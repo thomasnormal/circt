@@ -24,6 +24,7 @@
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "mlir/Interfaces/ControlFlowInterfaces.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Matchers.h"
@@ -2047,6 +2048,35 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     }
     return value;
   };
+  auto materializeValueBeforeUse =
+      [&](auto &&self, Value value, Operation *useOp, OpBuilder &pathBuilder,
+          IRMapping &mapping) -> Value {
+    if (!value)
+      return Value();
+    if (Value mapped = mapping.lookupOrNull(value))
+      return mapped;
+    if (dom.dominates(value, useOp))
+      return value;
+    auto *defOp = value.getDefiningOp();
+    if (!defOp || defOp->getBlock() != useOp->getBlock())
+      return Value();
+    if (defOp->hasTrait<OpTrait::IsTerminator>() || defOp->getNumRegions() != 0)
+      return Value();
+    if (!mlir::isMemoryEffectFree(defOp))
+      return Value();
+    for (Value operand : defOp->getOperands()) {
+      Value replacement =
+          self(self, operand, useOp, pathBuilder, mapping);
+      if (!replacement)
+        return Value();
+      mapping.map(operand, replacement);
+    }
+    auto *clonedOp = pathBuilder.clone(*defOp, mapping);
+    for (auto [orig, cloned] :
+         llvm::zip(defOp->getResults(), clonedOp->getResults()))
+      mapping.map(orig, cloned);
+    return mapping.lookupOrNull(value);
+  };
 
   // If the signal has a name matching a module input port and it is only ever
   // read (no drives), treat it as an alias for that port. This makes the
@@ -2657,6 +2687,12 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     }
 
     Value current = sigOp.getInit();
+    if (!isLocalSignal && drives.size() == 1 &&
+        drivePaths.lookup(drives.front()).empty() &&
+        !drives.front().getEnable() && isZeroTimeLike(drives.front())) {
+      if (Value drivenValue = unwrapStoredValue(drives.front().getValue()))
+        current = drivenValue;
+    }
     for (auto it = singleBlock->begin(); it != singleBlock->end();) {
       Operation *op = &*it++;
       if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
@@ -2746,6 +2782,72 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           "LLHD signal requires abstraction; rerun without --strict-llhd");
 
     if (allDrivesHaveTime && allDrivesSimplePath && allProbesSimplePath) {
+      // Non-local LLHD signals with a single unconditional 0-time drive model
+      // combinational wiring even when probes appear before the drive in block
+      // order. Preserve that behavior by resolving probes to the drive value,
+      // materializing a dominating clone when needed.
+      if (!isLocalSignal && drives.size() == 1) {
+        llhd::DriveOp driveOp = drives.front();
+        if (!driveOp.getEnable() && isZeroTimeLike(driveOp)) {
+          Value driveValue = unwrapStoredValue(driveOp.getValue());
+          if (!driveValue)
+            return driveOp.emitError("failed to resolve LLHD drive value");
+
+          auto dependsOnSignal = [&](Value seed) {
+            SmallVector<Value> stack{seed};
+            llvm::SmallPtrSet<Value, 16> seenValues;
+            while (!stack.empty()) {
+              Value cur = stack.pop_back_val();
+              if (!seenValues.insert(cur).second)
+                continue;
+              if (auto probe = cur.getDefiningOp<llhd::ProbeOp>()) {
+                if (probe.getSignal() == sigOp.getResult())
+                  return true;
+              }
+              if (auto *def = cur.getDefiningOp()) {
+                for (Value operand : def->getOperands())
+                  stack.push_back(operand);
+              }
+            }
+            return false;
+          };
+
+          if (!dependsOnSignal(driveValue)) {
+            for (auto probe : probes) {
+              OpBuilder probeBuilder(probe);
+              IRMapping localMapping;
+              Value replacement = driveValue;
+              if (!dom.dominates(replacement, probe.getOperation())) {
+                replacement = materializeValueBeforeUse(
+                    materializeValueBeforeUse, replacement,
+                    probe.getOperation(), probeBuilder, localMapping);
+                if (!replacement) {
+                  return probe.emitError(
+                      "failed to materialize non-dominating LLHD drive value");
+                }
+              }
+              if (replacement.getType() != probe.getResult().getType())
+                return probe.emitError("signal probe type mismatch in LEC");
+              probe.getResult().replaceAllUsesWith(replacement);
+              probe.erase();
+            }
+            driveOp.erase();
+            for (Operation *refOp : llvm::reverse(derivedRefs)) {
+              if (refOp->use_empty())
+                refOp->erase();
+            }
+            if (sigOp.use_empty()) {
+              Value init = sigOp.getInit();
+              sigOp.erase();
+              if (auto *def = init.getDefiningOp())
+                if (def->use_empty())
+                  def->erase();
+            }
+            return success();
+          }
+        }
+      }
+
       if (resolveEnabledDrives) {
         auto usesProcessResultInput = [&](Value value) -> bool {
           Value base = unwrapStoredValue(value);
@@ -2947,7 +3049,14 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
 
       // Build a mux chain: for each drive, if enabled select its value,
       // otherwise keep the previous value.
+      //
+      // For non-local wires modeled with a single unconditional 0-time drive,
+      // treat probes as observing the driven combinational value independent
+      // of op order in the graph block.
       Value current = sigOp.getInit();
+      if (!isLocalSignal && drives.size() == 1 && !drives.front().getEnable() &&
+          isZeroTimeLike(drives.front()))
+        current = drives.front().getValue();
       for (auto it = singleBlock->begin(); it != singleBlock->end();) {
         Operation *op = &*it++;
         if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {

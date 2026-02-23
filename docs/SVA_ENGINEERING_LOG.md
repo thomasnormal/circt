@@ -1,5 +1,52 @@
 # SVA Engineering Log
 
+## 2026-02-23
+
+- Iteration update (LLHD probe-before-drive wire semantics fix for extnets parity):
+  - realization:
+    - `strip-llhd-interface-signals` could fold non-local probe-before-drive
+      signals to init values when lowered LLHD ops were ordered as:
+      `llhd.prb` before `llhd.drv` in the same graph block.
+    - this caused false constant propagation in Yosys `extnets(pass)`:
+      the checker input path was folded to zero-init instead of tracking top
+      input `i`, producing `FAIL(pass)` despite correct RTL semantics.
+  - TDD proof:
+    - added regression first:
+      - `test/Tools/circt-lec/lec-strip-llhd-probe-before-drive-wire.mlir`
+      - requires strip pass to produce:
+        - no residual `llhd.*`
+        - `hw.output %in`.
+    - minimized reproducer loop:
+      - built reduced LLHD modules (`/tmp/extnet_core*.mlir`) and validated
+        red behavior (`A(i: const-zero)`) before fix.
+      - post-fix green behavior:
+        - same repros now lower to `A(i: %i)`.
+  - implementation:
+    - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`:
+      - in non-local, single unconditional 0-time drive cases:
+        - seed ordered fallback with drive value instead of init.
+        - materialize non-dominating drive values at probe use sites when
+          needed for wire-semantics replacement.
+      - keeps local/procedural signal behavior unchanged.
+  - validation:
+    - strip-pass regressions:
+      - `build-test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-probe-before-drive-wire.mlir`
+      - reduced repro checks:
+        - `build-test/bin/circt-opt --strip-llhd-interface-signals /tmp/extnet_core_step1.mlir`
+        - `build-test/bin/circt-opt --strip-llhd-interface-signals /tmp/extnet_core.mlir`
+    - yosys SVA parity:
+      - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `PASS(pass/fail)` for both `counter` and `extnets`.
+    - yosys LEC parity:
+      - `env CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_OPT=build-test/bin/circt-opt CIRCT_LEC=build-test/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
+      - result: `PASS`.
+    - sampled-value guard check:
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build-test/bin/circt-bmc --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only -`
+      - result: `BMC_RESULT=UNSAT`.
+  - profiling sample:
+    - `time TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - `elapsed=10.072 sec`.
+
 ## 2026-02-22
 
 - Iteration update (immediate-action assertion formalization + full OVL semantic closure):

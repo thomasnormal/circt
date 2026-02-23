@@ -41,6 +41,22 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
+## Latest SVA Closure Slice (February 23, 2026, LLHD probe-before-drive wire fix)
+
+- closed a real parity gap in Yosys `extnets(pass)` by fixing non-local LLHD
+  wire resolution in `strip-llhd-interface-signals`:
+  - probe-before-drive layouts for single unconditional 0-time drives now
+    resolve to the driven wire value instead of signal init.
+- added targeted regression:
+  - `test/Tools/circt-lec/lec-strip-llhd-probe-before-drive-wire.mlir`
+- validation snapshot:
+  - Yosys BMC subset:
+    - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `4/4` mode checks pass.
+  - Yosys LEC extnets smoke:
+    - `env CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_OPT=build-test/bin/circt-opt CIRCT_LEC=build-test/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
+    - result: `PASS`.
+
 ## Known Limitations (Must-Fix)
 
 1. SVA temporal semantics in BMC are still incomplete:
