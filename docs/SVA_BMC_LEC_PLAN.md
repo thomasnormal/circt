@@ -41,7 +41,37 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, sampled-value clocking + past clock recovery + formal stability)
+## Latest SVA Closure Slice (February 23, 2026, BMC final-check condition folding)
+
+- removed redundant final-check disjunctions in BMC lowering when no non-final
+  checks exist:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - added folded SMT bool combiners (`createSMTOrFolded`,
+    `createSMTAndFolded`) and applied them to final condition aggregation.
+  - in non-SMTLIB path, `violated` now resolves directly to `smtConstFalse`
+    when `numNonFinalChecks == 0`.
+- this avoids emitting patterns like:
+  - `smt.or %false, %final_fail`
+  and keeps final-only obligations structurally cleaner for solver backends.
+- regression lock:
+  - `test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+  - added `CHECK-BMC-NOT: smt.or %false`.
+- validation snapshot:
+  - build:
+    - `ninja -C build-test circt-bmc`
+  - focused regression:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+    - result: `PASS`.
+  - focused final-check batch:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-sat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-disable-iff-sat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-disable-iff-unsat-e2e.sv build-test/test/Tools/circt-bmc/bmc-final-checks-any-violation-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampling.mlir build-test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`
+    - result: `4 pass, 4 unsupported`.
+  - regular formal sanity:
+    - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `4/4` mode checks pass.
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `8 tests, failures=0`.
+
+## Previous SVA Closure Slice (February 23, 2026, sampled-value clocking + past clock recovery + formal stability)
 
 - importer sampled-value helper tightening in clocked assertion contexts:
   - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`

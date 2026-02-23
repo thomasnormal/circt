@@ -13,4 +13,5 @@ endmodule
 // CHECK-BMC: %[[LOOP:.*]]:3 = scf.for
 // CHECK-BMC: %[[FINAL_OK:.*]] = smt.eq %[[LOOP]]#2, %{{.*}} : !smt.bv<1>
 // CHECK-BMC: %[[FINAL_FAIL:.*]] = smt.not %[[FINAL_OK]]
+// CHECK-BMC-NOT: smt.or %false
 // CHECK-BMC: smt.assert %[[FINAL_FAIL]]
