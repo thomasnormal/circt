@@ -34051,8 +34051,7 @@ void LLHDProcessInterpreter::aotCompileProcesses() {
     // Only compile high-value callback types that have an llhd.wait loop.
     // Skip Coroutine (needs ucontext), OneShotCallback (no wait, runs once),
     // and CallbackDynamicWait (needs runtime re-registration, lower priority).
-    if (model != ExecModel::CallbackStaticObserved &&
-        model != ExecModel::CallbackTimeOnly)
+    if (model != ExecModel::CallbackStaticObserved)
       continue;
     auto processOp = dyn_cast<llhd::ProcessOp>(op);
     if (!processOp)
