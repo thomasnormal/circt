@@ -88,7 +88,11 @@ is_emscripten_cpp_compiler() {
 }
 
 cmd_dump="$tmpdir/circt-tblgen.commands"
-ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump"
+if ! ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump" 2>"$tmpdir/cmd-dump.err"; then
+  echo "[wasm-cxx20-warn] failed to query compile commands for circt-tblgen" >&2
+  cat "$tmpdir/cmd-dump.err" >&2
+  exit 1
+fi
 for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
   cmd_line="$(grep -F -- "$src" "$cmd_dump" | head -n 1 || true)"
   if [[ -z "$cmd_line" ]]; then
