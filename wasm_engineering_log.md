@@ -1483,3 +1483,29 @@
     - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=0 WASM_REQUIRE_CLEAN_CROSSCOMPILE=0 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
   - full required-verilog smoke also passes:
     - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+
+## 2026-02-23 (follow-up: ignore trailing non-compile command matches in warning triage)
+- Gap identified (regression-test first):
+  - extended `utils/wasm_cxx20_warning_behavior_check.sh` with new case:
+    - `trailing-link-step-ignored`
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_behavior_check.sh` failed with:
+      - `case 'trailing-link-step-ignored' failed (rc=1 expected 0)`
+    - warning triage selected the last raw line containing source-name
+      substrings, which could be a non-compile link step lacking `-std=...`.
+  - Real-run signal:
+    - smoke failed in warning-triage stage with:
+      - `compile command for FIRRTLAnnotationsGen.cpp is missing a -std=... flag`
+    - dump showed compile lines with `-std=c++20` and later non-compile lines
+      containing `*.cpp.o` names.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` source-command selection:
+    - filter matches to actual compile commands containing `-c`;
+    - then select the last compile command for each source.
+  - kept per-source `-std` validation unchanged after command selection.
+- Validation:
+  - `utils/wasm_cxx20_warning_behavior_check.sh` passes.
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
