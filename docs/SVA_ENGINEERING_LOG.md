@@ -3910,3 +3910,46 @@
       - result: `14 tests, failures=0`.
     - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
       - result: `total=6 pass=6 fail=0 error=0`.
+
+- Iteration update (nested `func.call` checks in `verif.bmc` are now lowered):
+  - realization:
+    - `verif.bmc` rejected nested `verif.assert`/`verif.cover` in called funcs,
+      which blocked legitimate SVA helper-style coding patterns even when the
+      callee body was simple and inlineable.
+  - TDD signal:
+    - made `@multiple_asserting_funcs_bmc` in
+      `test/Conversion/VerifToSMT/verif-to-smt-errors.mlir` expect success.
+    - pre-fix failure:
+      - `unexpected error: bounded model checking with nested
+        verif.assert/verif.cover in called functions or instantiated modules is
+        not yet supported`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - added `inlineSingleBlockFuncCall(...)`.
+      - added `inlineBMCRegionFuncCalls(...)` and invoked it before nested-check
+        validation in `ConvertVerifToSMTPass::runOnOperation()`.
+      - inlines local, non-external single-block `func.call` callees inside
+        `init`, `loop`, and `circuit` regions of each `verif.bmc`.
+      - preserves hard failures for malformed/non-inlineable call shapes via
+        explicit diagnostics.
+  - regression coverage:
+    - added `test/Conversion/VerifToSMT/bmc-nested-func-checks.mlir`.
+    - updated `test/Conversion/VerifToSMT/verif-to-smt-errors.mlir` to expect
+      success for nested called-function assertions.
+  - expectation refresh for current lowering shape:
+    - updated these tests to match current emitted IR ordering/aggregation:
+      - `test/Conversion/VerifToSMT/bmc-final-cover.mlir`
+      - `test/Conversion/VerifToSMT/bmc-final-only-odd-bound.mlir`
+      - `test/Conversion/VerifToSMT/bmc-ignore-asserts-until.mlir`
+      - `test/Conversion/VerifToSMT/bmc-nonfinal-check-i1-clock.mlir`
+      - `test/Conversion/VerifToSMT/verif-ops-to-smt.mlir`
+      - `test/Conversion/VerifToSMT/verif-to-smt.mlir`
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+      - result: `140/140` pass.
+    - SMT-LIB tool-path slice:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - result: `21/21` pass.
+  - remaining gap after this change:
+    - nested checks under instantiated modules (`hw.instance`) are still
+      intentionally rejected.

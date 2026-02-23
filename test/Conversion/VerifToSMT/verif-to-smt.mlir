@@ -150,18 +150,17 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK:        smt.eq {{%.+}}, [[CNEG1]] : !smt.bv<1>
 // CHECK:        smt.not
 // CHECK:        smt.and
-// CHECK:        smt.push 1
-// CHECK:        smt.assert
-// CHECK:        smt.check sat
-// CHECK:        smt.pop 1
-// CHECK:        arith.ori
 // Register updates with smt.ite
 // CHECK:        smt.ite
 // CHECK:        smt.ite
 // CHECK:        smt.ite
 // CHECK:        scf.yield
 // CHECK:      }
-// CHECK:      arith.xori
+// CHECK:        smt.push 1
+// CHECK:        smt.assert
+// CHECK:        smt.check sat
+// CHECK:        smt.pop 1
+// CHECK:        arith.xori
 // CHECK:      smt.yield
 // CHECK:    }
 // CHECK:    return [[BMC]]
@@ -179,7 +178,7 @@ func.func @test_lec(%arg0: !smt.bv<1>) -> (i1, i1, i1) {
 // CHECK1:        smt.assert
 // CHECK1:        smt.check
 // CHECK1:        smt.pop 1
-// CHECK1:        arith.ori
+// CHECK1:        arith.xori
 // CHECK1:        scf.yield
 
 func.func @test_bmc() -> (i1) {

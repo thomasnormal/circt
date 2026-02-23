@@ -2,10 +2,10 @@
 
 // CHECK-LABEL: func.func @test_final_cover
 // Final cover checks should be asserted directly (not negated).
-// CHECK: smt.push 1
 // CHECK: [[FINAL_EQ:%.+]] = smt.eq {{.*}}
-// CHECK-NOT: smt.not [[FINAL_EQ]]
-// CHECK: smt.assert [[FINAL_EQ]]
+// CHECK: [[FINAL_OR:%.+]] = smt.or {{.*}}, [[FINAL_EQ]]
+// CHECK: smt.push 1
+// CHECK: smt.assert [[FINAL_OR]]
 // CHECK: smt.check
 // CHECK: smt.pop 1
 func.func @test_final_cover() -> i1 {

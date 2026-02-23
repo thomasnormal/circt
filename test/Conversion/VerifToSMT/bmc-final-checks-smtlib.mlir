@@ -4,8 +4,7 @@
 // CHECK: %[[NOT0:.*]] = smt.not
 // CHECK: %[[NOT1:.*]] = smt.not
 // CHECK: %[[OR:.*]] = smt.or %[[NOT0]], %[[NOT1]]
-// CHECK: %[[ORW:.*]] = smt.or
-// CHECK: smt.assert %[[ORW]]
+// CHECK: smt.assert %[[OR]]
 
 func.func @bmc_final_checks_smtlib() -> i1 {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values []

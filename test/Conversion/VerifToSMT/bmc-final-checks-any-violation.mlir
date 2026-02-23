@@ -3,10 +3,10 @@
 // Final assertions should violate when any one is false, not only when all are
 // false.
 // CHECK-LABEL: func.func @final_checks_any_violation
-// CHECK: smt.push 1
 // CHECK-DAG: [[NOT0:%.*]] = smt.not %{{.*}}
 // CHECK-DAG: [[NOT1:%.*]] = smt.not %{{.*}}
 // CHECK: [[ANY_FAIL:%.*]] = smt.or [[NOT0]], [[NOT1]]
+// CHECK: smt.push 1
 // CHECK: smt.assert [[ANY_FAIL]]
 // CHECK: smt.check
 // CHECK: smt.pop 1

@@ -60,8 +60,8 @@ hw.module @OneAssertion(in %x: i1) {
 
 // -----
 
+// Nested assertions in called funcs are inlined into BMC regions and supported.
 func.func @multiple_asserting_funcs_bmc() -> (i1) {
-  // expected-error @below {{bounded model checking with nested verif.assert/verif.cover in called functions or instantiated modules is not yet supported}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}

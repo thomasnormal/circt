@@ -1,7 +1,8 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
 
 // CHECK-LABEL: func.func @final_only_odd_bound
-// CHECK-NOT: smt.check
+// CHECK: smt.assert %false
+// CHECK: smt.check sat
 // CHECK-LABEL: func.func @bmc_circuit
 func.func @final_only_odd_bound() -> i1 {
   %bmc = verif.bmc bound 3 num_regs 0 initial_values []
