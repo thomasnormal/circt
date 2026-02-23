@@ -584,3 +584,28 @@
 - Validation:
   - `utils/wasm_cxx20_warning_contract_check.sh` passes.
   - `utils/wasm_cxx20_warning_check.sh` passes.
+
+## 2026-02-23 (follow-up: integrate C++20 warning triage into wasm smoke)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require:
+    - `WASM_CHECK_CXX20_WARNINGS`
+    - `utils/wasm_cxx20_warning_check.sh` invocation path.
+  - Pre-fix failure:
+    - `utils/run_wasm_smoke.sh` had no hook to run C++20 warning triage.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` with
+    `WASM_CHECK_CXX20_WARNINGS` control:
+    - `auto` (default): run warning triage when rebuilding; skip in
+      `WASM_SKIP_BUILD=1` mode.
+    - `1`: force warning triage via `utils/wasm_cxx20_warning_check.sh`.
+    - `0`: disable warning triage for the smoke run.
+  - added explicit smoke-stage output `C++20 warning triage`.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end and runs `[wasm-cxx20-warn] PASS`.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_cxx20_warning_contract_check.sh`,
+    `utils/wasm_cxx20_warning_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` all pass.
