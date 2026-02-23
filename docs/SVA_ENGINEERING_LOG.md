@@ -4160,3 +4160,45 @@
       - result: `145/145` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize constant struct-global
+  `llvm.getelementptr` + `llvm.load`):
+  - realization:
+    - aggregate constant-load folding covered array-only paths; constant field
+      loads from struct globals still reached unsupported LLVM-op diagnostics.
+  - TDD signal:
+    - added
+      `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-struct-gep-load.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.addressof'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - generalized global constant extraction along constant GEP index paths
+      over LLVM aggregates:
+      - supports both `!llvm.array` and `!llvm.struct` traversal.
+      - adds `#llvm.zero` scalar coercion for integer/float leaf loads.
+      - keeps DenseElements fast-path for all-array traversal.
+    - preserves existing scalar type guard (`integer`/`float`) and non-constant
+      global safety checks.
+  - surprises:
+    - first implementation triggered an assert (`zip_equal` length mismatch) on
+      struct paths.
+    - fixed by computing linearized DenseElements index only inside all-array
+      paths.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-struct-gep-load.mlir`.
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `146/146` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
