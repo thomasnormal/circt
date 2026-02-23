@@ -12,6 +12,9 @@ WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
 REENTRY_HELPER="utils/wasm_callmain_reentry_check.js"
 PLUSARGS_HELPER="utils/wasm_plusargs_reentry_check.sh"
 RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
+REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"
+REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"
+REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"
 
 validate_bool_env() {
   local name="$1"
@@ -245,8 +248,8 @@ sim_reentry_log="$tmpdir/sim-reentry.log"
 
 "$NODE_BIN" "$REENTRY_HELPER" "$SIM_JS" \
   --first --help \
-  --second --resource-guard=false --vcd /tmp/reentry.vcd "$SIM_TEST_INPUT" \
-  --expect-wasm-file-substr /tmp/reentry.vcd "\$enddefinitions" \
+  --second --resource-guard=false --vcd "$REENTRY_VCD" "$SIM_TEST_INPUT" \
+  --expect-wasm-file-substr "$REENTRY_VCD" "\$enddefinitions" \
   --forbid-substr "Aborted(" \
   >"$sim_reentry_log" 2>&1
 if grep -q "InitLLVM was already initialized!" "$sim_reentry_log"; then
@@ -285,10 +288,10 @@ fi
 
 echo "[wasm-smoke] Re-entry: circt-sim run -> run"
 "$NODE_BIN" "$REENTRY_HELPER" "$SIM_JS" \
-  --first --resource-guard=false --vcd /tmp/reentry-run1.vcd "$SIM_TEST_INPUT" \
-  --second --resource-guard=false --vcd /tmp/reentry-run2.vcd "$SIM_TEST_INPUT" \
-  --expect-wasm-file-substr /tmp/reentry-run1.vcd "\$enddefinitions" \
-  --expect-wasm-file-substr /tmp/reentry-run2.vcd "\$enddefinitions" \
+  --first --resource-guard=false --vcd "$REENTRY_RUN1_VCD" "$SIM_TEST_INPUT" \
+  --second --resource-guard=false --vcd "$REENTRY_RUN2_VCD" "$SIM_TEST_INPUT" \
+  --expect-wasm-file-substr "$REENTRY_RUN1_VCD" "\$enddefinitions" \
+  --expect-wasm-file-substr "$REENTRY_RUN2_VCD" "\$enddefinitions" \
   --forbid-substr "Aborted(" \
   >"$tmpdir/sim-reentry-run-run.log" 2>&1
 

@@ -1300,3 +1300,28 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: avoid fixed reentry VCD paths in smoke checks)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require:
+    - process-unique reentry VCD variables:
+      - `REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"`
+      - `REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"`
+      - `REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"`
+    - corresponding usage in reentry checks.
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"`
+    - reentry checks used fixed `/tmp/reentry*.vcd` names, which could collide
+      across concurrent smoke invocations.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh`:
+    - introduced `BASHPID`-scoped reentry VCD paths;
+    - replaced fixed `/tmp/reentry*.vcd` paths in both help->run and run->run
+      reentry checks.
+  - updated `utils/wasm_smoke_contract_check.sh` to enforce this contract.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

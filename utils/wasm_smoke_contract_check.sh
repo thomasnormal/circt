@@ -29,6 +29,12 @@ required_tokens=(
   "REENTRY_HELPER"
   "PLUSARGS_HELPER"
   "RESOURCE_GUARD_HELPER"
+  'REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"'
+  'REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"'
+  'REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"'
+  '--vcd "$REENTRY_VCD"'
+  '--first --resource-guard=false --vcd "$REENTRY_RUN1_VCD"'
+  '--second --resource-guard=false --vcd "$REENTRY_RUN2_VCD"'
   'missing helper script: $REENTRY_HELPER'
   'missing executable helper script: $PLUSARGS_HELPER'
   'missing executable helper script: $RESOURCE_GUARD_HELPER'
