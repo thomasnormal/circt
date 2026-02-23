@@ -1091,3 +1091,29 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: explicit diagnostic when warning-triage command query fails)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require:
+    - explicit diagnostic token:
+      `failed to query compile commands for circt-tblgen`.
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_contract_check.sh` failed with:
+      - `missing token in warning check script: failed to query compile commands for circt-tblgen`
+    - warning triage relied on `set -e` for `ninja -t commands` failures
+      without clear context in stderr.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh`:
+    - wrapped `ninja -t commands circt-tblgen` in explicit failure handling;
+    - emit clear diagnostic and relay captured stderr from target-query
+      failure.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - fake-ninja regression simulation:
+    - `PATH="$tmpdir:$PATH" utils/wasm_cxx20_warning_check.sh`
+      exits non-zero with:
+      - `failed to query compile commands for circt-tblgen`.
+  - `utils/wasm_cxx20_warning_check.sh` passes with normal toolchain.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

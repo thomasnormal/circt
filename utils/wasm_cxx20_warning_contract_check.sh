@@ -17,6 +17,7 @@ required_tokens=(
   "build C++ standard is below 20"
   "std_flag_is_cpp20_or_newer"
   "is_emscripten_cpp_compiler"
+  "failed to query compile commands for circt-tblgen"
   "ambiguous-reversed-operator"
   "c++20-extensions"
   "-std="
