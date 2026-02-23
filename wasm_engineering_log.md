@@ -660,3 +660,26 @@
     `utils/wasm_ci_contract_check.sh` pass.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: include FIRRTLIntrinsicsGen in C++20 warning triage)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require
+    coverage for `FIRRTLIntrinsicsGen.cpp`.
+  - Pre-fix failure:
+    - warning triage rebuilt and verified only:
+      - `FIRRTLAnnotationsGen.cpp`
+      - `circt-tblgen.cpp`
+    - it skipped `FIRRTLIntrinsicsGen.cpp`, leaving a blind spot in
+      `circt-tblgen` C++20 warning coverage.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to:
+    - include `FIRRTLIntrinsicsGen.cpp.o` in forced rebuild targets;
+    - enforce `-std=c++20` compile-command verification for
+      `FIRRTLIntrinsicsGen.cpp` as well.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` pass.
