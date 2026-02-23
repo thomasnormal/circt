@@ -2,6 +2,32 @@
 
 ## 2026-02-23
 
+- Iteration update (run_formal_all backend-parity shadow retirement and
+  forced SMT-LIB orchestration):
+  - realization:
+    - after removing JIT from `circt-bmc` and secondary runners, the top-level
+      formal driver still encoded legacy backend-parity behavior (`sv-tests`
+      SMT-LIB vs JIT shadow run + parity counters), which no longer maps to a
+      real execution backend.
+  - implemented:
+    - `utils/run_formal_all.sh`
+      - removed sv-tests backend shadow rerun block and parity-summary
+        generation path.
+      - removed lane-state/config hash tracking fields tied to backend parity.
+      - fixed BMC lane forwarding to explicit SMT-LIB-only mode
+        (`BMC_RUN_SMTLIB=1`) for non-sv-tests BMC lanes.
+      - converted `--sv-tests-bmc-backend-parity`,
+        `--fail-on-new-bmc-backend-parity-mismatch-cases`, and
+        `--bmc-run-smtlib` to deprecated no-op flags with warnings.
+    - tests updated:
+      - `test/Tools/run-formal-all-sv-tests-bmc-backend-parity.test`
+      - `test/Tools/run-formal-all-strict-gate-bmc-backend-parity-mismatch-cases.test`
+  - validation:
+    - `bash -n utils/run_formal_all.sh`
+      - result: `PASS`.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-sv-tests-bmc-forces-smtlib.test build-test/test/Tools/run-formal-all-sv-tests-bmc-backend-parity.test build-test/test/Tools/run-formal-all-strict-gate-bmc-backend-parity-mismatch-cases.test`
+      - result: `4/4` pass.
+
 - Iteration update (stage-3 BMC backend cleanup: remove compatibility aliases
   and retire `jit` policy mode in secondary workflows):
   - realization:
