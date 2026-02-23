@@ -1,0 +1,14 @@
+// RUN: rm -rf %t/sv-tests
+// RUN: mkdir -p %t/sv-tests/tests %t/bin
+// RUN: printf '/*\n:tags: uvm\n:type: simulation\n:top_module: top\n*/\nmodule top(input logic clk, input logic a);\n  assert property (@(posedge clk) a);\nendmodule\n' > %t/sv-tests/tests/single_case.sv
+// RUN: printf '/*\n:tags: uvm\n:type: simulation\n:top_module: top\n*/\nmodule top(input logic clk_a, input logic clk_b, input logic a, input logic b);\n  assert property (@(posedge clk_a) a);\n  assert property (@(posedge clk_b) b);\nendmodule\n' > %t/sv-tests/tests/multiclock_case.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nlast=""\nfor a in "$@"; do last="$a"; done\nif [[ "$last" == *multiclock_case.sv ]]; then\n  cat <<"MLIR"\nmodule {\n  hw.module @top(in %clk_a : i1, in %clk_b : i1, in %a : i1, in %b : i1) {\n    %c1 = hw.constant true\n    verif.assert %c1 : i1\n    hw.output\n  }\n}\nMLIR\nelse\n  cat <<"MLIR"\nmodule {\n  hw.module @top(in %clk : i1, in %a : i1) {\n    %c1 = hw.constant true\n    verif.assert %c1 : i1\n    hw.output\n  }\n}\nMLIR\nfi\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nallow=0\nmlir=""\nfor a in "$@"; do\n  [[ "$a" == "--allow-multi-clock" ]] && allow=1\n  mlir="$a"\ndone\nif grep -q "clk_b" "$mlir"; then\n  if [[ "$allow" != "1" ]]; then\n    echo "$mlir:1:1: error: modules with multiple clocks not yet supported" >&2\n    exit 1\n  fi\nelse\n  if [[ "$allow" == "1" ]]; then\n    echo "unexpected --allow-multi-clock for single-clock case" >&2\n    exit 2\n  fi\nfi\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 TEST_FILTER='single_case|multiclock_case' OUT=%t/results.tsv %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=AUTO
+// RUN: FileCheck %s --check-prefix=AUTO-RESULTS < %t/results.tsv
+//
+// AUTO: sv-tests SVA summary: total=2 pass=2 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// AUTO-RESULTS-DAG: PASS{{[[:space:]]+}}single_case{{[[:space:]]+}}
+// AUTO-RESULTS-DAG: PASS{{[[:space:]]+}}multiclock_case{{[[:space:]]+}}

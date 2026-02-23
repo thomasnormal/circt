@@ -3468,3 +3468,49 @@
   - outcome:
     - restored functional sv-tests BMC harness execution and summary output.
     - converted one stale UVM smoke expected-fail into active pass coverage.
+
+- Iteration update (sv-tests multiclock auto-retry and UVM include-tags de-XFAIL):
+  - realization:
+    - `sv-tests-uvm-tags-include.mlir` failed only for
+      `16.13--uvm-multiclock-mini` with:
+      - `error: modules with multiple clocks not yet supported`
+    - this was a harness policy gap: mixed suites containing multiclock tests
+      required manually pre-setting `ALLOW_MULTI_CLOCK=1`.
+  - implemented:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - added `AUTO_ALLOW_MULTI_CLOCK` knob (default `1`).
+      - on BMC failure, when global `ALLOW_MULTI_CLOCK` is not set and
+        `RISING_CLOCKS_ONLY` is off, automatically retries once with
+        `--allow-multi-clock` if log diagnostics match known multiclock
+        support errors.
+    - regression coverage:
+      - added:
+        - `test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
+      - updated:
+        - `test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
+          - removed stale `XFAIL`.
+  - validation:
+    - new runner test:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
+      - result: `1/1` pass.
+    - UVM tagged smoke regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
+      - result: `2/2` pass.
+    - sv-tests harness contract bucket:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+      - result: `20 pass, 1 unsupported`.
+    - `circt-bmc` sv-tests bucket:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - result: `12 pass, 4 unsupported` (no expected-fail left in this
+        subset).
+    - regular formal sanity:
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh`
+      - result: `14 tests, failures=0`.
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+    - profiling sample:
+      - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - result: `real 0m99.29s`.
+  - outcome:
+    - closed stale UVM include-tags expected-fail lane and removed manual
+      multiclock knob friction for mixed sv-tests suites.
