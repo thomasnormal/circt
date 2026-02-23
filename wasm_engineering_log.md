@@ -982,3 +982,32 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: validate configure boolean toggles consistently)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_configure_contract_check.sh` to require:
+    - explicit `ON|OFF` validation hooks in `utils/configure_wasm_build.sh`
+      for:
+      - `LLVM_ENABLE_ASSERTIONS`
+      - `BUILD_SHARED_LIBS`
+      - `CIRCT_SIM_WASM_ENABLE_NODERAWFS`
+    - runtime rejection for invalid overrides:
+      - `LLVM_ENABLE_ASSERTIONS=enabled`
+      - `BUILD_SHARED_LIBS=static`
+  - Pre-fix failure:
+    - `utils/wasm_configure_contract_check.sh` failed with:
+      - `missing source check in configure script: validate_on_off_env "LLVM_ENABLE_ASSERTIONS" "$LLVM_ENABLE_ASSERTIONS"`
+    - configure script validated only the NODERAWFS toggle and left other
+      boolean toggles unsanitized.
+- Fix:
+  - added shared `validate_on_off_env()` helper in
+    `utils/configure_wasm_build.sh`.
+  - applied it to:
+    - `LLVM_ENABLE_ASSERTIONS`
+    - `BUILD_SHARED_LIBS`
+    - `CIRCT_SIM_WASM_ENABLE_NODERAWFS`
+- Validation:
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
