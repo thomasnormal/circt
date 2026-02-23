@@ -10,6 +10,15 @@ WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
 WASM_CHECK_CXX20_WARNINGS="${WASM_CHECK_CXX20_WARNINGS:-auto}"
 WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
 
+validate_bool_env() {
+  local name="$1"
+  local value="$2"
+  if [[ "$value" != "0" && "$value" != "1" ]]; then
+    echo "[wasm-smoke] invalid $name value: $value (expected 0 or 1)" >&2
+    exit 1
+  fi
+}
+
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
 VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
@@ -47,6 +56,15 @@ fi
 
 if [[ ! -f "$SV_TEST_INPUT" || ! -f "$SV_SIM_TEST_INPUT" ]]; then
   echo "[wasm-smoke] required SystemVerilog input file missing" >&2
+  exit 1
+fi
+
+validate_bool_env "WASM_REQUIRE_VERILOG" "$WASM_REQUIRE_VERILOG"
+validate_bool_env "WASM_SKIP_BUILD" "$WASM_SKIP_BUILD"
+validate_bool_env "WASM_REQUIRE_CLEAN_CROSSCOMPILE" "$WASM_REQUIRE_CLEAN_CROSSCOMPILE"
+
+if [[ "$WASM_CHECK_CXX20_WARNINGS" != "auto" && "$WASM_CHECK_CXX20_WARNINGS" != "0" && "$WASM_CHECK_CXX20_WARNINGS" != "1" ]]; then
+  echo "[wasm-smoke] invalid WASM_CHECK_CXX20_WARNINGS value: $WASM_CHECK_CXX20_WARNINGS (expected auto, 0, or 1)" >&2
   exit 1
 fi
 
