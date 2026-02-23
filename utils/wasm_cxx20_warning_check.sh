@@ -15,8 +15,18 @@ if [[ ! -f "$cache_file" ]]; then
   exit 1
 fi
 
-if ! grep -Fq -- "CMAKE_CXX_STANDARD:STRING=20" "$cache_file"; then
-  echo "[wasm-cxx20-warn] build is not configured for C++20 (expected CMAKE_CXX_STANDARD:STRING=20)" >&2
+cache_std_line="$(grep -E '^CMAKE_CXX_STANDARD:STRING=' "$cache_file" || true)"
+if [[ -z "$cache_std_line" ]]; then
+  echo "[wasm-cxx20-warn] missing CMAKE_CXX_STANDARD entry in cache" >&2
+  exit 1
+fi
+cache_std_value="${cache_std_line#CMAKE_CXX_STANDARD:STRING=}"
+if [[ ! "$cache_std_value" =~ ^[0-9]+$ ]]; then
+  echo "[wasm-cxx20-warn] cache C++ standard is non-numeric: $cache_std_value" >&2
+  exit 1
+fi
+if (( cache_std_value < 20 )); then
+  echo "[wasm-cxx20-warn] build C++ standard is below 20: $cache_std_value" >&2
   exit 1
 fi
 
@@ -42,21 +52,44 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 log="$tmpdir/cxx20-warning-check.log"
 
+std_flag_is_cpp20_or_newer() {
+  local std_flag="$1"
+  case "$std_flag" in
+    -std=c++2a|-std=gnu++2a|-std=c++2b|-std=gnu++2b|-std=c++2c|-std=gnu++2c)
+      return 0
+      ;;
+  esac
+  if [[ "$std_flag" =~ ^-std=(gnu\+\+|c\+\+)([0-9]+)$ ]]; then
+    local std_num="${BASH_REMATCH[2]}"
+    if (( std_num >= 20 )); then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 cmd_dump="$tmpdir/circt-tblgen.commands"
 ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump"
-if ! grep -Fq -- "-std=c++20" "$cmd_dump"; then
-  echo "[wasm-cxx20-warn] circt-tblgen compile command is not using -std=c++20" >&2
-  cat "$cmd_dump" >&2
-  exit 1
-fi
 for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
-  if ! grep -Fq -- "$src" "$cmd_dump"; then
+  cmd_line="$(grep -F -- "$src" "$cmd_dump" | head -n 1 || true)"
+  if [[ -z "$cmd_line" ]]; then
     echo "[wasm-cxx20-warn] missing compile command for $src" >&2
     cat "$cmd_dump" >&2
     exit 1
   fi
-  if ! grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"; then
-    echo "[wasm-cxx20-warn] compile command for $src is missing -std=c++20" >&2
+  if ! grep -Fq -- "emscripten/em++" <<<"$cmd_line"; then
+    echo "[wasm-cxx20-warn] compile command for $src is not using emscripten/em++" >&2
+    cat "$cmd_dump" >&2
+    exit 1
+  fi
+  std_flag="$(grep -Eo -- '-std=[^[:space:]]+' <<<"$cmd_line" | head -n 1 || true)"
+  if [[ -z "$std_flag" ]]; then
+    echo "[wasm-cxx20-warn] compile command for $src is missing a -std=... flag" >&2
+    cat "$cmd_dump" >&2
+    exit 1
+  fi
+  if ! std_flag_is_cpp20_or_newer "$std_flag"; then
+    echo "[wasm-cxx20-warn] compile command for $src does not use C++20-or-newer: $std_flag" >&2
     cat "$cmd_dump" >&2
     exit 1
   fi

@@ -9,17 +9,22 @@ if [[ ! -x "$SCRIPT" ]]; then
 fi
 
 required_tokens=(
-  "CMAKE_CXX_STANDARD:STRING=20"
+  "CMAKE_CXX_STANDARD:STRING="
+  "cache C++ standard is non-numeric"
+  "build C++ standard is below 20"
+  "std_flag_is_cpp20_or_newer"
   "ambiguous-reversed-operator"
   "c++20-extensions"
-  "-std=c++20"
+  "-std="
   'grep -Eiq -- "(^|[^[:alpha:]])warning:" "$log"'
   "FIRRTLAnnotationsGen.cpp"
   "FIRRTLIntrinsicsGen.cpp"
   "circt-tblgen.cpp"
-  'grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"'
+  'compile command for $src is missing a -std=... flag'
+  'compile command for $src does not use C++20-or-newer'
   '[wasm-cxx20-warn] failed to clean rebuild targets'
   '[wasm-cxx20-warn] missing compile command for'
+  "emscripten/em++"
 )
 
 for token in "${required_tokens[@]}"; do
