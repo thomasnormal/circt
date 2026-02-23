@@ -8932,6 +8932,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   };
 
   SmallVector<LLVM::ConstantOp> llvmConstants;
+  SmallVector<LLVM::ZeroOp> llvmZeros;
   SmallVector<Operation *> llvmIntOps;
   SmallVector<LLVM::ExtractValueOp> llvmExtractValues;
   SmallVector<LLVM::LoadOp> llvmLoads;
@@ -8980,6 +8981,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   };
   bmcOp->walk(
       [&](LLVM::ConstantOp op) { llvmConstants.push_back(op); });
+  bmcOp->walk([&](LLVM::ZeroOp op) { llvmZeros.push_back(op); });
   bmcOp->walk([&](Operation *op) {
     if (isa<LLVM::AddOp, LLVM::SubOp, LLVM::MulOp, LLVM::AndOp, LLVM::OrOp,
             LLVM::XOrOp, LLVM::ShlOp, LLVM::LShrOp, LLVM::AShrOp,
@@ -9007,6 +9009,25 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         arith::ConstantOp::create(builder, llvmConstant.getLoc(), typedAttr);
     llvmConstant.replaceAllUsesWith(arithConstant.getResult());
     llvmConstant.erase();
+  }
+  for (auto llvmZero : llvmZeros) {
+    auto ty = llvmZero.getType();
+    // Keep non-scalar zeros on the generic unsupported-op diagnostics path.
+    if (!isSupportedSMTLIBScalarType(ty))
+      continue;
+    TypedAttr typedAttr;
+    if (auto intTy = dyn_cast<IntegerType>(ty)) {
+      typedAttr = IntegerAttr::get(intTy, 0);
+    } else if (auto floatTy = dyn_cast<FloatType>(ty)) {
+      typedAttr = FloatAttr::get(floatTy, 0.0);
+    } else {
+      continue;
+    }
+    OpBuilder builder(llvmZero);
+    auto arithConstant =
+        arith::ConstantOp::create(builder, llvmZero.getLoc(), typedAttr);
+    llvmZero.replaceAllUsesWith(arithConstant.getResult());
+    llvmZero.erase();
   }
 
   auto isIntTy = [](Type ty) { return isa<IntegerType>(ty); };
