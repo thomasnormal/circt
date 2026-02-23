@@ -21,7 +21,6 @@ RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-1}"
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
-BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 FAIL_ON_XPASS="${FAIL_ON_XPASS:-1}"
 
 # Memory guardrails.
@@ -35,7 +34,6 @@ run_limited() {
   )
 }
 
-Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
 Z3_BIN="${Z3_BIN:-}"
 
 if [[ ! -d "$OVL_DIR" ]]; then
@@ -55,25 +53,21 @@ if [[ "$filter_ec" == "2" ]]; then
   echo "invalid OVL_SEMANTIC_TEST_FILTER regex: $OVL_SEMANTIC_TEST_FILTER" >&2
   exit 1
 fi
-if [[ "$BMC_ALLOW_RUN_FALLBACK" != "0" && "$BMC_ALLOW_RUN_FALLBACK" != "1" ]]; then
-  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
+if [[ -z "$Z3_BIN" ]]; then
+  if command -v z3 >/dev/null 2>&1; then
+    Z3_BIN="$(command -v z3)"
+  elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+    Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+  elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+    Z3_BIN="/home/thomas-ahle/z3/build/z3"
+  fi
+fi
+if [[ -z "$Z3_BIN" ]]; then
+  echo "z3 not found; set Z3_BIN or ensure z3 is on PATH" >&2
   exit 1
 fi
-
-if [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
-  if [[ -z "$Z3_BIN" ]]; then
-    if command -v z3 >/dev/null 2>&1; then
-      Z3_BIN="$(command -v z3)"
-    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
-      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
-    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
-      Z3_BIN="/home/thomas-ahle/z3/build/z3"
-    fi
-  fi
-  if [[ -z "$Z3_BIN" ]]; then
-    echo "z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB" >&2
-    exit 1
-  fi
+if [[ "$BMC_RUN_SMTLIB" != "1" ]]; then
+  echo "warning: BMC_RUN_SMTLIB=0 is ignored; circt-bmc JIT backend has been removed" >&2
 fi
 
 if [[ -n "$OUT" ]]; then
@@ -159,11 +153,7 @@ run_case_mode() {
   fi
 
   local bmc_args=(-b "$bound" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" --module "$top_module")
-  if [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
-    bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
-  elif [[ -f "$Z3_LIB" ]]; then
-    bmc_args+=("--shared-libs=$Z3_LIB")
-  fi
+  bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
   if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
     bmc_args+=(--rising-clocks-only)
   fi
@@ -182,39 +172,11 @@ run_case_mode() {
   if bmc_out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>"$bmc_log")"; then
     :
   else
-    if [[ "$BMC_RUN_SMTLIB" == "1" ]] && \
-        grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-      if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
-        echo "BMC_RUN_SMTLIB fallback($case_id/$mode): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-        {
-          echo "[run_ovl_sva_semantic_circt_bmc] BMC_RUN_SMTLIB fallback($case_id/$mode): unsupported SMT-LIB export op(s), retrying with --run"
-        } >> "$bmc_log"
-        bmc_args=(-b "$bound" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-          --module "$top_module" "--shared-libs=$Z3_LIB")
-        if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-          bmc_args+=(--rising-clocks-only)
-        fi
-        if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-          bmc_args+=(--allow-multi-clock)
-        fi
-        if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-          bmc_args+=(--assume-known-inputs)
-        fi
-        if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-          read -r -a extra_bmc_args <<< "$CIRCT_BMC_ARGS"
-          bmc_args+=("${extra_bmc_args[@]}")
-        fi
-        if bmc_out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>>"$bmc_log")"; then
-          :
-        else
-          bmc_out=""
-        fi
-      else
-        echo "BMC_RUN_SMTLIB fallback($case_id/$mode): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
-        {
-          echo "[run_ovl_sva_semantic_circt_bmc] BMC_RUN_SMTLIB fallback($case_id/$mode): disabled by BMC_ALLOW_RUN_FALLBACK=0"
-        } >> "$bmc_log"
-      fi
+    if grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
+      echo "SMT-LIB export failed($case_id/$mode): no native fallback available after JIT removal" >&2
+      {
+        echo "[run_ovl_sva_semantic_circt_bmc] SMT-LIB export failed($case_id/$mode): no native fallback available after JIT removal"
+      } >> "$bmc_log"
     fi
   fi
   if [[ -z "$bmc_out" ]]; then

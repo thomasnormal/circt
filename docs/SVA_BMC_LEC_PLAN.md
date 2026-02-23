@@ -41,6 +41,37 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
+## Latest SVA Closure Slice (February 23, 2026, stage-2 `circt-bmc` JIT retirement)
+
+- retired native/JIT execution path from `circt-bmc`:
+  - `tools/circt-bmc/circt-bmc.cpp`
+  - `tools/circt-bmc/CMakeLists.txt`
+- compatibility policy:
+  - `--run` now aliases to `--run-smtlib`.
+  - `--shared-libs` is deprecated and ignored.
+- converted main BMC harnesses to pure SMT-LIB execution:
+  - `utils/run_sv_tests_circt_bmc.sh`
+  - `utils/run_verilator_verification_circt_bmc.sh`
+  - `utils/run_yosys_sva_circt_bmc.sh`
+  - `utils/run_ovl_sva_circt_bmc.sh`
+  - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+- non-smoke mode now always drives `--run-smtlib --z3-path=...`; no native
+  fallback remains in these harnesses.
+- regression updates:
+  - added `test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir`.
+  - updated
+    `test/Tools/run-sv-tests-bmc-smtlib-fallback.test`,
+    `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`.
+- validation snapshot:
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+    - result: `157 pass, 156 unsupported, 0 fail`.
+  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `110 tests, failures=0`.
+  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `14 tests, failures=0`.
+  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+    - result: `total=6 pass=6 fail=0 error=0`.
+
 ## Latest SVA Closure Slice (February 23, 2026, stage-1 `circt-bmc` JIT deprecation)
 
 - changed `circt-bmc` default run mode to SMT-LIB:
