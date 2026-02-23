@@ -1388,3 +1388,33 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: make runtime-helper behavior test outputs concurrency-safe)
+- Gap identified (regression-test first):
+  - added contract check:
+    - `utils/wasm_runtime_helpers_behavior_contract_check.sh`
+  - Pre-fix failure:
+    - `utils/wasm_runtime_helpers_behavior_contract_check.sh` failed with:
+      - `missing token in behavior check script: case1_out="$tmpdir/case1.out"`
+    - `utils/wasm_runtime_helpers_behavior_check.sh` used fixed
+      `/tmp/wasm-runtime-helper-case*.{out,err}` paths, risking collisions in
+      concurrent CI/local runs.
+- Fix:
+  - updated `utils/wasm_runtime_helpers_behavior_check.sh`:
+    - switched case outputs/errors to tmpdir-scoped files:
+      - `case1_out`, `case1_err`, `case2_out`, `case2_err`;
+    - removed fixed `/tmp/wasm-runtime-helper-case*` paths.
+  - added `utils/wasm_runtime_helpers_behavior_contract_check.sh` to enforce:
+    - required tmpdir token usage;
+    - absence of fixed `/tmp/wasm-runtime-helper-case` literals.
+  - integrated into CI:
+    - `.github/workflows/wasmSmoke.yml` now runs
+      `utils/wasm_runtime_helpers_behavior_contract_check.sh`;
+    - `utils/wasm_ci_contract_check.sh` enforces workflow token.
+- Validation:
+  - `utils/wasm_runtime_helpers_behavior_contract_check.sh` passes.
+  - `utils/wasm_runtime_helpers_behavior_check.sh` passes.
+  - `utils/wasm_runtime_helpers_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - note: current full smoke run in this workspace fails in pre-existing
+    `utils/run_wasm_smoke.sh` VCD `$var` assertions unrelated to this change.
