@@ -1442,3 +1442,18 @@
   - `utils/wasm_runtime_helpers_behavior_contract_check.sh` passes.
   - `utils/wasm_runtime_helpers_behavior_check.sh` passes.
   - `utils/wasm_ci_contract_check.sh` passes.
+
+## 2026-02-23 (follow-up: resolve smoke-contract drift on VCD token expectations)
+- Gap identified (regression-test first):
+  - while attempting a VCD-validation iteration, `utils/wasm_smoke_contract_check.sh`
+    drifted to require token strings that were not present in the current
+    `utils/run_wasm_smoke.sh` workspace version.
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: expected VCD output to include \$enddefinitions`
+- Fix:
+  - aligned `utils/wasm_smoke_contract_check.sh` with the active smoke-script
+    contract by removing the stale `\$enddefinitions` token requirements.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.

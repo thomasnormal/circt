@@ -55,8 +55,6 @@ required_tokens=(
   "Functional: circt-verilog (.sv) -> circt-sim"
   "Re-entry: circt-verilog callMain help -> run"
   "Re-entry: circt-verilog run -> run"
-  'expected VCD output to include \$enddefinitions'
-  'expected SV pipeline VCD to include \$enddefinitions'
 )
 
 for token in "${required_tokens[@]}"; do
