@@ -1011,3 +1011,27 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: make warning-triage Emscripten compiler detection robust)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require:
+    - dedicated compiler detector helper `is_emscripten_cpp_compiler`;
+    - explicit diagnostic:
+      `does not appear to use Emscripten em++`.
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_contract_check.sh` failed with:
+      - `missing token in warning check script: is_emscripten_cpp_compiler`
+    - warning triage hardcoded `emscripten/em++` substring matching, which is
+      brittle when compile commands invoke `em++` from PATH.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to:
+    - add `is_emscripten_cpp_compiler()` matcher that accepts both
+      full-path and PATH-based `em++` command forms;
+    - replace hardcoded `emscripten/em++` substring check with the helper.
+  - updated `utils/wasm_cxx20_warning_contract_check.sh` accordingly.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

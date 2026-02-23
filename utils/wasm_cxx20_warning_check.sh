@@ -79,6 +79,14 @@ std_flag_is_cpp20_or_newer() {
   return 1
 }
 
+is_emscripten_cpp_compiler() {
+  local cmd_line="$1"
+  if [[ "$cmd_line" =~ (^|[[:space:]])([^[:space:]]*/)?em\+\+([[:space:]]|$) ]]; then
+    return 0
+  fi
+  return 1
+}
+
 cmd_dump="$tmpdir/circt-tblgen.commands"
 ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump"
 for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
@@ -88,8 +96,8 @@ for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cp
     cat "$cmd_dump" >&2
     exit 1
   fi
-  if ! grep -Fq -- "emscripten/em++" <<<"$cmd_line"; then
-    echo "[wasm-cxx20-warn] compile command for $src is not using emscripten/em++" >&2
+  if ! is_emscripten_cpp_compiler "$cmd_line"; then
+    echo "[wasm-cxx20-warn] compile command for $src does not appear to use Emscripten em++" >&2
     cat "$cmd_dump" >&2
     exit 1
   fi
