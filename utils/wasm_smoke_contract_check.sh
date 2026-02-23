@@ -14,6 +14,8 @@ required_tokens=(
   "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
   "WASM_REQUIRE_VERILOG"
   "VCD_PATH"
+  'expected VCD output to declare at least one \$var'
+  'expected SV pipeline VCD to declare at least one \$var'
   "validate_bool_env"
   "validate_positive_int_env"
   'validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"'
@@ -53,6 +55,8 @@ required_tokens=(
   "Functional: circt-verilog (.sv) -> circt-sim"
   "Re-entry: circt-verilog callMain help -> run"
   "Re-entry: circt-verilog run -> run"
+  'expected VCD output to include \$enddefinitions'
+  'expected SV pipeline VCD to include \$enddefinitions'
 )
 
 for token in "${required_tokens[@]}"; do

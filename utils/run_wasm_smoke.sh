@@ -215,6 +215,14 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
     echo "[wasm-smoke] expected SV pipeline VCD output not found or empty: $tmpdir/verilog-sim.vcd" >&2
     exit 1
   fi
+  if ! grep -q '\$enddefinitions' "$tmpdir/verilog-sim.vcd"; then
+    echo "[wasm-smoke] expected SV pipeline VCD to include \$enddefinitions: $tmpdir/verilog-sim.vcd" >&2
+    exit 1
+  fi
+  if ! grep -q '^\$var ' "$tmpdir/verilog-sim.vcd"; then
+    echo "[wasm-smoke] expected SV pipeline VCD to declare at least one \$var: $tmpdir/verilog-sim.vcd" >&2
+    exit 1
+  fi
 fi
 
 echo "[wasm-smoke] Functional: circt-bmc stdin -> SMT-LIB"
@@ -239,6 +247,14 @@ cat "$SIM_TEST_INPUT" | \
 grep -q "Wrote waveform" "$tmpdir/sim-vcd.out"
 if [[ ! -s "$VCD_PATH" ]]; then
   echo "[wasm-smoke] expected VCD output not found or empty: $VCD_PATH" >&2
+  exit 1
+fi
+if ! grep -q '\$enddefinitions' "$VCD_PATH"; then
+  echo "[wasm-smoke] expected VCD output to include \$enddefinitions: $VCD_PATH" >&2
+  exit 1
+fi
+if ! grep -q '^\$var ' "$VCD_PATH"; then
+  echo "[wasm-smoke] expected VCD output to declare at least one \$var: $VCD_PATH" >&2
   exit 1
 fi
 
