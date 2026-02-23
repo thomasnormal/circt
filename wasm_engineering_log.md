@@ -683,3 +683,26 @@
     `utils/wasm_cxx20_contract_check.sh`,
     `utils/wasm_smoke_contract_check.sh`, and
     `utils/wasm_ci_contract_check.sh` pass.
+
+## 2026-02-23 (follow-up: make CI warning-triage mode explicit)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_ci_contract_check.sh` to require explicit
+    workflow settings:
+    - `WASM_CHECK_CXX20_WARNINGS=1` for full rebuild smoke run;
+    - `WASM_CHECK_CXX20_WARNINGS=0` for `WASM_SKIP_BUILD=1` rerun.
+  - Pre-fix failure:
+    - CI relied on `WASM_CHECK_CXX20_WARNINGS=auto` behavior in smoke script.
+- Fix:
+  - updated `.github/workflows/wasmSmoke.yml`:
+    - full run now passes `WASM_CHECK_CXX20_WARNINGS=1`;
+    - runtime-only rerun now passes `WASM_CHECK_CXX20_WARNINGS=0`.
+  - this decouples CI intent from default-behavior changes in
+    `utils/run_wasm_smoke.sh`.
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_cxx20_warning_contract_check.sh`, and
+    `utils/wasm_smoke_contract_check.sh` pass.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
