@@ -2443,6 +2443,19 @@ private:
       uint64_t lastSampleOrdinal = std::numeric_limits<uint64_t>::max();
       llvm::SmallVector<std::deque<LTLTruth>, 4> inputHistories;
     };
+    struct ImplicationTracker {
+      struct PendingAntecedent {
+        uint64_t triggerSampleOrdinal = 0;
+        bool sawConsequentTrue = false;
+        bool sawConsequentUnknown = false;
+      };
+      bool hasBoundedWindow = false;
+      bool hasUnboundedWindow = false;
+      uint64_t boundedMinShift = 0;
+      uint64_t boundedMaxShift = 0;
+      uint64_t unboundedMinShift = 0;
+      llvm::SmallVector<PendingAntecedent, 4> pendingAntecedents;
+    };
     /// End-of-run tracker for strong eventually obligations.
     struct EventuallyTracker {
       uint64_t trailingUnsatisfiedSamples = 0;
@@ -2462,7 +2475,10 @@ private:
     llvm::DenseMap<mlir::Operation *, RepeatTracker> repeatTrackers;
     llvm::DenseMap<mlir::Operation *, RepetitionHitTracker>
         repetitionHitTrackers;
+    llvm::DenseMap<mlir::Operation *, ImplicationTracker> implicationTrackers;
     llvm::DenseMap<mlir::Operation *, ConcatTracker> concatTrackers;
+    llvm::DenseMap<mlir::Operation *, uint64_t> pastLastSampleOrdinal;
+    llvm::DenseMap<mlir::Operation *, LTLTruth> firstMatchPrevInput;
   };
 
   /// Evaluate an LTL property tree recursively, handling temporal operators.
@@ -3823,6 +3839,19 @@ private:
 
   /// Execute an AOT-compiled callback process (direct function call).
   void executeAOTCallbackProcess(ProcessId procId);
+
+  // --- Phase F1: native func dispatch ---
+
+  /// Map from func.func Operation* to native function pointer.
+  /// Populated by aotCompileFuncBodies() during init.
+  llvm::DenseMap<mlir::Operation *, void *> nativeFuncPtrs;
+
+  /// Counters for native vs interpreted dispatch (for compile report).
+  uint64_t nativeFuncCallCount = 0;
+  uint64_t interpretedFuncCallCount = 0;
+
+  /// Compile all eligible func.func bodies via AOT batch compilation.
+  void aotCompileFuncBodies();
 };
 
 } // namespace sim

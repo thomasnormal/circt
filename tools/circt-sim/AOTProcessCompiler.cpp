@@ -32,6 +32,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
+#include "mlir/IR/Verifier.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/TargetSelect.h"
@@ -829,22 +830,39 @@ struct HWBitcastOpLowering : public OpConversionPattern<hw::BitcastOp> {
 static bool isFuncBodyCompilable(func::FuncOp funcOp) {
   if (funcOp.isExternal())
     return false;
+
+  // Reject functions with non-LLVM or aggregate types in their signature.
+  // Aggregate types (structs, arrays) passed by value crash LLVM's ABI
+  // lowering during JIT codegen (cast<IntegerType> assertion failure).
+  // Only scalar types (integers ≤64 bits, pointers) are safe.
+  auto isScalarType = [](Type ty) -> bool {
+    if (auto intTy = dyn_cast<IntegerType>(ty))
+      return intTy.getWidth() <= 64;
+    if (isa<LLVM::LLVMPointerType>(ty))
+      return true;
+    if (isa<Float32Type, Float64Type>(ty))
+      return true;
+    if (isa<LLVM::LLVMVoidType>(ty))
+      return true;
+    return false;
+  };
+  for (auto argType : funcOp.getArgumentTypes()) {
+    if (!isScalarType(argType))
+      return false;
+  }
+  for (auto resType : funcOp.getResultTypes()) {
+    if (!isScalarType(resType))
+      return false;
+  }
+
   bool compilable = true;
   funcOp.walk([&](Operation *op) {
-    // Allow standard dialects that have conversion patterns.
-    if (isa<arith::ArithDialect, cf::ControlFlowDialect, scf::SCFDialect,
+    // Allow ONLY pure arith/cf/LLVM/func dialects — these have clean
+    // conversion to LLVM with no cross-dialect type interference.
+    // Everything else (scf, hw, comb, sim, unrealized_conversion_cast)
+    // is EXCLUDED to avoid type converter corruption of LLVM ops.
+    if (isa<arith::ArithDialect, cf::ControlFlowDialect,
             LLVM::LLVMDialect, func::FuncDialect>(op->getDialect()))
-      return WalkResult::advance();
-    if (isa<hw::HWDialect, comb::CombDialect>(op->getDialect()))
-      return WalkResult::advance();
-    // Allow supported sim ops.
-    if (isa<sim::FormatLiteralOp, sim::FormatDecOp, sim::FormatHexOp,
-            sim::FormatBinOp, sim::FormatCharOp, sim::FormatStringConcatOp,
-            sim::FormatDynStringOp, sim::PrintFormattedProcOp,
-            sim::TerminateOp>(op))
-      return WalkResult::advance();
-    // Allow unrealized_conversion_cast (used in type conversion).
-    if (isa<UnrealizedConversionCastOp>(op))
       return WalkResult::advance();
     // Reject anything else.
     LLVM_DEBUG(llvm::dbgs() << "[AOT] Func body not compilable: "
@@ -907,14 +925,23 @@ static void cloneReferencedDeclarations(ModuleOp microModule,
         if (auto clonedFunc = dyn_cast<LLVM::LLVMFuncOp>(cloned)) {
           if (!clonedFunc.getBody().empty())
             clonedFunc.getBody().getBlocks().clear();
+          // External declarations must have 'external' or 'extern_weak'
+          // linkage. Reset if we stripped the body from an 'internal' func.
+          auto linkage = clonedFunc.getLinkage();
+          if (linkage != LLVM::Linkage::External &&
+              linkage != LLVM::Linkage::ExternWeak)
+            clonedFunc.setLinkage(LLVM::Linkage::External);
         }
         changed = true;
       } else if (auto funcFunc = dyn_cast<func::FuncOp>(srcOp)) {
-        auto cloned = cast<func::FuncOp>(builder.clone(*funcFunc, mapping));
-        // Keep the body if it's compilable; otherwise strip to declaration.
-        if (!cloned.getBody().empty() && !isFuncBodyCompilable(funcFunc)) {
-          cloned.getBody().getBlocks().clear();
-        }
+        // Clone as external declaration only (no body).
+        // Cloning the full body and then stripping it triggers "operation
+        // destroyed but still has uses" because Block::clear() destroys
+        // ops in forward order, hitting use-before-def.
+        auto cloned = func::FuncOp::create(
+            builder, funcFunc.getLoc(), funcFunc.getSymName(),
+            funcFunc.getFunctionType());
+        cloned.setVisibility(funcFunc.getVisibility());
         changed = true;
       } else if (auto globalOp = dyn_cast<LLVM::GlobalOp>(srcOp)) {
         builder.clone(*globalOp, mapping);
@@ -1821,6 +1848,247 @@ bool AOTProcessCompiler::compileAllProcesses(
 }
 
 //===----------------------------------------------------------------------===//
+// Manual arith/cf/func → LLVM lowering (avoids applyPartialConversion)
+//===----------------------------------------------------------------------===//
+
+/// Convert arith CmpI predicate to LLVM ICmp predicate.
+static LLVM::ICmpPredicate convertCmpPredicate(arith::CmpIPredicate pred) {
+  switch (pred) {
+  case arith::CmpIPredicate::eq:  return LLVM::ICmpPredicate::eq;
+  case arith::CmpIPredicate::ne:  return LLVM::ICmpPredicate::ne;
+  case arith::CmpIPredicate::slt: return LLVM::ICmpPredicate::slt;
+  case arith::CmpIPredicate::sle: return LLVM::ICmpPredicate::sle;
+  case arith::CmpIPredicate::sgt: return LLVM::ICmpPredicate::sgt;
+  case arith::CmpIPredicate::sge: return LLVM::ICmpPredicate::sge;
+  case arith::CmpIPredicate::ult: return LLVM::ICmpPredicate::ult;
+  case arith::CmpIPredicate::ule: return LLVM::ICmpPredicate::ule;
+  case arith::CmpIPredicate::ugt: return LLVM::ICmpPredicate::ugt;
+  case arith::CmpIPredicate::uge: return LLVM::ICmpPredicate::uge;
+  }
+  llvm_unreachable("unhandled arith::CmpIPredicate");
+}
+
+/// In-place lowering of arith/cf/func ops to LLVM dialect equivalents.
+/// Returns true on success. This avoids applyPartialConversion which
+/// corrupts existing LLVM ops by rebuilding function regions.
+static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
+                                    MLIRContext &mlirContext) {
+  IRRewriter rewriter(&mlirContext);
+  bool hadError = false;
+
+  // Phase 1: Rewrite arith/cf/func ops inside function bodies.
+  // Collect first, then rewrite (walk + modify is unsafe).
+  llvm::SmallVector<Operation *> toRewrite;
+  microModule.walk([&](Operation *op) {
+    auto *dialect = op->getDialect();
+    if (dialect && (isa<arith::ArithDialect>(dialect) ||
+                    isa<cf::ControlFlowDialect>(dialect)))
+      toRewrite.push_back(op);
+    else if (isa<func::ReturnOp, func::CallOp>(op))
+      toRewrite.push_back(op);
+  });
+
+  for (auto *op : toRewrite) {
+    rewriter.setInsertionPoint(op);
+    auto loc = op->getLoc();
+
+    // --- arith ops ---
+    if (auto c = dyn_cast<arith::ConstantOp>(op)) {
+      auto r = rewriter.create<LLVM::ConstantOp>(loc, c.getType(), c.getValue());
+      c.replaceAllUsesWith(r.getResult());
+      rewriter.eraseOp(c);
+    } else if (auto o = dyn_cast<arith::AddIOp>(op)) {
+      auto r = rewriter.create<LLVM::AddOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::SubIOp>(op)) {
+      auto r = rewriter.create<LLVM::SubOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::MulIOp>(op)) {
+      auto r = rewriter.create<LLVM::MulOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::DivSIOp>(op)) {
+      auto r = rewriter.create<LLVM::SDivOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::DivUIOp>(op)) {
+      auto r = rewriter.create<LLVM::UDivOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::RemSIOp>(op)) {
+      auto r = rewriter.create<LLVM::SRemOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::RemUIOp>(op)) {
+      auto r = rewriter.create<LLVM::URemOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::AndIOp>(op)) {
+      auto r = rewriter.create<LLVM::AndOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::OrIOp>(op)) {
+      auto r = rewriter.create<LLVM::OrOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::XOrIOp>(op)) {
+      auto r = rewriter.create<LLVM::XOrOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::ShLIOp>(op)) {
+      auto r = rewriter.create<LLVM::ShlOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::ShRSIOp>(op)) {
+      auto r = rewriter.create<LLVM::AShrOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::ShRUIOp>(op)) {
+      auto r = rewriter.create<LLVM::LShrOp>(loc, o.getType(), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::ExtSIOp>(op)) {
+      auto r = rewriter.create<LLVM::SExtOp>(loc, o.getType(), o.getIn());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::ExtUIOp>(op)) {
+      auto r = rewriter.create<LLVM::ZExtOp>(loc, o.getType(), o.getIn());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::TruncIOp>(op)) {
+      auto r = rewriter.create<LLVM::TruncOp>(loc, o.getType(), o.getIn());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::CmpIOp>(op)) {
+      auto r = rewriter.create<LLVM::ICmpOp>(
+          loc, convertCmpPredicate(o.getPredicate()), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::SelectOp>(op)) {
+      auto r = rewriter.create<LLVM::SelectOp>(
+          loc, o.getType(), o.getCondition(), o.getTrueValue(), o.getFalseValue());
+      o.replaceAllUsesWith(r.getResult()); rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::IndexCastOp>(op)) {
+      // index → integer or integer → index: these types should already be i64.
+      o.replaceAllUsesWith(o.getIn()); rewriter.eraseOp(o);
+    }
+    // --- cf ops ---
+    else if (auto brOp = dyn_cast<cf::BranchOp>(op)) {
+      rewriter.create<LLVM::BrOp>(loc, brOp.getDestOperands(), brOp.getDest());
+      rewriter.eraseOp(brOp);
+    } else if (auto condBrOp = dyn_cast<cf::CondBranchOp>(op)) {
+      rewriter.create<LLVM::CondBrOp>(
+          loc, condBrOp.getCondition(), condBrOp.getTrueDest(),
+          condBrOp.getTrueDestOperands(), condBrOp.getFalseDest(),
+          condBrOp.getFalseDestOperands());
+      rewriter.eraseOp(condBrOp);
+    }
+    // --- func ops ---
+    else if (auto retOp = dyn_cast<func::ReturnOp>(op)) {
+      rewriter.create<LLVM::ReturnOp>(loc, retOp.getOperands());
+      rewriter.eraseOp(retOp);
+    } else if (auto callOp = dyn_cast<func::CallOp>(op)) {
+      auto newCall = rewriter.create<LLVM::CallOp>(
+          loc, callOp.getResultTypes(), callOp.getCallee(),
+          callOp.getOperands());
+      callOp.replaceAllUsesWith(newCall.getResults());
+      rewriter.eraseOp(callOp);
+    }
+    // Unhandled ops remain (will cause ExecutionEngine failure → graceful skip).
+  }
+
+  // Phase 2: Convert func.func → llvm.func by manual body inlining.
+  llvm::SmallVector<func::FuncOp> funcOps;
+  microModule.walk([&](func::FuncOp op) { funcOps.push_back(op); });
+
+  for (auto funcOp : funcOps) {
+    auto funcType = funcOp.getFunctionType();
+    std::string origName = funcOp.getSymName().str();
+    auto loc = funcOp.getLoc();
+
+    // Build LLVM function type.
+    SmallVector<Type> argTypes(funcType.getInputs());
+    Type retType = funcType.getNumResults() == 0
+                       ? LLVM::LLVMVoidType::get(&mlirContext)
+                       : funcType.getResult(0);
+    auto llvmFuncType = LLVM::LLVMFunctionType::get(retType, argTypes);
+
+    if (funcOp.isExternal()) {
+      // External: erase func.func first, then create llvm.func to avoid
+      // symbol conflict.
+      rewriter.setInsertionPoint(funcOp);
+      rewriter.eraseOp(funcOp);
+      rewriter.setInsertionPointToEnd(microModule.getBody());
+      rewriter.create<LLVM::LLVMFuncOp>(loc, origName, llvmFuncType);
+      continue;
+    }
+
+    // For functions with bodies: splice blocks from func.func to llvm.func.
+    // First extract the body, then erase func.func, then create llvm.func
+    // with the extracted body. This avoids symbol name conflicts.
+    rewriter.setInsertionPoint(funcOp);
+
+    // Create temp llvm.func to receive the body.
+    std::string tmpName = "__tmp_f1_" + origName;
+    auto llvmFunc = rewriter.create<LLVM::LLVMFuncOp>(
+        loc, tmpName, llvmFuncType);
+
+    // Splice all blocks from func.func into llvm.func.
+    auto &srcRegion = funcOp.getBody();
+    auto &dstRegion = llvmFunc.getBody();
+    dstRegion.getBlocks().splice(dstRegion.end(), srcRegion.getBlocks());
+
+    // funcOp's body is now empty. Safe to erase.
+    rewriter.eraseOp(funcOp);
+
+    // Rename to original name.
+    llvmFunc.setSymName(origName);
+  }
+
+  return !hadError;
+}
+
+/// Post-lowering validation: walk each llvm.func with a body and verify all
+/// ops and types are pure LLVM dialect. Remove functions that still contain
+/// non-LLVM types (e.g., index, unrealized_conversion_cast residuals) to
+/// prevent assertion failures in LLVM's JIT backend.
+/// Returns the names of stripped functions.
+static llvm::SmallVector<std::string>
+stripNonLLVMFunctions(ModuleOp microModule) {
+  llvm::SmallVector<std::string> stripped;
+  llvm::SmallVector<LLVM::LLVMFuncOp> toStrip;
+
+  microModule.walk([&](LLVM::LLVMFuncOp llvmFunc) {
+    if (llvmFunc.isExternal())
+      return;
+
+    bool hasNonLLVM = false;
+    llvmFunc.walk([&](Operation *op) {
+      // Check op dialect — must be LLVM.
+      if (op->getDialect() &&
+          !isa<LLVM::LLVMDialect>(op->getDialect())) {
+        hasNonLLVM = true;
+        return WalkResult::interrupt();
+      }
+      // Check all operand and result types.
+      for (auto type : op->getOperandTypes()) {
+        if (!LLVM::isCompatibleType(type)) {
+          hasNonLLVM = true;
+          return WalkResult::interrupt();
+        }
+      }
+      for (auto type : op->getResultTypes()) {
+        if (!LLVM::isCompatibleType(type)) {
+          hasNonLLVM = true;
+          return WalkResult::interrupt();
+        }
+      }
+      return WalkResult::advance();
+    });
+
+    if (hasNonLLVM)
+      toStrip.push_back(llvmFunc);
+  });
+
+  for (auto func : toStrip) {
+    stripped.push_back(func.getSymName().str());
+    // Strip to external declaration: clear body, ensure external linkage.
+    func.getBody().getBlocks().clear();
+    auto linkage = func.getLinkage();
+    if (linkage != LLVM::Linkage::External &&
+        linkage != LLVM::Linkage::ExternWeak)
+      func.setLinkage(LLVM::Linkage::External);
+  }
+
+  return stripped;
+}
+
+//===----------------------------------------------------------------------===//
 // compileAllFuncBodies — Phase F1: bulk function compilation
 //===----------------------------------------------------------------------===//
 
@@ -1874,186 +2142,175 @@ bool AOTProcessCompiler::compileAllFuncBodies(
   llvm::InitializeNativeTarget();
   llvm::InitializeNativeTargetAsmPrinter();
 
-  constexpr size_t kChunkSize = 64;
-  size_t numChunks = (candidates.size() + kChunkSize - 1) / kChunkSize;
-
-  llvm::errs() << "[AOT-F1] Compiling " << candidates.size()
-               << " func bodies in " << numChunks << " chunk(s)\n";
-
-  for (size_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx) {
-    auto chunkStart = std::chrono::steady_clock::now();
-
-    size_t chunkBegin = chunkIdx * kChunkSize;
-    size_t chunkEnd = std::min(chunkBegin + kChunkSize, candidates.size());
-    size_t chunkSize = chunkEnd - chunkBegin;
-
-    auto microModule = ModuleOp::create(UnknownLoc::get(&mlirContext));
-    OpBuilder builder(&mlirContext);
-    builder.setInsertionPointToEnd(microModule.getBody());
-    IRMapping mapping;
-
-    llvm::SmallVector<std::string, 64> chunkFuncNames;
-    for (size_t i = chunkBegin; i < chunkEnd; ++i) {
-      auto funcOp = candidates[i];
-      builder.clone(*funcOp, mapping);
-      chunkFuncNames.push_back(funcOp.getSymName().str());
+  // Allow limiting candidates via env var for debugging.
+  size_t totalCandidates = candidates.size();
+  if (auto *limitStr = std::getenv("CIRCT_SIM_AOT_FUNC_LIMIT")) {
+    size_t limit = std::atol(limitStr);
+    if (limit > 0 && limit < totalCandidates) {
+      llvm::errs() << "[AOT-F1] Limiting to " << limit << " of "
+                   << totalCandidates << " candidates\n";
+      candidates.resize(limit);
+      totalCandidates = limit;
     }
-
-    cloneReferencedDeclarations(microModule, parentModule, mapping);
-
-    // Lowering pipeline.
-    LLVMTypeConverter converter(&mlirContext);
-    addProcessTypeConversions(converter);
-    populateHWToLLVMTypeConversions(converter);
-    converter.addConversion([](sim::FormatStringType type) -> Type {
-      return LLVM::LLVMPointerType::get(type.getContext());
-    });
-
-    LLVMConversionTarget target(mlirContext);
-    target.addLegalOp<ModuleOp>();
-    target.addLegalDialect<LLVM::LLVMDialect>();
-    target.addIllegalDialect<hw::HWDialect, comb::CombDialect,
-                             llhd::LLHDDialect, scf::SCFDialect>();
-    target.addIllegalOp<sim::PrintFormattedProcOp, sim::TerminateOp>();
-    target.addIllegalOp<sim::FormatLiteralOp, sim::FormatDecOp,
-                        sim::FormatHexOp, sim::FormatBinOp,
-                        sim::FormatCharOp, sim::FormatStringConcatOp,
-                        sim::FormatDynStringOp>();
-
-    RewritePatternSet patterns(&mlirContext);
-    populateFuncToLLVMConversionPatterns(converter, patterns);
-    cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
-    arith::populateArithToLLVMConversionPatterns(converter, patterns);
-    populateAnyFunctionOpInterfaceTypeConversionPattern(patterns, converter);
-    populateSCFToControlFlowConversionPatterns(patterns);
-
-    Namespace globals;
-    DenseMap<std::pair<Type, ArrayAttr>, LLVM::GlobalOp> constAggMap;
-    std::optional<HWToLLVMArraySpillCache> spillCache =
-        HWToLLVMArraySpillCache();
-    {
-      OpBuilder spillBuilder(microModule);
-      spillCache->spillNonHWOps(spillBuilder, converter, microModule);
-    }
-    populateHWToLLVMConversionPatterns(converter, patterns, globals,
-                                       constAggMap, spillCache);
-    populateCombToArithConversionPatterns(converter, patterns);
-    populateCombToLLVMConversionPatterns(converter, patterns);
-    patterns.add<ProcessProbeOpLowering, ProcessDriveOpLowering,
-                 ProcessConstantTimeLowering, ProcessIntToTimeLowering,
-                 ProcessTimeToIntLowering, ProcessWaitOpLowering,
-                 ProcessHaltOpLowering>(converter, &mlirContext);
-    patterns.add<ProcessSigProjectionPassthrough<llhd::SigExtractOp>,
-                 ProcessSigProjectionPassthrough<llhd::SigArrayGetOp>,
-                 ProcessSigProjectionPassthrough<llhd::SigArraySliceOp>,
-                 ProcessSigProjectionPassthrough<llhd::SigStructExtractOp>>(
-        converter, &mlirContext);
-    patterns.add<ProcessPrintOpLowering>(converter, &mlirContext);
-    patterns.add<TerminateOpErasure>(converter, &mlirContext);
-    patterns.add<FmtLiteralOpLowering, FmtDecOpLowering, FmtHexOpLowering,
-                 FmtBinOpLowering, FmtCharOpLowering, FmtConcatOpLowering,
-                 FmtDynStringOpLowering>(converter, &mlirContext);
-    patterns.add<HWBitcastOpLowering>(converter, &mlirContext);
-
-    ConversionConfig config;
-    config.allowPatternRollback = false;
-    if (failed(applyPartialConversion(microModule, target, std::move(patterns),
-                                      config))) {
-      llvm::errs() << "[AOT-F1] Chunk " << chunkIdx + 1 << "/" << numChunks
-                   << ": conversion FAILED\n";
-      microModule.erase();
-      continue;
-    }
-
-    // Clean up unrealized_conversion_cast ops.
-    {
-      bool changed = true;
-      while (changed) {
-        changed = false;
-        llvm::SmallVector<UnrealizedConversionCastOp> casts;
-        microModule.walk(
-            [&](UnrealizedConversionCastOp op) { casts.push_back(op); });
-        for (auto castOp : casts) {
-          if (castOp.use_empty()) {
-            castOp.erase();
-            changed = true;
-            continue;
-          }
-          if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
-            auto inputCast = castOp.getOperand(0)
-                                 .getDefiningOp<UnrealizedConversionCastOp>();
-            if (inputCast && inputCast.getNumOperands() == 1 &&
-                inputCast.getNumResults() == 1 &&
-                castOp.getResult(0).getType() ==
-                    inputCast.getOperand(0).getType()) {
-              castOp.getResult(0).replaceAllUsesWith(
-                  inputCast.getOperand(0));
-              castOp.erase();
-              changed = true;
-            }
-          }
-        }
-      }
-    }
-
-    // Create ExecutionEngine with O1.
-    registerBuiltinDialectTranslation(*microModule.getContext());
-    registerLLVMDialectTranslation(*microModule.getContext());
-
-    ExecutionEngineOptions engineOpts;
-    engineOpts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
-    engineOpts.transformer = makeOptimizingTransformer(
-        /*optLevel=*/1, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
-
-    auto engineOrErr = ExecutionEngine::create(microModule, engineOpts);
-    if (!engineOrErr) {
-      llvm::errs() << "[AOT-F1] Chunk " << chunkIdx + 1 << "/" << numChunks
-                   << ": ExecutionEngine creation FAILED\n";
-      llvm::consumeError(engineOrErr.takeError());
-      microModule.erase();
-      continue;
-    }
-
-    engines.push_back(std::move(*engineOrErr));
-    auto *jitEngine = engines.back().get();
-    registerJITRuntimeSymbols(jitEngine);
-
-    // Lookup function pointers.
-    unsigned chunkCompiled = 0;
-    for (size_t i = 0; i < chunkFuncNames.size(); ++i) {
-      const auto &name = chunkFuncNames[i];
-      auto expectedFn = jitEngine->lookup(name);
-      if (!expectedFn) {
-        llvm::consumeError(expectedFn.takeError());
-        continue;
-      }
-
-      auto funcOp = candidates[chunkBegin + i];
-      AOTCompiledFunc result;
-      result.funcName = name;
-      result.funcPtr = reinterpret_cast<void *>(*expectedFn);
-      result.numArgs = funcOp.getNumArguments();
-      result.numResults = funcOp.getNumResults();
-      results.push_back(std::move(result));
-      ++chunkCompiled;
-    }
-
-    microModule.erase();
-
-    auto chunkEndTime = std::chrono::steady_clock::now();
-    double chunkMs = std::chrono::duration<double, std::milli>(
-                         chunkEndTime - chunkStart)
-                         .count();
-    llvm::errs() << "[AOT-F1] Chunk " << chunkIdx + 1 << "/" << numChunks
-                 << ": " << chunkCompiled << "/" << chunkSize << " compiled, "
-                 << llvm::format("%.1f", chunkMs) << " ms\n";
   }
+  llvm::errs() << "[AOT-F1] Compiling " << totalCandidates
+               << " func bodies (single engine)\n";
+
+  // Single micro-module for ALL eligible functions.
+  auto microModule = ModuleOp::create(UnknownLoc::get(&mlirContext));
+  OpBuilder builder(&mlirContext);
+  builder.setInsertionPointToEnd(microModule.getBody());
+  IRMapping mapping;
+
+  llvm::SmallVector<std::string> allFuncNames;
+  allFuncNames.reserve(totalCandidates);
+  for (auto funcOp : candidates) {
+    builder.clone(*funcOp, mapping);
+    allFuncNames.push_back(funcOp.getSymName().str());
+  }
+
+  // Clone referenced declarations ONCE for the whole module.
+  cloneReferencedDeclarations(microModule, parentModule, mapping);
+
+  // Manual in-place lowering: rewrite arith/cf/func ops to LLVM equivalents.
+  // We avoid applyPartialConversion entirely because the conversion framework
+  // rebuilds function regions during type conversion, destroying SSA values
+  // that existing LLVM ops (GEP, load, store) still reference.
+  if (!lowerFuncArithCfToLLVM(microModule, mlirContext)) {
+    llvm::errs() << "[AOT-F1] Manual lowering FAILED — aborting\n";
+    microModule.erase();
+    return false;
+  }
+
+  // Post-lowering: strip functions that still contain non-LLVM ops/types.
+  // These would cause assertion failures in LLVM's JIT backend.
+  {
+    auto stripped = stripNonLLVMFunctions(microModule);
+    if (!stripped.empty()) {
+      // Remove stripped functions from allFuncNames so we don't look them up.
+      llvm::DenseSet<llvm::StringRef> strippedSet;
+      for (const auto &name : stripped)
+        strippedSet.insert(name);
+      // Mark stripped names so lookup skips them.
+      for (auto &name : allFuncNames) {
+        if (strippedSet.contains(name))
+          name.clear(); // Empty name → skip during lookup
+      }
+      llvm::errs() << "[AOT-F1] Stripped " << stripped.size()
+                   << " functions with non-LLVM ops/types\n";
+    }
+  }
+
+  // Verify the module before attempting ExecutionEngine creation.
+  if (failed(mlir::verify(microModule))) {
+    llvm::errs() << "[AOT-F1] Module verification FAILED — aborting\n";
+    microModule.erase();
+    return false;
+  }
+
+  // Collect external function/global names that need stub resolution.
+  // These are functions declared (no body) in the micro-module — they're
+  // interpreted functions that compiled code might call.
+  llvm::SmallVector<std::string> externalDeclNames;
+  {
+    llvm::DenseSet<llvm::StringRef> compiledNames;
+    for (const auto &name : allFuncNames) {
+      if (!name.empty())
+        compiledNames.insert(name);
+    }
+    microModule.walk([&](LLVM::LLVMFuncOp func) {
+      if (func.isExternal() && !compiledNames.contains(func.getSymName()))
+        externalDeclNames.push_back(func.getSymName().str());
+    });
+    microModule.walk([&](LLVM::GlobalOp global) {
+      if (!global.getInitializerRegion().empty())
+        return; // Has an initializer — not external
+      if (!global.getValue())
+        externalDeclNames.push_back(global.getSymName().str());
+    });
+  }
+
+  // Create ONE ExecutionEngine with O1.
+  registerBuiltinDialectTranslation(*microModule.getContext());
+  registerLLVMDialectTranslation(*microModule.getContext());
+
+  ExecutionEngineOptions engineOpts;
+  engineOpts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
+  engineOpts.transformer = makeOptimizingTransformer(
+      /*optLevel=*/1, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
+
+  auto engineOrErr = ExecutionEngine::create(microModule, engineOpts);
+  if (!engineOrErr) {
+    llvm::errs() << "[AOT-F1] ExecutionEngine creation FAILED — aborting\n";
+    llvm::consumeError(engineOrErr.takeError());
+    microModule.erase();
+    return false;
+  }
+
+  engines.push_back(std::move(*engineOrErr));
+  auto *jitEngine = engines.back().get();
+  registerJITRuntimeSymbols(jitEngine);
+
+  // Register stub symbols for all external declarations so the JIT can
+  // resolve cross-references to interpreted functions. Without these stubs,
+  // the JIT fails to materialize even functions that never actually call
+  // the missing symbols at runtime (because materialization is eager).
+  if (!externalDeclNames.empty()) {
+    // Universal abort stub: if a compiled function actually calls an
+    // interpreted function at runtime, this will be called.
+    static auto abortStub = +[]() -> void {
+      llvm::errs() << "[AOT-F1] FATAL: compiled code called unresolved "
+                      "interpreter function\n";
+      std::abort();
+    };
+    jitEngine->registerSymbols(
+        [&](llvm::orc::MangleAndInterner interner) {
+          llvm::orc::SymbolMap symbolMap;
+          for (const auto &name : externalDeclNames) {
+            symbolMap[interner(name)] = {
+                llvm::orc::ExecutorAddr::fromPtr(
+                    reinterpret_cast<void *>(abortStub)),
+                llvm::JITSymbolFlags::Exported};
+          }
+          return symbolMap;
+        });
+    llvm::errs() << "[AOT-F1] Registered " << externalDeclNames.size()
+                 << " stub symbols for external declarations\n";
+  }
+
+  // Lookup ALL function pointers from the single engine.
+  unsigned lookupFailed = 0;
+  for (size_t i = 0; i < allFuncNames.size(); ++i) {
+    const auto &name = allFuncNames[i];
+    if (name.empty())
+      continue; // Stripped during post-lowering validation
+    auto expectedFn = jitEngine->lookup(name);
+    if (!expectedFn) {
+      llvm::consumeError(expectedFn.takeError());
+      ++lookupFailed;
+      continue;
+    }
+
+    auto funcOp = candidates[i];
+    AOTCompiledFunc result;
+    result.funcName = name;
+    result.funcPtr = reinterpret_cast<void *>(*expectedFn);
+    result.numArgs = funcOp.getNumArguments();
+    result.numResults = funcOp.getNumResults();
+    results.push_back(std::move(result));
+  }
+
+  microModule.erase();
 
   auto endTime = std::chrono::steady_clock::now();
   double totalMs =
       std::chrono::duration<double, std::milli>(endTime - startTime).count();
-  llvm::errs() << "[AOT-F1] Total: " << results.size() << " func bodies in "
-               << llvm::format("%.1f", totalMs) << " ms\n";
+  llvm::errs() << "[AOT-F1] Compiled " << results.size() << "/"
+               << totalCandidates << " eligible functions in "
+               << llvm::format("%.1f", totalMs) << " ms (single engine)";
+  if (lookupFailed > 0)
+    llvm::errs() << " (" << lookupFailed << " lookup failures)";
+  llvm::errs() << "\n";
 
   return !results.empty();
 #endif
@@ -2272,99 +2529,12 @@ LogicalResult AOTProcessCompiler::compileFunctions(
 
     cloneReferencedDeclarations(microModule, parentModule, mapping);
 
-    // --- Lowering pipeline (same as compileAllFuncBodies) ---
-    LLVMTypeConverter converter(&mlirContext);
-    addProcessTypeConversions(converter);
-    populateHWToLLVMTypeConversions(converter);
-    converter.addConversion([](sim::FormatStringType type) -> Type {
-      return LLVM::LLVMPointerType::get(type.getContext());
-    });
-
-    LLVMConversionTarget target(mlirContext);
-    target.addLegalOp<ModuleOp>();
-    target.addLegalDialect<LLVM::LLVMDialect>();
-    target.addIllegalDialect<hw::HWDialect, comb::CombDialect,
-                             llhd::LLHDDialect, scf::SCFDialect>();
-    target.addIllegalOp<sim::PrintFormattedProcOp, sim::TerminateOp>();
-    target.addIllegalOp<sim::FormatLiteralOp, sim::FormatDecOp,
-                        sim::FormatHexOp, sim::FormatBinOp,
-                        sim::FormatCharOp, sim::FormatStringConcatOp,
-                        sim::FormatDynStringOp>();
-
-    RewritePatternSet patterns(&mlirContext);
-    populateFuncToLLVMConversionPatterns(converter, patterns);
-    cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
-    arith::populateArithToLLVMConversionPatterns(converter, patterns);
-    populateAnyFunctionOpInterfaceTypeConversionPattern(patterns, converter);
-    populateSCFToControlFlowConversionPatterns(patterns);
-
-    Namespace globals;
-    DenseMap<std::pair<Type, ArrayAttr>, LLVM::GlobalOp> constAggMap;
-    std::optional<HWToLLVMArraySpillCache> spillCache =
-        HWToLLVMArraySpillCache();
-    {
-      OpBuilder spillBuilder(microModule);
-      spillCache->spillNonHWOps(spillBuilder, converter, microModule);
-    }
-    populateHWToLLVMConversionPatterns(converter, patterns, globals,
-                                       constAggMap, spillCache);
-    populateCombToArithConversionPatterns(converter, patterns);
-    populateCombToLLVMConversionPatterns(converter, patterns);
-    patterns.add<ProcessProbeOpLowering, ProcessDriveOpLowering,
-                 ProcessConstantTimeLowering, ProcessIntToTimeLowering,
-                 ProcessTimeToIntLowering, ProcessWaitOpLowering,
-                 ProcessHaltOpLowering>(converter, &mlirContext);
-    patterns.add<ProcessSigProjectionPassthrough<llhd::SigExtractOp>,
-                 ProcessSigProjectionPassthrough<llhd::SigArrayGetOp>,
-                 ProcessSigProjectionPassthrough<llhd::SigArraySliceOp>,
-                 ProcessSigProjectionPassthrough<llhd::SigStructExtractOp>>(
-        converter, &mlirContext);
-    patterns.add<ProcessPrintOpLowering>(converter, &mlirContext);
-    patterns.add<TerminateOpErasure>(converter, &mlirContext);
-    patterns.add<FmtLiteralOpLowering, FmtDecOpLowering, FmtHexOpLowering,
-                 FmtBinOpLowering, FmtCharOpLowering, FmtConcatOpLowering,
-                 FmtDynStringOpLowering>(converter, &mlirContext);
-    patterns.add<HWBitcastOpLowering>(converter, &mlirContext);
-
-    ConversionConfig config;
-    config.allowPatternRollback = false;
-    if (failed(applyPartialConversion(microModule, target, std::move(patterns),
-                                      config))) {
+    // Manual in-place lowering (same as compileAllFuncBodies).
+    if (!lowerFuncArithCfToLLVM(microModule, mlirContext)) {
       llvm::errs() << "[AOT-F1-packed] Chunk " << chunkIdx + 1 << "/"
-                   << numChunks << ": conversion FAILED\n";
+                   << numChunks << ": manual lowering FAILED\n";
       microModule.erase();
       continue;
-    }
-
-    // Clean up unrealized_conversion_cast ops.
-    {
-      bool changed = true;
-      while (changed) {
-        changed = false;
-        llvm::SmallVector<UnrealizedConversionCastOp> casts;
-        microModule.walk(
-            [&](UnrealizedConversionCastOp op) { casts.push_back(op); });
-        for (auto castOp : casts) {
-          if (castOp.use_empty()) {
-            castOp.erase();
-            changed = true;
-            continue;
-          }
-          if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
-            auto inputCast = castOp.getOperand(0)
-                                 .getDefiningOp<UnrealizedConversionCastOp>();
-            if (inputCast && inputCast.getNumOperands() == 1 &&
-                inputCast.getNumResults() == 1 &&
-                castOp.getResult(0).getType() ==
-                    inputCast.getOperand(0).getType()) {
-              castOp.getResult(0).replaceAllUsesWith(
-                  inputCast.getOperand(0));
-              castOp.erase();
-              changed = true;
-            }
-          }
-        }
-      }
     }
 
     // === Generate packed wrappers (AFTER lowering, BEFORE engine) ===
