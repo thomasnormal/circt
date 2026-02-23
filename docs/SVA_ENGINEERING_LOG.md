@@ -4012,3 +4012,38 @@
       - result: `3/3` pass.
     - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
       - result: `141/141` pass.
+
+- Iteration update (SMT-LIB export: legalize common live LLVM scalar-int ops in BMC regions):
+  - realization:
+    - `for-smtlib-export` still rejected many common LLVM scalar integer ops in
+      live BMC logic, even when they were straightforwardly representable via
+      `arith` + existing SMT lowering.
+    - this kept otherwise-simple imported SVA designs on the unsupported path.
+  - TDD signal:
+    - added `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.add'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - extended `legalizeSMTLIBSupportedLLVMOps(...)` to rewrite live LLVM scalar
+      integer ops to equivalent `arith` ops before unsupported-op checks:
+      - `llvm.add/sub/mul/and/or/xor`
+      - `llvm.icmp`
+      - `llvm.select`
+      - `llvm.trunc/zext/sext`
+    - rewrites are type-guarded to scalar integer forms and preserve existing
+      unsupported behavior for other LLVM ops (for example `llvm.call`).
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir`.
+    - validated existing rejection remains for unsupported op class:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-constant.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir`
+      - result: `4/4` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+      - result: `142/142` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - result: `21/21` pass.

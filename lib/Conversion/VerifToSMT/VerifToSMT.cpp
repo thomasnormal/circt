@@ -8636,10 +8636,17 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   };
 
   SmallVector<LLVM::ConstantOp> llvmConstants;
+  SmallVector<Operation *> llvmIntOps;
   SmallVector<LLVM::LoadOp> llvmLoads;
   DenseMap<SymbolRefAttr, bool> globalHasDirectStoreCache;
   bmcOp->walk(
       [&](LLVM::ConstantOp op) { llvmConstants.push_back(op); });
+  bmcOp->walk([&](Operation *op) {
+    if (isa<LLVM::AddOp, LLVM::SubOp, LLVM::MulOp, LLVM::AndOp, LLVM::OrOp,
+            LLVM::XOrOp, LLVM::ICmpOp, LLVM::SelectOp, LLVM::TruncOp,
+            LLVM::ZExtOp, LLVM::SExtOp>(op))
+      llvmIntOps.push_back(op);
+  });
   bmcOp->walk([&](LLVM::LoadOp op) { llvmLoads.push_back(op); });
 
   for (auto llvmConstant : llvmConstants) {
@@ -8658,6 +8665,109 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         arith::ConstantOp::create(builder, llvmConstant.getLoc(), typedAttr);
     llvmConstant.replaceAllUsesWith(arithConstant.getResult());
     llvmConstant.erase();
+  }
+
+  auto isIntTy = [](Type ty) { return isa<IntegerType>(ty); };
+  auto toArithCmpPredicate =
+      [](LLVM::ICmpPredicate pred) -> std::optional<arith::CmpIPredicate> {
+    switch (pred) {
+    case LLVM::ICmpPredicate::eq:
+      return arith::CmpIPredicate::eq;
+    case LLVM::ICmpPredicate::ne:
+      return arith::CmpIPredicate::ne;
+    case LLVM::ICmpPredicate::slt:
+      return arith::CmpIPredicate::slt;
+    case LLVM::ICmpPredicate::sle:
+      return arith::CmpIPredicate::sle;
+    case LLVM::ICmpPredicate::sgt:
+      return arith::CmpIPredicate::sgt;
+    case LLVM::ICmpPredicate::sge:
+      return arith::CmpIPredicate::sge;
+    case LLVM::ICmpPredicate::ult:
+      return arith::CmpIPredicate::ult;
+    case LLVM::ICmpPredicate::ule:
+      return arith::CmpIPredicate::ule;
+    case LLVM::ICmpPredicate::ugt:
+      return arith::CmpIPredicate::ugt;
+    case LLVM::ICmpPredicate::uge:
+      return arith::CmpIPredicate::uge;
+    }
+    return std::nullopt;
+  };
+  for (Operation *op : llvmIntOps) {
+    if (!op || op->getNumResults() != 1 || op->getNumOperands() == 0)
+      continue;
+    if (!isIntTy(op->getResult(0).getType()))
+      continue;
+
+    OpBuilder builder(op);
+    Location loc = op->getLoc();
+    Value replacement;
+    auto lhs = op->getOperand(0);
+    auto rhs = op->getNumOperands() > 1 ? op->getOperand(1) : Value();
+
+    if (isa<LLVM::AddOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::AddIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::SubOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::SubIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::MulOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::MulIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::AndOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::AndIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::OrOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::OrIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::XOrOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::XOrIOp::create(builder, loc, lhs, rhs);
+    } else if (auto icmp = dyn_cast<LLVM::ICmpOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      auto pred = toArithCmpPredicate(icmp.getPredicate());
+      if (!pred)
+        continue;
+      replacement = arith::CmpIOp::create(builder, loc, *pred, lhs, rhs);
+    } else if (isa<LLVM::SelectOp>(op)) {
+      if (op->getNumOperands() != 3)
+        continue;
+      Value cond = op->getOperand(0);
+      Value trueVal = op->getOperand(1);
+      Value falseVal = op->getOperand(2);
+      if (!isIntTy(cond.getType()) || !isIntTy(trueVal.getType()) ||
+          !isIntTy(falseVal.getType()))
+        continue;
+      replacement = arith::SelectOp::create(builder, loc, cond, trueVal, falseVal);
+    } else if (isa<LLVM::TruncOp>(op)) {
+      if (!isIntTy(lhs.getType()))
+        continue;
+      replacement = arith::TruncIOp::create(builder, loc,
+                                            op->getResult(0).getType(), lhs);
+    } else if (isa<LLVM::ZExtOp>(op)) {
+      if (!isIntTy(lhs.getType()))
+        continue;
+      replacement = arith::ExtUIOp::create(builder, loc,
+                                           op->getResult(0).getType(), lhs);
+    } else if (isa<LLVM::SExtOp>(op)) {
+      if (!isIntTy(lhs.getType()))
+        continue;
+      replacement = arith::ExtSIOp::create(builder, loc,
+                                           op->getResult(0).getType(), lhs);
+    } else {
+      continue;
+    }
+
+    op->getResult(0).replaceAllUsesWith(replacement);
+    op->erase();
   }
 
   for (auto llvmLoad : llvmLoads) {
