@@ -31,6 +31,7 @@ done
 required_source_tokens=(
   'command -v "$EMCMAKE_BIN"'
   'command -v "$CMAKE_BIN"'
+  "CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF"
 )
 
 for token in "${required_source_tokens[@]}"; do
@@ -39,5 +40,16 @@ for token in "${required_source_tokens[@]}"; do
     exit 1
   fi
 done
+
+tmp_err="$(mktemp)"
+trap 'rm -f "$tmp_err"' EXIT
+if CIRCT_SIM_WASM_ENABLE_NODERAWFS=maybe "$SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-config-contract] configure script accepted invalid CIRCT_SIM_WASM_ENABLE_NODERAWFS override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF" "$tmp_err"; then
+  echo "[wasm-config-contract] missing explicit ON/OFF diagnostic for CIRCT_SIM_WASM_ENABLE_NODERAWFS" >&2
+  exit 1
+fi
 
 echo "[wasm-config-contract] PASS"

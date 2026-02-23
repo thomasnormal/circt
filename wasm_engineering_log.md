@@ -959,3 +959,26 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: validate CIRCT_SIM_WASM_ENABLE_NODERAWFS in configure)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_configure_contract_check.sh` to require:
+    - explicit source-level diagnostic token:
+      `CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF`;
+    - runtime rejection for invalid overrides, e.g.
+      `CIRCT_SIM_WASM_ENABLE_NODERAWFS=maybe`.
+  - Pre-fix failure:
+    - `utils/wasm_configure_contract_check.sh` failed with:
+      - `missing source check in configure script: CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF`
+    - configure script accepted arbitrary values for
+      `CIRCT_SIM_WASM_ENABLE_NODERAWFS`, deferring behavior to CMake truthiness.
+- Fix:
+  - updated `utils/configure_wasm_build.sh` to fail fast unless
+    `CIRCT_SIM_WASM_ENABLE_NODERAWFS` is exactly `ON` or `OFF`.
+- Validation:
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `utils/wasm_cxx20_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

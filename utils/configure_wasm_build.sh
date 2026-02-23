@@ -23,6 +23,11 @@ if (( CMAKE_CXX_STANDARD < 20 )); then
   exit 1
 fi
 
+if [[ "$CIRCT_SIM_WASM_ENABLE_NODERAWFS" != "ON" && "$CIRCT_SIM_WASM_ENABLE_NODERAWFS" != "OFF" ]]; then
+  echo "[wasm-configure] CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF (got $CIRCT_SIM_WASM_ENABLE_NODERAWFS)" >&2
+  exit 1
+fi
+
 print_only=0
 extra_cmake_args=()
 while (($#)); do
