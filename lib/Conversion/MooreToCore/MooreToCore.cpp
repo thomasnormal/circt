@@ -435,6 +435,110 @@ static Value createFourStateStruct(OpBuilder &builder, Location loc,
                                     ValueRange{value, unknown});
 }
 
+/// Compute the packed bitwidth of a type — the number of bits it occupies in
+/// the flat simple-bit-vector representation (one bit per value, one bit per
+/// unknown). For 2-state leaf types this equals the integer width; for 4-state
+/// leaf types (FourStateStruct) this is the value-component width (half the
+/// struct's total bitwidth). Composite types accumulate their children.
+static unsigned getPackedWidth(Type type) {
+  if (auto intType = dyn_cast<IntegerType>(type))
+    return intType.getWidth();
+  if (isFourStateStructType(type)) {
+    auto st = cast<hw::StructType>(type);
+    return cast<IntegerType>(st.getElements()[0].type).getWidth();
+  }
+  if (auto st = dyn_cast<hw::StructType>(type)) {
+    unsigned total = 0;
+    for (auto &elem : st.getElements())
+      total += getPackedWidth(elem.type);
+    return total;
+  }
+  if (auto at = dyn_cast<hw::ArrayType>(type)) {
+    return at.getNumElements() * getPackedWidth(at.getElementType());
+  }
+  return 0;
+}
+
+/// Recursively reconstruct a structured HW value from flat packed value and
+/// unknown integer components. Used when converting a flat FourStateStruct
+/// to a mixed 2/4-state structured type where a simple bitcast would fail
+/// due to the 2-state fields not carrying unknown bits.
+static Value reconstructFromFlatPacked(OpBuilder &builder, Location loc,
+                                       Value valueBits, Value unknownBits,
+                                       Type targetType) {
+  // Leaf: plain integer (2-state field) — use value bits only.
+  if (auto intType = dyn_cast<IntegerType>(targetType)) {
+    unsigned width = intType.getWidth();
+    unsigned sourceWidth = cast<IntegerType>(valueBits.getType()).getWidth();
+    if (width == sourceWidth)
+      return valueBits;
+    return comb::ExtractOp::create(builder, loc, valueBits, 0, width);
+  }
+
+  // Leaf: FourStateStruct (4-state field).
+  if (isFourStateStructType(targetType)) {
+    auto structType = cast<hw::StructType>(targetType);
+    auto valueType = cast<IntegerType>(structType.getElements()[0].type);
+    unsigned halfWidth = valueType.getWidth();
+    unsigned sourceWidth = cast<IntegerType>(valueBits.getType()).getWidth();
+    Value val = valueBits;
+    Value unk = unknownBits;
+    if (halfWidth < sourceWidth) {
+      val = comb::ExtractOp::create(builder, loc, valueBits, 0, halfWidth);
+      unk = comb::ExtractOp::create(builder, loc, unknownBits, 0, halfWidth);
+    }
+    return createFourStateStruct(builder, loc, val, unk);
+  }
+
+  // hw::StructType (non-FourState): reconstruct fields.
+  if (auto structType = dyn_cast<hw::StructType>(targetType)) {
+    auto elements = structType.getElements();
+    SmallVector<Value> fields;
+    unsigned sourceWidth = cast<IntegerType>(valueBits.getType()).getWidth();
+    unsigned packedOffset = sourceWidth;
+
+    for (auto &elem : elements) {
+      unsigned pw = getPackedWidth(elem.type);
+      packedOffset -= pw;
+      Value fv =
+          comb::ExtractOp::create(builder, loc, valueBits, packedOffset, pw);
+      Value fu =
+          comb::ExtractOp::create(builder, loc, unknownBits, packedOffset, pw);
+      Value field = reconstructFromFlatPacked(builder, loc, fv, fu, elem.type);
+      if (!field)
+        return Value();
+      fields.push_back(field);
+    }
+    return hw::StructCreateOp::create(builder, loc, structType, fields);
+  }
+
+  // hw::ArrayType: reconstruct elements.
+  if (auto arrayType = dyn_cast<hw::ArrayType>(targetType)) {
+    unsigned numElements = arrayType.getNumElements();
+    Type elementType = arrayType.getElementType();
+    unsigned packedElemWidth = getPackedWidth(elementType);
+    unsigned sourceWidth = cast<IntegerType>(valueBits.getType()).getWidth();
+    unsigned packedOffset = sourceWidth;
+
+    SmallVector<Value> elems;
+    for (unsigned i = 0; i < numElements; ++i) {
+      packedOffset -= packedElemWidth;
+      Value ev = comb::ExtractOp::create(builder, loc, valueBits, packedOffset,
+                                         packedElemWidth);
+      Value eu = comb::ExtractOp::create(builder, loc, unknownBits,
+                                         packedOffset, packedElemWidth);
+      Value elem =
+          reconstructFromFlatPacked(builder, loc, ev, eu, elementType);
+      if (!elem)
+        return Value();
+      elems.push_back(elem);
+    }
+    return hw::ArrayCreateOp::create(builder, loc, arrayType, elems);
+  }
+
+  return Value();
+}
+
 /// Mask value bits to X for any unknown bits (used for logic/arithmetic ops).
 static Value maskFourStateValue(OpBuilder &builder, Location loc, Value value,
                                 Value unknown) {
@@ -11276,6 +11380,28 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
       Value valueComponent = extractFourStateValue(rewriter, op.getLoc(), input);
       rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, type, valueComponent);
       return success();
+    }
+
+    // Handle FourStateStruct → mixed 2/4-state structured type.
+    // When the target has 2-state leaf fields (plain IntegerType) alongside
+    // 4-state fields (FourStateStruct), a flat hw.bitcast fails because
+    // 2-state fields don't carry unknown bits in the structured
+    // representation, making the target narrower than the source.
+    // Reconstruct the structured value element-by-element instead.
+    if (isFourStateStructType(inputType)) {
+      int64_t inputBW = hw::getBitWidth(inputType);
+      int64_t targetBW = hw::getBitWidth(type);
+      if (inputBW >= 0 && targetBW >= 0 && inputBW != targetBW) {
+        Location loc = op.getLoc();
+        Value value = extractFourStateValue(rewriter, loc, input);
+        Value unknown = extractFourStateUnknown(rewriter, loc, input);
+        Value result =
+            reconstructFromFlatPacked(rewriter, loc, value, unknown, type);
+        if (result) {
+          rewriter.replaceOp(op, result);
+          return success();
+        }
+      }
     }
 
     // Otherwise use bitcast.
