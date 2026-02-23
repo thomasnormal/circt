@@ -19,6 +19,15 @@ validate_bool_env() {
   fi
 }
 
+validate_positive_int_env() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[wasm-smoke] invalid $name value: $value (expected positive integer)" >&2
+    exit 1
+  fi
+}
+
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
 VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
@@ -62,6 +71,7 @@ fi
 validate_bool_env "WASM_REQUIRE_VERILOG" "$WASM_REQUIRE_VERILOG"
 validate_bool_env "WASM_SKIP_BUILD" "$WASM_SKIP_BUILD"
 validate_bool_env "WASM_REQUIRE_CLEAN_CROSSCOMPILE" "$WASM_REQUIRE_CLEAN_CROSSCOMPILE"
+validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"
 
 if [[ "$WASM_CHECK_CXX20_WARNINGS" != "auto" && "$WASM_CHECK_CXX20_WARNINGS" != "0" && "$WASM_CHECK_CXX20_WARNINGS" != "1" ]]; then
   echo "[wasm-smoke] invalid WASM_CHECK_CXX20_WARNINGS value: $WASM_CHECK_CXX20_WARNINGS (expected auto, 0, or 1)" >&2

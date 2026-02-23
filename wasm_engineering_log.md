@@ -873,3 +873,32 @@
     passes end-to-end.
   - `utils/wasm_smoke_contract_check.sh`, `utils/wasm_ci_contract_check.sh`,
     and `utils/wasm_cxx20_contract_check.sh` pass.
+
+## 2026-02-23 (follow-up: fail fast on invalid NINJA_JOBS in wasm smoke)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require:
+    - a positive-integer validator helper (`validate_positive_int_env`);
+    - explicit `NINJA_JOBS` validation call in `utils/run_wasm_smoke.sh`.
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: validate_positive_int_env`
+    - smoke script accepted invalid values like `NINJA_JOBS=zero` and deferred
+      failure to downstream `ninja` invocations.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh`:
+    - added `validate_positive_int_env()` and require `NINJA_JOBS` to match
+      `^[1-9][0-9]*$`;
+    - fail early with explicit diagnostic when invalid.
+  - updated `utils/wasm_smoke_contract_check.sh` to enforce this new token
+    contract.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - negative test:
+    - `NINJA_JOBS=zero WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 utils/run_wasm_smoke.sh`
+      exits non-zero with:
+      - `invalid NINJA_JOBS value: zero (expected positive integer)`.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
+  - `utils/wasm_cxx20_warning_contract_check.sh`,
+    `utils/wasm_ci_contract_check.sh`, and
+    `utils/wasm_cxx20_contract_check.sh` pass.
