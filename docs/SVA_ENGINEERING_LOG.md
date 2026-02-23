@@ -3265,3 +3265,41 @@
     - closed a real lowering legality gap for assertion-context sequence
       subroutine side effects.
     - removed stale XFAIL status from seven UVM SVA e2e regression tests.
+
+- Iteration update (multiclock `ltl.past` de-XFAIL closure in VerifToSMT):
+  - realization:
+    - two multiclock `ltl.past` regression tests were still marked `XFAIL`
+      but no longer exercised a converter bug.
+    - both used type-invalid test IR (sequence-typed `ltl.past` consumed as
+      `i1`), so they failed in parser/type verification before conversion.
+  - implemented:
+    - fixed test IR typing and removed stale `XFAIL` in:
+      - `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
+      - `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
+    - strengthened checks to lock expected dual comparison lowering in
+      `@bmc_circuit` (`smt.eq` x2).
+    - refreshed check ordering in:
+      - `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir`
+      so it no longer depends on fragile local emission order.
+  - validation:
+    - targeted multiclock-past regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
+      - result: `3/3` pass.
+    - focused VerifToSMT multiclock-past bucket:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='bmc-multiclock-past-buffer'`
+      - result: `6/6` pass.
+    - regular formal sanity:
+      - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `4/4` mode checks pass.
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+    - profiling sample:
+      - `time llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
+      - result: `real 0m0.102s`.
+  - surprises:
+    - `llvm-lit` failed once due malformed local timing cache line in
+      `build-test/test/.lit_test_times.txt`; this was an environment artifact,
+      not a source regression.
+  - outcome:
+    - closed stale multiclock `ltl.past` expected-fail status and restored
+      meaningful conversion coverage for shared past across clock domains.

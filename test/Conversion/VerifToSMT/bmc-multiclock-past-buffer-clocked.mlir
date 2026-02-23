@@ -14,14 +14,14 @@
 // CHECK: func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bv<1>, !smt.bool)
 // Property checking
-// CHECK: smt.not
-// CHECK: smt.and
+// CHECK-DAG: smt.not
+// CHECK-DAG: smt.and
+// Past buffer update
+// CHECK-DAG: smt.ite
 // CHECK: smt.push
 // CHECK: smt.assert
 // CHECK: smt.check
 // CHECK: smt.pop
-// Past buffer update
-// CHECK: smt.ite
 func.func @past_multiclock_clocked() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk0", "clk1", "sig"]

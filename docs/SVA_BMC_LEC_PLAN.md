@@ -41,7 +41,39 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, BMC final-check condition folding)
+## Latest SVA Closure Slice (February 23, 2026, multiclock `ltl.past` de-XFAIL closure in VerifToSMT)
+
+- closed stale expected-failure coverage for shared `ltl.past` across clock
+  domains in VerifToSMT conversion tests.
+- regression fixes:
+  - `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
+    - removed stale `XFAIL`.
+    - fixed typed uses of `ltl.past` to `!ltl.sequence`.
+    - added dual `smt.eq` checks in `@bmc_circuit`.
+  - `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
+    - removed stale `XFAIL`.
+    - fixed `ltl.clock`/`verif.assert` uses to `!ltl.sequence`.
+    - added dual `smt.eq` checks in `@bmc_circuit`.
+  - `test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir`
+    - updated check ordering (`CHECK-DAG`) to avoid fragile local op-order
+      assumptions around `smt.not`/`smt.and`/`smt.ite`.
+- validation snapshot:
+  - targeted:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
+    - result: `3/3` pass.
+  - focused bucket:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='bmc-multiclock-past-buffer'`
+    - result: `6/6` pass.
+  - regular formal sanity:
+    - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `4/4` mode checks pass.
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+  - profiling sample:
+    - `time llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
+    - result: `real 0m0.102s`.
+
+## Previous SVA Closure Slice (February 23, 2026, BMC final-check condition folding)
 
 - removed redundant final-check disjunctions in BMC lowering when no non-final
   checks exist:
