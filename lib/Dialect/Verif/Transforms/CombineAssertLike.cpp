@@ -85,6 +85,14 @@ private:
     auto defop = op.getOperation();
     Block *parent = defop->getBlock();
 
+    // Preserve BMC-specific assert-like metadata (e.g. bmc.final/clock attrs).
+    // Combining such ops can destroy per-check semantics required by
+    // liveness/final-property handling.
+    for (NamedAttribute attr : defop->getAttrs()) {
+      if (attr.getName().strref().starts_with("bmc."))
+        return success();
+    }
+
     // Check that our condition isn't an ltl property, if so ignore
     if (!isa<ltl::PropertyType, ltl::SequenceType>(condition.getType())) {
 

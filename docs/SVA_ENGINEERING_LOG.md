@@ -3514,3 +3514,51 @@
   - outcome:
     - closed stale UVM include-tags expected-fail lane and removed manual
       multiclock knob friction for mixed sv-tests suites.
+
+- Iteration update (mixed assert+cover BMC support + `bmc.final` preservation):
+  - realization:
+    - `convert-verif-to-smt` still rejected mixed `verif.assert` + `verif.cover`
+      in one `verif.bmc`, even though commercial flows and OVL-style harnesses
+      regularly mix safety and coverage obligations.
+    - `combine-assert-like` combined `bmc.final` and non-final assert-like ops,
+      which can erase final-only semantics before liveness lowering.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - removed mixed assert/cover rejection.
+      - added per-non-final-check typing (`nonFinalCheckIsCover`) and used it
+        in SMTLIB and non-SMTLIB lowering paths.
+      - combined terminal condition as:
+        - non-final violation/hit OR final-assert-violation OR final-cover-hit.
+    - `lib/Dialect/Verif/Transforms/CombineAssertLike.cpp`
+      - skip combining assert/assume ops carrying any `bmc.*` attribute so
+        `bmc.final`/clock metadata survives to BMC conversion.
+    - regression coverage:
+      - added `test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir`
+        (new TDD test).
+      - updated `test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
+        to avoid brittle SSA-id coupling.
+  - TDD signal:
+    - before implementation:
+      - `bmc-mixed-assert-cover.mlir` failed with:
+        - `bounded model checking problems with mixed assert/cover properties are not yet correctly handled`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-bmc circt-opt`
+    - targeted regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir build-test/test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir build-test/test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
+      - result: `3/3` pass.
+    - broad `circt-bmc` suite:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+      - result: `153 pass, 156 unsupported, 1 xfail, 1 fail`.
+      - remaining fail is local JIT Z3 linkage (`Z3_*` missing symbols) in
+        `circt-bmc-disable-iff-constant.mlir`, not from this change.
+    - regular formal sanity:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.12--property|16.12--property-disj' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `total=9 pass=9 fail=0`.
+  - profiling sample:
+    - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+    - result: `real 1m43.77s`.
+  - outcome:
+    - mixed assert+cover BMC checks are now supported in one query.
+    - `bmc.final` semantics survive `combine-assert-like` for liveness/final
+      checks.
