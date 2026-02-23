@@ -3388,3 +3388,45 @@
   - outcome:
     - restored SVA ImportVerilog regression signal quality by removing stale
       harness assumptions and aligning checks with current frontend semantics.
+
+- Iteration update (`circt-bmc` option parity: plumb `--x-optimistic` to VerifToSMT):
+  - realization:
+    - `ConvertVerifToSMTOptions.xOptimisticOutputs` already exists and is used
+      by `circt-lec`, but `circt-bmc` did not expose or forward it.
+    - this left `circt-bmc` behind on LEC xprop controls despite shared
+      VerifToSMT infrastructure.
+  - implemented:
+    - `tools/circt-bmc/circt-bmc.cpp`:
+      - added CLI option:
+        - `--x-optimistic` (`Treat unknown output bits as don't-care in LEC operations.`)
+      - forwarded `xOptimisticOutputs` into `ConvertVerifToSMTOptions` for:
+        - regular BMC flow (`executeBMC`)
+        - induction flow (`executeBMCWithInduction`)
+    - regression coverage:
+      - added:
+        - `test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - updated:
+        - `test/Tools/circt-bmc/commandline.mlir`
+  - TDD signal:
+    - before implementation:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - failed with:
+        - missing `--x-optimistic` in help output
+        - `Unknown command line argument '--x-optimistic'`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-bmc`
+    - targeted regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - result: `2/2` pass.
+    - regular formal sanity:
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh`
+      - result: `14 tests, failures=0, xfail=6, xpass=0`.
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh`
+      - result: `14 tests, failures=0`.
+    - profiling sample:
+      - `time TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh`
+      - result: `real 0m10.539s`.
+  - outcome:
+    - closed `circt-bmc`/`circt-lec` option-parity gap for LEC xprop handling,
+      with regression coverage for both CLI surfacing and lowering behavior.

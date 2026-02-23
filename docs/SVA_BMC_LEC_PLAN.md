@@ -1476,3 +1476,36 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Current state:
   - `sva_value_change_sim` is now green in both known/xprop lanes with no
     expected-failure override.
+
+## Latest circt-bmc parity closure (2026-02-23, `--x-optimistic`)
+
+- Implemented:
+  - `tools/circt-bmc/circt-bmc.cpp`
+    - added user-facing `--x-optimistic` CLI option.
+    - wired option to `ConvertVerifToSMTOptions.xOptimisticOutputs` in:
+      - `executeBMC`
+      - `executeBMCWithInduction`
+  - regression updates:
+    - added `test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - checks strict vs x-optimistic LEC mismatch lowering in
+        `circt-bmc --emit-mlir`.
+    - updated `test/Tools/circt-bmc/commandline.mlir`
+      - verifies `--x-optimistic` appears in help.
+
+- Validation:
+  - build:
+    - `ninja -C build-test circt-bmc`
+  - targeted lit:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+    - result: `2/2` pass.
+  - regular formal sanity:
+    - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh`
+      - result: `14 tests, failures=0, xfail=6, xpass=0`.
+    - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh`
+      - result: `14 tests, failures=0`.
+
+- Current state:
+  - `circt-bmc` now has parity with `circt-lec` for `x-optimistic` LEC output
+    handling controls.
+  - remaining known xprop lane expected failures stay unchanged (`6`) since
+    they are BMC-property semantics, not LEC output-comparison mode.

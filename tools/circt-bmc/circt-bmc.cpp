@@ -161,6 +161,10 @@ static cl::opt<bool> assumeKnownInputs(
     cl::desc("Assume input values are known (not X) for BMC and LEC "
              "operations."),
     cl::init(false), cl::cat(mainCategory));
+static cl::opt<bool> xOptimisticOutputs(
+    "x-optimistic",
+    cl::desc("Treat unknown output bits as don't-care in LEC operations."),
+    cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<bool>
     verbosePassExecutions("verbose-pass-executions",
@@ -1304,6 +1308,7 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
   ConvertVerifToSMTOptions baseOptions;
   baseOptions.risingClocksOnly = risingClocksOnly;
   baseOptions.assumeKnownInputs = assumeKnownInputs;
+  baseOptions.xOptimisticOutputs = xOptimisticOutputs;
   baseOptions.forSMTLIBExport = true;
   baseOptions.bmcMode = "induction-base";
 
@@ -1405,6 +1410,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
   ConvertVerifToSMTOptions convertVerifToSMTOptions;
   convertVerifToSMTOptions.risingClocksOnly = risingClocksOnly;
   convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
+  convertVerifToSMTOptions.xOptimisticOutputs = xOptimisticOutputs;
   convertVerifToSMTOptions.forSMTLIBExport =
       (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
   convertVerifToSMTOptions.bmcMode =
