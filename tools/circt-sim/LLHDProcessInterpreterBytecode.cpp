@@ -84,13 +84,94 @@ private:
   /// Try to compile a drive operation.
   bool compileDrive(llhd::DriveOp driveOp, BytecodeProgram &program);
 
+  /// Emit parallel phi copies that are safe against register aliasing.
+  /// When copies form cycles (e.g., swap: a→b, b→a), temporary registers
+  /// are used to break the dependency.
+  void emitParallelCopies(
+      llvm::ArrayRef<std::pair<uint8_t, uint8_t>> copies,
+      BytecodeProgram &program);
+
+  /// Deferred auxiliary block for cf.cond_br with block arguments.
+  /// Each aux block performs parallel phi copies then jumps to the real target.
+  struct DeferredAuxBlock {
+    llvm::SmallVector<std::pair<uint8_t, uint8_t>> copies;
+    uint32_t targetBlockIndex;
+  };
+
   SignalResolverFn resolveSignalId;
   ProcessScheduler &scheduler;
   llvm::DenseMap<Value, uint8_t> valueToReg;
   llvm::DenseMap<Block *, uint32_t> blockToIndex;
+  llvm::SmallVector<DeferredAuxBlock> deferredAuxBlocks;
+  uint32_t nextAuxBlockIndex = 0;
   uint8_t nextReg = 0;
   bool tooManyRegs = false;
 };
+
+void BytecodeCompiler::emitParallelCopies(
+    llvm::ArrayRef<std::pair<uint8_t, uint8_t>> copies,
+    BytecodeProgram &program) {
+  // Filter out no-op copies (src == dest).
+  llvm::SmallVector<std::pair<uint8_t, uint8_t>> filtered;
+  for (auto [src, dest] : copies) {
+    if (src != dest)
+      filtered.push_back({src, dest});
+  }
+  if (filtered.empty())
+    return;
+
+  // Check if any copy's source register is also a destination of another copy.
+  // If so, sequential execution would clobber values (the parallel copy problem).
+  llvm::SmallDenseSet<uint8_t, 8> destRegs;
+  for (auto [src, dest] : filtered)
+    destRegs.insert(dest);
+  bool hasAliasing = false;
+  for (auto [src, dest] : filtered) {
+    if (destRegs.count(src)) {
+      hasAliasing = true;
+      break;
+    }
+  }
+
+  if (!hasAliasing) {
+    // No aliasing: safe to emit direct copies.
+    for (auto [src, dest] : filtered) {
+      MicroOp copyOp;
+      copyOp.kind = MicroOpKind::Trunci;
+      copyOp.destReg = dest;
+      copyOp.srcReg1 = src;
+      copyOp.width = 64;
+      program.ops.push_back(copyOp);
+    }
+    return;
+  }
+
+  // Aliasing detected: snapshot all sources into temps, then copy temps to
+  // destinations. This breaks any read-after-write dependencies.
+  llvm::SmallVector<uint8_t, 4> temps;
+  for (auto [src, dest] : filtered) {
+    uint8_t temp = nextReg++;
+    if (nextReg >= 255) {
+      tooManyRegs = true;
+      return;
+    }
+    temps.push_back(temp);
+    MicroOp copyOp;
+    copyOp.kind = MicroOpKind::Trunci;
+    copyOp.destReg = temp;
+    copyOp.srcReg1 = src;
+    copyOp.width = 64;
+    program.ops.push_back(copyOp);
+  }
+  for (size_t i = 0; i < filtered.size(); ++i) {
+    MicroOp copyOp;
+    copyOp.kind = MicroOpKind::Trunci;
+    copyOp.destReg = filtered[i].second;
+    copyOp.srcReg1 = temps[i];
+    copyOp.width = 64;
+    program.ops.push_back(copyOp);
+  }
+}
 
 bool BytecodeCompiler::compileProbe(llhd::ProbeOp probeOp,
                                      BytecodeProgram &program) {
@@ -206,56 +287,97 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
 
   // cf.br (unconditional branch)
   if (auto brOp = dyn_cast<cf::BranchOp>(op)) {
-    // Handle block arguments (phi values).
+    // Handle block arguments (phi values) with parallel copy semantics
+    // to avoid register aliasing (e.g., swap: cf.br ^bb(%b, %a)).
     Block *dest = brOp.getDest();
     auto destArgs = dest->getArguments();
     auto branchOperands = brOp.getDestOperands();
+    llvm::SmallVector<std::pair<uint8_t, uint8_t>, 4> copies;
     for (size_t i = 0; i < destArgs.size(); ++i) {
-      // Copy the branch operand register to the block argument register.
       uint8_t srcReg = getOrAssignReg(branchOperands[i]);
       uint8_t destReg = getOrAssignReg(destArgs[i]);
-      if (srcReg != destReg) {
-        MicroOp copyOp;
-        copyOp.kind = MicroOpKind::Const; // Abuse Const as copy
-        // Actually, we need a proper copy. Let's use Add with zero.
-        // Or just use a move instruction. Since we don't have one,
-        // use Xor with 0 as identity: dest = src ^ 0 = src.
-        // Actually simplest: dest = src + 0
-        copyOp.kind = MicroOpKind::Add;
-        copyOp.destReg = destReg;
-        copyOp.srcReg1 = srcReg;
-        // Need a zero register. Let's assign immediate const 0 first.
-        // This is getting complex. Let's just do: destReg = srcReg
-        // by emitting a CONST with the source reg value...
-        // No — we need a proper Move micro-op. Let me just use Trunci
-        // with full width as a copy.
-        copyOp.kind = MicroOpKind::Trunci;
-        copyOp.destReg = destReg;
-        copyOp.srcReg1 = srcReg;
-        copyOp.width = 64; // Full width copy
-        program.ops.push_back(copyOp);
-      }
+      copies.push_back({srcReg, destReg});
     }
+    emitParallelCopies(copies, program);
+    if (tooManyRegs)
+      return false;
 
     MicroOp mop;
     mop.kind = MicroOpKind::Jump;
     mop.immediate = getBlockIndex(dest);
     program.ops.push_back(mop);
-    return !tooManyRegs;
+    return true;
   }
 
   // cf.cond_br (conditional branch)
   if (auto condBrOp = dyn_cast<cf::CondBranchOp>(op)) {
-    // Only support cond_br with no block arguments for now.
-    if (!condBrOp.getTrueDestOperands().empty() ||
-        !condBrOp.getFalseDestOperands().empty())
-      return false;
+    bool hasTrueArgs = !condBrOp.getTrueDestOperands().empty();
+    bool hasFalseArgs = !condBrOp.getFalseDestOperands().empty();
+
+    if (!hasTrueArgs && !hasFalseArgs) {
+      // No block arguments: simple BranchIf.
+      MicroOp mop;
+      mop.kind = MicroOpKind::BranchIf;
+      mop.srcReg1 = getOrAssignReg(condBrOp.getCondition());
+      mop.srcReg2 =
+          static_cast<uint8_t>(getBlockIndex(condBrOp.getTrueDest()));
+      mop.srcReg3 =
+          static_cast<uint8_t>(getBlockIndex(condBrOp.getFalseDest()));
+      program.ops.push_back(mop);
+      return !tooManyRegs;
+    }
+
+    // Block arguments present: use auxiliary blocks to perform parallel phi
+    // copies before jumping to the real destination. This avoids the register
+    // aliasing problem where sequential copies clobber values needed by
+    // subsequent copies (e.g., swap patterns).
+    //
+    // For each branch side that has operands, we create an auxiliary block:
+    //   aux_block: parallel_copy(operands → dest_block_args); Jump dest_block
+    // If a branch side has no operands, we target the real block directly.
+
+    // Determine targets: real block index or deferred aux block index.
+    uint8_t trueTarget, falseTarget;
+
+    if (hasTrueArgs) {
+      if (nextAuxBlockIndex >= 256)
+        return false; // BranchIf targets are uint8_t
+      trueTarget = static_cast<uint8_t>(nextAuxBlockIndex++);
+      DeferredAuxBlock aux;
+      auto destArgs = condBrOp.getTrueDest()->getArguments();
+      auto operands = condBrOp.getTrueDestOperands();
+      for (size_t i = 0; i < destArgs.size(); ++i)
+        aux.copies.push_back(
+            {getOrAssignReg(operands[i]), getOrAssignReg(destArgs[i])});
+      aux.targetBlockIndex = getBlockIndex(condBrOp.getTrueDest());
+      deferredAuxBlocks.push_back(std::move(aux));
+    } else {
+      trueTarget =
+          static_cast<uint8_t>(getBlockIndex(condBrOp.getTrueDest()));
+    }
+
+    if (hasFalseArgs) {
+      if (nextAuxBlockIndex >= 256)
+        return false;
+      falseTarget = static_cast<uint8_t>(nextAuxBlockIndex++);
+      DeferredAuxBlock aux;
+      auto destArgs = condBrOp.getFalseDest()->getArguments();
+      auto operands = condBrOp.getFalseDestOperands();
+      for (size_t i = 0; i < destArgs.size(); ++i)
+        aux.copies.push_back(
+            {getOrAssignReg(operands[i]), getOrAssignReg(destArgs[i])});
+      aux.targetBlockIndex = getBlockIndex(condBrOp.getFalseDest());
+      deferredAuxBlocks.push_back(std::move(aux));
+    } else {
+      falseTarget =
+          static_cast<uint8_t>(getBlockIndex(condBrOp.getFalseDest()));
+    }
 
     MicroOp mop;
     mop.kind = MicroOpKind::BranchIf;
     mop.srcReg1 = getOrAssignReg(condBrOp.getCondition());
-    mop.srcReg2 = static_cast<uint8_t>(getBlockIndex(condBrOp.getTrueDest()));
-    mop.srcReg3 = static_cast<uint8_t>(getBlockIndex(condBrOp.getFalseDest()));
+    mop.srcReg2 = trueTarget;
+    mop.srcReg3 = falseTarget;
     program.ops.push_back(mop);
     return !tooManyRegs;
   }
@@ -517,6 +639,8 @@ BytecodeCompiler::compile(llhd::ProcessOp processOp) {
   for (Block &block : body) {
     blockToIndex[&block] = blockIdx++;
   }
+  // Auxiliary blocks (for cf.cond_br phi copies) start after MLIR blocks.
+  nextAuxBlockIndex = blockIdx;
 
   // Compile each block.
   for (Block &block : body) {
@@ -542,6 +666,22 @@ BytecodeCompiler::compile(llhd::ProcessOp processOp) {
         return std::nullopt;
       }
     }
+  }
+
+  // Emit deferred auxiliary blocks for cf.cond_br with block arguments.
+  // Each aux block does: parallel phi copies → Jump to real target.
+  for (auto &aux : deferredAuxBlocks) {
+    program.blockOffsets.push_back(program.ops.size());
+    emitParallelCopies(aux.copies, program);
+    if (tooManyRegs) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "[Bytecode] Too many regs in aux block phi copies\n");
+      return std::nullopt;
+    }
+    MicroOp jumpOp;
+    jumpOp.kind = MicroOpKind::Jump;
+    jumpOp.immediate = aux.targetBlockIndex;
+    program.ops.push_back(jumpOp);
   }
 
   // Sentinel: end of last block.

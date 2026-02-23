@@ -132,6 +132,34 @@ Use Cadence Xcelium (`xrun`) as a reference simulator to compare waveforms and
 results when debugging circt-sim failures. Useful for verifying expected behavior
 of SystemVerilog constructs.
 
+### Xcelium Binary Analysis (Reverse Engineering)
+Decompiling and analyzing the Xcelium `xmsim` binary has been a valuable source
+of architectural insights for circt-sim optimization. Key techniques and findings:
+
+**How to analyze:**
+```bash
+# Enumerate exported symbols
+nm -D /opt/cadence/installs/XCELIUM2403/tools/bin/64bit/xmsim | grep <pattern>
+# Disassemble specific functions
+objdump -d /opt/cadence/installs/XCELIUM2403/tools/inca/bin/64bit/xmsim | grep -A 50 <symbol>
+```
+
+**Key findings from past analysis** (see `perf_engineering_log.md` Phase 12 and
+`avip_engineering_log.md` 2026-02-21 for full details):
+- **Scheduling**: 13 separate scheduling regions (one per IEEE 1800 region), each
+  with intrusive linked lists + free-list allocation. Zero malloc on hot path.
+- **Process dispatch**: `_setjmp`/`_longjmp` for context switching (NOT `swapcontext`
+  which has syscall overhead). 32KB process stacks.
+- **VPtr caching**: `ncxxTlTFArgInfo` caches virtual function dispatch per call-site.
+  Similar to our E5 inline cache.
+- **Parallelism**: Clock-domain partitioning (`mcp::`) not process-level. Uses
+  lock-free ring buffers for inter-partition communication.
+- **MCP bytecode**: Has its own bytecode interpreter for cross-partition operations.
+
+**When to use**: When investigating how to optimize a specific subsystem (scheduling,
+dispatch, parallelism), check how Xcelium does it first. The binary analysis has
+consistently revealed efficient approaches we can adapt.
+
 ### AVIP Top Module Names
 | Protocol | hvl_top |
 |----------|---------|
