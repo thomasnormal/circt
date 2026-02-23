@@ -729,6 +729,10 @@ private:
   /// Register traces for requested signals (trace-all or --trace).
   void registerRequestedTraces();
 
+  /// Always trace synthetic SVA status signals (`__sva__*`) when VCD is
+  /// enabled so waveform viewers can display assertion pass/fail transitions.
+  void registerSvaAssertionTraces();
+
   /// Find the top module in the design.
   hw::HWModuleOp findTopModule(mlir::ModuleOp module, const std::string &name);
 
@@ -923,6 +927,7 @@ LogicalResult SimulationContext::initialize(
 
   if (traceAll || !traceSignals.empty())
     registerRequestedTraces();
+  registerSvaAssertionTraces();
 
   // Set up parallel simulation if multiple threads requested
   if (numThreads > 1) {
@@ -1646,6 +1651,19 @@ void SimulationContext::registerRequestedTraces() {
       llvm::errs() << "[circt-sim] Warning: trace signal '" << requested
                    << "' not found\n";
     }
+  }
+}
+
+void SimulationContext::registerSvaAssertionTraces() {
+  if (!vcdWriter)
+    return;
+
+  const auto &signalNames = scheduler.getSignalNames();
+  for (const auto &entry : signalNames) {
+    llvm::StringRef name(entry.second);
+    if (!name.starts_with("__sva__"))
+      continue;
+    registerTracedSignal(entry.first, name);
   }
 }
 
@@ -3525,7 +3543,8 @@ static LogicalResult processInput(MLIRContext &context,
   }
   // Check for SVA clocked assertion failures.
   if (exitCode == 0) {
-    if (const auto *interp = simContext.getInterpreter()) {
+    if (auto *interp = simContext.getInterpreter()) {
+      interp->finalizeClockedAssertionsAtEnd();
       size_t assertionFailures = interp->getClockedAssertionFailures();
       if (assertionFailures > 0) {
         llvm::errs() << "[circt-sim] " << assertionFailures

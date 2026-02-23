@@ -1508,12 +1508,19 @@ private:
 
   llvm::SmallVector<ProcessId, 32> processesExecutedThisDelta;
   llvm::SmallVector<ProcessId, 32> lastDeltaProcesses;
-  llvm::DenseMap<ProcessId, SignalId> pendingTriggerSignals;
-  llvm::DenseSet<ProcessId> pendingTriggerTimes;
-  llvm::DenseMap<ProcessId, SignalId> triggerSignalsThisDelta;
-  llvm::DenseMap<ProcessId, SignalId> lastDeltaTriggerSignals;
-  llvm::DenseSet<ProcessId> triggerTimesThisDelta;
-  llvm::DenseSet<ProcessId> lastDeltaTriggerTimes;
+
+  // Flat vectors indexed by ProcessId for O(1) trigger tracking.
+  // Sentinel kNoTriggerSignal means "no pending trigger signal".
+  static constexpr SignalId kNoTriggerSignal = ~SignalId(0);
+  std::vector<SignalId> pendingTriggerSignalVec;  // indexed by ProcessId
+  llvm::BitVector pendingTriggerTimeBits;         // indexed by ProcessId
+  std::vector<SignalId> triggerSignalVec;          // this-delta, indexed by ProcessId
+  std::vector<SignalId> lastTriggerSignalVec;      // last-delta, indexed by ProcessId
+  llvm::BitVector triggerTimeBits;                 // this-delta, indexed by ProcessId
+  llvm::BitVector lastTriggerTimeBits;             // last-delta, indexed by ProcessId
+  // Track which ProcessIds were touched this delta for efficient clearing.
+  llvm::SmallVector<ProcessId, 32> triggerSignalTouched;
+  llvm::SmallVector<ProcessId, 32> triggerTimeTouched;
 
   // Static signal for unknown values
   static SignalValue unknownSignal;

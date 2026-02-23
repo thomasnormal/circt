@@ -230,6 +230,12 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     ProcessId procId, mlir::func::FuncOp funcOp,
     llvm::ArrayRef<InterpretedValue> args,
     llvm::SmallVectorImpl<InterpretedValue> &results, mlir::Operation *callOp) {
+  // Fast exit for functions known to have no fast-path match.
+  // Avoids re-running StringSwitch + matchesMethod on every call.
+  if (funcBodyNoFastPathSet.contains(funcOp.getOperation())) {
+    ++funcBodyFastPathCacheSkips;
+    return false;
+  }
   llvm::StringRef funcName = funcOp.getSymName();
   auto matchesMethod = [&](llvm::StringRef method) {
     return funcName.ends_with(method) || funcName.contains(method);
@@ -638,6 +644,8 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     return true;
   }
 
+  // No fast path matched — cache this FuncOp as a negative result.
+  funcBodyNoFastPathSet.insert(funcOp.getOperation());
   return false;
 }
 
