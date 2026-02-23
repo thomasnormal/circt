@@ -1061,9 +1061,13 @@ top_module=${top_module}
       else
         result="ERROR"
       fi
-    elif [[ "$check_mode" == "mixed" && "$expect_bmc_violation" != "1" ]]; then
+    elif [[ "$check_mode" == "mixed" ]]; then
       if grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
-        result="PASS"
+        if [[ "$expect_bmc_violation" == "1" ]]; then
+          result="FAIL"
+        else
+          result="PASS"
+        fi
       elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
         # In mixed assert+cover mode, SAT can mean either an assertion
         # violation or just a cover witness. Re-run on an assert-only view of
@@ -1083,9 +1087,17 @@ top_module=${top_module}
         elif [[ "$bmc_assert_only_status" -ne 0 ]]; then
           result="ERROR"
         elif grep -q "BMC_RESULT=SAT" <<<"$out_assert_only"; then
-          result="FAIL"
+          if [[ "$expect_bmc_violation" == "1" ]]; then
+            result="PASS"
+          else
+            result="FAIL"
+          fi
         elif grep -q "BMC_RESULT=UNSAT" <<<"$out_assert_only"; then
-          result="PASS"
+          if [[ "$expect_bmc_violation" == "1" ]]; then
+            result="FAIL"
+          else
+            result="PASS"
+          fi
         else
           result="ERROR"
         fi
