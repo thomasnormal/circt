@@ -15,6 +15,7 @@ required_tokens=(
   "utils/wasm_cxx20_warning_check.sh"
   "utils/wasm_cxx20_warning_behavior_check.sh"
   "utils/wasm_cxx20_warning_contract_check.sh"
+  "utils/wasm_runtime_helpers_contract_check.sh"
   "utils/wasm_smoke_contract_check.sh"
   "utils/run_wasm_smoke.sh"
   "WASM_REQUIRE_VERILOG=1"

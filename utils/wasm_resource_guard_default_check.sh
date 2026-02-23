@@ -12,6 +12,11 @@ BMC_TEST_INPUT="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
 SIM_TEST_INPUT="test/Tools/circt-sim/llhd-combinational.mlir"
 SV_TEST_INPUT="test/Tools/circt-sim/reject-raw-sv-input.sv"
 
+if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
+  echo "[wasm-rg-default] missing Node.js runtime: $NODE_BIN" >&2
+  exit 1
+fi
+
 if [[ ! -f "$BMC_JS" || ! -f "$SIM_JS" ]]; then
   echo "[wasm-rg-default] missing wasm tools under $BUILD_DIR/bin" >&2
   exit 1
