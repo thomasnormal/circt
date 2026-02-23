@@ -34,6 +34,8 @@ chmod +x "$fake_bin/cmake"
 
 emcmake_marker="$tmpdir/emcmake.called"
 cmake_marker="$tmpdir/cmake.called"
+behavior_out="$tmpdir/configure.out"
+behavior_err="$tmpdir/configure.err"
 
 # print mode should not require source directory existence.
 BUILD_DIR="$build_dir" LLVM_SRC_DIR="$missing_src" "$SCRIPT" --print-cmake-command >/dev/null
@@ -46,7 +48,7 @@ BUILD_DIR="$build_dir" \
 LLVM_SRC_DIR="$missing_src" \
 EMCMAKE_BIN=emcmake \
 CMAKE_BIN=cmake \
-"$SCRIPT" >/tmp/wasm-config-behavior.out 2>/tmp/wasm-config-behavior.err
+"$SCRIPT" >"$behavior_out" 2>"$behavior_err"
 rc=$?
 set -e
 
@@ -55,9 +57,9 @@ if [[ "$rc" -eq 0 ]]; then
   exit 1
 fi
 
-if ! grep -Fq -- "missing LLVM source directory" /tmp/wasm-config-behavior.err; then
+if ! grep -Fq -- "missing LLVM source directory" "$behavior_err"; then
   echo "[wasm-config-behavior] missing explicit LLVM source directory diagnostic" >&2
-  cat /tmp/wasm-config-behavior.err >&2
+  cat "$behavior_err" >&2
   exit 1
 fi
 
