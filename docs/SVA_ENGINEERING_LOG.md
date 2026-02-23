@@ -21,13 +21,17 @@
       - updated RUN pipeline to pass
         `--externalize-registers='allow-multi-clock=true'`
         so multiclock e2e uses consistent pass optioning.
+    - `test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
+      - rewrote the negative no-allow lane to use two actual
+        `verif.clocked_assert` checks on distinct clocks (`seq.from_clock`),
+        avoiding stale expectations based on unused extra clock ports.
   - validation:
     - targeted red/green:
       - `build-test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
       - result: `BMC_RESULT=UNSAT`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv`
-      - result: `2/2` pass.
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv build-test/test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
+      - result: `3/3` pass.
     - formal sanity:
       - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - result: `4/4` mode checks pass.

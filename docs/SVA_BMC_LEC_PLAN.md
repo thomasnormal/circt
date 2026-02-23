@@ -55,13 +55,18 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
   - now passes
     `--externalize-registers='allow-multi-clock=true'`
     alongside `--lower-to-bmc ... allow-multi-clock`.
+- refreshed multiclock tool regression to ensure meaningful no-allow behavior:
+  - `test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
+  - now uses two `verif.clocked_assert` checks on distinct clocks so
+    `--allow-multi-clock`/default behavior is validated against actual
+    multi-clock use, not just extra unused clock inputs.
 - validation snapshot:
   - targeted regression:
     - `build-test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
     - result: `BMC_RESULT=UNSAT`
   - focused lit:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv`
-    - result: `2/2` pass
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv build-test/test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
+    - result: `3/3` pass
   - Yosys BMC sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
     - result: `4/4` mode checks pass.
