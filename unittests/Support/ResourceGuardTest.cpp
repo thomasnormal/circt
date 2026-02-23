@@ -25,6 +25,7 @@ TEST(ResourceGuardTest, ParseMegabytes) {
   EXPECT_FALSE(parseMegabytes("-1"));
 }
 
+#if GTEST_HAS_DEATH_TEST
 TEST(ResourceGuardTest, WarnsWhenAllLimitsDisabledExplicitly) {
   EXPECT_EXIT(
       {
@@ -137,3 +138,4 @@ TEST(ResourceGuardTest, ReportsWallTimeOnAbort) {
       },
       ::testing::ExitedWithCode(1), "wall time.*phase: unit-test-wall");
 }
+#endif

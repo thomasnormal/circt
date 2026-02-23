@@ -128,6 +128,9 @@ TEST(ThreadBarrierTest, SingleThread) {
 }
 
 TEST(ThreadBarrierTest, MultipleThreads) {
+#if defined(__EMSCRIPTEN__)
+  GTEST_SKIP() << "std::thread is unavailable in single-threaded wasm builds.";
+#else
   const size_t numThreads = 4;
   ThreadBarrier barrier(numThreads);
   std::atomic<int> counter{0};
@@ -147,6 +150,7 @@ TEST(ThreadBarrierTest, MultipleThreads) {
   }
 
   EXPECT_EQ(counter.load(), static_cast<int>(numThreads));
+#endif
 }
 
 //===----------------------------------------------------------------------===//

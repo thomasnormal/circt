@@ -45,7 +45,9 @@ TEST(ArcRuntimeTest, DieOnWrongAPIVersion) {
   bogusModel.apiVersion = ARC_RUNTIME_API_VERSION + 1;
   bogusModel.modelName = "bogus";
   bogusModel.numStateBytes = 8;
+#if GTEST_HAS_DEATH_TEST
   EXPECT_DEATH(arcRuntimeAllocateInstance(&bogusModel, nullptr), "");
+#endif
 }
 
 TEST(ArcRuntimeTest, GetStateFromModelState) {
@@ -63,7 +65,9 @@ TEST(ArcRuntimeTest, DieOnWrongMagic) {
   auto state = ArcState();
   state.impl = static_cast<void *>(&impl);
   state.magic = ~ARC_RUNTIME_MAGIC;
+#if GTEST_HAS_DEATH_TEST
   EXPECT_DEATH(arcRuntimeGetStateFromModelState(state.modelState, 0), "");
+#endif
 }
 
 TEST(ArcRuntimeTest, GetAPIVersion) {

@@ -1,6 +1,8 @@
 add_subdirectory(circt-debug)
 add_subdirectory(circt-lec)
-add_subdirectory(circt-sim)
+if(MLIR_ENABLE_EXECUTION_ENGINE)
+  add_subdirectory(circt-sim)
+endif()
 
 # Enable LSP server unit tests when slang is available
 # Note: Requires gtest to be built - may not be available in all configurations

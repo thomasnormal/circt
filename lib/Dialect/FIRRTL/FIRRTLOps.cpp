@@ -3747,7 +3747,7 @@ FirMemory MemOp::getSummary() {
         llvm::formatv(
             "{0}FIRRTLMem_{1}_{2}_{3}_{4}_{5}_{6}_{7}_{8}_{9}_{10}{11}{12}",
             op.getPrefix().value_or(""), numReadPorts, numWritePorts,
-            numReadWritePorts, (size_t)width, op.getDepth(),
+            numReadWritePorts, (size_t)width, static_cast<size_t>(op.getDepth()),
             op.getReadLatency(), op.getWriteLatency(), op.getMaskBits(),
             (unsigned)op.getRuw(), (unsigned)seq::WUW::PortOrder,
             clocks.empty() ? "" : "_" + clocks, init ? initStr.str() : ""));
@@ -3756,7 +3756,7 @@ FirMemory MemOp::getSummary() {
           numWritePorts,
           numReadWritePorts,
           (size_t)width,
-          op.getDepth(),
+          static_cast<size_t>(op.getDepth()),
           op.getReadLatency(),
           op.getWriteLatency(),
           op.getMaskBits(),
