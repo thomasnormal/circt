@@ -6295,6 +6295,19 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   // full sequence timing windows yet, so use conjunction over sampled truth and
   // preserve unknown as pending.
   if (auto intersectOp = dyn_cast<ltl::IntersectOp>(op)) {
+    std::optional<uint64_t> fixedLength;
+    for (Value input : intersectOp.getInputs()) {
+      auto len = getExactSequenceLength(input);
+      if (!len)
+        continue;
+      if (!fixedLength) {
+        fixedLength = *len;
+        continue;
+      }
+      if (*fixedLength != *len)
+        return LTLTruth::False;
+    }
+
     LTLTruth result = LTLTruth::True;
     for (Value input : intersectOp.getInputs()) {
       result = truthAnd(result, evaluateLTLProperty(input, state));
