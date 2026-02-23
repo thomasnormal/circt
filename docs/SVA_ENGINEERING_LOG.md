@@ -2836,3 +2836,34 @@
     - `ovl_sem_multiport_fifo` pass-mode gap is closed.
     - OVL semantic harness is now fully green (`102/102`) with no tracked
       known gaps.
+
+- Iteration update (`CombineAssertLike` enable implication semantics):
+  - realization:
+    - `sva-sampled-first-cycle-known-inputs-parity.sv` still returned
+      `BMC_RESULT=SAT` with multiple guarded assertions, while each assertion
+      in isolation was `UNSAT`.
+    - root cause was not sampled-value lowering; it was post-lowering
+      assert-combination semantics.
+  - surprise:
+    - `verif::CombineAssertLikePass` only manifests this bug when more than one
+      assert/assume is present in the same block. Single-assert paths stay
+      correct because they bypass combination.
+  - implemented:
+    - `lib/Dialect/Verif/Transforms/CombineAssertLike.cpp`
+      - fixed enable folding from `enable && property` to implication
+        semantics `!enable || property` before conjunction.
+    - `test/Dialect/Verif/combine-assert-like.mlir`
+      - updated expected IR for enabled assert/assume combination to check
+        implication gating.
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc circt-verilog`
+    - targeted regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Dialect/Verif/combine-assert-like.mlir`
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+        - result: `BMC_RESULT=UNSAT`
+    - targeted formal parity:
+      - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=1 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+        - result: `PASS(pass): sva_value_change_sim`
+      - `BMC_ASSUME_KNOWN_INPUTS=0` currently reports `XPASS(pass)` against the
+        existing expected baseline for this test profile.

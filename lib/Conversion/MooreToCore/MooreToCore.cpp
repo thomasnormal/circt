@@ -6472,7 +6472,22 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
     Value init = adaptor.getInitial();
     if (!init) {
       auto elementType = refType.getNestedType();
-      init = createZeroValue(elementType, loc, rewriter);
+      if (isFourStateStructType(elementType)) {
+        auto structTy = cast<hw::StructType>(elementType);
+        auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
+        auto unknownTy =
+            dyn_cast<IntegerType>(structTy.getFieldType("unknown"));
+        if (!valueTy || !unknownTy || valueTy.getWidth() != unknownTy.getWidth())
+          return failure();
+        auto valueZero = hw::ConstantOp::create(
+            rewriter, loc, IntegerAttr::get(valueTy, 0));
+        auto unknownOnes = hw::ConstantOp::create(
+            rewriter, loc, IntegerAttr::get(unknownTy, APInt::getAllOnes(
+                                                           unknownTy.getWidth())));
+        init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+      } else {
+        init = createZeroValue(elementType, loc, rewriter);
+      }
       if (!init)
         return failure();
     }
@@ -13800,18 +13815,47 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
         return failure();
       }
 
+      auto getFourStateBitWidth = [&](Value v) -> std::optional<unsigned> {
+        auto getWidthFromStruct = [&](Type ty) -> std::optional<unsigned> {
+          if (!isFourStateStructType(ty))
+            return std::nullopt;
+          auto structTy = cast<hw::StructType>(ty);
+          auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
+          auto unknownTy =
+              dyn_cast<IntegerType>(structTy.getFieldType("unknown"));
+          if (!valueTy || !unknownTy ||
+              valueTy.getWidth() != unknownTy.getWidth())
+            return std::nullopt;
+          return valueTy.getWidth();
+        };
+
+        v = stripUnrealizedCast(v);
+        if (auto width = getWidthFromStruct(v.getType()))
+          return width;
+        if (auto bitcastOp = v.getDefiningOp<hw::BitcastOp>()) {
+          Value bitcastInput = stripUnrealizedCast(bitcastOp.getInput());
+          return getWidthFromStruct(bitcastInput.getType());
+        }
+        return std::nullopt;
+      };
+
       Value reset = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
                                            /*value=*/0);
-      Value resetValue = hw::ConstantOp::create(
-          rewriter, loc, llvm::APInt(regIntType.getWidth(), 0));
+      llvm::APInt initBits(regIntType.getWidth(), 0);
+      if (auto fourStateWidth = getFourStateBitWidth(input)) {
+        if (regIntType.getWidth() == static_cast<unsigned>(2 * *fourStateWidth))
+          initBits = llvm::APInt::getLowBitsSet(regIntType.getWidth(),
+                                                *fourStateWidth);
+      }
+      Value resetValue = hw::ConstantOp::create(rewriter, loc, initBits);
       Value initialValue = seq::createConstantInitialValue(
-          rewriter, loc, rewriter.getIntegerAttr(regIntType, 0));
+          rewriter, loc, rewriter.getIntegerAttr(regIntType, initBits));
 
       Value current = regInput;
       for (int64_t i = 0; i < delay; ++i) {
         current = seq::CompRegOp::create(
             rewriter, loc, current, clockSignal, reset, resetValue,
-            rewriter.getStringAttr("moore_past"), initialValue);
+            initialValue);
       }
       if (castBack)
         current = hw::BitcastOp::create(rewriter, loc, inputType, current);
