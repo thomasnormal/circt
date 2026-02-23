@@ -734,6 +734,10 @@ private:
   /// enabled so waveform viewers can display assertion pass/fail transitions.
   void registerSvaAssertionTraces();
 
+  /// Default `--vcd` fallback for portless designs: if no traces were
+  /// registered, trace all named scheduler signals so the VCD has `$var`.
+  void registerDefaultNamedSignalTraces();
+
   /// Find the top module in the design.
   hw::HWModuleOp findTopModule(mlir::ModuleOp module, const std::string &name);
 
@@ -929,6 +933,7 @@ LogicalResult SimulationContext::initialize(
   if (traceAll || !traceSignals.empty())
     registerRequestedTraces();
   registerSvaAssertionTraces();
+  registerDefaultNamedSignalTraces();
 
   // Set up parallel simulation if multiple threads requested
   if (numThreads > 1) {
@@ -1663,6 +1668,23 @@ void SimulationContext::registerSvaAssertionTraces() {
   for (const auto &entry : signalNames) {
     llvm::StringRef name(entry.second);
     if (!name.starts_with("__sva__"))
+      continue;
+    registerTracedSignal(entry.first, name);
+  }
+}
+
+void SimulationContext::registerDefaultNamedSignalTraces() {
+  if (!vcdWriter)
+    return;
+  if (traceAll || !traceSignals.empty())
+    return;
+  if (!tracedSignals.empty())
+    return;
+
+  const auto &signalNames = scheduler.getSignalNames();
+  for (const auto &entry : signalNames) {
+    llvm::StringRef name(entry.second);
+    if (name.empty())
       continue;
     registerTracedSignal(entry.first, name);
   }
