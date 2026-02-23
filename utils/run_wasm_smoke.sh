@@ -101,6 +101,25 @@ if grep -q "InitLLVM was already initialized!" "$bmc_reentry_log"; then
   exit 1
 fi
 
+echo "[wasm-smoke] Re-entry: circt-sim run -> run"
+"$NODE_BIN" utils/wasm_callmain_reentry_check.js "$SIM_JS" \
+  --first --resource-guard=false --vcd /tmp/reentry-run1.vcd "$SIM_TEST_INPUT" \
+  --second --resource-guard=false --vcd /tmp/reentry-run2.vcd "$SIM_TEST_INPUT" \
+  --expect-wasm-file-substr /tmp/reentry-run1.vcd "\$enddefinitions" \
+  --expect-wasm-file-substr /tmp/reentry-run2.vcd "\$enddefinitions" \
+  --forbid-substr "Aborted(" \
+  >"$tmpdir/sim-reentry-run-run.log" 2>&1
+
+echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
+"$NODE_BIN" utils/wasm_callmain_reentry_check.js "$BMC_JS" \
+  --preload-file "$BMC_TEST_INPUT" /inputs/test.mlir \
+  --first --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out1.smt2 /inputs/test.mlir \
+  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out2.smt2 /inputs/test.mlir \
+  --expect-wasm-file-substr /out1.smt2 "(check-sat)" \
+  --expect-wasm-file-substr /out2.smt2 "(check-sat)" \
+  --forbid-substr "Aborted(" \
+  >"$tmpdir/bmc-reentry-run-run.log" 2>&1
+
 echo "[wasm-smoke] Re-entry: circt-sim plusargs isolation"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_plusargs_reentry_check.sh
 
