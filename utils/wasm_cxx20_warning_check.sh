@@ -33,6 +33,8 @@ rebuild_targets=(
 warn_patterns=(
   "ambiguous-reversed-operator"
   "-Wambiguous-reversed-operator"
+  "c++20-extensions"
+  "-Wc++20-extensions"
 )
 
 tmpdir="$(mktemp -d)"

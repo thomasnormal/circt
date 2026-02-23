@@ -546,3 +546,24 @@
     `utils/wasm_ci_contract_check.sh` all pass.
   - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: detect C++20-extension warnings in triage check)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require
+    coverage for `c++20-extensions` warning patterns.
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_check.sh` only checked ambiguous reversed
+      operator warnings.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to fail on:
+    - `c++20-extensions`
+    - `-Wc++20-extensions`
+  - this catches accidental per-target fallback to pre-C++20 flags even when
+    the cache-level standard is set to 20.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` all pass.
