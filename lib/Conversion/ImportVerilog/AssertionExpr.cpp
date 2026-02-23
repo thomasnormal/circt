@@ -65,6 +65,36 @@ static moore::IntType getSampledSimpleBitVectorType(Context &context,
   return {};
 }
 
+static bool isOneBitFourValuedInt(Type type) {
+  auto intTy = dyn_cast<moore::IntType>(type);
+  return intTy && intTy.getWidth() == 1 &&
+         intTy.getDomain() == moore::Domain::FourValued;
+}
+
+static Value buildSampledEdgeFromFourStateBit(Context &context, Location loc,
+                                              Value current, Value prev,
+                                              bool rising) {
+  auto &builder = context.builder;
+  if (!current || !prev || current.getType() != prev.getType() ||
+      !isOneBitFourValuedInt(current.getType()))
+    return {};
+
+  auto bitTy = cast<moore::IntType>(current.getType());
+  Value c0 = moore::ConstantOp::create(builder, loc, bitTy, 0);
+  Value c1 = moore::ConstantOp::create(builder, loc, bitTy, 1);
+  Value curIsZero = moore::CaseEqOp::create(builder, loc, current, c0);
+  Value curIsOne = moore::CaseEqOp::create(builder, loc, current, c1);
+  Value prevIsZero = moore::CaseEqOp::create(builder, loc, prev, c0);
+  Value prevIsOne = moore::CaseEqOp::create(builder, loc, prev, c1);
+
+  if (rising) {
+    Value notPrevOne = moore::NotOp::create(builder, loc, prevIsOne);
+    return moore::AndOp::create(builder, loc, curIsOne, notPrevOne);
+  }
+  Value notPrevZero = moore::NotOp::create(builder, loc, prevIsZero);
+  return moore::AndOp::create(builder, loc, curIsZero, notPrevZero);
+}
+
 static Value buildSampledStableComparison(Context &context, Location loc,
                                           Value lhs, Value rhs,
                                           StringRef funcName) {
@@ -75,7 +105,7 @@ static Value buildSampledStableComparison(Context &context, Location loc,
   }
 
   if (isa<moore::IntType>(lhs.getType()))
-    return moore::EqOp::create(builder, loc, lhs, rhs).getResult();
+    return moore::CaseEqOp::create(builder, loc, lhs, rhs).getResult();
 
   if (isa<moore::RealType>(lhs.getType()))
     return moore::EqRealOp::create(builder, loc, lhs, rhs).getResult();
@@ -1129,16 +1159,34 @@ static Value lowerSampledValueFunctionWithSamplingControl(
         result = moore::NotOp::create(builder, loc, stable).getResult();
     } else {
       if (isRose) {
-        auto notPrev = moore::NotOp::create(builder, loc, prev).getResult();
-        result = moore::AndOp::create(builder, loc, current, notPrev)
-                     .getResult();
+        if (auto edge = buildSampledEdgeFromFourStateBit(context, loc, current,
+                                                         prev, /*rising=*/true))
+          result = edge;
+        else {
+          auto notPrev = moore::NotOp::create(builder, loc, prev).getResult();
+          result = moore::AndOp::create(builder, loc, current, notPrev)
+                       .getResult();
+        }
       } else {
-        auto notCurrent =
-            moore::NotOp::create(builder, loc, current).getResult();
-        result = moore::AndOp::create(builder, loc, notCurrent, prev)
-                     .getResult();
+        if (auto edge = buildSampledEdgeFromFourStateBit(context, loc, current,
+                                                         prev,
+                                                         /*rising=*/false))
+          result = edge;
+        else {
+          auto notCurrent =
+              moore::NotOp::create(builder, loc, current).getResult();
+          result = moore::AndOp::create(builder, loc, notCurrent, prev)
+                       .getResult();
+        }
       }
     }
+
+    if (result.getType() != resultType)
+      result =
+          context.materializeConversion(resultType, result, /*isSigned=*/false,
+                                        loc);
+    if (!result)
+      return {};
 
     Value disabledValue;
     if (isUnpackedAggregateStableSample) {
@@ -3705,6 +3753,24 @@ Value Context::convertAssertionCallExpression(
       return resultVal;
     }
 
+    if (isOneBitFourValuedInt(value.getType())) {
+      Value sampled = value;
+      Value past;
+      if (inAssertionExpr) {
+        past = moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
+      } else {
+        past = moore::PastOp::create(builder, loc, value, /*delay=*/1).getResult();
+      }
+      Value edge = buildSampledEdgeFromFourStateBit(*this, loc, sampled, past,
+                                                    funcName == "$rose");
+      if (!edge) {
+        mlir::emitError(loc) << "failed to lower sampled edge function for "
+                             << funcName;
+        return {};
+      }
+      return edge;
+    }
+
     Value current = buildSampledBoolean(*this, loc, value, funcName);
     if (!current)
       return {};
@@ -3721,14 +3787,26 @@ Value Context::convertAssertionCallExpression(
     }
     Value resultVal;
     if (funcName == "$rose") {
-      auto notPast = moore::NotOp::create(builder, loc, past).getResult();
-      resultVal =
-          moore::AndOp::create(builder, loc, sampled, notPast).getResult();
+      if (auto edge = buildSampledEdgeFromFourStateBit(*this, loc, sampled,
+                                                       past,
+                                                       /*rising=*/true))
+        resultVal = edge;
+      else {
+        auto notPast = moore::NotOp::create(builder, loc, past).getResult();
+        resultVal =
+            moore::AndOp::create(builder, loc, sampled, notPast).getResult();
+      }
     } else {
-      auto notCurrent =
-          moore::NotOp::create(builder, loc, sampled).getResult();
-      resultVal =
-          moore::AndOp::create(builder, loc, notCurrent, past).getResult();
+      if (auto edge = buildSampledEdgeFromFourStateBit(*this, loc, sampled,
+                                                       past,
+                                                       /*rising=*/false))
+        resultVal = edge;
+      else {
+        auto notCurrent =
+            moore::NotOp::create(builder, loc, sampled).getResult();
+        resultVal =
+            moore::AndOp::create(builder, loc, notCurrent, past).getResult();
+      }
     }
     return resultVal;
   }

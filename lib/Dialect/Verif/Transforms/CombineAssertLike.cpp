@@ -88,20 +88,24 @@ private:
     // Check that our condition isn't an ltl property, if so ignore
     if (!isa<ltl::PropertyType, ltl::SequenceType>(condition.getType())) {
 
-      // Check for an optional enable signal
+      // Check for an optional enable signal.
+      // For assertions/assumptions, "if enable" means implication semantics:
+      // !enable || property. Preserve that while folding enables.
       auto enable = op.getEnable();
-      // For i1 conditions, the enable signal can be folded
-      // directly into the condition
       if (enable) {
         // Enable should always be reachable from the op, so it's safe to
-        // accumulate right before the op
+        // accumulate right before the op.
         builder.setInsertionPoint(defop);
 
-        auto andop =
-            comb::AndOp::create(builder, defop->getLoc(), condition, enable);
+        auto one = hw::ConstantOp::create(builder, defop->getLoc(),
+                                          builder.getI1Type(), 1);
+        auto notEnable =
+            comb::XorOp::create(builder, defop->getLoc(), enable, one);
+        auto implied = comb::OrOp::create(builder, defop->getLoc(), notEnable,
+                                          condition);
 
-        // We then only need to store the conjunction not the condition
-        conds[parent].push_back(andop);
+        // We then only need to store the enable-gated condition.
+        conds[parent].push_back(implied);
       } else {
         // If no enable is present, we can directly accumulate the condition
         conds[parent].push_back(condition);

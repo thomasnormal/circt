@@ -1223,3 +1223,32 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Current semantic-gap status:
   - OVL semantic harness has no tracked known gaps (`102/102` pass/fail modes
     passing).
+
+## Latest sampled-value parity closure (2026-02-23, multi-assert enable semantics)
+
+- Implemented:
+  - `lib/Dialect/Verif/Transforms/CombineAssertLike.cpp`
+    - fixed enabled assert/assume combination to preserve implication
+      semantics (`!enable || property`) before conjoining multiple checks.
+    - previous behavior incorrectly used `enable && property`, which turns
+      disabled checks into failures once combined.
+  - regression update:
+    - `test/Dialect/Verif/combine-assert-like.mlir`
+      - updated enabled-check expectations to implication-gated form.
+
+- Validation:
+  - build:
+    - `ninja -C build-test circt-opt circt-bmc circt-verilog`
+  - targeted regressions:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Dialect/Verif/combine-assert-like.mlir`
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+      - result: `BMC_RESULT=UNSAT`
+  - targeted Yosys SVA parity:
+    - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=1 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: pass
+    - `BMC_ASSUME_KNOWN_INPUTS=0` currently reports `XPASS` vs existing
+      baseline for this profile.
+
+- Current state:
+  - known-input sampled-value parity gap for `sva_value_change_sim` is closed.
+  - xprop expectation baseline for this case should be reviewed in a follow-up.
