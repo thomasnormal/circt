@@ -226,3 +226,18 @@
   - supports `--print-cmake-command` for contract testing and reproducibility.
 - Validation:
   - `utils/wasm_configure_contract_check.sh` passes.
+
+## 2026-02-23 (follow-up: CI wasm smoke enforcement)
+- Gap identified (regression-test first):
+  - Added `utils/wasm_ci_contract_check.sh`.
+  - Pre-fix failure:
+    - missing `.github/workflows/wasmSmoke.yml`.
+- Fix:
+  - added `.github/workflows/wasmSmoke.yml` with a dedicated wasm smoke job:
+    - checks out submodules;
+    - installs emsdk (`4.0.12`) and sources `emsdk_env.sh`;
+    - runs `utils/configure_wasm_build.sh`;
+    - runs `WASM_REQUIRE_VERILOG=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`.
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh` still passes.
