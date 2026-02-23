@@ -1453,14 +1453,29 @@ bool ProcessScheduler::advanceTime() {
 
     // Before advancing the TimeWheel, check if a minnow or clock domain
     // wake is earlier. If so, advance sim time to that point first.
+    // IMPORTANT: we must NOT let advanceToNextTime() jump past a minnow/clock
+    // wake, because advanceMinnows() fires minnows at the current sim time
+    // and rearmMinnow() uses getCurrentTime() to compute the next wake.
+    // Firing a 5ns minnow when the sim is at 30ns would cause rearmMinnow()
+    // to arm the next wake at 35ns instead of 10ns.
     uint64_t earliestBypass = std::min(earliestClockWake, earliestMinnowWake);
     bool timeWheelAdvanced = false;
     if (!eventScheduler->isComplete()) {
+      // Peek at the TimeWheel's next event time. If a minnow/clock wakes
+      // before that, advance to the bypass time instead of the TW event time.
+      if (earliestBypass < UINT64_MAX) {
+        uint64_t nextTWTime = eventScheduler->peekNextRealTime();
+        if (nextTWTime > earliestBypass) {
+          // Minnow/clock fires before next TW event: advance to bypass time.
+          eventScheduler->advanceTimeTo(earliestBypass);
+          didWork = true;
+          for (auto &queue : readyQueues)
+            if (!queue.empty())
+              return true;
+          continue;
+        }
+      }
       timeWheelAdvanced = eventScheduler->advanceToNextTime();
-      // If the TimeWheel advanced past a minnow/clock wake, we need to
-      // process those at the right time. The TimeWheel's advanceToNextTime
-      // sets the sim time, so on the next loop iteration the
-      // "at or before currentTime" checks above will catch them.
     }
 
     // If neither the TimeWheel nor bypasses (clock/minnow) have work,
