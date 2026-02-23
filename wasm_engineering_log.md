@@ -1175,6 +1175,37 @@
     - `utils/wasm_cxx20_warning_behavior_check.sh` passes.
     - `utils/wasm_cxx20_warning_contract_check.sh` passes.
     - `utils/wasm_ci_contract_check.sh` passes.
-    - `utils/wasm_smoke_contract_check.sh` passes.
-    - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
-      passes end-to-end.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
+
+## 2026-02-23 (follow-up: preflight NODE_BIN in standalone wasm helper scripts)
+- Gap identified (regression-test first):
+  - added contract check:
+    - `utils/wasm_runtime_helpers_contract_check.sh`
+  - Pre-fix failure:
+    - `utils/wasm_runtime_helpers_contract_check.sh` failed with:
+      - `missing token in plusargs helper: command -v "$NODE_BIN"`
+    - helper scripts relied on implicit shell errors when `NODE_BIN` was
+      invalid, resulting in less actionable diagnostics.
+- Fix:
+  - updated helper scripts:
+    - `utils/wasm_plusargs_reentry_check.sh`
+    - `utils/wasm_resource_guard_default_check.sh`
+  - both now fail fast with explicit Node runtime diagnostics:
+    - `[wasm-plusargs] missing Node.js runtime: ...`
+    - `[wasm-rg-default] missing Node.js runtime: ...`
+  - integrated new helper contract into CI:
+    - `.github/workflows/wasmSmoke.yml` runs
+      `utils/wasm_runtime_helpers_contract_check.sh`;
+    - `utils/wasm_ci_contract_check.sh` enforces workflow token.
+- Validation:
+  - `utils/wasm_runtime_helpers_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - negative tests:
+    - `NODE_BIN=definitely_not_node utils/wasm_plusargs_reentry_check.sh`
+      exits non-zero with explicit runtime diagnostic.
+    - `NODE_BIN=definitely_not_node utils/wasm_resource_guard_default_check.sh`
+      exits non-zero with explicit runtime diagnostic.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

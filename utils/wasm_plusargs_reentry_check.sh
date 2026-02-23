@@ -6,6 +6,11 @@ NODE_BIN="${NODE_BIN:-node}"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
 INPUT_MLIR="${INPUT_MLIR:-test/Tools/circt-sim/wasm-plusargs-reentry.mlir}"
 
+if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
+  echo "[wasm-plusargs] missing Node.js runtime: $NODE_BIN" >&2
+  exit 1
+fi
+
 if [[ ! -f "$SIM_JS" ]]; then
   echo "[wasm-plusargs] missing tool: $SIM_JS" >&2
   exit 1
