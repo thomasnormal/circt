@@ -4,7 +4,7 @@ set -euo pipefail
 BUILD_DIR="${BUILD_DIR:-build-wasm}"
 NINJA_JOBS="${NINJA_JOBS:-1}"
 NODE_BIN="${NODE_BIN:-node}"
-VCD_PATH="${VCD_PATH:-/tmp/circt-wasm-smoke.vcd}"
+VCD_PATH="${VCD_PATH-/tmp/circt-wasm-smoke.vcd}"
 WASM_REQUIRE_VERILOG="${WASM_REQUIRE_VERILOG:-0}"
 WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
 WASM_CHECK_CXX20_WARNINGS="${WASM_CHECK_CXX20_WARNINGS:-auto}"
@@ -88,6 +88,10 @@ validate_bool_env "WASM_REQUIRE_VERILOG" "$WASM_REQUIRE_VERILOG"
 validate_bool_env "WASM_SKIP_BUILD" "$WASM_SKIP_BUILD"
 validate_bool_env "WASM_REQUIRE_CLEAN_CROSSCOMPILE" "$WASM_REQUIRE_CLEAN_CROSSCOMPILE"
 validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"
+if [[ -z "$VCD_PATH" ]]; then
+  echo "[wasm-smoke] invalid VCD_PATH value: empty path" >&2
+  exit 1
+fi
 
 if [[ "$WASM_CHECK_CXX20_WARNINGS" != "auto" && "$WASM_CHECK_CXX20_WARNINGS" != "0" && "$WASM_CHECK_CXX20_WARNINGS" != "1" ]]; then
   echo "[wasm-smoke] invalid WASM_CHECK_CXX20_WARNINGS value: $WASM_CHECK_CXX20_WARNINGS (expected auto, 0, or 1)" >&2
