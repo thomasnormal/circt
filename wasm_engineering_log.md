@@ -481,3 +481,24 @@
     `utils/wasm_cxx20_contract_check.sh`.
 - Validation:
   - `utils/wasm_ci_contract_check.sh` passes with updated workflow.
+
+## 2026-02-23 (follow-up: automate C++20 warning triage in wasm CI)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_ci_contract_check.sh` to require
+    `utils/wasm_cxx20_warning_check.sh` usage in
+    `.github/workflows/wasmSmoke.yml`.
+  - Pre-fix failure:
+    - workflow had no dedicated C++20 warning triage step for
+      `-Wambiguous-reversed-operator`-class diagnostics.
+- Fix:
+  - added `utils/wasm_cxx20_warning_check.sh`:
+    - forces rebuild of `circt-tblgen` translation units tied to the C++20
+      compatibility fix (`FIRRTLAnnotationsGen.cpp`, `circt-tblgen.cpp`);
+    - scans rebuild log for disallowed warning patterns:
+      - `ambiguous-reversed-operator`
+      - `-Wambiguous-reversed-operator`
+  - updated `.github/workflows/wasmSmoke.yml` to run this check after wasm
+    configure and before full smoke checks.
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes locally.
