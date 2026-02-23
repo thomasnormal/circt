@@ -2082,8 +2082,42 @@ Per-call-site cache for `call_indirect` dispatch. Skips 28+ UVM interceptor cont
 support (print, malloc, function calls). RTL processes ARE compiling successfully.
 The bytecode path helps RTL-heavy designs, not UVM-heavy workloads.
 
+### cf.cond_br Phi Copy Fix (Feb 23, 2026)
+- Committed: `2584cc7c5`
+- Fixed register aliasing bug with parallel copy decomposition
+- Uses auxiliary blocks + temp registers for swap patterns
+- 531/537 tests pass (no regressions), bytecode compile rate unchanged
+  (cf.cond_br wasn't the main blocker — register pressure and unsupported ops dominate)
+
+### Profiling Results: UVM-phase-hopper Test (perf record, Feb 23, 2026)
+
+| Symbol | % Time | Category |
+|--------|--------|----------|
+| executeBytecodeProcess | 13.06% | Bytecode execution (good!) |
+| **memmove (SensitivityEntry copy)** | **10.61%** | **Sensitivity re-registration** |
+| scheduleNextDelta | 6.04% | Event scheduling |
+| executeProcess | 5.95% | Process dispatch |
+| executeDeltaCycle | 4.30% | Delta cycle mgmt |
+| tryExecuteDirectProcessFastPath | 4.00% | Fast path dispatch |
+| updateSignalFast | 3.52% | Signal updates |
+| triggerSensitiveProcesses | 3.42% | Process wake-up |
+| TimeWheel::schedule | 3.41% | Time scheduling |
+| malloc (vector realloc) | 2.91% | Memory allocation |
+| DenseMap lookups | 3.49% | Hash map overhead |
+| getProcess | 2.46% | Process lookup |
+| std::__find_if | 1.02% | O(n) linear search |
+
+**Key Optimization Targets:**
+1. **E6 sensitivity caching (10.61%)** — SmallVectorImpl<SensitivityEntry>::operator=() dominates.
+   Cache sensitivity list, use resuspendProcessFast() on repeat yields.
+2. **Per-op overhead** — Every interpretFuncBody op pays: 3 counter increments, maybeSampleMemoryState(),
+   conditional opStats hash update, step-limit + abort checks
+3. **Function-entry overhead** — 6+ string comparisons (funcName.contains/find) for UVM interception
+   on EVERY interpretFuncBody call, even for non-UVM functions
+4. **Op dispatch** — Linear if-else chain with dyn_cast<> (not switch/computed goto)
+
 **Next Steps:**
-1. Fix cf.cond_br phi copies (register aliasing bug) for more complex RTL
-2. Consider uint16_t register widening for processes >255 SSA values
-3. Find RTL-heavy benchmark to measure actual bytecode speedup
-4. E6 sensitivity caching for Coroutine process speedup
+1. **E6 sensitivity caching** — #1 priority, 10.61% of total time
+2. Reduce per-op overhead in interpretFuncBody (remove unnecessary checks in release builds)
+3. Consider computed goto or typeID-based dispatch for interpretOperation
+4. Find RTL-heavy benchmark to measure bytecode speedup

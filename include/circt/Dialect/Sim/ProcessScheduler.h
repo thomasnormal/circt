@@ -507,7 +507,10 @@ public:
 
   /// Clear the waiting state.
   void clearWaiting() {
-    waitingSensitivity.clear();
+    // E6: skip clearing waitingSensitivity when cached — it's never read
+    // for cached processes (triggerSensitiveProcesses uses sensitivity).
+    if (!sensitivityCached)
+      waitingSensitivity.clear();
     if (state == ProcessState::Waiting)
       state = ProcessState::Ready;
   }
@@ -521,6 +524,11 @@ public:
   /// True when this process is currently in a ready queue. Used for O(1)
   /// dedup in scheduleProcess instead of O(n) std::find on the queue.
   bool inReadyQueue = false;
+
+  /// E6: When true, the permanent sensitivity list is identical to the
+  /// waiting sensitivity, so resuspendProcessFast() can skip the copy
+  /// and triggerSensitiveProcesses() reads from sensitivity directly.
+  bool sensitivityCached = false;
 
   /// Intrusive singly-linked list pointer for ready-queue membership.
   /// When this process is in an IntrusiveProcessQueue, readyNext points
