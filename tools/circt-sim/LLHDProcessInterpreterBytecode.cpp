@@ -60,7 +60,7 @@ private:
     if (it != valueToReg.end())
       return it->second;
     uint8_t reg = nextReg++;
-    if (reg >= 128) { // Limit virtual registers
+    if (reg >= 255) { // Limit virtual registers (uint8_t max)
       tooManyRegs = true;
       return 0;
     }
@@ -274,6 +274,56 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
     return !tooManyRegs;
   }
 
+  // comb.sub
+  if (auto subOp = dyn_cast<comb::SubOp>(op)) {
+    MicroOp mop;
+    mop.kind = MicroOpKind::Sub;
+    mop.destReg = getOrAssignReg(subOp.getResult());
+    mop.srcReg1 = getOrAssignReg(subOp.getLhs());
+    mop.srcReg2 = getOrAssignReg(subOp.getRhs());
+    mop.width = subOp.getResult().getType().getIntOrFloatBitWidth();
+    program.ops.push_back(mop);
+    return !tooManyRegs;
+  }
+
+  // comb.mul
+  if (auto mulOp = dyn_cast<comb::MulOp>(op)) {
+    if (mulOp.getInputs().size() != 2)
+      return false;
+    MicroOp mop;
+    mop.kind = MicroOpKind::Mul;
+    mop.destReg = getOrAssignReg(mulOp.getResult());
+    mop.srcReg1 = getOrAssignReg(mulOp.getInputs()[0]);
+    mop.srcReg2 = getOrAssignReg(mulOp.getInputs()[1]);
+    mop.width = mulOp.getResult().getType().getIntOrFloatBitWidth();
+    program.ops.push_back(mop);
+    return !tooManyRegs;
+  }
+
+  // comb.shl
+  if (auto shlOp = dyn_cast<comb::ShlOp>(op)) {
+    MicroOp mop;
+    mop.kind = MicroOpKind::Shl;
+    mop.destReg = getOrAssignReg(shlOp.getResult());
+    mop.srcReg1 = getOrAssignReg(shlOp.getLhs());
+    mop.srcReg2 = getOrAssignReg(shlOp.getRhs());
+    mop.width = shlOp.getResult().getType().getIntOrFloatBitWidth();
+    program.ops.push_back(mop);
+    return !tooManyRegs;
+  }
+
+  // comb.shru
+  if (auto shrOp = dyn_cast<comb::ShrUOp>(op)) {
+    MicroOp mop;
+    mop.kind = MicroOpKind::Shr;
+    mop.destReg = getOrAssignReg(shrOp.getResult());
+    mop.srcReg1 = getOrAssignReg(shrOp.getLhs());
+    mop.srcReg2 = getOrAssignReg(shrOp.getRhs());
+    mop.width = shrOp.getResult().getType().getIntOrFloatBitWidth();
+    program.ops.push_back(mop);
+    return !tooManyRegs;
+  }
+
   // comb.xor
   if (auto xorOp = dyn_cast<comb::XorOp>(op)) {
     if (xorOp.getInputs().size() != 2)
@@ -393,6 +443,63 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
   if (isa<llhd::IntToTimeOp>(op))
     return true;
 
+  // hw.struct_extract — extract a field from a struct via shift + mask.
+  if (auto extractOp = dyn_cast<hw::StructExtractOp>(op)) {
+    auto structTy =
+        hw::type_cast<hw::StructType>(extractOp.getInput().getType());
+    unsigned totalWidth = hw::getBitWidth(structTy);
+    if (totalWidth > 64 || totalWidth == 0)
+      return false;
+    StringRef fieldName = extractOp.getFieldName();
+    unsigned fieldOffset = 0;
+    unsigned fieldWidth = 0;
+    for (auto &field : structTy.getElements()) {
+      unsigned fw = hw::getBitWidth(field.type);
+      if (field.name == fieldName) {
+        fieldWidth = fw;
+        break;
+      }
+      fieldOffset += fw;
+    }
+    if (fieldWidth == 0 || fieldWidth > 64)
+      return false;
+    // HW convention: fields MSB-first, so shift = total - offset - width.
+    unsigned shiftAmount = totalWidth - fieldOffset - fieldWidth;
+    MicroOp mop;
+    mop.kind = MicroOpKind::StructExtract;
+    mop.destReg = getOrAssignReg(extractOp.getResult());
+    mop.srcReg1 = getOrAssignReg(extractOp.getInput());
+    mop.width = static_cast<uint8_t>(fieldWidth);
+    mop.immediate = shiftAmount;
+    program.ops.push_back(mop);
+    return !tooManyRegs;
+  }
+
+  // hw.struct_create — pack fields into a struct (2-field structs only).
+  if (auto createOp = dyn_cast<hw::StructCreateOp>(op)) {
+    auto structTy = hw::type_cast<hw::StructType>(createOp.getType());
+    auto fields = structTy.getElements();
+    if (fields.size() != 2)
+      return false; // Only support 2-field structs (FourState pattern).
+    unsigned totalWidth = hw::getBitWidth(structTy);
+    if (totalWidth > 64 || totalWidth == 0)
+      return false;
+    unsigned field1Width = hw::getBitWidth(fields[1].type);
+    if (field1Width > 64)
+      return false;
+    // HW: field0 at MSB, field1 at LSB.
+    // dest = (field0 << field1Width) | field1
+    MicroOp mop;
+    mop.kind = MicroOpKind::StructCreate2;
+    mop.destReg = getOrAssignReg(createOp.getResult());
+    mop.srcReg1 = getOrAssignReg(createOp.getInput()[0]);
+    mop.srcReg2 = getOrAssignReg(createOp.getInput()[1]);
+    mop.width = static_cast<uint8_t>(field1Width);
+    mop.immediate = totalWidth;
+    program.ops.push_back(mop);
+    return !tooManyRegs;
+  }
+
   // Unsupported operation.
   LLVM_DEBUG(llvm::dbgs() << "[Bytecode] Unsupported op: " << op->getName()
                           << "\n");
@@ -493,7 +600,7 @@ struct PendingDrive {
 bool executeBytecodeProgram(const BytecodeProgram &program,
                             ProcessScheduler &scheduler,
                             uint32_t startBlock) {
-  uint64_t regs[128];
+  uint64_t regs[256];
   std::memset(regs, 0, sizeof(regs));
 
   // Collect drives to batch into a single Event at the end.
@@ -632,6 +739,29 @@ bool executeBytecodeProgram(const BytecodeProgram &program,
         regs[op.destReg] =
             regs[op.srcReg1] ? regs[op.srcReg2] : regs[op.srcReg3];
         break;
+
+      case MicroOpKind::StructExtract: {
+        // Extract field: shift right by immediate, mask to width bits.
+        uint64_t mask =
+            (op.width >= 64) ? ~0ULL : ((1ULL << op.width) - 1);
+        regs[op.destReg] = (regs[op.srcReg1] >> op.immediate) & mask;
+        break;
+      }
+
+      case MicroOpKind::StructCreate2: {
+        // Pack 2 fields: field0 at MSB (shifted left by width), field1 at LSB.
+        // width = field1Width (shift amount for field0).
+        // immediate = totalWidth (for masking the result).
+        uint64_t field0Mask =
+            (op.immediate - op.width >= 64)
+                ? ~0ULL
+                : ((1ULL << (op.immediate - op.width)) - 1);
+        uint64_t field1Mask =
+            (op.width >= 64) ? ~0ULL : ((1ULL << op.width) - 1);
+        regs[op.destReg] = ((regs[op.srcReg1] & field0Mask) << op.width) |
+                           (regs[op.srcReg2] & field1Mask);
+        break;
+      }
 
       case MicroOpKind::Jump:
         currentBlock = static_cast<uint32_t>(op.immediate);

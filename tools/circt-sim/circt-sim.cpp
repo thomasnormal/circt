@@ -2855,6 +2855,10 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
     llhdInterpreter->dumpProcessStats(os, processStatsTop);
   }
 
+  if (llhdInterpreter) {
+    llhdInterpreter->printBytecodeStats();
+  }
+
   os << "=============================\n";
 }
 
