@@ -1526,6 +1526,48 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
     StringRef calleeName = it->second;
     std::string overriddenCalleeName;
+
+    // E5: Per-call-site fast-dispatch cache.
+    if (!callIndirectDirectDispatchCacheDisabled) {
+      auto siteIt = callIndirectSiteCache.find(callIndirectOp.getOperation());
+      if (siteIt != callIndirectSiteCache.end() &&
+          siteIt->second.valid &&
+          siteIt->second.funcAddr == funcAddr &&
+          !siteIt->second.hadVtableOverride &&
+          !siteIt->second.isIntercepted &&
+          siteIt->second.funcOp) {
+        ++ciSiteCacheHits;
+        if (traceCallIndirectSiteCacheEnabled) {
+          auto ovrIt = callIndirectRuntimeOverrideSiteInfo.find(
+              callIndirectOp.getOperation());
+          int64_t mi =
+              (ovrIt != callIndirectRuntimeOverrideSiteInfo.end() &&
+               ovrIt->second.hasStaticMethodIndex)
+                  ? ovrIt->second.staticMethodIndex
+                  : -1;
+          maybeTraceCallIndirectSiteCacheHit(mi);
+        }
+        SmallVector<InterpretedValue, 4> fastArgs;
+        for (Value arg : callIndirectOp.getArgOperands())
+          fastArgs.push_back(getValue(procId, arg));
+        auto &fastState = processStates[procId];
+        if (fastState.callDepth < 200) {
+          ++fastState.callDepth;
+          SmallVector<InterpretedValue, 2> fastResults;
+          interpretFuncBody(procId, siteIt->second.funcOp, fastArgs, fastResults,
+                            callIndirectOp);
+          --fastState.callDepth;
+          if (!processStates[procId].waiting) {
+            for (auto [res, val] :
+                 llvm::zip(callIndirectOp.getResults(), fastResults))
+              setValue(procId, res, val);
+          }
+        }
+        return success();
+      }
+      ++ciSiteCacheMisses;
+    }
+
     // [CI-DISPATCH] diagnostic removed
     LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: resolved 0x"
                             << llvm::format_hex(funcAddr, 16)
@@ -2191,7 +2233,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
     // Use rootModule as fallback for global constructors
     ModuleOp moduleOp = parent ? cast<ModuleOp>(parent) : rootModule;
-    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
+    mlir::func::FuncOp funcOp;
+    bool hadOverride = !overriddenCalleeName.empty();
+    if (!hadOverride && !callIndirectDirectDispatchCacheDisabled) {
+      auto dcIt = callIndirectDispatchCache.find(funcAddr);
+      if (dcIt != callIndirectDispatchCache.end()) {
+        funcOp = dcIt->second;
+        ++ciDispatchCacheHits;
+      } else {
+        funcOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
+        if (funcOp) {
+          callIndirectDispatchCache[funcAddr] = funcOp;
+          ++ciDispatchCacheInstalls;
+        }
+        ++ciDispatchCacheMisses;
+      }
+    } else {
+      funcOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
+    }
     if (!funcOp) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: function '" << calleeName
                               << "' not found\n");
@@ -3326,6 +3385,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           --depthRef;
       }
       return success();
+    }
+
+    // E5: Populate per-call-site cache for non-intercepted calls.
+    if (!callIndirectDirectDispatchCacheDisabled && funcOp) {
+      auto &se = callIndirectSiteCache[callIndirectOp.getOperation()];
+      bool hadOverride = !overriddenCalleeName.empty();
+      if (!hadOverride) {
+        se.funcAddr = funcAddr;
+        se.funcOp = funcOp;
+        se.valid = true;
+        se.isIntercepted = false;
+        se.hadVtableOverride = false;
+      } else {
+        se.valid = false;
+        se.hadVtableOverride = true;
+      }
     }
 
     // Call the function with depth tracking

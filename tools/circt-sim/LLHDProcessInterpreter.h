@@ -3454,6 +3454,18 @@ private:
   uint64_t ciDispatchCacheMisses = 0;
   uint64_t ciDispatchCacheDeopts = 0;
 
+  /// E5: Per-call-site fast-dispatch cache entry.
+  struct CISiteEntry {
+    uint64_t funcAddr = 0;
+    mlir::func::FuncOp funcOp;
+    bool valid = false;
+    bool isIntercepted = false;
+    bool hadVtableOverride = false;
+  };
+  llvm::DenseMap<mlir::Operation *, CISiteEntry> callIndirectSiteCache;
+  uint64_t ciSiteCacheHits = 0;
+  uint64_t ciSiteCacheMisses = 0;
+
   //===--------------------------------------------------------------------===//
   // Function symbol lookup cache stats
   //===--------------------------------------------------------------------===//

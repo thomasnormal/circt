@@ -2455,6 +2455,15 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << " entries=" << callIndirectDispatchCache.size() << "\n";
   }
 
+  // E5: Per-call-site cache stats.
+  if (profileSummaryAtExitEnabled &&
+      !callIndirectDirectDispatchCacheDisabled &&
+      (ciSiteCacheHits || ciSiteCacheMisses)) {
+    os << "[circt-sim] call_indirect site cache: hits="
+       << ciSiteCacheHits << " misses=" << ciSiteCacheMisses
+       << " entries=" << callIndirectSiteCache.size() << "\n";
+  }
+
   // Function symbol lookup cache stats.
   if (profileSummaryAtExitEnabled &&
       (funcLookupCacheHits || funcLookupCacheMisses ||

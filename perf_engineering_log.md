@@ -1967,3 +1967,42 @@ The 10,000x performance gap between Xcelium and circt-sim is dominated by:
 5. **Phase E**: Signal deduplication. Hash-based check to prevent scheduling the same signal twice in a delta cycle. Low-effort, moderate impact.
 
 The scheduling optimizations in Tasks #17 and #18 are valuable but address the **smallest** part of the gap. The overwhelming priority should be getting AOT compilation working end-to-end.
+
+---
+
+## E1-E3 Performance Comparison (Feb 23, 2026)
+
+### AHB AVIP Benchmark (ahb_single_write_test, max-time=500ns, 3-run mean)
+
+**Pre-E1 baseline**: commit `86a76e729` (Feb 16) — last buildable pre-E1 commit
+**HEAD (E0-E3)**: commit `0853893c3` (Feb 23)
+
+| Stage | Pre-E1 | HEAD (E0-E3) | Speedup |
+|-------|--------|--------------|---------|
+| passes | 2362ms | 2300ms | ~1.03x |
+| init | 4763ms | 4666ms | ~1.02x |
+| **run** | **3480ms** | **916ms** | **3.8x** |
+| **total** | **10606ms** | **7883ms** | **1.35x** |
+
+Main loop iterations: 25,102 → 148 (170x reduction)
+
+**Key insight**: E1-E3 optimizations (flat process array, stackless callbacks, minnow time callbacks) deliver 3.8x run-phase speedup. passes and init unchanged (as expected). The 170x reduction in main loop iterations demonstrates dramatically more efficient event processing in the scheduler.
+
+---
+
+## E5 — Inline Cache (Feb 23, 2026)
+
+Per-call-site cache for `call_indirect` dispatch. Skips 28+ UVM interceptor contains() checks and lookupSymbol for non-intercepted functions on repeat calls.
+
+### AHB AVIP Benchmark (500ns window, 3 runs)
+| Stage  | Run 1  | Run 2  | Run 3  | Avg    |
+|--------|--------|--------|--------|--------|
+| passes | 1806ms | 1834ms | 1852ms | 1831ms |
+| init   | 4154ms | 4137ms | 4157ms | 4149ms |
+| run    | 695ms  | 693ms  | 713ms  | 700ms  |
+| total  | 6656ms | 6665ms | 6723ms | 6681ms |
+
+### Comparison
+- E0-E3 baseline: run=916ms
+- E5: run=700ms (1.31x speedup)
+- Cumulative from pre-E1 (3480ms): 5.0x run-phase speedup
