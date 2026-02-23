@@ -434,3 +434,50 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: move wasm configure path to C++20)
+- Gap identified (regression-test first):
+  - added `utils/wasm_cxx20_contract_check.sh` requiring:
+    - wasm configure command contains `-DCMAKE_CXX_STANDARD=20`;
+    - `tools/circt-tblgen/FIRRTLAnnotationsGen.cpp` uses out-of-line
+      `ObjectType::getFields()`.
+  - Pre-fix failure:
+    - configure command did not set C++20.
+- Fix:
+  - updated `utils/configure_wasm_build.sh`:
+    - added `CMAKE_CXX_STANDARD` (default `20`) and plumbed it into cmake args.
+  - updated `tools/circt-tblgen/FIRRTLAnnotationsGen.cpp`:
+    - changed `ObjectType::getFields()` to out-of-line definition after
+      `Parameter` is complete to avoid C++20 incomplete-type issues.
+- Validation:
+  - `utils/wasm_cxx20_contract_check.sh` passes.
+  - wasm reconfigure now shows `-DCMAKE_CXX_STANDARD=20`.
+  - `build-wasm/CMakeCache.txt` reports `CMAKE_CXX_STANDARD:STRING=20`.
+  - `ninja -C build-wasm -j1 circt-tblgen` succeeds under C++20.
+
+## 2026-02-23 (follow-up: wasm C++20 warning triage)
+- Triaged warnings during C++20 wasm builds:
+  - no `-Wambiguous-reversed-operator` warnings observed in `circt-tblgen`
+    rebuild and the sampled `circt-bmc` dependency rebuild output.
+  - no suppressions were added at this stage since no concrete hits were found.
+- Additional smoke-script robustness:
+  - added explicit tool preflight checks in `utils/run_wasm_smoke.sh`:
+    - `command -v "$NODE_BIN"`
+    - `command -v ninja` (required unless `WASM_SKIP_BUILD=1`)
+  - extended `utils/wasm_smoke_contract_check.sh` accordingly.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
+
+## 2026-02-23 (follow-up: enforce C++20 contract in CI)
+- Gap identified:
+  - `utils/wasm_cxx20_contract_check.sh` was not part of CI script-contract
+    enforcement.
+- Fix:
+  - updated `utils/wasm_ci_contract_check.sh` to require
+    `utils/wasm_cxx20_contract_check.sh`.
+  - updated `.github/workflows/wasmSmoke.yml` contract step to run
+    `utils/wasm_cxx20_contract_check.sh`.
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes with updated workflow.

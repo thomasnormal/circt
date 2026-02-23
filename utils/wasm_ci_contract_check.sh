@@ -11,6 +11,7 @@ fi
 required_tokens=(
   "utils/configure_wasm_build.sh"
   "utils/wasm_configure_contract_check.sh"
+  "utils/wasm_cxx20_contract_check.sh"
   "utils/wasm_smoke_contract_check.sh"
   "utils/run_wasm_smoke.sh"
   "WASM_REQUIRE_VERILOG=1"
