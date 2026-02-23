@@ -2756,3 +2756,36 @@
       leaves a pass-mode semantic false positive under the generic profile.
       This is now explicitly tracked as a pass-only known gap while keeping the
       broader matrix green.
+
+- Iteration update (`StripLLHDProcesses` observable-use abstraction tightening):
+  - realization:
+    - `ovl_sem_multiport_fifo` still reported pass-mode `SAT` after replacing
+      process-result abstractions with manifest `known_gap=pass`.
+    - IR tracing after `strip-llhd-processes` showed broad
+      `llhd_process_result*` abstraction feeding internal FIFO state signals.
+  - implemented:
+    - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+      - for process results used only via drives where the driven signal has
+        observable downstream use, prefer signal-level interface abstraction
+        (`observable_signal_use_resolution_unknown`) over process-result
+        abstraction.
+      - this keeps abstraction at the signal boundary and avoids proliferating
+        intermediate `llhd_process_result*` ports.
+    - updated regression expectations:
+      - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - focused regressions:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
+    - OVL semantic matrix:
+      - `FAIL_ON_XPASS=0 ...`
+      - result: `102 tests, failures=0, xfail=1, xpass=0`
+    - formal smoke:
+      - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
+      - result: pass/pass
+  - outcome:
+    - abstraction quality improved (`ovl_multiport_fifo` dropped from 12
+      process-result abstractions to 4 signal-level abstractions), but the
+      pass-mode SAT remains and stays tracked as `known_gap=pass`.

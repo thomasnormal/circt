@@ -1158,3 +1158,27 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - full OVL semantic matrix:
     - `FAIL_ON_XPASS=0 ...`
     - result: `102 tests, failures=0, xfail=1, xpass=0`
+
+## Latest LLHD process abstraction slice (2026-02-23)
+
+- Implemented:
+  - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+    - for `observable_signal_use` cases, switched from process-result
+      abstraction to signal-level interface abstraction
+      (`observable_signal_use_resolution_unknown`) when possible.
+    - goal: reduce spurious behavior from over-abstracted
+      `llhd_process_result*` ports.
+  - updated regression expectations:
+    - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
+
+- Validation:
+  - `ninja -C build-test circt-opt circt-bmc`
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
+  - `FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `102 tests, failures=0, xfail=1, xpass=0`
+
+- Current state:
+  - `ovl_sem_multiport_fifo` pass-mode remains the only tracked semantic gap
+    (`known_gap=pass`), but the abstraction footprint is reduced (from
+    process-result fanout to 4 signal-level abstraction inputs).
