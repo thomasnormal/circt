@@ -17,6 +17,13 @@
 #include <iomanip>
 #include <sstream>
 
+#ifdef stdout
+#undef stdout
+#endif
+#ifdef stderr
+#undef stderr
+#endif
+
 using namespace circt;
 
 //===----------------------------------------------------------------------===//

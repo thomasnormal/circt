@@ -1056,7 +1056,8 @@ struct RuntimeModelOpLowering
     auto modelInfoStructType = LLVM::LLVMStructType::getLiteral(
         getContext(), {rewriter.getI64Type(), rewriter.getI64Type(),
                        LLVM::LLVMPointerType::get(getContext())});
-    static_assert(sizeof(ArcRuntimeModelInfo) == 24 &&
+    static_assert(sizeof(ArcRuntimeModelInfo) ==
+                      2 * sizeof(uint64_t) + sizeof(void *),
                   "Unexpected size of ArcRuntimeModelInfo struct");
 
     // Construct the Model Name String GlobalOp
