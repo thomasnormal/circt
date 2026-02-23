@@ -729,3 +729,25 @@
     `utils/wasm_cxx20_warning_check.sh`,
     `utils/wasm_smoke_contract_check.sh`, and
     `utils/wasm_ci_contract_check.sh` pass.
+
+## 2026-02-23 (follow-up: hard-fail warning triage when clean step fails)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require an
+    explicit clean-step failure diagnostic:
+    - `[wasm-cxx20-warn] failed to clean rebuild targets`
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_check.sh` ignored clean failures via `|| true`,
+      which could allow stale object reuse and reduce warning sensitivity.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh`:
+    - clean step now hard-fails with explicit diagnostic if target cleaning
+      fails.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` pass.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
