@@ -4202,3 +4202,45 @@
       - result: `146/146` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize `llvm.load` from constant globals
+  with initializer regions):
+  - realization:
+    - global-load folding only handled attribute-initialized globals via
+      `getValueOrNull()`.
+    - globals initialized through `llvm.mlir.global ... { ... llvm.return ... }`
+      remained unsupported in `for-smtlib-export` BMC regions.
+  - TDD signal:
+    - added
+      `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-region.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.addressof'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - extended global constant extraction with initializer-region fallback:
+      - reads `llvm.return` operand from `llvm.mlir.global` initializer blocks.
+      - resolves scalar constants from simple value trees:
+        `llvm.mlir.constant`, `llvm.mlir.zero`, `llvm.insertvalue`.
+      - supports constant GEP index traversal through array/struct aggregate
+        initializers built with `insertvalue` over zero/undef containers.
+    - preserved existing safety behavior:
+      - still requires scalar integer/float leaf types.
+      - unsupported/non-constant/global-with-store behavior unchanged.
+  - surprises:
+    - first edit accidentally introduced a brace mismatch; caught by
+      `ninja -C build-test circt-opt` compile failure and fixed immediately.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-region.mlir`
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-struct-region-gep-load.mlir`
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `148/148` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
