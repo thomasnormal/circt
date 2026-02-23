@@ -350,6 +350,14 @@ bool TimeWheel::advanceToNextEvent() {
             static_cast<SchedulingRegion>(nextIdx));
       }
     }
+  } else if (nextTime.deltaStep > currentTime.deltaStep) {
+    // Same real time, future delta step — advance the delta step so that
+    // the next processCurrentDelta() call can find and process these events.
+    // This occurs when a minnow/clock-domain bypass advances sim time via
+    // advanceTimeTo(), which resets deltaStep to 0, but the woken process
+    // then schedules delta-delay events at deltaStep+1.
+    currentTime.deltaStep = nextTime.deltaStep;
+    currentTime.region = 0;
   }
 
   return true;
@@ -588,6 +596,13 @@ bool EventScheduler::advanceToNextTime() {
     }
   }
   return false;
+}
+
+uint64_t EventScheduler::peekNextRealTime() {
+  SimTime nextTime;
+  if (!wheel->findNextEventTime(nextTime))
+    return UINT64_MAX;
+  return nextTime.realTime;
 }
 
 void EventScheduler::advanceTimeTo(uint64_t timeFs) {

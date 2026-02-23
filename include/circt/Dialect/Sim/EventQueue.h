@@ -360,7 +360,12 @@ public:
   /// Set the current simulation time without processing events.
   /// Used by bypass mechanisms (minnows, clock domains) that advance
   /// sim time independently of the TimeWheel's event queue.
-  void setCurrentTime(const SimTime &time) { currentTime = time; }
+  /// Also updates levels[i].currentSlot so findNextEventTime() stays correct.
+  void setCurrentTime(const SimTime &time) {
+    currentTime = time;
+    for (size_t level = 0; level < levels.size(); ++level)
+      levels[level].currentSlot = getSlotIndex(time.realTime, level);
+  }
 
   /// Advance to the next scheduled event time.
   /// Returns false if there are no more events.
@@ -386,6 +391,9 @@ public:
 
   /// Clear all pending events.
   void clear();
+
+  /// Find the next time with scheduled events.
+  bool findNextEventTime(SimTime &nextTime);
 
 private:
   struct Slot {
@@ -485,9 +493,6 @@ private:
   /// Move events from higher levels to lower levels as time advances.
   void cascade(size_t fromLevel);
 
-  /// Find the next time with scheduled events.
-  bool findNextEventTime(SimTime &nextTime);
-
   Config config;
   std::vector<Level> levels;
   SimTime currentTime;
@@ -550,6 +555,10 @@ public:
   /// This allows the caller to control when events are executed.
   /// Returns true if time was advanced, false if no events or already at next event.
   bool advanceToNextTime();
+
+  /// Peek at the next real-time (in fs) that has scheduled events, without
+  /// advancing the simulation time. Returns UINT64_MAX if no future events.
+  uint64_t peekNextRealTime();
 
   /// Advance the internal simulation time to the specified value (in fs).
   /// Does NOT process events — just moves the clock forward.
