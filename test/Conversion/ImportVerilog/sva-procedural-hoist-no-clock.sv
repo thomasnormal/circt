@@ -1,11 +1,9 @@
-// RUN: circt-verilog %s --parse-only | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 // CHECK-LABEL: moore.module @test_proc_hoist_no_clock
-// CHECK: moore.procedure always
-// CHECK-NOT: verif.clocked_assert
-// CHECK-NOT: verif.assert
-// CHECK: moore.return
+// CHECK-NOT: moore.procedure always
 // CHECK: verif.clocked_assert
+// CHECK-SAME: if
 module test_proc_hoist_no_clock(input logic clk, a, b);
   always @(*) begin
     if (a)

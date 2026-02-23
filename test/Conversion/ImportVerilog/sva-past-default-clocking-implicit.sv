@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --parse-only | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 module test_past_default_clocking_implicit(input logic clk, a);
   default clocking @(posedge clk); endclocking
@@ -12,4 +12,4 @@ endmodule
 
 // CHECK-LABEL: moore.module @test_past_default_clocking_implicit
 // CHECK: moore.past
-// CHECK: verif.assert
+// CHECK: verif.clocked_assert

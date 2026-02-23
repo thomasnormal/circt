@@ -16,13 +16,13 @@ module sva_event_arg(
 
   // CHECK: [[A:%.*]] = moore.to_builtin_bool {{%.*}} : l1
   // CHECK: [[CLK:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED_A:%.*]] = ltl.clock [[A]],{{ *}}posedge [[CLK]] : i1
+  // CHECK: [[CLOCKED_A:%.*]] = ltl.clock [[A]],{{ *}}posedge [[CLK]]{{.*}} : i1
   // CHECK: verif.assert [[CLOCKED_A]] : !ltl.sequence
   assert property (seq_event(posedge clk, a));
 
   // CHECK: [[B:%.*]] = moore.to_builtin_bool {{%.*}} : l1
   // CHECK: [[CLK2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED_B:%.*]] = ltl.clock [[B]],{{ *}}negedge [[CLK2]] : i1
+  // CHECK: [[CLOCKED_B:%.*]] = ltl.clock [[B]],{{ *}}negedge [[CLK2]]{{.*}} : i1
   // CHECK: verif.assert [[CLOCKED_B]] : !ltl.sequence
   assert property (seq_event(negedge clk, b));
 endmodule

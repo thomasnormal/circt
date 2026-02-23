@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --parse-only | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 module test_past_default_clocking(input logic clk, reset, a);
   default clocking @(posedge clk); endclocking

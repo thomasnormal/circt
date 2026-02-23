@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --parse-only | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // Tests for SVA sampled value functions in boolean contexts
 
 // Test: $changed in boolean OR context within assertion

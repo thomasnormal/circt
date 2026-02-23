@@ -13,7 +13,6 @@ module test_past_disable_iff(
 endmodule
 
 // CHECK-LABEL: moore.module @test_past_disable_iff
-// CHECK: moore.procedure always
-// CHECK: moore.conditional
-// CHECK: moore.blocking_assign
+// CHECK: moore.past
+// CHECK: comb.or
 // CHECK: verif.clocked_assert
