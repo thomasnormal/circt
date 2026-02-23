@@ -205,7 +205,8 @@ public:
       llvm::SmallVector<AOTCompiledProcess> &results);
 
   /// Compile all eligible func.func bodies in the given module to native code.
-  /// Uses chunked compilation (64 functions per chunk). Only compiles functions
+  /// Uses a single ExecutionEngine for all functions (no chunking), so that
+  /// cross-function symbol references resolve correctly. Only compiles functions
   /// whose bodies pass isFuncBodyCompilable(). External functions and those
   /// with unsupported ops are skipped.
   ///

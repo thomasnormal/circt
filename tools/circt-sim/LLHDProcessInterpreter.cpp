@@ -1771,6 +1771,10 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   aotCompileProcesses();
   reportInitStage("aotCompile");
 
+  // Phase F1: compile eligible func.func bodies to native code.
+  aotCompileFuncBodies();
+  reportInitStage("aotCompileFunc");
+
   // Recursively process child module instances EXCEPT module-level ops.
   // We must register child signals and instance mappings first so that
   // continuous assignments can resolve instance outputs.
@@ -6082,6 +6086,22 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
           unresolvedStrongEventually = true;
         continue;
       }
+      if (auto implOp = dyn_cast<ltl::ImplicationOp>(def)) {
+        auto trackerIt = state.implicationTrackers.find(def);
+        if (trackerIt != state.implicationTrackers.end() &&
+            (trackerIt->second.hasBoundedWindow ||
+             trackerIt->second.hasUnboundedWindow)) {
+          for (const auto &pending : trackerIt->second.pendingAntecedents) {
+            if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
+              unresolvedStrongEventually = true;
+              break;
+            }
+          }
+        }
+        worklist.push_back(implOp.getAntecedent());
+        worklist.push_back(implOp.getConsequent());
+        continue;
+      }
       for (Value operand : def->getOperands())
         worklist.push_back(operand);
     }
@@ -6161,6 +6181,8 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         return std::nullopt;
       return *inputLen + delayOp.getDelay();
     }
+    if (auto pastOp = dyn_cast<ltl::PastOp>(seqOp))
+      return std::optional<uint64_t>(1);
     if (!isa<ltl::SequenceType>(seq.getType()))
       return std::optional<uint64_t>(1);
     if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp)) {
@@ -6188,6 +6210,365 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         return std::nullopt;
       return *inputLen * repeatOp.getBase();
     }
+    return std::nullopt;
+  };
+  std::function<std::optional<uint64_t>(Value)> getMinSequenceLength =
+      [&](Value seq) -> std::optional<uint64_t> {
+    if (!seq)
+      return std::optional<uint64_t>(0);
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return std::optional<uint64_t>(1);
+
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return getMinSequenceLength(clockOp.getInput());
+    if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp))
+      return getMinSequenceLength(firstMatchOp.getInput());
+    if (auto pastOp = dyn_cast<ltl::PastOp>(seqOp))
+      return getMinSequenceLength(pastOp.getInput());
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(seqOp)) {
+      auto inputMin = getMinSequenceLength(delayOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      if (*inputMin > std::numeric_limits<uint64_t>::max() - delayOp.getDelay())
+        return std::nullopt;
+      return *inputMin + delayOp.getDelay();
+    }
+
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return std::optional<uint64_t>(1);
+
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp)) {
+      uint64_t total = 0;
+      for (Value input : concatOp.getInputs()) {
+        auto inputMin = getMinSequenceLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        if (*inputMin > std::numeric_limits<uint64_t>::max() - total)
+          return std::nullopt;
+        total += *inputMin;
+      }
+      return total;
+    }
+    if (auto repeatOp = dyn_cast<ltl::RepeatOp>(seqOp)) {
+      auto inputMin = getMinSequenceLength(repeatOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      if (repeatOp.getBase() == 0)
+        return std::optional<uint64_t>(0);
+      if (*inputMin > std::numeric_limits<uint64_t>::max() / repeatOp.getBase())
+        return std::nullopt;
+      return *inputMin * repeatOp.getBase();
+    }
+    if (auto gotoOp = dyn_cast<ltl::GoToRepeatOp>(seqOp)) {
+      auto inputMin = getMinSequenceLength(gotoOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      if (gotoOp.getBase() == 0)
+        return std::optional<uint64_t>(0);
+      if (*inputMin > std::numeric_limits<uint64_t>::max() / gotoOp.getBase())
+        return std::nullopt;
+      return *inputMin * gotoOp.getBase();
+    }
+    if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(seqOp)) {
+      auto inputMin = getMinSequenceLength(nonConsecutiveOp.getInput());
+      if (!inputMin)
+        return std::nullopt;
+      if (nonConsecutiveOp.getBase() == 0)
+        return std::optional<uint64_t>(0);
+      if (*inputMin >
+          std::numeric_limits<uint64_t>::max() / nonConsecutiveOp.getBase())
+        return std::nullopt;
+      return *inputMin * nonConsecutiveOp.getBase();
+    }
+    if (auto orOp = dyn_cast<ltl::OrOp>(seqOp)) {
+      if (orOp.getInputs().empty())
+        return std::optional<uint64_t>(0);
+      std::optional<uint64_t> best;
+      for (Value input : orOp.getInputs()) {
+        auto inputMin = getMinSequenceLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        if (!best || *inputMin < *best)
+          best = *inputMin;
+      }
+      return best;
+    }
+    if (auto andOp = dyn_cast<ltl::AndOp>(seqOp)) {
+      uint64_t maxInputMin = 0;
+      for (Value input : andOp.getInputs()) {
+        auto inputMin = getMinSequenceLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        maxInputMin = std::max(maxInputMin, *inputMin);
+      }
+      return maxInputMin;
+    }
+    if (auto intersectOp = dyn_cast<ltl::IntersectOp>(seqOp)) {
+      uint64_t maxInputMin = 0;
+      for (Value input : intersectOp.getInputs()) {
+        auto inputMin = getMinSequenceLength(input);
+        if (!inputMin)
+          return std::nullopt;
+        maxInputMin = std::max(maxInputMin, *inputMin);
+      }
+      return maxInputMin;
+    }
+
+    return std::nullopt;
+  };
+  std::function<bool(Value)> hasUnboundedGapRepeat =
+      [&](Value seq) -> bool {
+    if (!seq)
+      return false;
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return false;
+
+    if (isa<ltl::GoToRepeatOp, ltl::NonConsecutiveRepeatOp>(seqOp))
+      return true;
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return hasUnboundedGapRepeat(clockOp.getInput());
+    if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp))
+      return hasUnboundedGapRepeat(firstMatchOp.getInput());
+    if (auto pastOp = dyn_cast<ltl::PastOp>(seqOp))
+      return hasUnboundedGapRepeat(pastOp.getInput());
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(seqOp))
+      return hasUnboundedGapRepeat(delayOp.getInput());
+    if (auto repeatOp = dyn_cast<ltl::RepeatOp>(seqOp))
+      return hasUnboundedGapRepeat(repeatOp.getInput());
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp))
+      for (Value input : concatOp.getInputs())
+        if (hasUnboundedGapRepeat(input))
+          return true;
+    if (auto orOp = dyn_cast<ltl::OrOp>(seqOp))
+      for (Value input : orOp.getInputs())
+        if (hasUnboundedGapRepeat(input))
+          return true;
+    if (auto andOp = dyn_cast<ltl::AndOp>(seqOp))
+      for (Value input : andOp.getInputs())
+        if (hasUnboundedGapRepeat(input))
+          return true;
+    if (auto intersectOp = dyn_cast<ltl::IntersectOp>(seqOp))
+      for (Value input : intersectOp.getInputs())
+        if (hasUnboundedGapRepeat(input))
+          return true;
+    return false;
+  };
+  std::function<bool(Value)> sequenceContainsFirstMatch =
+      [&](Value seq) -> bool {
+    if (!seq)
+      return false;
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return false;
+
+    if (isa<ltl::FirstMatchOp>(seqOp))
+      return true;
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return sequenceContainsFirstMatch(clockOp.getInput());
+    if (auto pastOp = dyn_cast<ltl::PastOp>(seqOp))
+      return sequenceContainsFirstMatch(pastOp.getInput());
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(seqOp))
+      return sequenceContainsFirstMatch(delayOp.getInput());
+    if (auto repeatOp = dyn_cast<ltl::RepeatOp>(seqOp))
+      return sequenceContainsFirstMatch(repeatOp.getInput());
+    if (auto gotoOp = dyn_cast<ltl::GoToRepeatOp>(seqOp))
+      return sequenceContainsFirstMatch(gotoOp.getInput());
+    if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(seqOp))
+      return sequenceContainsFirstMatch(nonConsecutiveOp.getInput());
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp))
+      for (Value input : concatOp.getInputs())
+        if (sequenceContainsFirstMatch(input))
+          return true;
+    if (auto orOp = dyn_cast<ltl::OrOp>(seqOp))
+      for (Value input : orOp.getInputs())
+        if (sequenceContainsFirstMatch(input))
+          return true;
+    if (auto andOp = dyn_cast<ltl::AndOp>(seqOp))
+      for (Value input : andOp.getInputs())
+        if (sequenceContainsFirstMatch(input))
+          return true;
+    if (auto intersectOp = dyn_cast<ltl::IntersectOp>(seqOp))
+      for (Value input : intersectOp.getInputs())
+        if (sequenceContainsFirstMatch(input))
+          return true;
+
+    return false;
+  };
+  std::function<std::optional<Value>(Value)> getFirstMatchBoundedDelayInput =
+      [&](Value seq) -> std::optional<Value> {
+    if (!seq)
+      return std::nullopt;
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return std::nullopt;
+
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return getFirstMatchBoundedDelayInput(clockOp.getInput());
+
+    auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp);
+    if (!firstMatchOp)
+      return std::nullopt;
+
+    Value inner = firstMatchOp.getInput();
+    while (inner) {
+      auto *innerOp = inner.getDefiningOp();
+      if (!innerOp)
+        return std::nullopt;
+      if (auto clockOp = dyn_cast<ltl::ClockOp>(innerOp)) {
+        inner = clockOp.getInput();
+        continue;
+      }
+      if (auto delayOp = dyn_cast<ltl::DelayOp>(innerOp)) {
+        if (!delayOp.getLength())
+          return std::nullopt;
+        return delayOp.getInput();
+      }
+      return std::nullopt;
+    }
+    return std::nullopt;
+  };
+  std::function<std::optional<Value>(Value)> getBoundedDelayInput =
+      [&](Value seq) -> std::optional<Value> {
+    if (!seq)
+      return std::nullopt;
+    Value cur = seq;
+    while (auto clockOp = cur.getDefiningOp<ltl::ClockOp>())
+      cur = clockOp.getInput();
+    if (auto delayOp = cur.getDefiningOp<ltl::DelayOp>()) {
+      if (delayOp.getLength())
+        return delayOp.getInput();
+    }
+    return std::nullopt;
+  };
+  auto stripTopLevelFirstMatchForImplication = [&](Value seq)
+      -> std::pair<Value, bool> {
+    if (!seq)
+      return {seq, false};
+    Value cur = seq;
+    while (auto clockOp = cur.getDefiningOp<ltl::ClockOp>())
+      cur = clockOp.getInput();
+    if (auto firstMatchOp = cur.getDefiningOp<ltl::FirstMatchOp>())
+      return {firstMatchOp.getInput(), true};
+    return {seq, false};
+  };
+  std::function<std::optional<std::pair<uint64_t, uint64_t>>(Value)>
+      getBoundedSequenceWindow =
+          [&](Value seq) -> std::optional<std::pair<uint64_t, uint64_t>> {
+    if (!seq)
+      return std::pair<uint64_t, uint64_t>{0, 0};
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return std::pair<uint64_t, uint64_t>{0, 0};
+
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return getBoundedSequenceWindow(clockOp.getInput());
+    if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp))
+      return getBoundedSequenceWindow(firstMatchOp.getInput());
+
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(seqOp)) {
+      auto inner = getBoundedSequenceWindow(delayOp.getInput());
+      if (!inner)
+        return std::nullopt;
+      uint64_t minOffset = inner->first;
+      uint64_t maxOffset = inner->second;
+      if (minOffset >
+          std::numeric_limits<uint64_t>::max() - delayOp.getDelay())
+        return std::nullopt;
+      if (maxOffset >
+          std::numeric_limits<uint64_t>::max() - delayOp.getDelay())
+        return std::nullopt;
+      minOffset += delayOp.getDelay();
+      maxOffset += delayOp.getDelay();
+
+      auto length = delayOp.getLength();
+      if (!length)
+        return std::nullopt;
+      if (*length > std::numeric_limits<uint64_t>::max() - maxOffset)
+        return std::nullopt;
+      maxOffset += *length;
+      return std::pair<uint64_t, uint64_t>{minOffset, maxOffset};
+    }
+
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return std::pair<uint64_t, uint64_t>{0, 0};
+
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp)) {
+      auto inputs = concatOp.getInputs();
+      if (inputs.empty())
+        return std::pair<uint64_t, uint64_t>{0, 0};
+      auto running = getBoundedSequenceWindow(inputs.front());
+      if (!running)
+        return std::nullopt;
+      uint64_t minOffset = running->first;
+      uint64_t maxOffset = running->second;
+      for (Value input : inputs.drop_front()) {
+        auto next = getBoundedSequenceWindow(input);
+        if (!next)
+          return std::nullopt;
+        if (minOffset > std::numeric_limits<uint64_t>::max() - 1 ||
+            maxOffset > std::numeric_limits<uint64_t>::max() - 1)
+          return std::nullopt;
+        minOffset += 1;
+        maxOffset += 1;
+        if (minOffset > std::numeric_limits<uint64_t>::max() - next->first ||
+            maxOffset > std::numeric_limits<uint64_t>::max() - next->second)
+          return std::nullopt;
+        minOffset += next->first;
+        maxOffset += next->second;
+      }
+      return std::pair<uint64_t, uint64_t>{minOffset, maxOffset};
+    }
+
+    if (auto orOp = dyn_cast<ltl::OrOp>(seqOp)) {
+      auto inputs = orOp.getInputs();
+      if (inputs.empty())
+        return std::pair<uint64_t, uint64_t>{0, 0};
+      uint64_t minOffset = std::numeric_limits<uint64_t>::max();
+      uint64_t maxOffset = 0;
+      for (Value input : inputs) {
+        auto window = getBoundedSequenceWindow(input);
+        if (!window)
+          return std::nullopt;
+        minOffset = std::min(minOffset, window->first);
+        maxOffset = std::max(maxOffset, window->second);
+      }
+      return std::pair<uint64_t, uint64_t>{minOffset, maxOffset};
+    }
+
+    if (auto andOp = dyn_cast<ltl::AndOp>(seqOp)) {
+      auto inputs = andOp.getInputs();
+      if (inputs.empty())
+        return std::pair<uint64_t, uint64_t>{0, 0};
+      uint64_t minOffset = 0;
+      uint64_t maxOffset = 0;
+      for (Value input : inputs) {
+        auto window = getBoundedSequenceWindow(input);
+        if (!window)
+          return std::nullopt;
+        minOffset = std::max(minOffset, window->first);
+        maxOffset = std::max(maxOffset, window->second);
+      }
+      return std::pair<uint64_t, uint64_t>{minOffset, maxOffset};
+    }
+
+    if (auto intersectOp = dyn_cast<ltl::IntersectOp>(seqOp)) {
+      auto inputs = intersectOp.getInputs();
+      if (inputs.empty())
+        return std::pair<uint64_t, uint64_t>{0, 0};
+      uint64_t minOffset = 0;
+      uint64_t maxOffset = 0;
+      for (Value input : inputs) {
+        auto window = getBoundedSequenceWindow(input);
+        if (!window)
+          return std::nullopt;
+        minOffset = std::max(minOffset, window->first);
+        maxOffset = std::max(maxOffset, window->second);
+      }
+      return std::pair<uint64_t, uint64_t>{minOffset, maxOffset};
+    }
+
     return std::nullopt;
   };
   std::function<LTLTruth(Value)> evaluateSequenceStart =
@@ -6269,6 +6650,10 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   if (auto clockOp = dyn_cast<ltl::ClockOp>(op))
     return evaluateLTLProperty(clockOp.getInput(), state);
 
+  // ltl.boolean_constant — constant property truth.
+  if (auto constantOp = dyn_cast<ltl::BooleanConstantOp>(op))
+    return constantOp.getValue() ? LTLTruth::True : LTLTruth::False;
+
   // ltl.or — three-valued disjunction (also encodes disable iff).
   if (auto orOp = dyn_cast<ltl::OrOp>(op)) {
     LTLTruth result = LTLTruth::False;
@@ -6291,12 +6676,14 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     return result;
   }
 
-  // ltl.intersect — timing-aware intersection. Runtime monitor does not track
-  // full sequence timing windows yet, so use conjunction over sampled truth and
-  // preserve unknown as pending.
+  // ltl.intersect — timing-aware intersection.
+  // Require a shared start offset whenever we can derive finite offset sets.
+  // Fall back to conjunction for cases we cannot model yet.
   if (auto intersectOp = dyn_cast<ltl::IntersectOp>(op)) {
+    auto inputs = intersectOp.getInputs();
+
     std::optional<uint64_t> fixedLength;
-    for (Value input : intersectOp.getInputs()) {
+    for (Value input : inputs) {
       auto len = getExactSequenceLength(input);
       if (!len)
         continue;
@@ -6308,9 +6695,98 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         return LTLTruth::False;
     }
 
+    using OffsetTruths = llvm::SmallVector<std::pair<uint64_t, LTLTruth>, 4>;
+    llvm::SmallVector<LTLTruth, 4> sampledTruths;
+    llvm::SmallVector<OffsetTruths, 4> perInputOffsets;
+    sampledTruths.reserve(inputs.size());
+    perInputOffsets.reserve(inputs.size());
+
+    bool allOffsetAware = true;
+    constexpr uint64_t kMaxIntersectOffsetScan = 4096;
+
+    for (Value input : inputs) {
+      LTLTruth sampledTruth = evaluateLTLProperty(input, state);
+      sampledTruths.push_back(sampledTruth);
+
+      OffsetTruths offsets;
+      Operation *inputDef = input.getDefiningOp();
+      if (auto delayOp = dyn_cast_or_null<ltl::DelayOp>(inputDef)) {
+        if (auto length = delayOp.getLength()) {
+          uint64_t minOffset = delayOp.getDelay();
+          if (*length > std::numeric_limits<uint64_t>::max() - minOffset) {
+            allOffsetAware = false;
+          } else {
+            uint64_t maxOffset = minOffset + *length;
+            if (maxOffset > kMaxIntersectOffsetScan) {
+              allOffsetAware = false;
+            } else {
+              auto histIt = state.temporalHistory.find(delayOp.getOperation());
+              for (uint64_t offset = minOffset; offset <= maxOffset; ++offset) {
+                LTLTruth offsetTruth = LTLTruth::Unknown;
+                if (histIt != state.temporalHistory.end() &&
+                    histIt->second.size() > offset)
+                  offsetTruth =
+                      histIt->second[histIt->second.size() - 1 - offset];
+                offsets.push_back({offset, offsetTruth});
+              }
+            }
+          }
+        } else {
+          allOffsetAware = false;
+        }
+      } else if (auto len = getExactSequenceLength(input)) {
+        uint64_t offset = *len > 0 ? *len - 1 : 0;
+        offsets.push_back({offset, sampledTruth});
+      } else {
+        allOffsetAware = false;
+      }
+
+      if (allOffsetAware)
+        perInputOffsets.push_back(std::move(offsets));
+    }
+
+    if (allOffsetAware && !perInputOffsets.empty()) {
+      auto findOffsetTruth = [](const OffsetTruths &offsets, uint64_t offset,
+                                LTLTruth &truth) -> bool {
+        for (const auto &entry : offsets) {
+          if (entry.first != offset)
+            continue;
+          truth = entry.second;
+          return true;
+        }
+        return false;
+      };
+
+      bool sawUnknown = false;
+      for (const auto &base : perInputOffsets.front()) {
+        uint64_t offset = base.first;
+        LTLTruth alignedTruth = base.second;
+        bool missingOffset = false;
+        for (size_t i = 1, e = perInputOffsets.size(); i < e; ++i) {
+          LTLTruth other = LTLTruth::Unknown;
+          if (!findOffsetTruth(perInputOffsets[i], offset, other)) {
+            missingOffset = true;
+            break;
+          }
+          alignedTruth = truthAnd(alignedTruth, other);
+          if (alignedTruth == LTLTruth::False)
+            break;
+        }
+        if (missingOffset)
+          continue;
+        if (alignedTruth == LTLTruth::True)
+          return LTLTruth::True;
+        if (alignedTruth == LTLTruth::Unknown)
+          sawUnknown = true;
+      }
+      if (sawUnknown)
+        return LTLTruth::Unknown;
+      return LTLTruth::False;
+    }
+
     LTLTruth result = LTLTruth::True;
-    for (Value input : intersectOp.getInputs()) {
-      result = truthAnd(result, evaluateLTLProperty(input, state));
+    for (LTLTruth sampledTruth : sampledTruths) {
+      result = truthAnd(result, sampledTruth);
       if (result == LTLTruth::False)
         return result;
     }
@@ -6436,9 +6912,40 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     return LTLTruth::Unknown;
   }
 
-  // ltl.first_match — keep the earliest-match wrapper transparent at runtime.
-  if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(op))
-    return evaluateLTLProperty(firstMatchOp.getInput(), state);
+  // ltl.first_match — keep only earliest endpoints of the wrapped sequence.
+  // Runtime approximation: emit true only on the first sample of each
+  // contiguous true region of the wrapped sequence.
+  if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(op)) {
+    LTLTruth input = evaluateLTLProperty(firstMatchOp.getInput(), state);
+    auto prevIt = state.firstMatchPrevInput.find(op);
+    LTLTruth prevInput =
+        prevIt == state.firstMatchPrevInput.end() ? LTLTruth::False
+                                                  : prevIt->second;
+    state.firstMatchPrevInput[op] = input;
+
+    LTLTruth output = LTLTruth::False;
+    if (input == LTLTruth::Unknown) {
+      // If a definite earlier match already occurred, this cycle cannot be the
+      // first match endpoint anymore.
+      output = prevInput == LTLTruth::True ? LTLTruth::False
+                                           : LTLTruth::Unknown;
+    } else if (input == LTLTruth::True) {
+      if (prevInput == LTLTruth::False)
+        output = LTLTruth::True;
+      else if (prevInput == LTLTruth::Unknown)
+        output = LTLTruth::True;
+      else
+        output = LTLTruth::False;
+    }
+
+    // Keep enough output history for concat-age scans.
+    constexpr size_t kFirstMatchHistoryLimit = 4098;
+    auto &history = state.temporalHistory[op];
+    history.push_back(output);
+    while (history.size() > kFirstMatchHistoryLimit)
+      history.pop_front();
+    return output;
+  }
 
   // ltl.matched — expose whether the wrapped sequence matched now.
   if (auto matchedOp = dyn_cast<ltl::MatchedOp>(op))
@@ -6457,17 +6964,274 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     return history[history.size() - 2];
   }
 
+  // ltl.past — evaluate the input from `delay` sampled cycles earlier.
+  if (auto pastOp = dyn_cast<ltl::PastOp>(op)) {
+    LTLTruth input = evaluateLTLProperty(pastOp.getInput(), state);
+    uint64_t delay = pastOp.getDelay();
+
+    auto &history = state.temporalHistory[op];
+    auto &lastSampleOrdinal = state.pastLastSampleOrdinal[op];
+    if (lastSampleOrdinal != state.sampleOrdinal) {
+      history.push_back(input);
+      lastSampleOrdinal = state.sampleOrdinal;
+    }
+
+    size_t historyLimit = std::numeric_limits<size_t>::max();
+    if (delay < static_cast<uint64_t>(std::numeric_limits<size_t>::max()) - 2)
+      historyLimit = static_cast<size_t>(delay + 2);
+    while (history.size() > historyLimit)
+      history.pop_front();
+
+    if (history.size() <= delay)
+      return LTLTruth::Unknown;
+    return history[history.size() - 1 - delay];
+  }
+
   // ltl.implication — a |-> consequent.
-  // Evaluate the consequent at the current sample and shift the antecedent
-  // by the consequent's exact sequence length (minus one) plus explicit delay.
-  // This aligns runtime checks with sequence endpoint timing.
+  // For bounded delay windows, track antecedent obligations explicitly so we
+  // can fail exactly when a window closes without any match.
   if (auto implOp = dyn_cast<ltl::ImplicationOp>(op)) {
     LTLTruth ante = evaluateLTLProperty(implOp.getAntecedent(), state);
     Value consequentValue = implOp.getConsequent();
+    auto [trackedConsequentValue, strippedTopLevelFirstMatch] =
+        stripTopLevelFirstMatchForImplication(consequentValue);
+    (void)strippedTopLevelFirstMatch;
+    auto exactConsequentLen = getExactSequenceLength(trackedConsequentValue);
+    std::optional<std::pair<uint64_t, uint64_t>> boundedConsequentWindow;
+    if (isa<ltl::SequenceType>(trackedConsequentValue.getType()))
+      boundedConsequentWindow = getBoundedSequenceWindow(trackedConsequentValue);
+    auto firstMatchBoundedDelayInput =
+        getFirstMatchBoundedDelayInput(trackedConsequentValue);
+
+    // Fast path for bounded delay consequents: evaluate the delayed input
+    // directly while the antecedent window is open.
+    if (auto delayOp = trackedConsequentValue.getDefiningOp<ltl::DelayOp>()) {
+      if (auto length = delayOp.getLength()) {
+        uint64_t windowMin = delayOp.getDelay();
+        if (*length > std::numeric_limits<uint64_t>::max() - windowMin)
+          return LTLTruth::Unknown;
+        uint64_t windowMax = windowMin + *length;
+
+        LTLTruth consequentNow = evaluateLTLProperty(delayOp.getInput(), state);
+        auto &tracker = state.implicationTrackers[op];
+        tracker.hasBoundedWindow = true;
+        tracker.boundedMinShift = windowMin;
+        tracker.boundedMaxShift = windowMax;
+        bool consequentHasFirstMatch =
+            sequenceContainsFirstMatch(delayOp.getInput());
+
+        if (ante == LTLTruth::True) {
+          ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+          pending.triggerSampleOrdinal = state.sampleOrdinal;
+          tracker.pendingAntecedents.push_back(pending);
+        }
+
+        bool hasEarlierPending = false;
+        for (auto pendingIt = tracker.pendingAntecedents.begin();
+             pendingIt != tracker.pendingAntecedents.end();) {
+          uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
+          if (age >= windowMin && age <= windowMax) {
+            if (consequentNow == LTLTruth::True)
+              pendingIt->sawConsequentTrue = true;
+            else if (consequentNow == LTLTruth::Unknown)
+              pendingIt->sawConsequentUnknown = true;
+            else if (consequentHasFirstMatch && hasEarlierPending)
+              pendingIt->sawConsequentUnknown = true;
+          }
+          hasEarlierPending = true;
+
+          if (age >= windowMax) {
+            bool failClosedWindow = !pendingIt->sawConsequentTrue &&
+                                    !pendingIt->sawConsequentUnknown;
+            pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+            if (failClosedWindow)
+              return LTLTruth::False;
+            continue;
+          }
+          ++pendingIt;
+        }
+
+        if (!tracker.pendingAntecedents.empty())
+          return LTLTruth::Unknown;
+        if (ante == LTLTruth::Unknown)
+          return LTLTruth::Unknown;
+        return LTLTruth::True;
+      }
+    }
+
+    if (boundedConsequentWindow &&
+        (!exactConsequentLen ||
+         boundedConsequentWindow->first != boundedConsequentWindow->second)) {
+      uint64_t windowMin = boundedConsequentWindow->first;
+      uint64_t windowMax = boundedConsequentWindow->second;
+
+      bool anchoredFirstMatchDelay = firstMatchBoundedDelayInput.has_value();
+      LTLTruth defaultConsequentTruth =
+          anchoredFirstMatchDelay
+              ? evaluateLTLProperty(*firstMatchBoundedDelayInput, state)
+              : evaluateLTLProperty(trackedConsequentValue, state);
+      enum class AgeCombineKind { None, Disjunction, Conjunction };
+      AgeCombineKind ageCombine = AgeCombineKind::None;
+      struct AgeGatedInputTruth {
+        std::optional<std::pair<uint64_t, uint64_t>> window;
+        LTLTruth truth;
+      };
+      llvm::SmallVector<AgeGatedInputTruth, 4> ageGatedInputTruths;
+      auto addAgeGatedInput = [&](Value input) {
+        auto window = getBoundedSequenceWindow(input);
+        auto delayInput = getBoundedDelayInput(input);
+        LTLTruth truth = delayInput ? evaluateLTLProperty(*delayInput, state)
+                                    : evaluateLTLProperty(input, state);
+        ageGatedInputTruths.push_back({window, truth});
+      };
+      if (!anchoredFirstMatchDelay) {
+        if (auto orOp = trackedConsequentValue.getDefiningOp<ltl::OrOp>()) {
+          ageCombine = AgeCombineKind::Disjunction;
+          for (Value input : orOp.getInputs())
+            addAgeGatedInput(input);
+        } else if (auto andOp = trackedConsequentValue.getDefiningOp<ltl::AndOp>()) {
+          ageCombine = AgeCombineKind::Conjunction;
+          for (Value input : andOp.getInputs())
+            addAgeGatedInput(input);
+        } else if (auto intersectOp =
+                       trackedConsequentValue.getDefiningOp<ltl::IntersectOp>()) {
+          ageCombine = AgeCombineKind::Conjunction;
+          for (Value input : intersectOp.getInputs())
+            addAgeGatedInput(input);
+        }
+      }
+
+      auto getConsequentTruthForAge = [&](uint64_t age) -> LTLTruth {
+        if (ageCombine == AgeCombineKind::None)
+          return defaultConsequentTruth;
+        LTLTruth result = ageCombine == AgeCombineKind::Disjunction
+                              ? LTLTruth::False
+                              : LTLTruth::True;
+        for (const auto &inputTruth : ageGatedInputTruths) {
+          LTLTruth branchTruth = inputTruth.truth;
+          if (inputTruth.window &&
+              (age < inputTruth.window->first || age > inputTruth.window->second))
+            branchTruth = LTLTruth::False;
+          // For bounded windows, pre-close unknowns are "still pending", not
+          // definitive uncertainty. Keep them from masking close-time failure.
+          if (branchTruth == LTLTruth::Unknown && age < windowMax)
+            branchTruth = LTLTruth::False;
+          result = ageCombine == AgeCombineKind::Disjunction
+                       ? truthOr(result, branchTruth)
+                       : truthAnd(result, branchTruth);
+          if (ageCombine == AgeCombineKind::Disjunction &&
+              result == LTLTruth::True)
+            return result;
+          if (ageCombine == AgeCombineKind::Conjunction &&
+              result == LTLTruth::False)
+            return result;
+        }
+        return result;
+      };
+      auto &tracker = state.implicationTrackers[op];
+      tracker.hasBoundedWindow = true;
+      tracker.boundedMinShift = windowMin;
+      tracker.boundedMaxShift = windowMax;
+      bool deferPreCloseUnknown = false;
+      if (trackedConsequentValue.getDefiningOp<ltl::ConcatOp>() &&
+          !getExactSequenceLength(trackedConsequentValue) &&
+          !sequenceContainsFirstMatch(trackedConsequentValue))
+        deferPreCloseUnknown = true;
+      bool consequentHasFirstMatch =
+          sequenceContainsFirstMatch(trackedConsequentValue);
+
+      if (ante == LTLTruth::True) {
+        ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+        pending.triggerSampleOrdinal = state.sampleOrdinal;
+        tracker.pendingAntecedents.push_back(pending);
+      }
+
+      bool hasEarlierPending = false;
+      for (auto pendingIt = tracker.pendingAntecedents.begin();
+           pendingIt != tracker.pendingAntecedents.end();) {
+        uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
+        if (age >= windowMin && age <= windowMax) {
+          LTLTruth consequentNow = getConsequentTruthForAge(age);
+          if (consequentNow == LTLTruth::True)
+            pendingIt->sawConsequentTrue = true;
+          else if (consequentNow == LTLTruth::Unknown &&
+                   (!deferPreCloseUnknown || age == windowMax))
+            pendingIt->sawConsequentUnknown = true;
+          else if (!anchoredFirstMatchDelay && consequentHasFirstMatch &&
+                   hasEarlierPending)
+            pendingIt->sawConsequentUnknown = true;
+        }
+        hasEarlierPending = true;
+
+        if (age >= windowMax) {
+          bool failClosedWindow = !pendingIt->sawConsequentTrue &&
+                                  !pendingIt->sawConsequentUnknown;
+          pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+          if (failClosedWindow)
+            return LTLTruth::False;
+          continue;
+        }
+        ++pendingIt;
+      }
+
+      if (!tracker.pendingAntecedents.empty())
+        return LTLTruth::Unknown;
+      if (ante == LTLTruth::Unknown)
+        return LTLTruth::Unknown;
+      return LTLTruth::True;
+    }
+
+    // Variable-length sequence consequents with no finite end window cannot
+    // be discharged by fixed shifting. Keep antecedent obligations pending and
+    // only resolve when the consequent is seen true.
+    if (isa<ltl::SequenceType>(trackedConsequentValue.getType()) &&
+        !exactConsequentLen && !boundedConsequentWindow &&
+        hasUnboundedGapRepeat(trackedConsequentValue)) {
+      uint64_t minShift = 0;
+      if (auto minLen = getMinSequenceLength(trackedConsequentValue))
+        if (*minLen > 0)
+          minShift = *minLen - 1;
+
+      LTLTruth consequentNow = evaluateLTLProperty(trackedConsequentValue, state);
+      auto &tracker = state.implicationTrackers[op];
+      tracker.hasUnboundedWindow = true;
+      tracker.unboundedMinShift = minShift;
+
+      if (ante == LTLTruth::True) {
+        ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+        pending.triggerSampleOrdinal = state.sampleOrdinal;
+        tracker.pendingAntecedents.push_back(pending);
+      }
+
+      for (auto pendingIt = tracker.pendingAntecedents.begin();
+           pendingIt != tracker.pendingAntecedents.end();) {
+        uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
+        if (age >= minShift) {
+          if (consequentNow == LTLTruth::True)
+            pendingIt->sawConsequentTrue = true;
+          else if (consequentNow == LTLTruth::Unknown)
+            pendingIt->sawConsequentUnknown = true;
+        }
+
+        if (pendingIt->sawConsequentTrue) {
+          pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+          continue;
+        }
+        ++pendingIt;
+      }
+
+      if (!tracker.pendingAntecedents.empty())
+        return LTLTruth::Unknown;
+      if (ante == LTLTruth::Unknown)
+        return LTLTruth::Unknown;
+      return LTLTruth::True;
+    }
+
+    // Fixed-length consequents can still use antecedent shifting.
     uint64_t shiftDelay = 0;
 
     // Prefer the same exact-delay shift model as LTLToCore lowering.
-    if (auto delayOp = consequentValue.getDefiningOp<ltl::DelayOp>()) {
+    if (auto delayOp = trackedConsequentValue.getDefiningOp<ltl::DelayOp>()) {
       if (auto length = delayOp.getLength()) {
         if (*length == 0) {
           Value inner = delayOp.getInput();
@@ -6476,20 +7240,21 @@ LLHDProcessInterpreter::evaluateLTLProperty(
               *innerLen <= std::numeric_limits<uint64_t>::max() -
                                delayOp.getDelay()) {
             shiftDelay = delayOp.getDelay() + *innerLen - 1;
-            consequentValue = inner;
+            trackedConsequentValue = inner;
           }
         }
       }
     }
     // If no explicit delay-shift was applied, shift by sequence length-1 for
     // fixed-length consequents.
-    if (shiftDelay == 0 && isa<ltl::SequenceType>(consequentValue.getType())) {
-      if (auto len = getExactSequenceLength(consequentValue))
+    if (shiftDelay == 0 &&
+        isa<ltl::SequenceType>(trackedConsequentValue.getType())) {
+      if (auto len = getExactSequenceLength(trackedConsequentValue))
         if (*len > 0)
           shiftDelay = *len - 1;
     }
 
-    LTLTruth consqVal = evaluateLTLProperty(consequentValue, state);
+    LTLTruth consqVal = evaluateLTLProperty(trackedConsequentValue, state);
 
     // Track antecedent history for delayed implications.
     auto &history = state.temporalHistory[op];
@@ -6572,6 +7337,110 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     auto inputs = concatOp.getInputs();
     if (inputs.empty())
       return LTLTruth::True;
+
+    struct BoundedDelayInfo {
+      ltl::DelayOp delay;
+      bool wrappedFirstMatch = false;
+    };
+    auto unwrapBoundedDelay =
+        [&](Value seq) -> std::optional<BoundedDelayInfo> {
+      if (!seq)
+        return std::nullopt;
+      Value cur = seq;
+      while (auto clockOp = cur.getDefiningOp<ltl::ClockOp>())
+        cur = clockOp.getInput();
+      bool wrappedFirstMatch = false;
+      if (auto firstMatchOp = cur.getDefiningOp<ltl::FirstMatchOp>()) {
+        wrappedFirstMatch = true;
+        cur = firstMatchOp.getInput();
+        while (auto clockOp = cur.getDefiningOp<ltl::ClockOp>())
+          cur = clockOp.getInput();
+      }
+      if (auto delayOp = cur.getDefiningOp<ltl::DelayOp>())
+        if (delayOp.getLength())
+          return BoundedDelayInfo{delayOp, wrappedFirstMatch};
+      return std::nullopt;
+    };
+
+    // Variable-length ordered concat of two bounded delays.
+    // Evaluate with explicit offset composition to preserve ordering.
+    if (inputs.size() == 2) {
+      auto leftDelay = unwrapBoundedDelay(inputs[0]);
+      auto rightDelay = unwrapBoundedDelay(inputs[1]);
+      if (leftDelay && rightDelay) {
+        (void)evaluateLTLProperty(inputs[0], state);
+        (void)evaluateLTLProperty(inputs[1], state);
+
+        auto getDelayInputSample = [&](ltl::DelayOp delayOp,
+                                       uint64_t offset) -> LTLTruth {
+          auto histIt = state.temporalHistory.find(delayOp.getOperation());
+          if (histIt == state.temporalHistory.end())
+            return LTLTruth::Unknown;
+          auto &history = histIt->second;
+          if (history.size() <= offset)
+            return LTLTruth::Unknown;
+          return history[history.size() - 1 - offset];
+        };
+        auto getSequenceOutputSample = [&](Value seq,
+                                           uint64_t offset) -> LTLTruth {
+          auto *seqOp = seq.getDefiningOp();
+          if (!seqOp)
+            return offset == 0 ? evaluateLTLProperty(seq, state)
+                               : LTLTruth::Unknown;
+          auto histIt = state.temporalHistory.find(seqOp);
+          if (histIt == state.temporalHistory.end())
+            return LTLTruth::Unknown;
+          auto &history = histIt->second;
+          if (history.size() <= offset)
+            return LTLTruth::Unknown;
+          return history[history.size() - 1 - offset];
+        };
+
+        uint64_t leftMin = leftDelay->delay.getDelay();
+        uint64_t leftMax = leftMin + *leftDelay->delay.getLength();
+        uint64_t rightMin = rightDelay->delay.getDelay();
+        uint64_t rightMax = rightMin + *rightDelay->delay.getLength();
+        constexpr uint64_t kMaxConcatOffsetScan = 4096;
+        if (leftMax > kMaxConcatOffsetScan || rightMax > kMaxConcatOffsetScan)
+          return LTLTruth::Unknown;
+
+        LTLTruth result = LTLTruth::False;
+        for (uint64_t rightOffset = rightMin; rightOffset <= rightMax;
+             ++rightOffset) {
+          LTLTruth rightTruth =
+              getDelayInputSample(rightDelay->delay, rightOffset);
+          if (leftDelay->wrappedFirstMatch) {
+            if (rightOffset >
+                std::numeric_limits<uint64_t>::max() - static_cast<uint64_t>(1))
+              return LTLTruth::Unknown;
+            uint64_t composedLeftOffset = rightOffset + 1;
+            if (composedLeftOffset > kMaxConcatOffsetScan)
+              return LTLTruth::Unknown;
+            LTLTruth leftTruth =
+                getSequenceOutputSample(inputs[0], composedLeftOffset);
+            result = truthOr(result, truthAnd(leftTruth, rightTruth));
+            if (result == LTLTruth::True)
+              return result;
+            continue;
+          }
+          for (uint64_t leftOffset = leftMin; leftOffset <= leftMax;
+               ++leftOffset) {
+            if (rightOffset >
+                std::numeric_limits<uint64_t>::max() - leftOffset)
+              return LTLTruth::Unknown;
+            uint64_t composedLeftOffset = rightOffset + leftOffset;
+            if (composedLeftOffset > kMaxConcatOffsetScan)
+              return LTLTruth::Unknown;
+            LTLTruth leftTruth =
+                getDelayInputSample(leftDelay->delay, composedLeftOffset);
+            result = truthOr(result, truthAnd(leftTruth, rightTruth));
+            if (result == LTLTruth::True)
+              return result;
+          }
+        }
+        return result;
+      }
+    }
 
     llvm::SmallVector<std::optional<uint64_t>, 4> inputLengths;
     inputLengths.reserve(inputs.size());
@@ -19673,6 +20542,99 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   bool addedToVisited = hasArg0;
   if (hasArg0) {
     ++depthMap[arg0Val];
+  }
+
+  // === Native dispatch (Phase F1) ===
+  if (!nativeFuncPtrs.empty()) {
+    auto nativeIt = nativeFuncPtrs.find(funcKey);
+    if (nativeIt != nativeFuncPtrs.end()) {
+      void *fptr = nativeIt->second;
+      unsigned numArgs = args.size();
+      unsigned numResults = callOp.getNumResults();
+      if (numArgs <= 8 && numResults <= 1) {
+        uint64_t a[8] = {};
+        bool canDispatch = true;
+        for (unsigned i = 0; i < numArgs; ++i) {
+          if (args[i].getWidth() <= 64)
+            a[i] = args[i].getUInt64();
+          else {
+            canDispatch = false;
+            break;
+          }
+        }
+        if (canDispatch && numResults == 1) {
+          unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
+          if (resWidth > 64)
+            canDispatch = false;
+        }
+        if (canDispatch) {
+          ++nativeFuncCallCount;
+          ++state.callDepth;
+          using F0 = uint64_t (*)();
+          using F1 = uint64_t (*)(uint64_t);
+          using F2 = uint64_t (*)(uint64_t, uint64_t);
+          using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+          using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+          using F5 =
+              uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+          using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t);
+          using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t, uint64_t);
+          using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t, uint64_t, uint64_t);
+          uint64_t retVal = 0;
+          switch (numArgs) {
+          case 0:
+            retVal = reinterpret_cast<F0>(fptr)();
+            break;
+          case 1:
+            retVal = reinterpret_cast<F1>(fptr)(a[0]);
+            break;
+          case 2:
+            retVal = reinterpret_cast<F2>(fptr)(a[0], a[1]);
+            break;
+          case 3:
+            retVal = reinterpret_cast<F3>(fptr)(a[0], a[1], a[2]);
+            break;
+          case 4:
+            retVal = reinterpret_cast<F4>(fptr)(a[0], a[1], a[2], a[3]);
+            break;
+          case 5:
+            retVal =
+                reinterpret_cast<F5>(fptr)(a[0], a[1], a[2], a[3], a[4]);
+            break;
+          case 6:
+            retVal = reinterpret_cast<F6>(fptr)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5]);
+            break;
+          case 7:
+            retVal = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5], a[6]);
+            break;
+          case 8:
+            retVal = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5], a[6], a[7]);
+            break;
+          }
+          --state.callDepth;
+          if (addedToVisited) {
+            auto &depthRef =
+                processStates[procId].recursionVisited[funcKey][arg0Val];
+            if (depthRef > 0)
+              --depthRef;
+          }
+          if (numResults == 1) {
+            unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
+            setValue(procId, callOp.getResult(0),
+                     InterpretedValue(llvm::APInt(resWidth, retVal)));
+          }
+          return success();
+        }
+      }
+      // Fell through — can't native dispatch, use interpreter
+      ++interpretedFuncCallCount;
+    }
   }
 
   // Execute the function body with depth tracking
@@ -34886,6 +35848,49 @@ void LLHDProcessInterpreter::aotCompileProcesses() {
 
   llvm::errs() << "[circt-sim] [AOT] Compiled " << results.size()
                << " processes (" << callbackCount << " callbacks)\n";
+}
+
+void LLHDProcessInterpreter::aotCompileFuncBodies() {
+  const char *aotEnv = std::getenv("CIRCT_SIM_AOT");
+  if (!aotEnv || std::string(aotEnv) != "1")
+    return;
+
+  if (!rootModule) {
+    LLVM_DEBUG(llvm::dbgs() << "[AOT-F1] No root module — skipping\n");
+    return;
+  }
+
+  // Create compiler if not already created by aotCompileProcesses().
+  auto &ctx = *rootModule->getContext();
+  if (!aotCompiler) {
+    ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+    ctx.getOrLoadDialect<mlir::func::FuncDialect>();
+    ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
+    ctx.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+    aotCompiler = std::make_unique<AOTProcessCompiler>(ctx);
+  }
+
+  llvm::SmallVector<AOTCompiledFunc> funcResults;
+  bool ok = aotCompiler->compileAllFuncBodies(rootModule, funcResults);
+
+  if (!ok) {
+    llvm::errs() << "[circt-sim] [AOT-F1] No func bodies compiled\n";
+    return;
+  }
+
+  // Build the nativeFuncPtrs map: FuncOp (Operation*) → native ptr.
+  unsigned mapped = 0;
+  for (auto &compiled : funcResults) {
+    auto *symbolOp =
+        mlir::SymbolTable::lookupSymbolIn(rootModule, compiled.funcName);
+    if (!symbolOp)
+      continue;
+    nativeFuncPtrs[symbolOp] = compiled.funcPtr;
+    ++mapped;
+  }
+
+  llvm::errs() << "[circt-sim] [AOT-F1] Mapped " << mapped
+               << " native func ptrs for dispatch\n";
 }
 
 // interpretMooreWaitConditionCall is defined in
