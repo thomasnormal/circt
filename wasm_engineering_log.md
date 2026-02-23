@@ -1,6 +1,56 @@
 # WASM Engineering Log
 
 ## 2026-02-23
+- Iteration update (UVM wasm frontend host-path + VCD regression coverage):
+  - gap identified (regression first):
+    - added `utils/wasm_uvm_stub_vcd_check.sh` plus fixture
+      `test/Tools/circt-sim/wasm-uvm-stub-vcd.sv`.
+    - pre-fix behavior:
+      - wasm frontend failed host-path invocation with
+        `error: cannot open input file ...` and UVM path warning.
+  - fix:
+    - `tools/circt-verilog/CMakeLists.txt`
+      - added `CIRCT_VERILOG_WASM_ENABLE_NODERAWFS` (default `ON`).
+      - enabled `-sNODERAWFS=1` for `circt-verilog` when emscripten + option on.
+    - `utils/configure_wasm_build.sh`
+      - added env passthrough/validation:
+        `CIRCT_VERILOG_WASM_ENABLE_NODERAWFS`.
+    - `utils/wasm_configure_contract_check.sh`
+      - added command/source tokens and invalid-value validation for the new
+        configure option.
+    - `utils/run_wasm_smoke.sh`
+      - integrated `utils/wasm_uvm_stub_vcd_check.sh`.
+  - follow-on gaps exposed by the new mode:
+    - `circt-verilog` re-entry still hit:
+      `InitLLVM was already initialized!`.
+    - non-UVM smoke/frontend paths could OOM when UVM auto-include became
+      reachable through raw-fs.
+    - wasm frontend smoke expected IR on stdout, but current `circt-verilog`
+      flow is file-output oriented in this tree.
+  - follow-on fixes:
+    - `tools/circt-verilog/circt-verilog.cpp`
+      - emscripten path now mirrors bmc/sim re-entry handling:
+        - no `InitLLVM` in wasm mode,
+        - `cl::ResetAllOptionOccurrences()` per invocation,
+        - local help/version handling,
+        - return code path in wasm mode (no hard process exit).
+    - `utils/run_wasm_smoke.sh`
+      - non-UVM frontend invocations now pass `--no-uvm-auto-include`.
+      - frontend IR checks now validate explicit `-o <file>` outputs.
+      - verilog re-entry checks switched to host-path input/output (raw-fs mode)
+        rather than MEMFS preload assumptions.
+    - `utils/wasm_resource_guard_default_check.sh`
+      - switched non-UVM frontend check to `--no-uvm-auto-include` and explicit
+        `-o` file validation.
+  - validation:
+    - `utils/wasm_configure_contract_check.sh`: `PASS`.
+    - `utils/wasm_smoke_contract_check.sh`: `PASS`.
+    - `utils/wasm_runtime_helpers_contract_check.sh`: `PASS`.
+    - `BUILD_DIR=build-wasm NODE_BIN=node utils/wasm_uvm_stub_vcd_check.sh`:
+      `PASS`.
+    - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh`:
+      `PASS` (including UVM-stub frontend+sim+VCD and verilog re-entry checks).
+
 - Iteration update (browser-target wasm configurability + circt-sim finalize const-unblock):
   - realization:
     - `tools/circt-sim/CMakeLists.txt` still hard-forced

@@ -12,6 +12,7 @@ WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
 REENTRY_HELPER="utils/wasm_callmain_reentry_check.js"
 PLUSARGS_HELPER="utils/wasm_plusargs_reentry_check.sh"
 RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
+UVM_STUB_VCD_HELPER="utils/wasm_uvm_stub_vcd_check.sh"
 REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"
 REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"
@@ -84,6 +85,10 @@ if [[ ! -x "$PLUSARGS_HELPER" ]]; then
 fi
 if [[ ! -x "$RESOURCE_GUARD_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $RESOURCE_GUARD_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$UVM_STUB_VCD_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $UVM_STUB_VCD_HELPER" >&2
   exit 1
 fi
 
@@ -197,17 +202,27 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
   fi
 
   echo "[wasm-smoke] Functional: circt-verilog stdin (.sv) -> IR"
+  verilog_ir_out="$tmpdir/verilog-func.mlir"
   cat "$SV_TEST_INPUT" | \
-    "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --ir-llhd --single-unit --format=sv - \
+    "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --no-uvm-auto-include --ir-llhd --single-unit --format=sv -o "$verilog_ir_out" - \
     >"$tmpdir/verilog-func.out" 2>"$tmpdir/verilog-func.err"
-  grep -Eq "(hw\\.module|llhd\\.entity)" "$tmpdir/verilog-func.out"
+  if [[ ! -s "$verilog_ir_out" ]]; then
+    echo "[wasm-smoke] expected circt-verilog IR output not found or empty: $verilog_ir_out" >&2
+    exit 1
+  fi
+  grep -Eq "(hw\\.module|llhd\\.entity)" "$verilog_ir_out"
 
   echo "[wasm-smoke] Functional: circt-verilog (.sv) -> circt-sim"
+  verilog_sim_mlir="$tmpdir/verilog-sim.mlir"
   cat "$SV_SIM_TEST_INPUT" | \
-    "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --ir-llhd --single-unit --format=sv - \
-    >"$tmpdir/verilog-sim.mlir" 2>"$tmpdir/verilog-sim-verilog.err"
+    "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --no-uvm-auto-include --ir-llhd --single-unit --format=sv -o "$verilog_sim_mlir" - \
+    >"$tmpdir/verilog-sim-verilog.out" 2>"$tmpdir/verilog-sim-verilog.err"
+  if [[ ! -s "$verilog_sim_mlir" ]]; then
+    echo "[wasm-smoke] expected circt-verilog sim IR output not found or empty: $verilog_sim_mlir" >&2
+    exit 1
+  fi
   "$NODE_BIN" "$SIM_JS" --resource-guard=false --top "$SV_SIM_TOP" \
-    --vcd "$tmpdir/verilog-sim.vcd" "$tmpdir/verilog-sim.mlir" \
+    --vcd "$tmpdir/verilog-sim.vcd" "$verilog_sim_mlir" \
     >"$tmpdir/verilog-sim.out" 2>"$tmpdir/verilog-sim.err"
   grep -q "event triggered ok" "$tmpdir/verilog-sim.out"
   grep -q "Simulation completed" "$tmpdir/verilog-sim.out"
@@ -280,11 +295,12 @@ fi
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog callMain help -> run"
   verilog_reentry_log="$tmpdir/verilog-reentry.log"
+  verilog_reentry_out="/tmp/verilog-reentry-${BASHPID}.mlir"
+  rm -f "$verilog_reentry_out"
   "$NODE_BIN" "$REENTRY_HELPER" "$VERILOG_JS" \
-    --preload-file "$SV_SIM_TEST_INPUT" /inputs/test.sv \
     --first --help \
-    --second --resource-guard=false --ir-llhd --single-unit --format=sv -o /out.mlir /inputs/test.sv \
-    --expect-wasm-file-substr /out.mlir "llhd.process" \
+    --second --resource-guard=false --no-uvm-auto-include --ir-llhd --single-unit --format=sv -o "$verilog_reentry_out" "$SV_SIM_TEST_INPUT" \
+    --expect-wasm-file-substr "$verilog_reentry_out" "llhd.process" \
     --forbid-substr "Aborted(" \
     >"$verilog_reentry_log" 2>&1
   if grep -q "InitLLVM was already initialized!" "$verilog_reentry_log"; then
@@ -314,12 +330,14 @@ echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog run -> run"
+  verilog_run1_out="/tmp/verilog-reentry-run1-${BASHPID}.mlir"
+  verilog_run2_out="/tmp/verilog-reentry-run2-${BASHPID}.mlir"
+  rm -f "$verilog_run1_out" "$verilog_run2_out"
   "$NODE_BIN" "$REENTRY_HELPER" "$VERILOG_JS" \
-    --preload-file "$SV_SIM_TEST_INPUT" /inputs/test.sv \
-    --first --resource-guard=false --ir-hw --single-unit --format=sv -o /out1.mlir /inputs/test.sv \
-    --second --resource-guard=false --ir-llhd --single-unit --format=sv -o /out2.mlir /inputs/test.sv \
-    --expect-wasm-file-substr /out1.mlir "hw.module" \
-    --expect-wasm-file-substr /out2.mlir "llhd.process" \
+    --first --resource-guard=false --no-uvm-auto-include --ir-hw --single-unit --format=sv -o "$verilog_run1_out" "$SV_SIM_TEST_INPUT" \
+    --second --resource-guard=false --no-uvm-auto-include --ir-llhd --single-unit --format=sv -o "$verilog_run2_out" "$SV_SIM_TEST_INPUT" \
+    --expect-wasm-file-substr "$verilog_run1_out" "hw.module" \
+    --expect-wasm-file-substr "$verilog_run2_out" "llhd.process" \
     --forbid-substr "Aborted(" \
     >"$tmpdir/verilog-reentry-run-run.log" 2>&1
 fi
@@ -329,6 +347,11 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$PLUSARGS_HELPER"
 
 echo "[wasm-smoke] Default guard: no wasm runtime abort"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"
+
+if [[ "$has_verilog_target" -eq 1 ]]; then
+  echo "[wasm-smoke] UVM stub frontend+sim+VCD"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_STUB_VCD_HELPER"
+fi
 
 if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake 2>"$tmpdir/crosscompile.err"; then
   echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): none"
