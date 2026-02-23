@@ -5,12 +5,15 @@ BUILD_DIR="${BUILD_DIR:-build-wasm}"
 NINJA_JOBS="${NINJA_JOBS:-1}"
 NODE_BIN="${NODE_BIN:-node}"
 VCD_PATH="${VCD_PATH:-/tmp/circt-wasm-smoke.vcd}"
+WASM_REQUIRE_VERILOG="${WASM_REQUIRE_VERILOG:-0}"
 
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
+VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
 
 BMC_TEST_INPUT="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
 SIM_TEST_INPUT="test/Tools/circt-sim/llhd-combinational.mlir"
+SV_TEST_INPUT="test/Tools/circt-sim/reject-raw-sv-input.sv"
 
 if [[ ! -d "$BUILD_DIR" ]]; then
   echo "[wasm-smoke] build directory not found: $BUILD_DIR" >&2
@@ -34,6 +37,32 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
+has_verilog_target=0
+if ninja -C "$BUILD_DIR" -t targets all >"$tmpdir/targets.list"; then
+  if grep -q 'circt-verilog: phony' "$tmpdir/targets.list"; then
+    has_verilog_target=1
+  fi
+fi
+
+if [[ "$has_verilog_target" -eq 1 ]]; then
+  echo "[wasm-smoke] Building optional wasm frontend: circt-verilog"
+  ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-verilog
+  if [[ ! -f "$VERILOG_JS" ]]; then
+    echo "[wasm-smoke] circt-verilog target exists but $VERILOG_JS is missing" >&2
+    exit 1
+  fi
+elif [[ "$WASM_REQUIRE_VERILOG" == "1" ]]; then
+  echo "[wasm-smoke] circt-verilog target is not configured in $BUILD_DIR" >&2
+  echo "  reconfigure with -DCIRCT_SLANG_FRONTEND_ENABLED=ON" >&2
+  exit 1
+else
+  echo "[wasm-smoke] circt-verilog target not configured; skipping SV frontend checks"
+fi
+
+if [[ "$has_verilog_target" -eq 0 && -f "$VERILOG_JS" ]]; then
+  echo "[wasm-smoke] found $VERILOG_JS from prior build; frontend functional checks will still run via default-guard regression"
+fi
+
 echo "[wasm-smoke] Smoke: circt-bmc.js --help"
 "$NODE_BIN" "$BMC_JS" --help >"$tmpdir/bmc-help.out" 2>"$tmpdir/bmc-help.err"
 if [[ ! -s "$tmpdir/bmc-help.out" ]]; then
@@ -46,6 +75,21 @@ echo "[wasm-smoke] Smoke: circt-sim.js --help"
 if [[ ! -s "$tmpdir/sim-help.out" ]]; then
   echo "[wasm-smoke] circt-sim.js --help produced no stdout" >&2
   exit 1
+fi
+
+if [[ "$has_verilog_target" -eq 1 ]]; then
+  echo "[wasm-smoke] Smoke: circt-verilog.js --help"
+  "$NODE_BIN" "$VERILOG_JS" --help >"$tmpdir/verilog-help.out" 2>"$tmpdir/verilog-help.err"
+  if [[ ! -s "$tmpdir/verilog-help.out" ]]; then
+    echo "[wasm-smoke] circt-verilog.js --help produced no stdout" >&2
+    exit 1
+  fi
+
+  echo "[wasm-smoke] Functional: circt-verilog stdin (.sv) -> IR"
+  cat "$SV_TEST_INPUT" | \
+    "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --ir-llhd --single-unit --format=sv - \
+    >"$tmpdir/verilog-func.out" 2>"$tmpdir/verilog-func.err"
+  grep -Eq "(hw\\.module|llhd\\.entity)" "$tmpdir/verilog-func.out"
 fi
 
 echo "[wasm-smoke] Functional: circt-bmc stdin -> SMT-LIB"
@@ -122,6 +166,9 @@ echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
 
 echo "[wasm-smoke] Re-entry: circt-sim plusargs isolation"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_plusargs_reentry_check.sh
+
+echo "[wasm-smoke] Default guard: no wasm runtime abort"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_resource_guard_default_check.sh
 
 if git diff --quiet -- llvm/llvm/cmake/modules/CrossCompile.cmake; then
   echo "[wasm-smoke] CrossCompile.cmake local edits: none"
