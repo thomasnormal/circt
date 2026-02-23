@@ -209,3 +209,20 @@
     - plusargs isolation regression;
     - default resource-guard no-abort checks;
     - optional `circt-verilog` frontend checks when target is enabled.
+
+## 2026-02-23 (follow-up: reproducible wasm configure entrypoint)
+- Gap identified (regression-test first):
+  - Added `utils/wasm_configure_contract_check.sh`.
+  - Pre-fix failure:
+    - reported missing `utils/configure_wasm_build.sh`.
+- Fix:
+  - added `utils/configure_wasm_build.sh` as a single reproducible wasm
+    configure entrypoint.
+  - defaults include:
+    - `-DLLVM_TARGETS_TO_BUILD=WebAssembly`
+    - `-DMLIR_ENABLE_EXECUTION_ENGINE=OFF`
+    - `-DLLVM_ENABLE_THREADS=OFF`
+    - `-DCIRCT_SLANG_FRONTEND_ENABLED=ON`
+  - supports `--print-cmake-command` for contract testing and reproducibility.
+- Validation:
+  - `utils/wasm_configure_contract_check.sh` passes.
