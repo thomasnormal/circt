@@ -272,3 +272,24 @@
     - still validates expected wasm JS artifacts and runs full smoke checks.
 - Validation:
   - `WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh` passes end-to-end.
+
+## 2026-02-23 (follow-up: add circt-verilog same-instance re-entry coverage)
+- Gap identified (regression-test first):
+  - extended `utils/wasm_smoke_contract_check.sh` to require:
+    - `Re-entry: circt-verilog callMain help -> run`
+    - `Re-entry: circt-verilog run -> run`
+  - Pre-fix failure:
+    - missing `circt-verilog` re-entry stages in `utils/run_wasm_smoke.sh`.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` to include optional frontend re-entry
+    checks (when `circt-verilog` target is configured):
+    - `help -> run` using preloaded `.sv` file in wasm FS and asserting
+      `/out.mlir` contains `llhd.process`;
+    - `run -> run` with two different lowering modes (`--ir-hw`, `--ir-llhd`)
+      and wasm-FS output assertions on `/out1.mlir` and `/out2.mlir`.
+  - both checks forbid `Aborted(` and explicitly fail on
+    `InitLLVM was already initialized!`.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh` passes end-to-end with the new
+    `circt-verilog` re-entry stages.

@@ -12,6 +12,8 @@ required_tokens=(
   "WASM_SKIP_BUILD"
   "Functional: circt-verilog stdin (.sv) -> IR"
   "Functional: circt-verilog (.sv) -> circt-sim"
+  "Re-entry: circt-verilog callMain help -> run"
+  "Re-entry: circt-verilog run -> run"
 )
 
 for token in "${required_tokens[@]}"; do
