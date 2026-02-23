@@ -649,6 +649,38 @@ std::string LLHDProcessInterpreter::readMooreStringStruct(
   return readMooreStringStruct(procId, getValue(procId, operand));
 }
 
+SignalValue
+LLHDProcessInterpreter::encodeMooreStringSignalValue(llvm::StringRef str) {
+  std::string storage = str.str();
+  interpreterStrings.push_back(std::move(storage));
+  const std::string &stored = interpreterStrings.back();
+  uint64_t ptrVal = reinterpret_cast<uint64_t>(stored.data());
+  int64_t lenVal = static_cast<int64_t>(stored.size());
+  if (ptrVal != 0 && lenVal > 0)
+    dynamicStrings[static_cast<int64_t>(ptrVal)] = {stored.data(), lenVal};
+
+  llvm::APInt packed(128, 0);
+  packed |= llvm::APInt(128, ptrVal);
+  packed |= llvm::APInt(128, static_cast<uint64_t>(lenVal)) << 64;
+  return SignalValue(packed);
+}
+
+bool LLHDProcessInterpreter::decodeMooreStringSignalValue(
+    const SignalValue &value, std::string &out) {
+  if (value.getWidth() < 128)
+    return false;
+  llvm::APInt bits = value.getAPInt().zextOrTrunc(128);
+  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
+  uint64_t len = bits.extractBits(64, 64).getZExtValue();
+  if (len == 0) {
+    out.clear();
+    return true;
+  }
+  if (ptr == 0)
+    return false;
+  return tryReadStringKey(/*procId=*/0, ptr, static_cast<int64_t>(len), out);
+}
+
 void LLHDProcessInterpreter::setCompileModeEnabled(bool enable) {
   compileModeEnabled = enable;
   // Keep block-level JIT disabled until compile-mode parity is restored.
@@ -1756,6 +1788,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
 
   // Register clocked assertion checkers (verif.clocked_assert at module level).
   registerClockedAssertions(discoveredOps, 0, InstanceInputMapping{});
+  registerClockedAssumptions(discoveredOps, 0, InstanceInputMapping{});
+  registerClockedCovers(discoveredOps, 0, InstanceInputMapping{});
 
   // Export signals to MooreRuntime signal registry for DPI/VPI access
   exportSignalsToRegistry();
@@ -2694,6 +2728,8 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
 
     // Register clocked assertions for the child module (per instance).
     registerClockedAssertions(childOps, instanceId, instanceInputMap);
+    registerClockedAssumptions(childOps, instanceId, instanceInputMap);
+    registerClockedCovers(childOps, instanceId, instanceInputMap);
 
     // Register processes from child module using pre-discovered ops
     for (llhd::ProcessOp processOp : childOps.processes) {
@@ -2712,6 +2748,12 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.currentOp = state.currentBlock->begin();
       registerProcessState(procId, std::move(state));
       instanceOpToProcessId[instanceId][processOp.getOperation()] = procId;
+
+      // Pre-register immediate cover signals so they are visible to VCD tracing
+      // before simulation starts.
+      processOp.walk([&](verif::CoverOp coverOp) {
+        (void)getOrCreateImmediateCoverSignal(coverOp, instanceId);
+      });
 
       LLVM_DEBUG(maybeTraceRegisteredChildProcess(procName, procId));
 
@@ -2795,6 +2837,12 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.currentOp = state.currentBlock->begin();
       registerProcessState(procId, std::move(state));
       instanceOpToProcessId[instanceId][initialOp.getOperation()] = procId;
+
+      // Pre-register immediate cover signals so they are visible to VCD tracing
+      // before simulation starts.
+      initialOp.walk([&](verif::CoverOp coverOp) {
+        (void)getOrCreateImmediateCoverSignal(coverOp, instanceId);
+      });
 
       LLVM_DEBUG(maybeTraceRegisteredChildInitialBlock(initName, procId));
 
@@ -3107,6 +3155,12 @@ void LLHDProcessInterpreter::discoverOpsIteratively(hw::HWModuleOp hwModule,
         } else if (auto clockedAssertOp =
                        dyn_cast<verif::ClockedAssertOp>(&op)) {
           ops.clockedAsserts.push_back(clockedAssertOp);
+        } else if (auto clockedAssumeOp =
+                       dyn_cast<verif::ClockedAssumeOp>(&op)) {
+          ops.clockedAssumes.push_back(clockedAssumeOp);
+        } else if (auto clockedCoverOp =
+                       dyn_cast<verif::ClockedCoverOp>(&op)) {
+          ops.clockedCovers.push_back(clockedCoverOp);
         }
 
         // Add nested regions to worklist (but skip process/initial/combinational bodies
@@ -3124,7 +3178,8 @@ void LLHDProcessInterpreter::discoverOpsIteratively(hw::HWModuleOp hwModule,
       ops.instances.size(), ops.signals.size(), ops.outputs.size(),
       ops.processes.size(), ops.combinationals.size(), ops.initials.size(),
       ops.moduleDrives.size(), ops.firRegs.size(),
-      ops.clockedAsserts.size()));
+      ops.clockedAsserts.size(), ops.clockedAssumes.size(),
+      ops.clockedCovers.size()));
 }
 
 //===----------------------------------------------------------------------===//
@@ -4036,6 +4091,12 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
   registerProcessState(procId, std::move(state));
   opToProcessId[processOp.getOperation()] = procId;
 
+  // Pre-register immediate cover signals so they are visible to VCD tracing
+  // before simulation starts.
+  processOp.walk([&](verif::CoverOp coverOp) {
+    (void)getOrCreateImmediateCoverSignal(coverOp, /*instanceId=*/0);
+  });
+
   // Classify the process into an ExecModel using the 6-step algorithm.
   // valueToSignal is fully populated by registerSignals() which runs first.
   CallbackPlan plan =
@@ -4170,6 +4231,12 @@ ProcessId LLHDProcessInterpreter::registerInitialBlock(seq::InitialOp initialOp)
   state.currentOp = state.currentBlock->begin();
   registerProcessState(procId, std::move(state));
   opToProcessId[initialOp.getOperation()] = procId;
+
+  // Pre-register immediate cover signals so they are visible to VCD tracing
+  // before simulation starts.
+  initialOp.walk([&](verif::CoverOp coverOp) {
+    (void)getOrCreateImmediateCoverSignal(coverOp, /*instanceId=*/0);
+  });
 
   LLVM_DEBUG(maybeTraceRegisteredTopInitialBlock(name, procId));
 
@@ -5936,7 +6003,7 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     signalIdToName[state.assertionSignalId] = traceName;
     signalIdToType[state.assertionSignalId] =
         IntegerType::get(assertOp.getContext(), 1);
-    clockedAssertionStates[assertOp.getOperation()] = state;
+    clockedAssertionStates[{assertOp.getOperation(), instanceId}] = state;
 
     std::string procName =
         "clocked_assert_" + (label.empty() ? std::to_string(assertionOrdinal)
@@ -5966,7 +6033,8 @@ void LLHDProcessInterpreter::registerClockedAssertions(
 
 void LLHDProcessInterpreter::executeClockedAssertion(
     verif::ClockedAssertOp assertOp, InstanceId instanceId) {
-  auto it = clockedAssertionStates.find(assertOp.getOperation());
+  auto key = std::make_pair(assertOp.getOperation(), instanceId);
+  auto it = clockedAssertionStates.find(key);
   if (it == clockedAssertionStates.end())
     return;
 
@@ -6036,15 +6104,312 @@ void LLHDProcessInterpreter::executeClockedAssertion(
     std::string label;
     if (auto labelAttr = assertOp.getLabelAttr())
       label = labelAttr.getValue().str();
-    maybeTraceSvaAssertionFailed(label, scheduler.getCurrentTime().realTime,
-                                 assertOp.getLoc());
+    if (areAssertionFailMessagesEnabled())
+      maybeTraceSvaAssertionFailed(label, scheduler.getCurrentTime().realTime,
+                                   assertOp.getLoc());
   }
+}
+
+void LLHDProcessInterpreter::registerClockedAssumptions(
+    const DiscoveredOps &ops, InstanceId instanceId,
+    const InstanceInputMapping &inputMap) {
+  ScopedInstanceContext instScope(*this, instanceId);
+  ScopedInputValueMap inputScope(*this, inputMap);
+
+  if (ops.clockedAssumes.empty())
+    return;
+
+  for (auto assumeOp : ops.clockedAssumes) {
+    size_t assumeOrdinal = clockedAssumptionStates.size() + 1;
+    std::string label;
+    if (auto labelAttr = assumeOp.getLabelAttr())
+      label = labelAttr.getValue().str();
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Registering clocked assumption"
+               << (label.empty() ? "" : " '" + label + "'")
+               << " at " << assumeOp.getLoc() << "\n");
+
+    ClockedAssertionState state;
+    state.instanceId = instanceId;
+    state.inputMap = inputMap;
+    std::string traceName;
+    if (!label.empty())
+      traceName = "__sva__assume_" + sanitizeSvaTraceName(label);
+    else
+      traceName = "__sva__assume_" + std::to_string(assumeOrdinal);
+    if (instanceId != 0)
+      traceName = "__sva__inst" + std::to_string(instanceId) + "_" +
+                  sanitizeSvaTraceName(traceName);
+    state.assertionSignalId =
+        scheduler.registerSignal(traceName, 1, SignalEncoding::TwoState);
+    scheduler.updateSignal(state.assertionSignalId, SignalValue(1, 1));
+    signalIdToName[state.assertionSignalId] = traceName;
+    signalIdToType[state.assertionSignalId] =
+        IntegerType::get(assumeOp.getContext(), 1);
+    clockedAssumptionStates[{assumeOp.getOperation(), instanceId}] = state;
+
+    std::string procName =
+        "clocked_assume_" + (label.empty() ? std::to_string(assumeOrdinal)
+                                           : label);
+    ProcessId procId = scheduler.registerProcess(
+        procName, [this, assumeOp, instanceId, inputMap]() {
+          ScopedInstanceContext scope(*this, instanceId);
+          ScopedInputValueMap inputScope(*this, inputMap);
+          executeClockedAssumption(assumeOp, instanceId);
+        });
+    if (auto *process = scheduler.getProcess(procId)) {
+      // Evaluate assumptions in the Observed region, analogous to assertions.
+      process->setPreferredRegion(SchedulingRegion::Observed);
+    }
+
+    llvm::SmallVector<SignalId, 4> clkSignals;
+    collectSignalIds(assumeOp.getClock(), clkSignals);
+    for (SignalId sig : clkSignals)
+      scheduler.addSensitivity(procId, sig, EdgeType::AnyEdge);
+
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+}
+
+void LLHDProcessInterpreter::executeClockedAssumption(
+    verif::ClockedAssumeOp assumeOp, InstanceId instanceId) {
+  auto key = std::make_pair(assumeOp.getOperation(), instanceId);
+  auto it = clockedAssumptionStates.find(key);
+  if (it == clockedAssumptionStates.end())
+    return;
+
+  ClockedAssertionState &state = it->second;
+  ScopedInstanceContext instScope(*this, state.instanceId);
+  ScopedInputValueMap inputScope(*this, state.inputMap);
+  auto updateAssumptionSignal = [&](bool passing) {
+    if (state.assertionSignalId == 0)
+      return;
+    scheduler.updateSignal(state.assertionSignalId,
+                           SignalValue(passing ? 1 : 0, 1));
+  };
+
+  InterpretedValue clkVal = evaluateContinuousValue(assumeOp.getClock());
+
+  bool edgeDetected = false;
+  if (!clkVal.isX()) {
+    if (!state.hasPrevClock) {
+      state.prevClock = clkVal;
+      state.hasPrevClock = true;
+      return;
+    }
+    if (!state.prevClock.isX()) {
+      uint64_t prev = state.prevClock.getUInt64();
+      uint64_t curr = clkVal.getUInt64();
+      auto edge = assumeOp.getEdge();
+      if (edge == verif::ClockEdge::Pos)
+        edgeDetected = (prev == 0 && curr != 0);
+      else if (edge == verif::ClockEdge::Neg)
+        edgeDetected = (prev != 0 && curr == 0);
+      else
+        edgeDetected = (prev != curr);
+    }
+    state.prevClock = clkVal;
+  } else {
+    state.prevClock = clkVal;
+    return;
+  }
+
+  if (!edgeDetected)
+    return;
+
+  if (assumeOp.getEnable()) {
+    InterpretedValue enableVal = evaluateContinuousValue(assumeOp.getEnable());
+    if (enableVal.isX() || enableVal.getAPInt().isZero()) {
+      updateAssumptionSignal(true);
+      return;
+    }
+  }
+
+  ++state.sampleOrdinal;
+  auto propTruth = evaluateLTLProperty(assumeOp.getProperty(), state);
+  bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
+  updateAssumptionSignal(propHolds);
+  if (!propHolds) {
+    ++clockedAssumptionFailures;
+    std::string label;
+    if (auto labelAttr = assumeOp.getLabelAttr())
+      label = labelAttr.getValue().str();
+    maybeTraceSvaAssumptionFailed(label, scheduler.getCurrentTime().realTime,
+                                  assumeOp.getLoc());
+  }
+}
+
+void LLHDProcessInterpreter::registerClockedCovers(
+    const DiscoveredOps &ops, InstanceId instanceId,
+    const InstanceInputMapping &inputMap) {
+  ScopedInstanceContext instScope(*this, instanceId);
+  ScopedInputValueMap inputScope(*this, inputMap);
+
+  if (ops.clockedCovers.empty())
+    return;
+
+  for (auto coverOp : ops.clockedCovers) {
+    size_t coverOrdinal = clockedCoverStates.size() + 1;
+    std::string label;
+    if (auto labelAttr = coverOp.getLabelAttr())
+      label = labelAttr.getValue().str();
+
+    LLVM_DEBUG(llvm::dbgs() << "  Registering clocked cover"
+                            << (label.empty() ? "" : " '" + label + "'")
+                            << " at " << coverOp.getLoc() << "\n");
+
+    ClockedAssertionState state;
+    state.instanceId = instanceId;
+    state.inputMap = inputMap;
+    std::string traceName;
+    if (!label.empty())
+      traceName = "__sva__cover_" + sanitizeSvaTraceName(label);
+    else
+      traceName = "__sva__cover_" + std::to_string(coverOrdinal);
+    if (instanceId != 0)
+      traceName = "__sva__inst" + std::to_string(instanceId) + "_" +
+                  sanitizeSvaTraceName(traceName);
+    state.assertionSignalId =
+        scheduler.registerSignal(traceName, 1, SignalEncoding::TwoState);
+    scheduler.updateSignal(state.assertionSignalId, SignalValue(0, 1));
+    signalIdToName[state.assertionSignalId] = traceName;
+    signalIdToType[state.assertionSignalId] =
+        IntegerType::get(coverOp.getContext(), 1);
+    clockedCoverStates[{coverOp.getOperation(), instanceId}] = state;
+
+    std::string procName =
+        "clocked_cover_" + (label.empty() ? std::to_string(coverOrdinal) : label);
+    ProcessId procId = scheduler.registerProcess(
+        procName, [this, coverOp, instanceId, inputMap]() {
+          ScopedInstanceContext scope(*this, instanceId);
+          ScopedInputValueMap inputScope(*this, inputMap);
+          executeClockedCover(coverOp, instanceId);
+        });
+    if (auto *process = scheduler.getProcess(procId)) {
+      process->setPreferredRegion(SchedulingRegion::Observed);
+    }
+
+    llvm::SmallVector<SignalId, 4> clkSignals;
+    collectSignalIds(coverOp.getClock(), clkSignals);
+    for (SignalId sig : clkSignals)
+      scheduler.addSensitivity(procId, sig, EdgeType::AnyEdge);
+
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+}
+
+void LLHDProcessInterpreter::executeClockedCover(verif::ClockedCoverOp coverOp,
+                                                 InstanceId instanceId) {
+  auto key = std::make_pair(coverOp.getOperation(), instanceId);
+  auto it = clockedCoverStates.find(key);
+  if (it == clockedCoverStates.end())
+    return;
+
+  ClockedAssertionState &state = it->second;
+  ScopedInstanceContext instScope(*this, state.instanceId);
+  ScopedInputValueMap inputScope(*this, state.inputMap);
+  auto setCoveredSignal = [&]() {
+    if (state.assertionSignalId == 0)
+      return;
+    scheduler.updateSignal(state.assertionSignalId, SignalValue(1, 1));
+  };
+
+  InterpretedValue clkVal = evaluateContinuousValue(coverOp.getClock());
+
+  bool edgeDetected = false;
+  if (!clkVal.isX()) {
+    if (!state.hasPrevClock) {
+      state.prevClock = clkVal;
+      state.hasPrevClock = true;
+      return;
+    }
+    if (!state.prevClock.isX()) {
+      uint64_t prev = state.prevClock.getUInt64();
+      uint64_t curr = clkVal.getUInt64();
+      auto edge = coverOp.getEdge();
+      if (edge == verif::ClockEdge::Pos)
+        edgeDetected = (prev == 0 && curr != 0);
+      else if (edge == verif::ClockEdge::Neg)
+        edgeDetected = (prev != 0 && curr == 0);
+      else
+        edgeDetected = (prev != curr);
+    }
+    state.prevClock = clkVal;
+  } else {
+    state.prevClock = clkVal;
+    return;
+  }
+
+  if (!edgeDetected)
+    return;
+
+  if (coverOp.getEnable()) {
+    InterpretedValue enableVal = evaluateContinuousValue(coverOp.getEnable());
+    if (enableVal.isX() || enableVal.getAPInt().isZero())
+      return;
+  }
+
+  ++state.sampleOrdinal;
+  auto propTruth = evaluateLTLProperty(coverOp.getProperty(), state);
+  if (propTruth == ClockedAssertionState::LTLTruth::True) {
+    ++clockedCoverHits;
+    setCoveredSignal();
+  }
+}
+
+bool LLHDProcessInterpreter::areAssertionFailMessagesEnabled() const {
+  auto readI1Global = [&](StringRef name) -> std::optional<bool> {
+    auto it = globalMemoryBlocks.find(name);
+    if (it == globalMemoryBlocks.end())
+      return std::nullopt;
+    const MemoryBlock &block = it->second;
+    if (block.data.empty())
+      return std::nullopt;
+    return (block.data[0] & 1) != 0;
+  };
+
+  if (auto enabled = readI1Global("__circt_assert_fail_msgs_enabled"))
+    return *enabled;
+  // Backward-compatible fallback for older synthetic-global naming.
+  if (auto enabled = readI1Global("__circt_assert_fail_messages_enabled"))
+    return *enabled;
+  return true;
+}
+
+SignalId LLHDProcessInterpreter::getOrCreateImmediateCoverSignal(
+    verif::CoverOp coverOp, InstanceId instanceId) {
+  auto key = std::make_pair(coverOp.getOperation(), instanceId);
+  if (auto it = immediateCoverSignals.find(key); it != immediateCoverSignals.end())
+    return it->second;
+
+  size_t coverOrdinal = immediateCoverSignals.size() + 1;
+  std::string label;
+  if (auto labelAttr = coverOp->getAttrOfType<StringAttr>("label"))
+    label = labelAttr.getValue().str();
+
+  std::string traceName;
+  if (!label.empty())
+    traceName = "__sva__cover_immediate_" + sanitizeSvaTraceName(label);
+  else
+    traceName = "__sva__cover_immediate_" + std::to_string(coverOrdinal);
+  if (instanceId != 0)
+    traceName = "__sva__inst" + std::to_string(instanceId) + "_" +
+                sanitizeSvaTraceName(traceName);
+
+  SignalId coverSignalId =
+      scheduler.registerSignal(traceName, 1, SignalEncoding::TwoState);
+  scheduler.updateSignal(coverSignalId, SignalValue(0, 1));
+  signalIdToName[coverSignalId] = traceName;
+  signalIdToType[coverSignalId] = IntegerType::get(coverOp.getContext(), 1);
+  immediateCoverSignals[key] = coverSignalId;
+  return coverSignalId;
 }
 
 size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
   size_t finalFailures = 0;
   for (auto &entry : clockedAssertionStates) {
-    auto assertOp = cast<verif::ClockedAssertOp>(entry.first);
+    auto assertOp = cast<verif::ClockedAssertOp>(entry.first.first);
     ClockedAssertionState &state = entry.second;
     ScopedInstanceContext instScope(*this, state.instanceId);
     ScopedInputValueMap inputScope(*this, state.inputMap);
@@ -6069,9 +6434,46 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
         if (trackerIt == state.eventuallyTrackers.end())
           continue;
         const auto &tracker = trackerIt->second;
-        if (tracker.trailingUnsatisfiedSamples > 0 &&
-            !tracker.trailingHasUnknown)
+        if (tracker.trailingUnsatisfiedSamples == 0)
+          continue;
+        if (!tracker.trailingHasUnknown) {
           unresolvedStrongEventually = true;
+          continue;
+        }
+
+        // Distinguish unknown-data uncertainty from pure lower-bound progress:
+        // when eventually wraps repeat with no unknown streak samples, an
+        // unresolved end-of-trace obligation is a real strong failure.
+        if (auto repeatOp = eventuallyOp.getInput().getDefiningOp<ltl::RepeatOp>()) {
+          auto repeatIt = state.repeatTrackers.find(repeatOp.getOperation());
+          if (repeatIt != state.repeatTrackers.end()) {
+            const auto &repeatTracker = repeatIt->second;
+            if (!repeatTracker.streakHasUnknown &&
+                repeatTracker.trueStreak < repeatOp.getBase())
+              unresolvedStrongEventually = true;
+          }
+        }
+        if (auto gotoOp =
+                eventuallyOp.getInput().getDefiningOp<ltl::GoToRepeatOp>()) {
+          auto hitIt = state.repetitionHitTrackers.find(gotoOp.getOperation());
+          if (hitIt != state.repetitionHitTrackers.end()) {
+            const auto &hitTracker = hitIt->second;
+            if (!hitTracker.hasUnknown && hitTracker.trueHits < gotoOp.getBase())
+              unresolvedStrongEventually = true;
+          }
+        }
+        if (auto nonConsecutiveOp =
+                eventuallyOp.getInput()
+                    .getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
+          auto hitIt =
+              state.repetitionHitTrackers.find(nonConsecutiveOp.getOperation());
+          if (hitIt != state.repetitionHitTrackers.end()) {
+            const auto &hitTracker = hitIt->second;
+            if (!hitTracker.hasUnknown &&
+                hitTracker.trueHits < nonConsecutiveOp.getBase())
+              unresolvedStrongEventually = true;
+          }
+        }
         continue;
       }
       if (auto delayOp = dyn_cast<ltl::DelayOp>(def)) {
@@ -6117,8 +6519,126 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
     std::string label;
     if (auto labelAttr = assertOp.getLabelAttr())
       label = labelAttr.getValue().str();
-    maybeTraceSvaAssertionFailed(label, scheduler.getCurrentTime().realTime,
-                                 assertOp.getLoc());
+    if (areAssertionFailMessagesEnabled())
+      maybeTraceSvaAssertionFailed(label, scheduler.getCurrentTime().realTime,
+                                   assertOp.getLoc());
+  }
+  return finalFailures;
+}
+
+size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
+  size_t finalFailures = 0;
+  for (auto &entry : clockedAssumptionStates) {
+    auto assumeOp = cast<verif::ClockedAssumeOp>(entry.first.first);
+    ClockedAssertionState &state = entry.second;
+    ScopedInstanceContext instScope(*this, state.instanceId);
+    ScopedInputValueMap inputScope(*this, state.inputMap);
+
+    bool unresolvedStrongEventually = false;
+    llvm::SmallVector<Value, 16> worklist{assumeOp.getProperty()};
+    while (!worklist.empty() && !unresolvedStrongEventually) {
+      Value cur = worklist.pop_back_val();
+      if (!cur)
+        continue;
+      Operation *def = cur.getDefiningOp();
+      if (!def)
+        continue;
+      if (auto clockOp = dyn_cast<ltl::ClockOp>(def)) {
+        worklist.push_back(clockOp.getInput());
+        continue;
+      }
+      if (auto eventuallyOp = dyn_cast<ltl::EventuallyOp>(def)) {
+        if (eventuallyOp->hasAttr("ltl.weak"))
+          continue;
+        auto trackerIt = state.eventuallyTrackers.find(def);
+        if (trackerIt == state.eventuallyTrackers.end())
+          continue;
+        const auto &tracker = trackerIt->second;
+        if (tracker.trailingUnsatisfiedSamples == 0)
+          continue;
+        if (!tracker.trailingHasUnknown) {
+          unresolvedStrongEventually = true;
+          continue;
+        }
+
+        if (auto repeatOp =
+                eventuallyOp.getInput().getDefiningOp<ltl::RepeatOp>()) {
+          auto repeatIt = state.repeatTrackers.find(repeatOp.getOperation());
+          if (repeatIt != state.repeatTrackers.end()) {
+            const auto &repeatTracker = repeatIt->second;
+            if (!repeatTracker.streakHasUnknown &&
+                repeatTracker.trueStreak < repeatOp.getBase())
+              unresolvedStrongEventually = true;
+          }
+        }
+        if (auto gotoOp =
+                eventuallyOp.getInput().getDefiningOp<ltl::GoToRepeatOp>()) {
+          auto hitIt = state.repetitionHitTrackers.find(gotoOp.getOperation());
+          if (hitIt != state.repetitionHitTrackers.end()) {
+            const auto &hitTracker = hitIt->second;
+            if (!hitTracker.hasUnknown && hitTracker.trueHits < gotoOp.getBase())
+              unresolvedStrongEventually = true;
+          }
+        }
+        if (auto nonConsecutiveOp =
+                eventuallyOp.getInput()
+                    .getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
+          auto hitIt =
+              state.repetitionHitTrackers.find(nonConsecutiveOp.getOperation());
+          if (hitIt != state.repetitionHitTrackers.end()) {
+            const auto &hitTracker = hitIt->second;
+            if (!hitTracker.hasUnknown &&
+                hitTracker.trueHits < nonConsecutiveOp.getBase())
+              unresolvedStrongEventually = true;
+          }
+        }
+        continue;
+      }
+      if (auto delayOp = dyn_cast<ltl::DelayOp>(def)) {
+        if (delayOp.getLength())
+          continue;
+        auto trackerIt = state.unboundedDelayTrackers.find(def);
+        if (trackerIt == state.unboundedDelayTrackers.end())
+          continue;
+        const auto &tracker = trackerIt->second;
+        if (tracker.trailingUnsatisfiedSamples > 0 &&
+            !tracker.trailingHasUnknown)
+          unresolvedStrongEventually = true;
+        continue;
+      }
+      if (auto implOp = dyn_cast<ltl::ImplicationOp>(def)) {
+        auto trackerIt = state.implicationTrackers.find(def);
+        if (trackerIt != state.implicationTrackers.end() &&
+            (trackerIt->second.hasBoundedWindow ||
+             trackerIt->second.hasUnboundedWindow)) {
+          for (const auto &pending : trackerIt->second.pendingAntecedents) {
+            if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
+              unresolvedStrongEventually = true;
+              break;
+            }
+          }
+        }
+        worklist.push_back(implOp.getAntecedent());
+        worklist.push_back(implOp.getConsequent());
+        continue;
+      }
+      for (Value operand : def->getOperands())
+        worklist.push_back(operand);
+    }
+
+    if (!unresolvedStrongEventually)
+      continue;
+
+    if (state.assertionSignalId != 0)
+      scheduler.updateSignal(state.assertionSignalId, SignalValue(0, 1));
+
+    ++clockedAssumptionFailures;
+    ++finalFailures;
+    std::string label;
+    if (auto labelAttr = assumeOp.getLabelAttr())
+      label = labelAttr.getValue().str();
+    maybeTraceSvaAssumptionFailed(label, scheduler.getCurrentTime().realTime,
+                                  assumeOp.getLoc());
   }
   return finalFailures;
 }
@@ -6814,9 +7334,14 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   // ltl.eventually — unresolved future obligations are unknown-pending.
   // If the operand matches now, eventually is true now.
   if (auto eventuallyOp = dyn_cast<ltl::EventuallyOp>(op)) {
-    if (eventuallyOp->hasAttr("ltl.weak"))
-      return LTLTruth::True;
     LTLTruth input = evaluateLTLProperty(eventuallyOp.getInput(), state);
+    if (eventuallyOp->hasAttr("ltl.weak")) {
+      // Weak eventually should stay pending until satisfied; it is resolved as
+      // vacuously true only at end-of-trace finalization.
+      if (input == LTLTruth::True)
+        return LTLTruth::True;
+      return LTLTruth::Unknown;
+    }
     auto &tracker = state.eventuallyTrackers[op];
     if (input == LTLTruth::True) {
       tracker.trailingUnsatisfiedSamples = 0;
@@ -6833,7 +7358,16 @@ LLHDProcessInterpreter::evaluateLTLProperty(
 
   // ltl.repeat — conservative runtime monitor for repetition-heavy patterns.
   if (auto repeatOp = dyn_cast<ltl::RepeatOp>(op)) {
+    auto &tracker = state.repeatTrackers[op];
+    if (tracker.lastSampleOrdinal == state.sampleOrdinal)
+      return tracker.lastResult;
+
     LTLTruth input = evaluateLTLProperty(repeatOp.getInput(), state);
+    auto setRepeatResult = [&](LTLTruth result) -> LTLTruth {
+      tracker.lastSampleOrdinal = state.sampleOrdinal;
+      tracker.lastResult = result;
+      return result;
+    };
 
     // Common lowering for `always <seq>` in import-verilog: `ltl.repeat seq, 0`
     // (unbounded). Treat this as an "ongoing obligation":
@@ -6841,13 +7375,12 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     // - otherwise keep it pending.
     if (!repeatOp.getMore() && repeatOp.getBase() == 0) {
       if (input == LTLTruth::False)
-        return LTLTruth::False;
-      return LTLTruth::Unknown;
+        return setRepeatResult(LTLTruth::False);
+      return setRepeatResult(LTLTruth::Unknown);
     }
 
     // Track contiguous definite-true streaks to recognize concrete bounded
     // repetition matches (e.g. a[*2], a[*2:4]) at the current sample.
-    auto &tracker = state.repeatTrackers[op];
     if (input == LTLTruth::True) {
       ++tracker.trueStreak;
       tracker.streakHasUnknown = false;
@@ -6860,17 +7393,17 @@ LLHDProcessInterpreter::evaluateLTLProperty(
 
     // Bounded forms with base=0 include an empty match at every sample.
     if (repeatOp.getBase() == 0 && repeatOp.getMore())
-      return LTLTruth::True;
+      return setRepeatResult(LTLTruth::True);
 
     if (repeatOp.getBase() > 0 && input == LTLTruth::False)
-      return LTLTruth::False;
+      return setRepeatResult(LTLTruth::False);
 
     if (repeatOp.getBase() > 0 && tracker.trueStreak >= repeatOp.getBase()) {
       if (tracker.streakHasUnknown)
-        return LTLTruth::Unknown;
-      return LTLTruth::True;
+        return setRepeatResult(LTLTruth::Unknown);
+      return setRepeatResult(LTLTruth::True);
     }
-    return LTLTruth::Unknown;
+    return setRepeatResult(LTLTruth::Unknown);
   }
 
   // ltl.goto_repeat / ltl.non_consecutive_repeat — baseline monitor:
@@ -6879,10 +7412,19 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   // This supports concrete hit-count patterns (e.g. [->2], [=2]) while
   // remaining conservative for unknown samples and advanced window bounds.
   if (auto gotoRepeatOp = dyn_cast<ltl::GoToRepeatOp>(op)) {
-    if (gotoRepeatOp.getBase() == 0)
-      return LTLTruth::True;
-    LTLTruth input = evaluateLTLProperty(gotoRepeatOp.getInput(), state);
     auto &tracker = state.repetitionHitTrackers[op];
+    if (tracker.lastSampleOrdinal == state.sampleOrdinal)
+      return tracker.lastResult;
+
+    auto setRepetitionResult = [&](LTLTruth result) -> LTLTruth {
+      tracker.lastSampleOrdinal = state.sampleOrdinal;
+      tracker.lastResult = result;
+      return result;
+    };
+
+    if (gotoRepeatOp.getBase() == 0)
+      return setRepetitionResult(LTLTruth::True);
+    LTLTruth input = evaluateLTLProperty(gotoRepeatOp.getInput(), state);
     if (input == LTLTruth::True)
       ++tracker.trueHits;
     else if (input == LTLTruth::Unknown)
@@ -6890,26 +7432,35 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     if (tracker.trueHits >= gotoRepeatOp.getBase() &&
         input == LTLTruth::True) {
       if (tracker.hasUnknown)
-        return LTLTruth::Unknown;
-      return LTLTruth::True;
+        return setRepetitionResult(LTLTruth::Unknown);
+      return setRepetitionResult(LTLTruth::True);
     }
-    return LTLTruth::Unknown;
+    return setRepetitionResult(LTLTruth::Unknown);
   }
   if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(op)) {
-    if (nonConsecutiveOp.getBase() == 0)
-      return LTLTruth::True;
-    LTLTruth input = evaluateLTLProperty(nonConsecutiveOp.getInput(), state);
     auto &tracker = state.repetitionHitTrackers[op];
+    if (tracker.lastSampleOrdinal == state.sampleOrdinal)
+      return tracker.lastResult;
+
+    auto setRepetitionResult = [&](LTLTruth result) -> LTLTruth {
+      tracker.lastSampleOrdinal = state.sampleOrdinal;
+      tracker.lastResult = result;
+      return result;
+    };
+
+    if (nonConsecutiveOp.getBase() == 0)
+      return setRepetitionResult(LTLTruth::True);
+    LTLTruth input = evaluateLTLProperty(nonConsecutiveOp.getInput(), state);
     if (input == LTLTruth::True)
       ++tracker.trueHits;
     else if (input == LTLTruth::Unknown)
       tracker.hasUnknown = true;
     if (tracker.trueHits >= nonConsecutiveOp.getBase()) {
       if (tracker.hasUnknown)
-        return LTLTruth::Unknown;
-      return LTLTruth::True;
+        return setRepetitionResult(LTLTruth::Unknown);
+      return setRepetitionResult(LTLTruth::True);
     }
-    return LTLTruth::Unknown;
+    return setRepetitionResult(LTLTruth::Unknown);
   }
 
   // ltl.first_match — keep only earliest endpoints of the wrapped sequence.
@@ -7003,9 +7554,123 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     auto firstMatchBoundedDelayInput =
         getFirstMatchBoundedDelayInput(trackedConsequentValue);
 
+    struct StrongUntilShape {
+      Value lhs;
+      Value terminate;
+    };
+    auto matchStrongUntilShape =
+        [&](Value consequent) -> std::optional<StrongUntilShape> {
+      auto andOp = consequent.getDefiningOp<ltl::AndOp>();
+      if (!andOp || andOp.getInputs().size() != 2)
+        return std::nullopt;
+
+      ltl::UntilOp untilOp;
+      ltl::EventuallyOp eventuallyOp;
+      for (Value input : andOp.getInputs()) {
+        if (!untilOp)
+          untilOp = input.getDefiningOp<ltl::UntilOp>();
+        if (!eventuallyOp)
+          eventuallyOp = input.getDefiningOp<ltl::EventuallyOp>();
+      }
+      if (!untilOp || !eventuallyOp)
+        return std::nullopt;
+
+      Value lhs = untilOp.getInput();
+      Value untilCondition = untilOp.getCondition();
+      Value terminate = eventuallyOp.getInput();
+
+      // strong(a until b): and(until(a,b), eventually(b))
+      // strong(a until_with b): and(until(a, a&&b), eventually(a&&b))
+      if (untilCondition == terminate)
+        return StrongUntilShape{lhs, terminate};
+      return std::nullopt;
+    };
+
+    if (auto strongUntil = matchStrongUntilShape(trackedConsequentValue)) {
+      auto &tracker = state.implicationTrackers[op];
+      tracker.hasUnboundedWindow = true;
+      tracker.unboundedMinShift = 0;
+
+      if (ante == LTLTruth::True) {
+        ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+        pending.triggerSampleOrdinal = state.sampleOrdinal;
+        tracker.pendingAntecedents.push_back(pending);
+      }
+
+      LTLTruth lhsNow = evaluateLTLProperty(strongUntil->lhs, state);
+      LTLTruth terminateNow = evaluateLTLProperty(strongUntil->terminate, state);
+      for (auto pendingIt = tracker.pendingAntecedents.begin();
+           pendingIt != tracker.pendingAntecedents.end();) {
+        if (terminateNow == LTLTruth::True) {
+          pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+          continue;
+        }
+
+        if (terminateNow == LTLTruth::False && lhsNow == LTLTruth::False) {
+          pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+          return LTLTruth::False;
+        }
+
+        if (terminateNow == LTLTruth::Unknown || lhsNow == LTLTruth::Unknown)
+          pendingIt->sawConsequentUnknown = true;
+        ++pendingIt;
+      }
+
+      if (!tracker.pendingAntecedents.empty())
+        return LTLTruth::Unknown;
+      if (ante == LTLTruth::Unknown)
+        return LTLTruth::Unknown;
+      return LTLTruth::True;
+    }
+
     // Fast path for bounded delay consequents: evaluate the delayed input
     // directly while the antecedent window is open.
     if (auto delayOp = trackedConsequentValue.getDefiningOp<ltl::DelayOp>()) {
+      if (!delayOp.getLength()) {
+        uint64_t minShift = delayOp.getDelay();
+        if (isa<ltl::SequenceType>(delayOp.getInput().getType())) {
+          if (auto inputMinLen = getMinSequenceLength(delayOp.getInput())) {
+            if (*inputMinLen > 0 &&
+                minShift <= std::numeric_limits<uint64_t>::max() -
+                                (*inputMinLen - 1))
+              minShift += *inputMinLen - 1;
+          }
+        }
+
+        LTLTruth consequentNow = evaluateLTLProperty(delayOp.getInput(), state);
+        auto &tracker = state.implicationTrackers[op];
+        tracker.hasUnboundedWindow = true;
+        tracker.unboundedMinShift = minShift;
+
+        if (ante == LTLTruth::True) {
+          ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+          pending.triggerSampleOrdinal = state.sampleOrdinal;
+          tracker.pendingAntecedents.push_back(pending);
+        }
+
+        for (auto pendingIt = tracker.pendingAntecedents.begin();
+             pendingIt != tracker.pendingAntecedents.end();) {
+          uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
+          if (age >= minShift) {
+            if (consequentNow == LTLTruth::True)
+              pendingIt->sawConsequentTrue = true;
+            else if (consequentNow == LTLTruth::Unknown)
+              pendingIt->sawConsequentUnknown = true;
+          }
+
+          if (pendingIt->sawConsequentTrue) {
+            pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+            continue;
+          }
+          ++pendingIt;
+        }
+
+        if (!tracker.pendingAntecedents.empty())
+          return LTLTruth::Unknown;
+        if (ante == LTLTruth::Unknown)
+          return LTLTruth::Unknown;
+        return LTLTruth::True;
+      }
       if (auto length = delayOp.getLength()) {
         uint64_t windowMin = delayOp.getDelay();
         if (*length > std::numeric_limits<uint64_t>::max() - windowMin)
@@ -13707,24 +14372,44 @@ llvm_dispatch:
     return success();
   }
 
-  // Verification ops (assert/assume/cover) are formal-only constructs.
-  // In simulation, halt the enclosing process since it has no useful work.
-  // These typically appear in processes like: ^bb1: verif.cover ... / cf.br ^bb1
-  // which would spin forever if we just returned success().
-  // Handle immediate (procedural) assertions: check the condition but
-  // continue execution. Only clocked/concurrent assertions are unsupported.
+  // Verification ops:
+  // - immediate/procedural assert/assume are checked and execution continues.
+  // - immediate/procedural cover updates synthetic runtime cover signals.
+  // - clocked forms are handled by dedicated checker processes and should not
+  //   execute as regular process-body ops.
   if (auto assertOp = dyn_cast<verif::AssertOp>(op)) {
     InterpretedValue cond = getValue(procId, assertOp.getProperty());
     if (!cond.isX() && cond.getAPInt().isZero()) {
       std::string label;
       if (auto labelAttr = assertOp->getAttrOfType<StringAttr>("label"))
         label = labelAttr.getValue().str();
-      maybeTraceImmediateAssertionFailed(label, assertOp.getLoc());
+      if (areAssertionFailMessagesEnabled())
+        maybeTraceImmediateAssertionFailed(label, assertOp.getLoc());
     }
     return success();
   }
-  if (isa<verif::AssumeOp, verif::CoverOp>(op)) {
-    // Assume/cover: skip in simulation
+  if (auto assumeOp = dyn_cast<verif::AssumeOp>(op)) {
+    InterpretedValue cond = getValue(procId, assumeOp.getProperty());
+    if (!cond.isX() && cond.getAPInt().isZero()) {
+      ++clockedAssumptionFailures;
+      std::string label;
+      if (auto labelAttr = assumeOp->getAttrOfType<StringAttr>("label"))
+        label = labelAttr.getValue().str();
+      maybeTraceSvaAssumptionFailed(label, scheduler.getCurrentTime().realTime,
+                                    assumeOp.getLoc());
+    }
+    return success();
+  }
+  if (auto coverOp = dyn_cast<verif::CoverOp>(op)) {
+    InstanceId instanceId = activeInstanceId;
+    SignalId coverSignalId =
+        getOrCreateImmediateCoverSignal(coverOp, instanceId);
+
+    InterpretedValue cond = getValue(procId, coverOp.getProperty());
+    if (!cond.isX() && !cond.getAPInt().isZero()) {
+      ++immediateCoverHits;
+      scheduler.updateSignal(coverSignalId, SignalValue(1, 1));
+    }
     return success();
   }
   if (isa<verif::ClockedAssertOp, verif::ClockedAssumeOp,
@@ -23928,8 +24613,6 @@ bool LLHDProcessInterpreter::shouldDeferDisableFork(ProcessId procId,
         continue;
       if (!childStateIt->second.waiting)
         continue;
-      if (childStateIt->second.totalSteps == 0)
-        continue;
       Process *childProc = scheduler.getProcess(childId);
       if (!childProc)
         continue;
@@ -23937,6 +24620,8 @@ bool LLHDProcessInterpreter::shouldDeferDisableFork(ProcessId procId,
       // Defer for children that may still consume a pending wakeup:
       // Ready/Suspended are runnable, while Waiting can represent a wake that
       // has not yet been promoted into scheduler state in this delta.
+      // Do not gate on totalSteps here: freshly blocked waiters can still
+      // carry a pending wakeup in the same parent turn.
       // Waiting is handled with a tighter defer poll budget in
       // fireDeferredDisableFork to avoid over-deferring long wait loops.
       if (childSchedState != ProcessState::Ready &&
