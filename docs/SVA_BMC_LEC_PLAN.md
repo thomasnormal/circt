@@ -41,25 +41,64 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, `ovl_sem_reg_loaded` pass-mode harness fix)
+## Latest SVA Closure Slice (February 23, 2026, `disable iff` constant-property fix + multiclock e2e optioning)
 
-- fixed pass/fail stimulus for:
-  - `utils/ovl_semantic/wrappers/ovl_sem_reg_loaded.sv`
-- changed vectors to align with checker sampling semantics:
-  - `src_expr`: `2'b00`
-  - pass `dest_expr`: `2'b00`
-  - fail `dest_expr`: `2'b01`
+- fixed `LTLToCore` constant-i1 detection for `disable iff` lowering:
+  - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+  - `getI1Constant` now folds simple i1 combinational forms
+    (`or/and/xor/mux/cmp/casts`) instead of only direct constants.
+  - this prevents false non-constant classification of
+    `comb.or(disable, true)`, which previously caused an unnecessary
+    clock-shift register and a spurious `SAT` result.
+- updated multiclock e2e harness RUN flow:
+  - `test/Tools/circt-bmc/sva-multiclock-e2e.sv`
+  - now passes
+    `--externalize-registers='allow-multi-clock=true'`
+    alongside `--lower-to-bmc ... allow-multi-clock`.
 - validation snapshot:
-  - targeted checker:
-    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_reg_loaded$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
-    - result: `2/2` mode checks pass.
-  - full semantic matrix in the current local workspace:
-    - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
-    - result: `110 total, 4 failures` (`ovl_sem_increment` pass/fail and
-      `ovl_sem_decrement` pass/fail frontend errors).
+  - targeted regression:
+    - `build-test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
+    - result: `BMC_RESULT=UNSAT`
+  - focused lit:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv`
+    - result: `2/2` pass
   - Yosys BMC sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
     - result: `4/4` mode checks pass.
+  - OVL semantic sanity:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `6 tests, failures=0`.
+
+## Previous SVA Closure Slice (February 23, 2026, sequence match-item print legalization + UVM de-XFAIL)
+
+- fixed `MooreToCore` lowering for assertion-context sequence match-item
+  print side effects (`$display/$write/$strobe/$monitor` family) so they no
+  longer emit illegal `sim.proc.print` ops outside procedural regions.
+- updated:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- added regression:
+  - `test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
+- closed stale UVM SVA e2e XFAILs by switching to the stable pre-solver
+  `circt-opt` lowering path (`lower-clocked-assert-like`,
+  `lower-ltl-to-core`, `externalize-registers`, `strip-llhd-processes`,
+  `lower-to-bmc`):
+  - `test/Tools/circt-bmc/sva-uvm-assume-e2e.sv`
+  - `test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv`
+  - `test/Tools/circt-bmc/sva-uvm-expect-e2e.sv`
+  - `test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv`
+  - `test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv`
+  - `test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv`
+  - `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+- validation snapshot:
+  - targeted regressions:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
+    - result: `8/8` pass.
+  - Yosys BMC sanity:
+    - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `4/4` mode checks pass.
+  - OVL semantic sanity:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `6 tests, failures=0`.
 
 ## Known Limitations (Must-Fix)
 
@@ -215,10 +254,8 @@ Items are grouped by pipeline stage.
     - `ovl_value_coverage`
     - `ovl_xproduct_bit_coverage`
     - `ovl_xproduct_value_coverage`
-  - Current semantic blockers in local workspace:
-    - `ovl_sem_increment` (pass/fail) and `ovl_sem_decrement` (pass/fail)
-      fail during frontend/lowering with:
-      `non-boolean moore.past requires a clocked assertion`.
+  - Current semantic lane status (Feb 23, 2026): full green
+    (`110/110`, `xfail=0`, `xpass=0`) in the active workspace.
 
 ## Core Workstreams
 

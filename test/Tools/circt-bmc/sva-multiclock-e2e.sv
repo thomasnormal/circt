@@ -1,5 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | circt-opt \
-// RUN:   --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers \
+// RUN:   --lower-clocked-assert-like --lower-ltl-to-core \
+// RUN:   --externalize-registers='allow-multi-clock=true' \
 // RUN:   --lower-to-bmc="top-module=sva_multiclock bound=5 allow-multi-clock" \
 // RUN:   | FileCheck %s --check-prefix=CHECK-BMC
 // REQUIRES: slang
