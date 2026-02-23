@@ -567,3 +567,20 @@
     `utils/wasm_cxx20_contract_check.sh`,
     `utils/wasm_smoke_contract_check.sh`, and
     `utils/wasm_ci_contract_check.sh` all pass.
+
+## 2026-02-23 (follow-up: verify compile-command C++ standard in warning triage)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require
+    `-std=c++20` coverage inside `utils/wasm_cxx20_warning_check.sh`.
+  - Pre-fix failure:
+    - warning triage relied on cache-level standard check only and did not
+      assert the actual `circt-tblgen` compile command used `-std=c++20`.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to:
+    - dump `ninja -t commands circt-tblgen`;
+    - fail if compile commands do not contain `-std=c++20`;
+    - keep existing warning-pattern checks (`ambiguous-reversed-operator`,
+      `c++20-extensions`).
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.

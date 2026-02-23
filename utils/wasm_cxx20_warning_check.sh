@@ -41,6 +41,14 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 log="$tmpdir/cxx20-warning-check.log"
 
+cmd_dump="$tmpdir/circt-tblgen.commands"
+ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump"
+if ! grep -Fq -- "-std=c++20" "$cmd_dump"; then
+  echo "[wasm-cxx20-warn] circt-tblgen compile command is not using -std=c++20" >&2
+  cat "$cmd_dump" >&2
+  exit 1
+fi
+
 # Force recompilation of relevant tblgen TUs so warnings are observable.
 ninja -C "$BUILD_DIR" -t clean "${rebuild_targets[@]}" >/dev/null 2>&1 || true
 
