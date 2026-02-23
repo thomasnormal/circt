@@ -4,6 +4,15 @@ set -euo pipefail
 BUILD_DIR="${BUILD_DIR:-build-wasm}"
 NINJA_JOBS="${NINJA_JOBS:-1}"
 
+validate_positive_int_env() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[wasm-cxx20-warn] invalid $name value: $value (expected positive integer)" >&2
+    exit 1
+  fi
+}
+
 if [[ ! -d "$BUILD_DIR" ]]; then
   echo "[wasm-cxx20-warn] build directory not found: $BUILD_DIR" >&2
   exit 1
@@ -34,6 +43,8 @@ if ! command -v ninja >/dev/null 2>&1; then
   echo "[wasm-cxx20-warn] missing ninja in PATH" >&2
   exit 1
 fi
+
+validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"
 
 rebuild_targets=(
   "tools/circt/tools/circt-tblgen/CMakeFiles/circt-tblgen.dir/FIRRTLAnnotationsGen.cpp.o"

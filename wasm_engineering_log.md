@@ -902,3 +902,31 @@
   - `utils/wasm_cxx20_warning_contract_check.sh`,
     `utils/wasm_ci_contract_check.sh`, and
     `utils/wasm_cxx20_contract_check.sh` pass.
+
+## 2026-02-23 (follow-up: fail fast on invalid NINJA_JOBS in C++20 warning triage)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require:
+    - a positive-integer validator helper (`validate_positive_int_env`);
+    - explicit validation call for `NINJA_JOBS` in
+      `utils/wasm_cxx20_warning_check.sh`.
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_contract_check.sh` failed with:
+      - `missing token in warning check script: validate_positive_int_env`
+    - warning triage accepted invalid values like `NINJA_JOBS=zero` and only
+      failed later during `ninja` invocation.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh`:
+    - added `validate_positive_int_env()` and require `NINJA_JOBS` to match
+      `^[1-9][0-9]*$`;
+    - fail early with explicit diagnostic when invalid.
+  - updated `utils/wasm_cxx20_warning_contract_check.sh` to enforce this
+    validation contract.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - negative test:
+    - `NINJA_JOBS=zero utils/wasm_cxx20_warning_check.sh`
+      exits non-zero with:
+      - `invalid NINJA_JOBS value: zero (expected positive integer)`.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

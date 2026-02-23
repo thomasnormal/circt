@@ -10,6 +10,9 @@ fi
 
 required_tokens=(
   "CMAKE_CXX_STANDARD:STRING="
+  "validate_positive_int_env"
+  'validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"'
+  'invalid $name value'
   "cache C++ standard is non-numeric"
   "build C++ standard is below 20"
   "std_flag_is_cpp20_or_newer"
