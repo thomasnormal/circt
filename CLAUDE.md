@@ -1,5 +1,7 @@
 # CLAUDE.md — circt-sim Development Guide
 
+**Always prioritize long-term maintainability.**
+
 ## Session Management (CRITICAL — READ THIS FIRST)
 
 **You are the team leader. You NEVER run builds, ninja, make, test suites, or
@@ -7,6 +9,10 @@ any large-output command directly.** Doing so causes context overflow that
 crashes your session and kills your entire team.
 
 **Don't write or run any code yourself. Always delegate to your agent team.**
+
+**Don't read large source files yourself either.** Reading 10+ sections of C++
+files (even with Read tool, not Bash) fills your context just as fast as running
+tests. Delegate code investigation to agents — they can read and summarize.
 
 ### What You Must NEVER Do
 ```
@@ -18,6 +24,26 @@ bash utils/run_sv_tests_circt_sim.sh     # sv-tests
 circt-sim some.mlir --top foo            # simulation run
 git stash pop                            # can produce huge merge conflict output
 ```
+
+### What Will ALSO Crash You (less obvious)
+```
+# DEATH BY A THOUSAND READS — fills context just as fast:
+Read(ProcessScheduler.cpp, offset=1340, limit=180)   # 180 lines of C++
+Read(LLHDProcessInterpreter.cpp, offset=15100, limit=50)
+Read(AOTProcessCompiler.cpp, offset=1059, limit=120)
+# ... repeat 15 more times = session dead
+
+# "Just one small test" — still crashes:
+circt-sim test.mlir 2>&1 | head -30
+CIRCT_SIM_TRACE_X=1 circt-sim test.mlir
+```
+**Actual crash history:** Session crashed on Feb 23 after 17 direct Read calls
+on ProcessScheduler.cpp, LLHDProcessInterpreter.cpp, AOTProcessCompiler.cpp,
+and circt-sim.cpp. Combined with agent output flowing back, context overflowed.
+
+**Rule of thumb:** If you need to read more than 2-3 short sections of code
+(~50 lines each), spawn an investigation agent to do it and report back a
+summary. Your context is precious — save it for decision-making.
 
 ### WARNING: Do NOT blindly revert files
 **Other agents (e.g., the Codex agent working on circt-bmc) may have committed
@@ -101,6 +127,11 @@ CIRCT_MAX_WALL_MS=600000 CIRCT_UVM_ARGS="+UVM_TESTNAME=apb_8b_write_test" \
 bash utils/run_cocotb_tests.sh
 ```
 
+### Debugging with Xcelium (xrun)
+Use Cadence Xcelium (`xrun`) as a reference simulator to compare waveforms and
+results when debugging circt-sim failures. Useful for verifying expected behavior
+of SystemVerilog constructs.
+
 ### AVIP Top Module Names
 | Protocol | hvl_top |
 |----------|---------|
@@ -132,26 +163,40 @@ bash utils/run_cocotb_tests.sh
 ## Current State (Feb 22, 2026)
 
 ### Uncommitted Changes
-- `lib/Dialect/Sim/ProcessScheduler.cpp`: advanceTime fix for minnow/delta interaction
-  (14 lines — prevents minnow time-skip from skipping same-time delta events)
+- None (worktree is clean for circt-sim files)
+- Codex agent has uncommitted changes in MooreToCore.cpp, AssertionExpr.cpp, manifest.tsv
 
-### Stash Contents (important ones)
-- `stash@{0}`: E3 minnow + SVA thunk changes (EventQueue.h, ProcessScheduler.h/.cpp, NativeThunkExec)
-- `stash@{1}`: **E4 edge fanout** — the main in-progress performance work
-  (ProcessScheduler.h +8, ProcessScheduler.cpp +123/-52)
-- `stash@{2}` and below: old, probably not needed
+### Recent Commit
+`9a700dd6a [circt-sim] Fix TimeWheel currentSlot staleness after advanceTimeTo()`
+- Fixed `setCurrentTime()` to update `levels[i].currentSlot` (was stale → findNextEventTime() missed events)
+- Added `EventScheduler::peekNextRealTime()` for bypass-time ordering
+- Added `advanceToNextEvent()` same-realtime delta-step advancement
+- Fixed `advanceTime()`: check minnow/clock wake before TW advance to prevent time-skip
+- Fixes: test/Tools/circt-sim/module-port-connection.mlir
+
+### Test Counts (Feb 23, 2026)
+- circt-sim: **530/536 pass** (5 failures need constraint solver: constraint-inside-basic,
+  constraint-signed-basic, constraint-unique-narrow, cross-var-inline, cross-var-linear-sum;
+  1 unresolved vpi-basic.sv). Fixed: pipeline-bench, packed-struct-array-reset-4state,
+  module-level-scf-if-init, 3x seq-* tests.
+
+### Stash Contents (SHIFTED — verify before use)
+**WARNING**: The stash list was reorganized by investigation agents. Do `git stash list` to
+find current positions. Notable stashes by description/content:
+- Look for E3 minnow + SVA thunk changes (EventQueue.h, ProcessScheduler.h/.cpp, NativeThunkExec)
+- Look for **E4 edge fanout** — ProcessScheduler.h +8, ProcessScheduler.cpp +123/-52
 
 ### E4 Status: IN PROGRESS — Has Test Regressions
 E4 (batch clock-edge wake-up) adds `EdgeFanout` struct to partition
 `signalToProcesses` by edge type (posedge/negedge/anyedge). Last test run
-showed 507/535 passing (27 failures). Need to determine which failures are
-E4-caused vs pre-existing by testing baseline (without E4). The advanceTime
-fix in the worktree may also interact.
+showed 507/535 passing (27 failures). With the setCurrentTime fix merged,
+the baseline is now 523/535 (11 pre-existing). Need to re-test E4 on the
+new baseline to see its net regression count.
 
 **To continue E4:**
-1. Spawn a team agent to test baseline (stash E4, build, run tests)
-2. Compare failing test lists to isolate E4-specific regressions
-3. Fix or revert E4 as needed
+1. Find E4 stash via `git stash list`; pop it onto current HEAD
+2. Build and run tests to get E4 failure count
+3. E4 failures - 11 baseline = actual E4 regressions; fix them
 
 ---
 
