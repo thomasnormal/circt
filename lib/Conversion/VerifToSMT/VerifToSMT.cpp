@@ -57,6 +57,91 @@ constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
 
 static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block);
 
+static LogicalResult inlineSingleBlockFuncCall(func::CallOp callOp,
+                                               func::FuncOp callee) {
+  if (!callee || callee.isExternal())
+    return success();
+  if (callee.empty())
+    return callOp.emitError(
+        "cannot inline empty callee when lowering verif.bmc");
+  if (!callee.getBody().hasOneBlock())
+    return callOp.emitError(
+        "only single-block func.call callees are supported in verif.bmc");
+
+  auto &calleeBlock = callee.getBody().front();
+  auto returnOp = dyn_cast<func::ReturnOp>(calleeBlock.getTerminator());
+  if (!returnOp)
+    return callOp.emitError(
+        "callee must end with func.return when used in verif.bmc");
+  if (calleeBlock.getNumArguments() != callOp.getNumOperands())
+    return callOp.emitError("callee argument count does not match func.call");
+  if (returnOp.getNumOperands() != callOp.getNumResults())
+    return callOp.emitError("callee return count does not match func.call");
+
+  IRMapping mapping;
+  for (auto [arg, operand] :
+       llvm::zip(calleeBlock.getArguments(), callOp.getOperands()))
+    mapping.map(arg, operand);
+
+  OpBuilder builder(callOp);
+  for (Operation &op : calleeBlock.without_terminator()) {
+    Operation *cloned = builder.clone(op, mapping);
+    for (auto [orig, mapped] : llvm::zip(op.getResults(), cloned->getResults()))
+      mapping.map(orig, mapped);
+  }
+
+  SmallVector<Value> results;
+  results.reserve(returnOp.getNumOperands());
+  for (Value value : returnOp.getOperands()) {
+    Value mapped = mapping.lookupOrNull(value);
+    if (!mapped)
+      return callOp.emitError(
+          "failed to map callee return operand while inlining func.call");
+    results.push_back(mapped);
+  }
+
+  if (!results.empty())
+    callOp.replaceAllUsesWith(results);
+  callOp.erase();
+  return success();
+}
+
+static LogicalResult
+inlineBMCRegionFuncCalls(verif::BoundedModelCheckingOp bmcOp,
+                         SymbolTable &symbolTable) {
+  auto inlineRegionCalls = [&](Region &region) -> LogicalResult {
+    constexpr unsigned kMaxInlineIterations = 1024;
+    for (unsigned iteration = 0; iteration < kMaxInlineIterations;
+         ++iteration) {
+      SmallVector<func::CallOp> calls;
+      for (Block &block : region)
+        block.walk([&](func::CallOp callOp) { calls.push_back(callOp); });
+      if (calls.empty())
+        return success();
+
+      bool changed = false;
+      for (auto callOp : calls) {
+        auto callee = symbolTable.lookup<func::FuncOp>(callOp.getCallee());
+        if (!callee || callee.isExternal())
+          continue;
+        if (failed(inlineSingleBlockFuncCall(callOp, callee)))
+          return failure();
+        changed = true;
+      }
+      if (!changed)
+        return success();
+    }
+    return bmcOp.emitError(
+        "func.call inlining did not converge while lowering verif.bmc");
+  };
+
+  if (failed(inlineRegionCalls(bmcOp.getInit())) ||
+      failed(inlineRegionCalls(bmcOp.getLoop())) ||
+      failed(inlineRegionCalls(bmcOp.getCircuit())))
+    return failure();
+  return success();
+}
+
 static Value gatePropertyWithEnable(Value property, Value enable, bool isCover,
                                     OpBuilder &builder, Location loc) {
   if (!enable)
@@ -8661,6 +8746,9 @@ void ConvertVerifToSMTPass::runOnOperation() {
   WalkResult assertionCheck = getOperation().walk(
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
+          if (failed(inlineBMCRegionFuncCalls(bmcOp, symbolTable)))
+            return WalkResult::interrupt();
+
           if (forSMTLIBExport) {
             if (failed(legalizeSMTLIBSupportedLLVMOps(bmcOp)))
               return WalkResult::interrupt();

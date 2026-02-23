@@ -5,7 +5,6 @@
 // CHECK: func.call @bmc_circuit
 // CHECK-SAME: -> (!smt.bv<1>, !smt.bool, !smt.bool)
 // CHECK: smt.check
-// CHECK: smt.check
 func.func @test_final_checks() -> i1 {
   %bmc = verif.bmc bound 4 num_regs 0 initial_values []
   init {

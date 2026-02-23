@@ -101,13 +101,13 @@ func.func @test_assert_with_label(%cond: i1) {
 // Property check
 // CHECK:           smt.not
 // CHECK:           smt.and
+// Register update with ite
+// CHECK:           smt.ite
+// CHECK:         }
 // CHECK:           smt.push
 // CHECK:           smt.assert
 // CHECK:           smt.check
 // CHECK:           smt.pop
-// Register update with ite
-// CHECK:           smt.ite
-// CHECK:         }
 // CHECK:       }
 func.func @test_bmc_clocked() -> (i1) {
   %bmc = verif.bmc bound 3 num_regs 1 initial_values [unit]

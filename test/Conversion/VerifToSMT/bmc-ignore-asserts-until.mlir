@@ -18,16 +18,16 @@
 // Skip checking if before threshold
 // CHECK:     scf.yield
 // CHECK: } else {
-// Check the property
-// CHECK:     smt.not
-// CHECK:     smt.push 1
-// CHECK:     smt.assert
-// CHECK:     smt.check sat
-// CHECK:     smt.pop 1
-// CHECK:     arith.ori
+// Keep the prior violation accumulator.
 // CHECK:     scf.yield
 // CHECK: }
 // CHECK: scf.yield
+// Final check is performed after the loop with the accumulated value.
+// CHECK: smt.push 1
+// CHECK: smt.assert
+// CHECK: smt.check sat
+// CHECK: smt.pop 1
+// CHECK: arith.xori
 
 
 func.func @test_bmc() -> (i1) {

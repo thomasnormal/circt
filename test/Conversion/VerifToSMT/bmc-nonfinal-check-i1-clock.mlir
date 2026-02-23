@@ -8,7 +8,8 @@
 // CHECK:   func.call @bmc_circuit
 // CHECK:   %[[NOT_PROP:.*]] = smt.not
 // CHECK:   %[[GATED:.*]] = smt.and %[[NEGEDGE]], %[[NOT_PROP]]
-// CHECK:   smt.assert %[[GATED]]
+// CHECK:   %[[ANY:.*]] = smt.or %arg4, %[[GATED]]
+// CHECK:   smt.assert %{{.*}}#3
 func.func @bmc_i1_clock_ltlclock() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk0", "clk1", "sig"]
