@@ -55,4 +55,15 @@ if [[ "$print_only" -eq 1 ]]; then
   exit 0
 fi
 
+if ! command -v "$EMCMAKE_BIN" >/dev/null 2>&1; then
+  echo "[wasm-configure] missing emcmake wrapper: $EMCMAKE_BIN" >&2
+  echo "  install/source emsdk and ensure emcmake is on PATH" >&2
+  exit 1
+fi
+
+if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
+  echo "[wasm-configure] missing cmake binary: $CMAKE_BIN" >&2
+  exit 1
+fi
+
 "$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}" "${extra_cmake_args[@]}"
