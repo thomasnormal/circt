@@ -18,6 +18,7 @@ required_tokens=(
   "FIRRTLIntrinsicsGen.cpp"
   "circt-tblgen.cpp"
   'grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"'
+  '[wasm-cxx20-warn] failed to clean rebuild targets'
 )
 
 for token in "${required_tokens[@]}"; do

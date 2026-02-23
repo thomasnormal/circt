@@ -58,7 +58,10 @@ for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cp
 done
 
 # Force recompilation of relevant tblgen TUs so warnings are observable.
-ninja -C "$BUILD_DIR" -t clean "${rebuild_targets[@]}" >/dev/null 2>&1 || true
+if ! ninja -C "$BUILD_DIR" -t clean "${rebuild_targets[@]}" >/dev/null 2>&1; then
+  echo "[wasm-cxx20-warn] failed to clean rebuild targets" >&2
+  exit 1
+fi
 
 if ! ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" "${rebuild_targets[@]}" >"$log" 2>&1; then
   echo "[wasm-cxx20-warn] rebuild failed" >&2
