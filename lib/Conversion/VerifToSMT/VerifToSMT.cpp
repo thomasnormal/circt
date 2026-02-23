@@ -11,6 +11,7 @@
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqOps.h"
@@ -106,6 +107,51 @@ static LogicalResult inlineSingleBlockFuncCall(func::CallOp callOp,
   return success();
 }
 
+static LogicalResult inlineSingleBlockInstance(InstanceOp instance,
+                                               HWModuleOp module) {
+  if (!module)
+    return success();
+
+  auto &moduleBlock = module.getBody().front();
+  auto outputOp = dyn_cast<hw::OutputOp>(moduleBlock.getTerminator());
+  if (!outputOp)
+    return instance.emitError(
+        "hw.instance callee must end with hw.output when used in verif.bmc");
+  if (moduleBlock.getNumArguments() != instance.getInputs().size())
+    return instance.emitError(
+        "hw.instance input count does not match callee port list");
+  if (outputOp.getNumOperands() != instance.getNumResults())
+    return instance.emitError(
+        "hw.instance result count does not match callee output count");
+
+  IRMapping mapping;
+  for (auto [arg, input] :
+       llvm::zip(moduleBlock.getArguments(), instance.getInputs()))
+    mapping.map(arg, input);
+
+  OpBuilder builder(instance);
+  for (Operation &op : moduleBlock.without_terminator()) {
+    Operation *cloned = builder.clone(op, mapping);
+    for (auto [orig, mapped] : llvm::zip(op.getResults(), cloned->getResults()))
+      mapping.map(orig, mapped);
+  }
+
+  SmallVector<Value> results;
+  results.reserve(outputOp.getNumOperands());
+  for (Value output : outputOp.getOperands()) {
+    Value mapped = mapping.lookupOrNull(output);
+    if (!mapped)
+      return instance.emitError(
+          "failed to map hw.output operand while inlining hw.instance");
+    results.push_back(mapped);
+  }
+
+  if (!results.empty())
+    instance.replaceAllUsesWith(results);
+  instance.erase();
+  return success();
+}
+
 static LogicalResult
 inlineBMCRegionFuncCalls(verif::BoundedModelCheckingOp bmcOp,
                          SymbolTable &symbolTable) {
@@ -114,9 +160,14 @@ inlineBMCRegionFuncCalls(verif::BoundedModelCheckingOp bmcOp,
     for (unsigned iteration = 0; iteration < kMaxInlineIterations;
          ++iteration) {
       SmallVector<func::CallOp> calls;
+      SmallVector<InstanceOp> instances;
       for (Block &block : region)
         block.walk([&](func::CallOp callOp) { calls.push_back(callOp); });
-      if (calls.empty())
+      for (Block &block : region)
+        block.walk([&](InstanceOp instanceOp) {
+          instances.push_back(instanceOp);
+        });
+      if (calls.empty() && instances.empty())
         return success();
 
       bool changed = false;
@@ -125,6 +176,14 @@ inlineBMCRegionFuncCalls(verif::BoundedModelCheckingOp bmcOp,
         if (!callee || callee.isExternal())
           continue;
         if (failed(inlineSingleBlockFuncCall(callOp, callee)))
+          return failure();
+        changed = true;
+      }
+      for (auto instance : instances) {
+        auto module = symbolTable.lookup<HWModuleOp>(instance.getModuleName());
+        if (!module)
+          continue;
+        if (failed(inlineSingleBlockInstance(instance, module)))
           return failure();
         changed = true;
       }

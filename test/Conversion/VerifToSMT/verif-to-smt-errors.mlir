@@ -38,9 +38,8 @@ func.func @multiple_assertions_bmc() -> (i1) {
 
 // -----
 
-// Nested assertions in instantiated modules are not yet supported.
+// Nested assertions in instantiated modules are supported.
 func.func @multiple_asserting_modules_bmc() -> (i1) {
-  // expected-error @below {{bounded model checking with nested verif.assert/verif.cover in called functions or instantiated modules is not yet supported}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
@@ -101,9 +100,8 @@ hw.module @empty() {
 
 // -----
 
-// Nested assertions (single or multiple) are not yet supported.
+// Nested assertions in instantiated modules are expected to work.
 func.func @one_nested_assertion() -> (i1) {
-  // expected-error @below {{bounded model checking with nested verif.assert/verif.cover in called functions or instantiated modules is not yet supported}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
@@ -123,9 +121,8 @@ hw.module @OneAssertion(in %x: i1) {
 
 // -----
 
-// Mixed direct and nested assertions are not yet supported.
+// Mixed direct and nested assertions are supported.
 func.func @two_separated_assertions() -> (i1) {
-  // expected-error @below {{bounded model checking with nested verif.assert/verif.cover in called functions or instantiated modules is not yet supported}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
@@ -145,9 +142,8 @@ hw.module @OneAssertion(in %x: i1) {
 
 // -----
 
-// Nested assertions in instantiated modules are not yet supported.
+// Nested assertions in instantiated modules are supported.
 func.func @multiple_nested_assertions() -> (i1) {
-  // expected-error @below {{bounded model checking with nested verif.assert/verif.cover in called functions or instantiated modules is not yet supported}}
   %bmc = verif.bmc bound 10 num_regs 0 initial_values []
   init {}
   loop {}
