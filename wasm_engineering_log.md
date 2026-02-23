@@ -334,3 +334,24 @@
   - `WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh` passes end-to-end.
   - `utils/wasm_configure_contract_check.sh` and
     `utils/wasm_ci_contract_check.sh` still pass.
+
+## 2026-02-23 (follow-up: CI coverage for runtime-only wasm smoke path)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_ci_contract_check.sh` to require
+    `WASM_SKIP_BUILD=1` usage in `.github/workflows/wasmSmoke.yml`.
+  - Pre-fix failure:
+    - workflow ran only full configure/build smoke and did not validate the
+      runtime-only `WASM_SKIP_BUILD=1` path.
+- Fix:
+  - updated `.github/workflows/wasmSmoke.yml` to add:
+    - `Re-run smoke checks without rebuild`
+    - executes:
+      `WASM_REQUIRE_VERILOG=1 WASM_SKIP_BUILD=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+  - this keeps CI coverage aligned with the local regression mode used in dirty
+    worktrees.
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh` passes
+    end-to-end.
