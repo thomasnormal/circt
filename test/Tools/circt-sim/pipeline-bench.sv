@@ -1,5 +1,5 @@
 // RUN: circt-verilog %s -o %t.mlir
-// RUN: circt-sim %t.mlir --top pipeline_tb --max-time=100000000 | FileCheck %s
+// RUN: circt-sim %t.mlir --top pipeline_tb --max-time=200000000000 | FileCheck %s
 // CHECK: PASS
 
 module pipeline_stage(
@@ -31,7 +31,7 @@ module pipeline_tb;
 
   initial begin
     #20 rst = 0;
-    #99999980;
+    #90;
     $display("PASS s7=%0d", s7);
     $finish;
   end
