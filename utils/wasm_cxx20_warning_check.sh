@@ -48,6 +48,13 @@ if ! grep -Fq -- "-std=c++20" "$cmd_dump"; then
   cat "$cmd_dump" >&2
   exit 1
 fi
+for src in "FIRRTLAnnotationsGen.cpp" "circt-tblgen.cpp"; do
+  if ! grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"; then
+    echo "[wasm-cxx20-warn] compile command for $src is missing -std=c++20" >&2
+    cat "$cmd_dump" >&2
+    exit 1
+  fi
+done
 
 # Force recompilation of relevant tblgen TUs so warnings are observable.
 ninja -C "$BUILD_DIR" -t clean "${rebuild_targets[@]}" >/dev/null 2>&1 || true

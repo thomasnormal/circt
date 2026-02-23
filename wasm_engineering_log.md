@@ -634,3 +634,29 @@
     `utils/wasm_ci_contract_check.sh` all pass.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: enforce -std=c++20 per rebuilt translation unit)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require
+    per-source compile-command checks:
+    - `FIRRTLAnnotationsGen.cpp`
+    - `circt-tblgen.cpp`
+    each with `-std=c++20`.
+  - Pre-fix failure:
+    - warning triage only checked for `-std=c++20` anywhere in command dump.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to iterate each source and
+    fail if its compile command is missing `-std=c++20`.
+  - retained all prior checks:
+    - cache-level C++20;
+    - disallowed warning patterns;
+    - generic warning-line detection.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` pass.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
