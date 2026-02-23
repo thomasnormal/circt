@@ -7,7 +7,6 @@
 // REQUIRES: slang
 // REQUIRES: bmc-jit
 // REQUIRES: z3
-// XFAIL: *
 
 // This is a minimized parity lock for the Yosys SVA `counter.sv` case.
 // Expected behavior: pass profile is UNSAT, fail profile is SAT.

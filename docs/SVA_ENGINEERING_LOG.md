@@ -2,6 +2,26 @@
 
 ## 2026-02-23
 
+- Iteration update (de-XFAIL Yosys SVA known-input parity locks):
+  - realization:
+    - `sva-yosys-counter-known-inputs-parity.sv` and
+      `sva-yosys-extnets-parity.sv` were still marked `XFAIL` despite current
+      behavior matching expected pass/fail outcomes.
+  - implemented:
+    - removed stale `XFAIL` lines from:
+      - `test/Tools/circt-bmc/sva-yosys-counter-known-inputs-parity.sv`
+      - `test/Tools/circt-bmc/sva-yosys-extnets-parity.sv`
+  - validation:
+    - parity sanity:
+      - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `PASS(pass/fail)` for both tests (`4/4` mode checks pass).
+    - focused direct checks (JIT path with Z3 shared lib):
+      - `counter` pass/fail: `UNSAT/SAT`
+      - `extnets` pass/fail: `UNSAT/SAT`
+    - OVL semantic sanity:
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `6 tests, failures=0`.
+
 - Iteration update (disable-iff constant-property SAT regression + multiclock e2e optioning):
   - realization:
     - `test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir` was
