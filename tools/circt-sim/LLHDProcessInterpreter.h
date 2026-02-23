@@ -43,6 +43,7 @@
 #include <chrono>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <optional>
 #include <random>
@@ -512,6 +513,205 @@ struct ProcessExecutionState {
 };
 
 //===----------------------------------------------------------------------===//
+// ProcessStateStore - Flat vector-backed process state storage
+//===----------------------------------------------------------------------===//
+
+/// O(1) lookup replacement for std::map<ProcessId, ProcessExecutionState>.
+/// Normal ProcessIds (sequential from 1) are stored in a deque for O(1) indexed
+/// access with stable element addresses. Temporary process IDs (used by
+/// evaluateCombinationalOp) are stored in an overflow unordered_map.
+/// The iterator returned by find() supports the same it->first / it->second
+/// patterns as std::map::iterator, so most call sites require no changes.
+class ProcessStateStore {
+  std::deque<ProcessExecutionState> vec;
+  std::vector<uint8_t> occupied; // 1 = entry exists, 0 = empty slot
+  std::unordered_map<ProcessId, ProcessExecutionState> overflow;
+  size_t count_ = 0;
+
+  static constexpr ProcessId kTempBase = 1ull << 60;
+
+  void ensureCapacity(ProcessId id) {
+    if (id >= vec.size()) {
+      vec.resize(id + 1);
+      occupied.resize(id + 1, 0);
+    }
+  }
+
+public:
+  /// Iterator for find() results. Supports it->first, it->second patterns.
+  class iterator {
+    friend class ProcessStateStore;
+    ProcessId id_ = 0;
+    ProcessExecutionState *ptr_ = nullptr;
+
+  public:
+    iterator() = default;
+    iterator(ProcessId id, ProcessExecutionState *p) : id_(id), ptr_(p) {}
+
+    bool operator==(const iterator &o) const { return ptr_ == o.ptr_; }
+    bool operator!=(const iterator &o) const { return ptr_ != o.ptr_; }
+
+    /// Arrow proxy enabling it->first and it->second access.
+    struct ArrowProxy {
+      ProcessId first;
+      ProcessExecutionState &second;
+      ArrowProxy *operator->() { return this; }
+    };
+    ArrowProxy operator*() const { return {id_, *ptr_}; }
+    ArrowProxy operator->() const { return {id_, *ptr_}; }
+  };
+
+  /// Const iterator for find() on const ProcessStateStore.
+  class const_iterator {
+    friend class ProcessStateStore;
+    ProcessId id_ = 0;
+    const ProcessExecutionState *ptr_ = nullptr;
+
+  public:
+    const_iterator() = default;
+    const_iterator(ProcessId id, const ProcessExecutionState *p)
+        : id_(id), ptr_(p) {}
+
+    bool operator==(const const_iterator &o) const { return ptr_ == o.ptr_; }
+    bool operator!=(const const_iterator &o) const { return ptr_ != o.ptr_; }
+
+    struct ArrowProxy {
+      ProcessId first;
+      const ProcessExecutionState &second;
+      const ArrowProxy *operator->() const { return this; }
+    };
+    ArrowProxy operator*() const { return {id_, *ptr_}; }
+    ArrowProxy operator->() const { return {id_, *ptr_}; }
+  };
+
+  /// O(1) access by ProcessId. Creates the entry if not present.
+  ProcessExecutionState &operator[](ProcessId id) {
+    if (id >= kTempBase)
+      return overflow[id];
+    ensureCapacity(id);
+    if (!occupied[id]) {
+      occupied[id] = 1;
+      ++count_;
+    }
+    return vec[id];
+  }
+
+  /// O(1) lookup. Returns end() if not found.
+  iterator find(ProcessId id) {
+    if (id >= kTempBase) {
+      auto it = overflow.find(id);
+      if (it != overflow.end())
+        return iterator(id, &it->second);
+      return end();
+    }
+    if (id < static_cast<ProcessId>(vec.size()) && occupied[id])
+      return iterator(id, &vec[id]);
+    return end();
+  }
+
+  const_iterator find(ProcessId id) const {
+    if (id >= kTempBase) {
+      auto it = overflow.find(id);
+      if (it != overflow.end())
+        return const_iterator(id, &it->second);
+      return end();
+    }
+    if (id < static_cast<ProcessId>(vec.size()) && occupied[id])
+      return const_iterator(id, &vec[id]);
+    return end();
+  }
+
+  iterator end() { return iterator(); }
+  const_iterator end() const { return const_iterator(); }
+
+  /// Insert if not present. Returns pair<iterator, bool> like std::map.
+  std::pair<iterator, bool> try_emplace(ProcessId id,
+                                        ProcessExecutionState &&state) {
+    if (id >= kTempBase) {
+      auto [it, inserted] = overflow.try_emplace(id, std::move(state));
+      return {iterator(id, &it->second), inserted};
+    }
+    ensureCapacity(id);
+    bool inserted = !occupied[id];
+    if (inserted) {
+      occupied[id] = 1;
+      ++count_;
+      vec[id] = std::move(state);
+    }
+    return {iterator(id, &vec[id]), inserted};
+  }
+
+  void erase(ProcessId id) {
+    if (id >= kTempBase) {
+      overflow.erase(id);
+      return;
+    }
+    if (id < static_cast<ProcessId>(vec.size()) && occupied[id]) {
+      occupied[id] = 0;
+      vec[id] = ProcessExecutionState();
+      --count_;
+    }
+  }
+
+  size_t count(ProcessId id) const {
+    if (id >= kTempBase)
+      return overflow.count(id);
+    return (id < static_cast<ProcessId>(vec.size()) && occupied[id]) ? 1 : 0;
+  }
+
+  size_t size() const { return count_ + overflow.size(); }
+  bool empty() const { return size() == 0; }
+
+  /// Iterate over all occupied entries. Callback: void(ProcessId, State&).
+  template <typename F>
+  void forEach(F &&f) {
+    for (size_t i = 0; i < vec.size(); ++i) {
+      if (occupied[i])
+        f(static_cast<ProcessId>(i), vec[i]);
+    }
+    for (auto &[id, state] : overflow)
+      f(id, state);
+  }
+
+  template <typename F>
+  void forEach(F &&f) const {
+    for (size_t i = 0; i < vec.size(); ++i) {
+      if (occupied[i])
+        f(static_cast<ProcessId>(i), vec[i]);
+    }
+    for (const auto &[id, state] : overflow)
+      f(id, state);
+  }
+
+  /// Iterate with early exit. Callback returns true to stop.
+  template <typename F>
+  bool forEachUntil(F &&f) {
+    for (size_t i = 0; i < vec.size(); ++i) {
+      if (occupied[i] && f(static_cast<ProcessId>(i), vec[i]))
+        return true;
+    }
+    for (auto &[id, state] : overflow) {
+      if (f(id, state))
+        return true;
+    }
+    return false;
+  }
+
+  template <typename F>
+  bool forEachUntil(F &&f) const {
+    for (size_t i = 0; i < vec.size(); ++i) {
+      if (occupied[i] && f(static_cast<ProcessId>(i), vec[i]))
+        return true;
+    }
+    for (const auto &[id, state] : overflow) {
+      if (f(id, state))
+        return true;
+    }
+    return false;
+  }
+};
+
+//===----------------------------------------------------------------------===//
 // DiscoveredOps - Collected operations from iterative traversal
 //===----------------------------------------------------------------------===//
 
@@ -864,6 +1064,11 @@ public:
 
   /// Print bytecode compilation statistics.
   void printBytecodeStats() const;
+
+  /// Print compile coverage report: per-dispatch-path activation counters,
+  /// ExecModel breakdown, and AOT rejection reasons.
+  /// Controlled by the CIRCT_SIM_COMPILE_REPORT environment variable.
+  void printCompileReport() const;
 
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
@@ -2227,16 +2432,37 @@ private:
     SignalId assertionSignalId = 0;
     /// Trivalent LTL truth value for runtime evaluation.
     enum class LTLTruth : uint8_t { False, True, Unknown };
+    /// Monotonic sampled-edge counter for this assertion checker.
+    uint64_t sampleOrdinal = 0;
     /// Per-operation history buffers for temporal runtime evaluation.
     /// Keys are temporal ops that need sampled history (e.g. implication,
     /// delay); values are oldest-to-newest truth samples.
     llvm::DenseMap<mlir::Operation *, std::deque<LTLTruth>> temporalHistory;
+    /// Per-concat sampled histories, indexed by concat input position.
+    struct ConcatTracker {
+      uint64_t lastSampleOrdinal = std::numeric_limits<uint64_t>::max();
+      llvm::SmallVector<std::deque<LTLTruth>, 4> inputHistories;
+    };
     /// End-of-run tracker for strong eventually obligations.
     struct EventuallyTracker {
       uint64_t trailingUnsatisfiedSamples = 0;
       bool trailingHasUnknown = false;
     };
+    struct RepeatTracker {
+      uint64_t trueStreak = 0;
+      bool streakHasUnknown = false;
+    };
+    struct RepetitionHitTracker {
+      uint64_t trueHits = 0;
+      bool hasUnknown = false;
+    };
     llvm::DenseMap<mlir::Operation *, EventuallyTracker> eventuallyTrackers;
+    llvm::DenseMap<mlir::Operation *, EventuallyTracker>
+        unboundedDelayTrackers;
+    llvm::DenseMap<mlir::Operation *, RepeatTracker> repeatTrackers;
+    llvm::DenseMap<mlir::Operation *, RepetitionHitTracker>
+        repetitionHitTrackers;
+    llvm::DenseMap<mlir::Operation *, ConcatTracker> concatTrackers;
   };
 
   /// Evaluate an LTL property tree recursively, handling temporal operators.
@@ -2328,13 +2554,14 @@ private:
       signalBackingMemory;
 
   /// Map from process IDs to execution states.
-  /// NOTE: This uses std::map rather than DenseMap to guarantee reference
-  /// stability.  evaluateCombinationalOp inserts and erases temporary entries
-  /// during getValue calls; with DenseMap this can trigger a rehash and
-  /// invalidate references held by callers (e.g., interpretWait's
-  /// `auto &state = processStates[procId]`).  std::map provides stable
-  /// references across inserts and erases.
-  std::map<ProcessId, ProcessExecutionState> processStates;
+  /// Uses ProcessStateStore (deque-backed flat storage) for O(1) lookup by
+  /// ProcessId instead of O(log N) std::map.  Deque guarantees stable element
+  /// addresses across resize, so pointer/reference stability is preserved for
+  /// callers (e.g., interpretWait's `auto &state = processStates[procId]`)
+  /// and the VPI handle mechanism that stores &state as uint64_t handles.
+  /// Temporary process IDs (>= kTempProcessIdBase) used by
+  /// evaluateCombinationalOp are stored in an overflow unordered_map.
+  ProcessStateStore processStates;
 
   /// Per-process execution model from classifyProcess(). Populated during
   /// registerProcesses() for llhd.process ops. Processes not in this map
@@ -2361,6 +2588,11 @@ private:
 
   /// Counter for callback fast-resuspend activations (diagnostics).
   uint64_t callbackFastResuspendCount = 0;
+
+  /// Activation counters for CIRCT_SIM_COMPILE_REPORT diagnostic.
+  uint64_t activationsAOTCallback = 0;
+  uint64_t activationsBytecode = 0;
+  uint64_t activationsInterpreter = 0;
 
   /// Shared function result cache across all processes for pure, high-frequency
   /// UVM/domain getters. This complements per-process funcResultCache to avoid

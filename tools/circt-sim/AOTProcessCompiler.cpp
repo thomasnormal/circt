@@ -933,7 +933,8 @@ AOTProcessCompiler::AOTProcessCompiler(MLIRContext &ctx)
 
 AOTProcessCompiler::~AOTProcessCompiler() = default;
 
-bool AOTProcessCompiler::isProcessCompilable(llhd::ProcessOp processOp) {
+bool AOTProcessCompiler::isProcessCompilable(llhd::ProcessOp processOp,
+                                             std::string *reason) {
   bool compilable = true;
   auto &processRegion = processOp.getBody();
 
@@ -941,12 +942,16 @@ bool AOTProcessCompiler::isProcessCompilable(llhd::ProcessOp processOp) {
     if (isa<moore::WaitEventOp>(op)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "[AOT] Process not compilable: contains moore.wait_event\n");
+      if (reason)
+        *reason = "moore.wait_event";
       compilable = false;
       return WalkResult::interrupt();
     }
     if (isa<sim::SimForkOp>(op)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "[AOT] Process not compilable: contains sim.fork\n");
+      if (reason)
+        *reason = "sim.fork";
       compilable = false;
       return WalkResult::interrupt();
     }
@@ -959,6 +964,8 @@ bool AOTProcessCompiler::isProcessCompilable(llhd::ProcessOp processOp) {
       LLVM_DEBUG(llvm::dbgs()
                  << "[AOT] Process not compilable: unsupported sim op "
                  << op->getName() << "\n");
+      if (reason)
+        *reason = op->getName().getStringRef().str();
       compilable = false;
       return WalkResult::interrupt();
     }
@@ -976,6 +983,8 @@ bool AOTProcessCompiler::isProcessCompilable(llhd::ProcessOp processOp) {
         LLVM_DEBUG(llvm::dbgs()
                    << "[AOT] Process not compilable: uses external sim op "
                    << defOp->getName() << "\n");
+        if (reason)
+          *reason = "external:" + defOp->getName().getStringRef().str();
         compilable = false;
         return WalkResult::interrupt();
       }
@@ -1347,12 +1356,6 @@ bool AOTProcessCompiler::compileAllProcesses(
   LLVM_DEBUG(llvm::dbgs() << "[AOT] Batch compiling " << processes.size()
                           << " processes\n");
 
-  // Create ONE micro-module for all processes
-  auto microModule = ModuleOp::create(UnknownLoc::get(&mlirContext));
-  OpBuilder builder(&mlirContext);
-
-  // Process data collected across all processes
-  llvm::DenseMap<std::pair<ProcessId, Value>, SignalId> procSignalIdMap;
   // Store function names as strings since func::FuncOp references become
   // invalid after applyPartialConversion converts them to LLVM::LLVMFuncOp.
   struct ExtractedFuncInfo {
@@ -1363,124 +1366,23 @@ bool AOTProcessCompiler::compileAllProcesses(
     CallbackPlan plan; // Full classification from classifyProcess()
     llvm::SmallVector<std::pair<SignalId, EdgeType>> waitSignals;
   };
-  llvm::SmallVector<ExtractedFuncInfo, 4> extractedFuncs;
 
-  auto ptrTy = LLVM::LLVMPointerType::get(&mlirContext);
-
-  // === Step 1: Extract all processes into functions in the combined module ===
+  // === Phase A: Classify all processes and collect metadata ===
+  // We separate collection from compilation so we can chunk the compilation.
+  llvm::SmallVector<ExtractedFuncInfo, 4> allFuncInfos;
   for (auto [procId, processOp] : processes) {
-    if (!isProcessCompilable(processOp)) {
+    std::string rejReason;
+    if (!isProcessCompilable(processOp, &rejReason)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "[AOT] Skipping non-compilable process " << procId << "\n");
+      if (!rejReason.empty())
+        rejectionStats[rejReason]++;
       continue;
     }
 
     std::string funcName = "__aot_process_" + std::to_string(procId);
-    LLVM_DEBUG(llvm::dbgs() << "[AOT] Extracting " << funcName << "\n");
 
-    // Collect signal values and external values used by this process.
-    // External values are those defined OUTSIDE the process region
-    // (e.g. hw.constant, llhd.constant_time in the hw.module body).
-    llvm::SmallVector<Value, 8> signalValues;
-    llvm::DenseMap<Value, SignalId> localSignalIdMap;
-    llvm::SetVector<Value> externalValues;
-
-    auto &processRegion = processOp.getBody();
-    processOp.walk([&](Operation *op) {
-      for (Value operand : op->getOperands()) {
-        // Check if this is a signal reference
-        auto it = valueToSignal.find(operand);
-        if (it != valueToSignal.end() &&
-            !localSignalIdMap.count(operand)) {
-          signalValues.push_back(operand);
-          localSignalIdMap[operand] = it->second;
-          procSignalIdMap[{procId, operand}] = it->second;
-          continue;
-        }
-        // Check if defined outside the process region
-        if (auto *defOp = operand.getDefiningOp()) {
-          if (!processRegion.isAncestor(defOp->getParentRegion()) &&
-              !localSignalIdMap.count(operand)) {
-            externalValues.insert(operand);
-          }
-        }
-      }
-    });
-
-    // Create function: void @__aot_process_<procId>()
-    auto funcTy = FunctionType::get(&mlirContext, {}, {});
-    auto funcOp = func::FuncOp::create(processOp.getLoc(), funcName, funcTy);
-    microModule.push_back(funcOp);
-
-    // Clone process body with signal ID constants baked and external values
-    // materialized in the function entry block.
-    IRMapping mapping;
-
-    auto &entryBlock = funcOp.getBody().emplaceBlock();
-    {
-      OpBuilder entryBuilder(&mlirContext);
-      entryBuilder.setInsertionPointToStart(&entryBlock);
-      auto i64Ty = entryBuilder.getI64Type();
-
-      // Map signal values → inttoptr(signalId)
-      for (auto sigVal : signalValues) {
-        auto sigId = localSignalIdMap[sigVal];
-        auto constOp = LLVM::ConstantOp::create(
-            entryBuilder, processOp.getLoc(), i64Ty,
-            entryBuilder.getI64IntegerAttr(static_cast<int64_t>(sigId)));
-        auto ptrOp = LLVM::IntToPtrOp::create(entryBuilder, processOp.getLoc(),
-                                             ptrTy, constOp.getResult());
-        mapping.map(sigVal, ptrOp.getResult());
-      }
-
-      // Clone external value definitions into entry block.
-      // We iterate in topological order: if an external value's defining op
-      // uses other external values, those were already inserted earlier
-      // (since SetVector preserves insertion order, and operands are visited
-      // before their users during the walk).
-      for (Value extVal : externalValues) {
-        auto *defOp = extVal.getDefiningOp();
-        assert(defOp && "external value without defining op");
-        entryBuilder.clone(*defOp, mapping);
-      }
-    }
-
-    // Clone blocks from process body
-    for (auto &block : processRegion) {
-      Block *newBlock;
-      if (&block == &processRegion.front()) {
-        newBlock = &entryBlock;
-      } else {
-        newBlock = new Block();
-        funcOp.getBody().push_back(newBlock);
-      }
-      mapping.map(&block, newBlock);
-
-      if (&block != &processRegion.front()) {
-        for (auto arg : block.getArguments()) {
-          auto newArg = newBlock->addArgument(arg.getType(), arg.getLoc());
-          mapping.map(arg, newArg);
-        }
-      }
-    }
-
-    // Clone ops
-    for (auto &block : processRegion) {
-      auto *newBlock = mapping.lookup(&block);
-      builder.setInsertionPointToEnd(newBlock);
-      for (auto &op : block) {
-        builder.clone(op, mapping);
-      }
-    }
-
-    // Classify: run-to-completion callback vs coroutine.
-    // Use both old isRunToCompletion (for backward compat) and new
-    // classifyProcess (for the richer ExecModel).
     CallbackPlan plan = classifyProcess(processOp, valueToSignal);
-
-    // Frame support not yet implemented: if the process has loop-carried
-    // state (destOperands on the wait), fall back to coroutine. This is
-    // safe and correct; frame-based callbacks will be enabled in Phase E2.
     if (plan.isCallback() && plan.hasFrame()) {
       LLVM_DEBUG(llvm::dbgs()
                  << "[AOT] Demoting " << procId
@@ -1497,19 +1399,15 @@ bool AOTProcessCompiler::compileAllProcesses(
     info.isCallback = isCallback;
     info.plan = plan;
 
-    // For callbacks, extract the sensitivity list from the wait op and
-    // transform the function to be body-only (skip wait, return instead).
+    // For callbacks, extract the sensitivity list from the wait op.
     if (isCallback) {
-      // Find the single wait op in the original process to extract signals.
       llhd::WaitOp originalWait = nullptr;
       processOp.walk([&](llhd::WaitOp w) { originalWait = w; });
       assert(originalWait && "classifyProcess callback but no wait found");
 
-      // Use the sensitivity list already extracted by classifyProcess.
       if (!plan.staticSignals.empty()) {
         info.waitSignals = plan.staticSignals;
       } else {
-        // Fallback: extract from the wait op directly.
         if (!originalWait.getObserved().empty()) {
           for (Value observed : originalWait.getObserved()) {
             auto sigIt = valueToSignal.find(observed);
@@ -1517,7 +1415,6 @@ bool AOTProcessCompiler::compileAllProcesses(
             info.waitSignals.push_back({sigId, EdgeType::AnyEdge});
           }
         } else {
-          // Derived sensitivity: scan the body for llhd.prb ops.
           llvm::DenseSet<SignalId> derivedSigs;
           processOp.walk([&](llhd::ProbeOp probeOp) {
             auto sigIt = valueToSignal.find(probeOp.getSignal());
@@ -1528,297 +1425,397 @@ bool AOTProcessCompiler::compileAllProcesses(
             info.waitSignals.push_back({sigId, EdgeType::AnyEdge});
         }
       }
-
-      // Transform the extracted function: find the cloned wait and the
-      // blocks to rewire for body-only execution.
-      llhd::WaitOp clonedWait = nullptr;
-      funcOp.walk([&](llhd::WaitOp w) { clonedWait = w; });
-
-      if (clonedWait) {
-        Block *waitBlock = clonedWait->getBlock();
-        Block *bodyBlock = clonedWait.getDest();
-
-        if (waitBlock == bodyBlock) {
-          // Simple case: wait and body are in the same block.
-          // Structure: ^body: <ops...> llhd.wait ^body
-          // Transform: replace wait with return, keep entry→body branch.
-          {
-            OpBuilder waitBuilder(clonedWait);
-            LLVM::ReturnOp::create(waitBuilder, clonedWait->getLoc(),
-                                   ValueRange{});
-            clonedWait.erase();
-          }
-        } else {
-          // Complex case: wait and body are in different blocks.
-          // Structure: ^wait: llhd.wait ^body; ^body: <ops...> cf.br ^wait
-          // Transform:
-          //   1. Replace body→wait back-edges with return
-          //   2. Replace wait op with return (makes wait block a dead end)
-          //   3. Redirect entry→wait branches to entry→body
-
-          // Step 1: Cut back-edges from body blocks to wait block.
-          for (Block &block : funcOp.getBody()) {
-            auto *terminator = block.getTerminator();
-            if (!terminator)
-              continue;
-            for (unsigned i = 0; i < terminator->getNumSuccessors(); ++i) {
-              if (terminator->getSuccessor(i) == waitBlock &&
-                  &block != waitBlock) {
-                OpBuilder retBuilder(terminator);
-                LLVM::ReturnOp::create(retBuilder, terminator->getLoc(),
-                                       ValueRange{});
-                terminator->erase();
-                break;
-              }
-            }
-          }
-
-          // Step 2: Replace wait op with return.
-          {
-            OpBuilder waitBuilder(clonedWait);
-            LLVM::ReturnOp::create(waitBuilder, clonedWait->getLoc(),
-                                   ValueRange{});
-            clonedWait.erase();
-          }
-
-          // Step 3: Redirect entry→wait to entry→body.
-          for (Block &block : funcOp.getBody()) {
-            auto *terminator = block.getTerminator();
-            if (!terminator)
-              continue;
-            for (unsigned i = 0; i < terminator->getNumSuccessors(); ++i) {
-              if (terminator->getSuccessor(i) == waitBlock) {
-                terminator->setSuccessor(bodyBlock, i);
-              }
-            }
-          }
-        }
-
-        // Erase unreachable blocks (blocks with no predecessors except entry).
-        {
-          Block &entryBlock = funcOp.getBody().front();
-          llvm::SmallVector<Block *> toErase;
-          for (Block &block : funcOp.getBody()) {
-            if (&block == &entryBlock)
-              continue;
-            if (block.hasNoPredecessors())
-              toErase.push_back(&block);
-          }
-          for (Block *block : toErase) {
-            block->dropAllDefinedValueUses();
-            block->erase();
-          }
-        }
-
-        LLVM_DEBUG(llvm::dbgs()
-                   << "[AOT] Transformed " << funcName
-                   << " to callback (body-only, "
-                   << info.waitSignals.size() << " signals)\n");
-      }
     }
 
-    extractedFuncs.push_back(std::move(info));
+    allFuncInfos.push_back(std::move(info));
   }
 
-  if (extractedFuncs.empty()) {
-    LLVM_DEBUG(llvm::dbgs() << "[AOT] No compilable processes extracted\n");
-    microModule.erase();
+  if (allFuncInfos.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "[AOT] No compilable processes found\n");
     return true;
   }
 
-  // Clone referenced declarations
-  IRMapping globalMapping; // Empty for now; can be extended if needed
-  cloneReferencedDeclarations(microModule, parentModule, globalMapping);
+  // Initialize native target once (required for JIT compilation).
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
 
-  LLVM_DEBUG({
-    llvm::dbgs() << "[AOT] Extracted module with " << extractedFuncs.size()
-                 << " functions:\n";
-    microModule.dump();
-  });
+  // === Phase B: Chunked compilation ===
+  // Split into chunks of 64 processes to avoid massive single-module lowering.
+  constexpr size_t kChunkSize = 64;
+  size_t totalProcs = allFuncInfos.size();
+  size_t numChunks = (totalProcs + kChunkSize - 1) / kChunkSize;
 
-  // === Step 2: Run lowering pipeline ONCE ===
-  LLVMTypeConverter converter(&mlirContext);
-  addProcessTypeConversions(converter);
-  populateHWToLLVMTypeConversions(converter);
+  llvm::errs() << "[AOT] Compiling " << totalProcs << " processes in "
+               << numChunks << " chunk(s) of up to " << kChunkSize << "\n";
 
-  // sim.fstring → !llvm.ptr
-  converter.addConversion([](sim::FormatStringType type) -> Type {
-    return LLVM::LLVMPointerType::get(type.getContext());
-  });
+  auto ptrTy = LLVM::LLVMPointerType::get(&mlirContext);
 
-  LLVMConversionTarget target(mlirContext);
-  target.addLegalOp<ModuleOp>();
-  target.addLegalDialect<LLVM::LLVMDialect>();
-  target.addIllegalDialect<hw::HWDialect, comb::CombDialect,
-                           llhd::LLHDDialect, scf::SCFDialect>();
-  target.addIllegalOp<sim::PrintFormattedProcOp>();
-  target.addIllegalOp<sim::TerminateOp>();
-  target.addIllegalOp<sim::FormatLiteralOp, sim::FormatDecOp,
-                      sim::FormatHexOp, sim::FormatBinOp,
-                      sim::FormatCharOp, sim::FormatStringConcatOp,
-                      sim::FormatDynStringOp>();
+  for (size_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx) {
+    auto chunkStart = std::chrono::steady_clock::now();
 
-  RewritePatternSet patterns(&mlirContext);
+    size_t chunkBegin = chunkIdx * kChunkSize;
+    size_t chunkEnd = std::min(chunkBegin + kChunkSize, totalProcs);
+    size_t chunkSize = chunkEnd - chunkBegin;
 
-  populateFuncToLLVMConversionPatterns(converter, patterns);
-  cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
-  arith::populateArithToLLVMConversionPatterns(converter, patterns);
-  populateAnyFunctionOpInterfaceTypeConversionPattern(patterns, converter);
-  populateSCFToControlFlowConversionPatterns(patterns);
+    // Step B1: Create a fresh micro-module for this chunk.
+    auto microModule = ModuleOp::create(UnknownLoc::get(&mlirContext));
+    OpBuilder builder(&mlirContext);
 
-  Namespace globals;
-  DenseMap<std::pair<Type, ArrayAttr>, LLVM::GlobalOp> constAggMap;
-  std::optional<HWToLLVMArraySpillCache> spillCache =
-      HWToLLVMArraySpillCache();
-  {
-    OpBuilder spillBuilder(microModule);
-    spillCache->spillNonHWOps(spillBuilder, converter, microModule);
-  }
-  populateHWToLLVMConversionPatterns(converter, patterns, globals, constAggMap,
-                                     spillCache);
-  populateCombToArithConversionPatterns(converter, patterns);
-  populateCombToLLVMConversionPatterns(converter, patterns);
+    llvm::DenseMap<std::pair<ProcessId, Value>, SignalId> procSignalIdMap;
+    llvm::SmallVector<ExtractedFuncInfo *, 64> chunkFuncs;
 
-  // Process LLHD patterns
-  patterns.add<ProcessProbeOpLowering, ProcessDriveOpLowering,
-               ProcessConstantTimeLowering, ProcessIntToTimeLowering,
-               ProcessTimeToIntLowering, ProcessWaitOpLowering,
-               ProcessHaltOpLowering>(converter, &mlirContext);
+    // Step B2: Extract this chunk's processes into functions.
+    for (size_t i = chunkBegin; i < chunkEnd; ++i) {
+      auto &info = allFuncInfos[i];
+      auto procId = info.procId;
+      auto processOp = info.originalOp;
 
-  // Signal projection passthroughs
-  patterns.add<ProcessSigProjectionPassthrough<llhd::SigExtractOp>,
-               ProcessSigProjectionPassthrough<llhd::SigArrayGetOp>,
-               ProcessSigProjectionPassthrough<llhd::SigArraySliceOp>,
-               ProcessSigProjectionPassthrough<llhd::SigStructExtractOp>>(
-      converter, &mlirContext);
+      LLVM_DEBUG(llvm::dbgs() << "[AOT] Extracting " << info.funcName << "\n");
 
-  // Sim dialect
-  patterns.add<ProcessPrintOpLowering>(converter, &mlirContext);
-  patterns.add<TerminateOpErasure>(converter, &mlirContext);
-  patterns.add<FmtLiteralOpLowering, FmtDecOpLowering, FmtHexOpLowering,
-               FmtBinOpLowering, FmtCharOpLowering, FmtConcatOpLowering,
-               FmtDynStringOpLowering>(converter, &mlirContext);
+      llvm::SmallVector<Value, 8> signalValues;
+      llvm::DenseMap<Value, SignalId> localSignalIdMap;
+      llvm::SetVector<Value> externalValues;
 
-  // HW bitcast (type reinterpretation, not covered by populateHWToLLVM)
-  patterns.add<HWBitcastOpLowering>(converter, &mlirContext);
+      auto &processRegion = processOp.getBody();
+      processOp.walk([&](Operation *op) {
+        for (Value operand : op->getOperands()) {
+          auto it = valueToSignal.find(operand);
+          if (it != valueToSignal.end() &&
+              !localSignalIdMap.count(operand)) {
+            signalValues.push_back(operand);
+            localSignalIdMap[operand] = it->second;
+            procSignalIdMap[{procId, operand}] = it->second;
+            continue;
+          }
+          if (auto *defOp = operand.getDefiningOp()) {
+            if (!processRegion.isAncestor(defOp->getParentRegion()) &&
+                !localSignalIdMap.count(operand)) {
+              externalValues.insert(operand);
+            }
+          }
+        }
+      });
 
-  // Apply conversion ONCE to the combined module
-  ConversionConfig config;
-  config.allowPatternRollback = false;
-  if (failed(applyPartialConversion(microModule, target, std::move(patterns),
-                                    config))) {
+      auto funcTy = FunctionType::get(&mlirContext, {}, {});
+      auto funcOp =
+          func::FuncOp::create(processOp.getLoc(), info.funcName, funcTy);
+      microModule.push_back(funcOp);
+
+      IRMapping mapping;
+      auto &entryBlock = funcOp.getBody().emplaceBlock();
+      {
+        OpBuilder entryBuilder(&mlirContext);
+        entryBuilder.setInsertionPointToStart(&entryBlock);
+        auto i64Ty = entryBuilder.getI64Type();
+
+        for (auto sigVal : signalValues) {
+          auto sigId = localSignalIdMap[sigVal];
+          auto constOp = LLVM::ConstantOp::create(
+              entryBuilder, processOp.getLoc(), i64Ty,
+              entryBuilder.getI64IntegerAttr(static_cast<int64_t>(sigId)));
+          auto ptrOp = LLVM::IntToPtrOp::create(
+              entryBuilder, processOp.getLoc(), ptrTy, constOp.getResult());
+          mapping.map(sigVal, ptrOp.getResult());
+        }
+
+        for (Value extVal : externalValues) {
+          auto *defOp = extVal.getDefiningOp();
+          assert(defOp && "external value without defining op");
+          entryBuilder.clone(*defOp, mapping);
+        }
+      }
+
+      for (auto &block : processRegion) {
+        Block *newBlock;
+        if (&block == &processRegion.front()) {
+          newBlock = &entryBlock;
+        } else {
+          newBlock = new Block();
+          funcOp.getBody().push_back(newBlock);
+        }
+        mapping.map(&block, newBlock);
+
+        if (&block != &processRegion.front()) {
+          for (auto arg : block.getArguments()) {
+            auto newArg = newBlock->addArgument(arg.getType(), arg.getLoc());
+            mapping.map(arg, newArg);
+          }
+        }
+      }
+
+      for (auto &block : processRegion) {
+        auto *newBlock = mapping.lookup(&block);
+        builder.setInsertionPointToEnd(newBlock);
+        for (auto &op : block) {
+          builder.clone(op, mapping);
+        }
+      }
+
+      // For callbacks, transform the function to body-only execution.
+      if (info.isCallback) {
+        llhd::WaitOp clonedWait = nullptr;
+        funcOp.walk([&](llhd::WaitOp w) { clonedWait = w; });
+
+        if (clonedWait) {
+          Block *waitBlock = clonedWait->getBlock();
+          Block *bodyBlock = clonedWait.getDest();
+
+          if (waitBlock == bodyBlock) {
+            {
+              OpBuilder waitBuilder(clonedWait);
+              LLVM::ReturnOp::create(waitBuilder, clonedWait->getLoc(),
+                                     ValueRange{});
+              clonedWait.erase();
+            }
+          } else {
+            for (Block &block : funcOp.getBody()) {
+              auto *terminator = block.getTerminator();
+              if (!terminator)
+                continue;
+              for (unsigned j = 0; j < terminator->getNumSuccessors(); ++j) {
+                if (terminator->getSuccessor(j) == waitBlock &&
+                    &block != waitBlock) {
+                  OpBuilder retBuilder(terminator);
+                  LLVM::ReturnOp::create(retBuilder, terminator->getLoc(),
+                                         ValueRange{});
+                  terminator->erase();
+                  break;
+                }
+              }
+            }
+
+            {
+              OpBuilder waitBuilder(clonedWait);
+              LLVM::ReturnOp::create(waitBuilder, clonedWait->getLoc(),
+                                     ValueRange{});
+              clonedWait.erase();
+            }
+
+            for (Block &block : funcOp.getBody()) {
+              auto *terminator = block.getTerminator();
+              if (!terminator)
+                continue;
+              for (unsigned j = 0; j < terminator->getNumSuccessors(); ++j) {
+                if (terminator->getSuccessor(j) == waitBlock) {
+                  terminator->setSuccessor(bodyBlock, j);
+                }
+              }
+            }
+          }
+
+          {
+            Block &funcEntry = funcOp.getBody().front();
+            llvm::SmallVector<Block *> toErase;
+            for (Block &block : funcOp.getBody()) {
+              if (&block == &funcEntry)
+                continue;
+              if (block.hasNoPredecessors())
+                toErase.push_back(&block);
+            }
+            for (Block *block : toErase) {
+              block->dropAllDefinedValueUses();
+              block->erase();
+            }
+          }
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "[AOT] Transformed " << info.funcName
+                     << " to callback (body-only, "
+                     << info.waitSignals.size() << " signals)\n");
+        }
+      }
+
+      chunkFuncs.push_back(&info);
+    }
+
+    // Step B3: Clone referenced declarations into the micro-module.
+    IRMapping globalMapping;
+    cloneReferencedDeclarations(microModule, parentModule, globalMapping);
+
     LLVM_DEBUG({
-      llvm::dbgs() << "[AOT] Conversion failed\n";
+      llvm::dbgs() << "[AOT] Chunk " << chunkIdx + 1 << "/" << numChunks
+                   << ": extracted " << chunkSize << " functions\n";
       microModule.dump();
     });
-    microModule.erase();
-    return false;
-  }
 
-  // Clean up unrealized_conversion_cast ops left by partial conversion.
-  // These arise from type materializations (e.g., !llhd.time → i64).
-  // Strategy: repeatedly fold cast chains and erase dead casts until fixpoint.
-  {
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      llvm::SmallVector<UnrealizedConversionCastOp> casts;
-      microModule.walk([&](UnrealizedConversionCastOp op) {
-        casts.push_back(op);
-      });
-      for (auto castOp : casts) {
-        // Dead cast: no uses → erase.
-        if (castOp.use_empty()) {
-          castOp.erase();
-          changed = true;
-          continue;
-        }
-        // Round-trip fold: cast(B→A) where input is cast(A→B).
-        // Replace cast(B→A)'s results with the original A values.
-        if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
-          auto inputCast = castOp.getOperand(0).getDefiningOp<
-              UnrealizedConversionCastOp>();
-          if (inputCast && inputCast.getNumOperands() == 1 &&
-              inputCast.getNumResults() == 1) {
-            // cast(cast(x : A→B) : B→A) → x
-            if (castOp.getResult(0).getType() ==
-                inputCast.getOperand(0).getType()) {
-              castOp.getResult(0).replaceAllUsesWith(
-                  inputCast.getOperand(0));
-              castOp.erase();
-              changed = true;
+    // Step B4: Run lowering pipeline on this chunk's micro-module.
+    LLVMTypeConverter converter(&mlirContext);
+    addProcessTypeConversions(converter);
+    populateHWToLLVMTypeConversions(converter);
+
+    converter.addConversion([](sim::FormatStringType type) -> Type {
+      return LLVM::LLVMPointerType::get(type.getContext());
+    });
+
+    LLVMConversionTarget target(mlirContext);
+    target.addLegalOp<ModuleOp>();
+    target.addLegalDialect<LLVM::LLVMDialect>();
+    target.addIllegalDialect<hw::HWDialect, comb::CombDialect,
+                             llhd::LLHDDialect, scf::SCFDialect>();
+    target.addIllegalOp<sim::PrintFormattedProcOp>();
+    target.addIllegalOp<sim::TerminateOp>();
+    target.addIllegalOp<sim::FormatLiteralOp, sim::FormatDecOp,
+                        sim::FormatHexOp, sim::FormatBinOp,
+                        sim::FormatCharOp, sim::FormatStringConcatOp,
+                        sim::FormatDynStringOp>();
+
+    RewritePatternSet patterns(&mlirContext);
+
+    populateFuncToLLVMConversionPatterns(converter, patterns);
+    cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
+    arith::populateArithToLLVMConversionPatterns(converter, patterns);
+    populateAnyFunctionOpInterfaceTypeConversionPattern(patterns, converter);
+    populateSCFToControlFlowConversionPatterns(patterns);
+
+    Namespace globals;
+    DenseMap<std::pair<Type, ArrayAttr>, LLVM::GlobalOp> constAggMap;
+    std::optional<HWToLLVMArraySpillCache> spillCache =
+        HWToLLVMArraySpillCache();
+    {
+      OpBuilder spillBuilder(microModule);
+      spillCache->spillNonHWOps(spillBuilder, converter, microModule);
+    }
+    populateHWToLLVMConversionPatterns(converter, patterns, globals,
+                                       constAggMap, spillCache);
+    populateCombToArithConversionPatterns(converter, patterns);
+    populateCombToLLVMConversionPatterns(converter, patterns);
+
+    patterns.add<ProcessProbeOpLowering, ProcessDriveOpLowering,
+                 ProcessConstantTimeLowering, ProcessIntToTimeLowering,
+                 ProcessTimeToIntLowering, ProcessWaitOpLowering,
+                 ProcessHaltOpLowering>(converter, &mlirContext);
+
+    patterns.add<ProcessSigProjectionPassthrough<llhd::SigExtractOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigArrayGetOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigArraySliceOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigStructExtractOp>>(
+        converter, &mlirContext);
+
+    patterns.add<ProcessPrintOpLowering>(converter, &mlirContext);
+    patterns.add<TerminateOpErasure>(converter, &mlirContext);
+    patterns.add<FmtLiteralOpLowering, FmtDecOpLowering, FmtHexOpLowering,
+                 FmtBinOpLowering, FmtCharOpLowering, FmtConcatOpLowering,
+                 FmtDynStringOpLowering>(converter, &mlirContext);
+
+    patterns.add<HWBitcastOpLowering>(converter, &mlirContext);
+
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(applyPartialConversion(microModule, target, std::move(patterns),
+                                      config))) {
+      llvm::errs() << "[AOT] Chunk " << chunkIdx + 1 << "/" << numChunks
+                   << ": conversion FAILED — skipping chunk\n";
+      LLVM_DEBUG(microModule.dump());
+      microModule.erase();
+      continue; // Skip this chunk, try the rest
+    }
+
+    // Clean up unrealized_conversion_cast ops.
+    {
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        llvm::SmallVector<UnrealizedConversionCastOp> casts;
+        microModule.walk([&](UnrealizedConversionCastOp op) {
+          casts.push_back(op);
+        });
+        for (auto castOp : casts) {
+          if (castOp.use_empty()) {
+            castOp.erase();
+            changed = true;
+            continue;
+          }
+          if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+            auto inputCast = castOp.getOperand(0).getDefiningOp<
+                UnrealizedConversionCastOp>();
+            if (inputCast && inputCast.getNumOperands() == 1 &&
+                inputCast.getNumResults() == 1) {
+              if (castOp.getResult(0).getType() ==
+                  inputCast.getOperand(0).getType()) {
+                castOp.getResult(0).replaceAllUsesWith(
+                    inputCast.getOperand(0));
+                castOp.erase();
+                changed = true;
+              }
             }
           }
         }
       }
     }
-  }
 
-  LLVM_DEBUG({
-    llvm::dbgs() << "[AOT] Lowered LLVM IR:\n";
-    microModule.dump();
-  });
+    LLVM_DEBUG({
+      llvm::dbgs() << "[AOT] Chunk " << chunkIdx + 1 << " lowered LLVM IR:\n";
+      microModule.dump();
+    });
 
-  // Register LLVM IR translation interfaces (required for ExecutionEngine).
-  registerBuiltinDialectTranslation(*microModule.getContext());
-  registerLLVMDialectTranslation(*microModule.getContext());
+    // Step B5: Create ExecutionEngine for this chunk (O1, not O2).
+    registerBuiltinDialectTranslation(*microModule.getContext());
+    registerLLVMDialectTranslation(*microModule.getContext());
 
-  // Initialize native target (required for JIT compilation).
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
+    ExecutionEngineOptions engineOpts;
+    engineOpts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
+    engineOpts.transformer = makeOptimizingTransformer(
+        /*optLevel=*/1, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
 
-  // === Step 3: Create ONE ExecutionEngine ===
-  ExecutionEngineOptions engineOpts;
-  engineOpts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
-  engineOpts.transformer = makeOptimizingTransformer(
-      /*optLevel=*/2, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
-
-  auto engineOrErr = ExecutionEngine::create(microModule, engineOpts);
-  if (!engineOrErr) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "[AOT] ExecutionEngine creation failed: "
-               << llvm::toString(engineOrErr.takeError()) << "\n");
-    microModule.erase();
-    return false;
-  }
-
-  engines.push_back(std::move(*engineOrErr));
-  auto *jitEngine = engines.back().get();
-
-  registerJITRuntimeSymbols(jitEngine);
-
-  // === Step 4: Lookup all function pointers ===
-  for (auto &info : extractedFuncs) {
-    auto expectedFn = jitEngine->lookup(info.funcName);
-    if (!expectedFn) {
+    auto engineOrErr = ExecutionEngine::create(microModule, engineOpts);
+    if (!engineOrErr) {
+      llvm::errs() << "[AOT] Chunk " << chunkIdx + 1 << "/" << numChunks
+                   << ": ExecutionEngine creation FAILED — skipping chunk\n";
       LLVM_DEBUG(llvm::dbgs()
-                 << "[AOT] Function lookup failed: " << info.funcName << ": "
-                 << llvm::toString(expectedFn.takeError()) << "\n");
-      engines.pop_back();
+                 << llvm::toString(engineOrErr.takeError()) << "\n");
       microModule.erase();
-      return false;
+      continue; // Skip this chunk, try the rest
     }
 
-    AOTCompiledProcess result;
-    result.procId = info.procId;
-    result.entryFunc =
-        reinterpret_cast<UcontextProcessState::EntryFuncTy>(*expectedFn);
-    result.funcName = info.funcName;
-    result.isCallback = info.isCallback;
-    result.execModel = info.plan.model;
-    result.needsInitRun = info.plan.needsInitRun;
-    result.waitSignals = std::move(info.waitSignals);
-    results.push_back(std::move(result));
+    engines.push_back(std::move(*engineOrErr));
+    auto *jitEngine = engines.back().get();
+
+    registerJITRuntimeSymbols(jitEngine);
+
+    // Step B6: Lookup function pointers for this chunk.
+    bool chunkLookupOk = true;
+    for (auto *infoPtr : chunkFuncs) {
+      auto &info = *infoPtr;
+      auto expectedFn = jitEngine->lookup(info.funcName);
+      if (!expectedFn) {
+        llvm::errs() << "[AOT] Function lookup failed: " << info.funcName
+                     << "\n";
+        LLVM_DEBUG(llvm::dbgs()
+                   << llvm::toString(expectedFn.takeError()) << "\n");
+        chunkLookupOk = false;
+        continue;
+      }
+
+      AOTCompiledProcess result;
+      result.procId = info.procId;
+      result.entryFunc =
+          reinterpret_cast<UcontextProcessState::EntryFuncTy>(*expectedFn);
+      result.funcName = info.funcName;
+      result.isCallback = info.isCallback;
+      result.execModel = info.plan.model;
+      result.needsInitRun = info.plan.needsInitRun;
+      result.waitSignals = std::move(info.waitSignals);
+      results.push_back(std::move(result));
+    }
+
+    microModule.erase();
+
+    auto chunkEndTime = std::chrono::steady_clock::now();
+    double chunkMs = std::chrono::duration<double, std::milli>(
+                         chunkEndTime - chunkStart)
+                         .count();
+    llvm::errs() << "[AOT] Chunk " << chunkIdx + 1 << "/" << numChunks << ": "
+                 << chunkSize << " processes, "
+                 << llvm::format("%.1f", chunkMs) << " ms"
+                 << (chunkLookupOk ? "" : " (some lookups failed)") << "\n";
   }
 
   auto endTime = std::chrono::steady_clock::now();
   double compileMs =
       std::chrono::duration<double, std::milli>(endTime - startTime).count();
-  LLVM_DEBUG(llvm::dbgs() << "[AOT] Batch compiled " << results.size()
-                          << " processes in "
-                          << llvm::format("%.1f", compileMs) << " ms\n");
+  llvm::errs() << "[AOT] Total: compiled " << results.size() << " processes in "
+               << llvm::format("%.1f", compileMs) << " ms\n";
 
-  microModule.erase();
-  return true;
+  return !results.empty();
 #endif
 }

@@ -943,18 +943,18 @@ LLHDProcessInterpreter::collectMemoryStateSnapshot() const {
   for (const auto &entry : nativeMemoryBlocks)
     snapshot.nativeBytes += entry.second;
 
-  for (const auto &procEntry : processStates) {
+  processStates.forEach([&](ProcessId procId, const ProcessExecutionState &state) {
     uint64_t procBytes = 0;
-    for (const auto &blockEntry : procEntry.second.memoryBlocks) {
+    for (const auto &blockEntry : state.memoryBlocks) {
       ++snapshot.processBlocks;
       snapshot.processBytes += blockEntry.second.size;
       procBytes += blockEntry.second.size;
     }
     if (procBytes >= snapshot.largestProcessBytes) {
       snapshot.largestProcessBytes = procBytes;
-      snapshot.largestProcessId = procEntry.first;
+      snapshot.largestProcessId = procId;
     }
-  }
+  });
 
   snapshot.dynamicStrings = dynamicStrings.size();
   for (const auto &entry : dynamicStrings) {
@@ -6019,6 +6019,8 @@ void LLHDProcessInterpreter::executeClockedAssertion(
     }
   }
 
+  ++state.sampleOrdinal;
+
   // Evaluate the property using LTL-aware evaluation.
   // Unknown-pending temporal states are treated as non-failing.
   auto propTruth = evaluateLTLProperty(assertOp.getProperty(), state);
@@ -6061,6 +6063,18 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
           continue;
         auto trackerIt = state.eventuallyTrackers.find(def);
         if (trackerIt == state.eventuallyTrackers.end())
+          continue;
+        const auto &tracker = trackerIt->second;
+        if (tracker.trailingUnsatisfiedSamples > 0 &&
+            !tracker.trailingHasUnknown)
+          unresolvedStrongEventually = true;
+        continue;
+      }
+      if (auto delayOp = dyn_cast<ltl::DelayOp>(def)) {
+        if (delayOp.getLength())
+          continue;
+        auto trackerIt = state.unboundedDelayTrackers.find(def);
+        if (trackerIt == state.unboundedDelayTrackers.end())
           continue;
         const auto &tracker = trackerIt->second;
         if (tracker.trailingUnsatisfiedSamples > 0 &&
@@ -6122,6 +6136,59 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     if (lhs == LTLTruth::Unknown || rhs == LTLTruth::Unknown)
       return LTLTruth::Unknown;
     return LTLTruth::False;
+  };
+  std::function<std::optional<uint64_t>(Value)> getExactSequenceLength =
+      [&](Value seq) -> std::optional<uint64_t> {
+    if (!seq)
+      return std::optional<uint64_t>(0);
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return std::optional<uint64_t>(1);
+
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return getExactSequenceLength(clockOp.getInput());
+    if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp))
+      return getExactSequenceLength(firstMatchOp.getInput());
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(seqOp)) {
+      auto length = delayOp.getLength();
+      if (!length || *length != 0)
+        return std::nullopt;
+      auto inputLen = getExactSequenceLength(delayOp.getInput());
+      if (!inputLen)
+        return std::nullopt;
+      if (*inputLen >
+          std::numeric_limits<uint64_t>::max() - delayOp.getDelay())
+        return std::nullopt;
+      return *inputLen + delayOp.getDelay();
+    }
+    if (!isa<ltl::SequenceType>(seq.getType()))
+      return std::optional<uint64_t>(1);
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp)) {
+      uint64_t total = 0;
+      for (Value input : concatOp.getInputs()) {
+        auto inputLen = getExactSequenceLength(input);
+        if (!inputLen)
+          return std::nullopt;
+        if (*inputLen > std::numeric_limits<uint64_t>::max() - total)
+          return std::nullopt;
+        total += *inputLen;
+      }
+      return total;
+    }
+    if (auto repeatOp = dyn_cast<ltl::RepeatOp>(seqOp)) {
+      auto more = repeatOp.getMore();
+      if (!more || *more != 0)
+        return std::nullopt;
+      auto inputLen = getExactSequenceLength(repeatOp.getInput());
+      if (!inputLen)
+        return std::nullopt;
+      if (repeatOp.getBase() == 0)
+        return std::optional<uint64_t>(0);
+      if (*inputLen > std::numeric_limits<uint64_t>::max() / repeatOp.getBase())
+        return std::nullopt;
+      return *inputLen * repeatOp.getBase();
+    }
+    return std::nullopt;
   };
   std::function<LTLTruth(Value)> evaluateSequenceStart =
       [&](Value seq) -> LTLTruth {
@@ -6289,31 +6356,70 @@ LLHDProcessInterpreter::evaluateLTLProperty(
       return LTLTruth::Unknown;
     }
 
-    // For other repetition forms, only a definite false at a required start
-    // step can fail immediately; otherwise keep the obligation pending.
+    // Track contiguous definite-true streaks to recognize concrete bounded
+    // repetition matches (e.g. a[*2], a[*2:4]) at the current sample.
+    auto &tracker = state.repeatTrackers[op];
+    if (input == LTLTruth::True) {
+      ++tracker.trueStreak;
+      tracker.streakHasUnknown = false;
+    } else if (input == LTLTruth::False) {
+      tracker.trueStreak = 0;
+      tracker.streakHasUnknown = false;
+    } else {
+      tracker.streakHasUnknown = true;
+    }
+
+    // Bounded forms with base=0 include an empty match at every sample.
+    if (repeatOp.getBase() == 0 && repeatOp.getMore())
+      return LTLTruth::True;
+
     if (repeatOp.getBase() > 0 && input == LTLTruth::False)
       return LTLTruth::False;
+
+    if (repeatOp.getBase() > 0 && tracker.trueStreak >= repeatOp.getBase()) {
+      if (tracker.streakHasUnknown)
+        return LTLTruth::Unknown;
+      return LTLTruth::True;
+    }
     return LTLTruth::Unknown;
   }
 
   // ltl.goto_repeat / ltl.non_consecutive_repeat — baseline monitor:
-  // - base=0 can match the empty sequence immediately;
-  // - base=1 is immediately satisfied if the input is true now;
-  // - larger bases (or input not true yet) remain pending.
+  // - base=0 can match the empty sequence immediately.
+  // - otherwise, track observed true-hit counts.
+  // This supports concrete hit-count patterns (e.g. [->2], [=2]) while
+  // remaining conservative for unknown samples and advanced window bounds.
   if (auto gotoRepeatOp = dyn_cast<ltl::GoToRepeatOp>(op)) {
     if (gotoRepeatOp.getBase() == 0)
       return LTLTruth::True;
     LTLTruth input = evaluateLTLProperty(gotoRepeatOp.getInput(), state);
-    if (gotoRepeatOp.getBase() == 1 && input == LTLTruth::True)
+    auto &tracker = state.repetitionHitTrackers[op];
+    if (input == LTLTruth::True)
+      ++tracker.trueHits;
+    else if (input == LTLTruth::Unknown)
+      tracker.hasUnknown = true;
+    if (tracker.trueHits >= gotoRepeatOp.getBase() &&
+        input == LTLTruth::True) {
+      if (tracker.hasUnknown)
+        return LTLTruth::Unknown;
       return LTLTruth::True;
+    }
     return LTLTruth::Unknown;
   }
   if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(op)) {
     if (nonConsecutiveOp.getBase() == 0)
       return LTLTruth::True;
     LTLTruth input = evaluateLTLProperty(nonConsecutiveOp.getInput(), state);
-    if (nonConsecutiveOp.getBase() == 1 && input == LTLTruth::True)
+    auto &tracker = state.repetitionHitTrackers[op];
+    if (input == LTLTruth::True)
+      ++tracker.trueHits;
+    else if (input == LTLTruth::Unknown)
+      tracker.hasUnknown = true;
+    if (tracker.trueHits >= nonConsecutiveOp.getBase()) {
+      if (tracker.hasUnknown)
+        return LTLTruth::Unknown;
       return LTLTruth::True;
+    }
     return LTLTruth::Unknown;
   }
 
@@ -6339,35 +6445,51 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   }
 
   // ltl.implication — a |-> consequent.
-  // For `a |-> ##N b`: delay the antecedent by N cycles and check
-  // !ante_delayed || b_current.
+  // Evaluate the consequent at the current sample and shift the antecedent
+  // by the consequent's exact sequence length (minus one) plus explicit delay.
+  // This aligns runtime checks with sequence endpoint timing.
   if (auto implOp = dyn_cast<ltl::ImplicationOp>(op)) {
-    // Evaluate antecedent (current truth value).
     LTLTruth ante = evaluateLTLProperty(implOp.getAntecedent(), state);
+    Value consequentValue = implOp.getConsequent();
+    uint64_t shiftDelay = 0;
 
-    // Check if consequent has a delay (the ##N part).
-    Value consq = implOp.getConsequent();
-    uint64_t delay = 0;
-    if (auto delayOp = consq.getDefiningOp<ltl::DelayOp>()) {
-      delay = delayOp.getDelay();
-      consq = delayOp.getInput();
+    // Prefer the same exact-delay shift model as LTLToCore lowering.
+    if (auto delayOp = consequentValue.getDefiningOp<ltl::DelayOp>()) {
+      if (auto length = delayOp.getLength()) {
+        if (*length == 0) {
+          Value inner = delayOp.getInput();
+          auto innerLen = getExactSequenceLength(inner);
+          if (innerLen && *innerLen > 0 &&
+              *innerLen <= std::numeric_limits<uint64_t>::max() -
+                               delayOp.getDelay()) {
+            shiftDelay = delayOp.getDelay() + *innerLen - 1;
+            consequentValue = inner;
+          }
+        }
+      }
+    }
+    // If no explicit delay-shift was applied, shift by sequence length-1 for
+    // fixed-length consequents.
+    if (shiftDelay == 0 && isa<ltl::SequenceType>(consequentValue.getType())) {
+      if (auto len = getExactSequenceLength(consequentValue))
+        if (*len > 0)
+          shiftDelay = *len - 1;
     }
 
-    // Evaluate consequent (current truth value, after stripping delay).
-    LTLTruth consqVal = evaluateLTLProperty(consq, state);
+    LTLTruth consqVal = evaluateLTLProperty(consequentValue, state);
 
     // Track antecedent history for delayed implications.
     auto &history = state.temporalHistory[op];
     history.push_back(ante);
-    // Keep only enough history (delay + 1 entries).
-    while (history.size() > delay + 2)
+    // Keep only enough history (shiftDelay + 1 entries).
+    while (history.size() > shiftDelay + 2)
       history.pop_front();
 
     LTLTruth anteDelayed;
-    if (delay == 0) {
+    if (shiftDelay == 0) {
       anteDelayed = ante;
-    } else if (history.size() > delay) {
-      anteDelayed = history[history.size() - 1 - delay];
+    } else if (history.size() > shiftDelay) {
+      anteDelayed = history[history.size() - 1 - shiftDelay];
     } else {
       anteDelayed = LTLTruth::False; // Not enough history yet.
     }
@@ -6407,7 +6529,17 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     };
 
     if (!length) {
-      LTLTruth matured = getSample(delay);
+      bool hasMaturedSample = history.size() > delay;
+      LTLTruth matured = hasMaturedSample ? getSample(delay) : LTLTruth::Unknown;
+      auto &tracker = state.unboundedDelayTrackers[op];
+      if (matured == LTLTruth::True) {
+        tracker.trailingUnsatisfiedSamples = 0;
+        tracker.trailingHasUnknown = false;
+      } else {
+        ++tracker.trailingUnsatisfiedSamples;
+        if (matured == LTLTruth::Unknown && hasMaturedSample)
+          tracker.trailingHasUnknown = true;
+      }
       if (matured == LTLTruth::True)
         return LTLTruth::True;
       return LTLTruth::Unknown;
@@ -6422,13 +6554,79 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     return result;
   }
 
-  // ltl.concat — check all inputs hold (conservative approximation).
+  // ltl.concat — evaluate sequence endpoints at the current sample.
   if (auto concatOp = dyn_cast<ltl::ConcatOp>(op)) {
+    auto inputs = concatOp.getInputs();
+    if (inputs.empty())
+      return LTLTruth::True;
+
+    llvm::SmallVector<std::optional<uint64_t>, 4> inputLengths;
+    inputLengths.reserve(inputs.size());
+    bool allExactLengths = true;
+    for (Value input : inputs) {
+      auto len = getExactSequenceLength(input);
+      if (!len) {
+        allExactLengths = false;
+        break;
+      }
+      inputLengths.push_back(len);
+    }
+
+    if (!allExactLengths) {
+      // Keep prior conservative behavior for variable-length concatenations.
+      LTLTruth result = LTLTruth::True;
+      for (Value input : inputs) {
+        result = truthAnd(result, evaluateLTLProperty(input, state));
+        if (result == LTLTruth::False)
+          return result;
+      }
+      return result;
+    }
+
+    auto &tracker = state.concatTrackers[op];
+    if (tracker.inputHistories.size() != inputs.size()) {
+      tracker.inputHistories.clear();
+      tracker.inputHistories.resize(inputs.size());
+      tracker.lastSampleOrdinal = std::numeric_limits<uint64_t>::max();
+    }
+
+    if (tracker.lastSampleOrdinal != state.sampleOrdinal) {
+      tracker.lastSampleOrdinal = state.sampleOrdinal;
+      uint64_t suffix = 0;
+      llvm::SmallVector<size_t, 4> historyLimits(inputs.size(), 2);
+      for (size_t idx = inputs.size(); idx > 0; --idx) {
+        size_t i = idx - 1;
+        if (suffix <
+            static_cast<uint64_t>(std::numeric_limits<size_t>::max()) - 2)
+          historyLimits[i] = static_cast<size_t>(suffix + 2);
+        if (*inputLengths[i] > std::numeric_limits<uint64_t>::max() - suffix)
+          return LTLTruth::Unknown;
+        suffix += *inputLengths[i];
+      }
+
+      for (size_t i = 0, e = inputs.size(); i < e; ++i) {
+        auto truth = evaluateLTLProperty(inputs[i], state);
+        auto &history = tracker.inputHistories[i];
+        history.push_back(truth);
+        while (history.size() > historyLimits[i])
+          history.pop_front();
+      }
+    }
+
+    uint64_t suffix = 0;
     LTLTruth result = LTLTruth::True;
-    for (Value input : concatOp.getInputs()) {
-      result = truthAnd(result, evaluateLTLProperty(input, state));
+    for (size_t idx = inputs.size(); idx > 0; --idx) {
+      size_t i = idx - 1;
+      auto &history = tracker.inputHistories[i];
+      LTLTruth sample = LTLTruth::Unknown;
+      if (history.size() > suffix)
+        sample = history[history.size() - 1 - suffix];
+      result = truthAnd(result, sample);
       if (result == LTLTruth::False)
         return result;
+      if (*inputLengths[i] > std::numeric_limits<uint64_t>::max() - suffix)
+        return LTLTruth::Unknown;
+      suffix += *inputLengths[i];
     }
     return result;
   }
@@ -8248,6 +8446,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   // activation (state.waiting==false) so the interpreter sets up minnow
   // registration, sensitivity lists, and init preambles.
   if (aotEnabled && state.waiting && aotCallbackProcs.count(procId)) {
+    ++activationsAOTCallback;
     executeAOTCallbackProcess(procId);
     return;
   }
@@ -8381,6 +8580,8 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       state.waiting = false;
     }
   }
+
+  ++activationsInterpreter;
 
   ScopedInstanceContext instScope(*this, state.instanceId);
   ScopedInputValueMap inputScope(*this, state.inputMap);
@@ -8760,14 +8961,16 @@ ProcessId LLHDProcessInterpreter::resolveProcessHandle(uint64_t handle) {
   if (it != processHandleToId.end())
     return it->second;
 
-  for (auto &entry : processStates) {
-    if (reinterpret_cast<uint64_t>(&entry.second) == handle) {
-      processHandleToId[handle] = entry.first;
-      return entry.first;
+  ProcessId foundId = InvalidProcessId;
+  processStates.forEachUntil([&](ProcessId procId, ProcessExecutionState &state) -> bool {
+    if (reinterpret_cast<uint64_t>(&state) == handle) {
+      processHandleToId[handle] = procId;
+      foundId = procId;
+      return true;
     }
-  }
-
-  return InvalidProcessId;
+    return false;
+  });
+  return foundId;
 }
 
 void LLHDProcessInterpreter::registerProcessState(
@@ -9178,7 +9381,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     // via a ref parameter.  If the parent halts first, the child can no
     // longer find the alloca's memory block.
     if (!it->second.memoryBlocks.empty()) {
-      for (auto &[childProcId, childState] : processStates) {
+      processStates.forEachUntil([&](ProcessId childProcId, ProcessExecutionState &childState) -> bool {
         if (childState.parentProcessId == procId && !childState.halted) {
           for (auto &[val, block] : it->second.memoryBlocks) {
             if (childState.memoryBlocks.find(val) ==
@@ -9194,9 +9397,10 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
                 childState.refBlockArgSources.end())
               childState.refBlockArgSources[arg] = src;
           }
-          break; // adopt into first active child only
+          return true; // adopt into first active child only
         }
-      }
+        return false;
+      });
     }
 
     // Persist process results before clearing valueMap so that
@@ -9283,15 +9487,13 @@ bool LLHDProcessInterpreter::isProcessSubtreeAlive(ProcessId rootProcId) const {
     return false;
   };
 
-  for (const auto &[procId, state] : processStates) {
+  return processStates.forEachUntil([&](ProcessId procId, const ProcessExecutionState &state) -> bool {
     if (state.halted)
-      continue;
+      return false;
     if (procId == rootProcId)
       return true;
-    if (isDescendantOfRoot(procId))
-      return true;
-  }
-  return false;
+    return isDescendantOfRoot(procId);
+  });
 }
 
 //===----------------------------------------------------------------------===//
@@ -34479,6 +34681,30 @@ void LLHDProcessInterpreter::executeAOTCallbackProcess(ProcessId procId) {
   if (!entryFunc)
     return;
 
+  // Watchdog: detect infinite firing at the same (time, delta).
+  {
+    static thread_local uint64_t watchdogTime = 0;
+    static thread_local uint32_t watchdogDelta = 0;
+    static thread_local unsigned watchdogCount = 0;
+    auto curTime = scheduler.getCurrentTime();
+    if (curTime.realTime == watchdogTime &&
+        curTime.deltaStep == watchdogDelta) {
+      if (++watchdogCount > 10000) {
+        llvm::errs() << "[AOT] WATCHDOG: proc " << procId
+                     << " fired >10000 times at (time=" << curTime.realTime
+                     << ", delta=" << curTime.deltaStep
+                     << ") — disabling AOT for this proc\n";
+        aotCallbackProcs.erase(procId);
+        watchdogCount = 0;
+        return;
+      }
+    } else {
+      watchdogTime = curTime.realTime;
+      watchdogDelta = curTime.deltaStep;
+      watchdogCount = 0;
+    }
+  }
+
   // Set up the JIT runtime context so __arc_sched_read_signal /
   // __arc_sched_drive_signal_fast can access the scheduler.
   aotJitCtx->processId = procId;
@@ -34560,8 +34786,44 @@ void LLHDProcessInterpreter::aotCompileProcesses() {
     candidates.push_back({procId, processOp});
   }
 
+  // Report classification stats for debugging.
+  {
+    unsigned totalProcs = opToProcessId.size();
+    unsigned classifiedProcs = 0;
+    unsigned staticObs = 0, dynWait = 0, timeOnly = 0, oneShot = 0,
+             coroutine = 0;
+    for (auto &[op, procId] : opToProcessId) {
+      auto modelIt = processExecModels.find(procId);
+      if (modelIt == processExecModels.end())
+        continue;
+      ++classifiedProcs;
+      switch (modelIt->second) {
+      case ExecModel::CallbackStaticObserved:
+        ++staticObs;
+        break;
+      case ExecModel::CallbackDynamicWait:
+        ++dynWait;
+        break;
+      case ExecModel::CallbackTimeOnly:
+        ++timeOnly;
+        break;
+      case ExecModel::OneShotCallback:
+        ++oneShot;
+        break;
+      case ExecModel::Coroutine:
+        ++coroutine;
+        break;
+      }
+    }
+    llvm::errs() << "[circt-sim] [AOT] Process classification: "
+                 << totalProcs << " total, " << classifiedProcs << " classified"
+                 << " (StaticObs=" << staticObs << ", DynWait=" << dynWait
+                 << ", TimeOnly=" << timeOnly << ", OneShot=" << oneShot
+                 << ", Coroutine=" << coroutine << ")\n";
+  }
+
   if (candidates.empty()) {
-    LLVM_DEBUG(llvm::dbgs() << "[AOT] No eligible callback processes\n");
+    llvm::errs() << "[circt-sim] [AOT] No eligible callback processes\n";
     return;
   }
 

@@ -27,7 +27,9 @@
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace mlir {
@@ -144,7 +146,9 @@ public:
 
   /// Check if a process can be compiled. Returns false if the process
   /// contains ops that require the interpreter (moore.wait_event, sim.fork).
-  static bool isProcessCompilable(llhd::ProcessOp processOp);
+  /// If @p reason is non-null, it is set to the first rejection reason name.
+  static bool isProcessCompilable(llhd::ProcessOp processOp,
+                                  std::string *reason = nullptr);
 
   /// Check if a compilable process is run-to-completion (stackless callback).
   /// Returns true if the process has exactly one llhd.wait at the loop tail
@@ -182,6 +186,11 @@ public:
       const llvm::DenseMap<::mlir::Value, SignalId> &valueToSignal,
       ::mlir::ModuleOp parentModule,
       llvm::SmallVector<AOTCompiledProcess> &results);
+
+  /// Rejection stats accumulated during compileAllProcesses(): maps a
+  /// rejection reason name (e.g. "moore.wait_event") to the number of
+  /// processes rejected for that reason.
+  llvm::StringMap<unsigned> rejectionStats;
 
 private:
   ::mlir::MLIRContext &mlirContext;
