@@ -93,4 +93,9 @@ if ! command -v "$CMAKE_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
+if [[ ! -d "$LLVM_SRC_DIR" ]]; then
+  echo "[wasm-configure] missing LLVM source directory: $LLVM_SRC_DIR" >&2
+  exit 1
+fi
+
 "$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}" "${extra_cmake_args[@]}"
