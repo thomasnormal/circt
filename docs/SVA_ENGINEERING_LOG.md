@@ -4285,3 +4285,47 @@
       - result: `149/149` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize constant-GEP dynamic index
+  operands when indices are compile-time constants):
+  - realization:
+    - global load folding required all GEP indices to be encoded in
+      `rawConstantIndices`.
+    - GEPs using dynamic index operands (even if produced by constants) were
+      rejected and hit unsupported LLVM-op diagnostics.
+  - TDD signal:
+    - added
+      `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-dynamic-constant-index.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.addressof'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - extended global-load access resolution to accept dynamic GEP indices when
+      each dynamic operand resolves to a compile-time integer constant via:
+      - `llvm.mlir.constant`
+      - `arith.constant`
+      - integer `llvm.mlir.zero`
+      - with simple one-to-one unrealized cast unwrapping.
+    - dynamic constant indices are merged with raw indices before global
+      constant extraction.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-dynamic-constant-index.mlir`.
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-load-extractvalue.mlir`
+      - `bmc-for-smtlib-llvm-global-load-region.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-region-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `150/150` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
