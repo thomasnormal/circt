@@ -41,6 +41,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <map>
 #include <optional>
@@ -742,7 +743,10 @@ public:
   void dumpProcessStats(llvm::raw_ostream &os, size_t topN) const;
 
   /// Set the maximum number of operations a process can execute per activation.
-  void setMaxProcessSteps(size_t maxSteps) { maxProcessSteps = maxSteps; }
+  void setMaxProcessSteps(size_t maxSteps) {
+    maxProcessSteps = maxSteps;
+    recomputePerOpInstrumentationActive();
+  }
 
   /// Provide pre-registered port signal mappings (name → SignalId) from the
   /// simulation context.  During initialize(), these are used to populate
@@ -753,7 +757,10 @@ public:
   }
 
   /// Enable collection of operation execution statistics.
-  void setCollectOpStats(bool enable) { collectOpStats = enable; }
+  void setCollectOpStats(bool enable) {
+    collectOpStats = enable;
+    recomputePerOpInstrumentationActive();
+  }
 
   /// Enable or disable compile-mode execution behavior.
   /// When enabled, also initializes the block-level JIT compiler.
@@ -1332,6 +1339,13 @@ private:
   /// Interpret a func.call operation.
   mlir::LogicalResult interpretFuncCall(ProcessId procId,
                                          mlir::func::CallOp callOp);
+
+  /// Fast path for func.call operations with cached no-interception result.
+  /// Skips all UVM string-matching interceptors and goes straight to
+  /// args preparation + interpretFuncBody.
+  mlir::LogicalResult
+  interpretFuncCallCachedPath(ProcessId procId, mlir::func::CallOp callOp,
+                              mlir::func::FuncOp funcOp);
 
   /// Interpret a func.call_indirect operation.
   mlir::LogicalResult
@@ -2204,14 +2218,22 @@ private:
     bool hasPrevClock = false;
     InstanceId instanceId = 0;
     InstanceInputMapping inputMap;
-    /// Per-operation history buffer for LTL temporal evaluation.
-    /// Key: the implication op; Value: deque of antecedent match booleans.
-    llvm::DenseMap<mlir::Operation *, std::deque<bool>> anteHistory;
+    /// Synthetic 1-bit runtime signal that mirrors assertion status in VCD:
+    /// 1 = pass/vacuous pass, 0 = fail.
+    SignalId assertionSignalId = 0;
+    /// Trivalent LTL truth value for runtime evaluation.
+    enum class LTLTruth : uint8_t { False, True, Unknown };
+    /// Per-operation history buffers for temporal runtime evaluation.
+    /// Keys are temporal ops that need sampled history (e.g. implication,
+    /// delay); values are oldest-to-newest truth samples.
+    llvm::DenseMap<mlir::Operation *, std::deque<LTLTruth>> temporalHistory;
   };
 
   /// Evaluate an LTL property tree recursively, handling temporal operators.
-  /// Returns true if the property holds at the current evaluation point.
-  bool evaluateLTLProperty(mlir::Value val, ClockedAssertionState &state);
+  /// Returns trivalent truth at the current evaluation point:
+  /// true/false/unknown-pending.
+  ClockedAssertionState::LTLTruth
+  evaluateLTLProperty(mlir::Value val, ClockedAssertionState &state);
 
   /// Map from instance IDs to per-instance firreg state maps.
   llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, FirRegState>>
@@ -2364,6 +2386,17 @@ private:
   llvm::StringMap<uint64_t> opStats;
 
   bool collectOpStats = false;
+
+  /// When true, per-op step counting, memory sampling, and step limiting are
+  /// active. When false (the common case), the inner loop skips all overhead.
+  bool perOpInstrumentationActive = false;
+
+  /// Recompute perOpInstrumentationActive from current settings.
+  void recomputePerOpInstrumentationActive() {
+    perOpInstrumentationActive = collectOpStats || maxProcessSteps > 0 ||
+                                 profileSummaryAtExitEnabled ||
+                                 memorySampleIntervalSteps > 0;
+  }
 
   /// Module-level drives connected to process results.
   struct ModuleDrive {
@@ -3473,6 +3506,26 @@ private:
   uint64_t funcLookupCacheHits = 0;
   uint64_t funcLookupCacheMisses = 0;
   uint64_t funcLookupCacheNegativeHits = 0;
+
+  //===--------------------------------------------------------------------===//
+  // Interception caching
+  //===--------------------------------------------------------------------===//
+
+  /// Cache of FuncOps known to have no UVM fast-path match in
+  /// handleUvmFuncBodyFastPath. Avoids re-running StringSwitch +
+  /// matchesMethod on every call for non-UVM functions.
+  llvm::DenseSet<mlir::Operation *> funcBodyNoFastPathSet;
+
+  /// Per func.call resolved FuncOp + interception classification.
+  struct FuncCallCacheEntry {
+    mlir::func::FuncOp funcOp; // resolved FuncOp (null if unresolved)
+    bool noInterception = false; // true if no UVM interceptor matches
+  };
+  llvm::DenseMap<mlir::Operation *, FuncCallCacheEntry> funcCallCache;
+
+  uint64_t funcCallCacheHits = 0;
+  uint64_t funcCallCacheMisses = 0;
+  uint64_t funcBodyFastPathCacheSkips = 0;
 
   //===--------------------------------------------------------------------===//
   // Analysis port terminal cache

@@ -49,6 +49,7 @@ unsigned g_lastFuncProcId = 0;
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
@@ -534,6 +535,9 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
       profileSummaryAtExitEnabled ? 3 : 0);
   if (memorySampleIntervalSteps > 0)
     memorySampleNextStep = memorySampleIntervalSteps;
+  perOpInstrumentationActive = collectOpStats || maxProcessSteps > 0 ||
+                               profileSummaryAtExitEnabled ||
+                               memorySampleIntervalSteps > 0;
   uvmSeqQueueCacheMaxEntries =
       envUint64Value("CIRCT_SIM_UVM_SEQ_QUEUE_CACHE_MAX_ENTRIES", 0);
   uvmSeqQueueCacheEvictOnCap =
@@ -6015,7 +6019,9 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   }
 
   // Evaluate the property using LTL-aware evaluation.
-  bool propHolds = evaluateLTLProperty(assertOp.getProperty(), state);
+  // Unknown-pending temporal states are treated as non-failing.
+  auto propTruth = evaluateLTLProperty(assertOp.getProperty(), state);
+  bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssertionSignal(propHolds);
   if (!propHolds) {
     // Assertion failed.
@@ -6028,44 +6034,183 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   }
 }
 
-bool LLHDProcessInterpreter::evaluateLTLProperty(
+LLHDProcessInterpreter::ClockedAssertionState::LTLTruth
+LLHDProcessInterpreter::evaluateLTLProperty(
     mlir::Value val, ClockedAssertionState &state) {
+  using LTLTruth = ClockedAssertionState::LTLTruth;
+  auto fromInterpretedValue = [](const InterpretedValue &v) -> LTLTruth {
+    if (v.isX())
+      return LTLTruth::Unknown;
+    return v.getUInt64() != 0 ? LTLTruth::True : LTLTruth::False;
+  };
+  auto truthNot = [](LTLTruth v) -> LTLTruth {
+    switch (v) {
+    case LTLTruth::False:
+      return LTLTruth::True;
+    case LTLTruth::True:
+      return LTLTruth::False;
+    case LTLTruth::Unknown:
+      return LTLTruth::Unknown;
+    }
+    llvm_unreachable("all LTL truth states handled");
+  };
+  auto truthAnd = [](LTLTruth lhs, LTLTruth rhs) -> LTLTruth {
+    if (lhs == LTLTruth::False || rhs == LTLTruth::False)
+      return LTLTruth::False;
+    if (lhs == LTLTruth::Unknown || rhs == LTLTruth::Unknown)
+      return LTLTruth::Unknown;
+    return LTLTruth::True;
+  };
+  auto truthOr = [](LTLTruth lhs, LTLTruth rhs) -> LTLTruth {
+    if (lhs == LTLTruth::True || rhs == LTLTruth::True)
+      return LTLTruth::True;
+    if (lhs == LTLTruth::Unknown || rhs == LTLTruth::Unknown)
+      return LTLTruth::Unknown;
+    return LTLTruth::False;
+  };
+
   auto *op = val.getDefiningOp();
   if (!op) {
-    // Block argument or similar — evaluate as combinational boolean.
+    // Block argument or similar — evaluate as combinational truth value.
     InterpretedValue v = evaluateContinuousValue(val);
-    return v.isX() || v.getUInt64() != 0;
+    return fromInterpretedValue(v);
   }
 
-  // ltl.or — disjunction (also encodes disable iff).
+  // ltl.clock — clock sampling is handled by verif.clocked_assert scheduling.
+  if (auto clockOp = dyn_cast<ltl::ClockOp>(op))
+    return evaluateLTLProperty(clockOp.getInput(), state);
+
+  // ltl.or — three-valued disjunction (also encodes disable iff).
   if (auto orOp = dyn_cast<ltl::OrOp>(op)) {
+    LTLTruth result = LTLTruth::False;
     for (Value input : orOp.getInputs()) {
-      if (evaluateLTLProperty(input, state))
-        return true;
+      result = truthOr(result, evaluateLTLProperty(input, state));
+      if (result == LTLTruth::True)
+        return result;
     }
-    return false;
+    return result;
   }
 
-  // ltl.and — conjunction.
+  // ltl.and — three-valued conjunction.
   if (auto andOp = dyn_cast<ltl::AndOp>(op)) {
+    LTLTruth result = LTLTruth::True;
     for (Value input : andOp.getInputs()) {
-      if (!evaluateLTLProperty(input, state))
-        return false;
+      result = truthAnd(result, evaluateLTLProperty(input, state));
+      if (result == LTLTruth::False)
+        return result;
     }
-    return true;
+    return result;
+  }
+
+  // ltl.intersect — timing-aware intersection. Runtime monitor does not track
+  // full sequence timing windows yet, so use conjunction over sampled truth and
+  // preserve unknown as pending.
+  if (auto intersectOp = dyn_cast<ltl::IntersectOp>(op)) {
+    LTLTruth result = LTLTruth::True;
+    for (Value input : intersectOp.getInputs()) {
+      result = truthAnd(result, evaluateLTLProperty(input, state));
+      if (result == LTLTruth::False)
+        return result;
+    }
+    return result;
   }
 
   // ltl.not — negation.
   if (auto notOp = dyn_cast<ltl::NotOp>(op)) {
-    return !evaluateLTLProperty(notOp.getInput(), state);
+    return truthNot(evaluateLTLProperty(notOp.getInput(), state));
+  }
+
+  // ltl.until (weak) — holds if condition already holds, or if input holds
+  // while condition remains pending. Immediate failure occurs only when both
+  // input and condition are definitively false at this sample point.
+  if (auto untilOp = dyn_cast<ltl::UntilOp>(op)) {
+    LTLTruth input = evaluateLTLProperty(untilOp.getInput(), state);
+    LTLTruth condition = evaluateLTLProperty(untilOp.getCondition(), state);
+    if (condition == LTLTruth::True)
+      return LTLTruth::True;
+    if (condition == LTLTruth::False && input == LTLTruth::False)
+      return LTLTruth::False;
+    return LTLTruth::Unknown;
+  }
+
+  // ltl.eventually — unresolved future obligations are unknown-pending.
+  // If the operand matches now, eventually is true now.
+  if (auto eventuallyOp = dyn_cast<ltl::EventuallyOp>(op)) {
+    LTLTruth input = evaluateLTLProperty(eventuallyOp.getInput(), state);
+    if (input == LTLTruth::True)
+      return LTLTruth::True;
+    return LTLTruth::Unknown;
+  }
+
+  // ltl.repeat — conservative runtime monitor for repetition-heavy patterns.
+  if (auto repeatOp = dyn_cast<ltl::RepeatOp>(op)) {
+    LTLTruth input = evaluateLTLProperty(repeatOp.getInput(), state);
+
+    // Common lowering for `always <seq>` in import-verilog: `ltl.repeat seq, 0`
+    // (unbounded). Treat this as an "ongoing obligation":
+    // - fail immediately once the repeated input is false;
+    // - otherwise keep it pending.
+    if (!repeatOp.getMore() && repeatOp.getBase() == 0) {
+      if (input == LTLTruth::False)
+        return LTLTruth::False;
+      return LTLTruth::Unknown;
+    }
+
+    // For other repetition forms, only a definite false at a required start
+    // step can fail immediately; otherwise keep the obligation pending.
+    if (repeatOp.getBase() > 0 && input == LTLTruth::False)
+      return LTLTruth::False;
+    return LTLTruth::Unknown;
+  }
+
+  // ltl.goto_repeat / ltl.non_consecutive_repeat — baseline monitor:
+  // - base=0 can match the empty sequence immediately;
+  // - base=1 is immediately satisfied if the input is true now;
+  // - larger bases (or input not true yet) remain pending.
+  if (auto gotoRepeatOp = dyn_cast<ltl::GoToRepeatOp>(op)) {
+    if (gotoRepeatOp.getBase() == 0)
+      return LTLTruth::True;
+    LTLTruth input = evaluateLTLProperty(gotoRepeatOp.getInput(), state);
+    if (gotoRepeatOp.getBase() == 1 && input == LTLTruth::True)
+      return LTLTruth::True;
+    return LTLTruth::Unknown;
+  }
+  if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(op)) {
+    if (nonConsecutiveOp.getBase() == 0)
+      return LTLTruth::True;
+    LTLTruth input = evaluateLTLProperty(nonConsecutiveOp.getInput(), state);
+    if (nonConsecutiveOp.getBase() == 1 && input == LTLTruth::True)
+      return LTLTruth::True;
+    return LTLTruth::Unknown;
+  }
+
+  // ltl.first_match — keep the earliest-match wrapper transparent at runtime.
+  if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(op))
+    return evaluateLTLProperty(firstMatchOp.getInput(), state);
+
+  // ltl.matched — expose whether the wrapped sequence matched now.
+  if (auto matchedOp = dyn_cast<ltl::MatchedOp>(op))
+    return evaluateLTLProperty(matchedOp.getInput(), state);
+
+  // ltl.triggered — true when the wrapped sequence started in the previous
+  // sampled cycle. Approximate using one-sample history of the wrapped truth.
+  if (auto triggeredOp = dyn_cast<ltl::TriggeredOp>(op)) {
+    LTLTruth current = evaluateLTLProperty(triggeredOp.getInput(), state);
+    auto &history = state.temporalHistory[op];
+    history.push_back(current);
+    while (history.size() > 3)
+      history.pop_front();
+    if (history.size() < 2)
+      return LTLTruth::False;
+    return history[history.size() - 2];
   }
 
   // ltl.implication — a |-> consequent.
   // For `a |-> ##N b`: delay the antecedent by N cycles and check
   // !ante_delayed || b_current.
   if (auto implOp = dyn_cast<ltl::ImplicationOp>(op)) {
-    // Evaluate antecedent (current value).
-    bool ante = evaluateLTLProperty(implOp.getAntecedent(), state);
+    // Evaluate antecedent (current truth value).
+    LTLTruth ante = evaluateLTLProperty(implOp.getAntecedent(), state);
 
     // Check if consequent has a delay (the ##N part).
     Value consq = implOp.getConsequent();
@@ -6075,46 +6220,62 @@ bool LLHDProcessInterpreter::evaluateLTLProperty(
       consq = delayOp.getInput();
     }
 
-    // Evaluate consequent (current value, after stripping delay).
-    bool consqVal = evaluateLTLProperty(consq, state);
+    // Evaluate consequent (current truth value, after stripping delay).
+    LTLTruth consqVal = evaluateLTLProperty(consq, state);
 
     // Track antecedent history for delayed implications.
-    auto &history = state.anteHistory[op];
+    auto &history = state.temporalHistory[op];
     history.push_back(ante);
     // Keep only enough history (delay + 1 entries).
     while (history.size() > delay + 2)
       history.pop_front();
 
-    bool anteDelayed;
+    LTLTruth anteDelayed;
     if (delay == 0) {
       anteDelayed = ante;
     } else if (history.size() > delay) {
       anteDelayed = history[history.size() - 1 - delay];
     } else {
-      anteDelayed = false; // Not enough history yet.
+      anteDelayed = LTLTruth::False; // Not enough history yet.
     }
 
-    return !anteDelayed || consqVal;
+    return truthOr(truthNot(anteDelayed), consqVal);
   }
 
-  // ltl.delay — when appearing outside implication context, evaluate
-  // input directly (conservative: ignores delay for standalone use).
+  // ltl.delay — for exact delays (length=0), monitor obligations using sampled
+  // history. Other delay ranges require future-match window tracking; keep
+  // those pending for now.
   if (auto delayOp = dyn_cast<ltl::DelayOp>(op)) {
-    return evaluateLTLProperty(delayOp.getInput(), state);
+    LTLTruth input = evaluateLTLProperty(delayOp.getInput(), state);
+    auto length = delayOp.getLength();
+    uint64_t delay = delayOp.getDelay();
+    if (!length || *length != 0)
+      return LTLTruth::Unknown;
+
+    auto &history = state.temporalHistory[op];
+    history.push_back(input);
+    while (history.size() > delay + 2)
+      history.pop_front();
+
+    if (history.size() <= delay)
+      return LTLTruth::Unknown;
+    return history[history.size() - 1 - delay];
   }
 
   // ltl.concat — check all inputs hold (conservative approximation).
   if (auto concatOp = dyn_cast<ltl::ConcatOp>(op)) {
+    LTLTruth result = LTLTruth::True;
     for (Value input : concatOp.getInputs()) {
-      if (!evaluateLTLProperty(input, state))
-        return false;
+      result = truthAnd(result, evaluateLTLProperty(input, state));
+      if (result == LTLTruth::False)
+        return result;
     }
-    return true;
+    return result;
   }
 
-  // Default: evaluate as combinational value.
+  // Default: evaluate as combinational truth value.
   InterpretedValue v = evaluateContinuousValue(val);
-  return v.isX() || v.getUInt64() != 0;
+  return fromInterpretedValue(v);
 }
 
 void LLHDProcessInterpreter::scheduleInstanceOutputUpdate(
@@ -8394,10 +8555,13 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
   Operation *op = &*state.currentOp;
   ++state.currentOp;
   state.lastOp = op;
-  ++state.totalSteps;
-  maybeSampleMemoryState(state.totalSteps);
-  if (collectOpStats)
-    ++opStats[op->getName().getStringRef()];
+  if (LLVM_UNLIKELY(perOpInstrumentationActive)) {
+    ++state.totalSteps;
+    if (profileSummaryAtExitEnabled)
+      maybeSampleMemoryState(state.totalSteps);
+    if (collectOpStats)
+      ++opStats[op->getName().getStringRef()];
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "  Executing: " << *op << "\n");
 
@@ -16596,6 +16760,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (profilingEnabled)
     ++funcCallProfile[calleeName];
 
+  // Fast path for CallOps with cached no-interception result.
+  // Skips all UVM string-matching interceptors (~20+ checks).
+  {
+    auto cacheIt = funcCallCache.find(callOp.getOperation());
+    if (cacheIt != funcCallCache.end() && cacheIt->second.noInterception) {
+      ++funcCallCacheHits;
+      return interpretFuncCallCachedPath(procId, callOp,
+                                         cacheIt->second.funcOp);
+    }
+  }
+
   // Intercept get_0 (uvm_coreservice_t::get singleton accessor) - 907 calls.
   // After init, just reads global uvm_coreservice_t::inst pointer.
   if (calleeName == "get_0" && callOp.getNumResults() >= 1) {
@@ -19068,6 +19243,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
+  // No UVM interceptor matched this CallOp. Cache for future fast-path.
+  if (!funcCallCache.count(callOp.getOperation())) {
+    FuncCallCacheEntry entry;
+    entry.funcOp = funcOp;
+    entry.noInterception = true;
+    funcCallCache[callOp.getOperation()] = entry;
+    ++funcCallCacheMisses;
+  }
+
   auto &state = processStates[procId];
   constexpr size_t maxCallDepth = 200;
   if (state.callDepth >= maxCallDepth) {
@@ -19194,6 +19378,90 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                << "' (argHash=0x" << llvm::format_hex(cacheArgHash, 16)
                << ")\n");
   }
+
+  return success();
+}
+
+LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
+    ProcessId procId, mlir::func::CallOp callOp,
+    mlir::func::FuncOp funcOp) {
+  // This is the fast path for func.call operations where we've already
+  // determined that no UVM interceptor matches. Skips ~20+ string comparisons.
+
+  // Prepare arguments.
+  llvm::SmallVector<InterpretedValue, 4> args;
+  for (Value operand : callOp.getOperands())
+    args.push_back(getValue(procId, operand));
+
+  // Call depth check.
+  auto &state = processStates[procId];
+  constexpr size_t maxCallDepth = 200;
+  if (state.callDepth >= maxCallDepth) {
+    for (Value result : callOp.getResults()) {
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+    }
+    return success();
+  }
+
+  // Recursion tracking (same as the slow path).
+  Operation *funcKey = funcOp.getOperation();
+  uint64_t arg0Val = 0;
+  bool hasArg0 = !args.empty() && !args[0].isX();
+  if (hasArg0)
+    arg0Val = args[0].getUInt64();
+
+  constexpr unsigned maxRecursionDepth = 20;
+  auto &depthMap = state.recursionVisited[funcKey];
+  if (hasArg0 && state.callDepth > 0) {
+    unsigned &depth = depthMap[arg0Val];
+    if (depth >= maxRecursionDepth) {
+      for (Value result : callOp.getResults()) {
+        unsigned width = getTypeWidth(result.getType());
+        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+      }
+      return success();
+    }
+  }
+
+  bool addedToVisited = hasArg0;
+  if (hasArg0)
+    ++depthMap[arg0Val];
+
+  // Execute function body.
+  ++state.callDepth;
+  llvm::SmallVector<InterpretedValue, 4> returnValues;
+  LogicalResult funcResult =
+      interpretFuncBody(procId, funcOp, args, returnValues, callOp);
+  --state.callDepth;
+
+  // Decrement depth counter.
+  if (addedToVisited) {
+    auto &depthRef = processStates[procId].recursionVisited[funcKey][arg0Val];
+    if (depthRef > 0)
+      --depthRef;
+  }
+
+  // Handle failures.
+  if (failed(funcResult)) {
+    auto &failState = processStates[procId];
+    if (failState.waiting)
+      return success();
+    for (Value result : callOp.getResults()) {
+      unsigned width = getTypeWidth(result.getType());
+      setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+    }
+    return success();
+  }
+
+  // Handle suspension.
+  auto &postCallState = processStates[procId];
+  if (postCallState.waiting)
+    return success();
+
+  // Map return values to call results.
+  for (auto [result, retVal] : llvm::zip(callOp.getResults(), returnValues))
+    setValue(procId, result, retVal);
 
   return success();
 }
@@ -19847,6 +20115,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // Track if we're starting from a resume point
   bool skipToResumeOp = (resumeBlock != nullptr);
 
+  // Hoist per-op overhead decisions before the loop so the hot path is lean.
+  const size_t cachedMaxSteps = getEffectiveMaxProcessSteps(procId);
+  const bool needsDetailedTracking =
+      cachedMaxSteps > 0 || collectOpStats || profileSummaryAtExitEnabled;
+
   while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     // Check if termination was requested (e.g., UVM die() -> sim.terminate).
     // This prevents spending time executing function bodies in processes that
@@ -19877,18 +20150,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       }
 
       ++opCount;
-      // Track func body steps in process state for global step limiting
-      // Use cached active process state to avoid std::map lookup per op.
-      {
+      // Track func body steps in process state for global step limiting.
+      // The detailed tracking (step counting, memory sampling, op stats,
+      // step limit, progress trace) is gated behind needsDetailedTracking
+      // so that the common fast path only pays for a periodic abort check.
+      if (LLVM_UNLIKELY(needsDetailedTracking)) {
         ProcessExecutionState *statePtr =
             (procId == activeProcessId && activeProcessState)
                 ? activeProcessState
                 : &processStates[procId];
         ++statePtr->totalSteps;
         ++statePtr->funcBodySteps;
-        maybeSampleMemoryState(statePtr->totalSteps);
+
+        if (profileSummaryAtExitEnabled)
+          maybeSampleMemoryState(statePtr->totalSteps);
+
         if (collectOpStats)
           ++opStats[op.getName().getStringRef()];
+
         // Progress report every ~16M func body steps (power-of-2 for cheap
         // bitwise check instead of expensive integer division)
         if ((statePtr->funcBodySteps & 0xFFFFFF) == 0) {
@@ -19897,23 +20176,30 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                                  statePtr->callDepth,
                                  op.getName().getStringRef());
         }
+
         // Enforce global process step limit inside function bodies
-        size_t effectiveMaxProcessSteps = getEffectiveMaxProcessSteps(procId);
-        if (effectiveMaxProcessSteps > 0 &&
-            statePtr->totalSteps > effectiveMaxProcessSteps) {
+        if (cachedMaxSteps > 0 &&
+            statePtr->totalSteps > cachedMaxSteps) {
           maybeTraceProcessStepOverflowInFunc(
-              procId, effectiveMaxProcessSteps, statePtr->totalSteps,
+              procId, cachedMaxSteps, statePtr->totalSteps,
               funcOp.getName(), /*isLLVMFunction=*/false);
           statePtr->halted = true;
           cleanupTempMappings();
           return failure();
         }
+
         // Periodically check for abort (timeout watchdog, every ~16K ops)
         if ((statePtr->funcBodySteps & 0x3FFF) == 0 && isAbortRequested()) {
           statePtr->halted = true;
           cleanupTempMappings();
           if (abortCallback)
             abortCallback();
+          return failure();
+        }
+      } else {
+        // Fast path: only abort check (every 16K ops using opCount as proxy)
+        if (LLVM_UNLIKELY((opCount & 0x3FFF) == 0 && isAbortRequested())) {
+          cleanupTempMappings();
           return failure();
         }
       }
@@ -33507,6 +33793,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   // Track if we're starting from a resume point
   bool skipToResumeOp = (resumeBlock != nullptr);
 
+  // Hoist per-op overhead decisions before the loop so the hot path is lean.
+  const size_t cachedMaxSteps = getEffectiveMaxProcessSteps(procId);
+  const bool needsDetailedTracking =
+      cachedMaxSteps > 0 || collectOpStats || profileSummaryAtExitEnabled;
+
   while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     bool tookBranch = false;
     for (auto opIt = currentBlock->begin(); opIt != currentBlock->end();
@@ -33526,13 +33817,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       }
 
       ++opCount;
-      // Track func body steps in process state for global step limiting
-      {
+      // Track func body steps in process state for global step limiting.
+      // Detailed tracking gated behind needsDetailedTracking for fast path.
+      if (LLVM_UNLIKELY(needsDetailedTracking)) {
           ++cachedState->totalSteps;
           ++cachedState->funcBodySteps;
-          maybeSampleMemoryState(cachedState->totalSteps);
+
+          if (profileSummaryAtExitEnabled)
+            maybeSampleMemoryState(cachedState->totalSteps);
+
           if (collectOpStats)
             ++opStats[op.getName().getStringRef()];
+
           // Progress report every ~16M func body steps (power-of-2 for cheap
           // bitwise check instead of expensive integer division)
           if ((cachedState->funcBodySteps & 0xFFFFFF) == 0) {
@@ -33541,17 +33837,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
                                    cachedState->callDepth,
                                    op.getName().getStringRef());
           }
+
           // Enforce global process step limit inside function bodies
-          size_t effectiveMaxProcessSteps = getEffectiveMaxProcessSteps(procId);
-          if (effectiveMaxProcessSteps > 0 &&
-              cachedState->totalSteps > effectiveMaxProcessSteps) {
+          if (cachedMaxSteps > 0 &&
+              cachedState->totalSteps > cachedMaxSteps) {
             maybeTraceProcessStepOverflowInFunc(
-                procId, effectiveMaxProcessSteps, cachedState->totalSteps,
+                procId, cachedMaxSteps, cachedState->totalSteps,
                 funcOp.getName(), /*isLLVMFunction=*/true);
             cachedState->halted = true;
             cleanupTempMappings();
             return failure();
           }
+
           // Periodically check for abort (timeout watchdog, every ~16K ops)
           if ((cachedState->funcBodySteps & 0x3FFF) == 0 && isAbortRequested()) {
             cachedState->halted = true;
@@ -33560,6 +33857,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
               abortCallback();
             return failure();
           }
+      } else {
+        // Fast path: only abort check (every 16K ops using opCount as proxy)
+        if (LLVM_UNLIKELY((opCount & 0x3FFF) == 0 && isAbortRequested())) {
+          cleanupTempMappings();
+          return failure();
+        }
       }
       if (maxOps > 0 && opCount >= maxOps) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: LLVM function '"
