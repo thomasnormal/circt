@@ -3430,3 +3430,41 @@
   - outcome:
     - closed `circt-bmc`/`circt-lec` option-parity gap for LEC xprop handling,
       with regression coverage for both CLI surfacing and lowering behavior.
+
+- Iteration update (sv-tests BMC harness restoration and stale UVM smoke XFAIL cleanup):
+  - realization:
+    - `utils/run_sv_tests_circt_bmc.sh` had an accidental tail truncation:
+      helper/validation functions remained, but the main sv-tests loop and
+      summary emission block were deleted.
+    - impact:
+      - sv-tests BMC runner emitted empty stdout in many lit paths.
+      - broad `sv-tests-*` regressions were effectively muted, and
+        `sv-tests-uvm-smoke.mlir` remained stale-`XFAIL` despite passing.
+  - implemented:
+    - restored the missing runner main loop and result/summarization tail in:
+      - `utils/run_sv_tests_circt_bmc.sh`
+    - kept explicit-filter contract (`must set TAG_REGEX or TEST_FILTER`) and
+      updated stale callers to pass explicit filters:
+      - `test/Tools/circt-bmc/sv-tests-expectations.mlir`
+      - `test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir`
+    - de-XFAILed stale passing UVM smoke regression:
+      - `test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
+  - validation:
+    - targeted sv-tests subset:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-expectations.mlir build-test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build-test/test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
+      - result: `4 pass, 1 expected-fail`.
+    - sv-tests bmc harness contract tests:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+      - result: `19 pass, 1 unsupported`.
+    - full `circt-bmc` sv-tests bucket:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - result: `11 pass, 1 expected-fail, 4 unsupported`.
+    - existing x-optimistic regressions remain green:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - result: `2/2` pass.
+    - profiling sample:
+      - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - result: `real 0m97.93s`.
+  - outcome:
+    - restored functional sv-tests BMC harness execution and summary output.
+    - converted one stale UVM smoke expected-fail into active pass coverage.

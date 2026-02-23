@@ -1,6 +1,5 @@
 // REQUIRES: slang
-// XFAIL: *
-// NOTE: UVM tests currently fail during lowering - class methods not yet fully supported
+// NOTE: UVM smoke subset is expected to lower in smoke mode.
 // RUN: env CIRCT_VERILOG=circt-verilog CIRCT_BMC=circt-bmc Z3_LIB=/dev/null \
 // RUN:   OUT=%t/results.txt TAG_REGEX='uvm' TEST_FILTER=uvm \
 // RUN:   ALLOW_MULTI_CLOCK=1 BMC_SMOKE_ONLY=1 CIRCT_BMC_ARGS=--emit-mlir \

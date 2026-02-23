@@ -604,3 +604,541 @@ hash_file() {
   fi
 }
 
+while IFS= read -r -d '' sv; do
+  tags="$(read_meta tags "$sv")"
+  if [[ -z "$tags" ]]; then
+    skip=$((skip + 1))
+    continue
+  fi
+  if [[ -n "$TAG_REGEX_EFFECTIVE" ]] && ! [[ "$tags" =~ $TAG_REGEX_EFFECTIVE ]]; then
+    skip=$((skip + 1))
+    continue
+  fi
+
+  base="$(basename "$sv" .sv)"
+  if [[ -n "$TEST_FILTER" ]] && ! [[ "$base" =~ $TEST_FILTER ]]; then
+    skip=$((skip + 1))
+    continue
+  fi
+
+  total=$((total + 1))
+
+  type="$(read_meta type "$sv")"
+  run_bmc=1
+  if [[ "$type" =~ [Pp]arsing ]]; then
+    run_bmc=0
+    if [[ "$FORCE_BMC" == "1" ]]; then
+      run_bmc=1
+    fi
+  fi
+  use_uvm=0
+  if [[ "$tags" =~ $UVM_TAG_REGEX ]]; then
+    use_uvm=1
+  fi
+
+  should_fail="$(read_meta should_fail "$sv")"
+  should_fail_because="$(read_meta should_fail_because "$sv")"
+  if [[ -n "$should_fail_because" ]]; then
+    should_fail="1"
+  fi
+  force_xfail=0
+  expect="${expect_mode[$base]-}"
+  case "$expect" in
+    skip)
+      skip=$((skip + 1))
+      continue
+      ;;
+    compile-only|parse-only)
+      run_bmc=0
+      ;;
+    xfail)
+      force_xfail=1
+      should_fail="1"
+      ;;
+  esac
+
+  # sv-tests uses `:should_fail_because:` both for tests that should fail to
+  # *compile* (parsing/compilation negative tests) and for tests that should
+  # *fail at runtime* (simulation negative tests, e.g. an assertion violation).
+  #
+  # For formal BMC, the latter category should be treated as PASS when a
+  # counterexample exists (SAT for asserts). This avoids incorrectly reporting
+  # such tests as XFAIL.
+  expect_compile_fail=0
+  expect_bmc_violation=0
+  if [[ "$should_fail" == "1" ]]; then
+    if [[ "$type" =~ [Ss]imulation ]]; then
+      expect_bmc_violation=1
+    else
+      expect_compile_fail=1
+    fi
+  fi
+
+  files_line="$(read_meta files "$sv")"
+  incdirs_line="$(read_meta incdirs "$sv")"
+  defines_line="$(read_meta defines "$sv")"
+  top_module="$(read_meta top_module "$sv")"
+  if [[ -z "$top_module" ]]; then
+    top_module="top"
+  fi
+
+  test_root="$SV_TESTS_DIR/tests"
+  if [[ -z "$files_line" ]]; then
+    files=("$sv")
+  else
+    mapfile -t files < <(normalize_paths "$test_root" $files_line)
+  fi
+  if [[ -z "$incdirs_line" ]]; then
+    incdirs=()
+  else
+    mapfile -t incdirs < <(normalize_paths "$test_root" $incdirs_line)
+  fi
+  incdirs+=("$(dirname "$sv")")
+
+  defines=()
+  if [[ -n "$defines_line" ]]; then
+    for d in $defines_line; do
+      defines+=("$d")
+    done
+  fi
+  log_tag="$base"
+  rel_path="${sv#"$test_root/"}"
+  if [[ "$rel_path" != "$sv" ]]; then
+    log_tag="${rel_path%.sv}"
+  fi
+  log_tag="${log_tag//\//__}"
+
+  mlir="$tmpdir/${base}.mlir"
+  verilog_log="$tmpdir/${base}.circt-verilog.log"
+  bmc_log="$tmpdir/${base}.circt-bmc.log"
+
+  if [[ "$use_uvm" == "1" && ! -d "$UVM_PATH" ]]; then
+    printf "ERROR\t%s\t%s (UVM path not found: %s)\n" \
+      "$base" "$sv" "$UVM_PATH" >> "$results_tmp"
+    error=$((error + 1))
+    continue
+  fi
+
+  cmd=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
+    -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
+  if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" && "$use_uvm" == "0" ]]; then
+    cmd+=("--no-uvm-auto-include")
+  fi
+  if [[ "$use_uvm" == "1" ]]; then
+    cmd+=("--uvm-path=$UVM_PATH")
+  fi
+  if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
+    read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
+    cmd+=("${extra_args[@]}")
+  fi
+  for inc in "${incdirs[@]}"; do
+    cmd+=("-I" "$inc")
+  done
+  for def in "${defines[@]}"; do
+    cmd+=("-D" "$def")
+  done
+  if [[ -n "$top_module" ]]; then
+    cmd+=("--top=$top_module")
+  fi
+  cmd+=("${files[@]}")
+
+  cache_hit=0
+  cache_file=""
+  if [[ -n "$BMC_MLIR_CACHE_DIR" ]]; then
+    mkdir -p "$BMC_MLIR_CACHE_DIR"
+    cache_payload="circt_verilog=${CIRCT_VERILOG}
+circt_verilog_args=${CIRCT_VERILOG_ARGS}
+disable_uvm_auto_include=${DISABLE_UVM_AUTO_INCLUDE}
+use_uvm=${use_uvm}
+uvm_path=${UVM_PATH}
+top_module=${top_module}
+"
+    for inc in "${incdirs[@]}"; do
+      cache_payload+="incdir=${inc}
+"
+    done
+    for def in "${defines[@]}"; do
+      cache_payload+="define=${def}
+"
+    done
+    for f in "${files[@]}"; do
+      cache_payload+="file=${f} hash=$(hash_file "$f")
+"
+    done
+    cache_key="$(hash_key "$cache_payload")"
+    cache_file="$BMC_MLIR_CACHE_DIR/${cache_key}.mlir"
+    if [[ -s "$cache_file" ]]; then
+      cp -f "$cache_file" "$mlir"
+      : > "$verilog_log"
+      echo "[run_sv_tests_circt_bmc] cache-hit key=$cache_key case=$base" >> "$verilog_log"
+      cache_hit=1
+      cache_hits=$((cache_hits + 1))
+    else
+      cache_misses=$((cache_misses + 1))
+    fi
+  fi
+
+  frontend_timeout_reason=""
+  bmc_timeout_reason=""
+  if [[ "$cache_hit" != "1" ]]; then
+    : > "$verilog_log"
+    launch_attempt=0
+    launch_copy_fallback_used=0
+    frontend_memory_retry_used=0
+    frontend_memory_limit_kb="$CIRCT_MEMORY_LIMIT_KB"
+    frontend_error_reason=""
+    launch_reason=""
+    while true; do
+      if run_limited_with_memory_kb "$frontend_memory_limit_kb" "${cmd[@]}" > "$mlir" 2>> "$verilog_log"; then
+        verilog_status=0
+      else
+        verilog_status=$?
+      fi
+      if [[ "$verilog_status" -eq 0 ]]; then
+        break
+      fi
+      if [[ "$verilog_status" -eq 126 ]] && \
+          is_retryable_launch_failure_log "$verilog_log" && \
+          [[ "$launch_attempt" -lt "$BMC_LAUNCH_RETRY_ATTEMPTS" ]]; then
+        launch_reason="$(classify_retryable_launch_failure_reason "$verilog_log" "$verilog_status")"
+        launch_attempt=$((launch_attempt + 1))
+        retry_delay_secs="$(compute_retry_backoff_secs "$launch_attempt")"
+        append_bmc_launch_event \
+          "RETRY" "$base" "$sv" "frontend" "${cmd[0]}" "$launch_reason" \
+          "$launch_attempt" "$retry_delay_secs" "$verilog_status" ""
+        {
+          printf '[run_sv_tests_circt_bmc] frontend launch retry attempt=%s delay_secs=%s\n' \
+            "$launch_attempt" "$retry_delay_secs"
+        } >> "$verilog_log"
+        sleep "$retry_delay_secs"
+        continue
+      fi
+      if [[ "$verilog_status" -eq 126 && "$BMC_LAUNCH_COPY_FALLBACK" == "1" && \
+            "$launch_copy_fallback_used" -eq 0 ]] && \
+          is_retryable_launch_failure_log "$verilog_log"; then
+        launch_reason="$(classify_retryable_launch_failure_reason "$verilog_log" "$verilog_status")"
+        original_verilog_tool="${cmd[0]}"
+        fallback_verilog="$tmpdir/${base}.circt-verilog-launch-fallback"
+        if cp -f "$CIRCT_VERILOG" "$fallback_verilog" 2>> "$verilog_log"; then
+          chmod +x "$fallback_verilog" 2>> "$verilog_log" || true
+          cmd[0]="$fallback_verilog"
+          append_bmc_launch_event \
+            "FALLBACK" "$base" "$sv" "frontend" "$original_verilog_tool" \
+            "${launch_reason}_retry_exhausted" "" "" "$verilog_status" "$fallback_verilog"
+          launch_copy_fallback_used=1
+          launch_attempt=0
+          {
+            printf '[run_sv_tests_circt_bmc] frontend launch fallback copy=%s\n' \
+              "$fallback_verilog"
+          } >> "$verilog_log"
+          continue
+        else
+          {
+            printf '[run_sv_tests_circt_bmc] frontend launch fallback copy failed\n'
+          } >> "$verilog_log"
+        fi
+      fi
+      if [[ "$verilog_status" -ne 0 && \
+            "$frontend_memory_retry_used" -eq 0 && \
+            "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB" -gt "$frontend_memory_limit_kb" ]]; then
+        frontend_error_reason="$(classify_frontend_error_reason "$verilog_status" "$verilog_log")"
+        if [[ "$frontend_error_reason" == "frontend_out_of_memory" || \
+              "$frontend_error_reason" == "frontend_resource_guard_rss" ]]; then
+          {
+            printf '[run_sv_tests_circt_bmc] frontend memory retry reason=%s from_kb=%s to_kb=%s\n' \
+              "$frontend_error_reason" "$frontend_memory_limit_kb" "$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB"
+          } >> "$verilog_log"
+          frontend_memory_retry_used=1
+          frontend_memory_limit_kb="$BMC_FRONTEND_OOM_RETRY_MEMORY_LIMIT_KB"
+          continue
+        fi
+      fi
+      break
+    done
+    if [[ "$verilog_status" -ne 0 ]]; then
+      record_drop_remark_case "$base" "$sv" "$verilog_log"
+      if [[ "$force_xfail" == "1" ]]; then
+        result="XFAIL"
+        xfail=$((xfail + 1))
+      elif [[ "$verilog_status" -eq 124 || "$verilog_status" -eq 137 ]]; then
+        # Classify frontend timeouts explicitly so summary timeout/error counters
+        # reflect performance regressions instead of generic command failures.
+        result="TIMEOUT"
+        frontend_timeout_reason="frontend_command_timeout"
+        timeout=$((timeout + 1))
+        error=$((error + 1))
+      # Treat expected compile failures as PASS for negative compilation/parsing
+      # tests. Simulation-negative tests are expected to compile and are handled
+      # via SAT/UNSAT classification below.
+      elif [[ "$expect_compile_fail" == "1" ]]; then
+        result="PASS"
+        pass=$((pass + 1))
+      else
+        result="ERROR"
+        frontend_error_reason="$(classify_frontend_error_reason "$verilog_status" "$verilog_log")"
+        error=$((error + 1))
+      fi
+      emit_result_row "$result" "$base" "$sv"
+      if [[ "$result" == "TIMEOUT" ]]; then
+        record_timeout_reason_case "$base" "$sv" "$frontend_timeout_reason"
+      elif [[ "$result" == "ERROR" ]]; then
+        record_frontend_error_reason_case "$base" "$sv" "$frontend_error_reason"
+      fi
+      if [[ -n "$KEEP_LOGS_DIR" ]]; then
+        mkdir -p "$KEEP_LOGS_DIR"
+        cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+        cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+          2>/dev/null || true
+      fi
+      continue
+    fi
+    record_drop_remark_case "$base" "$sv" "$verilog_log"
+    if [[ -n "$cache_file" && -s "$mlir" ]]; then
+      cache_tmp="$cache_file.tmp.$$.$RANDOM"
+      cp -f "$mlir" "$cache_tmp" 2>/dev/null || true
+      mv -f "$cache_tmp" "$cache_file" 2>/dev/null || true
+      cache_stores=$((cache_stores + 1))
+    fi
+  fi
+
+  if [[ "$run_bmc" == "0" ]]; then
+    if [[ "$force_xfail" == "1" ]]; then
+      result="XPASS"
+      xpass=$((xpass + 1))
+    elif [[ "$expect_compile_fail" == "1" ]]; then
+      result="FAIL"
+      fail=$((fail + 1))
+    else
+      result="PASS"
+      pass=$((pass + 1))
+    fi
+    emit_result_row "$result" "$base" "$sv"
+    if [[ -n "$KEEP_LOGS_DIR" ]]; then
+      mkdir -p "$KEEP_LOGS_DIR"
+      cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+      cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+        2>/dev/null || true
+    fi
+    continue
+  fi
+
+  # Determine how to interpret SAT/UNSAT for this test.
+  #
+  # By convention, `circt-bmc` reports SAT when it finds an "interesting"
+  # condition:
+  # - for asserts: a violation exists
+  # - for covers: a witness exists
+  #
+  # For cover-only tests, SAT is therefore a PASS, while UNSAT is a FAIL.
+  check_mode="assert"
+  if grep -Fq "verif.cover" "$mlir" && ! grep -Fq "verif.assert" "$mlir"; then
+    check_mode="cover"
+  fi
+  append_bmc_check_attribution "$base" "$sv" "$mlir"
+
+  bmc_base_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+    "--module" "$top_module")
+  if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+    bmc_base_args+=("--rising-clocks-only")
+  fi
+  if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+    bmc_base_args+=("--allow-multi-clock")
+  fi
+  if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+    read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
+    bmc_base_args+=("${extra_bmc_args[@]}")
+  fi
+
+  bmc_args=("${bmc_base_args[@]}")
+  if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+    bmc_args+=("--emit-mlir")
+  elif [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
+    bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+  else
+    bmc_args+=("--shared-libs=$Z3_LIB")
+  fi
+  out=""
+  if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2> "$bmc_log")"; then
+    bmc_status=0
+  else
+    bmc_status=$?
+  fi
+  if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
+      grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
+    echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+    {
+      echo "[run_sv_tests_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
+    } >> "$bmc_log"
+    bmc_args=("${bmc_base_args[@]}" "--shared-libs=$Z3_LIB")
+    if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+      bmc_status=0
+    else
+      bmc_status=$?
+    fi
+  fi
+  append_bmc_abstraction_provenance "$base" "$sv" "$bmc_log"
+  # NOTE: The "no property provided to check" warning is typically spurious.
+  # It appears before LTLToCore and LowerClockedAssertLike passes run, but
+  # after these passes, verif.clocked_assert (!ltl.property) becomes
+  # verif.assert (i1), which is properly checked. This skip logic is disabled
+  # by default (NO_PROPERTY_AS_SKIP=0) to avoid false SKIP results.
+  if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \
+      grep -q "no property provided to check in module" "$bmc_log"; then
+    result="SKIP"
+    skip=$((skip + 1))
+    emit_result_row "$result" "$base" "$sv"
+    if [[ -n "$KEEP_LOGS_DIR" ]]; then
+      mkdir -p "$KEEP_LOGS_DIR"
+      cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+      cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+        2>/dev/null || true
+      cp -f "$bmc_log" "$KEEP_LOGS_DIR/${log_tag}.circt-bmc.log" \
+        2>/dev/null || true
+    fi
+    continue
+  fi
+
+  if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+    if [[ "$bmc_status" -eq 124 || "$bmc_status" -eq 137 ]]; then
+      result="TIMEOUT"
+      bmc_timeout_reason="solver_command_timeout"
+    elif [[ "$bmc_status" -eq 0 ]]; then
+      result="PASS"
+    else
+      result="ERROR"
+    fi
+  else
+    if [[ "$bmc_status" -eq 124 || "$bmc_status" -eq 137 ]]; then
+      result="TIMEOUT"
+      bmc_timeout_reason="solver_command_timeout"
+    elif grep -q "BMC_RESULT=UNKNOWN" <<<"$out"; then
+      result="UNKNOWN"
+    elif [[ "$check_mode" == "cover" ]]; then
+      if grep -q "BMC_RESULT=SAT" <<<"$out"; then
+        result="PASS"
+      elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+        result="FAIL"
+      else
+        result="ERROR"
+      fi
+    elif [[ "$expect_bmc_violation" == "1" ]]; then
+      # Simulation-negative tests are expected to have an assertion violation
+      # within the bound (SAT).
+      if grep -q "BMC_RESULT=SAT" <<<"$out"; then
+        result="PASS"
+      elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+        result="FAIL"
+      else
+        result="ERROR"
+      fi
+    elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+      result="PASS"
+    elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
+      result="FAIL"
+    else
+      result="ERROR"
+    fi
+  fi
+
+  if [[ "$BMC_SMOKE_ONLY" == "1" && "$should_fail" == "1" && "$expect_bmc_violation" != "1" ]]; then
+    result="XFAIL"
+    xfail=$((xfail + 1))
+    emit_result_row "$result" "$base" "$sv"
+    if [[ -n "$KEEP_LOGS_DIR" ]]; then
+      mkdir -p "$KEEP_LOGS_DIR"
+      cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+      cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+        2>/dev/null || true
+      cp -f "$bmc_log" "$KEEP_LOGS_DIR/${log_tag}.circt-bmc.log" \
+        2>/dev/null || true
+    fi
+    continue
+  fi
+
+  if [[ "$force_xfail" == "1" ]]; then
+    if [[ "$result" == "PASS" ]]; then
+      result="XPASS"
+      xpass=$((xpass + 1))
+    else
+      result="XFAIL"
+      xfail=$((xfail + 1))
+    fi
+  elif [[ "$expect_bmc_violation" == "1" ]]; then
+    case "$result" in
+      PASS) pass=$((pass + 1)) ;;
+      FAIL) fail=$((fail + 1)) ;;
+      UNKNOWN)
+        unknown=$((unknown + 1))
+        error=$((error + 1))
+        ;;
+      TIMEOUT)
+        timeout=$((timeout + 1))
+        error=$((error + 1))
+        ;;
+      *) error=$((error + 1)) ;;
+    esac
+  elif [[ "$should_fail" == "1" ]]; then
+    if [[ "$result" == "PASS" ]]; then
+      result="XPASS"
+      xpass=$((xpass + 1))
+    else
+      result="XFAIL"
+      xfail=$((xfail + 1))
+    fi
+  else
+    case "$result" in
+      PASS) pass=$((pass + 1)) ;;
+      FAIL) fail=$((fail + 1)) ;;
+      UNKNOWN)
+        unknown=$((unknown + 1))
+        error=$((error + 1))
+        ;;
+      TIMEOUT)
+        timeout=$((timeout + 1))
+        error=$((error + 1))
+        ;;
+      *) error=$((error + 1)) ;;
+    esac
+  fi
+
+  emit_result_row "$result" "$base" "$sv"
+  if [[ "$result" == "TIMEOUT" ]]; then
+    record_timeout_reason_case "$base" "$sv" "$bmc_timeout_reason"
+  fi
+  if [[ -n "$KEEP_LOGS_DIR" ]]; then
+    mkdir -p "$KEEP_LOGS_DIR"
+    cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+    cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+      2>/dev/null || true
+    cp -f "$bmc_log" "$KEEP_LOGS_DIR/${log_tag}.circt-bmc.log" \
+      2>/dev/null || true
+  fi
+done < <(find "$SV_TESTS_DIR/tests" -type f -name "*.sv" -print0)
+
+sort "$results_tmp" > "$OUT"
+if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
+  sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
+fi
+if [[ -n "$BMC_CHECK_ATTRIBUTION_OUT" && -f "$BMC_CHECK_ATTRIBUTION_OUT" ]]; then
+  sort -u -o "$BMC_CHECK_ATTRIBUTION_OUT" "$BMC_CHECK_ATTRIBUTION_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_CASES_OUT" && -f "$BMC_DROP_REMARK_CASES_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_CASES_OUT" "$BMC_DROP_REMARK_CASES_OUT"
+fi
+if [[ -n "$BMC_DROP_REMARK_REASONS_OUT" && -f "$BMC_DROP_REMARK_REASONS_OUT" ]]; then
+  sort -u -o "$BMC_DROP_REMARK_REASONS_OUT" "$BMC_DROP_REMARK_REASONS_OUT"
+fi
+if [[ -n "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" && -f "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" ]]; then
+  sort -u -o "$BMC_FRONTEND_ERROR_REASON_CASES_OUT" "$BMC_FRONTEND_ERROR_REASON_CASES_OUT"
+fi
+
+echo "sv-tests SVA summary: total=$total pass=$pass fail=$fail xfail=$xfail xpass=$xpass error=$error skip=$skip unknown=$unknown timeout=$timeout"
+echo "sv-tests dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
+if [[ -n "$BMC_MLIR_CACHE_DIR" ]]; then
+  echo "sv-tests frontend cache summary: hits=$cache_hits misses=$cache_misses stores=$cache_stores dir=$BMC_MLIR_CACHE_DIR"
+fi
+echo "results: $OUT"
+if [[ "$FAIL_ON_DROP_REMARKS" == "1" && "$drop_remark_cases" -gt 0 ]]; then
+  echo "FAIL_ON_DROP_REMARKS triggered: drop_remark_cases=$drop_remark_cases" >&2
+  exit 2
+fi
