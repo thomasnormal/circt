@@ -1819,3 +1819,632 @@ bool AOTProcessCompiler::compileAllProcesses(
   return !results.empty();
 #endif
 }
+
+//===----------------------------------------------------------------------===//
+// compileAllFuncBodies — Phase F1: bulk function compilation
+//===----------------------------------------------------------------------===//
+
+bool AOTProcessCompiler::compileAllFuncBodies(
+    ModuleOp parentModule, llvm::SmallVector<AOTCompiledFunc> &results) {
+#ifndef CIRCT_SIM_JIT_ENABLED
+  return false;
+#else
+  auto startTime = std::chrono::steady_clock::now();
+
+  // Collect compilable func.func ops.
+  llvm::SmallVector<func::FuncOp, 64> candidates;
+  unsigned totalFuncs = 0, externalFuncs = 0, rejectedFuncs = 0;
+
+  parentModule.walk([&](func::FuncOp funcOp) {
+    ++totalFuncs;
+    if (funcOp.isExternal()) {
+      ++externalFuncs;
+      return;
+    }
+    if (!isFuncBodyCompilable(funcOp)) {
+      ++rejectedFuncs;
+      funcOp.walk([&](Operation *op) {
+        if (isa<arith::ArithDialect, cf::ControlFlowDialect, scf::SCFDialect,
+                LLVM::LLVMDialect, func::FuncDialect>(op->getDialect()))
+          return WalkResult::advance();
+        if (isa<hw::HWDialect, comb::CombDialect>(op->getDialect()))
+          return WalkResult::advance();
+        if (isa<sim::FormatLiteralOp, sim::FormatDecOp, sim::FormatHexOp,
+                sim::FormatBinOp, sim::FormatCharOp, sim::FormatStringConcatOp,
+                sim::FormatDynStringOp, sim::PrintFormattedProcOp,
+                sim::TerminateOp>(op))
+          return WalkResult::advance();
+        if (isa<UnrealizedConversionCastOp>(op))
+          return WalkResult::advance();
+        funcRejectionStats[op->getName().getStringRef()]++;
+        return WalkResult::interrupt();
+      });
+      return;
+    }
+    candidates.push_back(funcOp);
+  });
+
+  llvm::errs() << "[AOT-F1] Func bodies: " << totalFuncs << " total, "
+               << externalFuncs << " external, " << rejectedFuncs
+               << " rejected, " << candidates.size() << " compilable\n";
+
+  if (candidates.empty())
+    return false;
+
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+
+  constexpr size_t kChunkSize = 64;
+  size_t numChunks = (candidates.size() + kChunkSize - 1) / kChunkSize;
+
+  llvm::errs() << "[AOT-F1] Compiling " << candidates.size()
+               << " func bodies in " << numChunks << " chunk(s)\n";
+
+  for (size_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx) {
+    auto chunkStart = std::chrono::steady_clock::now();
+
+    size_t chunkBegin = chunkIdx * kChunkSize;
+    size_t chunkEnd = std::min(chunkBegin + kChunkSize, candidates.size());
+    size_t chunkSize = chunkEnd - chunkBegin;
+
+    auto microModule = ModuleOp::create(UnknownLoc::get(&mlirContext));
+    OpBuilder builder(&mlirContext);
+    builder.setInsertionPointToEnd(microModule.getBody());
+    IRMapping mapping;
+
+    llvm::SmallVector<std::string, 64> chunkFuncNames;
+    for (size_t i = chunkBegin; i < chunkEnd; ++i) {
+      auto funcOp = candidates[i];
+      builder.clone(*funcOp, mapping);
+      chunkFuncNames.push_back(funcOp.getSymName().str());
+    }
+
+    cloneReferencedDeclarations(microModule, parentModule, mapping);
+
+    // Lowering pipeline.
+    LLVMTypeConverter converter(&mlirContext);
+    addProcessTypeConversions(converter);
+    populateHWToLLVMTypeConversions(converter);
+    converter.addConversion([](sim::FormatStringType type) -> Type {
+      return LLVM::LLVMPointerType::get(type.getContext());
+    });
+
+    LLVMConversionTarget target(mlirContext);
+    target.addLegalOp<ModuleOp>();
+    target.addLegalDialect<LLVM::LLVMDialect>();
+    target.addIllegalDialect<hw::HWDialect, comb::CombDialect,
+                             llhd::LLHDDialect, scf::SCFDialect>();
+    target.addIllegalOp<sim::PrintFormattedProcOp, sim::TerminateOp>();
+    target.addIllegalOp<sim::FormatLiteralOp, sim::FormatDecOp,
+                        sim::FormatHexOp, sim::FormatBinOp,
+                        sim::FormatCharOp, sim::FormatStringConcatOp,
+                        sim::FormatDynStringOp>();
+
+    RewritePatternSet patterns(&mlirContext);
+    populateFuncToLLVMConversionPatterns(converter, patterns);
+    cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
+    arith::populateArithToLLVMConversionPatterns(converter, patterns);
+    populateAnyFunctionOpInterfaceTypeConversionPattern(patterns, converter);
+    populateSCFToControlFlowConversionPatterns(patterns);
+
+    Namespace globals;
+    DenseMap<std::pair<Type, ArrayAttr>, LLVM::GlobalOp> constAggMap;
+    std::optional<HWToLLVMArraySpillCache> spillCache =
+        HWToLLVMArraySpillCache();
+    {
+      OpBuilder spillBuilder(microModule);
+      spillCache->spillNonHWOps(spillBuilder, converter, microModule);
+    }
+    populateHWToLLVMConversionPatterns(converter, patterns, globals,
+                                       constAggMap, spillCache);
+    populateCombToArithConversionPatterns(converter, patterns);
+    populateCombToLLVMConversionPatterns(converter, patterns);
+    patterns.add<ProcessProbeOpLowering, ProcessDriveOpLowering,
+                 ProcessConstantTimeLowering, ProcessIntToTimeLowering,
+                 ProcessTimeToIntLowering, ProcessWaitOpLowering,
+                 ProcessHaltOpLowering>(converter, &mlirContext);
+    patterns.add<ProcessSigProjectionPassthrough<llhd::SigExtractOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigArrayGetOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigArraySliceOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigStructExtractOp>>(
+        converter, &mlirContext);
+    patterns.add<ProcessPrintOpLowering>(converter, &mlirContext);
+    patterns.add<TerminateOpErasure>(converter, &mlirContext);
+    patterns.add<FmtLiteralOpLowering, FmtDecOpLowering, FmtHexOpLowering,
+                 FmtBinOpLowering, FmtCharOpLowering, FmtConcatOpLowering,
+                 FmtDynStringOpLowering>(converter, &mlirContext);
+    patterns.add<HWBitcastOpLowering>(converter, &mlirContext);
+
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(applyPartialConversion(microModule, target, std::move(patterns),
+                                      config))) {
+      llvm::errs() << "[AOT-F1] Chunk " << chunkIdx + 1 << "/" << numChunks
+                   << ": conversion FAILED\n";
+      microModule.erase();
+      continue;
+    }
+
+    // Clean up unrealized_conversion_cast ops.
+    {
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        llvm::SmallVector<UnrealizedConversionCastOp> casts;
+        microModule.walk(
+            [&](UnrealizedConversionCastOp op) { casts.push_back(op); });
+        for (auto castOp : casts) {
+          if (castOp.use_empty()) {
+            castOp.erase();
+            changed = true;
+            continue;
+          }
+          if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+            auto inputCast = castOp.getOperand(0)
+                                 .getDefiningOp<UnrealizedConversionCastOp>();
+            if (inputCast && inputCast.getNumOperands() == 1 &&
+                inputCast.getNumResults() == 1 &&
+                castOp.getResult(0).getType() ==
+                    inputCast.getOperand(0).getType()) {
+              castOp.getResult(0).replaceAllUsesWith(
+                  inputCast.getOperand(0));
+              castOp.erase();
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+
+    // Create ExecutionEngine with O1.
+    registerBuiltinDialectTranslation(*microModule.getContext());
+    registerLLVMDialectTranslation(*microModule.getContext());
+
+    ExecutionEngineOptions engineOpts;
+    engineOpts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
+    engineOpts.transformer = makeOptimizingTransformer(
+        /*optLevel=*/1, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
+
+    auto engineOrErr = ExecutionEngine::create(microModule, engineOpts);
+    if (!engineOrErr) {
+      llvm::errs() << "[AOT-F1] Chunk " << chunkIdx + 1 << "/" << numChunks
+                   << ": ExecutionEngine creation FAILED\n";
+      llvm::consumeError(engineOrErr.takeError());
+      microModule.erase();
+      continue;
+    }
+
+    engines.push_back(std::move(*engineOrErr));
+    auto *jitEngine = engines.back().get();
+    registerJITRuntimeSymbols(jitEngine);
+
+    // Lookup function pointers.
+    unsigned chunkCompiled = 0;
+    for (size_t i = 0; i < chunkFuncNames.size(); ++i) {
+      const auto &name = chunkFuncNames[i];
+      auto expectedFn = jitEngine->lookup(name);
+      if (!expectedFn) {
+        llvm::consumeError(expectedFn.takeError());
+        continue;
+      }
+
+      auto funcOp = candidates[chunkBegin + i];
+      AOTCompiledFunc result;
+      result.funcName = name;
+      result.funcPtr = reinterpret_cast<void *>(*expectedFn);
+      result.numArgs = funcOp.getNumArguments();
+      result.numResults = funcOp.getNumResults();
+      results.push_back(std::move(result));
+      ++chunkCompiled;
+    }
+
+    microModule.erase();
+
+    auto chunkEndTime = std::chrono::steady_clock::now();
+    double chunkMs = std::chrono::duration<double, std::milli>(
+                         chunkEndTime - chunkStart)
+                         .count();
+    llvm::errs() << "[AOT-F1] Chunk " << chunkIdx + 1 << "/" << numChunks
+                 << ": " << chunkCompiled << "/" << chunkSize << " compiled, "
+                 << llvm::format("%.1f", chunkMs) << " ms\n";
+  }
+
+  auto endTime = std::chrono::steady_clock::now();
+  double totalMs =
+      std::chrono::duration<double, std::milli>(endTime - startTime).count();
+  llvm::errs() << "[AOT-F1] Total: " << results.size() << " func bodies in "
+               << llvm::format("%.1f", totalMs) << " ms\n";
+
+  return !results.empty();
+#endif
+}
+
+//===----------------------------------------------------------------------===//
+// compileFunctions — Phase F1 packed-wrapper compilation
+//===----------------------------------------------------------------------===//
+
+/// Check if an LLVM type is a scalar type suitable for packed wrapper slots.
+/// Only integers (<=64 bits) and pointers are supported in v1.
+static bool isPackedScalarType(Type ty) {
+  if (auto intTy = dyn_cast<IntegerType>(ty))
+    return intTy.getWidth() <= 64;
+  if (isa<LLVM::LLVMPointerType>(ty))
+    return true;
+  return false;
+}
+
+/// Generate packed wrapper functions in the micro-module for all eligible
+/// LLVM::LLVMFuncOp entries. Each wrapper has signature:
+///   void __packed_<name>(ptr %args, ptr %results)
+/// where args/results are arrays of 8-byte (i64-sized) slots.
+///
+/// Returns the number of wrappers generated. The wrapperNames output maps
+/// original function name -> wrapper function name.
+static unsigned generatePackedWrappers(
+    ModuleOp microModule, ArrayRef<std::string> funcNames,
+    llvm::SmallVector<std::pair<std::string, std::string>> &wrapperNames) {
+
+  auto *ctx = microModule.getContext();
+  OpBuilder builder(ctx);
+  auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+  auto voidTy = LLVM::LLVMVoidType::get(ctx);
+  auto i64Ty = IntegerType::get(ctx, 64);
+  unsigned generated = 0;
+
+  for (const auto &name : funcNames) {
+    auto *symbol = microModule.lookupSymbol(name);
+    auto llvmFunc = dyn_cast_or_null<LLVM::LLVMFuncOp>(symbol);
+    if (!llvmFunc)
+      continue;
+
+    auto funcType = llvmFunc.getFunctionType();
+
+    // Check all params are scalar.
+    bool eligible = true;
+    for (unsigned i = 0; i < funcType.getNumParams(); ++i) {
+      if (!isPackedScalarType(funcType.getParamType(i))) {
+        eligible = false;
+        break;
+      }
+    }
+
+    // Check return type is void or scalar.
+    Type retTy = funcType.getReturnType();
+    bool isVoid = isa<LLVM::LLVMVoidType>(retTy);
+    if (!isVoid && !isPackedScalarType(retTy))
+      eligible = false;
+
+    if (!eligible)
+      continue;
+
+    std::string wrapperName = "__packed_" + name;
+
+    // Create: void @__packed_<name>(ptr %args, ptr %results)
+    auto wrapperFuncTy = LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy});
+    builder.setInsertionPointToEnd(microModule.getBody());
+    auto wrapperFunc =
+        LLVM::LLVMFuncOp::create(builder, llvmFunc.getLoc(), wrapperName,
+                                  wrapperFuncTy);
+
+    auto *entryBlock = wrapperFunc.addEntryBlock(builder);
+    builder.setInsertionPointToStart(entryBlock);
+
+    Value argsPtr = wrapperFunc.getArgument(0);
+    Value resultsPtr = wrapperFunc.getArgument(1);
+
+    // Load arguments from 8-byte slots.
+    SmallVector<Value> callArgs;
+    for (unsigned i = 0; i < funcType.getNumParams(); ++i) {
+      Type argTy = funcType.getParamType(i);
+
+      // GEP: &args[i] (element type = i64, each slot = 8 bytes)
+      auto slotPtr = LLVM::GEPOp::create(
+          builder, llvmFunc.getLoc(), ptrTy, i64Ty, argsPtr,
+          ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(i)});
+
+      if (isa<LLVM::LLVMPointerType>(argTy)) {
+        // Load as ptr directly from the 8-byte slot.
+        auto loaded =
+            LLVM::LoadOp::create(builder, llvmFunc.getLoc(), ptrTy, slotPtr);
+        callArgs.push_back(loaded);
+      } else {
+        // Load as i64, then trunc to the actual integer type if needed.
+        auto loaded =
+            LLVM::LoadOp::create(builder, llvmFunc.getLoc(), i64Ty, slotPtr);
+        Value arg = loaded;
+        if (argTy != i64Ty)
+          arg = LLVM::TruncOp::create(builder, llvmFunc.getLoc(), argTy, arg);
+        callArgs.push_back(arg);
+      }
+    }
+
+    // Call the original function.
+    if (isVoid) {
+      LLVM::CallOp::create(builder, llvmFunc.getLoc(), llvmFunc, callArgs);
+    } else {
+      auto callResult =
+          LLVM::CallOp::create(builder, llvmFunc.getLoc(), llvmFunc, callArgs);
+      Value result = callResult.getResult();
+
+      // Store result into results[0].
+      auto resultSlotPtr = LLVM::GEPOp::create(
+          builder, llvmFunc.getLoc(), ptrTy, i64Ty, resultsPtr,
+          ArrayRef<LLVM::GEPArg>{static_cast<int32_t>(0)});
+
+      if (isa<LLVM::LLVMPointerType>(retTy)) {
+        LLVM::StoreOp::create(builder, llvmFunc.getLoc(), result,
+                               resultSlotPtr);
+      } else {
+        // Zero-extend to i64 then store into the 8-byte slot.
+        Value toStore = result;
+        if (retTy != i64Ty)
+          toStore =
+              LLVM::ZExtOp::create(builder, llvmFunc.getLoc(), i64Ty, result);
+        LLVM::StoreOp::create(builder, llvmFunc.getLoc(), toStore,
+                               resultSlotPtr);
+      }
+    }
+
+    LLVM::ReturnOp::create(builder, llvmFunc.getLoc(), ValueRange{});
+
+    wrapperNames.push_back({name, wrapperName});
+    ++generated;
+  }
+
+  return generated;
+}
+
+LogicalResult AOTProcessCompiler::compileFunctions(
+    ModuleOp parentModule,
+    llvm::DenseMap<llvm::StringRef, void *> &compiled) {
+#ifndef CIRCT_SIM_JIT_ENABLED
+  return failure();
+#else
+  auto startTime = std::chrono::steady_clock::now();
+
+  // Collect compilable func.func ops.
+  llvm::SmallVector<func::FuncOp, 64> candidates;
+  unsigned totalFuncs = 0, externalFuncs = 0, rejectedFuncs = 0;
+
+  parentModule.walk([&](func::FuncOp funcOp) {
+    ++totalFuncs;
+    if (funcOp.isExternal()) {
+      ++externalFuncs;
+      return;
+    }
+    if (!isFuncBodyCompilable(funcOp)) {
+      ++rejectedFuncs;
+      funcOp.walk([&](Operation *op) {
+        if (isa<arith::ArithDialect, cf::ControlFlowDialect, scf::SCFDialect,
+                LLVM::LLVMDialect, func::FuncDialect>(op->getDialect()))
+          return WalkResult::advance();
+        if (isa<hw::HWDialect, comb::CombDialect>(op->getDialect()))
+          return WalkResult::advance();
+        if (isa<sim::FormatLiteralOp, sim::FormatDecOp, sim::FormatHexOp,
+                sim::FormatBinOp, sim::FormatCharOp, sim::FormatStringConcatOp,
+                sim::FormatDynStringOp, sim::PrintFormattedProcOp,
+                sim::TerminateOp>(op))
+          return WalkResult::advance();
+        if (isa<UnrealizedConversionCastOp>(op))
+          return WalkResult::advance();
+        funcRejectionStats[op->getName().getStringRef()]++;
+        return WalkResult::interrupt();
+      });
+      return;
+    }
+    candidates.push_back(funcOp);
+  });
+
+  llvm::errs() << "[AOT-F1-packed] Func bodies: " << totalFuncs << " total, "
+               << externalFuncs << " external, " << rejectedFuncs
+               << " rejected, " << candidates.size() << " compilable\n";
+
+  if (candidates.empty())
+    return failure();
+
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+
+  constexpr size_t kChunkSize = 64;
+  size_t numChunks = (candidates.size() + kChunkSize - 1) / kChunkSize;
+
+  llvm::errs() << "[AOT-F1-packed] Compiling " << candidates.size()
+               << " func bodies in " << numChunks << " chunk(s)\n";
+
+  for (size_t chunkIdx = 0; chunkIdx < numChunks; ++chunkIdx) {
+    auto chunkStart = std::chrono::steady_clock::now();
+
+    size_t chunkBegin = chunkIdx * kChunkSize;
+    size_t chunkEnd = std::min(chunkBegin + kChunkSize, candidates.size());
+    size_t chunkSize = chunkEnd - chunkBegin;
+
+    auto microModule = ModuleOp::create(UnknownLoc::get(&mlirContext));
+    OpBuilder builder(&mlirContext);
+    builder.setInsertionPointToEnd(microModule.getBody());
+    IRMapping mapping;
+
+    llvm::SmallVector<std::string, 64> chunkFuncNames;
+    for (size_t i = chunkBegin; i < chunkEnd; ++i) {
+      auto funcOp = candidates[i];
+      builder.clone(*funcOp, mapping);
+      chunkFuncNames.push_back(funcOp.getSymName().str());
+    }
+
+    cloneReferencedDeclarations(microModule, parentModule, mapping);
+
+    // --- Lowering pipeline (same as compileAllFuncBodies) ---
+    LLVMTypeConverter converter(&mlirContext);
+    addProcessTypeConversions(converter);
+    populateHWToLLVMTypeConversions(converter);
+    converter.addConversion([](sim::FormatStringType type) -> Type {
+      return LLVM::LLVMPointerType::get(type.getContext());
+    });
+
+    LLVMConversionTarget target(mlirContext);
+    target.addLegalOp<ModuleOp>();
+    target.addLegalDialect<LLVM::LLVMDialect>();
+    target.addIllegalDialect<hw::HWDialect, comb::CombDialect,
+                             llhd::LLHDDialect, scf::SCFDialect>();
+    target.addIllegalOp<sim::PrintFormattedProcOp, sim::TerminateOp>();
+    target.addIllegalOp<sim::FormatLiteralOp, sim::FormatDecOp,
+                        sim::FormatHexOp, sim::FormatBinOp,
+                        sim::FormatCharOp, sim::FormatStringConcatOp,
+                        sim::FormatDynStringOp>();
+
+    RewritePatternSet patterns(&mlirContext);
+    populateFuncToLLVMConversionPatterns(converter, patterns);
+    cf::populateControlFlowToLLVMConversionPatterns(converter, patterns);
+    arith::populateArithToLLVMConversionPatterns(converter, patterns);
+    populateAnyFunctionOpInterfaceTypeConversionPattern(patterns, converter);
+    populateSCFToControlFlowConversionPatterns(patterns);
+
+    Namespace globals;
+    DenseMap<std::pair<Type, ArrayAttr>, LLVM::GlobalOp> constAggMap;
+    std::optional<HWToLLVMArraySpillCache> spillCache =
+        HWToLLVMArraySpillCache();
+    {
+      OpBuilder spillBuilder(microModule);
+      spillCache->spillNonHWOps(spillBuilder, converter, microModule);
+    }
+    populateHWToLLVMConversionPatterns(converter, patterns, globals,
+                                       constAggMap, spillCache);
+    populateCombToArithConversionPatterns(converter, patterns);
+    populateCombToLLVMConversionPatterns(converter, patterns);
+    patterns.add<ProcessProbeOpLowering, ProcessDriveOpLowering,
+                 ProcessConstantTimeLowering, ProcessIntToTimeLowering,
+                 ProcessTimeToIntLowering, ProcessWaitOpLowering,
+                 ProcessHaltOpLowering>(converter, &mlirContext);
+    patterns.add<ProcessSigProjectionPassthrough<llhd::SigExtractOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigArrayGetOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigArraySliceOp>,
+                 ProcessSigProjectionPassthrough<llhd::SigStructExtractOp>>(
+        converter, &mlirContext);
+    patterns.add<ProcessPrintOpLowering>(converter, &mlirContext);
+    patterns.add<TerminateOpErasure>(converter, &mlirContext);
+    patterns.add<FmtLiteralOpLowering, FmtDecOpLowering, FmtHexOpLowering,
+                 FmtBinOpLowering, FmtCharOpLowering, FmtConcatOpLowering,
+                 FmtDynStringOpLowering>(converter, &mlirContext);
+    patterns.add<HWBitcastOpLowering>(converter, &mlirContext);
+
+    ConversionConfig config;
+    config.allowPatternRollback = false;
+    if (failed(applyPartialConversion(microModule, target, std::move(patterns),
+                                      config))) {
+      llvm::errs() << "[AOT-F1-packed] Chunk " << chunkIdx + 1 << "/"
+                   << numChunks << ": conversion FAILED\n";
+      microModule.erase();
+      continue;
+    }
+
+    // Clean up unrealized_conversion_cast ops.
+    {
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        llvm::SmallVector<UnrealizedConversionCastOp> casts;
+        microModule.walk(
+            [&](UnrealizedConversionCastOp op) { casts.push_back(op); });
+        for (auto castOp : casts) {
+          if (castOp.use_empty()) {
+            castOp.erase();
+            changed = true;
+            continue;
+          }
+          if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+            auto inputCast = castOp.getOperand(0)
+                                 .getDefiningOp<UnrealizedConversionCastOp>();
+            if (inputCast && inputCast.getNumOperands() == 1 &&
+                inputCast.getNumResults() == 1 &&
+                castOp.getResult(0).getType() ==
+                    inputCast.getOperand(0).getType()) {
+              castOp.getResult(0).replaceAllUsesWith(
+                  inputCast.getOperand(0));
+              castOp.erase();
+              changed = true;
+            }
+          }
+        }
+      }
+    }
+
+    // === Generate packed wrappers (AFTER lowering, BEFORE engine) ===
+    llvm::SmallVector<std::pair<std::string, std::string>> wrapperNames;
+    unsigned numWrappers =
+        generatePackedWrappers(microModule, chunkFuncNames, wrapperNames);
+
+    LLVM_DEBUG(llvm::dbgs() << "[AOT-F1-packed] Chunk " << chunkIdx + 1
+                            << ": generated " << numWrappers
+                            << " packed wrappers\n");
+
+    // Create ExecutionEngine with O1.
+    registerBuiltinDialectTranslation(*microModule.getContext());
+    registerLLVMDialectTranslation(*microModule.getContext());
+
+    ExecutionEngineOptions engineOpts;
+    engineOpts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
+    engineOpts.transformer = makeOptimizingTransformer(
+        /*optLevel=*/1, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
+
+    auto engineOrErr = ExecutionEngine::create(microModule, engineOpts);
+    if (!engineOrErr) {
+      llvm::errs() << "[AOT-F1-packed] Chunk " << chunkIdx + 1 << "/"
+                   << numChunks << ": ExecutionEngine creation FAILED\n";
+      llvm::consumeError(engineOrErr.takeError());
+      microModule.erase();
+      continue;
+    }
+
+    engines.push_back(std::move(*engineOrErr));
+    auto *jitEngine = engines.back().get();
+    registerJITRuntimeSymbols(jitEngine);
+
+    // Lookup packed wrapper pointers, keyed by ORIGINAL function name.
+    unsigned chunkCompiled = 0;
+    for (auto &[origName, wrapperName] : wrapperNames) {
+      auto expectedFn = jitEngine->lookup(wrapperName);
+      if (!expectedFn) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "[AOT-F1-packed] Lookup failed: " << wrapperName << "\n");
+        llvm::consumeError(expectedFn.takeError());
+        continue;
+      }
+
+      // Key: look up the original FuncOp's name from the parent module.
+      // The StringRef from the parent module's symbol table is stable.
+      auto *parentSymbol =
+          mlir::SymbolTable::lookupSymbolIn(parentModule, origName);
+      if (!parentSymbol)
+        continue;
+
+      auto parentFuncOp = dyn_cast<func::FuncOp>(parentSymbol);
+      if (!parentFuncOp)
+        continue;
+
+      // Use the parent module's StringRef (stable lifetime).
+      compiled[parentFuncOp.getSymName()] =
+          reinterpret_cast<void *>(*expectedFn);
+      ++chunkCompiled;
+    }
+
+    microModule.erase();
+
+    auto chunkEndTime = std::chrono::steady_clock::now();
+    double chunkMs = std::chrono::duration<double, std::milli>(
+                         chunkEndTime - chunkStart)
+                         .count();
+    llvm::errs() << "[AOT-F1-packed] Chunk " << chunkIdx + 1 << "/"
+                 << numChunks << ": " << chunkCompiled << "/" << chunkSize
+                 << " compiled (" << numWrappers << " wrappers), "
+                 << llvm::format("%.1f", chunkMs) << " ms\n";
+  }
+
+  auto endTime = std::chrono::steady_clock::now();
+  double totalMs =
+      std::chrono::duration<double, std::milli>(endTime - startTime).count();
+  llvm::errs() << "[AOT-F1-packed] Total: " << compiled.size()
+               << " packed funcs in " << llvm::format("%.1f", totalMs)
+               << " ms\n";
+
+  return compiled.empty() ? failure() : success();
+#endif
+}

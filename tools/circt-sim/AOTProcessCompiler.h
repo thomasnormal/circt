@@ -137,6 +137,23 @@ struct AOTCompiledProcess {
   size_t frameSize = 0;
 };
 
+/// Result of compiling a single func.func body to native code.
+struct AOTCompiledFunc {
+  /// The function symbol name (e.g., "uvm_pkg::uvm_object::get_name").
+  std::string funcName;
+
+  /// Native function pointer. Signature depends on the function's type:
+  /// all arguments and return values use the LLVM native ABI (i32->int32_t,
+  /// i64->int64_t, ptr->void*, etc.).
+  void *funcPtr = nullptr;
+
+  /// Number of arguments.
+  unsigned numArgs = 0;
+
+  /// Number of results (0 or 1).
+  unsigned numResults = 0;
+};
+
 /// AOT batch compiler. Extracts multiple LLHD processes into a single
 /// combined LLVM module, runs lowering once, and compiles via one engine.
 class AOTProcessCompiler {
@@ -187,10 +204,40 @@ public:
       ::mlir::ModuleOp parentModule,
       llvm::SmallVector<AOTCompiledProcess> &results);
 
+  /// Compile all eligible func.func bodies in the given module to native code.
+  /// Uses chunked compilation (64 functions per chunk). Only compiles functions
+  /// whose bodies pass isFuncBodyCompilable(). External functions and those
+  /// with unsupported ops are skipped.
+  ///
+  /// @param parentModule  The root module containing all func.func ops.
+  /// @param[out] results  Populated with (funcName, funcPtr) for each compiled
+  ///                      function.
+  /// @return true if at least one function was compiled.
+  bool compileAllFuncBodies(::mlir::ModuleOp parentModule,
+                            llvm::SmallVector<AOTCompiledFunc> &results);
+
+  /// Compile all eligible func.func bodies with packed wrappers.
+  /// Each compiled function gets a wrapper with uniform signature
+  ///   void(void *args, void *results)
+  /// where args/results are arrays of 8-byte (pointer-sized) slots.
+  /// Integer args are zero-extended to 8 bytes; pointer args stored directly.
+  /// Functions with struct/array args or returns are skipped (v1).
+  ///
+  /// @param parentModule     The root module containing all func.func ops.
+  /// @param[out] compiled    Map from original function name -> packed wrapper
+  ///                         ptr.
+  /// @return success if at least one function was compiled.
+  ::mlir::LogicalResult
+  compileFunctions(::mlir::ModuleOp parentModule,
+                   llvm::DenseMap<llvm::StringRef, void *> &compiled);
+
   /// Rejection stats accumulated during compileAllProcesses(): maps a
   /// rejection reason name (e.g. "moore.wait_event") to the number of
   /// processes rejected for that reason.
   llvm::StringMap<unsigned> rejectionStats;
+
+  /// Rejection stats for func body compilation.
+  llvm::StringMap<unsigned> funcRejectionStats;
 
 private:
   ::mlir::MLIRContext &mlirContext;
