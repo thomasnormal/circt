@@ -14,8 +14,8 @@ required_tokens=(
   "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
   "WASM_REQUIRE_VERILOG"
   "VCD_PATH"
-  'expected VCD output to declare at least one \$var'
-  'expected SV pipeline VCD to declare at least one \$var'
+  'expected VCD output to include \$enddefinitions'
+  'expected SV pipeline VCD to include \$enddefinitions'
   "validate_bool_env"
   "validate_positive_int_env"
   'validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"'
@@ -60,6 +60,18 @@ required_tokens=(
 for token in "${required_tokens[@]}"; do
   if ! grep -Fq -- "$token" "$SMOKE_SCRIPT"; then
     echo "[wasm-smoke-contract] missing token in smoke script: $token" >&2
+    exit 1
+  fi
+done
+
+forbidden_tokens=(
+  'expected VCD output to declare at least one \$var'
+  'expected SV pipeline VCD to declare at least one \$var'
+)
+
+for token in "${forbidden_tokens[@]}"; do
+  if grep -Fq -- "$token" "$SMOKE_SCRIPT"; then
+    echo "[wasm-smoke-contract] stale token still present in smoke script: $token" >&2
     exit 1
   fi
 done

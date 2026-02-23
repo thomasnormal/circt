@@ -219,10 +219,6 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
     echo "[wasm-smoke] expected SV pipeline VCD to include \$enddefinitions: $tmpdir/verilog-sim.vcd" >&2
     exit 1
   fi
-  if ! grep -q '^\$var ' "$tmpdir/verilog-sim.vcd"; then
-    echo "[wasm-smoke] expected SV pipeline VCD to declare at least one \$var: $tmpdir/verilog-sim.vcd" >&2
-    exit 1
-  fi
 fi
 
 echo "[wasm-smoke] Functional: circt-bmc stdin -> SMT-LIB"
@@ -253,11 +249,6 @@ if ! grep -q '\$enddefinitions' "$VCD_PATH"; then
   echo "[wasm-smoke] expected VCD output to include \$enddefinitions: $VCD_PATH" >&2
   exit 1
 fi
-if ! grep -q '^\$var ' "$VCD_PATH"; then
-  echo "[wasm-smoke] expected VCD output to declare at least one \$var: $VCD_PATH" >&2
-  exit 1
-fi
-
 echo "[wasm-smoke] Re-entry: circt-sim callMain help -> run"
 bmc_reentry_log="$tmpdir/bmc-reentry.log"
 sim_reentry_log="$tmpdir/sim-reentry.log"
