@@ -31,7 +31,11 @@ done
 required_source_tokens=(
   'command -v "$EMCMAKE_BIN"'
   'command -v "$CMAKE_BIN"'
-  "CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF"
+  "validate_on_off_env"
+  'validate_on_off_env "LLVM_ENABLE_ASSERTIONS" "$LLVM_ENABLE_ASSERTIONS"'
+  'validate_on_off_env "BUILD_SHARED_LIBS" "$BUILD_SHARED_LIBS"'
+  'validate_on_off_env "CIRCT_SIM_WASM_ENABLE_NODERAWFS" "$CIRCT_SIM_WASM_ENABLE_NODERAWFS"'
+  "must be ON or OFF"
 )
 
 for token in "${required_source_tokens[@]}"; do
@@ -49,6 +53,24 @@ if CIRCT_SIM_WASM_ENABLE_NODERAWFS=maybe "$SCRIPT" --print-cmake-command > /dev/
 fi
 if ! grep -Fq -- "CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF" "$tmp_err"; then
   echo "[wasm-config-contract] missing explicit ON/OFF diagnostic for CIRCT_SIM_WASM_ENABLE_NODERAWFS" >&2
+  exit 1
+fi
+
+if LLVM_ENABLE_ASSERTIONS=enabled "$SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-config-contract] configure script accepted invalid LLVM_ENABLE_ASSERTIONS override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "LLVM_ENABLE_ASSERTIONS must be ON or OFF" "$tmp_err"; then
+  echo "[wasm-config-contract] missing explicit ON/OFF diagnostic for LLVM_ENABLE_ASSERTIONS" >&2
+  exit 1
+fi
+
+if BUILD_SHARED_LIBS=static "$SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-config-contract] configure script accepted invalid BUILD_SHARED_LIBS override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "BUILD_SHARED_LIBS must be ON or OFF" "$tmp_err"; then
+  echo "[wasm-config-contract] missing explicit ON/OFF diagnostic for BUILD_SHARED_LIBS" >&2
   exit 1
 fi
 

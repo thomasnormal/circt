@@ -13,6 +13,15 @@ LLVM_ENABLE_ASSERTIONS="${LLVM_ENABLE_ASSERTIONS:-ON}"
 BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS:-OFF}"
 CIRCT_SIM_WASM_ENABLE_NODERAWFS="${CIRCT_SIM_WASM_ENABLE_NODERAWFS:-ON}"
 
+validate_on_off_env() {
+  local name="$1"
+  local value="$2"
+  if [[ "$value" != "ON" && "$value" != "OFF" ]]; then
+    echo "[wasm-configure] $name must be ON or OFF (got $value)" >&2
+    exit 1
+  fi
+}
+
 if [[ ! "$CMAKE_CXX_STANDARD" =~ ^[0-9]+$ ]]; then
   echo "[wasm-configure] CMAKE_CXX_STANDARD must be a numeric integer (got $CMAKE_CXX_STANDARD)" >&2
   exit 1
@@ -23,10 +32,9 @@ if (( CMAKE_CXX_STANDARD < 20 )); then
   exit 1
 fi
 
-if [[ "$CIRCT_SIM_WASM_ENABLE_NODERAWFS" != "ON" && "$CIRCT_SIM_WASM_ENABLE_NODERAWFS" != "OFF" ]]; then
-  echo "[wasm-configure] CIRCT_SIM_WASM_ENABLE_NODERAWFS must be ON or OFF (got $CIRCT_SIM_WASM_ENABLE_NODERAWFS)" >&2
-  exit 1
-fi
+validate_on_off_env "LLVM_ENABLE_ASSERTIONS" "$LLVM_ENABLE_ASSERTIONS"
+validate_on_off_env "BUILD_SHARED_LIBS" "$BUILD_SHARED_LIBS"
+validate_on_off_env "CIRCT_SIM_WASM_ENABLE_NODERAWFS" "$CIRCT_SIM_WASM_ENABLE_NODERAWFS"
 
 print_only=0
 extra_cmake_args=()
