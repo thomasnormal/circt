@@ -1329,7 +1329,15 @@ static LogicalResult executeBMC(MLIRContext &context) {
 /// registers all dialects within a MLIR context,
 /// and calls the `executeBMC` function to do the actual work.
 int main(int argc, char **argv) {
+#if !defined(__EMSCRIPTEN__)
   llvm::InitLLVM y(argc, argv);
+#endif
+
+#if defined(__EMSCRIPTEN__)
+  // Wasm/browser integrations may invoke this entrypoint repeatedly in one
+  // loaded module instance. Reset parser state to avoid cross-run leakage.
+  cl::ResetAllOptionOccurrences();
+#endif
 
   // Hide default LLVM options, other than for this tool.
   // MLIR options are added below.
@@ -1343,13 +1351,44 @@ int main(int argc, char **argv) {
   cl::AddExtraVersionPrinter(
       [](llvm::raw_ostream &os) { os << circt::getCirctVersion() << '\n'; });
 
+#if defined(__EMSCRIPTEN__)
+  auto hasArg = [&](llvm::StringRef needle) {
+    for (int i = 1; i < argc; ++i)
+      if (argv[i] && llvm::StringRef(argv[i]) == needle)
+        return true;
+    return false;
+  };
+  const bool wantVersion = hasArg("--version");
+  const bool wantHelp = hasArg("--help") || hasArg("-help") || hasArg("-h");
+  const bool wantHelpHidden = hasArg("--help-hidden");
+  const bool wantHelpList = hasArg("--help-list");
+  const bool wantHelpListHidden = hasArg("--help-list-hidden");
+
+  // Handle help/version locally in wasm mode so these one-shot paths do not
+  // trigger a process-style exit in LLVM's option handlers.
+  if (wantVersion) {
+    cl::PrintVersionMessage();
+    llvm::outs().flush();
+    llvm::errs().flush();
+    return 0;
+  }
+  if (wantHelp || wantHelpHidden || wantHelpList || wantHelpListHidden) {
+    cl::PrintHelpMessage(/*Hidden=*/wantHelpHidden || wantHelpListHidden,
+                         /*Categorized=*/wantHelp || wantHelpHidden);
+    llvm::outs().flush();
+    llvm::errs().flush();
+    return 0;
+  }
+#endif
+
   // Parse the command-line options provided by the user.
-  cl::ParseCommandLineOptions(
-      argc, argv,
+  if (!cl::ParseCommandLineOptions(
+          argc, argv,
       "circt-bmc - bounded model checker\n\n"
       "\tThis tool checks all possible executions of a hardware module up to a "
       "given time bound to check whether any asserted properties can be "
-      "violated.\n");
+      "violated.\n"))
+    return 1;
   circt::installResourceGuard();
 
   // Set the bug report message to indicate users should file issues on
@@ -1391,7 +1430,11 @@ int main(int argc, char **argv) {
   // Avoid printing a superfluous note on diagnostic emission.
   context.printOpOnDiagnostic(false);
 
-  // Perform the logical equivalence checking; using `exit` to avoid the slow
-  // teardown of the MLIR context.
-  exit(failed(executeBMC(context)));
+  int rc = failed(executeBMC(context)) ? 1 : 0;
+#if defined(__EMSCRIPTEN__)
+  return rc;
+#else
+  // Native mode keeps fast process exit to avoid slow MLIR context teardown.
+  exit(rc);
+#endif
 }

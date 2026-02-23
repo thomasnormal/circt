@@ -3542,7 +3542,11 @@ static LogicalResult processInput(MLIRContext &context,
   llvm::errs().flush();
   std::fflush(stdout);
   std::fflush(stderr);
+#if defined(__EMSCRIPTEN__)
+  return exitCode == 0 ? success() : failure();
+#else
   std::_Exit(exitCode);
+#endif
 }
 
 //===----------------------------------------------------------------------===//
@@ -3550,7 +3554,15 @@ static LogicalResult processInput(MLIRContext &context,
 //===----------------------------------------------------------------------===//
 
 int main(int argc, char **argv) {
+#if !defined(__EMSCRIPTEN__)
   llvm::InitLLVM y(argc, argv);
+#endif
+
+#if defined(__EMSCRIPTEN__)
+  // Wasm/browser integrations may invoke this entrypoint repeatedly in one
+  // loaded module instance. Reset parser state to avoid cross-run leakage.
+  llvm::cl::ResetAllOptionOccurrences();
+#endif
 
   // Increase stack size to 64 MB to handle deep UVM call chains.
   // The interpreter uses C++ recursion for func.call/call_indirect, and UVM
@@ -3639,12 +3651,43 @@ int main(int argc, char **argv) {
     ::setenv("CIRCT_UVM_ARGS", mergedUvmArgs.c_str(), /*overwrite=*/1);
   }
 
-  // Parse command line (with plusargs filtered out)
-  llvm::cl::ParseCommandLineOptions(
-      filteredArgc, filteredArgvPtr,
+#if defined(__EMSCRIPTEN__)
+  auto hasArg = [&](llvm::StringRef needle) {
+    for (char *arg : filteredArgv)
+      if (arg && llvm::StringRef(arg) == needle)
+        return true;
+    return false;
+  };
+  const bool wantVersion = hasArg("--version");
+  const bool wantHelp = hasArg("--help") || hasArg("-help") || hasArg("-h");
+  const bool wantHelpHidden = hasArg("--help-hidden");
+  const bool wantHelpList = hasArg("--help-list");
+  const bool wantHelpListHidden = hasArg("--help-list-hidden");
+
+  // Handle help/version locally in wasm mode so these one-shot paths do not
+  // trigger a process-style exit in LLVM's option handlers.
+  if (wantVersion) {
+    llvm::cl::PrintVersionMessage();
+    llvm::outs().flush();
+    llvm::errs().flush();
+    return 0;
+  }
+  if (wantHelp || wantHelpHidden || wantHelpList || wantHelpListHidden) {
+    llvm::cl::PrintHelpMessage(/*Hidden=*/wantHelpHidden || wantHelpListHidden,
+                               /*Categorized=*/wantHelp || wantHelpHidden);
+    llvm::outs().flush();
+    llvm::errs().flush();
+    return 0;
+  }
+#endif
+
+  // Parse command line (with plusargs filtered out).
+  if (!llvm::cl::ParseCommandLineOptions(
+          filteredArgc, filteredArgvPtr,
       "CIRCT Event-Driven Simulation Tool\n\n"
       "This tool simulates hardware designs using CIRCT's event-driven\n"
-      "simulation infrastructure with IEEE 1800 scheduling semantics.\n");
+      "simulation infrastructure with IEEE 1800 scheduling semantics.\n"))
+    return 1;
   // circt-sim-specific: apply tighter resource limits than the generic 10 GB
   // defaults.  Multiple circt-sim instances may be launched in parallel (e.g.
   // by lit), so each instance must stay well below the system total.  Using
@@ -3686,6 +3729,15 @@ int main(int argc, char **argv) {
   mlir::LLVM::registerInlinerInterface(registry);
   context.appendDialectRegistry(registry);
 
+  llvm::StringRef inputNameRef = inputFilename;
+  if (inputFilename != "-" &&
+      (inputNameRef.ends_with(".sv") || inputNameRef.ends_with(".v") ||
+       inputNameRef.ends_with(".svh"))) {
+    llvm::errs() << "error: circt-sim expects MLIR input; for SystemVerilog "
+                    "run circt-verilog first and pass the lowered MLIR\n";
+    return 1;
+  }
+
   // Open input file
   std::string errorMessage;
   auto input = openInputFile(inputFilename, &errorMessage);
@@ -3699,11 +3751,15 @@ int main(int argc, char **argv) {
   sourceMgr.AddNewSourceBuffer(std::move(input), llvm::SMLoc());
   SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
 
-  // Process the input
-  if (failed(processInput(context, sourceMgr))) {
+  // Process the input.
+  if (failed(processInput(context, sourceMgr)))
     return 1;
-  }
 
-  // processInput() calls std::_Exit(0) on success, so this is unreachable.
+  // In native mode processInput() performs a fast std::_Exit() on success.
+  // In wasm mode it returns normally to support repeated invocations.
+#if defined(__EMSCRIPTEN__)
   return 0;
+#else
+  return 0;
+#endif
 }
