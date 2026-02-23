@@ -16,6 +16,7 @@
 #include "LLHDProcessInterpreter.h"
 #include "LLHDProcessInterpreterStorePatterns.h"
 #include "JITBlockCompiler.h"
+#include "JITSchedulerRuntime.h"
 
 // Global crash diagnostic — last LLVM callee name
 char g_lastLLVMCallCalleeBuf[256] = {};
@@ -1342,6 +1343,22 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       APInt byteVal(fieldBitWidth, masked);
       bits |= byteVal.shl(insertPos);
     }
+    // Memory bytes are in LLVM layout (field 0 = value at low bits,
+    // field 1 = unknown at high bits). FourStateStruct signals expect HW
+    // layout (unknown at low bits, value at high bits). Convert so that
+    // later reads applying HW→LLVM conversion produce the correct result.
+    if (scheduler.getSignalEncoding(fieldSigId) ==
+        SignalEncoding::FourStateStruct) {
+      unsigned halfWidth = fieldBitWidth / 2;
+      if (halfWidth > 0 && halfWidth * 2 == fieldBitWidth) {
+        APInt valueBits = bits.extractBits(halfWidth, 0);
+        APInt unknownBits = bits.extractBits(halfWidth, halfWidth);
+        APInt encoded = APInt::getZero(fieldBitWidth);
+        encoded.insertBits(unknownBits, 0);
+        encoded.insertBits(valueBits, halfWidth);
+        bits = encoded;
+      }
+    }
     scheduler.updateSignal(fieldSigId, SignalValue(bits));
   };
 
@@ -1727,6 +1744,12 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(registerProcesses(discoveredOps)))
     return failure();
   reportInitStage("registerProcesses");
+
+  // AOT batch compilation: compile eligible callback processes to native code.
+  // Must run after registerProcesses() (needs processExecModels, opToProcessId,
+  // valueToSignal) and after rootModule is set.
+  aotCompileProcesses();
+  reportInitStage("aotCompile");
 
   // Recursively process child module instances EXCEPT module-level ops.
   // We must register child signals and instance mappings first so that
@@ -7860,6 +7883,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
         modelIt->second != ExecModel::Coroutine) {
       ++callbackDispatchCount;
     }
+  }
+
+  // AOT callback dispatch: if a process was AOT-compiled, call the native
+  // function pointer directly instead of interpreting. Skip the first
+  // activation (state.waiting==false) so the interpreter sets up minnow
+  // registration, sensitivity lists, and init preambles.
+  if (aotEnabled && state.waiting && aotCallbackProcs.count(procId)) {
+    executeAOTCallbackProcess(procId);
+    return;
   }
 
   // Direct fast paths for known hot process loop shapes. These execute
@@ -33931,6 +33963,154 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
     }
   }
   deferredChildModuleOps.clear();
+}
+
+//===----------------------------------------------------------------------===//
+// AOT Callback Dispatch — executeAOTCallbackProcess()
+//===----------------------------------------------------------------------===//
+
+void LLHDProcessInterpreter::executeAOTCallbackProcess(ProcessId procId) {
+  auto funcIt = aotCallbackProcs.find(procId);
+  if (funcIt == aotCallbackProcs.end())
+    return;
+
+  auto entryFunc = funcIt->second.entryFunc;
+  if (!entryFunc)
+    return;
+
+  // Set up the JIT runtime context so __arc_sched_read_signal /
+  // __arc_sched_drive_signal_fast can access the scheduler.
+  aotJitCtx->processId = procId;
+  setJITRuntimeContext(aotJitCtx.get());
+
+  LLVM_DEBUG(llvm::dbgs() << "[AOT] Executing callback proc=" << procId
+                          << "\n");
+
+  // Call the AOT-compiled native function. Signal IDs are baked as constants;
+  // the function reads/drives via __arc_sched_* runtime calls.
+  entryFunc();
+
+  clearJITRuntimeContext();
+
+  // Re-suspend the process based on its ExecModel.
+  auto modelIt = processExecModels.find(procId);
+  if (modelIt == processExecModels.end())
+    return;
+
+  switch (modelIt->second) {
+  case ExecModel::CallbackStaticObserved:
+    // Sensitivity was registered permanently in registerProcess().
+    // Just flip back to Waiting state.
+    scheduler.resuspendProcessFast(procId);
+    ++callbackFastResuspendCount;
+    break;
+
+  case ExecModel::CallbackTimeOnly:
+    // Minnow was registered during the first wait (interpreter path).
+    // Re-arm it for the next wake time.
+    if (scheduler.isMinnowProcess(procId)) {
+      scheduler.rearmMinnow(procId);
+      auto *proc = scheduler.getProcessDirect(procId);
+      if (proc)
+        proc->setState(ProcessState::Suspended);
+    }
+    break;
+
+  default:
+    // Other callback types shouldn't reach here (filtered in
+    // aotCompileProcesses), but handle gracefully.
+    break;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// AOT Batch Compilation — aotCompileProcesses()
+//===----------------------------------------------------------------------===//
+
+void LLHDProcessInterpreter::aotCompileProcesses() {
+  // Check CIRCT_SIM_AOT env var — only compile when explicitly enabled.
+  const char *aotEnv = std::getenv("CIRCT_SIM_AOT");
+  if (!aotEnv || std::string(aotEnv) != "1")
+    return;
+
+  if (!rootModule) {
+    LLVM_DEBUG(llvm::dbgs() << "[AOT] No root module — skipping\n");
+    return;
+  }
+
+  aotEnabled = true;
+
+  // Collect eligible (ProcessId, ProcessOp) pairs for callback-classified
+  // processes. Skip coroutines for now — they need ucontext integration.
+  llvm::SmallVector<std::pair<ProcessId, llhd::ProcessOp>> candidates;
+  for (auto &[op, procId] : opToProcessId) {
+    auto modelIt = processExecModels.find(procId);
+    if (modelIt == processExecModels.end())
+      continue;
+    ExecModel model = modelIt->second;
+    // Only compile high-value callback types that have an llhd.wait loop.
+    // Skip Coroutine (needs ucontext), OneShotCallback (no wait, runs once),
+    // and CallbackDynamicWait (needs runtime re-registration, lower priority).
+    if (model != ExecModel::CallbackStaticObserved &&
+        model != ExecModel::CallbackTimeOnly)
+      continue;
+    auto processOp = dyn_cast<llhd::ProcessOp>(op);
+    if (!processOp)
+      continue;
+    candidates.push_back({procId, processOp});
+  }
+
+  if (candidates.empty()) {
+    LLVM_DEBUG(llvm::dbgs() << "[AOT] No eligible callback processes\n");
+    return;
+  }
+
+  llvm::errs() << "[circt-sim] [AOT] Compiling " << candidates.size()
+               << " callback processes...\n";
+
+  // Ensure dialects needed for LLHD→LLVM lowering are loaded.
+  auto &ctx = *rootModule->getContext();
+  ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
+  ctx.getOrLoadDialect<mlir::func::FuncDialect>();
+  ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
+  ctx.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
+
+  // Create the AOT compiler.
+  aotCompiler = std::make_unique<AOTProcessCompiler>(ctx);
+
+  // Set up the JIT runtime context so compiled code can call
+  // __arc_sched_read_signal / __arc_sched_drive_signal_fast etc.
+  aotJitCtx = std::make_unique<JITRuntimeContext>();
+  aotJitCtx->scheduler = &scheduler;
+
+  // Run batch compilation.
+  llvm::SmallVector<AOTCompiledProcess> results;
+  bool ok = aotCompiler->compileAllProcesses(
+      candidates, valueToSignal, rootModule, results);
+
+  if (!ok) {
+    llvm::errs() << "[circt-sim] [AOT] Batch compilation failed — "
+                 << "falling back to interpreter for all processes\n";
+    aotEnabled = false;
+    aotCompiler.reset();
+    aotJitCtx.reset();
+    return;
+  }
+
+  // Store compiled results and mark processes as AOT-compiled.
+  unsigned callbackCount = 0;
+  for (auto &result : results) {
+    aotCompiledProcesses.insert(result.procId);
+    if (result.isCallback) {
+      if (result.needsInitRun)
+        aotCallbackFirstActivation.insert(result.procId);
+      aotCallbackProcs[result.procId] = std::move(result);
+      ++callbackCount;
+    }
+  }
+
+  llvm::errs() << "[circt-sim] [AOT] Compiled " << results.size()
+               << " processes (" << callbackCount << " callbacks)\n";
 }
 
 // interpretMooreWaitConditionCall is defined in

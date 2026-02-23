@@ -3513,10 +3513,11 @@ private:
   /// Set of processes compiled as coroutines (need ucontext resume).
   llvm::DenseSet<ProcessId> aotCompiledProcesses;
 
-  /// Map of processes compiled as callbacks → their entry function pointer.
-  llvm::DenseMap<ProcessId, void *> aotCallbackFuncs;
+  /// Map of processes compiled as callbacks → their full compilation result.
+  llvm::DenseMap<ProcessId, AOTCompiledProcess> aotCallbackProcs;
 
   /// Set of callback processes that haven't had their first activation yet.
+  /// These need one interpreter run to set up sensitivity, then switch to AOT.
   llvm::DenseSet<ProcessId> aotCallbackFirstActivation;
 
   /// Compile all eligible processes via AOT batch compilation.
