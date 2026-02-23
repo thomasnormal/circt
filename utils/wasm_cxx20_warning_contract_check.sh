@@ -16,6 +16,7 @@ required_tokens=(
   "cache C++ standard is non-numeric"
   "build C++ standard is below 20"
   "std_flag_is_cpp20_or_newer"
+  "is_emscripten_cpp_compiler"
   "ambiguous-reversed-operator"
   "c++20-extensions"
   "-std="
@@ -27,7 +28,7 @@ required_tokens=(
   'compile command for $src does not use C++20-or-newer'
   '[wasm-cxx20-warn] failed to clean rebuild targets'
   '[wasm-cxx20-warn] missing compile command for'
-  "emscripten/em++"
+  "does not appear to use Emscripten em++"
 )
 
 for token in "${required_tokens[@]}"; do
