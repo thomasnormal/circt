@@ -2867,3 +2867,18 @@
         - result: `PASS(pass): sva_value_change_sim`
       - `BMC_ASSUME_KNOWN_INPUTS=0` currently reports `XPASS(pass)` against the
         existing expected baseline for this test profile.
+
+- Iteration update (xprop baseline reclassification for `sva_value_change_sim`):
+  - realization:
+    - after the enable-implication fix, `sva_value_change_sim` now passes in
+      both `known` and `xprop` profiles; the remaining issue was baseline drift
+      (`XPASS`), not solver behavior.
+  - implemented:
+    - removed obsolete xprop xfail entries from:
+      - `utils/yosys-sva-bmc-expected.txt`
+      - `utils/yosys-sva-bmc-xfail.txt`
+  - validation:
+    - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=1 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - pass
+    - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=0 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - pass (no xpass)

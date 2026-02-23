@@ -15,4 +15,3 @@ basic03	pass	xprop
 counter	pass	xprop
 extnets	pass	xprop
 sva_not	pass	xprop
-sva_value_change_sim	pass	xprop

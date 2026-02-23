@@ -1252,3 +1252,20 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Current state:
   - known-input sampled-value parity gap for `sva_value_change_sim` is closed.
   - xprop expectation baseline for this case should be reviewed in a follow-up.
+
+## Latest parity baseline sync (2026-02-23, `sva_value_change_sim` xprop)
+
+- Implemented:
+  - removed stale xprop xfail entries for `sva_value_change_sim` in:
+    - `utils/yosys-sva-bmc-expected.txt`
+    - `utils/yosys-sva-bmc-xfail.txt`
+
+- Validation:
+  - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=1 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - pass
+  - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=0 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - pass (no xpass)
+
+- Current state:
+  - `sva_value_change_sim` is now green in both known/xprop lanes with no
+    expected-failure override.
