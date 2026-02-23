@@ -1418,3 +1418,27 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - note: current full smoke run in this workspace fails in pre-existing
     `utils/run_wasm_smoke.sh` VCD `$var` assertions unrelated to this change.
+
+## 2026-02-23 (follow-up: preflight baseline inputs in runtime-helper behavior check)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_runtime_helpers_behavior_contract_check.sh` to
+    require in `utils/wasm_runtime_helpers_behavior_check.sh`:
+    - env-overridable baseline inputs:
+      - `BMC_INPUT`
+      - `SIM_INPUT`
+    - explicit baseline-input preflight diagnostic:
+      - `[wasm-runtime-helpers-behavior] missing baseline test input(s): ...`
+  - Pre-fix failure:
+    - `utils/wasm_runtime_helpers_behavior_contract_check.sh` failed with:
+      - `missing token in behavior check script: BMC_INPUT="${BMC_INPUT:-`
+    - behavior check hardcoded baseline inputs without explicit preflight.
+- Fix:
+  - updated `utils/wasm_runtime_helpers_behavior_check.sh`:
+    - added `BMC_INPUT`/`SIM_INPUT` environment overrides;
+    - added upfront existence check for both baseline inputs with explicit
+      diagnostic;
+    - threaded overrides through both behavior test cases.
+- Validation:
+  - `utils/wasm_runtime_helpers_behavior_contract_check.sh` passes.
+  - `utils/wasm_runtime_helpers_behavior_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.

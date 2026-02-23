@@ -44,20 +44,25 @@ EOF
 chmod +x "$fake_bin/node"
 
 missing_sv="$tmpdir/missing.sv"
-bmc_input="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
-sim_input="test/Tools/circt-sim/llhd-combinational.mlir"
+BMC_INPUT="${BMC_INPUT:-test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir}"
+SIM_INPUT="${SIM_INPUT:-test/Tools/circt-sim/llhd-combinational.mlir}"
 case1_out="$tmpdir/case1.out"
 case1_err="$tmpdir/case1.err"
 case2_out="$tmpdir/case2.out"
 case2_err="$tmpdir/case2.err"
+
+if [[ ! -f "$BMC_INPUT" || ! -f "$SIM_INPUT" ]]; then
+  echo "[wasm-runtime-helpers-behavior] missing baseline test input(s): BMC_INPUT=$BMC_INPUT SIM_INPUT=$SIM_INPUT" >&2
+  exit 1
+fi
 
 # Case 1: no circt-verilog.js in BUILD_DIR => missing SV input must not fail.
 set +e
 PATH="$fake_bin:$PATH" \
   BUILD_DIR="$base_build" \
   NODE_BIN=node \
-  BMC_TEST_INPUT="$bmc_input" \
-  SIM_TEST_INPUT="$sim_input" \
+  BMC_TEST_INPUT="$BMC_INPUT" \
+  SIM_TEST_INPUT="$SIM_INPUT" \
   SV_TEST_INPUT="$missing_sv" \
   "$SCRIPT" >"$case1_out" 2>"$case1_err"
 case1_rc=$?
@@ -73,8 +78,8 @@ set +e
 PATH="$fake_bin:$PATH" \
   BUILD_DIR="$with_verilog_build" \
   NODE_BIN=node \
-  BMC_TEST_INPUT="$bmc_input" \
-  SIM_TEST_INPUT="$sim_input" \
+  BMC_TEST_INPUT="$BMC_INPUT" \
+  SIM_TEST_INPUT="$SIM_INPUT" \
   SV_TEST_INPUT="$missing_sv" \
   "$SCRIPT" >"$case2_out" 2>"$case2_err"
 case2_rc=$?
