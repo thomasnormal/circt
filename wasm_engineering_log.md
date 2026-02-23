@@ -392,3 +392,25 @@
   - `utils/wasm_configure_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end in this workspace.
+
+## 2026-02-23 (follow-up: fix CrossCompile cleanliness check scope)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require submodule-
+    scoped check command:
+    - `git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake`
+  - Pre-fix failure:
+    - `utils/run_wasm_smoke.sh` checked
+      `git diff -- llvm/llvm/cmake/modules/CrossCompile.cmake` from top-level
+      repo scope.
+    - this path is not tracked by the superproject (it is inside `llvm`
+      submodule), so cleanliness detection was structurally unreliable.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` CrossCompile detection to run in the
+    `llvm` submodule using `git -C llvm ...`.
+  - retained the existing hard-fail behavior under
+    `WASM_REQUIRE_CLEAN_CROSSCOMPILE=1`.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end and reports:
+    `CrossCompile.cmake local edits (llvm submodule): none`.

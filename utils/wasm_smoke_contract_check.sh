@@ -11,6 +11,7 @@ fi
 required_tokens=(
   "WASM_SKIP_BUILD"
   "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
+  "git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake"
   "circt-bmc.wasm"
   "circt-sim.wasm"
   "Functional: circt-verilog stdin (.sv) -> IR"
