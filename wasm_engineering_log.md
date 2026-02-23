@@ -706,3 +706,26 @@
     `utils/wasm_smoke_contract_check.sh` pass.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: reject non-numeric C++ standard overrides)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_contract_check.sh` to assert that
+    `utils/configure_wasm_build.sh` rejects non-numeric
+    `CMAKE_CXX_STANDARD` values (e.g. `gnu++20`) with clear diagnostics.
+  - Pre-fix failure:
+    - configure script accepted non-numeric values and deferred failures to
+      downstream tooling.
+- Fix:
+  - updated `utils/configure_wasm_build.sh`:
+    - require `CMAKE_CXX_STANDARD` to match `^[0-9]+$`;
+    - keep existing floor check (`>= 20`) for numeric values.
+  - explicit diagnostics now cover both:
+    - non-numeric value;
+    - numeric but too-low value.
+- Validation:
+  - `utils/wasm_cxx20_contract_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_warning_contract_check.sh`,
+    `utils/wasm_cxx20_warning_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` pass.

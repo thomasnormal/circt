@@ -45,4 +45,13 @@ if ! grep -Fq -- "CMAKE_CXX_STANDARD must be >= 20" "$tmp_err"; then
   exit 1
 fi
 
+if CMAKE_CXX_STANDARD=gnu++20 "$CONFIG_SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-cxx20-contract] configure script accepted non-numeric CMAKE_CXX_STANDARD override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "CMAKE_CXX_STANDARD must be a numeric integer" "$tmp_err"; then
+  echo "[wasm-cxx20-contract] missing explicit numeric diagnostic for CMAKE_CXX_STANDARD" >&2
+  exit 1
+fi
+
 echo "[wasm-cxx20-contract] PASS"

@@ -12,7 +12,12 @@ CMAKE_CXX_STANDARD="${CMAKE_CXX_STANDARD:-20}"
 LLVM_ENABLE_ASSERTIONS="${LLVM_ENABLE_ASSERTIONS:-ON}"
 BUILD_SHARED_LIBS="${BUILD_SHARED_LIBS:-OFF}"
 
-if [[ "$CMAKE_CXX_STANDARD" =~ ^[0-9]+$ ]] && (( CMAKE_CXX_STANDARD < 20 )); then
+if [[ ! "$CMAKE_CXX_STANDARD" =~ ^[0-9]+$ ]]; then
+  echo "[wasm-configure] CMAKE_CXX_STANDARD must be a numeric integer (got $CMAKE_CXX_STANDARD)" >&2
+  exit 1
+fi
+
+if (( CMAKE_CXX_STANDARD < 20 )); then
   echo "[wasm-configure] CMAKE_CXX_STANDARD must be >= 20 (got $CMAKE_CXX_STANDARD)" >&2
   exit 1
 fi
