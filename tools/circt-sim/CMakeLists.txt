@@ -82,6 +82,12 @@ target_link_libraries(circt-sim
   MooreRuntime
 )
 
+# For wasm/node builds, map POSIX paths directly to the host filesystem.
+# This keeps CLI behavior (e.g. --vcd /tmp/test.vcd) consistent with native.
+if(EMSCRIPTEN)
+  target_link_options(circt-sim PRIVATE "SHELL:-sNODERAWFS=1")
+endif()
+
 llvm_update_compile_flags(circt-sim)
 mlir_check_all_link_libraries(circt-sim)
 
