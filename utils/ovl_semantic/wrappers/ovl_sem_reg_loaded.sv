@@ -3,11 +3,11 @@ module ovl_sem_reg_loaded(input logic clk);
   logic enable = 1'b1;
   logic start_event = 1'b0;
   logic end_event = 1'b0;
-  logic [1:0] src_expr = 2'b01;
+  logic [1:0] src_expr = 2'b00;
 `ifdef FAIL
-  logic [1:0] dest_expr = 2'b10;
-`else
   logic [1:0] dest_expr = 2'b01;
+`else
+  logic [1:0] dest_expr = 2'b00;
 `endif
   logic [2:0] cycles = 3'd0;
 

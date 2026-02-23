@@ -2986,3 +2986,29 @@
       - `55` wrappers / `110` obligations.
     - no new regressions were introduced; remaining failures are pre-existing
       local baseline issues outside this wrapper slice.
+
+- Iteration update (`ovl_sem_reg_loaded` harness semantics correction):
+  - realization:
+    - `ovl_sem_reg_loaded(pass)` still reported `SAT` in the full semantic
+      matrix after the 110-case expansion.
+    - the issue was in wrapper stimulus, not checker lowering:
+      pass-mode vectors did not align with the checker's sampled-value behavior
+      around the start-event pulse.
+  - implemented:
+    - updated `utils/ovl_semantic/wrappers/ovl_sem_reg_loaded.sv`:
+      - `src_expr` changed to `2'b00`
+      - pass-mode `dest_expr` changed to `2'b00`
+      - fail-mode `dest_expr` changed to `2'b01`
+  - validation:
+    - targeted:
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_reg_loaded$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `2 tests, failures=0, xfail=0, xpass=0`
+    - full matrix:
+      - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `110 tests, failures=4, xfail=0, xpass=0`
+      - remaining failures are only:
+        - `ovl_sem_increment` pass/fail (`CIRCT_VERILOG_ERROR`)
+        - `ovl_sem_decrement` pass/fail (`CIRCT_VERILOG_ERROR`)
+  - outcome:
+    - closed one real semantic harness gap (`ovl_sem_reg_loaded(pass)`).
+    - full semantic failure count reduced from `5` to `4`.
