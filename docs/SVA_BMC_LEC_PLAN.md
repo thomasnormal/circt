@@ -1570,3 +1570,44 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Current state:
   - UVM include-tags lane is now green without an expected-fail override.
   - no expected-fail entries remain in the `sv-tests-*` `circt-bmc` subset.
+
+## Latest mixed assert+cover BMC closure (2026-02-23)
+
+- Implemented:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - enabled mixed `verif.assert` + `verif.cover` handling in one
+      `verif.bmc` by removing the hard verifier rejection.
+    - introduced per-check non-final typing (`nonFinalCheckIsCover`) so
+      assert/cover checks are lowered with correct polarity in both SMTLIB and
+      non-SMTLIB paths.
+    - unified terminal solve condition so one BMC query can report:
+      - any non-final assertion violation,
+      - any final assertion violation, and
+      - any final/non-final cover hit.
+  - `lib/Dialect/Verif/Transforms/CombineAssertLike.cpp`
+    - preserved `bmc.*`-annotated assert/assume ops from combination.
+    - prevents `bmc.final` metadata loss before liveness/final-check lowering.
+  - test updates:
+    - added `test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir`.
+    - refreshed `test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
+      checks to avoid brittle SSA-id coupling.
+
+- Validation:
+  - build:
+    - `ninja -C build-test circt-bmc circt-opt`
+  - focused:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir build-test/test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir build-test/test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
+    - result: `3/3` pass.
+  - broad `circt-bmc` suite:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+    - result: `153 pass, 156 unsupported, 1 xfail, 1 fail`.
+    - remaining fail is local JIT Z3 linkage (`Z3_*` symbol materialization)
+      in `circt-bmc-disable-iff-constant.mlir`.
+  - formal smoke cadence:
+    - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.12--property|16.12--property-disj' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - result: `total=9 pass=9 fail=0`.
+
+- Current state:
+  - mixed assert+cover BMC support is now landed.
+  - liveness/final-property semantics remain intact under
+    `combine-assert-like` for `bmc.*`-annotated checks.

@@ -3265,7 +3265,7 @@ struct VerifBoundedModelCheckingOpConversion
       return failure();
     }
 
-    bool isCoverCheck =
+    bool hasAnyCovers =
         std::find(coverBMCOps.begin(), coverBMCOps.end(), op) !=
         coverBMCOps.end();
 
@@ -3990,34 +3990,37 @@ struct VerifBoundedModelCheckingOpConversion
       std::optional<ltl::ClockEdge> edge;
     };
 
-    // Collect non-final properties so BMC can detect any violating property.
+    // Collect non-final properties so BMC can detect any assertion violation
+    // or cover hit.
     SmallVector<Operation *> nonFinalOps;
     SmallVector<NonFinalCheckInfo> nonFinalCheckInfos;
-    if (isCoverCheck) {
-      circuitBlock.walk([&](verif::CoverOp coverOp) {
-        if (coverOp->hasAttr("bmc.final"))
-          return;
-        nonFinalOps.push_back(coverOp);
-        NonFinalCheckInfo info(coverOp.getLoc());
-        info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
-        if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
-                "bmc.clock_edge"))
-          info.edge = edgeAttr.getValue();
-        nonFinalCheckInfos.push_back(info);
-      });
-    } else {
-      circuitBlock.walk([&](verif::AssertOp assertOp) {
-        if (assertOp->hasAttr("bmc.final"))
-          return;
+    SmallVector<bool> nonFinalCheckIsCover;
+    circuitBlock.walk([&](Operation *curOp) {
+      if (curOp->hasAttr("bmc.final"))
+        return;
+      if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
         nonFinalOps.push_back(assertOp);
+        nonFinalCheckIsCover.push_back(false);
         NonFinalCheckInfo info(assertOp.getLoc());
         info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
         if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
           info.edge = edgeAttr.getValue();
         nonFinalCheckInfos.push_back(info);
-      });
-    }
+        return;
+      }
+      if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
+        nonFinalOps.push_back(coverOp);
+        nonFinalCheckIsCover.push_back(true);
+        NonFinalCheckInfo info(coverOp.getLoc());
+        info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
+        if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
+                "bmc.clock_edge"))
+          info.edge = edgeAttr.getValue();
+        nonFinalCheckInfos.push_back(info);
+        return;
+      }
+    });
     // Materialize non-final check values after NFA/delay rewriting to ensure
     // the yielded check expressions reflect any sequence-root rewrites.
     SmallVector<Value> nonFinalCheckValues;
@@ -4080,6 +4083,7 @@ struct VerifBoundedModelCheckingOpConversion
       // Liveness mode focuses on final-only obligations. Non-final checks
       // remain lowered into the circuit but are not treated as violations.
       nonFinalOps.clear();
+      nonFinalCheckIsCover.clear();
       nonFinalCheckInfos.clear();
     }
     size_t numNonFinalChecks = nonFinalOps.size();
@@ -4087,7 +4091,7 @@ struct VerifBoundedModelCheckingOpConversion
     uint64_t boundValue = op.getBound();
 
     if (inductionStep) {
-      if (isCoverCheck) {
+      if (hasAnyCovers) {
         op.emitError("k-induction does not support cover properties yet");
         return failure();
       }
@@ -4786,8 +4790,10 @@ struct VerifBoundedModelCheckingOpConversion
       rewriter.setInsertionPoint(circuitBlock.getTerminator());
       nonFinalCheckValues.reserve(nonFinalOps.size());
       nonFinalCheckProps.reserve(nonFinalOps.size());
-      for (Operation *opToCheck : nonFinalOps) {
-        if (isCoverCheck) {
+      for (auto [checkIdx, opToCheck] : llvm::enumerate(nonFinalOps)) {
+        bool isCover =
+            checkIdx < nonFinalCheckIsCover.size() && nonFinalCheckIsCover[checkIdx];
+        if (isCover) {
           auto coverOp = cast<verif::CoverOp>(opToCheck);
           nonFinalCheckProps.push_back(coverOp.getProperty());
           nonFinalCheckValues.push_back(gatePropertyWithEnable(
@@ -7163,7 +7169,10 @@ struct VerifBoundedModelCheckingOpConversion
                 isTrue = smt::EqOp::create(rewriter, loc, checkVal, trueBV);
               }
 
-              Value term = isCoverCheck
+              bool isNonFinalCover =
+                  checkIdx < nonFinalCheckIsCover.size() &&
+                  nonFinalCheckIsCover[checkIdx];
+              Value term = isNonFinalCover
                                ? isTrue
                                : smt::NotOp::create(rewriter, loc, isTrue);
               Value gate;
@@ -7656,12 +7665,8 @@ struct VerifBoundedModelCheckingOpConversion
         }
       }
 
-      Value overallCond;
-      if (isCoverCheck) {
-        overallCond = combineOr(violated, finalCoverHit);
-      } else {
-        overallCond = combineOr(violated, finalCheckViolated);
-      }
+      Value overallCond = combineOr(violated, finalCheckViolated);
+      overallCond = combineOr(overallCond, finalCoverHit);
       if (overallCond)
         smt::AssertOp::create(rewriter, loc, overallCond);
 
@@ -8009,7 +8014,10 @@ struct VerifBoundedModelCheckingOpConversion
                 isTrue = smt::EqOp::create(builder, loc, checkVal, trueBV);
               }
 
-              Value term = isCoverCheck
+              bool isNonFinalCover =
+                  checkIdx < nonFinalCheckIsCover.size() &&
+                  nonFinalCheckIsCover[checkIdx];
+              Value term = isNonFinalCover
                                ? isTrue
                                : smt::NotOp::create(builder, loc, isTrue);
               Value gate;
@@ -8367,13 +8375,9 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
-    Value overallCond;
-    if (isCoverCheck) {
-      overallCond = createSMTOrFolded(rewriter, loc, violated, finalCoverHit);
-    } else {
-      overallCond =
-          createSMTOrFolded(rewriter, loc, violated, finalCheckViolated);
-    }
+    Value overallCond =
+        createSMTOrFolded(rewriter, loc, violated, finalCheckViolated);
+    overallCond = createSMTOrFolded(rewriter, loc, overallCond, finalCoverHit);
     Value res = constTrue;
     if (overallCond) {
       smt::PushOp::create(rewriter, loc, 1);
@@ -8706,13 +8710,6 @@ void ConvertVerifToSMTPass::runOnOperation() {
             op->emitWarning("no property provided to check in module - will "
                             "trivially find no violations.");
             propertylessBMCOps.push_back(bmcOp);
-          }
-          if (numAssertions > 0 && numCovers > 0) {
-            op->emitError(
-                "bounded model checking problems with mixed assert/cover "
-                "properties are not yet correctly handled - instead, check one "
-                "kind at a time");
-            return WalkResult::interrupt();
           }
           if (numCovers > 0)
             coverBMCOps.push_back(bmcOp);

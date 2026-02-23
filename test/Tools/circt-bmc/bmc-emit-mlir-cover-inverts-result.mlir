@@ -12,5 +12,7 @@ hw.module @top() {
 //
 // CHECK: %true = arith.constant true
 // CHECK: %[[HIT:.*]] = scf.for
-// CHECK: %[[INV:.*]] = arith.xori %[[HIT]], %true : i1
+// CHECK: smt.assert %[[HIT]]
+// CHECK: %[[RES:.*]] = smt.check
+// CHECK: %[[INV:.*]] = arith.xori %[[RES]], %true : i1
 // CHECK: smt.yield %[[INV]] : i1
