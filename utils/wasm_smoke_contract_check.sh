@@ -12,6 +12,13 @@ required_tokens=(
   "WASM_SKIP_BUILD"
   "WASM_CHECK_CXX20_WARNINGS"
   "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
+  "WASM_REQUIRE_VERILOG"
+  "validate_bool_env"
+  'validate_bool_env "WASM_REQUIRE_VERILOG" "$WASM_REQUIRE_VERILOG"'
+  'validate_bool_env "WASM_SKIP_BUILD" "$WASM_SKIP_BUILD"'
+  'validate_bool_env "WASM_REQUIRE_CLEAN_CROSSCOMPILE" "$WASM_REQUIRE_CLEAN_CROSSCOMPILE"'
+  'invalid $name value'
+  "invalid WASM_CHECK_CXX20_WARNINGS"
   'command -v "$NODE_BIN"'
   'command -v ninja'
   "utils/wasm_cxx20_warning_check.sh"

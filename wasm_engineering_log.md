@@ -771,3 +771,38 @@
     `utils/wasm_cxx20_contract_check.sh`,
     `utils/wasm_smoke_contract_check.sh`, and
     `utils/wasm_ci_contract_check.sh` pass.
+
+## 2026-02-23 (follow-up: validate wasm smoke env toggle values)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    env validation hooks in `utils/run_wasm_smoke.sh`:
+    - shared boolean helper `validate_bool_env`;
+    - explicit checks for:
+      - `WASM_REQUIRE_VERILOG`
+      - `WASM_SKIP_BUILD`
+      - `WASM_REQUIRE_CLEAN_CROSSCOMPILE`
+    - explicit `WASM_CHECK_CXX20_WARNINGS` value validation.
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh`
+      failed with:
+      - `missing token in smoke script: validate_bool_env`
+    - smoke script accepted invalid env values (for example,
+      `WASM_CHECK_CXX20_WARNINGS=invalid`) without early rejection.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` to:
+    - add `validate_bool_env()` and fail fast unless boolean toggles are
+      exactly `0` or `1`;
+    - reject invalid `WASM_CHECK_CXX20_WARNINGS` values unless one of
+      `auto`, `0`, or `1`.
+  - updated `utils/wasm_smoke_contract_check.sh` to enforce the new validation
+    contract tokens.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - negative test:
+    - `WASM_CHECK_CXX20_WARNINGS=invalid WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh`
+      exits non-zero with:
+      - `invalid WASM_CHECK_CXX20_WARNINGS value: invalid (expected auto, 0, or 1)`.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
