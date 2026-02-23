@@ -18,6 +18,7 @@ required_tokens=(
   "utils/wasm_cxx20_warning_behavior_check.sh"
   "utils/wasm_cxx20_warning_contract_check.sh"
   "utils/wasm_runtime_helpers_behavior_check.sh"
+  "utils/wasm_runtime_helpers_behavior_contract_check.sh"
   "utils/wasm_runtime_helpers_contract_check.sh"
   "utils/wasm_smoke_contract_check.sh"
   "utils/run_wasm_smoke.sh"

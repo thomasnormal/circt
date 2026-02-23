@@ -46,6 +46,10 @@ chmod +x "$fake_bin/node"
 missing_sv="$tmpdir/missing.sv"
 bmc_input="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
 sim_input="test/Tools/circt-sim/llhd-combinational.mlir"
+case1_out="$tmpdir/case1.out"
+case1_err="$tmpdir/case1.err"
+case2_out="$tmpdir/case2.out"
+case2_err="$tmpdir/case2.err"
 
 # Case 1: no circt-verilog.js in BUILD_DIR => missing SV input must not fail.
 set +e
@@ -55,12 +59,12 @@ PATH="$fake_bin:$PATH" \
   BMC_TEST_INPUT="$bmc_input" \
   SIM_TEST_INPUT="$sim_input" \
   SV_TEST_INPUT="$missing_sv" \
-  "$SCRIPT" >/tmp/wasm-runtime-helper-case1.out 2>/tmp/wasm-runtime-helper-case1.err
+  "$SCRIPT" >"$case1_out" 2>"$case1_err"
 case1_rc=$?
 set -e
 if [[ "$case1_rc" -ne 0 ]]; then
   echo "[wasm-runtime-helpers-behavior] case1 failed: missing SV input should be ignored when circt-verilog.js is absent" >&2
-  cat /tmp/wasm-runtime-helper-case1.err >&2
+  cat "$case1_err" >&2
   exit 1
 fi
 
@@ -72,16 +76,16 @@ PATH="$fake_bin:$PATH" \
   BMC_TEST_INPUT="$bmc_input" \
   SIM_TEST_INPUT="$sim_input" \
   SV_TEST_INPUT="$missing_sv" \
-  "$SCRIPT" >/tmp/wasm-runtime-helper-case2.out 2>/tmp/wasm-runtime-helper-case2.err
+  "$SCRIPT" >"$case2_out" 2>"$case2_err"
 case2_rc=$?
 set -e
 if [[ "$case2_rc" -eq 0 ]]; then
   echo "[wasm-runtime-helpers-behavior] case2 unexpectedly succeeded with missing SV input and circt-verilog.js present" >&2
   exit 1
 fi
-if ! grep -Fq -- "[wasm-rg-default] missing test input: $missing_sv" /tmp/wasm-runtime-helper-case2.err; then
+if ! grep -Fq -- "[wasm-rg-default] missing test input: $missing_sv" "$case2_err"; then
   echo "[wasm-runtime-helpers-behavior] case2 missing explicit missing-SV-input diagnostic" >&2
-  cat /tmp/wasm-runtime-helper-case2.err >&2
+  cat "$case2_err" >&2
   exit 1
 fi
 
