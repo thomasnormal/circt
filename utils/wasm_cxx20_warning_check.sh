@@ -9,6 +9,17 @@ if [[ ! -d "$BUILD_DIR" ]]; then
   exit 1
 fi
 
+cache_file="$BUILD_DIR/CMakeCache.txt"
+if [[ ! -f "$cache_file" ]]; then
+  echo "[wasm-cxx20-warn] missing CMake cache: $cache_file" >&2
+  exit 1
+fi
+
+if ! grep -Fq -- "CMAKE_CXX_STANDARD:STRING=20" "$cache_file"; then
+  echo "[wasm-cxx20-warn] build is not configured for C++20 (expected CMAKE_CXX_STANDARD:STRING=20)" >&2
+  exit 1
+fi
+
 if ! command -v ninja >/dev/null 2>&1; then
   echo "[wasm-cxx20-warn] missing ninja in PATH" >&2
   exit 1

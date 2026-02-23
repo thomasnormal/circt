@@ -502,3 +502,27 @@
 - Validation:
   - `utils/wasm_ci_contract_check.sh` passes.
   - `utils/wasm_cxx20_warning_check.sh` passes locally.
+
+## 2026-02-23 (follow-up: enforce C++20 configuration in warning triage)
+- Gap identified (regression-test first):
+  - added `utils/wasm_cxx20_warning_contract_check.sh` requiring warning-check
+    script coverage of:
+    - `CMAKE_CXX_STANDARD:STRING=20`
+    - `ambiguous-reversed-operator` warning pattern.
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_check.sh` did not verify that the build cache
+      actually used C++20, so it could silently pass against stale C++17
+      configuration.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to hard-fail unless
+    `build-wasm/CMakeCache.txt` contains `CMAKE_CXX_STANDARD:STRING=20`.
+  - added `utils/wasm_cxx20_warning_contract_check.sh`.
+  - wired the new contract into CI guardrails:
+    - `utils/wasm_ci_contract_check.sh` requires it in workflow.
+    - `.github/workflows/wasmSmoke.yml` runs it in contract-check step.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh`, `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`, and
+    `utils/wasm_smoke_contract_check.sh` all pass.
