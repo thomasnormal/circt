@@ -1325,3 +1325,33 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: make configure behavior test outputs concurrency-safe)
+- Gap identified (regression-test first):
+  - added new contract check:
+    - `utils/wasm_configure_behavior_contract_check.sh`
+  - Pre-fix failure:
+    - `utils/wasm_configure_behavior_contract_check.sh` failed with:
+      - `missing token in behavior check script: behavior_out="$tmpdir/configure.out"`
+    - `utils/wasm_configure_behavior_check.sh` wrote diagnostics to fixed
+      `/tmp/wasm-config-behavior.*` paths, which can collide across concurrent
+      CI/local runs.
+- Fix:
+  - updated `utils/wasm_configure_behavior_check.sh`:
+    - switched behavior-check output/error paths to tmpdir-scoped files:
+      - `behavior_out="$tmpdir/configure.out"`
+      - `behavior_err="$tmpdir/configure.err"`
+    - removed fixed `/tmp/wasm-config-behavior*` usage.
+  - added `utils/wasm_configure_behavior_contract_check.sh` to enforce this
+    contract, including guard against reintroducing fixed `/tmp` paths.
+  - integrated contract in CI:
+    - `.github/workflows/wasmSmoke.yml` now runs
+      `utils/wasm_configure_behavior_contract_check.sh`;
+    - `utils/wasm_ci_contract_check.sh` requires workflow token.
+- Validation:
+  - `utils/wasm_configure_behavior_contract_check.sh` passes.
+  - `utils/wasm_configure_behavior_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
