@@ -468,22 +468,97 @@ struct LTLPropertyLowerer {
   }
 
   std::optional<bool> getI1Constant(Value value) {
-    if (!value)
-      return std::nullopt;
-    if (auto hwConst = value.getDefiningOp<hw::ConstantOp>()) {
-      APInt bits = hwConst.getValue();
-      if (bits.getBitWidth() == 1)
-        return bits.isOne();
-    }
-    if (auto arithConst = value.getDefiningOp<arith::ConstantOp>()) {
-      if (auto boolAttr = dyn_cast<BoolAttr>(arithConst.getValue()))
-        return boolAttr.getValue();
-      if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
-        if (intAttr.getType().isInteger(1))
-          return intAttr.getValue().isOne();
+    std::function<std::optional<bool>(Value)> eval = [&](Value cur)
+        -> std::optional<bool> {
+      if (!cur)
+        return std::nullopt;
+      if (auto hwConst = cur.getDefiningOp<hw::ConstantOp>()) {
+        APInt bits = hwConst.getValue();
+        if (bits.getBitWidth() == 1)
+          return bits.isOne();
       }
-    }
-    return std::nullopt;
+      if (auto arithConst = cur.getDefiningOp<arith::ConstantOp>()) {
+        if (auto boolAttr = dyn_cast<BoolAttr>(arithConst.getValue()))
+          return boolAttr.getValue();
+        if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
+          if (intAttr.getType().isInteger(1))
+            return intAttr.getValue().isOne();
+        }
+      }
+      if (auto cast = cur.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() == 1)
+          return eval(cast->getOperand(0));
+      }
+      if (auto mux = cur.getDefiningOp<comb::MuxOp>()) {
+        if (auto cond = eval(mux.getCond()))
+          return *cond ? eval(mux.getTrueValue()) : eval(mux.getFalseValue());
+        auto t = eval(mux.getTrueValue());
+        auto f = eval(mux.getFalseValue());
+        if (t && f && *t == *f)
+          return *t;
+        return std::nullopt;
+      }
+      if (auto andOp = cur.getDefiningOp<comb::AndOp>()) {
+        bool allConst = true;
+        for (Value operand : andOp.getOperands()) {
+          auto c = eval(operand);
+          if (!c) {
+            allConst = false;
+            continue;
+          }
+          if (!*c)
+            return false;
+        }
+        if (allConst)
+          return true;
+        return std::nullopt;
+      }
+      if (auto orOp = cur.getDefiningOp<comb::OrOp>()) {
+        bool allConst = true;
+        for (Value operand : orOp.getOperands()) {
+          auto c = eval(operand);
+          if (!c) {
+            allConst = false;
+            continue;
+          }
+          if (*c)
+            return true;
+        }
+        if (allConst)
+          return false;
+        return std::nullopt;
+      }
+      if (auto xorOp = cur.getDefiningOp<comb::XorOp>()) {
+        bool result = false;
+        for (Value operand : xorOp.getOperands()) {
+          auto c = eval(operand);
+          if (!c)
+            return std::nullopt;
+          result ^= *c;
+        }
+        return result;
+      }
+      if (auto icmp = cur.getDefiningOp<comb::ICmpOp>()) {
+        auto lhs = eval(icmp.getLhs());
+        auto rhs = eval(icmp.getRhs());
+        if (!lhs || !rhs)
+          return std::nullopt;
+        switch (icmp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+        case comb::ICmpPredicate::ceq:
+        case comb::ICmpPredicate::weq:
+          return *lhs == *rhs;
+        case comb::ICmpPredicate::ne:
+        case comb::ICmpPredicate::cne:
+        case comb::ICmpPredicate::wne:
+          return *lhs != *rhs;
+        default:
+          return std::nullopt;
+        }
+      }
+      return std::nullopt;
+    };
+    return eval(value);
   }
 
   PropertyResult lowerDisableIff(ltl::OrOp orOp, Value clock,
