@@ -33,5 +33,6 @@
 - Keep changes scoped; split unrelated work across commits/PRs.
 
 ## Project-Specific Notes
+- Always prioritize long term maintainability.
 - Update `CHANGELOG.md` for significant features or fixes.
 - Merge regularly with upstream/main to keep worktrees aligned.
