@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AOTProcessCompiler.h"
+#include "CompiledModuleLoader.h"
 #include "UcontextProcess.h"
 #include "LLHDProcessInterpreter.h"
 #include "LLHDProcessInterpreterStorePatterns.h"
@@ -10608,86 +10609,115 @@ void LLHDProcessInterpreter::notifyProcessAwaiters(ProcessId procId) {
 
 void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
     SignalId signal, const SignalValue &value) {
+  constexpr ProcessId kAnyProcess = static_cast<ProcessId>(-1);
+
   auto propIt = interfaceFieldPropagation.find(signal);
-  if (propIt == interfaceFieldPropagation.end())
-    return;
-
-  SignalEncoding parentEncoding = scheduler.getSignalEncoding(signal);
-  InterpretedValue parentVal = InterpretedValue::fromSignalValue(value);
-  maybeTraceInterfacePropagationSource(signal, parentVal, propIt->second.size());
-  for (SignalId childSigId : propIt->second) {
-    const SignalValue &childCurrent = scheduler.getSignalValue(childSigId);
-    unsigned childW = childCurrent.getWidth();
-    SignalEncoding childEncoding = scheduler.getSignalEncoding(childSigId);
-    InterpretedValue childDriveVal = parentVal;
-    if (childDriveVal.isX()) {
-      childDriveVal = InterpretedValue::makeX(childW);
-    } else {
-      APInt apVal = childDriveVal.getAPInt();
-      // Four-state shadow signals encode unknown bits in the low half and
-      // value bits in the high half. When driving a two-state child from a
-      // four-state parent, decode only when widths match a true 2x->1x
-      // representation change. Equal-width edges must preserve layout bits.
-      if (parentEncoding == SignalEncoding::FourStateStruct &&
-          childEncoding != SignalEncoding::FourStateStruct &&
-          apVal.getBitWidth() == childW * 2) {
-        unsigned logicalW = childW;
-        APInt unknownBits = apVal.extractBits(logicalW, 0);
-        APInt valueBits = apVal.extractBits(logicalW, logicalW);
-        // Two-state sinks collapse X/Z to 0.
-        if (!unknownBits.isZero())
-          valueBits = valueBits & ~unknownBits;
-        apVal = valueBits;
+  if (propIt != interfaceFieldPropagation.end()) {
+    SignalEncoding parentEncoding = scheduler.getSignalEncoding(signal);
+    InterpretedValue parentVal = InterpretedValue::fromSignalValue(value);
+    maybeTraceInterfacePropagationSource(signal, parentVal,
+                                         propIt->second.size());
+    for (SignalId childSigId : propIt->second) {
+      const SignalValue &childCurrent = scheduler.getSignalValue(childSigId);
+      unsigned childW = childCurrent.getWidth();
+      SignalEncoding childEncoding = scheduler.getSignalEncoding(childSigId);
+      InterpretedValue childDriveVal = parentVal;
+      if (childDriveVal.isX()) {
+        childDriveVal = InterpretedValue::makeX(childW);
+      } else {
+        APInt apVal = childDriveVal.getAPInt();
+        // Four-state shadow signals encode unknown bits in the low half and
+        // value bits in the high half. When driving a two-state child from a
+        // four-state parent, decode only when widths match a true 2x->1x
+        // representation change. Equal-width edges must preserve layout bits.
+        if (parentEncoding == SignalEncoding::FourStateStruct &&
+            childEncoding != SignalEncoding::FourStateStruct &&
+            apVal.getBitWidth() == childW * 2) {
+          unsigned logicalW = childW;
+          APInt unknownBits = apVal.extractBits(logicalW, 0);
+          APInt valueBits = apVal.extractBits(logicalW, logicalW);
+          // Two-state sinks collapse X/Z to 0.
+          if (!unknownBits.isZero())
+            valueBits = valueBits & ~unknownBits;
+          apVal = valueBits;
+        }
+        if (childEncoding == SignalEncoding::FourStateStruct) {
+          unsigned logicalW = childW / 2;
+          if (apVal.getBitWidth() <= logicalW) {
+            // Scalar known value -> four-state struct encoding:
+            // low half = unknown (0), high half = value bits.
+            if (apVal.getBitWidth() < logicalW)
+              apVal = apVal.zext(logicalW);
+            else if (apVal.getBitWidth() > logicalW)
+              apVal = apVal.trunc(logicalW);
+            APInt encoded = APInt::getZero(childW);
+            safeInsertBits(encoded, apVal, logicalW);
+            apVal = encoded;
+          }
+        }
+        if (apVal.getBitWidth() < childW)
+          apVal = apVal.zext(childW);
+        else if (apVal.getBitWidth() > childW)
+          apVal = apVal.trunc(childW);
+        childDriveVal = InterpretedValue(apVal);
       }
-      if (childEncoding == SignalEncoding::FourStateStruct) {
-        unsigned logicalW = childW / 2;
-        if (apVal.getBitWidth() <= logicalW) {
-          // Scalar known value -> four-state struct encoding:
-          // low half = unknown (0), high half = value bits.
-          if (apVal.getBitWidth() < logicalW)
-            apVal = apVal.zext(logicalW);
-          else if (apVal.getBitWidth() > logicalW)
-            apVal = apVal.trunc(logicalW);
-          APInt encoded = APInt::getZero(childW);
-          safeInsertBits(encoded, apVal, logicalW);
-          apVal = encoded;
+      // Keep epsilon shadow in sync with direct propagation updates so that
+      // subsequent llvm.load fast-path reads do not see stale values.
+      pendingEpsilonDrives[childSigId] = childDriveVal;
+      scheduler.updateSignal(childSigId, childDriveVal.toSignalValue());
+      maybeTraceInterfacePropagationChild(childSigId, childDriveVal);
+
+      auto childAddrIt = fieldSignalToAddr.find(childSigId);
+      if (childAddrIt != fieldSignalToAddr.end()) {
+        uint64_t childAddr = childAddrIt->second;
+        uint64_t off = 0;
+        MemoryBlock *block =
+            findMemoryBlockByAddress(childAddr, kAnyProcess, &off);
+        unsigned storeSize = (childW + 7) / 8;
+        if (block && off + storeSize <= block->size) {
+          uint64_t baseAddr = childAddr - off;
+          auto &byteInit = interfaceMemoryByteInitMask[baseAddr];
+          if (byteInit.size() != block->size)
+            byteInit.assign(block->size, 0);
+          std::fill(byteInit.begin() + off, byteInit.begin() + off + storeSize,
+                    childDriveVal.isX() ? uint8_t{0} : uint8_t{1});
+          if (!childDriveVal.isX()) {
+            APInt bits = childDriveVal.getAPInt();
+            if (bits.getBitWidth() < storeSize * 8)
+              bits = bits.zext(storeSize * 8);
+            for (unsigned i = 0; i < storeSize; ++i)
+              block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+            block->initialized = true;
+          }
         }
       }
-      if (apVal.getBitWidth() < childW)
-        apVal = apVal.zext(childW);
-      else if (apVal.getBitWidth() > childW)
-        apVal = apVal.trunc(childW);
-      childDriveVal = InterpretedValue(apVal);
     }
-    // Keep epsilon shadow in sync with direct propagation updates so that
-    // subsequent llvm.load fast-path reads do not see stale values.
-    pendingEpsilonDrives[childSigId] = childDriveVal;
-    scheduler.updateSignal(childSigId, childDriveVal.toSignalValue());
-    maybeTraceInterfacePropagationChild(childSigId, childDriveVal);
+  }
 
-    auto childAddrIt = fieldSignalToAddr.find(childSigId);
-    if (childAddrIt != fieldSignalToAddr.end()) {
-      uint64_t childAddr = childAddrIt->second;
+  // Replay direct signal->memory mirror stores discovered at module init
+  // (e.g. `llvm.store %stream_in_string, %alloca`) so memory-backed process
+  // logic observes updated signal values on each signal change.
+  if (!signalMemoryMirrorPairs.empty()) {
+    unsigned mirrorHits = 0;
+    APInt bits = value.getAPInt();
+    unsigned storeSize = (bits.getBitWidth() + 7) / 8;
+    if (storeSize > 0 && bits.getBitWidth() < storeSize * 8)
+      bits = bits.zext(storeSize * 8);
+
+    for (auto &[srcSigId, destAddr] : signalMemoryMirrorPairs) {
+      if (srcSigId != signal)
+        continue;
       uint64_t off = 0;
-      MemoryBlock *block = findBlockByAddress(childAddr, off);
-      unsigned storeSize = (childW + 7) / 8;
-      if (block && off + storeSize <= block->size) {
-        uint64_t baseAddr = childAddr - off;
-        auto &byteInit = interfaceMemoryByteInitMask[baseAddr];
-        if (byteInit.size() != block->size)
-          byteInit.assign(block->size, 0);
-        std::fill(byteInit.begin() + off, byteInit.begin() + off + storeSize,
-                  childDriveVal.isX() ? uint8_t{0} : uint8_t{1});
-        if (!childDriveVal.isX()) {
-          APInt bits = childDriveVal.getAPInt();
-          if (bits.getBitWidth() < storeSize * 8)
-            bits = bits.zext(storeSize * 8);
-          for (unsigned i = 0; i < storeSize; ++i)
-            block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
-          block->initialized = true;
-        }
-      }
+      MemoryBlock *block =
+          findMemoryBlockByAddress(destAddr, kAnyProcess, &off);
+      if (!block || off + storeSize > block->size)
+        continue;
+      for (unsigned i = 0; i < storeSize; ++i)
+        block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+      block->initialized = true;
+      ++mirrorHits;
     }
+    (void)mirrorHits;
   }
 }
 
@@ -17337,7 +17367,8 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
   // Note: The 'observed' operands are probe results (values), not signal refs.
   // We need to trace back to find the original signal by looking at the
   // defining probe operation.
-  auto applySelfDrivenFilter = [&](SensitivityList &list) {
+  auto applySelfDrivenFilter = [&](SensitivityList &list,
+                                   bool dropAllSelf = false) {
     if (list.empty())
       return;
     llvm::DenseSet<SignalId> selfDrivenSignals;
@@ -17384,7 +17415,7 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       }
     }
 
-    if (hasNonSelf) {
+    if (hasNonSelf || dropAllSelf) {
       SensitivityList filtered;
       for (const auto &entry : list.getEntries()) {
         if (selfDrivenSignals.count(entry.signalId))
@@ -17634,7 +17665,9 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         });
       }
 
-      applySelfDrivenFilter(waitList);
+      // For inferred always @(*) sensitivities, drop self-driven-only signal
+      // sets so we can fall back to memory-mirror/input-port sensitivity.
+      applySelfDrivenFilter(waitList, /*dropAllSelf=*/true);
 
       // Expand interface pointer signals to their field shadow signals.
       // When a process is sensitive to an interface pointer signal (which
@@ -17668,6 +17701,76 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
       cacheWaitState(state, scheduler, &waitList, hadDelay,
                      waitOp.getOperation());
     } else {
+      // If module-level signal->memory mirror stores are present, use their
+      // source signals as a fallback sensitivity set. This is critical for
+      // string-typed always blocks lowered as:
+      //   llvm.store %port, %alloca
+      //   llhd.process { llhd.wait ... llvm.load %alloca ... }
+      // where direct LLHD signal dependencies are otherwise undetectable.
+      SensitivityList mirrorWaitList;
+      if (!signalMemoryMirrorPairs.empty()) {
+        llvm::DenseSet<SignalId> mirrorSeen;
+        for (auto &[srcSigId, destAddr] : signalMemoryMirrorPairs) {
+          (void)destAddr;
+          if (srcSigId != 0 && mirrorSeen.insert(srcSigId).second)
+            mirrorWaitList.addLevel(srcSigId);
+        }
+        applySelfDrivenFilter(mirrorWaitList, /*dropAllSelf=*/true);
+      }
+      if (!mirrorWaitList.empty()) {
+        maybeTraceWaitSensitivityList(procId, "mirror", mirrorWaitList);
+        scheduler.suspendProcessForEvents(procId, mirrorWaitList);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Wait with no delay/no signals - using "
+                   << mirrorWaitList.size()
+                   << " mirrored signal(s)\n");
+        cacheWaitState(state, scheduler, &mirrorWaitList, hadDelay,
+                       waitOp.getOperation());
+        return success();
+      }
+
+      // Last static fallback before one-shot delta resumption:
+      // if this interpreter was given external input port mappings and
+      // sensitivity inference failed, suspend on those input ports.
+      // This avoids dropping into single-shot fallback for processes that
+      // read module-level mirrored memory fed from input block arguments
+      // (common for string-typed always blocks).
+      SensitivityList portWaitList;
+      if (externalPortSignals && !externalPortSignals->empty()) {
+        llvm::DenseSet<SignalId> seen;
+        for (const auto &entry : *externalPortSignals) {
+          SignalId sigId = entry.second;
+          if (sigId != 0 && seen.insert(sigId).second)
+            portWaitList.addLevel(sigId);
+        }
+        applySelfDrivenFilter(portWaitList, /*dropAllSelf=*/true);
+      }
+      if (!portWaitList.empty()) {
+        maybeTraceWaitSensitivityList(procId, "port-fallback", portWaitList);
+        scheduler.suspendProcessForEvents(procId, portWaitList);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Wait with no delay/no signals - using "
+                   << portWaitList.size()
+                   << " input port fallback signal(s)\n");
+        cacheWaitState(state, scheduler, &portWaitList, hadDelay,
+                       waitOp.getOperation());
+        return success();
+      }
+
+      static bool traceWaitSensitivity = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_WAIT_SENS");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      if (traceWaitSensitivity) {
+        llvm::errs() << "[WAIT-SENS] proc=" << procId;
+        if (const Process *proc = scheduler.getProcess(procId))
+          llvm::errs() << " name='" << proc->getName() << "'";
+        llvm::errs() << " tag=empty mirrors=" << signalMemoryMirrorPairs.size()
+                     << " ports="
+                     << (externalPortSignals ? externalPortSignals->size() : 0)
+                     << "\n";
+      }
+
       // Guard against infinite delta cycles: if this process+wait has already
       // been through the empty-sensitivity fallback at least once, halt the
       // process instead of re-scheduling.  This prevents processes that read
@@ -36156,6 +36259,15 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
               interfaceSignalCopyPairs.push_back(pair);
           }
 
+          SignalId directSignalId = resolveSignal(storeOp.getValue());
+          if (directSignalId != 0) {
+            auto pair = std::make_pair(directSignalId, destAddr.getUInt64());
+            if (std::find(signalMemoryMirrorPairs.begin(),
+                          signalMemoryMirrorPairs.end(),
+                          pair) == signalMemoryMirrorPairs.end())
+              signalMemoryMirrorPairs.push_back(pair);
+          }
+
           InterfaceTriStateStorePattern triPattern;
           if (matchInterfaceTriStateStore(storeOp.getValue(),
                                           getChildOrParentValue,
@@ -36576,6 +36688,26 @@ void LLHDProcessInterpreter::aotCompileFuncBodies() {
 
   llvm::errs() << "[circt-sim] [AOT-F1] Mapped " << mapped
                << " native func ptrs for dispatch\n";
+}
+
+void LLHDProcessInterpreter::loadCompiledFunctions(
+    const CompiledModuleLoader &loader) {
+  if (!rootModule)
+    return;
+
+  unsigned mapped = 0;
+  rootModule.walk([&](mlir::func::FuncOp funcOp) {
+    if (funcOp.isExternal())
+      return;
+    void *ptr = loader.lookupFunction(funcOp.getSymName());
+    if (ptr) {
+      nativeFuncPtrs[funcOp.getOperation()] = ptr;
+      ++mapped;
+    }
+  });
+
+  llvm::errs() << "[circt-sim] Loaded " << mapped
+               << " compiled functions from .so for native dispatch\n";
 }
 
 // interpretMooreWaitConditionCall is defined in
