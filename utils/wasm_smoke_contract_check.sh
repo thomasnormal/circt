@@ -24,6 +24,12 @@ required_tokens=(
   'command -v "$NODE_BIN"'
   'command -v ninja'
   "utils/wasm_cxx20_warning_check.sh"
+  "REENTRY_HELPER"
+  "PLUSARGS_HELPER"
+  "RESOURCE_GUARD_HELPER"
+  'missing helper script: $REENTRY_HELPER'
+  'missing executable helper script: $PLUSARGS_HELPER'
+  'missing executable helper script: $RESOURCE_GUARD_HELPER'
   "git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake"
   "circt-bmc.wasm"
   "circt-sim.wasm"
