@@ -500,8 +500,7 @@ Options:
                          Fail when any `LEC*` lane reports
                          `lec_diag_missing_cases > 0`
   --fail-on-new-bmc-backend-parity-mismatch-cases
-                         Fail when BMC backend-parity mismatch case count
-                         increases vs baseline
+                         Deprecated no-op (backend parity shadow mode removed)
   --fail-on-new-bmc-ir-check-fingerprint-cases
                          Fail when BMC fingerprint-fallback IR-check case count
                          increases vs baseline
@@ -595,9 +594,7 @@ Options:
                          Run targeted sv-tests UVM semantic-closure BMC lane
                          (`sv-tests-uvm/BMC_SEMANTICS`)
   --sv-tests-bmc-backend-parity
-                         Run sv-tests BMC backend parity shadow pass
-                         (SMT-LIB primary vs JIT shadow) and export
-                         `sv-tests-bmc-backend-parity.tsv`
+                         Deprecated no-op (legacy backend parity shadow mode)
   --expected-failures-file FILE
                          TSV with suite/mode expected fail+error budgets
   --expectations-dry-run
@@ -971,9 +968,7 @@ Options:
                          Fail filtered formal lanes that report `total=0` by
                          marking them `error=1 nonempty_filter_miss=1` in
                          summary output
-  --bmc-run-smtlib        Use circt-bmc --run-smtlib (external z3) in
-                         non-sv-tests BMC suite runs (sv-tests BMC lanes
-                         already force SMT-LIB mode for semantic parity)
+  --bmc-run-smtlib        Deprecated no-op (BMC lanes now always run SMT-LIB)
   --bmc-timeout-secs N    Override CIRCT_TIMEOUT_SECS for BMC suite runners
                          (sv-tests/verilator/yosys BMC lanes)
   --bmc-allow-multi-clock Add --allow-multi-clock to BMC runs
@@ -3031,7 +3026,6 @@ WITH_OPENTITAN_LEC_STRICT=0
 WITH_OPENTITAN_E2E=0
 WITH_OPENTITAN_E2E_STRICT=0
 WITH_SV_TESTS_UVM_BMC_SEMANTICS=0
-SV_TESTS_BMC_BACKEND_PARITY=0
 WITH_AVIP=0
 WITH_OVL=0
 WITH_OVL_SEMANTIC=0
@@ -3157,7 +3151,7 @@ OPENTITAN_E2E_IMPL_FILTER=""
 OPENTITAN_E2E_INCLUDE_MASKED=0
 OPENTITAN_E2E_LEC_X_MODE="xopt"
 OPENTITAN_E2E_LEC_X_MODE_FLAG_COUNT=0
-BMC_RUN_SMTLIB=0
+BMC_RUN_SMTLIB=1
 BMC_ALLOW_MULTI_CLOCK=0
 BMC_ASSUME_KNOWN_INPUTS=0
 BMC_TIMEOUT_SECS=""
@@ -3232,7 +3226,8 @@ while [[ $# -gt 0 ]]; do
     --with-sv-tests-uvm-bmc-semantics)
       WITH_SV_TESTS_UVM_BMC_SEMANTICS=1; shift ;;
     --sv-tests-bmc-backend-parity)
-      SV_TESTS_BMC_BACKEND_PARITY=1; shift ;;
+      echo "warning: --sv-tests-bmc-backend-parity is deprecated and ignored" >&2
+      shift ;;
     --opentitan-bmc-impl-filter)
       OPENTITAN_BMC_IMPL_FILTER="$2"; shift 2 ;;
     --opentitan-bmc-bound)
@@ -3490,7 +3485,8 @@ while [[ $# -gt 0 ]]; do
     --avip-glob)
       AVIP_GLOB="$2"; shift 2 ;;
     --bmc-run-smtlib)
-      BMC_RUN_SMTLIB=1; shift ;;
+      echo "warning: --bmc-run-smtlib is deprecated and ignored (SMT-LIB is always used)" >&2
+      shift ;;
     --bmc-timeout-secs)
       BMC_TIMEOUT_SECS="$2"; shift 2 ;;
     --bmc-allow-multi-clock)
@@ -3734,7 +3730,8 @@ while [[ $# -gt 0 ]]; do
     --fail-on-any-lec-diag-missing-cases)
       FAIL_ON_ANY_LEC_DIAG_MISSING_CASES=1; shift ;;
     --fail-on-new-bmc-backend-parity-mismatch-cases)
-      FAIL_ON_NEW_BMC_BACKEND_PARITY_MISMATCH_CASES=1; shift ;;
+      echo "warning: --fail-on-new-bmc-backend-parity-mismatch-cases is deprecated and ignored" >&2
+      shift ;;
     --fail-on-new-bmc-ir-check-fingerprint-cases)
       FAIL_ON_NEW_BMC_IR_CHECK_FINGERPRINT_CASES=1; shift ;;
     --fail-on-new-bmc-semantic-bucket-cases)
@@ -9404,8 +9401,6 @@ compute_lane_state_config_hash() {
     printf "schema_version=1\n"
     printf "lane_state_compat_policy_version=%s\n" "$LANE_STATE_COMPAT_POLICY_VERSION"
     printf "script_sha256=%s\n" "$script_sha"
-    printf "bmc_run_smtlib=%s\n" "$BMC_RUN_SMTLIB"
-    printf "sv_tests_bmc_backend_parity=%s\n" "$SV_TESTS_BMC_BACKEND_PARITY"
     printf "bmc_allow_multi_clock=%s\n" "$BMC_ALLOW_MULTI_CLOCK"
     printf "bmc_assume_known_inputs=%s\n" "$BMC_ASSUME_KNOWN_INPUTS"
     printf "bmc_timeout_secs=%s\n" "$BMC_TIMEOUT_SECS"
@@ -13130,32 +13125,6 @@ if [[ -d "$SV_TESTS_DIR" ]] && lane_enabled "sv-tests/BMC"; then
           summary="${summary} ${bmc_launch_summary}"
         fi
       fi
-      if [[ "$SV_TESTS_BMC_BACKEND_PARITY" == "1" ]]; then
-        run_suite sv-tests-bmc-backend-parity-jit \
-          env "${FORMAL_BMC_TIMEOUT_ENV[@]}" \
-          OUT="$OUT_DIR/sv-tests-bmc-jit-results.txt" \
-          CIRCT_VERILOG="$CIRCT_VERILOG_BIN" \
-          CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN" \
-          CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN" \
-          CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN" \
-          BMC_SEMANTIC_TAG_MAP_FILE="$SV_TESTS_BMC_SEMANTIC_TAG_MAP_FILE" \
-          BMC_RUN_SMTLIB=0 \
-          ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
-          BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
-          TAG_REGEX="$SV_TESTS_BMC_TAG_REGEX" \
-          TEST_FILTER="$SV_TESTS_BMC_TEST_FILTER" \
-          Z3_BIN="$Z3_BIN" \
-          utils/run_sv_tests_circt_bmc.sh "$SV_TESTS_DIR" || true
-        bmc_backend_parity_summary="$(
-          summarize_bmc_backend_parity_file \
-            "$OUT_DIR/sv-tests-bmc-results.txt" \
-            "$OUT_DIR/sv-tests-bmc-jit-results.txt" \
-            "$OUT_DIR/sv-tests-bmc-backend-parity.tsv"
-        )"
-        if [[ -n "$bmc_backend_parity_summary" ]]; then
-          summary="${summary} ${bmc_backend_parity_summary}"
-        fi
-      fi
       append_filtered_min_total_violation total summary
       maybe_enforce_nonempty_filtered_lane "sv-tests/BMC" total error summary
       record_result_with_summary "sv-tests" "BMC" "$total" "$pass" "$fail" "$xfail" "$xpass" "$error" "$skip" "$summary"
@@ -13372,7 +13341,7 @@ if [[ -d "$VERILATOR_DIR" ]] && lane_enabled "verilator-verification/BMC"; then
       BMC_LAUNCH_EVENTS_OUT="$verilator_bmc_launch_events_file" \
       BMC_SEMANTIC_TAG_MAP_FILE="$VERILATOR_BMC_SEMANTIC_TAG_MAP_FILE" \
       XFAILS="$VERILATOR_BMC_XFAILS" \
-      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB" \
+      BMC_RUN_SMTLIB=1 \
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK" \
       BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS" \
       TEST_FILTER="$VERILATOR_BMC_TEST_FILTER" \
@@ -13517,7 +13486,7 @@ if [[ -d "$YOSYS_DIR" ]] && lane_enabled "yosys/tests/sva/BMC"; then
       CIRCT_OPT="$FORMAL_CIRCT_OPT_BIN"
       CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN"
       CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN"
-      BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+      BMC_RUN_SMTLIB=1
       ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
       BMC_ABSTRACTION_PROVENANCE_OUT="$yosys_bmc_provenance_file"
       BMC_CHECK_ATTRIBUTION_OUT="$yosys_bmc_check_attribution_file"
@@ -13937,7 +13906,7 @@ run_opentitan_bmc_lane() {
     CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
     BMC_MODE_LABEL="$mode_name"
     BOUND="$OPENTITAN_BMC_BOUND"
-    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+    BMC_RUN_SMTLIB=1
     BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
     BMC_ASSUME_KNOWN_INPUTS="$lane_assume_known_inputs"
     Z3_BIN="$Z3_BIN")
@@ -14213,7 +14182,7 @@ run_opentitan_connectivity_bmc_lane() {
     CIRCT_BMC="$FORMAL_CIRCT_BMC_BIN_OPENTITAN"
     CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
     BMC_MODE_LABEL="$mode_name"
-    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+    BMC_RUN_SMTLIB=1
     BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
     BMC_ASSUME_KNOWN_INPUTS="$BMC_ASSUME_KNOWN_INPUTS"
     Z3_BIN="$Z3_BIN")
@@ -15549,7 +15518,7 @@ run_opentitan_fpv_bmc_lane() {
     CIRCT_LEC="$FORMAL_CIRCT_LEC_BIN_OPENTITAN"
     BMC_MODE_LABEL="$mode_name"
     BOUND="$OPENTITAN_BMC_BOUND"
-    BMC_RUN_SMTLIB="$BMC_RUN_SMTLIB"
+    BMC_RUN_SMTLIB=1
     BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
     BMC_ASSUME_KNOWN_INPUTS="$lane_assume_known_inputs"
     Z3_BIN="$Z3_BIN")
@@ -16884,10 +16853,6 @@ summary_txt="$OUT_DIR/summary.txt"
   if [[ -f "$OUT_DIR/bmc-semantic-bucket-case-map.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/bmc-semantic-bucket-case-map.tsv")" -gt 1 ]]; then
     echo "BMC semantic bucket case map: $OUT_DIR/bmc-semantic-bucket-case-map.tsv"
-  fi
-  if [[ -f "$OUT_DIR/sv-tests-bmc-backend-parity.tsv" ]] && \
-     [[ "$(wc -l < "$OUT_DIR/sv-tests-bmc-backend-parity.tsv")" -gt 1 ]]; then
-    echo "sv-tests BMC backend parity case map: $OUT_DIR/sv-tests-bmc-backend-parity.tsv"
   fi
   if [[ -f "$OUT_DIR/opentitan-lec-xprop-case-map.tsv" ]] && \
      [[ "$(wc -l < "$OUT_DIR/opentitan-lec-xprop-case-map.tsv")" -gt 1 ]]; then

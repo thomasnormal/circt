@@ -43,6 +43,22 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
 
 ## Latest SVA Closure Slice (February 23, 2026, stage-3 compatibility shim removal)
 
+- `run_formal_all.sh` orchestration cleanup to align with SMT-LIB-only backend:
+  - removed effective sv-tests backend parity shadow execution path.
+  - deprecated/no-op flags:
+    - `--sv-tests-bmc-backend-parity`
+    - `--fail-on-new-bmc-backend-parity-mismatch-cases`
+    - `--bmc-run-smtlib`
+  - non-sv-tests BMC lane forwarding now pins `BMC_RUN_SMTLIB=1`.
+  - updated tests:
+    - `test/Tools/run-formal-all-sv-tests-bmc-backend-parity.test`
+    - `test/Tools/run-formal-all-strict-gate-bmc-backend-parity-mismatch-cases.test`
+  - validation:
+    - `bash -n utils/run_formal_all.sh` -> pass.
+    - targeted lit (`run-formal-all-help`, `...forces-smtlib`,
+      `...sv-tests-bmc-backend-parity`,
+      `...strict-gate-bmc-backend-parity-mismatch-cases`) -> `4/4` pass.
+
 - retired remaining compatibility shims and legacy backend-mode semantics:
   - `tools/circt-bmc/circt-bmc.cpp`
     - removed `--run` alias and `--shared-libs` option.
