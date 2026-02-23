@@ -4244,3 +4244,44 @@
       - result: `148/148` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize `llvm.extractvalue` from constant
+  global loads):
+  - realization:
+    - some LLVM lowering paths materialize aggregate loads and then use
+      `llvm.extractvalue` to select scalar fields.
+    - existing SMT-LIB legalization covered direct scalar loads (with optional
+      GEP), but not load+extractvalue chains.
+  - TDD signal:
+    - added
+      `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-extractvalue.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.addressof'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - added legalization for scalar `llvm.extractvalue` where:
+      - container is `llvm.load` from a resolvable global access path
+      - extracted element can be resolved to a scalar constant via the existing
+        global constant extractor (including region initializer fallback).
+    - reuses non-constant global safety policy and direct-store checks used by
+      load folding.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-extractvalue.mlir`.
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-load-region.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-region-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-struct-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `149/149` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
