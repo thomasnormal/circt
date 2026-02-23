@@ -12,6 +12,7 @@ required_tokens=(
   "CMAKE_CXX_STANDARD:STRING=20"
   "ambiguous-reversed-operator"
   "c++20-extensions"
+  "-std=c++20"
 )
 
 for token in "${required_tokens[@]}"; do
