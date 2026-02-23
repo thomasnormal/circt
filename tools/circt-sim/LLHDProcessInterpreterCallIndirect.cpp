@@ -3096,6 +3096,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                          << llvm::format_hex(queueAddr, 16) << " depth="
                          << sequencerItemFifo[queueAddr].size() << "\n";
           }
+          // Wake any process blocked in get/get_next_item on this queue.
+          wakeUvmSequencerGetWaiterForPush(queueAddr);
         }
 
         // Record waiter and suspend. The item_done interceptor will
@@ -3154,7 +3156,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       // Fallback: when the port-to-sequencer resolution fails (no UVM
       // connection chain), scan all FIFOs for any available item. This
       // handles simple test cases with a single sequencer-driver pair.
-      if (!found && seqrQueueAddr == 0) {
+      if (!found && seqrQueueAddr == 0 && !isTryNextItem) {
         for (auto &[qAddr, fifo] : sequencerItemFifo) {
           if (!fifo.empty()) {
             seqrQueueAddr = qAddr;
@@ -3235,40 +3237,28 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
         return success();
       }
-      // If no item available, suspend the process and schedule a poll
-      // to retry on the next delta. Return success() so the halt check
-      // in interpretFuncBody saves call stack frames. Store the call op
-      // in sequencerGetRetryCallOp so that on resume, the innermost
-      // frame's resumeOp is overridden to re-execute this call_indirect
-      // (instead of skipping past it).
+      // If no item available, register as a queue waiter so that
+      // finish_item's push will wake this process directly (event-based
+      // instead of delta-cycle polling). Return success() so the halt
+      // check in interpretFuncBody saves call stack frames.
       LLVM_DEBUG(llvm::dbgs() << "  seq_item_pull_port::get: FIFO empty, "
-                              << "suspending for delta poll\n");
+                              << "registering as queue waiter\n");
+      {
+        // Only emit the trace on first registration (avoid duplicate
+        // messages from re-wakeup via unrelated signal sensitivity).
+        bool alreadyWaiting =
+            sequencerGetWaitQueueByProc.count(procId) != 0;
+        if (traceSeq && !alreadyWaiting) {
+          llvm::errs() << "[SEQ-CI] wait port=0x"
+                       << llvm::format_hex(portAddr, 16) << " seqr=0x"
+                       << llvm::format_hex(seqrQueueAddr, 16) << "\n";
+        }
+      }
       auto &pState = processStates[procId];
       pState.waiting = true;
       pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
-      SimTime currentTime = scheduler.getCurrentTime();
-      constexpr uint32_t kDeltaPollSafetyMargin = 32;
-      constexpr uint32_t kMaxDeltaPollBudgetCap = 256;
-      constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ps
-      size_t configuredMaxDeltas = scheduler.getMaxDeltaCycles();
-      uint32_t deltaPollBudget = 0;
-      if (configuredMaxDeltas > kDeltaPollSafetyMargin) {
-        deltaPollBudget = static_cast<uint32_t>(std::min<size_t>(
-            configuredMaxDeltas - kDeltaPollSafetyMargin,
-            kMaxDeltaPollBudgetCap));
-      }
-      SimTime targetTime;
-      if (currentTime.deltaStep < deltaPollBudget)
-        targetTime = currentTime.nextDelta();
-      else
-        targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
-      scheduler.getEventScheduler().schedule(
-          targetTime, SchedulingRegion::Active,
-          Event([this, procId]() {
-            auto &st = processStates[procId];
-            st.waiting = false;
-            scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-          }));
+      enqueueUvmSequencerGetWaiter(seqrQueueAddr, procId,
+                                   callIndirectOp.getOperation());
       return success();
     }
 
