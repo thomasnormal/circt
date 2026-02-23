@@ -41,30 +41,22 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, OVL semantic harness expansion to 110)
+## Latest SVA Closure Slice (February 23, 2026, `ovl_sem_reg_loaded` pass-mode harness fix)
 
-- extended OVL semantic harness coverage from `102` to `110` pass/fail
-  obligations by adding wrappers for the four previously missing
-  coverage-family checkers:
-  - `ovl_coverage`
-  - `ovl_value_coverage`
-  - `ovl_xproduct_bit_coverage`
-  - `ovl_xproduct_value_coverage`
-- updated:
-  - `utils/ovl_semantic/manifest.tsv`
-  - `utils/ovl_semantic/wrappers/ovl_sem_coverage.sv`
-  - `utils/ovl_semantic/wrappers/ovl_sem_value_coverage.sv`
-  - `utils/ovl_semantic/wrappers/ovl_sem_xproduct_bit_coverage.sv`
-  - `utils/ovl_semantic/wrappers/ovl_sem_xproduct_value_coverage.sv`
+- fixed pass/fail stimulus for:
+  - `utils/ovl_semantic/wrappers/ovl_sem_reg_loaded.sv`
+- changed vectors to align with checker sampling semantics:
+  - `src_expr`: `2'b00`
+  - pass `dest_expr`: `2'b00`
+  - fail `dest_expr`: `2'b01`
 - validation snapshot:
-  - targeted new wrappers:
-    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(coverage|value_coverage|xproduct_bit_coverage|xproduct_value_coverage)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
-    - result: `8/8` mode checks pass.
+  - targeted checker:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_reg_loaded$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `2/2` mode checks pass.
   - full semantic matrix in the current local workspace:
     - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
-    - result: `110 total, 5 failures` (same 5 pre-existing failures when
-      running the previous `102`-case manifest: `ovl_sem_increment`,
-      `ovl_sem_decrement`, `ovl_sem_reg_loaded(pass)`).
+    - result: `110 total, 4 failures` (`ovl_sem_increment` pass/fail and
+      `ovl_sem_decrement` pass/fail frontend errors).
   - Yosys BMC sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
     - result: `4/4` mode checks pass.
@@ -223,6 +215,10 @@ Items are grouped by pipeline stage.
     - `ovl_value_coverage`
     - `ovl_xproduct_bit_coverage`
     - `ovl_xproduct_value_coverage`
+  - Current semantic blockers in local workspace:
+    - `ovl_sem_increment` (pass/fail) and `ovl_sem_decrement` (pass/fail)
+      fail during frontend/lowering with:
+      `non-boolean moore.past requires a clocked assertion`.
 
 ## Core Workstreams
 
