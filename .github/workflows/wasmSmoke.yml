@@ -47,10 +47,12 @@ jobs:
 
           utils/configure_wasm_build.sh
           BUILD_DIR=build-wasm NINJA_JOBS=1 utils/wasm_cxx20_warning_check.sh
-          WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 \
+          WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 \
+            WASM_CHECK_CXX20_WARNINGS=1 NINJA_JOBS=1 \
             utils/run_wasm_smoke.sh
 
       - name: Re-run smoke checks without rebuild
         run: |
           WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 \
-            WASM_SKIP_BUILD=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh
+            WASM_CHECK_CXX20_WARNINGS=0 WASM_SKIP_BUILD=1 NINJA_JOBS=1 \
+            utils/run_wasm_smoke.sh
