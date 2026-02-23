@@ -41,6 +41,29 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
+## Latest SVA Closure Slice (February 23, 2026, stage-3 compatibility shim removal)
+
+- retired remaining compatibility shims and legacy backend-mode semantics:
+  - `tools/circt-bmc/circt-bmc.cpp`
+    - removed `--run` alias and `--shared-libs` option.
+  - `utils/run_pairwise_circt_bmc.py`
+  - `utils/run_opentitan_circt_bmc.py`
+    - `backend_mode` now supports only `default|smtlib|smoke`.
+    - no `jit` policy path remains.
+    - non-smoke execution always uses `--run-smtlib`.
+    - `BMC_RUN_SMTLIB=0` is treated as legacy input and ignored with warning.
+- regression closure:
+  - added `test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir`.
+  - updated `test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir` to assert `--run`
+    rejection.
+  - updated pairwise/OpenTitan backend-policy tests to remove `jit` acceptance
+    and lock SMT-LIB-only default execution.
+- validation snapshot:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir build-test/test/Tools/run-pairwise-circt-bmc-case-backend-invalid.test build-test/test/Tools/run-pairwise-circt-bmc-case-backend-override.test build-test/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-invalid.test build-test/test/Tools/run-opentitan-bmc-case-policy-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-regex.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build-test/test/Tools/run-opentitan-bmc-case-policy-ambiguous-pattern.test`
+    - result: `10/10` pass.
+  - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-pairwise-circt-bmc|run-opentitan-bmc|bmc-run-alias-smtlib|bmc-shared-libs-rejected' build-test/test/Tools build-test/test/Tools/circt-bmc`
+    - result: `48/48` pass.
+
 ## Latest SVA Closure Slice (February 23, 2026, stage-2 `circt-bmc` JIT retirement)
 
 - retired native/JIT execution path from `circt-bmc`:

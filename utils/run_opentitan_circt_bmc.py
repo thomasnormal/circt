@@ -62,12 +62,12 @@ def parse_case_backend_mode(raw: str, line_no: int) -> str:
     token = raw.strip().lower()
     if not token:
         return "default"
-    if token in {"default", "jit", "smtlib", "smoke"}:
+    if token in {"default", "smtlib", "smoke"}:
         return token
     print(
         (
             f"invalid case-policy row {line_no}: backend_mode must be one of "
-            f"default|jit|smtlib|smoke, got '{raw}'"
+            f"default|smtlib|smoke, got '{raw}'"
         ),
         file=sys.stderr,
     )
