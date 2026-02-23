@@ -1637,3 +1637,22 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - k-induction no longer rejects cover properties.
   - induction mode now supports cover-only checks in line with broader
     assert/cover mixed-property support.
+
+## Latest LLHD inline formal regression de-XFAIL (2026-02-23)
+
+- Implemented:
+  - `test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
+    - repaired invalid SSA (process-local values used outside process regions).
+    - removed stale `XFAIL: *`.
+    - aligned expected output with current post-lowering form
+      (`smt.solver`).
+
+- Validation:
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
+    - result: `1/1` pass.
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='llhd|lower-to-bmc-inline'`
+    - result: `18 pass, 1 unsupported`.
+
+- Current state:
+  - this LLHD inline BMC regression now contributes active pass/fail signal
+    instead of being permanently expected-fail.

@@ -3597,3 +3597,26 @@
     - regular formal sanity:
       - `TEST_FILTER='^basic00$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - result: `2/2` mode checks pass.
+
+- Iteration update (LLHD inline combinational BMC regression de-XFAIL):
+  - realization:
+    - `test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir` was
+      blanket-`XFAIL` due invalid SSA uses (`%38`/`%42` defined inside
+      `llhd.process` but referenced outside).
+    - this masked real pass/fail signal for an LLHD+formal integration path.
+  - implemented:
+    - fixed the test IR by moving process-produced drives into their owning
+      processes.
+    - removed stale `XFAIL: *`.
+    - updated stale output expectation from `verif.bmc` to `smt.solver` for
+      current `circt-bmc --emit-mlir` post-lowering output.
+  - validation:
+    - targeted:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
+      - result: `1/1` pass.
+    - focused bucket:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='llhd|lower-to-bmc-inline'`
+      - result: `18 pass, 1 unsupported`.
+    - regular formal sanity:
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_next$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `2 tests, failures=0`.
