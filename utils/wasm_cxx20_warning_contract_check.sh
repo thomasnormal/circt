@@ -15,6 +15,7 @@ required_tokens=(
   "-std=c++20"
   'grep -Eiq -- "(^|[^[:alpha:]])warning:" "$log"'
   "FIRRTLAnnotationsGen.cpp"
+  "FIRRTLIntrinsicsGen.cpp"
   "circt-tblgen.cpp"
   'grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"'
 )

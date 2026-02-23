@@ -27,6 +27,7 @@ fi
 
 rebuild_targets=(
   "tools/circt/tools/circt-tblgen/CMakeFiles/circt-tblgen.dir/FIRRTLAnnotationsGen.cpp.o"
+  "tools/circt/tools/circt-tblgen/CMakeFiles/circt-tblgen.dir/FIRRTLIntrinsicsGen.cpp.o"
   "tools/circt/tools/circt-tblgen/CMakeFiles/circt-tblgen.dir/circt-tblgen.cpp.o"
 )
 
@@ -48,7 +49,7 @@ if ! grep -Fq -- "-std=c++20" "$cmd_dump"; then
   cat "$cmd_dump" >&2
   exit 1
 fi
-for src in "FIRRTLAnnotationsGen.cpp" "circt-tblgen.cpp"; do
+for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
   if ! grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"; then
     echo "[wasm-cxx20-warn] compile command for $src is missing -std=c++20" >&2
     cat "$cmd_dump" >&2
