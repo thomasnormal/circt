@@ -1035,3 +1035,28 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: make VCD_PATH validation effective in smoke script)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    empty-path diagnostic coverage:
+    - `invalid VCD_PATH value: empty path`
+  - Pre-fix behavior:
+    - initial empty-path validation was added, but it was ineffective because
+      `VCD_PATH` used `${VCD_PATH:-/tmp/circt-wasm-smoke.vcd}`.
+    - explicitly setting `VCD_PATH=` triggered fallback to default path,
+      bypassing validation and allowing the run to continue.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh`:
+    - switched to `VCD_PATH="${VCD_PATH-/tmp/circt-wasm-smoke.vcd}"` so
+      explicit empty override is preserved;
+    - retained explicit empty-path validation:
+      - `[wasm-smoke] invalid VCD_PATH value: empty path`.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - negative test:
+    - `VCD_PATH= WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 utils/run_wasm_smoke.sh`
+      exits non-zero with:
+      - `invalid VCD_PATH value: empty path`.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

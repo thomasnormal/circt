@@ -13,6 +13,7 @@ required_tokens=(
   "WASM_CHECK_CXX20_WARNINGS"
   "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
   "WASM_REQUIRE_VERILOG"
+  "VCD_PATH"
   "validate_bool_env"
   "validate_positive_int_env"
   'validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"'
@@ -21,6 +22,7 @@ required_tokens=(
   'validate_bool_env "WASM_REQUIRE_CLEAN_CROSSCOMPILE" "$WASM_REQUIRE_CLEAN_CROSSCOMPILE"'
   'invalid $name value'
   "invalid WASM_CHECK_CXX20_WARNINGS"
+  "invalid VCD_PATH value: empty path"
   'command -v "$NODE_BIN"'
   'command -v ninja'
   "utils/wasm_cxx20_warning_check.sh"
