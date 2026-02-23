@@ -81,6 +81,46 @@ static Value gateSMTWithEnable(Value property, Value enable, bool isCover,
   return smt::OrOp::create(builder, loc, notEnable, property);
 }
 
+static bool isSMTBoolConstant(Value value, bool expected) {
+  if (auto cst = value.getDefiningOp<smt::BoolConstantOp>())
+    return cst.getValue() == expected;
+  return false;
+}
+
+static Value createSMTOrFolded(OpBuilder &builder, Location loc, Value lhs,
+                               Value rhs) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+  if (isSMTBoolConstant(lhs, false))
+    return rhs;
+  if (isSMTBoolConstant(rhs, false))
+    return lhs;
+  if (isSMTBoolConstant(lhs, true))
+    return lhs;
+  if (isSMTBoolConstant(rhs, true))
+    return rhs;
+  return smt::OrOp::create(builder, loc, lhs, rhs);
+}
+
+static Value createSMTAndFolded(OpBuilder &builder, Location loc, Value lhs,
+                                Value rhs) {
+  if (!lhs)
+    return rhs;
+  if (!rhs)
+    return lhs;
+  if (isSMTBoolConstant(lhs, true))
+    return rhs;
+  if (isSMTBoolConstant(rhs, true))
+    return lhs;
+  if (isSMTBoolConstant(lhs, false))
+    return lhs;
+  if (isSMTBoolConstant(rhs, false))
+    return rhs;
+  return smt::AndOp::create(builder, loc, lhs, rhs);
+}
+
 static bool isFourStateStruct(Type originalTy, int64_t &valueWidth,
                               int64_t &unknownWidth) {
   if (auto aliasTy = dyn_cast<hw::TypeAliasType>(originalTy))
@@ -6814,18 +6854,10 @@ struct VerifBoundedModelCheckingOpConversion
 
     if (emitSMTLIB) {
       auto combineOr = [&](Value lhs, Value rhs) -> Value {
-        if (!lhs)
-          return rhs;
-        if (!rhs)
-          return lhs;
-        return smt::OrOp::create(rewriter, loc, lhs, rhs);
+        return createSMTOrFolded(rewriter, loc, lhs, rhs);
       };
       auto combineAnd = [&](Value lhs, Value rhs) -> Value {
-        if (!lhs)
-          return rhs;
-        if (!rhs)
-          return lhs;
-        return smt::AndOp::create(rewriter, loc, lhs, rhs);
+        return createSMTAndFolded(rewriter, loc, lhs, rhs);
       };
 
       size_t numCircuitArgs = circuitInputTy.size();
@@ -8272,7 +8304,8 @@ struct VerifBoundedModelCheckingOpConversion
         });
 
     // Get the violation flag from the loop
-    Value violated = forOp->getResults().back();
+    Value violated =
+        numNonFinalChecks == 0 ? smtConstFalse : forOp->getResults().back();
 
     // If there are final checks, compute any final assertion violation and
     // any final cover success.
@@ -8308,10 +8341,8 @@ struct VerifBoundedModelCheckingOpConversion
           // Assert outputs denote property hold; negate to detect violations.
           Value isFalse = smt::NotOp::create(rewriter, loc, isTrue);
           anyFinalAssertViolation =
-              anyFinalAssertViolation
-                  ? smt::OrOp::create(rewriter, loc, anyFinalAssertViolation,
-                                      isFalse)
-                  : isFalse;
+              createSMTOrFolded(rewriter, loc, anyFinalAssertViolation,
+                                isFalse);
         }
         finalCheckViolated =
             anyFinalAssertViolation ? anyFinalAssertViolation : smtConstFalse;
@@ -8338,10 +8369,10 @@ struct VerifBoundedModelCheckingOpConversion
 
     Value overallCond;
     if (isCoverCheck) {
-      overallCond = smt::OrOp::create(rewriter, loc, violated, finalCoverHit);
+      overallCond = createSMTOrFolded(rewriter, loc, violated, finalCoverHit);
     } else {
       overallCond =
-          smt::OrOp::create(rewriter, loc, violated, finalCheckViolated);
+          createSMTOrFolded(rewriter, loc, violated, finalCheckViolated);
     }
     Value res = constTrue;
     if (overallCond) {
