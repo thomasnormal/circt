@@ -1656,3 +1656,35 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - Current state:
   - this LLHD inline BMC regression now contributes active pass/fail signal
     instead of being permanently expected-fail.
+
+## Latest sv-tests mixed assert+cover classification closure (2026-02-23)
+
+- Implemented:
+  - `utils/run_sv_tests_circt_bmc.sh`
+    - added explicit mixed check-mode detection when generated MLIR contains
+      both `verif.assert` and `verif.cover`.
+    - added SAT disambiguation for mixed, non-negative simulation tests:
+      rerun `circt-bmc` on an assert-only MLIR view (covers removed) to
+      distinguish:
+      - SAT-from-assert-violation => `FAIL`
+      - SAT-from-cover-hit => `PASS`
+  - regression coverage:
+    - added
+      `test/Tools/run-sv-tests-bmc-mixed-assert-cover-classification.test`.
+
+- Validation:
+  - manual TDD repro before fix:
+    - `utils/run_sv_tests_circt_bmc.sh` on a synthetic mixed module with SAT
+      only when cover is present
+    - result: `total=1 pass=0 fail=1`.
+  - same repro after fix:
+    - result: `total=1 pass=1 fail=0`.
+  - harness contract tests:
+    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-mixed-assert-cover-classification' build-test/test`
+    - result: `1/1` pass.
+    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+    - result: `21 pass, 1 unsupported`.
+
+- Current state:
+  - mixed assert+cover SAT outcomes in sv-tests are now interpreted with
+    assert/cover-aware semantics rather than assert-only heuristics.

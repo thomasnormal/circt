@@ -935,9 +935,20 @@ top_module=${top_module}
   # - for covers: a witness exists
   #
   # For cover-only tests, SAT is therefore a PASS, while UNSAT is a FAIL.
+  has_assert=0
+  has_cover=0
+  if grep -Fq "verif.assert" "$mlir"; then
+    has_assert=1
+  fi
+  if grep -Fq "verif.cover" "$mlir"; then
+    has_cover=1
+  fi
+
   check_mode="assert"
-  if grep -Fq "verif.cover" "$mlir" && ! grep -Fq "verif.assert" "$mlir"; then
+  if [[ "$has_cover" == "1" && "$has_assert" != "1" ]]; then
     check_mode="cover"
+  elif [[ "$has_cover" == "1" && "$has_assert" == "1" ]]; then
+    check_mode="mixed"
   fi
   append_bmc_check_attribution "$base" "$sv" "$mlir"
 
@@ -1047,6 +1058,37 @@ top_module=${top_module}
         result="PASS"
       elif grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
         result="FAIL"
+      else
+        result="ERROR"
+      fi
+    elif [[ "$check_mode" == "mixed" && "$expect_bmc_violation" != "1" ]]; then
+      if grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+        result="PASS"
+      elif grep -q "BMC_RESULT=SAT" <<<"$out"; then
+        # In mixed assert+cover mode, SAT can mean either an assertion
+        # violation or just a cover witness. Re-run on an assert-only view of
+        # the MLIR to disambiguate.
+        assert_only_mlir="$tmpdir/${base}.assert-only.mlir"
+        grep -Ev "verif\\.(clocked_)?cover[[:space:]]" "$mlir" > "$assert_only_mlir"
+        echo "[run_sv_tests_circt_bmc] mixed-check disambiguation($base): rerun on assert-only MLIR" >> "$bmc_log"
+        out_assert_only=""
+        if out_assert_only="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$assert_only_mlir" 2>> "$bmc_log")"; then
+          bmc_assert_only_status=0
+        else
+          bmc_assert_only_status=$?
+        fi
+        if [[ "$bmc_assert_only_status" -eq 124 || "$bmc_assert_only_status" -eq 137 ]]; then
+          result="TIMEOUT"
+          bmc_timeout_reason="solver_command_timeout"
+        elif [[ "$bmc_assert_only_status" -ne 0 ]]; then
+          result="ERROR"
+        elif grep -q "BMC_RESULT=SAT" <<<"$out_assert_only"; then
+          result="FAIL"
+        elif grep -q "BMC_RESULT=UNSAT" <<<"$out_assert_only"; then
+          result="PASS"
+        else
+          result="ERROR"
+        fi
       else
         result="ERROR"
       fi
