@@ -79,15 +79,7 @@
 #include "llvm/Support/Program.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
-#include <atomic>
 #include <map>
-
-#ifdef CIRCT_BMC_ENABLE_JIT
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
-#include "llvm/ExecutionEngine/Orc/Mangling.h"
-#include "llvm/Support/TargetSelect.h"
-#endif
 
 namespace cl = llvm::cl;
 
@@ -205,12 +197,6 @@ static cl::opt<std::string>
               cl::desc("Path to z3 binary for --run-smtlib (optional)"),
               cl::value_desc("path"), cl::init(""), cl::cat(mainCategory));
 
-static std::atomic<int> bmcJitResult{-1};
-
-extern "C" void circt_bmc_report_result(int result) {
-  bmcJitResult.store(result ? 1 : 0, std::memory_order_relaxed);
-}
-
 static cl::opt<bool> risingClocksOnly(
     "rising-clocks-only",
     cl::desc("Only consider the circuit and property on rising clock edges"),
@@ -238,32 +224,6 @@ static cl::opt<bool> flattenModules(
              "boundaries to be supported)"),
     cl::init(true), cl::cat(mainCategory));
 
-#ifdef CIRCT_BMC_ENABLE_JIT
-
-enum OutputFormat {
-  OutputMLIR,
-  OutputLLVM,
-  OutputSMTLIB,
-  OutputRunJIT,
-  OutputRunSMTLIB
-};
-static cl::opt<OutputFormat> outputFormat(
-    cl::desc("Specify output format"),
-    cl::values(clEnumValN(OutputMLIR, "emit-mlir", "Emit LLVM MLIR dialect"),
-               clEnumValN(OutputLLVM, "emit-llvm", "Emit LLVM"),
-               clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit SMT-LIB file"),
-               clEnumValN(OutputRunSMTLIB, "run-smtlib",
-                          "Run SMT-LIB via z3"),
-               clEnumValN(OutputRunJIT, "run",
-                          "Perform BMC and output result")),
-    cl::init(OutputRunSMTLIB), cl::cat(mainCategory));
-
-static cl::list<std::string> sharedLibs{
-    "shared-libs", llvm::cl::desc("Libraries to link dynamically"),
-    cl::MiscFlags::CommaSeparated, llvm::cl::cat(mainCategory)};
-
-#else
-
 enum OutputFormat { OutputMLIR, OutputLLVM, OutputSMTLIB, OutputRunSMTLIB };
 static cl::opt<OutputFormat> outputFormat(
     cl::desc("Specify output format"),
@@ -271,10 +231,14 @@ static cl::opt<OutputFormat> outputFormat(
                clEnumValN(OutputLLVM, "emit-llvm", "Emit LLVM"),
                clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit SMT-LIB file"),
                clEnumValN(OutputRunSMTLIB, "run-smtlib",
-                          "Run SMT-LIB via z3")),
+                          "Run SMT-LIB via z3"),
+               clEnumValN(OutputRunSMTLIB, "run",
+                          "Deprecated alias for --run-smtlib")),
     cl::init(OutputRunSMTLIB), cl::cat(mainCategory));
 
-#endif
+static cl::list<std::string> sharedLibs{
+    "shared-libs", llvm::cl::desc("Deprecated and ignored"),
+    cl::MiscFlags::CommaSeparated, llvm::cl::cat(mainCategory)};
 
 //===----------------------------------------------------------------------===//
 // Tool implementation
@@ -1152,97 +1116,6 @@ runSMTLIBSolver(ModuleOp module, bool wantSolverOutput, bool printResultLines) {
   return failure();
 }
 
-#ifdef CIRCT_BMC_ENABLE_JIT
-static FailureOr<BMCResult> runJITSolver(ModuleOp module, TimingScope &ts) {
-  auto handleErr = [](llvm::Error error) -> LogicalResult {
-    llvm::handleAllErrors(std::move(error),
-                          [](const llvm::ErrorInfoBase &info) {
-                            llvm::errs() << "Error: ";
-                            info.log(llvm::errs());
-                            llvm::errs() << '\n';
-                          });
-    return failure();
-  };
-
-  std::unique_ptr<mlir::ExecutionEngine> engine;
-  std::function<llvm::Error(llvm::Module *)> transformer =
-      mlir::makeOptimizingTransformer(
-          /*optLevel*/ 3, /*sizeLevel=*/0, /*targetMachine=*/nullptr);
-  {
-    auto timer = ts.nest("Setting up the JIT");
-    auto entryPoint =
-        dyn_cast_or_null<LLVM::LLVMFuncOp>(module.lookupSymbol(moduleName));
-    if (!entryPoint || entryPoint.empty()) {
-      llvm::errs() << "no valid entry point found, expected 'llvm.func' named '"
-                   << moduleName << "'\n";
-      return failure();
-    }
-
-    if (entryPoint.getNumArguments() != 0) {
-      llvm::errs() << "entry point '" << moduleName
-                   << "' must have no arguments";
-      return failure();
-    }
-
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTargetAsmPrinter();
-
-    SmallVector<StringRef, 4> sharedLibraries(sharedLibs.begin(),
-                                              sharedLibs.end());
-    mlir::ExecutionEngineOptions engineOptions;
-    engineOptions.transformer = transformer;
-    engineOptions.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Aggressive;
-    engineOptions.sharedLibPaths = sharedLibraries;
-    engineOptions.enableObjectDump = true;
-
-    auto expectedEngine =
-        mlir::ExecutionEngine::create(module, engineOptions);
-    if (!expectedEngine)
-      return handleErr(expectedEngine.takeError());
-
-    engine = std::move(*expectedEngine);
-
-    // Register the circt_bmc_report_result callback symbol so JIT-compiled code
-    // can call back to report BMC results.
-    engine->registerSymbols([](llvm::orc::MangleAndInterner interner) {
-      llvm::orc::SymbolMap symbolMap;
-      symbolMap[interner("circt_bmc_report_result")] = {
-          llvm::orc::ExecutorAddr::fromPtr(&circt_bmc_report_result),
-          llvm::JITSymbolFlags::Exported};
-      symbolMap[interner("circt_smt_print_model_header")] = {
-          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_header),
-          llvm::JITSymbolFlags::Exported};
-      symbolMap[interner("circt_smt_print_model_value")] = {
-          llvm::orc::ExecutorAddr::fromPtr(&circt_smt_print_model_value),
-          llvm::JITSymbolFlags::Exported};
-      return symbolMap;
-    });
-  }
-
-  auto timer = ts.nest("JIT Execution");
-  bmcJitResult.store(-1, std::memory_order_relaxed);
-  circt::resetCapturedSMTModelValues();
-  if (auto err = engine->invokePacked(moduleName))
-    return handleErr(std::move(err));
-  int result = bmcJitResult.load(std::memory_order_relaxed);
-  if (result < 0) {
-    llvm::errs() << "BMC JIT did not report a result\n";
-    return failure();
-  }
-
-  BMCResult bmcResult = result ? BMCResult::Unsat : BMCResult::Sat;
-  if (printCounterexample && bmcResult == BMCResult::Sat) {
-    auto modelValues = circt::getCapturedSMTModelValues();
-    if (!modelValues.empty())
-      printMixedEventSources(module, &modelValues);
-    else
-      printMixedEventSources(module);
-  }
-
-  return bmcResult;
-}
-#endif
-
 static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
                                        TimingScope &ts,
                                        ConvertVerifToSMTOptions convertOptions,
@@ -1253,11 +1126,6 @@ static FailureOr<BMCResult> runBMCOnce(MLIRContext &context, ModuleOp module,
   if (failed(runPassPipeline(context, module, ts, convertOptions,
                              boundOverride, emitResultMessages)))
     return failure();
-
-#ifdef CIRCT_BMC_ENABLE_JIT
-  if (outputFormat == OutputRunJIT)
-    return runJITSolver(module, ts);
-#endif
 
   circt::setResourceGuardPhase("run z3");
   auto timer = ts.nest("Run SMT-LIB via z3");
@@ -1271,18 +1139,10 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
            "--induction/--k-induction\n";
     return failure();
   }
-#ifdef CIRCT_BMC_ENABLE_JIT
-  if (outputFormat != OutputRunSMTLIB && outputFormat != OutputRunJIT) {
-    llvm::errs()
-        << "--induction/--k-induction requires --run or --run-smtlib\n";
-    return failure();
-  }
-#else
   if (outputFormat != OutputRunSMTLIB) {
     llvm::errs() << "--induction/--k-induction requires --run-smtlib\n";
     return failure();
   }
-#endif
   // Create the timing manager we use to sample execution times.
   DefaultTimingManager tm;
   applyDefaultTimingManagerCLOptions(tm);
@@ -1316,10 +1176,6 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
   OwningOpRef<ModuleOp> baseModule(
       llvm::cast<ModuleOp>(module->clone()));
   bool emitResultMessages = true;
-#ifdef CIRCT_BMC_ENABLE_JIT
-  if (outputFormat == OutputRunJIT)
-    emitResultMessages = false;
-#endif
   auto baseResultOr =
       runBMCOnce(context, *baseModule, ts, baseOptions, clockBound,
                  wantSolverOutput, /*printResultLines=*/false,
@@ -1471,16 +1327,7 @@ static LogicalResult executeBMC(MLIRContext &context) {
     return success();
   }
 
-#ifdef CIRCT_BMC_ENABLE_JIT
-  auto resultOr = runJITSolver(*module, ts);
-  if (failed(resultOr))
-    return failure();
-  if (failOnViolation && *resultOr == BMCResult::Sat)
-    return failure();
-  return success();
-#else
-  return failure();
-#endif
+  llvm_unreachable("invalid output mode");
 }
 
 /// The entry point for the `circt-bmc` tool:
@@ -1509,6 +1356,11 @@ int main(int argc, char **argv) {
       "\tThis tool checks all possible executions of a hardware module up to a "
       "given time bound to check whether any asserted properties can be "
       "violated.\n");
+  if (!sharedLibs.empty()) {
+    llvm::errs()
+        << "warning: --shared-libs is deprecated and ignored; use "
+           "--run-smtlib/--z3-path\n";
+  }
   circt::installResourceGuard();
 
   // Set the bug report message to indicate users should file issues on

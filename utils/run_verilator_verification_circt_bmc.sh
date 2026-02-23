@@ -110,7 +110,6 @@ append_bmc_launch_event() {
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
-Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
 CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
 CIRCT_BMC="${CIRCT_BMC:-$(resolve_default_circt_tool "circt-bmc" "$CIRCT_TOOL_DIR_DEFAULT")}"
@@ -122,7 +121,6 @@ BMC_LAUNCH_EVENTS_OUT="${BMC_LAUNCH_EVENTS_OUT:-}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
 BMC_FAIL_ON_VIOLATION="${BMC_FAIL_ON_VIOLATION:-1}"
 BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
-BMC_ALLOW_RUN_FALLBACK="${BMC_ALLOW_RUN_FALLBACK:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
@@ -196,12 +194,7 @@ if ! is_bool_01 "$BMC_LAUNCH_COPY_FALLBACK"; then
   echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
   exit 1
 fi
-if ! is_bool_01 "$BMC_ALLOW_RUN_FALLBACK"; then
-  echo "invalid BMC_ALLOW_RUN_FALLBACK: $BMC_ALLOW_RUN_FALLBACK" >&2
-  exit 1
-fi
-
-if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
+if [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
   if [[ -z "$Z3_BIN" ]]; then
     if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
       if circt_common_resolve_tool z3 >/dev/null 2>&1; then
@@ -222,9 +215,12 @@ if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
     fi
   fi
   if [[ -z "$Z3_BIN" ]]; then
-    echo "z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB" >&2
+    echo "z3 not found; set Z3_BIN or ensure z3 is on PATH" >&2
     exit 1
   fi
+fi
+if [[ "$BMC_RUN_SMTLIB" != "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
+  echo "warning: BMC_RUN_SMTLIB=0 is ignored; circt-bmc JIT backend has been removed" >&2
 fi
 
 suites=("$@")
@@ -558,11 +554,7 @@ for suite in "${suites[@]}"; do
     if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
       bmc_args+=("--emit-mlir")
     else
-      if [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
-        bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
-      else
-        bmc_args+=("--shared-libs=$Z3_LIB")
-      fi
+      bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
     fi
     if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_FAIL_ON_VIOLATION" == "1" ]]; then
       bmc_args+=("--fail-on-violation")
@@ -587,42 +579,12 @@ for suite in "${suites[@]}"; do
     else
       bmc_status=$?
     fi
-    if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
+    if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" ]] && \
         grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
-      if [[ "$BMC_ALLOW_RUN_FALLBACK" == "1" ]]; then
-        echo "BMC_RUN_SMTLIB fallback($base): retrying with --run due unsupported SMT-LIB export op(s)" >&2
-        {
-          echo "[run_verilator_verification_circt_bmc] BMC_RUN_SMTLIB fallback($base): unsupported SMT-LIB export op(s), retrying with --run"
-        } >> "$bmc_log"
-        bmc_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-          "--module" "$top_for_file" "--shared-libs=$Z3_LIB")
-        if [[ "$BMC_FAIL_ON_VIOLATION" == "1" ]]; then
-          bmc_args+=("--fail-on-violation")
-        fi
-        if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
-          bmc_args+=("--rising-clocks-only")
-        fi
-        if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-          bmc_args+=("--assume-known-inputs")
-        fi
-        if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
-          bmc_args+=("--allow-multi-clock")
-        fi
-        if [[ -n "$CIRCT_BMC_ARGS" ]]; then
-          read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"
-          bmc_args+=("${extra_bmc_args[@]}")
-        fi
-        if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
-          bmc_status=0
-        else
-          bmc_status=$?
-        fi
-      else
-        echo "BMC_RUN_SMTLIB fallback($base): disabled by BMC_ALLOW_RUN_FALLBACK=0" >&2
-        {
-          echo "[run_verilator_verification_circt_bmc] BMC_RUN_SMTLIB fallback($base): disabled by BMC_ALLOW_RUN_FALLBACK=0"
-        } >> "$bmc_log"
-      fi
+      echo "SMT-LIB export failed($base): no native fallback available after JIT removal" >&2
+      {
+        echo "[run_verilator_verification_circt_bmc] SMT-LIB export failed($base): no native fallback available after JIT removal"
+      } >> "$bmc_log"
     fi
     append_bmc_abstraction_provenance "$base" "$sv" "$bmc_log"
     if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \

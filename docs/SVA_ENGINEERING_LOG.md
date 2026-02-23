@@ -3781,3 +3781,48 @@
       - result: `14 tests, failures=0`.
       - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
       - result: `total=6 pass=6 fail=0 error=0`.
+
+- Iteration update (stage 2 JIT-path retirement in `circt-bmc` + pure SMT-LIB harnessing):
+  - realization:
+    - after stage 1, `circt-bmc` still carried dead JIT execution plumbing and
+      main harnesses still contained stale native-fallback branches
+      (`--shared-libs`) that no longer represented a desired backend.
+  - implemented:
+    - `tools/circt-bmc/circt-bmc.cpp`
+      - removed JIT execution-engine path (`runJITSolver`, callback wiring, and
+        compile-time JIT branches).
+      - made `--run` a deprecated alias to `--run-smtlib`.
+      - retained `--shared-libs` as deprecated/ignored compatibility flag with
+        warning.
+    - `tools/circt-bmc/CMakeLists.txt`
+      - removed JIT-only compile definitions/deps and native component linkage
+        for `circt-bmc`.
+    - main BMC harnesses converted to pure SMT-LIB execution:
+      - `utils/run_sv_tests_circt_bmc.sh`
+      - `utils/run_verilator_verification_circt_bmc.sh`
+      - `utils/run_yosys_sva_circt_bmc.sh`
+      - `utils/run_ovl_sva_circt_bmc.sh`
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+      - non-smoke mode now always passes `--run-smtlib --z3-path=...`.
+      - unsupported-export retries now report no native fallback available.
+      - `BMC_RUN_SMTLIB=0` is treated as deprecated/ignored with warning.
+  - TDD/Regression coverage:
+    - added `test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir`.
+    - updated:
+      - `test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
+      - result: `2/2` pass.
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build-test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build-test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+      - result: `3/3` pass.
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+      - result: `157 pass, 156 unsupported, 0 fail`.
+    - `llvm/build/bin/llvm-lit -sv --filter='run-(sv-tests|verilator-verification)-circt-bmc' build-test/test/Tools`
+      - result: `13/13` pass.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `110 tests, failures=0`.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+      - result: `total=6 pass=6 fail=0 error=0`.
