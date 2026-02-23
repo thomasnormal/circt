@@ -29,6 +29,8 @@ rg_tokens=(
   'BMC_TEST_INPUT="${BMC_TEST_INPUT:-'
   'SIM_TEST_INPUT="${SIM_TEST_INPUT:-'
   'SV_TEST_INPUT="${SV_TEST_INPUT:-'
+  'if [[ -f "$VERILOG_JS" ]]; then'
+  'if [[ ! -f "$SV_TEST_INPUT" ]]; then'
   "[wasm-rg-default] missing test input:"
 )
 

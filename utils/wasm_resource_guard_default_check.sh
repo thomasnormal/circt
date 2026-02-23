@@ -22,7 +22,7 @@ if [[ ! -f "$BMC_JS" || ! -f "$SIM_JS" ]]; then
   exit 1
 fi
 
-for input in "$BMC_TEST_INPUT" "$SIM_TEST_INPUT" "$SV_TEST_INPUT"; do
+for input in "$BMC_TEST_INPUT" "$SIM_TEST_INPUT"; do
   if [[ ! -f "$input" ]]; then
     echo "[wasm-rg-default] missing test input: $input" >&2
     exit 1
@@ -77,6 +77,10 @@ if grep -q "Aborted(" "$tmpdir/sim.out" "$tmpdir/sim.err"; then
 fi
 
 if [[ -f "$VERILOG_JS" ]]; then
+  if [[ ! -f "$SV_TEST_INPUT" ]]; then
+    echo "[wasm-rg-default] missing test input: $SV_TEST_INPUT" >&2
+    exit 1
+  fi
   echo "[wasm-rg-default] circt-verilog default resource guard"
   set +e
   cat "$SV_TEST_INPUT" | \
