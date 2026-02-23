@@ -293,3 +293,23 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh` passes end-to-end with the new
     `circt-verilog` re-entry stages.
+
+## 2026-02-23 (follow-up: enforce wasm contract scripts in CI workflow)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_ci_contract_check.sh` to require CI workflow usage
+    of:
+    - `utils/wasm_configure_contract_check.sh`
+    - `utils/wasm_smoke_contract_check.sh`
+  - Pre-fix failure:
+    - `.github/workflows/wasmSmoke.yml` did not run the local contract checks.
+- Fix:
+  - updated `.github/workflows/wasmSmoke.yml` with a dedicated
+    `Run wasm script contract checks` step before the emsdk setup/build stage.
+  - the step runs:
+    - `utils/wasm_configure_contract_check.sh`
+    - `utils/wasm_smoke_contract_check.sh`
+    - `utils/wasm_ci_contract_check.sh`
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.

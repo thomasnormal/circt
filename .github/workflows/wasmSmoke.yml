@@ -29,6 +29,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build
 
+      - name: Run wasm script contract checks
+        run: |
+          utils/wasm_configure_contract_check.sh
+          utils/wasm_smoke_contract_check.sh
+          utils/wasm_ci_contract_check.sh
+
       - name: Configure wasm build and run smoke checks
         run: |
           set -euo pipefail
