@@ -241,3 +241,34 @@
 - Validation:
   - `utils/wasm_ci_contract_check.sh` passes.
   - `utils/wasm_configure_contract_check.sh` still passes.
+
+## 2026-02-23 (follow-up: wasm smoke SV->sim pipeline coverage)
+- Gap identified (regression-test first):
+  - Added `utils/wasm_smoke_contract_check.sh`.
+  - Pre-fix failure:
+    - missing `Functional: circt-verilog (.sv) -> circt-sim` stage in
+      `utils/run_wasm_smoke.sh`.
+- Fix:
+  - extended `utils/run_wasm_smoke.sh` optional frontend path to run an
+    end-to-end wasm pipeline:
+    - `.sv` stdin into `circt-verilog.js` (`--ir-llhd`);
+    - output MLIR into `circt-sim.js --top event_triggered_tb --vcd ...`;
+    - assert expected simulation output and non-empty VCD artifact.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+
+## 2026-02-23 (follow-up: smoke runtime checks without rebuild)
+- Gap identified (regression-test first):
+  - in dirty worktrees, `utils/run_wasm_smoke.sh` could fail at rebuild time
+    before any runtime regressions were executed.
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require a skip-build
+    control path.
+  - Pre-fix failure:
+    - missing `WASM_SKIP_BUILD` handling in `utils/run_wasm_smoke.sh`.
+- Fix:
+  - added `WASM_SKIP_BUILD=1` support in `utils/run_wasm_smoke.sh`:
+    - skips `ninja` rebuild for `circt-bmc`, `circt-sim`, and optional
+      `circt-verilog`;
+    - still validates expected wasm JS artifacts and runs full smoke checks.
+- Validation:
+  - `WASM_SKIP_BUILD=1 utils/run_wasm_smoke.sh` passes end-to-end.
