@@ -78,8 +78,28 @@ cmd_lines_with_final_old_std="$(cat <<'EOF'
 EOF
 )"
 
+cmd_lines_with_duplicate_src_entries="$(cat <<'EOF'
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/FIRRTLAnnotationsGen.cpp -std=gnu++17 -o FIRRTLAnnotationsGen.cpp.o.old
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/FIRRTLAnnotationsGen.cpp -std=c++20 -o FIRRTLAnnotationsGen.cpp.o
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/FIRRTLIntrinsicsGen.cpp -std=gnu++17 -o FIRRTLIntrinsicsGen.cpp.o.old
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/FIRRTLIntrinsicsGen.cpp -std=c++20 -o FIRRTLIntrinsicsGen.cpp.o
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/circt-tblgen.cpp -std=gnu++17 -o circt-tblgen.cpp.o.old
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/circt-tblgen.cpp -std=c++20 -o circt-tblgen.cpp.o
+EOF
+)"
+
+cmd_lines_with_trailing_link_step="$(cat <<'EOF'
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/FIRRTLAnnotationsGen.cpp -std=c++20 -o FIRRTLAnnotationsGen.cpp.o
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/FIRRTLIntrinsicsGen.cpp -std=c++20 -o FIRRTLIntrinsicsGen.cpp.o
+/opt/emsdk/upstream/emscripten/em++ -c tools/circt-tblgen/circt-tblgen.cpp -std=c++20 -o circt-tblgen.cpp.o
+/opt/emsdk/upstream/emscripten/em++ tools/circt-tblgen/FIRRTLAnnotationsGen.cpp.o tools/circt-tblgen/FIRRTLIntrinsicsGen.cpp.o tools/circt-tblgen/circt-tblgen.cpp.o -o bin/circt-tblgen.js
+EOF
+)"
+
 # Effective standard should be taken from the last -std flag.
 run_case "final-cxx20" "$cmd_lines_with_final_cxx20" 0
 run_case "final-old-std" "$cmd_lines_with_final_old_std" 1
+run_case "duplicate-src-last-command-wins" "$cmd_lines_with_duplicate_src_entries" 0
+run_case "trailing-link-step-ignored" "$cmd_lines_with_trailing_link_step" 0
 
 echo "[wasm-cxx20-warn-behavior] PASS"

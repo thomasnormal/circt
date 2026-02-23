@@ -94,7 +94,11 @@ if ! ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump" 2>"$tmpdir/cmd-
   exit 1
 fi
 for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
-  cmd_line="$(grep -F -- "$src" "$cmd_dump" | head -n 1 || true)"
+  cmd_line="$(
+    grep -F -- "$src" "$cmd_dump" | \
+      grep -E -- '(^|[[:space:]])-c([[:space:]]|$)' | \
+      tail -n 1 || true
+  )"
   if [[ -z "$cmd_line" ]]; then
     echo "[wasm-cxx20-warn] missing compile command for $src" >&2
     cat "$cmd_dump" >&2
