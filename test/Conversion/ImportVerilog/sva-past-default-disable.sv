@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --parse-only | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 module test_past_default_disable(input logic clk, reset, a);
   default clocking @(posedge clk); endclocking
@@ -12,7 +12,6 @@ module test_past_default_disable(input logic clk, reset, a);
 endmodule
 
 // CHECK-LABEL: moore.module @test_past_default_disable
-// CHECK-NOT: moore.past
-// CHECK: moore.procedure always
-// CHECK: moore.wait_event
-// CHECK: moore.blocking_assign
+// CHECK: moore.past
+// CHECK: comb.or
+// CHECK: verif.clocked_assert

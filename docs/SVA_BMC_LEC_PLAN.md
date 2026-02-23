@@ -41,7 +41,30 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, Yosys xprop baseline sync for `counter`)
+## Latest SVA Closure Slice (February 23, 2026, ImportVerilog SVA harness refresh for `OnlyParse` drift)
+
+- fixed stale ImportVerilog SVA regression harness assumptions where tests
+  expected lowered Moore/LTL IR from `circt-verilog --parse-only`.
+- moved 13 SVA ImportVerilog tests to:
+  - `circt-verilog --no-uvm-auto-include --ir-moore`
+- refreshed 7 brittle check patterns for current lowering:
+  - explicit `ltl.clock` attribute tolerance (`{sva.explicit_clocking}`)
+  - string sampled/past checks aligned to `moore.string_cmp`
+  - default clocking/disable and procedural-hoist checks aligned to direct
+    `moore.past` / `verif.clocked_assert` forms.
+- validation snapshot:
+  - ImportVerilog SVA bucket:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+    - result: `148/148` pass.
+  - regular formal sanity:
+    - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+    - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0, xfail=6, xpass=0`.
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+
+## Previous SVA Closure Slice (February 23, 2026, Yosys xprop baseline sync for `counter`)
 
 - removed stale xprop expected-failure baseline for `counter/pass`:
   - `utils/yosys-sva-bmc-expected.txt`

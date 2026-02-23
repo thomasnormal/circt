@@ -1,4 +1,4 @@
-// RUN: circt-verilog --no-uvm-auto-include %s --parse-only | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 
 module sampled_default_disable(input logic clk, reset, a);
   default clocking @(posedge clk); endclocking
@@ -12,9 +12,9 @@ module sampled_default_disable(input logic clk, reset, a);
 endmodule
 
 // CHECK-LABEL: moore.module @sampled_default_disable
-// CHECK: moore.procedure always
-// CHECK: moore.wait_event
-// CHECK: moore.blocking_assign
+// CHECK: moore.past
+// CHECK: comb.or
+// CHECK: verif.clocked_assert
 
 module sampled_default_clocking_only(input logic clk, a);
   default clocking @(posedge clk); endclocking

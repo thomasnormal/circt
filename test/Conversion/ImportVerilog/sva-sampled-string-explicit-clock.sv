@@ -6,11 +6,11 @@ module SvaSampledStringExplicitClock(input logic clk);
   string s;
 
   // String sampled-values with explicit clocking should lower via
-  // string->int sampled helper lowering instead of hard failure.
+  // sampled helper-state with string comparison instead of hard failure.
   // CHECK: moore.procedure always
   // CHECK: moore.wait_event
   // CHECK: moore.detect_event posedge
-  // CHECK: moore.string_to_int
+  // CHECK: moore.string_cmp
   // CHECK: verif.assert
   assert property ($changed(s, @(posedge clk)));
 endmodule

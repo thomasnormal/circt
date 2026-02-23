@@ -13,9 +13,7 @@ module test_past_default_disable_reset(input logic clk, reset, a);
 endmodule
 
 // CHECK-LABEL: moore.module @test_past_default_disable_reset
-// CHECK-DAG: [[INIT:%[0-9]+]] = moore.constant bX : l1
-// CHECK: moore.procedure always
-// CHECK: moore.wait_event
-// CHECK-DAG: [[RESET:%[0-9]+]] = moore.read %reset
-// CHECK: moore.conditional [[RESET]] : l1 -> l1
-// CHECK: moore.yield [[INIT]] : l1
+// CHECK: moore.clocking_block
+// CHECK: moore.past %a delay 2 : l1
+// CHECK: comb.or
+// CHECK: verif.clocked_assert

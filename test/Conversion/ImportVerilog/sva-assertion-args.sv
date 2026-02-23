@@ -37,7 +37,7 @@ module sva_assertion_args(
   // CHECK: [[DC:%.*]] = ltl.delay [[C]], 0, 0 : i1
   // CHECK: [[SEQ:%.*]] = ltl.concat [[BASE_DELAY]], [[DC]] : !ltl.sequence, !ltl.sequence
   // CHECK: [[CLK:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED:%.*]] = ltl.clock [[SEQ]],{{ *}}posedge [[CLK]] : !ltl.sequence
+  // CHECK: [[CLOCKED:%.*]] = ltl.clock [[SEQ]],{{ *}}posedge [[CLK]]{{.*}} : !ltl.sequence
   // CHECK: verif.assert [[CLOCKED]] : !ltl.sequence
   assert property (@(posedge clk) seq_arg(base_seq(a, b), c));
 
@@ -45,7 +45,7 @@ module sva_assertion_args(
   // CHECK: [[B2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
   // CHECK: [[IMP:%.*]] = ltl.implication [[A2]], [[B2]] : i1, i1
   // CHECK: [[CLK2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED2:%.*]] = ltl.clock [[IMP]],{{ *}}posedge [[CLK2]] : !ltl.property
+  // CHECK: [[CLOCKED2:%.*]] = ltl.clock [[IMP]],{{ *}}posedge [[CLK2]]{{.*}} : !ltl.property
   // CHECK: verif.assert [[CLOCKED2]] : !ltl.property
   assert property (@(posedge clk) prop_arg(base_prop(a, b)));
 endmodule

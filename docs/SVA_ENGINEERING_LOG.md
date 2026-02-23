@@ -3333,3 +3333,58 @@
   - outcome:
     - closed one stale xprop expected-failure baseline and restored strict
       red/green reporting for `counter`.
+
+- Iteration update (ImportVerilog SVA regression harness refresh for `OnlyParse` drift):
+  - realization:
+    - `circt-verilog --parse-only` intentionally leaves the output module
+      empty in `ImportVerilogOptions::Mode::OnlyParse`.
+    - 13 SVA ImportVerilog tests still expected lowered Moore/LTL IR under
+      `--parse-only`, causing systemic false failures and hiding real SVA
+      frontend regressions behind harness drift.
+  - implemented:
+    - switched 13 stale SVA ImportVerilog RUN lines from `--parse-only` to:
+      - `circt-verilog --no-uvm-auto-include --ir-moore`
+    - refreshed brittle checks in 7 tests for current lowering:
+      - explicit clocking attr tolerant checks (`{sva.explicit_clocking}`)
+      - string sampled/past lowering checks (`moore.string_cmp` path)
+      - default clocking/disable and procedural-hoist expectations updated to
+        current direct `moore.past` / `verif.clocked_assert` forms.
+    - touched tests:
+      - `sva-within-unbounded.sv`
+      - `sva-bool-context.sv`
+      - `sva-procedural-hoist-no-clock.sv`
+      - `sva-sampled-explicit-clock.sv`
+      - `sva-value-change.sv`
+      - `sva-procedural-clock.sv`
+      - `sva-throughout-unbounded.sv`
+      - `sva-past-default-disable.sv`
+      - `sva-sampled-default-disable.sv`
+      - `sva-defaults.sv`
+      - `sva-past-default-clocking.sv`
+      - `sva-defaults-property.sv`
+      - `sva-past-default-clocking-implicit.sv`
+      - plus check refresh in:
+        - `sva-event-arg.sv`
+        - `sva-multiclock.sv`
+        - `sva-assertion-args.sv`
+        - `sva-past-string-explicit-clock.sv`
+        - `sva-sampled-string-explicit-clock.sv`
+        - `sva-past-disable-iff.sv`
+        - `sva-past-default-disable-reset.sv`
+  - validation:
+    - ImportVerilog SVA bucket:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+      - result: `148/148` pass.
+    - regular formal sanity:
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0, xfail=6, xpass=0`.
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+    - profiling sample:
+      - `time llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+      - result: `real 0m20.195s`.
+  - outcome:
+    - restored SVA ImportVerilog regression signal quality by removing stale
+      harness assumptions and aligning checks with current frontend semantics.
