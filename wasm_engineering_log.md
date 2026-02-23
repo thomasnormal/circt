@@ -1117,3 +1117,30 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: distinguish CrossCompile diff state from git inspection errors)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    handling tokens around llvm submodule inspection:
+    - `git_rc=$?`
+    - `if [[ "$git_rc" -eq 1 ]]; then`
+    - `unable to inspect llvm submodule CrossCompile.cmake status`
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: unable to inspect llvm submodule CrossCompile.cmake status`
+    - smoke script treated any non-zero return from
+      `git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake`
+      as “local edits present”, which conflated true diff state (`rc=1`) with
+      git/submodule errors (`rc>1`).
+- Fix:
+  - updated `utils/run_wasm_smoke.sh`:
+    - capture stderr for CrossCompile status query to
+      `$tmpdir/crosscompile.err`;
+    - branch on git return code:
+      - `rc=1`: preserve existing “local edits present” behavior;
+      - other non-zero: fail with explicit diagnostic and captured stderr.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
