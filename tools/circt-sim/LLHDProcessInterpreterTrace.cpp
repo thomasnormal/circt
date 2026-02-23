@@ -2276,9 +2276,7 @@ LLHDProcessInterpreter::getJitRuntimeIndirectSiteProfiles() const {
 
 void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   os << "[circt-sim] Process states:\n";
-  for (const auto &entry : processStates) {
-    ProcessId procId = entry.first;
-    const ProcessExecutionState &state = entry.second;
+  processStates.forEach([&](ProcessId procId, const ProcessExecutionState &state) {
     const Process *proc = scheduler.getProcess(procId);
     os << "  proc " << procId;
     if (proc)
@@ -2316,7 +2314,7 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
       os << " seqRetry="
          << state.sequencerGetRetryCallOp->getName().getStringRef();
     os << "\n";
-  }
+  });
 
   // Print function call profile (top 30 by call count)
   if (profilingEnabled && !funcCallProfile.empty()) {
@@ -2358,11 +2356,11 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   if (profilingEnabled) {
     uint64_t localFuncCacheHits = 0;
     uint64_t localFuncCacheEntries = 0;
-    for (const auto &entry : processStates) {
-      localFuncCacheHits += entry.second.funcCacheHits;
-      for (const auto &funcEntry : entry.second.funcResultCache)
+    processStates.forEach([&](ProcessId, const ProcessExecutionState &state) {
+      localFuncCacheHits += state.funcCacheHits;
+      for (const auto &funcEntry : state.funcResultCache)
         localFuncCacheEntries += funcEntry.second.size();
-    }
+    });
 
     uint64_t sharedFuncCacheEntries = 0;
     for (const auto &funcEntry : sharedFuncResultCache)
@@ -2613,12 +2611,12 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
     if (memorySummaryTopProcesses > 0 && !processStates.empty()) {
       llvm::SmallVector<std::pair<ProcessId, uint64_t>, 16> ranked;
       ranked.reserve(processStates.size());
-      for (const auto &entry : processStates) {
+      processStates.forEach([&](ProcessId procId, const ProcessExecutionState &state) {
         uint64_t bytes = 0;
-        for (const auto &block : entry.second.memoryBlocks)
+        for (const auto &block : state.memoryBlocks)
           bytes += block.second.size;
-        ranked.push_back({entry.first, bytes});
-      }
+        ranked.push_back({procId, bytes});
+      });
       llvm::sort(ranked, [](const auto &lhs, const auto &rhs) {
         if (lhs.second != rhs.second)
           return lhs.second > rhs.second;
@@ -2692,9 +2690,7 @@ void LLHDProcessInterpreter::dumpProcessStats(llvm::raw_ostream &os,
 
   llvm::SmallVector<ProcEntry, 16> entries;
   entries.reserve(processStates.size());
-  for (const auto &entry : processStates) {
-    ProcessId procId = entry.first;
-    const ProcessExecutionState &state = entry.second;
+  processStates.forEach([&](ProcessId procId, const ProcessExecutionState &state) {
     llvm::StringRef name;
     if (const Process *proc = scheduler.getProcess(procId))
       name = proc->getName();
@@ -2708,7 +2704,7 @@ void LLHDProcessInterpreter::dumpProcessStats(llvm::raw_ostream &os,
     }
     entries.push_back({procId, state.totalSteps, state.funcBodySteps, opCount,
                        state.cacheSkips, state.waitSensitivityCacheHits, name});
-  }
+  });
 
   llvm::sort(entries, [](const ProcEntry &lhs, const ProcEntry &rhs) {
     if (lhs.steps != rhs.steps)

@@ -232,6 +232,7 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
   if (kindMask & toFastPathMask(DirectProcessFastPathKind::BytecodeProcess)) {
     ProcessThunkExecutionState thunkState;
     thunkState.resumeToken = state.jitThunkResumeToken;
+    ++activationsBytecode;
     if (executeBytecodeProcess(procId, state, thunkState)) {
       state.jitThunkResumeToken = thunkState.resumeToken;
       return true;

@@ -25,6 +25,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
 #include <map>
 
 #define DEBUG_TYPE "llhd-bytecode"
@@ -956,6 +957,65 @@ void LLHDProcessInterpreter::printBytecodeStats() const {
     for (auto &[name, count] : sorted)
       llvm::errs() << "  " << name << ": " << count << "\n";
   }
+}
+
+void LLHDProcessInterpreter::printCompileReport() const {
+  uint64_t total =
+      activationsAOTCallback + activationsBytecode + activationsInterpreter;
+  uint64_t divisor = total > 0 ? total : 1;
+
+  llvm::errs() << "\n=== Compile Coverage Report ===\n";
+  llvm::errs() << "Process activations by dispatch path:\n";
+  llvm::errs() << "  AOT callback:  " << activationsAOTCallback << " ("
+               << llvm::format("%.1f", 100.0 * activationsAOTCallback / divisor)
+               << "%)\n";
+  llvm::errs() << "  Bytecode:      " << activationsBytecode << " ("
+               << llvm::format("%.1f", 100.0 * activationsBytecode / divisor)
+               << "%)\n";
+  llvm::errs() << "  Interpreter:   " << activationsInterpreter << " ("
+               << llvm::format("%.1f", 100.0 * activationsInterpreter / divisor)
+               << "%)\n";
+  llvm::errs() << "  Total:         " << total << "\n";
+
+  // ExecModel breakdown: count processes per model.
+  llvm::DenseMap<ExecModel, unsigned> modelCounts;
+  for (auto &[procId, model] : processExecModels)
+    modelCounts[model]++;
+  if (!modelCounts.empty()) {
+    llvm::errs() << "ExecModel breakdown (registered processes):\n";
+    auto modelName = [](ExecModel m) -> llvm::StringRef {
+      switch (m) {
+      case ExecModel::CallbackStaticObserved:  return "CallbackStaticObserved";
+      case ExecModel::CallbackDynamicWait:     return "CallbackDynamicWait";
+      case ExecModel::CallbackTimeOnly:        return "CallbackTimeOnly";
+      case ExecModel::OneShotCallback:         return "OneShotCallback";
+      case ExecModel::Coroutine:               return "Coroutine";
+      }
+      return "Unknown";
+    };
+    for (auto m : {ExecModel::CallbackStaticObserved, ExecModel::CallbackDynamicWait,
+                   ExecModel::CallbackTimeOnly, ExecModel::OneShotCallback,
+                   ExecModel::Coroutine}) {
+      unsigned cnt = modelCounts.lookup(m);
+      if (cnt > 0)
+        llvm::errs() << "  " << modelName(m) << ": " << cnt << "\n";
+    }
+  }
+
+  // AOT rejection reasons (populated during AOT compilation if aotEnabled).
+  if (aotCompiler && !aotCompiler->rejectionStats.empty()) {
+    llvm::errs() << "AOT rejection reasons:\n";
+    std::vector<std::pair<std::string, unsigned>> sorted;
+    for (auto &entry : aotCompiler->rejectionStats)
+      sorted.emplace_back(entry.getKey().str(), entry.getValue());
+    llvm::sort(sorted, [](const auto &a, const auto &b) {
+      return a.second > b.second;
+    });
+    for (auto &[name, count] : sorted)
+      llvm::errs() << "  " << name << ": " << count << "\n";
+  }
+
+  llvm::errs() << "===============================\n";
 }
 
 /// Try to compile a process to bytecode and store the result.

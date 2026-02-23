@@ -706,6 +706,7 @@ public:
   size_t getWarningCount() const { return control.getWarningCount(); }
 
   /// Get the LLHD process interpreter, if initialized.
+  LLHDProcessInterpreter *getInterpreter() { return llhdInterpreter.get(); }
   const LLHDProcessInterpreter *getInterpreter() const {
     return llhdInterpreter.get();
   }
@@ -3559,6 +3560,11 @@ static LogicalResult processInput(MLIRContext &context,
   else
     llvm::outs() << "[circt-sim] Simulation finished with exit code "
                  << exitCode << "\n";
+  // Print compile coverage report if requested.
+  if (std::getenv("CIRCT_SIM_COMPILE_REPORT")) {
+    if (const auto *interp = simContext.getInterpreter())
+      interp->printCompileReport();
+  }
   // Print coverage report if any covergroups were registered.
   __moore_coverage_report();
   llvm::outs().flush();
