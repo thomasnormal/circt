@@ -130,6 +130,8 @@ if ninja -C "$BUILD_DIR" -t targets all >"$tmpdir/targets.list" 2>"$tmpdir/targe
 elif [[ "$WASM_SKIP_BUILD" == "1" && -s "$VERILOG_JS" && -s "$VERILOG_WASM" ]]; then
   echo "[wasm-smoke] ninja target query failed; inferring circt-verilog support from existing artifacts"
   has_verilog_target=1
+elif [[ "$WASM_SKIP_BUILD" == "1" && "$WASM_REQUIRE_VERILOG" != "1" ]]; then
+  echo "[wasm-smoke] ninja target query failed and circt-verilog is optional; skipping SV frontend checks"
 else
   echo "[wasm-smoke] failed to query ninja targets in $BUILD_DIR (needed to detect circt-verilog target)" >&2
   cat "$tmpdir/targets.err" >&2

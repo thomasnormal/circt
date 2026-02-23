@@ -37,6 +37,8 @@ required_tokens=(
   'git_rc=$?'
   'if [[ "$git_rc" -eq 1 ]]; then'
   'ninja target query failed; inferring circt-verilog support from existing artifacts'
+  'ninja target query failed and circt-verilog is optional; skipping SV frontend checks'
+  'elif [[ "$WASM_SKIP_BUILD" == "1" && "$WASM_REQUIRE_VERILOG" != "1" ]]; then'
   'failed to query ninja targets'
   'WASM_SKIP_BUILD" == "1" && -s "$VERILOG_JS" && -s "$VERILOG_WASM"'
   "circt-bmc.wasm"

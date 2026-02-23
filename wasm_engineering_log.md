@@ -1239,3 +1239,38 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: skip optional verilog when ninja target query fails)
+- Gap identified (regression-test first):
+  - behavioral repro before fix:
+    - prepared temp `BUILD_DIR` containing only `circt-bmc` and `circt-sim`
+      wasm artifacts (no `circt-verilog` artifacts);
+    - injected fake `ninja` that fails `-t targets` query;
+    - ran:
+      - `WASM_SKIP_BUILD=1`
+      - `WASM_REQUIRE_VERILOG=0`
+      - `WASM_CHECK_CXX20_WARNINGS=0`
+    - pre-fix result:
+      - hard failure:
+        - `failed to query ninja targets ... (needed to detect circt-verilog target)`
+      - this was incorrect because verilog was optional in this run mode.
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    optional-verilog fallback branch and diagnostic:
+    - `ninja target query failed and circt-verilog is optional; skipping SV frontend checks`.
+  - Pre-fix contract failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: ninja target query failed and circt-verilog is optional; skipping SV frontend checks`
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` target-detection logic:
+    - existing fallback (skip-build + existing verilog artifacts) preserved;
+    - new fallback: if `WASM_SKIP_BUILD=1` and `WASM_REQUIRE_VERILOG!=1`,
+      continue without verilog checks when target query fails;
+    - keep hard failure when verilog is required or when query failure cannot
+      be safely ignored.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - regression scenario (temp build + fake failing `ninja` + optional verilog)
+    now passes end-to-end and logs:
+    - `ninja target query failed and circt-verilog is optional; skipping SV frontend checks`.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
