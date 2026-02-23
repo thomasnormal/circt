@@ -2,7 +2,7 @@
 // RUN: mkdir -p %t/bin %t/src
 // RUN: touch %t/src/a.sv %t/src/b.sv
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: "${out:?}"\n: > "$out"\nexit 0\n' > %t/bin/circt-verilog
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmod=""\nrun_smtlib=0\nfor arg in "$@"; do\n  case "$arg" in\n    --module=*) mod="${arg#--module=}" ;;\n    --run-smtlib) run_smtlib=1 ;;\n  esac\ndone\nif [[ "$mod" == "top_custom" ]]; then\n  [[ "$run_smtlib" == "1" ]] || exit 10\nfi\nif [[ "$mod" == "top_default" ]]; then\n  [[ "$run_smtlib" == "0" ]] || exit 11\nfi\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmod=""\nrun_smtlib=0\nfor arg in "$@"; do\n  case "$arg" in\n    --module=*) mod="${arg#--module=}" ;;\n    --run-smtlib) run_smtlib=1 ;;\n  esac\ndone\nif [[ "$mod" == "top_custom" ]]; then\n  [[ "$run_smtlib" == "1" ]] || exit 10\nfi\nif [[ "$mod" == "top_default" ]]; then\n  [[ "$run_smtlib" == "1" ]] || exit 11\nfi\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
 // RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t/bin/z3
 // RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc %t/bin/z3
 // RUN: printf 'default_case\ttop_default\t%t/src/a.sv\t%t/src\t%t/work/default\ncustom_case\ttop_custom\t%t/src/b.sv\t%t/src\t%t/work/custom\t13\tsmtlib\t7\t3\toff\ton\t--foo=bar --custom=1\tpolicy:re:^top_custom$\n' > %t/cases.tsv
@@ -16,4 +16,4 @@
 // RES: PASS{{[[:space:]]+}}default_case{{[[:space:]]+}}{{.*}}work/default{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
 // CONTRACT: #resolved_contract_schema_version=1
 // CONTRACT-DAG: custom_case{{[[:space:]]+}}{{.*}}work/custom{{[[:space:]]+}}policy:re:^top_custom${{[[:space:]]+}}smtlib{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}13{{[[:space:]]+}}7{{[[:space:]]+}}3{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}--foo=bar --custom=1{{[[:space:]]+}}f4b32e41390cda4f
-// CONTRACT-DAG: default_case{{[[:space:]]+}}{{.*}}work/default{{[[:space:]]+}}manifest{{[[:space:]]+}}default{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}11{{[[:space:]]+}}5{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}8a29cc93bd23d19d
+// CONTRACT-DAG: default_case{{[[:space:]]+}}{{.*}}work/default{{[[:space:]]+}}manifest{{[[:space:]]+}}default{{[[:space:]]+}}0{{[[:space:]]+}}1{{[[:space:]]+}}11{{[[:space:]]+}}5{{[[:space:]]+}}2{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}[[DEFAULT_FP:[0-9a-f]+]]

@@ -21,10 +21,11 @@ Only the first three columns are required.
 - case_path: logical case path written to output rows (optional).
 - timeout_secs: per-case timeout override in seconds (optional).
 - backend_mode: per-case backend override (optional):
-  - default: inherit global env (BMC_RUN_SMTLIB/BMC_SMOKE_ONLY)
-  - jit: force native/JIT backend (no --run-smtlib)
+  - default: inherit global env (BMC_SMOKE_ONLY)
   - smtlib: force external SMT-LIB backend (--run-smtlib)
   - smoke: force smoke-only emit-mlir mode
+- BMC_RUN_SMTLIB: legacy knob and ignored (non-smoke runs always use
+  `--run-smtlib`).
 - bmc_bound: per-case `-b` override (optional, non-negative integer; 0 maps to 1).
 - ignore_asserts_until: per-case `--ignore-asserts-until` override (optional,
   non-negative integer).
@@ -1104,12 +1105,12 @@ def parse_case_backend(raw: str, line_no: int) -> str:
     token = raw.strip().lower()
     if not token:
         return "default"
-    if token in {"default", "jit", "smtlib", "smoke"}:
+    if token in {"default", "smtlib", "smoke"}:
         return token
     print(
         (
             f"invalid cases file row {line_no}: backend_mode must be one of "
-            f"default|jit|smtlib|smoke, got '{raw}'"
+            f"default|smtlib|smoke, got '{raw}'"
         ),
         file=sys.stderr,
     )
@@ -1163,7 +1164,6 @@ def parse_case_bmc_extra_args(raw: str, line_no: int) -> list[str]:
         "--emit-mlir",
         "--run-smtlib",
         "--z3-path",
-        "--shared-libs",
         "--assume-known-inputs",
         "--allow-multi-clock",
     )
@@ -1586,9 +1586,16 @@ def main() -> int:
                 Path.home() / ".cache" / "circt-bmc-verilog-cache"
             )
         verilog_cache_dir.mkdir(parents=True, exist_ok=True)
-    z3_lib = os.environ.get("Z3_LIB", str(Path.home() / "z3-install/lib64/libz3.so"))
-    bmc_run_smtlib = os.environ.get("BMC_RUN_SMTLIB", "1") == "1"
+    bmc_run_smtlib_raw = os.environ.get("BMC_RUN_SMTLIB", "1")
     bmc_smoke_only = os.environ.get("BMC_SMOKE_ONLY", "0") == "1"
+    if bmc_run_smtlib_raw != "1" and not bmc_smoke_only:
+        print(
+            (
+                "warning: BMC_RUN_SMTLIB=0 is ignored; "
+                "circt-bmc JIT backend has been removed"
+            ),
+            file=sys.stderr,
+        )
     bmc_assume_known_inputs = os.environ.get("BMC_ASSUME_KNOWN_INPUTS", "0") == "1"
     bmc_allow_multi_clock = os.environ.get("BMC_ALLOW_MULTI_CLOCK", "0") == "1"
     bmc_prepare_core_with_circt_opt = (
@@ -1772,9 +1779,9 @@ def main() -> int:
             return True, False
         if case.backend_mode == "smtlib":
             return False, True
-        if case.backend_mode == "jit":
-            return False, False
-        return bmc_smoke_only, bmc_run_smtlib
+        if bmc_smoke_only:
+            return True, False
+        return False, True
 
     def resolve_case_toggle(mode: str, inherited: bool) -> bool:
         if mode == "on":
@@ -1798,9 +1805,6 @@ def main() -> int:
             z3_bin = str(Path.home() / "z3-install/bin/z3")
         if not z3_bin and Path.home().joinpath("z3/build/z3").is_file():
             z3_bin = str(Path.home() / "z3/build/z3")
-        if not z3_bin:
-            print("z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB", file=sys.stderr)
-            return 1
 
     if args.workdir:
         workdir = Path(args.workdir).resolve()
@@ -2126,11 +2130,9 @@ def main() -> int:
             if case_smoke_only:
                 bmc_cmd.append("--emit-mlir")
             else:
-                if case_run_smtlib:
-                    bmc_cmd.append("--run-smtlib")
+                bmc_cmd.append("--run-smtlib")
+                if z3_bin:
                     bmc_cmd.append(f"--z3-path={z3_bin}")
-                elif z3_lib:
-                    bmc_cmd.append(f"--shared-libs={z3_lib}")
             if case_assume_known_inputs:
                 bmc_cmd.append("--assume-known-inputs")
             if case_allow_multi_clock:

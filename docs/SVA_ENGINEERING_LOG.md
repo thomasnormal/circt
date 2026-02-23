@@ -2,6 +2,36 @@
 
 ## 2026-02-23
 
+- Iteration update (stage-3 BMC backend cleanup: remove compatibility aliases
+  and retire `jit` policy mode in secondary workflows):
+  - realization:
+    - after stage-2 JIT runtime removal, we still accepted deprecated CLI and
+      manifest policy surfaces (`--run`, `--shared-libs`, `backend_mode=jit`)
+      in secondary orchestration code, which kept dead semantics alive and
+      complicated contract interpretation.
+  - implemented:
+    - `tools/circt-bmc/circt-bmc.cpp`
+      - removed CLI acceptance of `--run` and `--shared-libs`.
+    - `utils/run_pairwise_circt_bmc.py`
+      - removed `jit` backend_mode support and `--shared-libs` launch path.
+      - default non-smoke case execution now always emits `--run-smtlib`.
+      - `BMC_RUN_SMTLIB=0` is now legacy-only and ignored with warning.
+    - `utils/run_opentitan_circt_bmc.py`
+      - removed `jit` backend_mode policy acceptance.
+    - regression locks:
+      - added `test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir`.
+      - updated `test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir` to negative
+        expectation for `--run`.
+      - updated pairwise/OpenTitan backend-policy tests to
+        `default|smtlib|smoke` semantics.
+  - validation:
+    - `ninja -C build-test circt-bmc`
+      - result: `PASS`.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir build-test/test/Tools/run-pairwise-circt-bmc-case-backend-invalid.test build-test/test/Tools/run-pairwise-circt-bmc-case-backend-override.test build-test/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-invalid.test build-test/test/Tools/run-opentitan-bmc-case-policy-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-regex.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build-test/test/Tools/run-opentitan-bmc-case-policy-ambiguous-pattern.test`
+      - result: `10/10` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-pairwise-circt-bmc|run-opentitan-bmc|bmc-run-alias-smtlib|bmc-shared-libs-rejected' build-test/test/Tools build-test/test/Tools/circt-bmc`
+      - result: `48/48` pass.
+
 - Iteration update (BMC final-check condition folding for no-nonfinal designs):
   - realization:
     - `test/Tools/circt-bmc/sva-assert-final-e2e.sv` exposed redundant SMT in

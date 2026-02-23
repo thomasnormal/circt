@@ -231,14 +231,8 @@ static cl::opt<OutputFormat> outputFormat(
                clEnumValN(OutputLLVM, "emit-llvm", "Emit LLVM"),
                clEnumValN(OutputSMTLIB, "emit-smtlib", "Emit SMT-LIB file"),
                clEnumValN(OutputRunSMTLIB, "run-smtlib",
-                          "Run SMT-LIB via z3"),
-               clEnumValN(OutputRunSMTLIB, "run",
-                          "Deprecated alias for --run-smtlib")),
+                          "Run SMT-LIB via z3")),
     cl::init(OutputRunSMTLIB), cl::cat(mainCategory));
-
-static cl::list<std::string> sharedLibs{
-    "shared-libs", llvm::cl::desc("Deprecated and ignored"),
-    cl::MiscFlags::CommaSeparated, llvm::cl::cat(mainCategory)};
 
 //===----------------------------------------------------------------------===//
 // Tool implementation
@@ -1356,11 +1350,6 @@ int main(int argc, char **argv) {
       "\tThis tool checks all possible executions of a hardware module up to a "
       "given time bound to check whether any asserted properties can be "
       "violated.\n");
-  if (!sharedLibs.empty()) {
-    llvm::errs()
-        << "warning: --shared-libs is deprecated and ignored; use "
-           "--run-smtlib/--z3-path\n";
-  }
   circt::installResourceGuard();
 
   // Set the bug report message to indicate users should file issues on

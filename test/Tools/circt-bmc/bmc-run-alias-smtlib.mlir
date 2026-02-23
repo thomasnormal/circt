@@ -1,7 +1,5 @@
-// RUN: circt-bmc -b 1 --run --z3-path=%S/Inputs/fake-z3-unsat.sh --module top %s | FileCheck %s
-
-// CHECK: BMC_RESULT=UNSAT
-// CHECK: Bound reached with no violations!
+// RUN: not circt-bmc -b 1 --run --module top %s 2>&1 | FileCheck %s
+// CHECK: Unknown command line argument '--run'
 
 module {
   hw.module @top(in %clk : i1) {
