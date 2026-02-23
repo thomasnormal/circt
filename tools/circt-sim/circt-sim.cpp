@@ -18,6 +18,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CompiledModuleLoader.h"
 #include "LLHDProcessInterpreter.h"
 #include "JITCompileManager.h"
 #include "circt/Runtime/MooreRuntime.h"
@@ -492,6 +493,12 @@ static llvm::cl::opt<RunMode> runMode(
                    "Analyze the design without simulating")),
     llvm::cl::init(RunMode::Interpret), llvm::cl::cat(mainCategory));
 
+static llvm::cl::opt<std::string> compiledModulePath(
+    "compiled",
+    llvm::cl::desc("Path to AOT-compiled .so module (from circt-sim-compile)"),
+    llvm::cl::value_desc("path"), llvm::cl::init(""),
+    llvm::cl::cat(mainCategory));
+
 static llvm::cl::opt<std::string> jitReportPath(
     "jit-report",
     llvm::cl::desc("Write machine-readable JIT telemetry JSON report"),
@@ -670,6 +677,14 @@ public:
       llhdInterpreter->setJitRuntimeIndirectProfileEnabled(enable);
   }
 
+  /// Load AOT-compiled functions from a .so into the interpreter's
+  /// nativeFuncPtrs map for native dispatch.
+  void setCompiledModule(std::unique_ptr<CompiledModuleLoader> loader) {
+    compiledLoader = std::move(loader);
+    if (llhdInterpreter)
+      llhdInterpreter->loadCompiledFunctions(*compiledLoader);
+  }
+
   /// Dump signals that changed in the last delta cycle.
   void dumpLastDeltaSignals(llvm::raw_ostream &os) const {
     scheduler.dumpLastDeltaSignals(os);
@@ -786,6 +801,9 @@ private:
   std::unique_ptr<LLHDProcessInterpreter> llhdInterpreter;
   JITCompileManager *jitCompileManager = nullptr;
   bool jitRuntimeIndirectProfileEnabled = false;
+
+  // AOT-compiled module loader (via --compiled flag)
+  std::unique_ptr<CompiledModuleLoader> compiledLoader;
 
   std::atomic<bool> abortRequested{false};
   std::atomic<bool> abortHandled{false};
@@ -1824,6 +1842,18 @@ LogicalResult SimulationContext::run() {
     vpiRuntime.setScheduler(&scheduler);
     vpiRuntime.setSimulationControl(&control);
     vpiRuntime.setTopModuleNames(topModuleNames);
+    if (llhdInterpreter) {
+      vpiRuntime.setStringSignalCallbacks(
+          [this](SignalId, llvm::StringRef str, SignalValue &out) {
+            out = llhdInterpreter->encodeMooreStringSignalValue(str);
+            return true;
+          },
+          [this](SignalId, const SignalValue &value, std::string &out) {
+            return llhdInterpreter->decodeMooreStringSignalValue(value, out);
+          });
+    } else {
+      vpiRuntime.setStringSignalCallbacks({}, {});
+    }
 
     // Pass command-line args (including plusargs) to VPI for vpi_get_vlog_info.
     {
@@ -3476,6 +3506,19 @@ static LogicalResult processInput(MLIRContext &context,
     return failure();
   }
 
+  // Load AOT-compiled module if provided.
+  if (!compiledModulePath.empty()) {
+    auto loader = CompiledModuleLoader::load(compiledModulePath);
+    if (!loader)
+      return failure();
+    if (!loader->isCompatible()) {
+      llvm::errs() << "[circt-sim] Compiled module ABI version mismatch\n";
+      return failure();
+    }
+    simContext.setCompiledModule(std::move(loader));
+    reportStage("load-compiled");
+  }
+
   // Run the simulation
   reportStage("run");
   auto runStartTime = std::chrono::steady_clock::now();
@@ -3564,14 +3607,21 @@ static LogicalResult processInput(MLIRContext &context,
     }
     exitCode = 1;
   }
-  // Check for SVA clocked assertion failures.
+  // Check for SVA clocked assertion/assumption failures.
   if (exitCode == 0) {
     if (auto *interp = simContext.getInterpreter()) {
       interp->finalizeClockedAssertionsAtEnd();
+      interp->finalizeClockedAssumptionsAtEnd();
       size_t assertionFailures = interp->getClockedAssertionFailures();
+      size_t assumptionFailures = interp->getClockedAssumptionFailures();
       if (assertionFailures > 0) {
         llvm::errs() << "[circt-sim] " << assertionFailures
                      << " SVA assertion failure(s)\n";
+        exitCode = 1;
+      }
+      if (assumptionFailures > 0) {
+        llvm::errs() << "[circt-sim] " << assumptionFailures
+                     << " SVA assumption failure(s)\n";
         exitCode = 1;
       }
     }

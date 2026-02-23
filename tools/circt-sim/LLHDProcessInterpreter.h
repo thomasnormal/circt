@@ -18,6 +18,13 @@
 #define CIRCT_TOOLS_CIRCT_SIM_LLHDPROCESSINTERPRETER_H
 
 #include "AOTProcessCompiler.h"
+
+// Forward declaration — avoid pulling in <dlfcn.h> in the header.
+namespace circt {
+namespace sim {
+class CompiledModuleLoader;
+} // namespace sim
+} // namespace circt
 #include "LLHDProcessInterpreterBytecode.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
@@ -746,6 +753,12 @@ struct DiscoveredOps {
   /// verif.clocked_assert operations found at module level.
   llvm::SmallVector<verif::ClockedAssertOp, 4> clockedAsserts;
 
+  /// verif.clocked_assume operations found at module level.
+  llvm::SmallVector<verif::ClockedAssumeOp, 4> clockedAssumes;
+
+  /// verif.clocked_cover operations found at module level.
+  llvm::SmallVector<verif::ClockedCoverOp, 4> clockedCovers;
+
   /// Clear all collected operations.
   void clear() {
     instances.clear();
@@ -757,6 +770,8 @@ struct DiscoveredOps {
     moduleDrives.clear();
     firRegs.clear();
     clockedAsserts.clear();
+    clockedAssumes.clear();
+    clockedCovers.clear();
   }
 };
 
@@ -980,6 +995,11 @@ public:
     jitCompileManager = manager;
   }
 
+  /// Load compiled function pointers from an AOT-compiled .so module into the
+  /// nativeFuncPtrs map. Walks all func.func ops in the root module and checks
+  /// the loader for a compiled version by name.
+  void loadCompiledFunctions(const CompiledModuleLoader &loader);
+
   /// Set a callback to be called when sim.terminate is executed.
   /// The callback receives (success, verbose) parameters.
   void setTerminateCallback(std::function<void(bool, bool)> callback) {
@@ -1037,6 +1057,13 @@ public:
     dumponCallback = std::move(callback);
   }
 
+  /// Encode a host string into Moore packed-string signal bits ({ptr, len}).
+  /// Registers the pointer in the interpreter dynamic-string registry.
+  SignalValue encodeMooreStringSignalValue(llvm::StringRef str);
+
+  /// Decode Moore packed-string signal bits ({ptr, len}) to host string.
+  bool decodeMooreStringSignalValue(const SignalValue &value, std::string &out);
+
   /// Apply a DPI/VPI force to a signal and synchronize interpreter force state.
   void applyDpiForce(SignalId sigId, const SignalValue &forcedValue);
 
@@ -1058,9 +1085,18 @@ public:
     return clockedAssertionFailures;
   }
 
+  /// Get the number of clocked assumption failures observed during simulation.
+  size_t getClockedAssumptionFailures() const {
+    return clockedAssumptionFailures;
+  }
+
   /// Finalize outstanding temporal obligations at simulation end.
   /// Returns the number of additional failures reported during finalization.
   size_t finalizeClockedAssertionsAtEnd();
+
+  /// Finalize outstanding assumption obligations at simulation end.
+  /// Returns the number of additional failures reported during finalization.
+  size_t finalizeClockedAssumptionsAtEnd();
 
   /// Print bytecode compilation statistics.
   void printBytecodeStats() const;
@@ -1183,6 +1219,31 @@ private:
   /// Execute a single clocked assertion check (called on clock edge).
   void executeClockedAssertion(verif::ClockedAssertOp assertOp,
                                InstanceId instanceId);
+
+  /// Register verif.clocked_assume operations as reactive processes.
+  void registerClockedAssumptions(const DiscoveredOps &ops,
+                                  InstanceId instanceId,
+                                  const InstanceInputMapping &inputMap);
+
+  /// Execute a single clocked assumption check (called on clock edge).
+  void executeClockedAssumption(verif::ClockedAssumeOp assumeOp,
+                                InstanceId instanceId);
+
+  /// Register verif.clocked_cover operations as reactive processes.
+  void registerClockedCovers(const DiscoveredOps &ops, InstanceId instanceId,
+                             const InstanceInputMapping &inputMap);
+
+  /// Execute a single clocked cover check (called on clock edge).
+  void executeClockedCover(verif::ClockedCoverOp coverOp,
+                           InstanceId instanceId);
+
+  /// Get or create a synthetic VCD-visible signal for an immediate cover site.
+  SignalId getOrCreateImmediateCoverSignal(verif::CoverOp coverOp,
+                                           InstanceId instanceId);
+
+  /// Return true when assertion failure diagnostics are enabled by runtime
+  /// assertion-control globals (default true when no control global exists).
+  bool areAssertionFailMessagesEnabled() const;
 
   /// Resolve a signal ID from an arbitrary value.
   SignalId resolveSignalId(mlir::Value value) const;
@@ -1703,7 +1764,8 @@ private:
       size_t instanceCount, size_t signalCount, size_t outputCount,
       size_t processCount, size_t combinationalCount, size_t initialCount,
       size_t moduleDriveCount, size_t firRegCount,
-      size_t clockedAssertCount) const;
+      size_t clockedAssertCount, size_t clockedAssumeCount,
+      size_t clockedCoverCount) const;
   void maybeTraceRegisteredPortSignal(llvm::StringRef portName,
                                       SignalId signalId,
                                       unsigned width) const;
@@ -2000,6 +2062,8 @@ private:
                                      llvm::StringRef lastOpName) const;
   void maybeTraceSvaAssertionFailed(llvm::StringRef label, int64_t timeFs,
                                     mlir::Location loc) const;
+  void maybeTraceSvaAssumptionFailed(llvm::StringRef label, int64_t timeFs,
+                                     mlir::Location loc) const;
   void maybeTraceImmediateAssertionFailed(llvm::StringRef label,
                                           mlir::Location loc) const;
   void maybeTraceUvmRunTestEntry(ProcessId procId, llvm::StringRef calleeName,
@@ -2464,10 +2528,14 @@ private:
     struct RepeatTracker {
       uint64_t trueStreak = 0;
       bool streakHasUnknown = false;
+      uint64_t lastSampleOrdinal = std::numeric_limits<uint64_t>::max();
+      LTLTruth lastResult = LTLTruth::Unknown;
     };
     struct RepetitionHitTracker {
       uint64_t trueHits = 0;
       bool hasUnknown = false;
+      uint64_t lastSampleOrdinal = std::numeric_limits<uint64_t>::max();
+      LTLTruth lastResult = LTLTruth::Unknown;
     };
     llvm::DenseMap<mlir::Operation *, EventuallyTracker> eventuallyTrackers;
     llvm::DenseMap<mlir::Operation *, EventuallyTracker>
@@ -2784,11 +2852,33 @@ private:
   /// cbValueChange callbacks fire (e.g. cocotb RisingEdge).
   llvm::DenseMap<SignalId, SignalValue> processConditionalDriveValues;
 
-  /// Registered clocked assertion state keyed by op.
-  llvm::DenseMap<mlir::Operation *, ClockedAssertionState> clockedAssertionStates;
+  /// Registered clocked assertion state keyed by (op, instanceId).
+  llvm::DenseMap<std::pair<mlir::Operation *, InstanceId>, ClockedAssertionState>
+      clockedAssertionStates;
+
+  /// Registered clocked assumption state keyed by (op, instanceId).
+  llvm::DenseMap<std::pair<mlir::Operation *, InstanceId>, ClockedAssertionState>
+      clockedAssumptionStates;
+
+  /// Registered clocked cover state keyed by (op, instanceId).
+  llvm::DenseMap<std::pair<mlir::Operation *, InstanceId>, ClockedAssertionState>
+      clockedCoverStates;
+
+  /// Synthetic immediate-cover status signals keyed by (op, instanceId).
+  llvm::DenseMap<std::pair<mlir::Operation *, InstanceId>, SignalId>
+      immediateCoverSignals;
 
   /// Counter of clocked assertion failures during simulation.
   size_t clockedAssertionFailures = 0;
+
+  /// Counter of clocked assumption failures during simulation.
+  size_t clockedAssumptionFailures = 0;
+
+  /// Counter of clocked cover hits during simulation.
+  size_t clockedCoverHits = 0;
+
+  /// Counter of immediate (procedural) cover hits during simulation.
+  size_t immediateCoverHits = 0;
 
   /// Callback for sim.terminate operation.
   std::function<void(bool, bool)> terminateCallback;
@@ -3272,6 +3362,13 @@ private:
   /// signal changes can directly refresh all mirrored interface fields.
   llvm::SmallVector<std::pair<SignalId, uint64_t>, 8>
       interfaceSignalCopyPairs;
+
+  /// Records (srcSignalId, destAddr) pairs for direct signal->memory mirror
+  /// stores at module level (e.g., `llvm.store %stream_in_string, %alloca`).
+  /// Runtime signal updates replay these stores so memory-backed always blocks
+  /// observe fresh input values.
+  llvm::SmallVector<std::pair<SignalId, uint64_t>, 8>
+      signalMemoryMirrorPairs;
 
   /// Deferred child module-level ops: saved during initializeChildInstances(),
   /// executed after executeModuleLevelLLVMOps() so parent signal values are

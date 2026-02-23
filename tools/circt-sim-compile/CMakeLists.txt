@@ -1,0 +1,43 @@
+set(LLVM_LINK_COMPONENTS
+  Support
+  native
+  AllTargetsAsmParsers
+  AllTargetsCodeGens
+  AllTargetsDescs
+  AllTargetsInfos
+  Passes
+)
+
+add_circt_tool(circt-sim-compile circt-sim-compile.cpp)
+target_link_libraries(circt-sim-compile
+  PRIVATE
+  CIRCTCombToArith
+  CIRCTCombToLLVM
+  CIRCTHWToLLVM
+  CIRCTHW
+  CIRCTComb
+  CIRCTLLHD
+  CIRCTMoore
+  CIRCTSeq
+  CIRCTSim
+  CIRCTSupport
+  CIRCTVerif
+  MLIRArithDialect
+  MLIRBuiltinToLLVMIRTranslation
+  MLIRControlFlowDialect
+  MLIRFuncDialect
+  MLIRIR
+  MLIRLLVMDialect
+  MLIRLLVMIRTransforms
+  MLIRLLVMToLLVMIRTranslation
+  MLIRParser
+  MLIRSCFDialect
+  MLIRTargetLLVMIRExport
+  MLIRTransforms
+  LLVMSupport
+  LLVMCore
+  LLVMTarget
+)
+
+llvm_update_compile_flags(circt-sim-compile)
+mlir_check_all_link_libraries(circt-sim-compile)

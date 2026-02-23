@@ -55,6 +55,7 @@ set(libs
 add_circt_tool(circt-sim
   PARTIAL_SOURCES_INTENDED
   AOTProcessCompiler.cpp
+  CompiledModuleLoader.cpp
   circt-sim.cpp
   JITCompileManager.cpp
   JITSchedulerRuntime.cpp
