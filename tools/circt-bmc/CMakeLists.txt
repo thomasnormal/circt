@@ -17,6 +17,10 @@ if(MLIR_ENABLE_EXECUTION_ENGINE)
 endif()
 
 set(LLVM_LINK_COMPONENTS Support ${CIRCT_BMC_JIT_LLVM_COMPONENTS})
+set(CIRCT_BMC_IMPORT_VERILOG_DEPS)
+if(TARGET CIRCTImportVerilog)
+  list(APPEND CIRCT_BMC_IMPORT_VERILOG_DEPS CIRCTImportVerilog)
+endif()
 
 add_circt_tool(circt-bmc circt-bmc.cpp)
 target_link_libraries(circt-bmc
@@ -28,12 +32,16 @@ target_link_libraries(circt-bmc
   CIRCTHW
   CIRCTHWTransforms
   CIRCTHWToSMT
-  CIRCTImportVerilog
+  ${CIRCT_BMC_IMPORT_VERILOG_DEPS}
   CIRCTLECTransforms
+  CIRCTLLHDTransforms
   CIRCTLTL
   CIRCTLTLToCore
+  CIRCTMoore
+  CIRCTMooreToCore
   CIRCTOMTransforms
   CIRCTSeq
+  CIRCTSeqTransforms
   CIRCTSim
   CIRCTSimTransforms
   CIRCTSMTToZ3LLVM

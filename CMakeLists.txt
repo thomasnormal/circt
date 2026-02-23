@@ -124,7 +124,12 @@ else()
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir ) # --src-root
   set(MLIR_INCLUDE_DIR ${MLIR_MAIN_SRC_DIR}/include ) # --includedir
   set(MLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
-  set(MLIR_TABLEGEN_EXE $<TARGET_FILE:mlir-tblgen>)
+  if (CMAKE_CROSSCOMPILING AND DEFINED MLIR_TABLEGEN AND NOT "${MLIR_TABLEGEN}" STREQUAL "")
+    # In cross builds, tablegen must run as a native host tool.
+    set(MLIR_TABLEGEN_EXE ${MLIR_TABLEGEN})
+  else()
+    set(MLIR_TABLEGEN_EXE $<TARGET_FILE:mlir-tblgen>)
+  endif()
   include_directories(SYSTEM ${MLIR_INCLUDE_DIR})
   include_directories(SYSTEM ${MLIR_TABLEGEN_OUTPUT_DIR})
 

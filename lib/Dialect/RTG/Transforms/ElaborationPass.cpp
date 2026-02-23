@@ -964,7 +964,12 @@ private:
     weights.reserve(val->bag.size());
     for (auto [val, weight] : val->bag) {
       auto materializedVal = materialize(val, loc, emitError);
-      auto materializedWeight = materialize(weight, loc, emitError);
+      if (weight > std::numeric_limits<size_t>::max()) {
+        emitError() << "bag weight exceeds platform size_t range";
+        return Value();
+      }
+      auto materializedWeight =
+          materialize(static_cast<size_t>(weight), loc, emitError);
       if (!materializedVal || !materializedWeight)
         return Value();
 

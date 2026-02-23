@@ -15,6 +15,7 @@
 
 #include "circt/Dialect/HW/HWAttributes.h"
 #include "circt/Support/SymCache.h"
+#include <limits>
 
 namespace circt {
 namespace hw {
@@ -28,9 +29,11 @@ class HWSymbolCache : public SymbolCacheBase {
 public:
   class Item {
   public:
-    Item(mlir::Operation *op) : op(op), port(~0ULL) {}
+    static constexpr size_t kNoPort = std::numeric_limits<size_t>::max();
+
+    Item(mlir::Operation *op) : op(op), port(kNoPort) {}
     Item(mlir::Operation *op, size_t port) : op(op), port(port) {}
-    bool hasPort() const { return port != ~0ULL; }
+    bool hasPort() const { return port != kNoPort; }
     size_t getPort() const { return port; }
     mlir::Operation *getOp() const { return op; }
 
@@ -41,7 +44,7 @@ public:
 
   // Add inner names, which might be ports
   void addDefinition(mlir::StringAttr modSymbol, mlir::StringAttr name,
-                     mlir::Operation *op, size_t port = ~0ULL) {
+                     mlir::Operation *op, size_t port = Item::kNoPort) {
     auto key = InnerRefAttr::get(modSymbol, name);
     symbolCache.try_emplace(key, op, port);
   }
@@ -78,7 +81,7 @@ private:
   Item lookupInner(InnerRefAttr attr) const {
     assert(isFrozen && "cannot read from this cache until it is frozen");
     auto it = symbolCache.find(attr);
-    return it == symbolCache.end() ? Item{nullptr, ~0ULL} : it->second;
+    return it == symbolCache.end() ? Item{nullptr, Item::kNoPort} : it->second;
   }
 
   bool isFrozen = false;

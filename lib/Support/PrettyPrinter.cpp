@@ -282,7 +282,7 @@ void PrettyPrinter::print(const FormattedToken &f) {
                             : PrintBreaks::Inconsistent;
           ssize_t newIndent = indent;
           if (b->style() == IndentStyle::Visual)
-            newIndent = ssize_t{margin} - space;
+            newIndent = static_cast<ssize_t>(margin) - space;
           indent = computeNewIndent(newIndent, b->offset(), maxStartingIndent);
           printStack.push_back({indent, breaks});
         } else {

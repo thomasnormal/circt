@@ -17,6 +17,10 @@ if(MLIR_ENABLE_EXECUTION_ENGINE)
 endif()
 
 set(LLVM_LINK_COMPONENTS Support ${CIRCT_LEC_JIT_LLVM_COMPONENTS})
+set(CIRCT_LEC_IMPORT_VERILOG_DEPS)
+if(TARGET CIRCTImportVerilog)
+  list(APPEND CIRCT_LEC_IMPORT_VERILOG_DEPS CIRCTImportVerilog)
+endif()
 
 add_circt_tool(circt-lec circt-lec.cpp)
 target_link_libraries(circt-lec
@@ -30,7 +34,7 @@ target_link_libraries(circt-lec
   CIRCTHW
   CIRCTHWTransforms
   CIRCTHWToSMT
-  CIRCTImportVerilog
+  ${CIRCT_LEC_IMPORT_VERILOG_DEPS}
   CIRCTLECTransforms
   CIRCTOMTransforms
   CIRCTSim
