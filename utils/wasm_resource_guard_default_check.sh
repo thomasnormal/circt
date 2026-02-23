@@ -8,9 +8,9 @@ BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
 VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
 
-BMC_TEST_INPUT="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
-SIM_TEST_INPUT="test/Tools/circt-sim/llhd-combinational.mlir"
-SV_TEST_INPUT="test/Tools/circt-sim/reject-raw-sv-input.sv"
+BMC_TEST_INPUT="${BMC_TEST_INPUT:-test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir}"
+SIM_TEST_INPUT="${SIM_TEST_INPUT:-test/Tools/circt-sim/llhd-combinational.mlir}"
+SV_TEST_INPUT="${SV_TEST_INPUT:-test/Tools/circt-sim/reject-raw-sv-input.sv}"
 
 if ! command -v "$NODE_BIN" >/dev/null 2>&1; then
   echo "[wasm-rg-default] missing Node.js runtime: $NODE_BIN" >&2
@@ -21,6 +21,13 @@ if [[ ! -f "$BMC_JS" || ! -f "$SIM_JS" ]]; then
   echo "[wasm-rg-default] missing wasm tools under $BUILD_DIR/bin" >&2
   exit 1
 fi
+
+for input in "$BMC_TEST_INPUT" "$SIM_TEST_INPUT" "$SV_TEST_INPUT"; do
+  if [[ ! -f "$input" ]]; then
+    echo "[wasm-rg-default] missing test input: $input" >&2
+    exit 1
+  fi
+done
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
