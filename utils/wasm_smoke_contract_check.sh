@@ -14,6 +14,8 @@ required_tokens=(
   "WASM_REQUIRE_CLEAN_CROSSCOMPILE"
   "WASM_REQUIRE_VERILOG"
   "validate_bool_env"
+  "validate_positive_int_env"
+  'validate_positive_int_env "NINJA_JOBS" "$NINJA_JOBS"'
   'validate_bool_env "WASM_REQUIRE_VERILOG" "$WASM_REQUIRE_VERILOG"'
   'validate_bool_env "WASM_SKIP_BUILD" "$WASM_SKIP_BUILD"'
   'validate_bool_env "WASM_REQUIRE_CLEAN_CROSSCOMPILE" "$WASM_REQUIRE_CLEAN_CROSSCOMPILE"'
