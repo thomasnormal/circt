@@ -3953,3 +3953,43 @@
   - remaining gap after this change:
     - nested checks under instantiated modules (`hw.instance`) are still
       intentionally rejected.
+
+- Iteration update (nested `hw.instance` checks in `verif.bmc` are now lowered):
+  - realization:
+    - helper modules instantiated via `hw.instance` are a common SVA pattern,
+      and rejecting nested `verif.assert`/`verif.cover` there blocked parity
+      with commercial-style assertion helper hierarchies.
+  - TDD signal:
+    - flipped `@one_nested_assertion` in
+      `test/Conversion/VerifToSMT/verif-to-smt-errors.mlir` to expect success.
+    - pre-fix failure emitted:
+      - `bounded model checking with nested verif.assert/verif.cover in called
+        functions or instantiated modules is not yet supported`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - added `inlineSingleBlockInstance(...)` for `hw.instance` inlining.
+      - extended `inlineBMCRegionFuncCalls(...)` fixed-point walk to inline both
+        `func.call` and `hw.instance` symbols in `init`/`loop`/`circuit`.
+      - inlines local `hw.module` bodies directly at instance sites before BMC
+        nested-check validation.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir`.
+    - updated:
+      - `test/Conversion/VerifToSMT/verif-to-smt-errors.mlir` now expects
+        success for:
+        - `@multiple_asserting_modules_bmc`
+        - `@one_nested_assertion`
+        - `@two_separated_assertions`
+        - `@multiple_nested_assertions`
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+      - result: `2/2` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+      - result: `141/141` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - result: `21/21` pass.
+  - remaining gap after this change:
+    - nested checks through non-inlineable hierarchy (for example,
+      non-`hw.module` symbols or intentionally complex non-single-block helper
+      constructs) still depend on fallback diagnostics.
