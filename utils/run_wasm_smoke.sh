@@ -7,6 +7,7 @@ NODE_BIN="${NODE_BIN:-node}"
 VCD_PATH="${VCD_PATH:-/tmp/circt-wasm-smoke.vcd}"
 WASM_REQUIRE_VERILOG="${WASM_REQUIRE_VERILOG:-0}"
 WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
+WASM_CHECK_CXX20_WARNINGS="${WASM_CHECK_CXX20_WARNINGS:-auto}"
 WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
 
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
@@ -47,6 +48,14 @@ fi
 if [[ ! -f "$SV_TEST_INPUT" || ! -f "$SV_SIM_TEST_INPUT" ]]; then
   echo "[wasm-smoke] required SystemVerilog input file missing" >&2
   exit 1
+fi
+
+if [[ "$WASM_CHECK_CXX20_WARNINGS" == "auto" ]]; then
+  if [[ "$WASM_SKIP_BUILD" == "1" ]]; then
+    WASM_CHECK_CXX20_WARNINGS=0
+  else
+    WASM_CHECK_CXX20_WARNINGS=1
+  fi
 fi
 
 if [[ "$WASM_SKIP_BUILD" == "1" ]]; then
@@ -94,6 +103,15 @@ fi
 
 if [[ "$has_verilog_target" -eq 0 && ( -f "$VERILOG_JS" || -f "$VERILOG_WASM" ) ]]; then
   echo "[wasm-smoke] found prior circt-verilog artifacts ($VERILOG_JS and/or $VERILOG_WASM); frontend functional checks will still run via default-guard regression"
+fi
+
+if [[ "$WASM_CHECK_CXX20_WARNINGS" == "1" ]]; then
+  echo "[wasm-smoke] C++20 warning triage"
+  if [[ ! -x "utils/wasm_cxx20_warning_check.sh" ]]; then
+    echo "[wasm-smoke] missing executable warning check script: utils/wasm_cxx20_warning_check.sh" >&2
+    exit 1
+  fi
+  BUILD_DIR="$BUILD_DIR" NINJA_JOBS="$NINJA_JOBS" utils/wasm_cxx20_warning_check.sh
 fi
 
 echo "[wasm-smoke] Smoke: circt-bmc.js --help"
