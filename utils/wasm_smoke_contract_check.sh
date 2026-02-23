@@ -33,6 +33,9 @@ required_tokens=(
   'missing executable helper script: $PLUSARGS_HELPER'
   'missing executable helper script: $RESOURCE_GUARD_HELPER'
   "git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake"
+  'ninja target query failed; inferring circt-verilog support from existing artifacts'
+  'failed to query ninja targets'
+  'WASM_SKIP_BUILD" == "1" && -s "$VERILOG_JS" && -s "$VERILOG_WASM"'
   "circt-bmc.wasm"
   "circt-sim.wasm"
   "Functional: circt-verilog stdin (.sv) -> IR"

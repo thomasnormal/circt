@@ -123,10 +123,17 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 has_verilog_target=0
-if ninja -C "$BUILD_DIR" -t targets all >"$tmpdir/targets.list"; then
+if ninja -C "$BUILD_DIR" -t targets all >"$tmpdir/targets.list" 2>"$tmpdir/targets.err"; then
   if grep -q 'circt-verilog: phony' "$tmpdir/targets.list"; then
     has_verilog_target=1
   fi
+elif [[ "$WASM_SKIP_BUILD" == "1" && -s "$VERILOG_JS" && -s "$VERILOG_WASM" ]]; then
+  echo "[wasm-smoke] ninja target query failed; inferring circt-verilog support from existing artifacts"
+  has_verilog_target=1
+else
+  echo "[wasm-smoke] failed to query ninja targets in $BUILD_DIR (needed to detect circt-verilog target)" >&2
+  cat "$tmpdir/targets.err" >&2
+  exit 1
 fi
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
