@@ -3620,3 +3620,36 @@
     - regular formal sanity:
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_next$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `2 tests, failures=0`.
+
+- Iteration update (sv-tests mixed assert+cover SAT classification):
+  - realization:
+    - `utils/run_sv_tests_circt_bmc.sh` treated mixed `verif.assert` +
+      `verif.cover` MLIR as assert-only.
+    - with recent mixed-check core support, SAT can now mean "cover hit" even
+      when assertions hold; assert-only interpretation caused false FAILs.
+  - implemented:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - added explicit `check_mode="mixed"` detection for modules containing
+        both `verif.assert` and `verif.cover`.
+      - when mixed mode returns SAT for non-negative simulation tests, rerun
+        `circt-bmc` on an assert-only MLIR view (covers stripped) to
+        disambiguate:
+        - assert-only SAT => `FAIL` (assertion violation),
+        - assert-only UNSAT => `PASS` (cover witness only).
+    - regression coverage:
+      - added
+        `test/Tools/run-sv-tests-bmc-mixed-assert-cover-classification.test`.
+  - TDD signal:
+    - pre-fix manual harness repro on a mixed module yielded:
+      - `total=1 pass=0 fail=1`.
+    - same repro after fix yields:
+      - `total=1 pass=1 fail=0`.
+  - validation:
+    - focused harness contracts:
+      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-mixed-assert-cover-classification' build-test/test`
+      - result: `1/1` pass.
+      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+      - result: `21 pass, 1 unsupported`.
+  - outcome:
+    - sv-tests mixed assert+cover runs are now classified semantically, instead
+      of treating all mixed SAT results as assertion failures.

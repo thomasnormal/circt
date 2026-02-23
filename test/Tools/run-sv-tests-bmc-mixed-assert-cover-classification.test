@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.30--mixed-assert-cover.sv <<"SVEOF"\n/*\n:name: mixed_assert_cover\n:description: mixed assert+cover simulation test\n:type: simulation\n:tags: 16.30\n:unsynthesizable: 1\n*/\nmodule top(input logic clk, input logic a, input logic b);\n  assert property (@(posedge clk) a);\n  cover property (@(posedge clk) b);\nendmodule\nSVEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<"EOFV"\n#!/usr/bin/env bash\ncat <<"MLIR"\nmodule {\n  hw.module @top(in %clk : i1, in %a : i1, in %b : i1) {\n    %c1 = hw.constant true : i1\n    %c0 = hw.constant false : i1\n    verif.assert %c1 : i1\n    verif.cover %c0 : i1\n    hw.output\n  }\n}\nMLIR\nEOFV\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-bmc.sh <<"EOFB"\n#!/usr/bin/env bash\nmlir="${@: -1}"\nif grep -Fq "verif.cover" "$mlir"; then\n  echo "BMC_RESULT=SAT"\nelse\n  echo "BMC_RESULT=UNSAT"\nfi\nEOFB\nchmod +x %t/fake-bmc.sh\n'
+// RUN: env OUT=%t/out.txt CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )16\\.30( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/out.txt | FileCheck %s --check-prefix=OUT
+
+// CHECK: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// OUT: PASS{{[[:space:]]+}}16.30--mixed-assert-cover{{[[:space:]]+}}
