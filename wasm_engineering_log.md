@@ -930,3 +930,32 @@
   - `utils/wasm_cxx20_warning_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: preflight all wasm smoke helper scripts)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_smoke_contract_check.sh` to require explicit
+    helper preflight hooks in `utils/run_wasm_smoke.sh` for all invoked
+    helper scripts:
+    - `REENTRY_HELPER` (`utils/wasm_callmain_reentry_check.js`)
+    - `PLUSARGS_HELPER` (`utils/wasm_plusargs_reentry_check.sh`)
+    - `RESOURCE_GUARD_HELPER` (`utils/wasm_resource_guard_default_check.sh`)
+    - explicit diagnostics on missing/non-executable helpers.
+  - Pre-fix failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `missing token in smoke script: missing helper script: $REENTRY_HELPER`
+    - smoke script only preflighted `utils/wasm_cxx20_warning_check.sh` and
+      could fail later with less targeted diagnostics if helper scripts were
+      missing.
+- Fix:
+  - updated `utils/run_wasm_smoke.sh` to:
+    - define helper variables (`REENTRY_HELPER`, `PLUSARGS_HELPER`,
+      `RESOURCE_GUARD_HELPER`);
+    - fail early when:
+      - re-entry helper file is missing;
+      - plusargs/default-guard helpers are not executable;
+    - route helper invocations through these validated helper variables.
+  - updated `utils/wasm_smoke_contract_check.sh` to enforce this contract.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

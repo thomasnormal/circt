@@ -9,6 +9,9 @@ WASM_REQUIRE_VERILOG="${WASM_REQUIRE_VERILOG:-0}"
 WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
 WASM_CHECK_CXX20_WARNINGS="${WASM_CHECK_CXX20_WARNINGS:-auto}"
 WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
+REENTRY_HELPER="utils/wasm_callmain_reentry_check.js"
+PLUSARGS_HELPER="utils/wasm_plusargs_reentry_check.sh"
+RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
 
 validate_bool_env() {
   local name="$1"
@@ -65,6 +68,19 @@ fi
 
 if [[ ! -f "$SV_TEST_INPUT" || ! -f "$SV_SIM_TEST_INPUT" ]]; then
   echo "[wasm-smoke] required SystemVerilog input file missing" >&2
+  exit 1
+fi
+
+if [[ ! -f "$REENTRY_HELPER" ]]; then
+  echo "[wasm-smoke] missing helper script: $REENTRY_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$PLUSARGS_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $PLUSARGS_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$RESOURCE_GUARD_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $RESOURCE_GUARD_HELPER" >&2
   exit 1
 fi
 
@@ -214,7 +230,7 @@ echo "[wasm-smoke] Re-entry: circt-sim callMain help -> run"
 bmc_reentry_log="$tmpdir/bmc-reentry.log"
 sim_reentry_log="$tmpdir/sim-reentry.log"
 
-"$NODE_BIN" utils/wasm_callmain_reentry_check.js "$SIM_JS" \
+"$NODE_BIN" "$REENTRY_HELPER" "$SIM_JS" \
   --first --help \
   --second --resource-guard=false --vcd /tmp/reentry.vcd "$SIM_TEST_INPUT" \
   --expect-wasm-file-substr /tmp/reentry.vcd "\$enddefinitions" \
@@ -226,7 +242,7 @@ if grep -q "InitLLVM was already initialized!" "$sim_reentry_log"; then
 fi
 
 echo "[wasm-smoke] Re-entry: circt-bmc callMain help -> run"
-"$NODE_BIN" utils/wasm_callmain_reentry_check.js "$BMC_JS" \
+"$NODE_BIN" "$REENTRY_HELPER" "$BMC_JS" \
   --preload-file "$BMC_TEST_INPUT" /inputs/test.mlir \
   --first --help \
   --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out.smt2 /inputs/test.mlir \
@@ -241,7 +257,7 @@ fi
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog callMain help -> run"
   verilog_reentry_log="$tmpdir/verilog-reentry.log"
-  "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$VERILOG_JS" \
+  "$NODE_BIN" "$REENTRY_HELPER" "$VERILOG_JS" \
     --preload-file "$SV_SIM_TEST_INPUT" /inputs/test.sv \
     --first --help \
     --second --resource-guard=false --ir-llhd --single-unit --format=sv -o /out.mlir /inputs/test.sv \
@@ -255,7 +271,7 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
 fi
 
 echo "[wasm-smoke] Re-entry: circt-sim run -> run"
-"$NODE_BIN" utils/wasm_callmain_reentry_check.js "$SIM_JS" \
+"$NODE_BIN" "$REENTRY_HELPER" "$SIM_JS" \
   --first --resource-guard=false --vcd /tmp/reentry-run1.vcd "$SIM_TEST_INPUT" \
   --second --resource-guard=false --vcd /tmp/reentry-run2.vcd "$SIM_TEST_INPUT" \
   --expect-wasm-file-substr /tmp/reentry-run1.vcd "\$enddefinitions" \
@@ -264,7 +280,7 @@ echo "[wasm-smoke] Re-entry: circt-sim run -> run"
   >"$tmpdir/sim-reentry-run-run.log" 2>&1
 
 echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
-"$NODE_BIN" utils/wasm_callmain_reentry_check.js "$BMC_JS" \
+"$NODE_BIN" "$REENTRY_HELPER" "$BMC_JS" \
   --preload-file "$BMC_TEST_INPUT" /inputs/test.mlir \
   --first --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out1.smt2 /inputs/test.mlir \
   --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out2.smt2 /inputs/test.mlir \
@@ -275,7 +291,7 @@ echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog run -> run"
-  "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$VERILOG_JS" \
+  "$NODE_BIN" "$REENTRY_HELPER" "$VERILOG_JS" \
     --preload-file "$SV_SIM_TEST_INPUT" /inputs/test.sv \
     --first --resource-guard=false --ir-hw --single-unit --format=sv -o /out1.mlir /inputs/test.sv \
     --second --resource-guard=false --ir-llhd --single-unit --format=sv -o /out2.mlir /inputs/test.sv \
@@ -286,10 +302,10 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
 fi
 
 echo "[wasm-smoke] Re-entry: circt-sim plusargs isolation"
-BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_plusargs_reentry_check.sh
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$PLUSARGS_HELPER"
 
 echo "[wasm-smoke] Default guard: no wasm runtime abort"
-BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_resource_guard_default_check.sh
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"
 
 if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake; then
   echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): none"
