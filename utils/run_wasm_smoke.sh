@@ -318,14 +318,21 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$PLUSARGS_HELPER"
 echo "[wasm-smoke] Default guard: no wasm runtime abort"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"
 
-if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake; then
+if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake 2>"$tmpdir/crosscompile.err"; then
   echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): none"
 else
-  if [[ "$WASM_REQUIRE_CLEAN_CROSSCOMPILE" == "1" ]]; then
-    echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): present (failing because WASM_REQUIRE_CLEAN_CROSSCOMPILE=1)" >&2
+  git_rc=$?
+  if [[ "$git_rc" -eq 1 ]]; then
+    if [[ "$WASM_REQUIRE_CLEAN_CROSSCOMPILE" == "1" ]]; then
+      echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): present (failing because WASM_REQUIRE_CLEAN_CROSSCOMPILE=1)" >&2
+      exit 1
+    fi
+    echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): present (remaining work)"
+  else
+    echo "[wasm-smoke] unable to inspect llvm submodule CrossCompile.cmake status" >&2
+    cat "$tmpdir/crosscompile.err" >&2
     exit 1
   fi
-  echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): present (remaining work)"
 fi
 
 echo "[wasm-smoke] PASS"
