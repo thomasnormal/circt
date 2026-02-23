@@ -2006,3 +2006,45 @@ Per-call-site cache for `call_indirect` dispatch. Skips 28+ UVM interceptor cont
 - E0-E3 baseline: run=916ms
 - E5: run=700ms (1.31x speedup)
 - Cumulative from pre-E1 (3480ms): 5.0x run-phase speedup
+
+## Session Summary — Feb 23, 2026
+
+### Commits
+- `44392f89d` — E5: per-call-site inline cache for call_indirect (CISiteEntry)
+- `b1803e94f` — Fix pipeline-bench.sv test timing
+- `74e71e369` — AOT: compilation glue + callback dispatch (aotCompileProcesses + executeAOTCallbackProcess)
+- `eeb1ea558` — MooreToCore: fix hw.bitcast for mixed 2/4-state packed struct arrays
+- `7dd17ac26` — AOT: exclude CallbackTimeOnly from AOT (minnow regression fix)
+- `8e49ac96c` — Fix UVM sequencer get_next_item/try_next_item event wakeup
+
+### Test Count: 530/536 (98.9%)
+- Up from 523/535 at session start
+- Fixed: pipeline-bench, packed-struct-array-reset-4state, module-level-scf-if-init, 3x seq-* tests
+- Remaining 5 failures: constraint-inside-basic, constraint-signed-basic, constraint-unique-narrow, cross-var-inline, cross-var-linear-sum (all need constraint solver)
+- 1 unresolved: vpi-basic.sv
+
+### E5 Inline Cache Benchmark (AHB AVIP, 500ns window)
+| Stage  | Avg (3 runs) |
+|--------|-------------|
+| passes | 1831ms      |
+| init   | 4149ms      |
+| run    | 700ms       |
+| total  | 6681ms      |
+
+- E0-E4 baseline: run=916ms
+- E5: run=700ms (1.31x speedup, 5.0x cumulative from pre-E1 3480ms)
+
+### AOT Compilation Status
+- Infrastructure complete: aotCompileProcesses() + executeAOTCallbackProcess() + dispatch wiring
+- Gated behind CIRCT_SIM_AOT=1 env var (zero overhead when disabled)
+- Only compiles CallbackStaticObserved processes (CallbackTimeOnly excluded — broke minnow path)
+- AHB AVIP: 0 AOT candidates (all UVM/Coroutine processes)
+- AOT will help RTL-heavy designs with many always @(posedge clk) processes
+- Bug found and fixed: CallbackTimeOnly AOT broke minnow re-arming (52 vs 6 iterations)
+
+### Key Insight: Path to 1000x
+- 29x per-operation interpreter overhead (3,755 vs 128 instructions per register update)
+- AOT callback compilation doesn't help UVM-heavy workloads (all Coroutine)
+- Bytecode compiler has 0% compile rate on real SV (missing hw.struct_extract/create)
+- Next step: Add FourState struct support to bytecode compiler to unlock real SV compilation
+- Alternative: JIT-compile hot interpreter functions for Coroutine processes
