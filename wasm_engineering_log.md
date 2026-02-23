@@ -1355,3 +1355,36 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: only require SV input when verilog helper path is active)
+- Gap identified (regression-test first):
+  - behavioral bug repro before fix:
+    - created temp `BUILD_DIR` with `circt-bmc.js` and `circt-sim.js` only;
+    - ran `utils/wasm_resource_guard_default_check.sh` with
+      `SV_TEST_INPUT` pointing to a missing file;
+    - pre-fix result:
+      - failed with `missing test input` even though `circt-verilog.js` was
+        absent and verilog checks should be skipped.
+  - added behavioral regression:
+    - `utils/wasm_runtime_helpers_behavior_check.sh`
+    - Pre-fix failure:
+      - case1 failed:
+        - `missing SV input should be ignored when circt-verilog.js is absent`.
+- Fix:
+  - updated `utils/wasm_resource_guard_default_check.sh`:
+    - require `BMC_TEST_INPUT` and `SIM_TEST_INPUT` unconditionally;
+    - move `SV_TEST_INPUT` preflight into the
+      `if [[ -f "$VERILOG_JS" ]]; then` branch.
+  - strengthened contract:
+    - `utils/wasm_runtime_helpers_contract_check.sh` now requires tokens for
+      verilog-guarded SV preflight.
+  - integrated behavior check into CI:
+    - `.github/workflows/wasmSmoke.yml` runs
+      `utils/wasm_runtime_helpers_behavior_check.sh`;
+    - `utils/wasm_ci_contract_check.sh` enforces workflow token.
+- Validation:
+  - `utils/wasm_runtime_helpers_behavior_check.sh` passes.
+  - `utils/wasm_runtime_helpers_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
