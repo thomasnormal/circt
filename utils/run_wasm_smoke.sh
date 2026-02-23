@@ -6,6 +6,7 @@ NINJA_JOBS="${NINJA_JOBS:-1}"
 NODE_BIN="${NODE_BIN:-node}"
 VCD_PATH="${VCD_PATH:-/tmp/circt-wasm-smoke.vcd}"
 WASM_REQUIRE_VERILOG="${WASM_REQUIRE_VERILOG:-0}"
+WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
 
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
@@ -14,6 +15,8 @@ VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
 BMC_TEST_INPUT="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
 SIM_TEST_INPUT="test/Tools/circt-sim/llhd-combinational.mlir"
 SV_TEST_INPUT="test/Tools/circt-sim/reject-raw-sv-input.sv"
+SV_SIM_TEST_INPUT="test/Tools/circt-sim/event-triggered.sv"
+SV_SIM_TOP="event_triggered_tb"
 
 if [[ ! -d "$BUILD_DIR" ]]; then
   echo "[wasm-smoke] build directory not found: $BUILD_DIR" >&2
@@ -25,8 +28,17 @@ if [[ ! -f "$BMC_TEST_INPUT" || ! -f "$SIM_TEST_INPUT" ]]; then
   exit 1
 fi
 
-echo "[wasm-smoke] Building wasm tools (jobs=$NINJA_JOBS)"
-ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-bmc circt-sim
+if [[ ! -f "$SV_TEST_INPUT" || ! -f "$SV_SIM_TEST_INPUT" ]]; then
+  echo "[wasm-smoke] required SystemVerilog input file missing" >&2
+  exit 1
+fi
+
+if [[ "$WASM_SKIP_BUILD" == "1" ]]; then
+  echo "[wasm-smoke] Skipping wasm rebuild (WASM_SKIP_BUILD=1)"
+else
+  echo "[wasm-smoke] Building wasm tools (jobs=$NINJA_JOBS)"
+  ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-bmc circt-sim
+fi
 
 if [[ ! -f "$BMC_JS" || ! -f "$SIM_JS" ]]; then
   echo "[wasm-smoke] expected wasm JS outputs are missing" >&2
@@ -45,8 +57,12 @@ if ninja -C "$BUILD_DIR" -t targets all >"$tmpdir/targets.list"; then
 fi
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
-  echo "[wasm-smoke] Building optional wasm frontend: circt-verilog"
-  ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-verilog
+  if [[ "$WASM_SKIP_BUILD" == "1" ]]; then
+    echo "[wasm-smoke] Skipping circt-verilog rebuild (WASM_SKIP_BUILD=1)"
+  else
+    echo "[wasm-smoke] Building optional wasm frontend: circt-verilog"
+    ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-verilog
+  fi
   if [[ ! -f "$VERILOG_JS" ]]; then
     echo "[wasm-smoke] circt-verilog target exists but $VERILOG_JS is missing" >&2
     exit 1
@@ -90,6 +106,20 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
     "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --ir-llhd --single-unit --format=sv - \
     >"$tmpdir/verilog-func.out" 2>"$tmpdir/verilog-func.err"
   grep -Eq "(hw\\.module|llhd\\.entity)" "$tmpdir/verilog-func.out"
+
+  echo "[wasm-smoke] Functional: circt-verilog (.sv) -> circt-sim"
+  cat "$SV_SIM_TEST_INPUT" | \
+    "$NODE_BIN" "$VERILOG_JS" --resource-guard=false --ir-llhd --single-unit --format=sv - \
+    >"$tmpdir/verilog-sim.mlir" 2>"$tmpdir/verilog-sim-verilog.err"
+  "$NODE_BIN" "$SIM_JS" --resource-guard=false --top "$SV_SIM_TOP" \
+    --vcd "$tmpdir/verilog-sim.vcd" "$tmpdir/verilog-sim.mlir" \
+    >"$tmpdir/verilog-sim.out" 2>"$tmpdir/verilog-sim.err"
+  grep -q "event triggered ok" "$tmpdir/verilog-sim.out"
+  grep -q "Simulation completed" "$tmpdir/verilog-sim.out"
+  if [[ ! -s "$tmpdir/verilog-sim.vcd" ]]; then
+    echo "[wasm-smoke] expected SV pipeline VCD output not found or empty: $tmpdir/verilog-sim.vcd" >&2
+    exit 1
+  fi
 fi
 
 echo "[wasm-smoke] Functional: circt-bmc stdin -> SMT-LIB"
