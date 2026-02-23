@@ -92,6 +92,21 @@ static bool mapHWArrayIndexToLLVMIndex(hw::ArrayType arrayType, uint64_t hwIndex
   return true;
 }
 
+static std::string sanitizeSvaTraceName(llvm::StringRef name) {
+  std::string out;
+  out.reserve(name.size());
+  for (char c : name) {
+    unsigned char uc = static_cast<unsigned char>(c);
+    if (std::isalnum(uc) || c == '_')
+      out.push_back(c);
+    else
+      out.push_back('_');
+  }
+  if (out.empty())
+    out = "assert";
+  return out;
+}
+
 static bool computeMemoryBackedArrayBitOffset(hw::ArrayType arrayType,
                                               uint64_t hwIndex,
                                               unsigned &bitOffset) {
@@ -5885,6 +5900,7 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     return;
 
   for (auto assertOp : ops.clockedAsserts) {
+    size_t assertionOrdinal = clockedAssertionStates.size() + 1;
     std::string label;
     if (auto labelAttr = assertOp.getLabelAttr())
       label = labelAttr.getValue().str();
@@ -5897,11 +5913,24 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     ClockedAssertionState state;
     state.instanceId = instanceId;
     state.inputMap = inputMap;
+    std::string traceName;
+    if (!label.empty())
+      traceName = "__sva__" + sanitizeSvaTraceName(label);
+    else
+      traceName = "__sva__assert_" + std::to_string(assertionOrdinal);
+    if (instanceId != 0)
+      traceName = "__sva__inst" + std::to_string(instanceId) + "_" +
+                  sanitizeSvaTraceName(traceName);
+    state.assertionSignalId =
+        scheduler.registerSignal(traceName, 1, SignalEncoding::TwoState);
+    scheduler.updateSignal(state.assertionSignalId, SignalValue(1, 1));
+    signalIdToName[state.assertionSignalId] = traceName;
+    signalIdToType[state.assertionSignalId] =
+        IntegerType::get(assertOp.getContext(), 1);
     clockedAssertionStates[assertOp.getOperation()] = state;
 
     std::string procName =
-        "clocked_assert_" + (label.empty() ? std::to_string(
-                                                 clockedAssertionStates.size())
+        "clocked_assert_" + (label.empty() ? std::to_string(assertionOrdinal)
                                            : label);
     ProcessId procId = scheduler.registerProcess(
         procName, [this, assertOp, instanceId, inputMap]() {
@@ -5935,6 +5964,12 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   ClockedAssertionState &state = it->second;
   ScopedInstanceContext instScope(*this, state.instanceId);
   ScopedInputValueMap inputScope(*this, state.inputMap);
+  auto updateAssertionSignal = [&](bool passing) {
+    if (state.assertionSignalId == 0)
+      return;
+    scheduler.updateSignal(state.assertionSignalId,
+                           SignalValue(passing ? 1 : 0, 1));
+  };
 
   // Read the current clock value.
   InterpretedValue clkVal = evaluateContinuousValue(assertOp.getClock());
@@ -5974,12 +6009,14 @@ void LLHDProcessInterpreter::executeClockedAssertion(
         evaluateContinuousValue(assertOp.getEnable());
     if (enableVal.isX() || enableVal.getAPInt().isZero()) {
       // Assertion is disabled.
+      updateAssertionSignal(true);
       return;
     }
   }
 
   // Evaluate the property using LTL-aware evaluation.
   bool propHolds = evaluateLTLProperty(assertOp.getProperty(), state);
+  updateAssertionSignal(propHolds);
   if (!propHolds) {
     // Assertion failed.
     ++clockedAssertionFailures;
@@ -8029,11 +8066,12 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   if ((state.waiting || state.destBlock) &&
       canSkipCachedProcess(state, scheduler)) {
-    SensitivityList waitList = buildSensitivityListFromState(state);
-    if (!waitList.empty()) {
+    if (!state.lastSensitivityEntries.empty()) {
       ++state.cacheSkips;
       state.waiting = true;
-      scheduler.suspendProcessForEvents(procId, waitList);
+      // E6: Sensitivity is unchanged (verified by canSkipCachedProcess).
+      // Use fast re-arm instead of rebuilding list + full re-registration.
+      scheduler.resuspendProcessFast(procId);
       return;
     }
   }

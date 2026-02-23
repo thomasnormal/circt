@@ -809,8 +809,11 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
         state != ProcessState::Ready)
       return;
     if (state == ProcessState::Waiting) {
-      if (sensitivityTriggered(proc->getWaitingSensitivity(), signalId,
-                               actualEdge)) {
+      // E6: cached processes use the permanent sensitivity list directly.
+      const SensitivityList &sensList = proc->sensitivityCached
+          ? proc->getSensitivityList()
+          : proc->getWaitingSensitivity();
+      if (sensitivityTriggered(sensList, signalId, actualEdge)) {
         proc->clearWaiting();
         recordTriggerSignal(proc->getId(), signalId);
         scheduleProcess(proc->getId(), proc->getPreferredRegion());
@@ -845,8 +848,11 @@ void ProcessScheduler::triggerSensitiveProcesses(SignalId signalId,
           state != ProcessState::Ready)
         continue;
       if (state == ProcessState::Waiting) {
-        if (sensitivityTriggered(proc->getWaitingSensitivity(), signalId,
-                                 actualEdge)) {
+        // E6: cached processes use the permanent sensitivity list directly.
+        const SensitivityList &sensList = proc->sensitivityCached
+            ? proc->getSensitivityList()
+            : proc->getWaitingSensitivity();
+        if (sensitivityTriggered(sensList, signalId, actualEdge)) {
           proc->clearWaiting();
           recordTriggerSignal(proc->getId(), signalId);
           scheduleProcess(proc->getId(), proc->getPreferredRegion());
@@ -918,6 +924,19 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
 
   proc->setWaitingFor(waitList);
 
+  // E6: If the incoming list matches the permanent sensitivity, skip the
+  // permanent copy and signal registration loop.  Both the permanent list and
+  // the registeredSignals set are already up to date from the previous cycle.
+  // This eliminates one SmallVector copy and all DenseSet::insert calls on
+  // every wake/sleep cycle for RTL processes with stable sensitivity lists.
+  const auto &newEntries = waitList.getEntries();
+  const auto &curEntries = proc->getSensitivityList().getEntries();
+  if (newEntries.size() == curEntries.size() && newEntries == curEntries) {
+    LLVM_DEBUG(llvm::dbgs() << "Process " << id << " E6 fast-resuspend ("
+                            << newEntries.size() << " entries unchanged)\n");
+    return;
+  }
+
   // Also update the main sensitivity list so it persists across wake/sleep cycles.
   // This is critical for LLHD processes that use llhd.wait - if a process wakes
   // but doesn't re-execute to its next wait (due to control flow or errors),
@@ -952,11 +971,11 @@ void ProcessScheduler::resuspendProcessFast(ProcessId id) {
   Process *proc = getProcess(id);
   if (!proc)
     return;
-  // Fast re-arm: copy the permanent sensitivity list into the waiting
-  // sensitivity so that triggerSensitiveProcesses() (which checks
-  // getWaitingSensitivity() for Waiting-state processes) can match edges.
-  // The signal-to-process mappings are unchanged from registerProcess().
-  proc->setWaitingFor(proc->getSensitivityList());
+  // E6: The permanent sensitivity list never changes for bytecode/static
+  // processes. Mark as cached so triggerSensitiveProcesses() reads from
+  // sensitivity directly, avoiding the SmallVector copy every cycle.
+  proc->sensitivityCached = true;
+  proc->setState(ProcessState::Waiting);
 }
 
 void ProcessScheduler::queueSignalUpdateFast(SignalId signalId, uint64_t value,
