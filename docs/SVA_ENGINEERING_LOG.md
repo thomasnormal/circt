@@ -2,6 +2,34 @@
 
 ## 2026-02-23
 
+- Iteration update (VerifToSMT nested-check soundness guard for BMC):
+  - realization:
+    - `verif.bmc` only aggregated checks syntactically present in the BMC
+      circuit region. checks reachable through `func.call`/`hw.instance`
+      symbol bodies were lowered but not connected to `violated` aggregation,
+      producing unsound "no-violation" behavior.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - during BMC preflight, walk the BMC call/instance graph and detect
+        reachable nested `verif.assert`/`verif.cover`.
+      - emit a hard diagnostic for these cases:
+        - `bounded model checking with nested verif.assert/verif.cover in called functions or instantiated modules is not yet supported`
+      - keep top-level (direct-in-circuit) multi-assert support unchanged.
+    - regression lock:
+      - `test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+      - converted nested module/function check scenarios from "supported" to
+        explicit expected-error coverage.
+  - validation:
+    - `ninja -C build-test circt-opt`
+      - result: `PASS`.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+      - result: `1/1` pass.
+  - surprise:
+    - two adjacent VerifToSMT tests (`bmc-final-checks-any-violation.mlir`,
+      `bmc-final-checks-smtlib.mlir`) are currently failing in this workspace
+      from pre-existing FileCheck drift unrelated to this change; this needs a
+      separate cleanup.
+
 - Iteration update (run_formal_all backend-parity shadow retirement and
   forced SMT-LIB orchestration):
   - realization:
