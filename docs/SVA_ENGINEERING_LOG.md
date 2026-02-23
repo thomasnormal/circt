@@ -4047,3 +4047,35 @@
       - result: `142/142` pass.
     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
+
+- Iteration update (SMT-LIB export: legalize LLVM shift/div/rem integer ops):
+  - realization:
+    - after scalar add/sub/mul/logic legalization, common integer
+      shift/div/rem LLVM ops still triggered unsupported diagnostics in live BMC
+      logic under `for-smtlib-export`.
+  - TDD signal:
+    - added `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.shl'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - extended LLVM scalar-op legalization set with rewrites to `arith` for:
+      - `llvm.shl` -> `arith.shli`
+      - `llvm.lshr` -> `arith.shrui`
+      - `llvm.ashr` -> `arith.shrsi`
+      - `llvm.udiv` -> `arith.divui`
+      - `llvm.sdiv` -> `arith.divsi`
+      - `llvm.urem` -> `arith.remui`
+      - `llvm.srem` -> `arith.remsi`
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir`.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+      - result: `3/3` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+      - result: `143/143` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - result: `21/21` pass.

@@ -8643,8 +8643,10 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       [&](LLVM::ConstantOp op) { llvmConstants.push_back(op); });
   bmcOp->walk([&](Operation *op) {
     if (isa<LLVM::AddOp, LLVM::SubOp, LLVM::MulOp, LLVM::AndOp, LLVM::OrOp,
-            LLVM::XOrOp, LLVM::ICmpOp, LLVM::SelectOp, LLVM::TruncOp,
-            LLVM::ZExtOp, LLVM::SExtOp>(op))
+            LLVM::XOrOp, LLVM::ShlOp, LLVM::LShrOp, LLVM::AShrOp,
+            LLVM::UDivOp, LLVM::SDivOp, LLVM::URemOp, LLVM::SRemOp,
+            LLVM::ICmpOp, LLVM::SelectOp, LLVM::TruncOp, LLVM::ZExtOp,
+            LLVM::SExtOp>(op))
       llvmIntOps.push_back(op);
   });
   bmcOp->walk([&](LLVM::LoadOp op) { llvmLoads.push_back(op); });
@@ -8730,6 +8732,34 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::XOrIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::ShlOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::ShLIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::LShrOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::ShRUIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::AShrOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::ShRSIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::UDivOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::DivUIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::SDivOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::DivSIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::URemOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::RemUIOp::create(builder, loc, lhs, rhs);
+    } else if (isa<LLVM::SRemOp>(op)) {
+      if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
+        continue;
+      replacement = arith::RemSIOp::create(builder, loc, lhs, rhs);
     } else if (auto icmp = dyn_cast<LLVM::ICmpOp>(op)) {
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
