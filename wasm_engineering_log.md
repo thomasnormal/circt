@@ -1457,3 +1457,29 @@
 - Validation:
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `utils/wasm_ci_contract_check.sh` passes.
+
+## 2026-02-23 (follow-up: accept header-only VCDs in smoke validation)
+- Gap identified (regression-test first):
+  - runtime repro before fix:
+    - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=0 WASM_REQUIRE_CLEAN_CROSSCOMPILE=0 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+      failed with:
+      - `expected SV pipeline VCD to declare at least one $var: ...`
+  - strengthened `utils/wasm_smoke_contract_check.sh`:
+    - require smoke diagnostics to validate VCDs via `\$enddefinitions`;
+    - explicitly forbid stale `$var`-declaration-required diagnostics.
+  - Pre-fix contract failure:
+    - `utils/wasm_smoke_contract_check.sh` failed with:
+      - `stale token still present in smoke script: expected VCD output to declare at least one \$var`
+- Fix:
+  - updated `utils/run_wasm_smoke.sh`:
+    - removed strict `^\$var` requirements for both:
+      - SV pipeline VCD (`$tmpdir/verilog-sim.vcd`)
+      - stdin sim VCD (`$VCD_PATH`)
+    - retained non-empty and `\$enddefinitions` checks.
+  - updated `utils/wasm_smoke_contract_check.sh` to enforce new contract.
+- Validation:
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - previously failing repro now passes end-to-end:
+    - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=0 WASM_REQUIRE_CLEAN_CROSSCOMPILE=0 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+  - full required-verilog smoke also passes:
+    - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
