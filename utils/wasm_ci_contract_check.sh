@@ -15,6 +15,7 @@ required_tokens=(
   "utils/run_wasm_smoke.sh"
   "WASM_REQUIRE_VERILOG=1"
   "WASM_SKIP_BUILD=1"
+  "WASM_REQUIRE_CLEAN_CROSSCOMPILE=1"
 )
 
 for token in "${required_tokens[@]}"; do

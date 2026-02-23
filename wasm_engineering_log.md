@@ -374,3 +374,21 @@
   - `utils/wasm_smoke_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes in this workspace (no local CrossCompile edits detected).
+
+## 2026-02-23 (follow-up: enforce clean CrossCompile mode in CI)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_ci_contract_check.sh` to require
+    `WASM_REQUIRE_CLEAN_CROSSCOMPILE=1` in `.github/workflows/wasmSmoke.yml`.
+  - Pre-fix failure:
+    - workflow did not enable the new hard-fail cleanliness mode.
+- Fix:
+  - updated `.github/workflows/wasmSmoke.yml` to pass
+    `WASM_REQUIRE_CLEAN_CROSSCOMPILE=1` in both stages:
+    - full configure/build smoke run;
+    - `WASM_SKIP_BUILD=1` runtime-only rerun.
+- Validation:
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `utils/wasm_smoke_contract_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end in this workspace.
