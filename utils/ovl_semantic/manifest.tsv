@@ -50,3 +50,7 @@ ovl_sem_valid_id	utils/ovl_semantic/wrappers/ovl_sem_valid_id.sv	ovl_valid_id.v	
 ovl_sem_frame	utils/ovl_semantic/wrappers/ovl_sem_frame.sv	ovl_frame.v	ovl_sem_frame	8	0
 ovl_sem_arbiter	utils/ovl_semantic/wrappers/ovl_sem_arbiter.sv	ovl_arbiter.v	ovl_sem_arbiter	8	0
 ovl_sem_stack	utils/ovl_semantic/wrappers/ovl_sem_stack.sv	ovl_stack.v	ovl_sem_stack	8	0
+ovl_sem_coverage	utils/ovl_semantic/wrappers/ovl_sem_coverage.sv	ovl_coverage.v	ovl_sem_coverage	8	0
+ovl_sem_value_coverage	utils/ovl_semantic/wrappers/ovl_sem_value_coverage.sv	ovl_value_coverage.v	ovl_sem_value_coverage	8	0
+ovl_sem_xproduct_bit_coverage	utils/ovl_semantic/wrappers/ovl_sem_xproduct_bit_coverage.sv	ovl_xproduct_bit_coverage.v	ovl_sem_xproduct_bit_coverage	8	0
+ovl_sem_xproduct_value_coverage	utils/ovl_semantic/wrappers/ovl_sem_xproduct_value_coverage.sv	ovl_xproduct_value_coverage.v	ovl_sem_xproduct_value_coverage	8	0
