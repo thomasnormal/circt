@@ -1509,3 +1509,35 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     handling controls.
   - remaining known xprop lane expected failures stay unchanged (`6`) since
     they are BMC-property semantics, not LEC output-comparison mode.
+
+## Latest sv-tests harness restoration (2026-02-23)
+
+- Implemented:
+  - `utils/run_sv_tests_circt_bmc.sh`
+    - restored missing main execution/summarization tail that runs discovered
+      sv-tests and emits `sv-tests SVA summary`.
+    - preserved explicit filter contract (`TAG_REGEX`/`TEST_FILTER`) except
+      existing smoke-mode fallback behavior.
+  - stale test harness callsite fixes:
+    - `test/Tools/circt-bmc/sv-tests-expectations.mlir`
+    - `test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir`
+    - both now pass explicit `TEST_FILTER='.*'`.
+  - stale expected-fail cleanup:
+    - `test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
+    - removed `XFAIL` after confirming stable pass.
+
+- Validation:
+  - targeted sv-tests files:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-expectations.mlir build-test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build-test/test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
+    - result: `4 pass, 1 expected-fail`.
+  - harness-level contract tests:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+    - result: `19 pass, 1 unsupported`.
+  - full `circt-bmc` sv-tests bucket:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+    - result: `11 pass, 1 expected-fail, 4 unsupported`.
+
+- Current state:
+  - sv-tests BMC runner is operational again with non-empty summary output.
+  - one known UVM include-path lane remains expected-fail
+    (`sv-tests-uvm-tags-include.mlir`, `pass=5 error=1`).
