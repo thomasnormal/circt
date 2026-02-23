@@ -46,6 +46,7 @@ jobs:
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
 
           utils/configure_wasm_build.sh
+          utils/wasm_cxx20_warning_behavior_check.sh
           BUILD_DIR=build-wasm NINJA_JOBS=1 utils/wasm_cxx20_warning_check.sh
           WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 \
             WASM_CHECK_CXX20_WARNINGS=1 NINJA_JOBS=1 \

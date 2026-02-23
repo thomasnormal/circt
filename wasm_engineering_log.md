@@ -1144,3 +1144,37 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: use effective (last) -std flag in warning triage)
+- Gap identified (regression-test first):
+  - added behavioral regression test:
+    - `utils/wasm_cxx20_warning_behavior_check.sh`
+  - Pre-fix failure:
+    - `utils/wasm_cxx20_warning_behavior_check.sh` failed in case
+      `final-cxx20`:
+      - compile commands contained `-std=gnu++17 -std=c++20`;
+      - warning triage still rejected them because it read the first `-std`
+        flag instead of the effective final one.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh`:
+    - parse the last `-std=...` token per compile command
+      (`tail -n 1`) so validation matches effective compiler behavior.
+  - added `utils/wasm_cxx20_warning_behavior_check.sh`:
+    - pass case: final flag is C++20 (`... -std=gnu++17 -std=c++20`);
+    - fail case: final flag is older than C++20
+      (`... -std=c++20 -std=gnu++17`).
+  - integrated behavior check into CI:
+    - `.github/workflows/wasmSmoke.yml` now runs
+      `utils/wasm_cxx20_warning_behavior_check.sh`;
+    - `utils/wasm_ci_contract_check.sh` enforces workflow token.
+- Validation:
+  - pre-fix regression failure reproduced:
+    - `utils/wasm_cxx20_warning_behavior_check.sh`
+      failed `final-cxx20` as expected.
+  - post-fix:
+    - `utils/wasm_cxx20_warning_behavior_check.sh` passes.
+    - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+    - `utils/wasm_ci_contract_check.sh` passes.
+    - `utils/wasm_smoke_contract_check.sh` passes.
+    - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+      passes end-to-end.
