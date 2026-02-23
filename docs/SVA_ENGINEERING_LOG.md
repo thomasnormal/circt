@@ -2929,3 +2929,60 @@
       - pass
     - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=0 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - pass (no xpass)
+
+- Iteration update (OVL semantic harness expansion to full 110-case inventory):
+  - realization:
+    - semantic harness inventory still covered `51` wrappers (`102` obligations),
+      while the OVL checker matrix contains `55` modules (`110` obligations).
+    - missing checkers were all coverage-family modules:
+      - `ovl_coverage`
+      - `ovl_value_coverage`
+      - `ovl_xproduct_bit_coverage`
+      - `ovl_xproduct_value_coverage`
+  - surprise:
+    - in the current dirty workspace, full semantic runs report `5` pre-existing
+      failures unrelated to the new wrappers:
+      - `ovl_sem_increment` (pass/fail) and `ovl_sem_decrement` (pass/fail):
+        frontend legalization error (`non-boolean moore.past requires a clocked assertion`)
+      - `ovl_sem_reg_loaded(pass)`: unexpected `SAT`
+    - re-running with the previous 102-case manifest reproduces the same 5
+      failures, confirming no regression from this slice.
+  - implemented:
+    - `utils/ovl_semantic/manifest.tsv`
+      - added entries for:
+        - `ovl_sem_coverage`
+        - `ovl_sem_value_coverage`
+        - `ovl_sem_xproduct_bit_coverage`
+        - `ovl_sem_xproduct_value_coverage`
+    - new wrappers:
+      - `utils/ovl_semantic/wrappers/ovl_sem_coverage.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_value_coverage.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_xproduct_bit_coverage.sv`
+      - `utils/ovl_semantic/wrappers/ovl_sem_xproduct_value_coverage.sv`
+    - wrapper semantics:
+      - `ovl_sem_coverage`: pass keeps `test_expr=0`, fail uses `test_expr=1`.
+      - `ovl_sem_value_coverage`: fail uses `test_expr=1'bx` to exercise
+        checker X-check semantics.
+      - `ovl_sem_xproduct_*_coverage`: pass sets `coverage_check=0`,
+        fail sets `coverage_check=1` and drives values that complete coverage.
+  - validation:
+    - targeted new wrappers:
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(coverage|value_coverage|xproduct_bit_coverage|xproduct_value_coverage)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0, xfail=0, xpass=0`
+    - full semantic matrix:
+      - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `110 tests, failures=5, xfail=0, xpass=0`
+    - previous-manifest confirmation:
+      - `OVL_SEMANTIC_MANIFEST=/tmp/manifest_old.tsv FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `102 tests, failures=5, xfail=0, xpass=0`
+    - formal sanity:
+      - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `4/4` mode checks pass.
+    - profiling sample:
+      - `time OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(coverage|value_coverage|xproduct_bit_coverage|xproduct_value_coverage)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `elapsed=2.577 sec`
+  - outcome:
+    - semantic harness inventory now reaches full OVL breadth:
+      - `55` wrappers / `110` obligations.
+    - no new regressions were introduced; remaining failures are pre-existing
+      local baseline issues outside this wrapper slice.

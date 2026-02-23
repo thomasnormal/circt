@@ -41,21 +41,33 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, LLHD probe-before-drive wire fix)
+## Latest SVA Closure Slice (February 23, 2026, OVL semantic harness expansion to 110)
 
-- closed a real parity gap in Yosys `extnets(pass)` by fixing non-local LLHD
-  wire resolution in `strip-llhd-interface-signals`:
-  - probe-before-drive layouts for single unconditional 0-time drives now
-    resolve to the driven wire value instead of signal init.
-- added targeted regression:
-  - `test/Tools/circt-lec/lec-strip-llhd-probe-before-drive-wire.mlir`
+- extended OVL semantic harness coverage from `102` to `110` pass/fail
+  obligations by adding wrappers for the four previously missing
+  coverage-family checkers:
+  - `ovl_coverage`
+  - `ovl_value_coverage`
+  - `ovl_xproduct_bit_coverage`
+  - `ovl_xproduct_value_coverage`
+- updated:
+  - `utils/ovl_semantic/manifest.tsv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_coverage.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_value_coverage.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_xproduct_bit_coverage.sv`
+  - `utils/ovl_semantic/wrappers/ovl_sem_xproduct_value_coverage.sv`
 - validation snapshot:
-  - Yosys BMC subset:
+  - targeted new wrappers:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(coverage|value_coverage|xproduct_bit_coverage|xproduct_value_coverage)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `8/8` mode checks pass.
+  - full semantic matrix in the current local workspace:
+    - `FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `110 total, 5 failures` (same 5 pre-existing failures when
+      running the previous `102`-case manifest: `ovl_sem_increment`,
+      `ovl_sem_decrement`, `ovl_sem_reg_loaded(pass)`).
+  - Yosys BMC sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
     - result: `4/4` mode checks pass.
-  - Yosys LEC extnets smoke:
-    - `env CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_OPT=build-test/bin/circt-opt CIRCT_LEC=build-test/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
-    - result: `PASS`.
 
 ## Known Limitations (Must-Fix)
 
@@ -200,48 +212,17 @@ Items are grouped by pipeline stage.
   `utils/run_ovl_sva_semantic_circt_bmc.sh`.
   - Harness style: one SV wrapper per checker case in
     `utils/ovl_semantic/wrappers/` with manifest-driven expectations.
-  - Current semantic status (Feb 22, 2026): `90` pass/fail obligations with
-    `90 PASS + 0 XFAIL` (`45` checker wrappers x `pass/fail` modes).
+  - Current semantic coverage inventory (Feb 23, 2026): `110` pass/fail
+    obligations (`55` checker wrappers x `pass/fail` modes), matching the full
+    OVL checker matrix.
   - Runner supports known-gap modes (`known_gap=1`, `known_gap=tool`,
     `known_gap=any`) for future triage, but there are currently no active
     known-gap semantic cases in `utils/ovl_semantic/manifest.tsv`.
-  - Coverage now includes:
-    - `ovl_change`
-    - `ovl_one_cold`
-    - `ovl_mutex`
-    - `ovl_next_state`
-    - `ovl_odd_parity`
-    - `ovl_increment`
-    - `ovl_decrement`
-    - `ovl_delta`
-    - `ovl_unchange`
-    - `ovl_no_overflow`
-    - `ovl_no_underflow`
-    - `ovl_transition`
-    - `ovl_no_transition`
-    - `ovl_req_requires`
-    - `ovl_window`
-    - `ovl_win_change`
-    - `ovl_win_unchange`
-    - `ovl_hold_value`
-    - `ovl_no_contention`
-    - `ovl_always_on_edge`
-    - `ovl_width`
-    - `ovl_quiescent_state`
-    - `ovl_value`
-    - `ovl_proposition`
-    - `ovl_cycle_sequence`
-    - `ovl_handshake`
-    - `ovl_req_ack_unique`
-    - `ovl_reg_loaded`
-    - `ovl_time`
-    - `ovl_bits`
-    - `ovl_code_distance`
-    - `ovl_fifo_index`
-    - `ovl_frame`
-    - `ovl_never_unknown_async`
-    - `ovl_arbiter`
-    - `ovl_stack`
+  - Newly added in this slice:
+    - `ovl_coverage`
+    - `ovl_value_coverage`
+    - `ovl_xproduct_bit_coverage`
+    - `ovl_xproduct_value_coverage`
 
 ## Core Workstreams
 
