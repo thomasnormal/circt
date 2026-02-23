@@ -26,6 +26,10 @@ done
 rg_tokens=(
   'command -v "$NODE_BIN"'
   "[wasm-rg-default] missing Node.js runtime"
+  'BMC_TEST_INPUT="${BMC_TEST_INPUT:-'
+  'SIM_TEST_INPUT="${SIM_TEST_INPUT:-'
+  'SV_TEST_INPUT="${SV_TEST_INPUT:-'
+  "[wasm-rg-default] missing test input:"
 )
 
 for token in "${rg_tokens[@]}"; do

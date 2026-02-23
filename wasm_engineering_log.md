@@ -1209,3 +1209,33 @@
       exits non-zero with explicit runtime diagnostic.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: explicit test-input preflight in default-guard helper)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_runtime_helpers_contract_check.sh` to require
+    in `utils/wasm_resource_guard_default_check.sh`:
+    - env-overridable input paths:
+      - `BMC_TEST_INPUT`
+      - `SIM_TEST_INPUT`
+      - `SV_TEST_INPUT`
+    - explicit missing-input diagnostic:
+      - `[wasm-rg-default] missing test input: ...`
+  - Pre-fix failure:
+    - `utils/wasm_runtime_helpers_contract_check.sh` failed with:
+      - `missing token in default-guard helper: BMC_TEST_INPUT="${BMC_TEST_INPUT:-`
+    - helper used hardcoded relative test paths without explicit preflight
+      checks.
+- Fix:
+  - updated `utils/wasm_resource_guard_default_check.sh`:
+    - made input paths env-overridable;
+    - added upfront file-existence checks for all three inputs with explicit
+      diagnostics.
+- Validation:
+  - `utils/wasm_runtime_helpers_contract_check.sh` passes.
+  - negative test:
+    - `BMC_TEST_INPUT=/tmp/definitely-missing.mlir utils/wasm_resource_guard_default_check.sh`
+      exits non-zero with:
+      - `missing test input: /tmp/definitely-missing.mlir`.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
