@@ -8709,14 +8709,23 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     auto rhs = op->getNumOperands() > 1 ? op->getOperand(1) : Value();
 
     if (isa<LLVM::AddOp>(op)) {
+      if (cast<LLVM::AddOp>(op).getOverflowFlags() !=
+          LLVM::IntegerOverflowFlags::none)
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::AddIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::SubOp>(op)) {
+      if (cast<LLVM::SubOp>(op).getOverflowFlags() !=
+          LLVM::IntegerOverflowFlags::none)
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::SubIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::MulOp>(op)) {
+      if (cast<LLVM::MulOp>(op).getOverflowFlags() !=
+          LLVM::IntegerOverflowFlags::none)
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::MulIOp::create(builder, loc, lhs, rhs);
@@ -8733,22 +8742,33 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         continue;
       replacement = arith::XOrIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::ShlOp>(op)) {
+      if (cast<LLVM::ShlOp>(op).getOverflowFlags() !=
+          LLVM::IntegerOverflowFlags::none)
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::ShLIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::LShrOp>(op)) {
+      if (cast<LLVM::LShrOp>(op).getIsExact())
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::ShRUIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::AShrOp>(op)) {
+      if (cast<LLVM::AShrOp>(op).getIsExact())
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::ShRSIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::UDivOp>(op)) {
+      if (cast<LLVM::UDivOp>(op).getIsExact())
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::DivUIOp::create(builder, loc, lhs, rhs);
     } else if (isa<LLVM::SDivOp>(op)) {
+      if (cast<LLVM::SDivOp>(op).getIsExact())
+        continue;
       if (!isIntTy(lhs.getType()) || !isIntTy(rhs.getType()))
         continue;
       replacement = arith::DivSIOp::create(builder, loc, lhs, rhs);
@@ -8778,6 +8798,9 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         continue;
       replacement = arith::SelectOp::create(builder, loc, cond, trueVal, falseVal);
     } else if (isa<LLVM::TruncOp>(op)) {
+      if (cast<LLVM::TruncOp>(op).getOverflowFlags() !=
+          LLVM::IntegerOverflowFlags::none)
+        continue;
       if (!isIntTy(lhs.getType()))
         continue;
       replacement = arith::TruncIOp::create(builder, loc,
