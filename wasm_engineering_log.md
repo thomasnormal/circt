@@ -751,3 +751,23 @@
     `utils/wasm_ci_contract_check.sh` pass.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: verify compile-command presence per triaged TU)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require
+    explicit diagnostic coverage for missing compile commands:
+    - `[wasm-cxx20-warn] missing compile command for ...`
+  - Pre-fix failure:
+    - warning triage assumed each TU appears in `ninja -t commands` output and
+      only validated `-std=c++20` for matched lines.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh`:
+    - fail immediately if any expected TU compile command is absent from
+      command dump before checking flags.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` pass.

@@ -50,6 +50,11 @@ if ! grep -Fq -- "-std=c++20" "$cmd_dump"; then
   exit 1
 fi
 for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
+  if ! grep -Fq -- "$src" "$cmd_dump"; then
+    echo "[wasm-cxx20-warn] missing compile command for $src" >&2
+    cat "$cmd_dump" >&2
+    exit 1
+  fi
   if ! grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"; then
     echo "[wasm-cxx20-warn] compile command for $src is missing -std=c++20" >&2
     cat "$cmd_dump" >&2

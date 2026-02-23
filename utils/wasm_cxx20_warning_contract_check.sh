@@ -19,6 +19,7 @@ required_tokens=(
   "circt-tblgen.cpp"
   'grep -F -- "$src" "$cmd_dump" | grep -Fq -- "-std=c++20"'
   '[wasm-cxx20-warn] failed to clean rebuild targets'
+  '[wasm-cxx20-warn] missing compile command for'
 )
 
 for token in "${required_tokens[@]}"; do
