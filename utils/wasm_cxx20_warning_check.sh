@@ -105,7 +105,7 @@ for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cp
     cat "$cmd_dump" >&2
     exit 1
   fi
-  std_flag="$(grep -Eo -- '-std=[^[:space:]]+' <<<"$cmd_line" | head -n 1 || true)"
+  std_flag="$(grep -Eo -- '-std=[^[:space:]]+' <<<"$cmd_line" | tail -n 1 || true)"
   if [[ -z "$std_flag" ]]; then
     echo "[wasm-cxx20-warn] compile command for $src is missing a -std=... flag" >&2
     cat "$cmd_dump" >&2
