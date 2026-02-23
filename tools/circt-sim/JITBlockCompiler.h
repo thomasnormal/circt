@@ -17,6 +17,7 @@
 #define CIRCT_TOOLS_CIRCT_SIM_JITBLOCKCOMPILER_H
 
 #include "JITSchedulerRuntime.h"
+#include "ExecutionEngineHandle.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "mlir/IR/Block.h"
@@ -28,7 +29,6 @@
 #include <vector>
 
 namespace mlir {
-class ExecutionEngine;
 class MLIRContext;
 } // namespace mlir
 
@@ -122,7 +122,7 @@ private:
   ///
   /// Keep every engine alive for the lifetime of the compiler instance so
   /// previously returned native function pointers remain valid.
-  std::vector<std::unique_ptr<mlir::ExecutionEngine>> engines;
+  std::vector<ExecutionEngineHandle> engines;
 
   /// Counter for generating unique function names.
   unsigned funcCounter = 0;
