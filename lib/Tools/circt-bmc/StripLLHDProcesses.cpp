@@ -729,6 +729,27 @@ struct StripLLHDProcessesPass
             }
             return false;
           };
+          auto materializeSignalInputAbstraction =
+              [&](Value signal, Type signalType, Location loc,
+                  StringRef reason) -> std::optional<Value> {
+            if (auto existing = signalInputs.find(signal);
+                existing != signalInputs.end())
+              return existing->second;
+            if (!signalType)
+              return std::nullopt;
+            auto baseName = StringAttr::get(hwModule.getContext(),
+                                            ns.newName(getSignalName(signal)));
+            auto newInput = addInputPort(baseName, signalType);
+            signalInputs[signal] = newInput.second;
+            recordAbstractedInterfaceInput(newInput.first, baseName, signalType,
+                                           reason, getSignalName(signal),
+                                           std::nullopt, loc);
+            OpBuilder builder(hwModule.getContext());
+            builder.setInsertionPoint(hwModule.getBodyBlock()->getTerminator());
+            DriveOp::create(builder, loc, signal, newInput.second,
+                            getZeroTime(), Value{});
+            return newInput.second;
+          };
 
         if (!dynamicDrives.empty()) {
           auto isZeroTimeConst = [](Value time) -> bool {
@@ -836,29 +857,38 @@ struct StripLLHDProcessesPass
           }
         }
 
-        for (Value result : process.getResults()) {
-          bool needsAbstraction = false;
-          StringRef abstractionReason = "unknown";
-          std::string abstractionSignal;
+          for (Value result : process.getResults()) {
+            bool needsAbstraction = false;
+            StringRef abstractionReason = "unknown";
+            std::string abstractionSignal;
           Location abstractionLoc = process.getLoc();
           SmallVector<DriveOp> droppableResultDrives;
-          for (OpOperand &use : result.getUses()) {
-            auto drv = dyn_cast<DriveOp>(use.getOwner());
-            if (!drv) {
-              needsAbstraction = true;
-              abstractionReason = "non_drive_use";
+            for (OpOperand &use : result.getUses()) {
+              auto drv = dyn_cast<DriveOp>(use.getOwner());
+              if (!drv) {
+                needsAbstraction = true;
+                abstractionReason = "non_drive_use";
               abstractionLoc = use.getOwner()->getLoc();
-              break;
+                break;
+              }
+              if (hasObservableSignalUse(drv.getSignal(), drv)) {
+                Type signalType = driveValueTypes.lookup(drv.getSignal());
+                if (!signalType)
+                  signalType = drv.getValue().getType();
+                if (materializeSignalInputAbstraction(
+                        drv.getSignal(), signalType, drv.getLoc(),
+                        "observable_signal_use_resolution_unknown")) {
+                  droppableResultDrives.push_back(drv);
+                  continue;
+                }
+                needsAbstraction = true;
+                abstractionReason = "observable_signal_use";
+                abstractionSignal = getSignalName(drv.getSignal()).str();
+                abstractionLoc = drv.getLoc();
+                break;
+              }
+              droppableResultDrives.push_back(drv);
             }
-            if (hasObservableSignalUse(drv.getSignal(), drv)) {
-              needsAbstraction = true;
-              abstractionReason = "observable_signal_use";
-              abstractionSignal = getSignalName(drv.getSignal()).str();
-              abstractionLoc = drv.getLoc();
-              break;
-            }
-            droppableResultDrives.push_back(drv);
-          }
           if (!needsAbstraction) {
             for (auto drv : droppableResultDrives)
               drv.erase();

@@ -55,12 +55,12 @@ module {
   }
 
   // CHECK-LABEL: hw.module @assert_proc
-  // CHECK-DAG: circt.bmc_abstracted_llhd_process_result_details =
-  // CHECK-DAG: circt.bmc_abstracted_llhd_process_results = 1 : i32
-  // CHECK-DAG: llhd_process_result
-  // CHECK-DAG: observable_signal_use
+  // CHECK-SAME: in %sig
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_input_details =
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_inputs = 1 : i32
+  // CHECK-DAG: observable_signal_use_resolution_unknown
   // CHECK-DAG: signal = "sig"
-  // CHECK-DAG: result = 0
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
   // CHECK: llhd.prb
   // CHECK: hw.struct_extract
   // CHECK: verif.assert
@@ -181,10 +181,16 @@ module {
   }
 
   // CHECK-LABEL: hw.module @redundant_init_drive_bitcast_equiv
-  // CHECK: circt.bmc_abstracted_llhd_process_results = 2 : i32
+  // CHECK-SAME: in %sig
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_input_details =
+  // CHECK-DAG: circt.bmc_abstracted_llhd_interface_inputs = 1 : i32
+  // CHECK-DAG: observable_signal_use_resolution_unknown
+  // CHECK-DAG: signal = "sig"
+  // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
+  // CHECK-NOT: llhd_process_result
   // CHECK-NOT: llhd.process
   // CHECK-NOT: llhd.drv %sig, %sig_zero
-  // CHECK: llhd.drv %sig, %llhd_process_result after
+  // CHECK: llhd.drv %{{.*}}, %sig after
   hw.module @redundant_init_drive_bitcast_equiv() {
     %true = hw.constant true
     %c0_i2 = hw.constant 0 : i2
