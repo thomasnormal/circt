@@ -34,4 +34,15 @@ if ! grep -Fq -- "ArrayRef<Parameter> ObjectType::getFields() const { return fie
   exit 1
 fi
 
+tmp_err="$(mktemp)"
+trap 'rm -f "$tmp_err"' EXIT
+if CMAKE_CXX_STANDARD=17 "$CONFIG_SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-cxx20-contract] configure script accepted unsupported C++ standard override (17)" >&2
+  exit 1
+fi
+if ! grep -Fq -- "CMAKE_CXX_STANDARD must be >= 20" "$tmp_err"; then
+  echo "[wasm-cxx20-contract] missing explicit floor diagnostic for C++20 requirement" >&2
+  exit 1
+fi
+
 echo "[wasm-cxx20-contract] PASS"

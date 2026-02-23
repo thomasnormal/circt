@@ -526,3 +526,23 @@
   - `utils/wasm_ci_contract_check.sh`, `utils/wasm_configure_contract_check.sh`,
     `utils/wasm_cxx20_contract_check.sh`, and
     `utils/wasm_smoke_contract_check.sh` all pass.
+
+## 2026-02-23 (follow-up: enforce C++20 floor in wasm configure)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_contract_check.sh` to assert that
+    `utils/configure_wasm_build.sh` rejects `CMAKE_CXX_STANDARD=17`.
+  - Pre-fix failure:
+    - configure script accepted C++17 override even after default moved to 20.
+- Fix:
+  - updated `utils/configure_wasm_build.sh` with explicit floor check:
+    - fail with clear diagnostic unless `CMAKE_CXX_STANDARD >= 20`.
+- Validation:
+  - `utils/wasm_cxx20_contract_check.sh` passes (including override-rejection
+    path).
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_warning_contract_check.sh`,
+    `utils/wasm_cxx20_warning_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` all pass.
+  - `WASM_SKIP_BUILD=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.
