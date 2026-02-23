@@ -1,6 +1,5 @@
 // RUN: circt-bmc --emit-mlir -b 10 --module top %s | FileCheck %s
-// XFAIL: *
-// Test file has SSA error: %38 and %42 defined inside process but used outside.
+// Regression for LLHD combinational/process lowering through BMC.
 
 module {
   hw.module private @clk_gen(in %valid : !hw.struct<value: i1, unknown: i1>, in %clk : !hw.struct<value: i1, unknown: i1>, out out : !hw.struct<value: i8, unknown: i8>, in %in : !hw.struct<value: i8, unknown: i8>) {
@@ -175,9 +174,9 @@ module {
     ^bb3:  // pred: ^bb2
       %37 = llhd.prb %cycle : i32
       %38 = comb.add %37, %c1_i32 : i32
+      llhd.drv %cycle, %38 after %0 : i32
       cf.br ^bb1
     }
-    llhd.drv %cycle, %38 after %0 : i32
     llhd.process {
       %39 = llhd.int_to_time %c50000000_i64
       llhd.wait delay %39, ^bb1
@@ -187,9 +186,9 @@ module {
       %unknown_9 = hw.struct_extract %40["unknown"] : !hw.struct<value: i1, unknown: i1>
       %41 = comb.xor %value_8, %true : i1
       %42 = hw.struct_create (%41, %unknown_9) : !hw.struct<value: i1, unknown: i1>
-      llhd.wait yield (%42 : !hw.struct<value: i1, unknown: i1>), delay %39, ^bb1
+      llhd.drv %clk, %42 after %0 : !hw.struct<value: i1, unknown: i1>
+      llhd.wait delay %39, ^bb1
     }
-    llhd.drv %clk, %42 after %0 : !hw.struct<value: i1, unknown: i1>
     llhd.process {
       %43 = llhd.int_to_time %c1000000000_i64
       llhd.wait delay %43, ^bb1
@@ -200,4 +199,4 @@ module {
   }
 }
 
-// CHECK: verif.bmc
+// CHECK: smt.solver
