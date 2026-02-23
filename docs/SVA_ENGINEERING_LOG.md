@@ -4376,3 +4376,37 @@
       - result: `152/152` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize scalar `llvm.mlir.zero` in BMC
+  regions):
+  - realization:
+    - `llvm.mlir.zero` remained unsupported in `for-smtlib-export` despite
+      being a straightforward scalar constant form.
+  - TDD signal:
+    - added `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-zero.mlir` first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.zero'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - added scalar `llvm.mlir.zero` legalization to `arith.constant` for:
+      - integer types
+      - floating-point types
+    - non-scalar zero forms remain on the explicit unsupported diagnostics
+      path.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-zero.mlir`.
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-gep-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-load-readonly-store-error.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-dynamic-constant-index.mlir`
+      - `bmc-for-smtlib-llvm-global-load-extractvalue.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `153/153` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
