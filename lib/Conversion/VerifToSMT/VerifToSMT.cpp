@@ -8631,8 +8631,137 @@ static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block) {
 
 static LogicalResult
 legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
+  struct GlobalLoadAccessInfo {
+    LLVM::AddressOfOp addrOf;
+    SmallVector<LLVM::GEPOp> geps;
+    SmallVector<int64_t> elementIndices;
+  };
+
   auto isSupportedSMTLIBScalarType = [](Type ty) {
     return isa<IntegerType, FloatType>(ty);
+  };
+  auto resolveGlobalLoadAccess =
+      [](Value loadAddr) -> std::optional<GlobalLoadAccessInfo> {
+    GlobalLoadAccessInfo access;
+    SmallVector<LLVM::GEPOp> reversedGeps;
+    Value current = loadAddr;
+    while (true) {
+      if (auto addrOf = current.getDefiningOp<LLVM::AddressOfOp>()) {
+        access.addrOf = addrOf;
+        break;
+      }
+      auto gep = current.getDefiningOp<LLVM::GEPOp>();
+      if (!gep)
+        return std::nullopt;
+      auto rawIndices = gep.getRawConstantIndices();
+      if (rawIndices.empty())
+        return std::nullopt;
+      if (!gep.getDynamicIndices().empty())
+        return std::nullopt;
+      if (llvm::any_of(rawIndices, [](int32_t idx) {
+            return idx == LLVM::GEPOp::kDynamicIndex;
+          }))
+        return std::nullopt;
+      reversedGeps.push_back(gep);
+      current = gep.getBase();
+    }
+
+    for (auto it = reversedGeps.rbegin(), e = reversedGeps.rend(); it != e;
+         ++it) {
+      auto gep = *it;
+      auto rawIndices = gep.getRawConstantIndices();
+      if (rawIndices.empty() || rawIndices.front() != 0)
+        return std::nullopt;
+      access.geps.push_back(gep);
+      for (int32_t idx : rawIndices.drop_front()) {
+        if (idx < 0)
+          return std::nullopt;
+        access.elementIndices.push_back(static_cast<int64_t>(idx));
+      }
+    }
+    return access;
+  };
+  auto coerceToTypedScalarAttr =
+      [&](Attribute value, Type loadType) -> std::optional<TypedAttr> {
+    if (auto typedAttr = dyn_cast<TypedAttr>(value)) {
+      if (typedAttr.getType() == loadType)
+        return typedAttr;
+      return std::nullopt;
+    }
+    if (auto boolAttr = dyn_cast<BoolAttr>(value)) {
+      auto intTy = dyn_cast<IntegerType>(loadType);
+      if (!intTy || intTy.getWidth() != 1)
+        return std::nullopt;
+      return IntegerAttr::get(intTy, boolAttr.getValue() ? 1 : 0);
+    }
+    return std::nullopt;
+  };
+  auto extractGlobalLoadConstant =
+      [&](LLVM::GlobalOp global, ArrayRef<int64_t> elementIndices,
+          Type loadType) -> std::optional<TypedAttr> {
+    Attribute globalValue = global.getValueOrNull();
+    if (!globalValue)
+      return std::nullopt;
+
+    if (elementIndices.empty())
+      return coerceToTypedScalarAttr(globalValue, loadType);
+
+    Type currentType = global.getGlobalType();
+    SmallVector<int64_t> expectedShape;
+    while (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+      expectedShape.push_back(arrayTy.getNumElements());
+      currentType = arrayTy.getElementType();
+    }
+    if (expectedShape.empty() || elementIndices.size() != expectedShape.size())
+      return std::nullopt;
+    if (currentType != loadType || !isSupportedSMTLIBScalarType(currentType))
+      return std::nullopt;
+
+    for (auto [idx, dim] : llvm::zip_equal(elementIndices, expectedShape))
+      if (idx < 0 || idx >= dim)
+        return std::nullopt;
+
+    int64_t linearIndex = 0;
+    for (auto [idx, dim] : llvm::zip_equal(elementIndices, expectedShape))
+      linearIndex = linearIndex * dim + idx;
+
+    if (auto dense = dyn_cast<DenseElementsAttr>(globalValue)) {
+      auto rankedTy = dyn_cast<RankedTensorType>(dense.getType());
+      if (!rankedTy || rankedTy.getRank() != static_cast<int64_t>(expectedShape.size()))
+        return std::nullopt;
+      for (auto [shapeDim, denseDim] :
+           llvm::zip_equal(expectedShape, rankedTy.getShape()))
+        if (shapeDim != denseDim)
+          return std::nullopt;
+      if (linearIndex < 0 || linearIndex >= dense.getNumElements())
+        return std::nullopt;
+      if (auto intTy = dyn_cast<IntegerType>(currentType)) {
+        auto values = dense.getValues<APInt>();
+        return IntegerAttr::get(intTy, values[linearIndex]);
+      }
+      if (auto floatTy = dyn_cast<FloatType>(currentType)) {
+        auto values = dense.getValues<APFloat>();
+        return FloatAttr::get(floatTy, values[linearIndex]);
+      }
+      return std::nullopt;
+    }
+
+    std::function<Attribute(Attribute, ArrayRef<int64_t>)> peelArrayAttr =
+        [&](Attribute attr, ArrayRef<int64_t> remainingIndices) -> Attribute {
+      if (remainingIndices.empty())
+        return attr;
+      auto arrayAttr = dyn_cast<ArrayAttr>(attr);
+      if (!arrayAttr)
+        return {};
+      int64_t idx = remainingIndices.front();
+      if (idx < 0 || idx >= static_cast<int64_t>(arrayAttr.size()))
+        return {};
+      return peelArrayAttr(arrayAttr[idx], remainingIndices.drop_front());
+    };
+    Attribute scalar = peelArrayAttr(globalValue, elementIndices);
+    if (!scalar)
+      return std::nullopt;
+    return coerceToTypedScalarAttr(scalar, loadType);
   };
 
   SmallVector<LLVM::ConstantOp> llvmConstants;
@@ -8824,9 +8953,10 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   }
 
   for (auto llvmLoad : llvmLoads) {
-    auto addr = llvmLoad.getAddr().getDefiningOp<LLVM::AddressOfOp>();
-    if (!addr)
+    auto loadAccess = resolveGlobalLoadAccess(llvmLoad.getAddr());
+    if (!loadAccess)
       continue;
+    auto addr = loadAccess->addrOf;
     auto module = llvmLoad->getParentOfType<ModuleOp>();
     if (!module)
       continue;
@@ -8836,6 +8966,10 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       continue;
     bool allowGlobalConstFold = global->hasAttr("constant");
     if (!allowGlobalConstFold) {
+      // Non-constant globals are currently only legalized for direct
+      // addressof loads when no direct stores exist.
+      if (!loadAccess->geps.empty())
+        continue;
       SymbolRefAttr globalName = addr.getGlobalNameAttr();
       auto cached = globalHasDirectStoreCache.find(globalName);
       bool hasDirectStore = false;
@@ -8854,27 +8988,20 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       if (hasDirectStore)
         continue;
     }
-    Attribute globalValue = global.getValueOrNull();
-    if (!globalValue)
+    auto typedAttr = extractGlobalLoadConstant(
+        global, loadAccess->elementIndices, llvmLoad.getType());
+    if (!typedAttr)
       continue;
-    TypedAttr typedAttr = dyn_cast<TypedAttr>(globalValue);
-    if (!typedAttr) {
-      auto boolAttr = dyn_cast<BoolAttr>(globalValue);
-      auto intTy = dyn_cast<IntegerType>(llvmLoad.getType());
-      if (!boolAttr || !intTy || intTy.getWidth() != 1)
-        continue;
-      typedAttr = IntegerAttr::get(intTy, boolAttr.getValue() ? 1 : 0);
-    }
-    if (!isSupportedSMTLIBScalarType(typedAttr.getType()))
+    if (!isSupportedSMTLIBScalarType((*typedAttr).getType()))
       continue;
-    if (typedAttr.getType() != llvmLoad.getType())
+    if ((*typedAttr).getType() != llvmLoad.getType())
       return llvmLoad.emitOpError(
           "cannot legalize llvm.load of scalar constant global with mismatched "
           "load type for SMT-LIB export");
 
     // Prefer replacing cast users directly with SMT constants so the SMT-LIB
     // export path does not retain unrealized casts inside smt.solver regions.
-    auto intAttr = dyn_cast<IntegerAttr>(typedAttr);
+    auto intAttr = dyn_cast<IntegerAttr>(*typedAttr);
     if (intAttr) {
       SmallVector<UnrealizedConversionCastOp> castsToErase;
       for (Operation *user : llvmLoad.getResult().getUsers()) {
@@ -8909,10 +9036,14 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     if (!llvmLoad.getResult().use_empty()) {
       OpBuilder builder(llvmLoad);
       auto arithConstant =
-          arith::ConstantOp::create(builder, llvmLoad.getLoc(), typedAttr);
+          arith::ConstantOp::create(builder, llvmLoad.getLoc(), *typedAttr);
       llvmLoad.replaceAllUsesWith(arithConstant.getResult());
     }
     llvmLoad.erase();
+    for (auto it = loadAccess->geps.rbegin(), e = loadAccess->geps.rend();
+         it != e; ++it)
+      if ((*it)->use_empty())
+        (*it).erase();
     if (addr->use_empty())
       addr.erase();
   }
