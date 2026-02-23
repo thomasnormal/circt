@@ -233,14 +233,14 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_plusargs_reentry_check.sh
 echo "[wasm-smoke] Default guard: no wasm runtime abort"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_resource_guard_default_check.sh
 
-if git diff --quiet -- llvm/llvm/cmake/modules/CrossCompile.cmake; then
-  echo "[wasm-smoke] CrossCompile.cmake local edits: none"
+if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake; then
+  echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): none"
 else
   if [[ "$WASM_REQUIRE_CLEAN_CROSSCOMPILE" == "1" ]]; then
-    echo "[wasm-smoke] CrossCompile.cmake local edits: present (failing because WASM_REQUIRE_CLEAN_CROSSCOMPILE=1)" >&2
+    echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): present (failing because WASM_REQUIRE_CLEAN_CROSSCOMPILE=1)" >&2
     exit 1
   fi
-  echo "[wasm-smoke] CrossCompile.cmake local edits: present (remaining work)"
+  echo "[wasm-smoke] CrossCompile.cmake local edits (llvm submodule): present (remaining work)"
 fi
 
 echo "[wasm-smoke] PASS"
