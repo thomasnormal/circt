@@ -4410,3 +4410,44 @@
       - result: `153/153` pass.
     - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
       - result: `19/19` pass.
+
+- Iteration update (SMT-LIB export: legalize `llvm.insertvalue` /
+  `llvm.extractvalue` projection patterns):
+  - realization:
+    - aggregate builder patterns rooted at `llvm.mlir.undef` with field writes
+      (`llvm.insertvalue`) and later scalar reads (`llvm.extractvalue`) were
+      still rejected under `for-smtlib-export`.
+  - TDD signal:
+    - added
+      `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-insert-extract.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.undef'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - extended extractvalue legalization with projection folding:
+      - resolves scalar `llvm.extractvalue` from insertvalue trees by tracing
+        inserted paths and container fallbacks.
+      - replaces the extract with the inserted SSA value when path and type
+        match.
+    - this erases the live dependency on `llvm.mlir.undef` in these fully
+      defined projection cases, while still leaving genuinely unconstrained
+      paths unsupported.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-insert-extract.mlir`.
+    - revalidated:
+      - `bmc-for-smtlib-llvm-zero.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-global-gep-load-readonly-store-error.mlir`
+      - `bmc-for-smtlib-llvm-global-load-extractvalue.mlir`
+      - `bmc-for-smtlib-llvm-global-load-region.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `154/154` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.

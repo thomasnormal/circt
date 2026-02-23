@@ -9187,6 +9187,34 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   for (auto extractValue : llvmExtractValues) {
     if (!isSupportedSMTLIBScalarType(extractValue.getType()))
       continue;
+
+    // Fold insert/extract projection through aggregate builder trees.
+    std::function<Value(Value, ArrayRef<int64_t>)> findInsertedValue =
+        [&](Value container, ArrayRef<int64_t> path) -> Value {
+      auto insert = container.getDefiningOp<LLVM::InsertValueOp>();
+      if (!insert)
+        return {};
+
+      ArrayRef<int64_t> pos = insert.getPosition();
+      if (path.size() >= pos.size() &&
+          llvm::equal(pos, path.take_front(pos.size()))) {
+        if (path.size() == pos.size())
+          return insert.getValue();
+        if (Value nested =
+                findInsertedValue(insert.getValue(), path.drop_front(pos.size())))
+          return nested;
+      }
+      return findInsertedValue(insert.getContainer(), path);
+    };
+    if (Value replacement =
+            findInsertedValue(extractValue.getContainer(), extractValue.getPosition())) {
+      if (replacement.getType() == extractValue.getType()) {
+        extractValue.replaceAllUsesWith(replacement);
+        extractValue.erase();
+        continue;
+      }
+    }
+
     auto load = extractValue.getContainer().getDefiningOp<LLVM::LoadOp>();
     if (!load)
       continue;
