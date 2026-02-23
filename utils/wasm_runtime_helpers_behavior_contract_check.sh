@@ -9,6 +9,10 @@ if [[ ! -x "$SCRIPT" ]]; then
 fi
 
 required_tokens=(
+  'BMC_INPUT="${BMC_INPUT:-'
+  'SIM_INPUT="${SIM_INPUT:-'
+  'if [[ ! -f "$BMC_INPUT" || ! -f "$SIM_INPUT" ]]; then'
+  "[wasm-runtime-helpers-behavior] missing baseline test input(s):"
   'case1_out="$tmpdir/case1.out"'
   'case1_err="$tmpdir/case1.err"'
   'case2_out="$tmpdir/case2.out"'
