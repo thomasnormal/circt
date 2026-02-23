@@ -609,3 +609,28 @@
     `utils/wasm_cxx20_warning_contract_check.sh`,
     `utils/wasm_cxx20_warning_check.sh`, and
     `utils/wasm_ci_contract_check.sh` all pass.
+
+## 2026-02-23 (follow-up: fail warning triage on any compiler warning)
+- Gap identified (regression-test first):
+  - strengthened `utils/wasm_cxx20_warning_contract_check.sh` to require a
+    generic warning-line scan in `utils/wasm_cxx20_warning_check.sh`:
+    - `grep -Eiq -- "(^|[^[:alpha:]])warning:" "$log"`
+  - Pre-fix failure:
+    - warning triage only rejected a small explicit warning list.
+    - new warning classes could slip through undetected.
+- Fix:
+  - updated `utils/wasm_cxx20_warning_check.sh` to fail on any remaining
+    compiler warning line in rebuild output after targeted pattern checks.
+  - kept explicit checks for:
+    - `ambiguous-reversed-operator`
+    - `c++20-extensions`
+    - compile-command `-std=c++20`.
+- Validation:
+  - `utils/wasm_cxx20_warning_contract_check.sh` passes.
+  - `utils/wasm_cxx20_warning_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh`,
+    `utils/wasm_cxx20_contract_check.sh`,
+    `utils/wasm_smoke_contract_check.sh`, and
+    `utils/wasm_ci_contract_check.sh` all pass.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

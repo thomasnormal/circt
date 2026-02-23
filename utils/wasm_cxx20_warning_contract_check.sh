@@ -13,6 +13,7 @@ required_tokens=(
   "ambiguous-reversed-operator"
   "c++20-extensions"
   "-std=c++20"
+  'grep -Eiq -- "(^|[^[:alpha:]])warning:" "$log"'
 )
 
 for token in "${required_tokens[@]}"; do

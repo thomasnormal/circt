@@ -66,4 +66,10 @@ for pattern in "${warn_patterns[@]}"; do
   fi
 done
 
+if grep -Eiq -- "(^|[^[:alpha:]])warning:" "$log"; then
+  echo "[wasm-cxx20-warn] found unexpected compiler warning in rebuild output" >&2
+  cat "$log" >&2
+  exit 1
+fi
+
 echo "[wasm-cxx20-warn] PASS"
