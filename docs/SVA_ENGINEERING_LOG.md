@@ -3303,3 +3303,33 @@
   - outcome:
     - closed stale multiclock `ltl.past` expected-fail status and restored
       meaningful conversion coverage for shared past across clock domains.
+
+- Iteration update (Yosys xprop parity baseline sync for `counter`):
+  - realization:
+    - in xprop mode (`BMC_ASSUME_KNOWN_INPUTS=0`), `counter` pass-mode had
+      become a stable `XPASS` instead of the tracked expected failure.
+    - repeated reruns confirmed this was deterministic baseline drift, not
+      flakiness.
+  - implemented:
+    - removed stale xprop expected-failure entries for `counter/pass` in:
+      - `utils/yosys-sva-bmc-expected.txt`
+      - `utils/yosys-sva-bmc-xfail.txt`
+  - validation:
+    - targeted:
+      - `TEST_FILTER='^counter$' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `2/2` mode checks pass, no xpass.
+    - full xprop lane:
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0, xfail=6, xpass=0`.
+    - known-input sanity:
+      - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+    - OVL semantic sanity:
+      - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - result: `8 tests, failures=0`.
+    - profiling sample:
+      - `time TEST_FILTER='^counter$' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `real 0m8.067s`.
+  - outcome:
+    - closed one stale xprop expected-failure baseline and restored strict
+      red/green reporting for `counter`.

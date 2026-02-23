@@ -12,6 +12,5 @@ basic00	pass	xprop
 basic01	pass	xprop
 basic02	pass	xprop
 basic03	pass	xprop
-counter	pass	xprop
 extnets	pass	xprop
 sva_not	pass	xprop

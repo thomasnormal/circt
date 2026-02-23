@@ -14,6 +14,5 @@ basic00	pass	xprop	xfail
 basic01	pass	xprop	xfail
 basic02	pass	xprop	xfail
 basic03	pass	xprop	xfail
-counter	pass	xprop	xfail
 extnets	pass	xprop	xfail
 sva_not	pass	xprop	xfail

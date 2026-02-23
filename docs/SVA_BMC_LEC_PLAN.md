@@ -41,7 +41,29 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
-## Latest SVA Closure Slice (February 23, 2026, multiclock `ltl.past` de-XFAIL closure in VerifToSMT)
+## Latest SVA Closure Slice (February 23, 2026, Yosys xprop baseline sync for `counter`)
+
+- removed stale xprop expected-failure baseline for `counter/pass`:
+  - `utils/yosys-sva-bmc-expected.txt`
+  - `utils/yosys-sva-bmc-xfail.txt`
+- rationale:
+  - `counter/pass/xprop` is now stably passing and should no longer be tracked
+    as expected-fail.
+- validation snapshot:
+  - targeted:
+    - `TEST_FILTER='^counter$' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `PASS(pass)`, `PASS(fail)`.
+  - full xprop lane:
+    - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `14 tests, failures=0, xfail=6, xpass=0`.
+  - known-input lane:
+    - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - result: `14 tests, failures=0`.
+  - OVL semantic sanity:
+    - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - result: `8 tests, failures=0`.
+
+## Previous SVA Closure Slice (February 23, 2026, multiclock `ltl.past` de-XFAIL closure in VerifToSMT)
 
 - closed stale expected-failure coverage for shared `ltl.past` across clock
   domains in VerifToSMT conversion tests.
