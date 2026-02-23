@@ -63,21 +63,18 @@ static LogicalResult inlineSingleBlockFuncCall(func::CallOp callOp,
   if (!callee || callee.isExternal())
     return success();
   if (callee.empty())
-    return callOp.emitError(
-        "cannot inline empty callee when lowering verif.bmc");
+    return success();
   if (!callee.getBody().hasOneBlock())
-    return callOp.emitError(
-        "only single-block func.call callees are supported in verif.bmc");
+    return success();
 
   auto &calleeBlock = callee.getBody().front();
   auto returnOp = dyn_cast<func::ReturnOp>(calleeBlock.getTerminator());
   if (!returnOp)
-    return callOp.emitError(
-        "callee must end with func.return when used in verif.bmc");
+    return success();
   if (calleeBlock.getNumArguments() != callOp.getNumOperands())
-    return callOp.emitError("callee argument count does not match func.call");
+    return success();
   if (returnOp.getNumOperands() != callOp.getNumResults())
-    return callOp.emitError("callee return count does not match func.call");
+    return success();
 
   IRMapping mapping;
   for (auto [arg, operand] :
