@@ -8490,15 +8490,23 @@ static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block) {
 
 static LogicalResult
 legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
+  auto isSupportedSMTLIBScalarType = [](Type ty) {
+    return isa<IntegerType, FloatType>(ty);
+  };
+
   SmallVector<LLVM::ConstantOp> llvmConstants;
+  SmallVector<LLVM::LoadOp> llvmLoads;
+  DenseMap<SymbolRefAttr, bool> globalHasDirectStoreCache;
   bmcOp->walk(
       [&](LLVM::ConstantOp op) { llvmConstants.push_back(op); });
+  bmcOp->walk([&](LLVM::LoadOp op) { llvmLoads.push_back(op); });
+
   for (auto llvmConstant : llvmConstants) {
     auto ty = llvmConstant.getType();
     // for-smtlib-export currently supports scalar integer/float constants in
     // verif.bmc regions; keep other LLVM constants on the generic rejection
     // path so they remain explicit unsupported-syntax diagnostics.
-    if (!isa<IntegerType, FloatType>(ty))
+    if (!isSupportedSMTLIBScalarType(ty))
       continue;
     auto typedAttr = dyn_cast<TypedAttr>(llvmConstant.getValue());
     if (!typedAttr)
@@ -8509,6 +8517,100 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         arith::ConstantOp::create(builder, llvmConstant.getLoc(), typedAttr);
     llvmConstant.replaceAllUsesWith(arithConstant.getResult());
     llvmConstant.erase();
+  }
+
+  for (auto llvmLoad : llvmLoads) {
+    auto addr = llvmLoad.getAddr().getDefiningOp<LLVM::AddressOfOp>();
+    if (!addr)
+      continue;
+    auto module = llvmLoad->getParentOfType<ModuleOp>();
+    if (!module)
+      continue;
+    auto global =
+        module.lookupSymbol<LLVM::GlobalOp>(addr.getGlobalNameAttr().getValue());
+    if (!global)
+      continue;
+    bool allowGlobalConstFold = global->hasAttr("constant");
+    if (!allowGlobalConstFold) {
+      SymbolRefAttr globalName = addr.getGlobalNameAttr();
+      auto cached = globalHasDirectStoreCache.find(globalName);
+      bool hasDirectStore = false;
+      if (cached != globalHasDirectStoreCache.end()) {
+        hasDirectStore = cached->second;
+      } else {
+        module.walk([&](LLVM::StoreOp store) -> WalkResult {
+          auto storeAddr = store.getAddr().getDefiningOp<LLVM::AddressOfOp>();
+          if (!storeAddr || storeAddr.getGlobalNameAttr() != globalName)
+            return WalkResult::advance();
+          hasDirectStore = true;
+          return WalkResult::interrupt();
+        });
+        globalHasDirectStoreCache.try_emplace(globalName, hasDirectStore);
+      }
+      if (hasDirectStore)
+        continue;
+    }
+    Attribute globalValue = global.getValueOrNull();
+    if (!globalValue)
+      continue;
+    TypedAttr typedAttr = dyn_cast<TypedAttr>(globalValue);
+    if (!typedAttr) {
+      auto boolAttr = dyn_cast<BoolAttr>(globalValue);
+      auto intTy = dyn_cast<IntegerType>(llvmLoad.getType());
+      if (!boolAttr || !intTy || intTy.getWidth() != 1)
+        continue;
+      typedAttr = IntegerAttr::get(intTy, boolAttr.getValue() ? 1 : 0);
+    }
+    if (!isSupportedSMTLIBScalarType(typedAttr.getType()))
+      continue;
+    if (typedAttr.getType() != llvmLoad.getType())
+      return llvmLoad.emitOpError(
+          "cannot legalize llvm.load of scalar constant global with mismatched "
+          "load type for SMT-LIB export");
+
+    // Prefer replacing cast users directly with SMT constants so the SMT-LIB
+    // export path does not retain unrealized casts inside smt.solver regions.
+    auto intAttr = dyn_cast<IntegerAttr>(typedAttr);
+    if (intAttr) {
+      SmallVector<UnrealizedConversionCastOp> castsToErase;
+      for (Operation *user : llvmLoad.getResult().getUsers()) {
+        auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
+        if (!castOp || castOp->getNumOperands() != 1 || castOp->getNumResults() != 1)
+          continue;
+        Type dstTy = castOp->getResult(0).getType();
+        Value replacement;
+        OpBuilder builder(castOp);
+        if (auto bvTy = dyn_cast<smt::BitVectorType>(dstTy)) {
+          if (bvTy.getWidth() != intAttr.getValue().getBitWidth())
+            continue;
+          replacement = smt::BVConstantOp::create(
+              builder, castOp.getLoc(),
+              intAttr.getValue().zextOrTrunc(bvTy.getWidth()));
+        } else if (isa<smt::BoolType>(dstTy)) {
+          if (intAttr.getValue().getBitWidth() != 1)
+            continue;
+          replacement = smt::BoolConstantOp::create(
+              builder, castOp.getLoc(), intAttr.getValue().isOne());
+        } else {
+          continue;
+        }
+        castOp->getResult(0).replaceAllUsesWith(replacement);
+        castsToErase.push_back(castOp);
+      }
+      for (auto castOp : castsToErase)
+        if (castOp->use_empty())
+          castOp.erase();
+    }
+
+    if (!llvmLoad.getResult().use_empty()) {
+      OpBuilder builder(llvmLoad);
+      auto arithConstant =
+          arith::ConstantOp::create(builder, llvmLoad.getLoc(), typedAttr);
+      llvmLoad.replaceAllUsesWith(arithConstant.getResult());
+    }
+    llvmLoad.erase();
+    if (addr->use_empty())
+      addr.erase();
   }
   return success();
 }

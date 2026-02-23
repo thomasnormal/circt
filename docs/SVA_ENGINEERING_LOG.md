@@ -3689,3 +3689,54 @@
   - outcome:
     - mixed assert+cover SAT classification is now consistent for both
       normal and simulation-negative expectation modes.
+
+- Iteration update (SMT-LIB default + OVL/Yosys exporter closure for global-load patterns):
+  - realization:
+    - our known SMT-LIB exporter blockers were centered on LLVM global-flag
+      accesses in BMC regions (`llvm.mlir.addressof` + `llvm.load`), especially
+      `@__circt_proc_assertions_enabled`/`@__circt_assert_fail_msgs_enabled`.
+    - after initial legalization of constant globals, two OVL fail-mode cases
+      still failed because these globals were initialized scalars but not marked
+      LLVM `constant`.
+    - a second-order issue then surfaced: replacing loads with scalar constants
+      could leave `builtin.unrealized_conversion_cast` inside `smt.solver`,
+      which breaks SMT-LIB export (`solver must not contain any non-SMT operations`).
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - extended `legalizeSMTLIBSupportedLLVMOps` to fold load-from-addressof
+        for:
+        - LLVM `constant` globals with scalar initializers, and
+        - read-only initialized globals with no direct `llvm.store`.
+      - added cast-user rewrite:
+        - when the load feeds `builtin.unrealized_conversion_cast` into SMT
+          types, emit direct `smt.bv.constant` / `smt.constant` and erase the
+          bridge cast.
+    - defaulted formal runners to SMT-LIB and hardened Z3 path resolution:
+      - `utils/run_sv_tests_circt_bmc.sh`
+      - `utils/run_verilator_verification_circt_bmc.sh`
+      - `utils/run_yosys_sva_circt_bmc.sh`
+      - `utils/run_ovl_sva_circt_bmc.sh`
+      - `utils/run_ovl_sva_semantic_circt_bmc.sh`
+      - fixed `--z3-path` to always use an absolute path from `command -v z3`
+        (passing literal `z3` fails `circt-bmc` path existence checks).
+    - regression coverage:
+      - added
+        `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir`
+      - added
+        `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-readonly.mlir`
+  - TDD signal:
+    - before fixes, both new tests failed with:
+      - `for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions; found 'llvm.mlir.addressof'`
+    - after fixes, both pass and OVL fail-mode repros run on SMT-LIB without
+      fallback.
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-readonly.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+      - result: `3/3` pass.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async)' utils/run_ovl_sva_semantic_circt_bmc.sh`
+      - result: `4 tests, failures=0`.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh`
+      - result: `110 tests, failures=0`.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+      - result: `total=6 pass=6 fail=0`.

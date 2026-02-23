@@ -20,6 +20,7 @@ IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 TOP="${TOP:-}"
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
 BMC_SMOKE_ONLY="${BMC_SMOKE_ONLY:-0}"
+BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
 
@@ -35,6 +36,7 @@ run_limited() {
 }
 
 Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
+Z3_BIN="${Z3_BIN:-}"
 
 if [[ ! -d "$OVL_DIR" ]]; then
   echo "OVL directory not found: $OVL_DIR" >&2
@@ -52,6 +54,22 @@ set -e
 if [[ "$ovl_filter_ec" == "2" ]]; then
   echo "invalid OVL_BMC_TEST_FILTER regex: $OVL_BMC_TEST_FILTER" >&2
   exit 1
+fi
+
+if [[ "$BMC_RUN_SMTLIB" == "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
+  if [[ -z "$Z3_BIN" ]]; then
+    if command -v z3 >/dev/null 2>&1; then
+      Z3_BIN="$(command -v z3)"
+    elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+    elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+      Z3_BIN="/home/thomas-ahle/z3/build/z3"
+    fi
+  fi
+  if [[ -z "$Z3_BIN" ]]; then
+    echo "z3 not found; set Z3_BIN or disable BMC_RUN_SMTLIB" >&2
+    exit 1
+  fi
 fi
 
 if [[ -n "$OUT" ]]; then
@@ -120,6 +138,8 @@ for sv in "${ovl_files[@]}"; do
     bmc_args=(-b "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" --module "$top_module")
     if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
       bmc_args+=(--emit-mlir)
+    elif [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
+      bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
     else
       if [[ -f "$Z3_LIB" ]]; then
         bmc_args+=("--shared-libs=$Z3_LIB")
@@ -160,6 +180,34 @@ for sv in "${ovl_files[@]}"; do
         printf 'PASS(%s): %s\n' "$profile" "$base" >> "$OUT"
       fi
     else
+      if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
+          grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
+        echo "BMC_RUN_SMTLIB fallback($base/$profile): retrying with --run due unsupported SMT-LIB export op(s)" >&2
+        {
+          echo "[run_ovl_sva_circt_bmc] BMC_RUN_SMTLIB fallback($base/$profile): unsupported SMT-LIB export op(s), retrying with --run"
+        } >> "$bmc_log"
+        bmc_args=(-b "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
+          --module "$top_module" "--shared-libs=$Z3_LIB")
+        if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
+          bmc_args+=(--rising-clocks-only)
+        fi
+        if [[ "$ALLOW_MULTI_CLOCK" == "1" ]]; then
+          bmc_args+=(--allow-multi-clock)
+        fi
+        if [[ "$assume_known" == "1" ]]; then
+          bmc_args+=(--assume-known-inputs)
+        fi
+        if [[ -n "$CIRCT_BMC_ARGS" ]]; then
+          read -r -a extra_bmc_args <<< "$CIRCT_BMC_ARGS"
+          bmc_args+=("${extra_bmc_args[@]}")
+        fi
+        if run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" > /dev/null 2>>"$bmc_log"; then
+          if [[ -n "$OUT" ]]; then
+            printf 'PASS(%s): %s\n' "$profile" "$base" >> "$OUT"
+          fi
+          continue
+        fi
+      fi
       failures=$((failures + 1))
       if [[ -n "$OUT" ]]; then
         printf 'FAIL(%s): %s [%s]\n' "$profile" "$base" "CIRCT_BMC_ERROR" >> "$OUT"
