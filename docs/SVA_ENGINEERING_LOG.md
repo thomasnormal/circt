@@ -3993,3 +3993,22 @@
     - nested checks through non-inlineable hierarchy (for example,
       non-`hw.module` symbols or intentionally complex non-single-block helper
       constructs) still depend on fallback diagnostics.
+
+- Follow-up hardening (non-inlineable helper funcs no longer hard-fail BMC):
+  - issue:
+    - the initial helper-call inliner emitted hard errors for non-single-block
+      or otherwise non-inlineable `func.call` callees.
+    - that could regress previously-valid designs that do not rely on nested
+      assertion extraction from those callees.
+  - fix:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - `inlineSingleBlockFuncCall(...)` now skips unsupported callee shapes
+      (empty, multi-block, non-`func.return`, signature mismatch) instead of
+      emitting conversion-fatal diagnostics.
+    - inlining still happens for supported single-block callees, preserving the
+      nested-check feature behavior.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir build-test/test/Conversion/VerifToSMT/bmc-nested-func-checks.mlir build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+      - result: `3/3` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+      - result: `141/141` pass.
