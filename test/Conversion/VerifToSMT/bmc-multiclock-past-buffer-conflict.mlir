@@ -1,12 +1,12 @@
 // RUN: circt-opt %s --convert-verif-to-smt --reconcile-unrealized-casts -allow-unregistered-dialect | FileCheck %s
-// XFAIL: *
-// Known conversion bug: ltl.clock with explicit clock signal causes SSA dominance violation
 
 // Shared ltl.past across multiple clock domains is cloned per property.
 // CHECK-LABEL: func.func @past_multiclock_conflict
 // CHECK: scf.for
 // CHECK: func.call @bmc_circuit
 // CHECK-LABEL: func.func @bmc_circuit
+// CHECK: smt.eq
+// CHECK: smt.eq
 func.func @past_multiclock_conflict() -> i1 {
   %bmc = verif.bmc bound 2 num_regs 0 initial_values [] attributes {
     bmc_input_names = ["clk0", "clk1", "sig"]
@@ -31,8 +31,8 @@ func.func @past_multiclock_conflict() -> i1 {
   circuit {
   ^bb0(%clk0: !seq.clock, %clk1: !seq.clock, %sig: i1):
     %past = ltl.past %sig, 1 : i1
-    verif.assert %past {bmc.clock = "clk0"} : i1
-    verif.assert %past {bmc.clock = "clk1"} : i1
+    verif.assert %past {bmc.clock = "clk0"} : !ltl.sequence
+    verif.assert %past {bmc.clock = "clk1"} : !ltl.sequence
     verif.yield %sig : i1
   }
   func.return %bmc : i1
