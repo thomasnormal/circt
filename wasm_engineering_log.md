@@ -1274,3 +1274,29 @@
     - `ninja target query failed and circt-verilog is optional; skipping SV frontend checks`.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: fail-fast configure when LLVM_SRC_DIR is missing)
+- Gap identified (regression-test first):
+  - added behavioral regression:
+    - `utils/wasm_configure_behavior_check.sh`
+  - Pre-fix failure:
+    - `utils/wasm_configure_behavior_check.sh` failed with:
+      - `configure unexpectedly succeeded with missing LLVM source dir`
+    - configure script invoked `emcmake/cmake` even when `LLVM_SRC_DIR` did
+      not exist, producing downstream errors instead of clear preflight output.
+- Fix:
+  - updated `utils/configure_wasm_build.sh`:
+    - added explicit runtime-mode preflight:
+      - `[wasm-configure] missing LLVM source directory: ...`
+    - check runs after command-availability checks and only in non-print mode
+      (keeps `--print-cmake-command` behavior unchanged).
+  - integrated behavioral check into CI:
+    - `.github/workflows/wasmSmoke.yml` runs
+      `utils/wasm_configure_behavior_check.sh`;
+    - `utils/wasm_ci_contract_check.sh` enforces workflow token.
+- Validation:
+  - `utils/wasm_configure_behavior_check.sh` passes.
+  - `utils/wasm_configure_contract_check.sh` passes.
+  - `utils/wasm_ci_contract_check.sh` passes.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
+    passes end-to-end.

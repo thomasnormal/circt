@@ -10,6 +10,7 @@ fi
 
 required_tokens=(
   "utils/configure_wasm_build.sh"
+  "utils/wasm_configure_behavior_check.sh"
   "utils/wasm_configure_contract_check.sh"
   "utils/wasm_cxx20_contract_check.sh"
   "utils/wasm_cxx20_warning_check.sh"
