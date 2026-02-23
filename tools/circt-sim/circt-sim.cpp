@@ -3621,6 +3621,27 @@ int main(int argc, char **argv) {
   // LLVM's option parser rejects unknown arguments, so we pre-filter them.
   // These are stored and returned via vpi_get_vlog_info().
   extern std::vector<std::string> vlogPlusargs;
+#if defined(__EMSCRIPTEN__)
+  // Re-entry hygiene: each wasm invocation must rebuild plusarg state from the
+  // original host environment, not from prior invocations in the same module.
+  static bool baselineUvmArgsCaptured = false;
+  static bool baselineHasCirctUvmArgs = false;
+  static std::string baselineCirctUvmArgs;
+  static bool baselineHasLegacyUvmArgs = false;
+  static std::string baselineLegacyUvmArgs;
+  if (!baselineUvmArgsCaptured) {
+    if (const char *envArgs = std::getenv("CIRCT_UVM_ARGS")) {
+      baselineHasCirctUvmArgs = true;
+      baselineCirctUvmArgs = envArgs;
+    }
+    if (const char *legacyArgs = std::getenv("UVM_ARGS")) {
+      baselineHasLegacyUvmArgs = true;
+      baselineLegacyUvmArgs = legacyArgs;
+    }
+    baselineUvmArgsCaptured = true;
+  }
+#endif
+  vlogPlusargs.clear();
   std::vector<char *> filteredArgv;
   for (int i = 0; i < argc; ++i) {
     if (argv[i][0] == '+') {
@@ -3636,19 +3657,30 @@ int main(int argc, char **argv) {
   // command-line test selection) read arguments from CIRCT_UVM_ARGS/UVM_ARGS.
   // Merge command-line plusargs into CIRCT_UVM_ARGS so filtered '+' arguments
   // remain visible after LLVM option parsing.
-  if (!vlogPlusargs.empty()) {
+  {
     std::string mergedUvmArgs;
+#if defined(__EMSCRIPTEN__)
+    if (baselineHasCirctUvmArgs)
+      mergedUvmArgs = baselineCirctUvmArgs;
+    else if (baselineHasLegacyUvmArgs)
+      mergedUvmArgs = baselineLegacyUvmArgs;
+#else
     if (const char *envArgs = std::getenv("CIRCT_UVM_ARGS")) {
       mergedUvmArgs = envArgs;
     } else if (const char *legacyArgs = std::getenv("UVM_ARGS")) {
       mergedUvmArgs = legacyArgs;
     }
+#endif
     for (const std::string &plusarg : vlogPlusargs) {
       if (!mergedUvmArgs.empty())
         mergedUvmArgs.push_back(' ');
       mergedUvmArgs.append(plusarg);
     }
-    ::setenv("CIRCT_UVM_ARGS", mergedUvmArgs.c_str(), /*overwrite=*/1);
+    if (mergedUvmArgs.empty()) {
+      ::unsetenv("CIRCT_UVM_ARGS");
+    } else {
+      ::setenv("CIRCT_UVM_ARGS", mergedUvmArgs.c_str(), /*overwrite=*/1);
+    }
   }
 
 #if defined(__EMSCRIPTEN__)

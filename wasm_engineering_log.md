@@ -113,3 +113,49 @@
 - Validation:
   - `utils/run_wasm_smoke.sh` passes end-to-end.
   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/reject-raw-sv-input.sv` passes.
+
+## 2026-02-23 (follow-up: close bmc real-run re-entry gap)
+- Gap identified:
+  - `utils/run_wasm_smoke.sh` only exercised `circt-bmc` same-instance
+    re-entry as `help -> help` because `help -> run` previously failed when
+    passing host paths to the wasm module (no `NODERAWFS` enabled for bmc).
+- Fix:
+  - extended `utils/wasm_callmain_reentry_check.js` with:
+    - `--preload-file <host> <wasm>` to copy host files into wasm MEMFS before
+      invocation;
+    - `--expect-wasm-file-substr <wasm> <text>` to assert output generated in
+      wasm FS.
+  - updated `utils/run_wasm_smoke.sh` to run:
+    - `circt-bmc` same-instance `help -> real SMT-LIB run`
+      using preloaded `/inputs/test.mlir`;
+    - output directed to `/out.smt2` in wasm FS and asserted to include
+      `(check-sat)`.
+- Validation:
+  - `utils/run_wasm_smoke.sh` now passes with real `circt-bmc` re-entry run
+    (not just help/help).
+
+## 2026-02-23 (follow-up: plusarg re-entry isolation in circt-sim wasm)
+- Gap identified (regression-test first):
+  - Added `utils/wasm_plusargs_reentry_check.sh` with fixture
+    `test/Tools/circt-sim/wasm-plusargs-reentry.mlir`.
+  - The test executes `circt-sim.js` in one loaded module instance:
+    - run1 with `+VERBOSE +DEBUG=3`;
+    - run2 without plusargs.
+  - Expected run2 output: `verbose_not_found` and `debug_not_found`.
+  - Actual pre-fix output: run2 still printed `verbose_found` and `debug_found`
+    (plusargs leaked across invocations).
+- Root cause:
+  - `vlogPlusargs` is process-global and was never cleared between wasm
+    invocations.
+  - wasm invocation path also reused previously mutated UVM arg state.
+- Fix:
+  - in `tools/circt-sim/circt-sim.cpp`:
+    - clear `vlogPlusargs` at each invocation;
+    - capture baseline `CIRCT_UVM_ARGS` / `UVM_ARGS` once (emscripten mode);
+    - rebuild `CIRCT_UVM_ARGS` from baseline + current invocation plusargs;
+    - `unsetenv("CIRCT_UVM_ARGS")` when merged args are empty.
+  - strengthened wasm smoke re-entry checks to use deterministic FS assertions
+    (`--expect-wasm-file-substr`) instead of fragile stdout greps.
+- Validation:
+  - `utils/wasm_plusargs_reentry_check.sh` now passes.
+  - `utils/run_wasm_smoke.sh` passes end-to-end after the fix.

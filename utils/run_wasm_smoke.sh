@@ -74,16 +74,35 @@ if [[ ! -s "$VCD_PATH" ]]; then
 fi
 
 echo "[wasm-smoke] Re-entry: circt-sim callMain help -> run"
+bmc_reentry_log="$tmpdir/bmc-reentry.log"
+sim_reentry_log="$tmpdir/sim-reentry.log"
+
 "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$SIM_JS" \
   --first --help \
-  --second --resource-guard=false "$SIM_TEST_INPUT" \
-  --forbid-substr "Aborted("
+  --second --resource-guard=false --vcd /tmp/reentry.vcd "$SIM_TEST_INPUT" \
+  --expect-wasm-file-substr /tmp/reentry.vcd "\$enddefinitions" \
+  --forbid-substr "Aborted(" \
+  >"$sim_reentry_log" 2>&1
+if grep -q "InitLLVM was already initialized!" "$sim_reentry_log"; then
+  echo "[wasm-smoke] circt-sim same-instance re-entry still hits InitLLVM guard" >&2
+  exit 1
+fi
 
-echo "[wasm-smoke] Re-entry: circt-bmc callMain help -> help"
+echo "[wasm-smoke] Re-entry: circt-bmc callMain help -> run"
 "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$BMC_JS" \
+  --preload-file "$BMC_TEST_INPUT" /inputs/test.mlir \
   --first --help \
-  --second --help \
-  --forbid-substr "Aborted("
+  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out.smt2 /inputs/test.mlir \
+  --expect-wasm-file-substr /out.smt2 "(check-sat)" \
+  --forbid-substr "Aborted(" \
+  >"$bmc_reentry_log" 2>&1
+if grep -q "InitLLVM was already initialized!" "$bmc_reentry_log"; then
+  echo "[wasm-smoke] circt-bmc same-instance re-entry still hits InitLLVM guard" >&2
+  exit 1
+fi
+
+echo "[wasm-smoke] Re-entry: circt-sim plusargs isolation"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_plusargs_reentry_check.sh
 
 if git diff --quiet -- llvm/llvm/cmake/modules/CrossCompile.cmake; then
   echo "[wasm-smoke] CrossCompile.cmake local edits: none"
