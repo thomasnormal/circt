@@ -1539,5 +1539,34 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Current state:
   - sv-tests BMC runner is operational again with non-empty summary output.
-  - one known UVM include-path lane remains expected-fail
-    (`sv-tests-uvm-tags-include.mlir`, `pass=5 error=1`).
+
+## Latest sv-tests multiclock parity closure (2026-02-23)
+
+- Implemented:
+  - `utils/run_sv_tests_circt_bmc.sh`
+    - added `AUTO_ALLOW_MULTI_CLOCK` (default `1`) auto-retry:
+      - if a case fails with known multiclock diagnostics and
+        `ALLOW_MULTI_CLOCK` is not globally set, rerun that case with
+        `--allow-multi-clock`.
+  - regression updates:
+    - added `test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
+    - updated `test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
+      - removed stale `XFAIL`.
+
+- Validation:
+  - runner feature test:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
+    - result: `1/1` pass.
+  - UVM tagged smoke regressions:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
+    - result: `2/2` pass.
+  - harness contract tests:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+    - result: `20 pass, 1 unsupported`.
+  - full `circt-bmc` sv-tests bucket:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+    - result: `12 pass, 4 unsupported`.
+
+- Current state:
+  - UVM include-tags lane is now green without an expected-fail override.
+  - no expected-fail entries remain in the `sv-tests-*` `circt-bmc` subset.

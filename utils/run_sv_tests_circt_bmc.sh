@@ -120,6 +120,7 @@ append_bmc_launch_event() {
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
+AUTO_ALLOW_MULTI_CLOCK="${AUTO_ALLOW_MULTI_CLOCK:-1}"
 FORCE_BMC="${FORCE_BMC:-0}"
 Z3_LIB="${Z3_LIB:-/home/thomas-ahle/z3-install/lib64/libz3.so}"
 CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
@@ -290,6 +291,10 @@ if ! is_nonneg_decimal "$BMC_LAUNCH_RETRY_BACKOFF_SECS"; then
 fi
 if ! is_bool_01 "$BMC_LAUNCH_COPY_FALLBACK"; then
   echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
+  exit 1
+fi
+if ! is_bool_01 "$AUTO_ALLOW_MULTI_CLOCK"; then
+  echo "invalid AUTO_ALLOW_MULTI_CLOCK: $AUTO_ALLOW_MULTI_CLOCK" >&2
   exit 1
 fi
 if ! is_positive_int "$CIRCT_MEMORY_LIMIT_GB"; then
@@ -962,6 +967,30 @@ top_module=${top_module}
     bmc_status=0
   else
     bmc_status=$?
+  fi
+  if [[ "$bmc_status" -ne 0 && "$ALLOW_MULTI_CLOCK" != "1" && \
+        "$AUTO_ALLOW_MULTI_CLOCK" == "1" && "$RISING_CLOCKS_ONLY" != "1" ]] && \
+      grep -Eiq \
+        "modules with multiple clocks not yet supported|multi-clock BMC requires bmc_reg_clocks|multi-clock BMC requires bmc_input_names" \
+        "$bmc_log"; then
+    echo "BMC auto-retry($base): retrying with --allow-multi-clock for multi-clock module" >&2
+    {
+      echo "[run_sv_tests_circt_bmc] BMC auto-retry($base): retrying with --allow-multi-clock for multi-clock module"
+    } >> "$bmc_log"
+    bmc_base_args+=("--allow-multi-clock")
+    bmc_args=("${bmc_base_args[@]}")
+    if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+      bmc_args+=("--emit-mlir")
+    elif [[ "$BMC_RUN_SMTLIB" == "1" ]]; then
+      bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+    else
+      bmc_args+=("--shared-libs=$Z3_LIB")
+    fi
+    if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+      bmc_status=0
+    else
+      bmc_status=$?
+    fi
   fi
   if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]] && \
       grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
