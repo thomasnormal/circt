@@ -8642,6 +8642,35 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   };
   auto resolveGlobalLoadAccess =
       [](Value loadAddr) -> std::optional<GlobalLoadAccessInfo> {
+    auto getConstantIndexValue = [](Value value) -> std::optional<int64_t> {
+      // Unwrap simple one-to-one casts that can appear around constant indices.
+      while (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+          break;
+        value = cast.getOperand(0);
+      }
+      if (auto cst = value.getDefiningOp<LLVM::ConstantOp>()) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+          APInt apInt = intAttr.getValue();
+          if (!apInt.isSignedIntN(64))
+            return std::nullopt;
+          return apInt.getSExtValue();
+        }
+      }
+      if (auto cst = value.getDefiningOp<arith::ConstantOp>()) {
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+          APInt apInt = intAttr.getValue();
+          if (!apInt.isSignedIntN(64))
+            return std::nullopt;
+          return apInt.getSExtValue();
+        }
+      }
+      if (auto zero = value.getDefiningOp<LLVM::ZeroOp>())
+        if (isa<IntegerType>(zero.getType()))
+          return 0;
+      return std::nullopt;
+    };
+
     GlobalLoadAccessInfo access;
     SmallVector<LLVM::GEPOp> reversedGeps;
     Value current = loadAddr;
@@ -8656,12 +8685,6 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       auto rawIndices = gep.getRawConstantIndices();
       if (rawIndices.empty())
         return std::nullopt;
-      if (!gep.getDynamicIndices().empty())
-        return std::nullopt;
-      if (llvm::any_of(rawIndices, [](int32_t idx) {
-            return idx == LLVM::GEPOp::kDynamicIndex;
-          }))
-        return std::nullopt;
       reversedGeps.push_back(gep);
       current = gep.getBase();
     }
@@ -8670,13 +8693,33 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
          ++it) {
       auto gep = *it;
       auto rawIndices = gep.getRawConstantIndices();
-      if (rawIndices.empty() || rawIndices.front() != 0)
+      if (rawIndices.empty())
+        return std::nullopt;
+      ValueRange dynamicIndices = gep.getDynamicIndices();
+      unsigned dynamicCursor = 0;
+      SmallVector<int64_t> resolvedIndices;
+      resolvedIndices.reserve(rawIndices.size());
+      for (int32_t rawIdx : rawIndices) {
+        if (rawIdx != LLVM::GEPOp::kDynamicIndex) {
+          resolvedIndices.push_back(rawIdx);
+          continue;
+        }
+        if (dynamicCursor >= dynamicIndices.size())
+          return std::nullopt;
+        auto idxValue = getConstantIndexValue(dynamicIndices[dynamicCursor++]);
+        if (!idxValue)
+          return std::nullopt;
+        resolvedIndices.push_back(*idxValue);
+      }
+      if (dynamicCursor != dynamicIndices.size())
+        return std::nullopt;
+      if (resolvedIndices.empty() || resolvedIndices.front() != 0)
         return std::nullopt;
       access.geps.push_back(gep);
-      for (int32_t idx : rawIndices.drop_front()) {
+      for (int64_t idx : llvm::drop_begin(resolvedIndices)) {
         if (idx < 0)
           return std::nullopt;
-        access.elementIndices.push_back(static_cast<int64_t>(idx));
+        access.elementIndices.push_back(idx);
       }
     }
     return access;
