@@ -4113,3 +4113,50 @@
       - result: `144/144` pass.
     - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
+
+- Iteration update (SMT-LIB export: legalize constant global array
+  `llvm.getelementptr` + `llvm.load`):
+  - realization:
+    - `for-smtlib-export` only folded direct `llvm.mlir.addressof` ->
+      `llvm.load` global constants.
+    - constant-index GEP loads from globals were left as LLVM ops and then hit
+      the generic unsupported-op diagnostic path.
+  - TDD signal:
+    - added `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-load.mlir`
+      first.
+    - pre-fix failure:
+      - `for-smtlib-export does not support LLVM dialect operations inside
+        verif.bmc regions; found 'llvm.mlir.addressof'`.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+    - extended LLVM load legalization to:
+      - resolve constant-address chains `llvm.getelementptr`* ->
+        `llvm.mlir.addressof` for loads.
+      - extract scalar constants from global initializers for nested
+        `!llvm.array` element accesses (DenseElements and ArrayAttr forms).
+      - fold legalized loads to `arith.constant` and erase dead GEP/addressof
+        ops.
+    - semantic guard:
+      - non-constant globals remain legalized only for direct addressof loads
+        (existing direct-store check path); GEP on mutable globals is kept
+        unsupported for now.
+  - regression coverage:
+    - added:
+      - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-gep-load.mlir`.
+    - revalidated:
+      - `bmc-for-smtlib-llvm-global-load.mlir`
+      - `bmc-for-smtlib-llvm-global-load-readonly.mlir`
+      - `bmc-for-smtlib-llvm-int-ops.mlir`
+      - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
+      - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
+  - surprises:
+    - `llvm-lit --filter='smtlib|disable-iff-constant|no-fallback'
+      build-test/test/Tools` pulled in an unrelated `circt-sim` test via
+      `no-fallback` name overlap.
+    - narrowed the tool slice to `build-test/test/Tools/circt-bmc` for relevant
+      SMT-LIB/BMC signal.
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - result: `145/145` pass.
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+      - result: `19/19` pass.
