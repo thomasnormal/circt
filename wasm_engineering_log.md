@@ -68,3 +68,48 @@
   - LLVM submodule check: `llvm/llvm/cmake/modules/CrossCompile.cmake` has no local
     edits in this workspace; no local patch is currently required for these bmc/sim
     wasm builds.
+
+## 2026-02-23 (follow-up: interrupted regression run recovery)
+- Goal: recover and complete previously interrupted focused checks:
+  - `ninja -C build-test check-circt-conversion-veriftosmt`
+  - `ninja -C build-test check-circt-tools-circt-bmc`
+- Results:
+  - `check-circt-conversion-veriftosmt`: `Passed: 155/155`.
+  - `check-circt-tools-circt-bmc`: `Passed: 158`, `Unsupported: 156`, `Failed: 0`.
+- Realization:
+  - The apparent "hang" in the bmc suite repeatedly occurs near progress marker
+    `~70` while long-running `sv-tests-mini-uvm` scripts execute; the suite does
+    complete successfully after a longer wait (`Testing Time: 237.93s`).
+
+## 2026-02-23 (follow-up: wasm re-entry hardening + smoke automation)
+- Goal: close the self-check->run same-instance failure mode and formalize wasm
+  smoke checks into one repeatable script.
+- Realization: `llvm::cl::ResetCommandLineParser()` is too strong for this case.
+  In wasm tools it cleared registered options, causing nearly all CLI flags to
+  become "unknown argument" at runtime. Keeping only
+  `ResetAllOptionOccurrences()` preserves registrations and still avoids option
+  occurrence leakage between repeated invocations.
+- Updated both `circt-sim` and `circt-bmc` wasm entry paths:
+  - keep `InitLLVM` disabled on emscripten builds;
+  - keep manual wasm help/version handling + parser reset via
+    `ResetAllOptionOccurrences()`;
+  - keep direct return paths in wasm (no process `exit/_Exit`) for repeat calls.
+- Added wasm smoke automation:
+  - `utils/run_wasm_smoke.sh`
+    - builds `circt-bmc` + `circt-sim` wasm with constrained single-job default;
+    - verifies `--help` for both tools;
+    - runs BMC functional stdin smoke;
+    - runs sim functional stdin smoke;
+    - runs `--vcd` smoke and checks file existence/non-zero size;
+    - runs same-instance callMain re-entry checks.
+  - `utils/wasm_callmain_reentry_check.js`
+    - executes wasm JS wrapper in a VM global context;
+    - calls `callMain` twice in one loaded instance;
+    - fails if either call returns nonzero or forbidden text appears
+      (default includes `InitLLVM was already initialized!`).
+- Added regression test for clearer SV-input contract:
+  - `test/Tools/circt-sim/reject-raw-sv-input.sv`
+  - checks `circt-sim` emits explicit guidance to run `circt-verilog` first.
+- Validation:
+  - `utils/run_wasm_smoke.sh` passes end-to-end.
+  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/reject-raw-sv-input.sv` passes.
