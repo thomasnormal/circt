@@ -41,6 +41,26 @@ Out of scope for this plan:
 
 See PROJECT_PLAN.md for detailed iteration status and prior work.
 
+## Latest SVA Closure Slice (February 23, 2026, VerifToSMT nested-check soundness guard)
+
+- closed an unsound BMC lowering path where nested checks were silently ignored:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - `verif.bmc` now emits a hard error when reachable `func.call` or
+    `hw.instance` symbol bodies contain `verif.assert`/`verif.cover` checks.
+- updated regression expectations:
+  - `test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+  - nested module/function assertion cases are now explicit expected-error
+    tests.
+- validation snapshot:
+  - `ninja -C build-test circt-opt`
+    - result: pass.
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+    - result: `1/1` pass.
+- next P0 in this track:
+  - replace the guard with full interprocedural nested-check support by
+    threading check outputs from called funcs/modules into BMC non-final/final
+    aggregation.
+
 ## Latest SVA Closure Slice (February 23, 2026, stage-3 compatibility shim removal)
 
 - `run_formal_all.sh` orchestration cleanup to align with SMT-LIB-only backend:

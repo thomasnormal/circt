@@ -8764,8 +8764,11 @@ void ConvertVerifToSMTPass::runOnOperation() {
             }
           }
           SmallVector<mlir::Operation *> worklist;
+          DenseSet<Operation *> visitedNestedSymbols;
           int numAssertions = 0;
           int numCovers = 0;
+          int numNestedAssertions = 0;
+          int numNestedCovers = 0;
           op->walk([&](Operation *curOp) {
             if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
               numAssertions++;
@@ -8774,28 +8777,36 @@ void ConvertVerifToSMTPass::runOnOperation() {
               numCovers++;
             }
             if (auto inst = dyn_cast<InstanceOp>(curOp))
-              worklist.push_back(symbolTable.lookup(inst.getModuleName()));
+              if (auto *symbol = symbolTable.lookup(inst.getModuleName()))
+                worklist.push_back(symbol);
             if (auto func = dyn_cast<func::CallOp>(curOp))
-              worklist.push_back(symbolTable.lookup(func.getCallee()));
+              if (auto *symbol = symbolTable.lookup(func.getCallee()))
+                worklist.push_back(symbol);
           });
-          // TODO: probably negligible compared to actual model checking time
-          // but cacheing the assertion count of modules would speed this up
           while (!worklist.empty()) {
-            auto *module = worklist.pop_back_val();
-            module->walk([&](Operation *curOp) {
+            auto *symbolOp = worklist.pop_back_val();
+            if (!symbolOp || !visitedNestedSymbols.insert(symbolOp).second)
+              continue;
+            symbolOp->walk([&](Operation *curOp) {
               if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
-                numAssertions++;
+                numNestedAssertions++;
               }
               if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
-                numCovers++;
+                numNestedCovers++;
               }
               if (auto inst = dyn_cast<InstanceOp>(curOp))
-                worklist.push_back(symbolTable.lookup(inst.getModuleName()));
+                if (auto *symbol = symbolTable.lookup(inst.getModuleName()))
+                  worklist.push_back(symbol);
               if (auto func = dyn_cast<func::CallOp>(curOp))
-                worklist.push_back(symbolTable.lookup(func.getCallee()));
+                if (auto *symbol = symbolTable.lookup(func.getCallee()))
+                  worklist.push_back(symbol);
             });
-            if (numAssertions > 1 || numCovers > 1)
-              break;
+          }
+          if (numNestedAssertions > 0 || numNestedCovers > 0) {
+            op->emitError("bounded model checking with nested "
+                          "verif.assert/verif.cover in called functions or "
+                          "instantiated modules is not yet supported");
+            return WalkResult::interrupt();
           }
           if (numAssertions == 0 && numCovers == 0) {
             op->emitWarning("no property provided to check in module - will "
