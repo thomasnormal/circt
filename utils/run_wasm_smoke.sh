@@ -175,6 +175,22 @@ if grep -q "InitLLVM was already initialized!" "$bmc_reentry_log"; then
   exit 1
 fi
 
+if [[ "$has_verilog_target" -eq 1 ]]; then
+  echo "[wasm-smoke] Re-entry: circt-verilog callMain help -> run"
+  verilog_reentry_log="$tmpdir/verilog-reentry.log"
+  "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$VERILOG_JS" \
+    --preload-file "$SV_SIM_TEST_INPUT" /inputs/test.sv \
+    --first --help \
+    --second --resource-guard=false --ir-llhd --single-unit --format=sv -o /out.mlir /inputs/test.sv \
+    --expect-wasm-file-substr /out.mlir "llhd.process" \
+    --forbid-substr "Aborted(" \
+    >"$verilog_reentry_log" 2>&1
+  if grep -q "InitLLVM was already initialized!" "$verilog_reentry_log"; then
+    echo "[wasm-smoke] circt-verilog same-instance re-entry still hits InitLLVM guard" >&2
+    exit 1
+  fi
+fi
+
 echo "[wasm-smoke] Re-entry: circt-sim run -> run"
 "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$SIM_JS" \
   --first --resource-guard=false --vcd /tmp/reentry-run1.vcd "$SIM_TEST_INPUT" \
@@ -193,6 +209,18 @@ echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
   --expect-wasm-file-substr /out2.smt2 "(check-sat)" \
   --forbid-substr "Aborted(" \
   >"$tmpdir/bmc-reentry-run-run.log" 2>&1
+
+if [[ "$has_verilog_target" -eq 1 ]]; then
+  echo "[wasm-smoke] Re-entry: circt-verilog run -> run"
+  "$NODE_BIN" utils/wasm_callmain_reentry_check.js "$VERILOG_JS" \
+    --preload-file "$SV_SIM_TEST_INPUT" /inputs/test.sv \
+    --first --resource-guard=false --ir-hw --single-unit --format=sv -o /out1.mlir /inputs/test.sv \
+    --second --resource-guard=false --ir-llhd --single-unit --format=sv -o /out2.mlir /inputs/test.sv \
+    --expect-wasm-file-substr /out1.mlir "hw.module" \
+    --expect-wasm-file-substr /out2.mlir "llhd.process" \
+    --forbid-substr "Aborted(" \
+    >"$tmpdir/verilog-reentry-run-run.log" 2>&1
+fi
 
 echo "[wasm-smoke] Re-entry: circt-sim plusargs isolation"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" utils/wasm_plusargs_reentry_check.sh
