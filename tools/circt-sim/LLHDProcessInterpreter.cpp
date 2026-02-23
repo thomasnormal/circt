@@ -25055,7 +25055,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (block && block->size >= offset + 1 && block->initialized) {
             currentValue = block->data[offset];
             // For larger values, read more bytes (up to 8).
-            valueSize = std::min(block->size - offset, static_cast<size_t>(8));
+            const uint64_t bytesAvailable = block->size - offset;
+            valueSize =
+                static_cast<unsigned>(std::min<uint64_t>(bytesAvailable, 8));
             if (valueSize > 1) {
               currentValue = 0;
               for (unsigned i = 0; i < valueSize; ++i)
@@ -29714,10 +29716,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // Only dereference as native pointer if the address is known to be
             // within a tracked native allocation. This avoids invalid
             // host-pointer dereferences from corrupted/unknown values.
-            uint64_t nativeOffset = 0, nativeSize = 0;
+            uint64_t nativeOffset = 0;
+            size_t nativeSize = 0;
             if (findNativeMemoryBlockByAddress(initAddr, &nativeOffset,
                                                &nativeSize) &&
-                nativeSize >= nativeOffset + 16) {
+                static_cast<uint64_t>(nativeSize) >= nativeOffset + 16) {
               auto *structPtr = reinterpret_cast<const uint8_t *>(initAddr);
               std::memcpy(&dataPtr, structPtr, 8);
               std::memcpy(&initLen, structPtr + 8, 8);
@@ -29725,7 +29728,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
           // Now copy from the actual data pointer
           if (dataPtr != 0) {
-            uint64_t nativeOffset = 0, nativeSize = 0;
+            uint64_t nativeOffset = 0;
+            size_t nativeSize = 0;
             if (findNativeMemoryBlockByAddress(dataPtr, &nativeOffset,
                                                &nativeSize)) {
               size_t srcAvail = 0;

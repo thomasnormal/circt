@@ -37,6 +37,8 @@ static bool isSMTRootOp(Operation *op) {
 struct SMTDeadCodeEliminationPass
     : public PassWrapper<SMTDeadCodeEliminationPass,
                          OperationPass<ModuleOp>> {
+  MLIR_DEFINE_EXPLICIT_INTERNAL_INLINE_TYPE_ID(SMTDeadCodeEliminationPass)
+
   void runOnOperation() override {
     ModuleOp module = getOperation();
     module.walk([&](Operation *op) {

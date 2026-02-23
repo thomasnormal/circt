@@ -3461,11 +3461,11 @@ static LogicalResult processInput(MLIRContext &context,
           emitJitReport(simContext, jitCompileManager, runWallMs, totalWallMs)))
     return failure();
 
-  // Use _exit() here, before returning, to skip the expensive
+  // Use std::_Exit() here, before returning, to skip the expensive
   // SimulationContext destructor.  For UVM designs with millions of
   // operations, the destructor chain (DenseMap/StringMap/vector cleanup)
   // can take minutes and provides no user-visible benefit after a
-  // successful simulation.  The _exit() must be here (not in main())
+  // successful simulation.  The std::_Exit() must be here (not in main())
   // because SimulationContext is stack-allocated and its destructor
   // runs when this function returns.
   int exitCode = simContext.getExitCode();
@@ -3542,7 +3542,7 @@ static LogicalResult processInput(MLIRContext &context,
   llvm::errs().flush();
   std::fflush(stdout);
   std::fflush(stderr);
-  _exit(exitCode);
+  std::_Exit(exitCode);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3704,6 +3704,6 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // processInput() calls _exit(0) on success, so this is unreachable.
+  // processInput() calls std::_Exit(0) on success, so this is unreachable.
   return 0;
 }
