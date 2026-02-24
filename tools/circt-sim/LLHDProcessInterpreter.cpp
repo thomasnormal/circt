@@ -140,6 +140,7 @@ static Value getClockedAssertLikeEvalProperty(
   Value trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
   Value antecedent = trueVal;
   if (anchorSignal && anchorSignal.getType().isInteger(1)) {
+    builder.getContext()->loadDialect<mlir::arith::ArithDialect>();
     Value notAnchor = arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
     antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
   }
@@ -37202,7 +37203,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     uint8_t kind = mod->proc_kind[i];
     void *entry = const_cast<void *>(mod->proc_entry[i]);
 
-    if (kind == CIRCT_PROC_CALLBACK || kind == CIRCT_PROC_MINNOW) {
+    if (kind == CIRCT_PROC_CALLBACK) {
       // Defer callback installation: the process's entry block must run
       // interpreted first (to execute the initial llhd.wait and schedule
       // the correct delay). The compiled callback is installed after the
@@ -37211,6 +37212,18 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr]() {
         ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr);
+      };
+      matched++;
+    } else if (kind == CIRCT_PROC_MINNOW) {
+      // Minnow (CallbackTimeOnly) processes: same deferred installation,
+      // but after the compiled callback fires we must re-arm the timer.
+      // The interpreted path does this in interpretWait(); compiled code
+      // bypasses that, so we re-arm explicitly here.
+      auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
+      pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
+        ++compiledCallbackInvocations;
+        fptr(*ctxPtr, nullptr);
+        scheduler.rearmMinnow(procId);
       };
       matched++;
     }
