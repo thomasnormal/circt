@@ -1652,3 +1652,27 @@
     returns:
     - `[wasm-regressions] summary: failures=0 xfails=0`
     - `[wasm-regressions] PASS`.
+
+## 2026-02-24 (follow-up: harden wasm regression gate behavior + smoke integration)
+- Gap identified (regression-first):
+  - `utils/run_wasm_regressions.sh` exited early on lit infrastructure errors
+    (for example empty filter matches) and could miss a normalized summary line.
+  - the focused lit gate did not include wasm JS smoke end-to-end execution.
+- Fixes:
+  - hardened `utils/run_wasm_regressions.sh`:
+    - captures lit exit code without early abort;
+    - normalizes infra failures into `failures=1` when no test-level
+      `FAIL/XFAIL/XPASS` rows are present;
+    - counts `XPASS` and treats it as failure;
+    - optionally executes `utils/run_wasm_smoke.sh` (enabled by default)
+      and folds smoke failure into `failures`;
+    - emits expanded summary:
+      - `failures=<n> xfails=<n> xpasses=<n> smoke_failures=<n>`.
+  - added `utils/wasm_regressions_behavior_check.sh`:
+    - verifies no-match filter case fails with normalized summary;
+    - verifies focused wasm lit set reports zero failures/xfails.
+- Validation:
+  - `utils/wasm_regressions_behavior_check.sh` passes.
+  - `utils/run_wasm_regressions.sh` passes end-to-end with smoke enabled:
+    - `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`
+    - `[wasm-regressions] PASS`.
