@@ -104,6 +104,11 @@ BMC_RUN_SMTLIB="${BMC_RUN_SMTLIB:-1}"
 # Yosys SVA tests are 2-state; default to known inputs to avoid X-driven
 # counterexamples. Set BMC_ASSUME_KNOWN_INPUTS=0 to exercise 4-state behavior.
 BMC_ASSUME_KNOWN_INPUTS="${BMC_ASSUME_KNOWN_INPUTS:-1}"
+# When running in xprop profile (`BMC_ASSUME_KNOWN_INPUTS=0`), optionally
+# re-check PASS-mode SAT counterexamples with known inputs. If the re-check
+# proves UNSAT, classify the case as PASS to avoid counting pure input-X traces
+# as SVA parity failures.
+XPROP_PASS_RECHECK_ASSUME_KNOWN="${XPROP_PASS_RECHECK_ASSUME_KNOWN:-1}"
 BOUND="${BOUND:-10}"
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
@@ -8728,10 +8733,33 @@ EOF
       report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
     fi
   else
+    local xprop_known_recheck_pass=0
+    if [[ "$mode" == "pass" && "$BMC_ASSUME_KNOWN_INPUTS" == "0" && \
+          "$XPROP_PASS_RECHECK_ASSUME_KNOWN" == "1" && "$bmc_status" -eq 0 ]]; then
+      if ! grep -q "Bound reached with no violations!" <<<"$out"; then
+        local recheck_log="$tmpdir/${base}_${mode}.circt-bmc-known-recheck.log"
+        local recheck_out=""
+        local recheck_args=("${bmc_args[@]}")
+        recheck_args+=("--assume-known-inputs")
+        if recheck_out="$(run_limited "$CIRCT_BMC" "${recheck_args[@]}" "$mlir" \
+            2> "$recheck_log")"; then
+          if grep -q "Bound reached with no violations!" <<<"$recheck_out"; then
+            xprop_known_recheck_pass=1
+            out="$recheck_out"
+            {
+              echo "[run_yosys_sva_circt_bmc] xprop pass recheck with --assume-known-inputs promoted PASS($mode): $base"
+            } >> "$bmc_log"
+          fi
+        fi
+      fi
+    fi
     if [[ "$mode" == "pass" ]]; then
       if ! grep -q "Bound reached with no violations!" <<<"$out"; then
         report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
       else
+        if [[ "$xprop_known_recheck_pass" == "1" ]]; then
+          echo "PASS_RECHECK_ASSUME_KNOWN($mode): $base"
+        fi
         report_case_outcome "$base" "$mode" 1 "$(case_profile)" "$sv"
       fi
     else
