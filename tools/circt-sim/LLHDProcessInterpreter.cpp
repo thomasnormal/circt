@@ -37271,7 +37271,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   };
 
   unsigned compiled = 0, nativeEligible = 0, intercepted = 0,
-           skippedGlobals = 0;
+           skippedMutableGlobals = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
     if (funcOp.isExternal())
       return;
@@ -37284,27 +37284,43 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         ++intercepted;
         // Skip: let this function route through interpreter for interceptors.
       } else {
-        // Check if the function accesses MLIR globals via llvm.mlir.addressof.
-        // Native code has its own copy of globals (in the .so's BSS/data),
-        // which is separate from the interpreter's globalMemoryBlocks.
-        // Dispatching such functions natively causes them to read stale/zero
-        // global state, breaking singletons like UVM factory registries.
+        // Check if the function accesses MUTABLE MLIR globals via
+        // llvm.mlir.addressof. Native code has its own copy of globals (in the
+        // .so's BSS/data), which is separate from the interpreter's
+        // globalMemoryBlocks. Dispatching such functions natively causes them
+        // to read stale/zero global state, breaking singletons like UVM
+        // factory registries.
+        //
+        // However, CONSTANT globals (string literals, type info, read-only
+        // data) are safe — their values are baked into the .so at compile time
+        // and never change, so the native copy is always correct.
         //
         // Also check for func.call_indirect — vtable slots contain synthetic
         // addresses (0xF0000000+N) that only the interpreter can resolve.
         // Native code calling these addresses would produce undefined behavior.
         bool unsafeForNative = false;
+        auto parentModule = funcOp->getParentOfType<mlir::ModuleOp>();
         funcOp.walk([&](mlir::Operation *op) {
-          if (isa<mlir::LLVM::AddressOfOp>(op) ||
-              isa<mlir::func::CallIndirectOp>(op)) {
+          if (isa<mlir::func::CallIndirectOp>(op)) {
             unsafeForNative = true;
             return mlir::WalkResult::interrupt();
+          }
+          if (auto addrOfOp = dyn_cast<mlir::LLVM::AddressOfOp>(op)) {
+            // Look up the referenced global. If it's constant, it's safe.
+            auto globalOp = parentModule.lookupSymbol<mlir::LLVM::GlobalOp>(
+                addrOfOp.getGlobalName());
+            if (!globalOp || !globalOp.getConstant()) {
+              unsafeForNative = true;
+              return mlir::WalkResult::interrupt();
+            }
+            // Constant global — safe in native code.
+            return mlir::WalkResult::advance();
           }
           return mlir::WalkResult::advance();
         });
         if (unsafeForNative) {
-          ++skippedGlobals;
-          // Keep in interpreter — uses globals or call_indirect.
+          ++skippedMutableGlobals;
+          // Keep in interpreter — uses mutable globals or call_indirect.
         } else {
           nativeFuncPtrs[funcOp.getOperation()] = ptr;
           ++nativeEligible;
@@ -37320,8 +37336,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions: " << nativeEligible
                  << " native-eligible, " << intercepted
-                 << " intercepted, " << skippedGlobals
-                 << " skipped (use globals)\n";
+                 << " intercepted, " << skippedMutableGlobals
+                 << " skipped (mutable globals/call_indirect)\n";
   }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
@@ -37546,6 +37562,12 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   // Call the interpreter.
   llvm::SmallVector<InterpretedValue, 2> interpResults;
   auto &callState = processStates[procId];
+  if (callState.callDepth >= 200) {
+    llvm::errs() << "[circt-sim] WARNING: trampoline call depth exceeded 200"
+                 << " for " << (funcName ? funcName : "<null>")
+                 << ", aborting call\n";
+    return;
+  }
   ++callState.callDepth;
   (void)interpretFuncBody(procId, funcOp, interpArgs, interpResults,
                           /*callOp=*/nullptr);
