@@ -8103,6 +8103,114 @@ struct DynExtractOpConversion : public OpConversionPattern<DynExtractOp> {
       return success();
     }
 
+    // Packed structs are bit-addressable. Use the original Moore packed width
+    // to reinterpret the value and apply dynamic bit extraction.
+    if (isa<hw::StructType>(inputType)) {
+      auto moorePackedType = dyn_cast<moore::PackedType>(op.getInput().getType());
+      auto packedWidth = moorePackedType ? moorePackedType.getBitSize()
+                                         : std::optional<unsigned>{};
+      if (!packedWidth || *packedWidth == 0)
+        return failure();
+      unsigned width = *packedWidth;
+
+      // Handle 4-state index - extract just the value part.
+      Value amount = adaptor.getLowBit();
+      Value amountUnknown;
+      if (isFourStateStructType(amount.getType())) {
+        amountUnknown = extractFourStateUnknown(rewriter, loc, amount);
+        amount = extractFourStateValue(rewriter, loc, amount);
+      }
+      if (!amountUnknown)
+        amountUnknown = hw::ConstantOp::create(rewriter, loc, amount.getType(), 0);
+
+      if (isFourStateStructType(resultType)) {
+        auto packedFourStateType = getFourStateStructType(rewriter.getContext(), width);
+        Value packedInput = UnrealizedConversionCastOp::create(
+                                rewriter, loc, packedFourStateType, adaptor.getInput())
+                                .getResult(0);
+        Value inputValue = extractFourStateValue(rewriter, loc, packedInput);
+        Value inputUnknown = extractFourStateUnknown(rewriter, loc, packedInput);
+
+        amount = adjustIntegerWidth(rewriter, amount, width, loc);
+        amountUnknown =
+            adjustIntegerWidth(rewriter, amountUnknown, width, loc);
+        Value amountUnknownZero = hw::ConstantOp::create(
+            rewriter, loc, amountUnknown.getType(), 0);
+        Value amountUnknownCond = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::ne, amountUnknown,
+            amountUnknownZero);
+
+        Value shiftedValue =
+            comb::ShrUOp::create(rewriter, loc, inputValue, amount);
+        Value shiftedUnknown =
+            comb::ShrUOp::create(rewriter, loc, inputUnknown, amount);
+
+        auto resultStructType = cast<hw::StructType>(resultType);
+        auto resultValueType = resultStructType.getElements()[0].type;
+        Value extractedValue = comb::ExtractOp::create(
+            rewriter, loc, resultValueType, shiftedValue, 0);
+        Value extractedUnknown = comb::ExtractOp::create(
+            rewriter, loc, resultValueType, shiftedUnknown, 0);
+
+        int64_t resultWidth =
+            cast<IntegerType>(resultValueType).getWidth();
+        int64_t maxIdx = static_cast<int64_t>(width) - resultWidth;
+        Value outOfBoundsCond;
+        Value constTrue =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+        if (maxIdx < 0) {
+          outOfBoundsCond = constTrue;
+        } else {
+          Value maxIdxConst =
+              hw::ConstantOp::create(rewriter, loc, amount.getType(), maxIdx);
+          outOfBoundsCond = comb::ICmpOp::create(
+              rewriter, loc, comb::ICmpPredicate::ugt, amount, maxIdxConst);
+        }
+
+        Value zero = hw::ConstantOp::create(rewriter, loc, resultValueType, 0);
+        Value allOnes =
+            hw::ConstantOp::create(rewriter, loc, resultValueType, -1);
+        Value fallbackValue = comb::MuxOp::create(rewriter, loc, outOfBoundsCond,
+                                                  zero, extractedValue);
+        Value fallbackUnknown = comb::MuxOp::create(rewriter, loc, outOfBoundsCond,
+                                                    allOnes, extractedUnknown);
+        Value fallback = createFourStateStruct(rewriter, loc, fallbackValue,
+                                               fallbackUnknown);
+
+        if (Value consensus = buildUnknownDynExtractConsensus(
+                rewriter, loc, inputValue, inputUnknown, amount, amountUnknown,
+                static_cast<unsigned>(resultWidth))) {
+          Value result = comb::MuxOp::create(rewriter, loc, amountUnknownCond,
+                                             consensus, fallback);
+          rewriter.replaceOp(op, result);
+        } else {
+          Value cond = comb::OrOp::create(rewriter, loc, outOfBoundsCond,
+                                          amountUnknownCond);
+          Value finalValue = comb::MuxOp::create(rewriter, loc, cond, zero,
+                                                 extractedValue);
+          Value finalUnknown = comb::MuxOp::create(rewriter, loc, cond, allOnes,
+                                                   extractedUnknown);
+          rewriter.replaceOp(op, createFourStateStruct(rewriter, loc, finalValue,
+                                                       finalUnknown));
+        }
+        return success();
+      }
+
+      auto resultIntType = dyn_cast<IntegerType>(resultType);
+      if (!resultIntType)
+        return failure();
+      auto packedIntType = rewriter.getIntegerType(width);
+      Value packedInput = UnrealizedConversionCastOp::create(
+                              rewriter, loc, packedIntType, adaptor.getInput())
+                              .getResult(0);
+      amount = adjustIntegerWidth(rewriter, amount, width, loc);
+      Value shiftedValue =
+          comb::ShrUOp::create(rewriter, loc, packedInput, amount);
+      rewriter.replaceOpWithNewOp<comb::ExtractOp>(op, resultIntType, shiftedValue,
+                                                   0);
+      return success();
+    }
+
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       // Handle 4-state index - extract just the value part
       Value amount = adaptor.getLowBit();
@@ -8706,6 +8814,72 @@ struct DynExtractRefOpConversion : public OpConversionPattern<DynExtractRefOp> {
       return rewriter.notifyMatchFailure(
           loc, "input type must be llhd.ref, not LLVM pointer");
     Type inputType = inputRefType.getNestedType();
+
+    // Packed structs are bit-addressable. Reinterpret the signal reference
+    // using the original Moore packed width and slice that bit view.
+    if (isa<hw::StructType>(inputType)) {
+      auto mooreInputRefType = dyn_cast<moore::RefType>(op.getInput().getType());
+      auto moorePackedType = mooreInputRefType
+                                 ? dyn_cast<moore::PackedType>(
+                                       mooreInputRefType.getNestedType())
+                                 : nullptr;
+      auto packedWidth = moorePackedType ? moorePackedType.getBitSize()
+                                         : std::optional<unsigned>{};
+      if (!packedWidth || *packedWidth == 0)
+        return failure();
+      unsigned width = *packedWidth;
+
+      Value amount = adaptor.getLowBit();
+      if (isFourStateStructType(amount.getType()))
+        amount = extractFourStateValue(rewriter, loc, amount);
+      amount = adjustIntegerWidth(rewriter, amount, llvm::Log2_64_Ceil(width), loc);
+
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (!resultRefType)
+        return failure();
+      if (isFourStateStructType(resultRefType.getNestedType())) {
+        auto resultStructType = cast<hw::StructType>(resultRefType.getNestedType());
+        auto resultValueType =
+            cast<IntegerType>(resultStructType.getElements()[0].type);
+        auto resultUnknownType =
+            cast<IntegerType>(resultStructType.getElements()[1].type);
+
+        auto packedFourStateRefType =
+            llhd::RefType::get(getFourStateStructType(rewriter.getContext(), width));
+        Value packedFourStateRef = UnrealizedConversionCastOp::create(
+                                       rewriter, loc, packedFourStateRefType,
+                                       adaptor.getInput())
+                                       .getResult(0);
+        Value valueRef = llhd::SigStructExtractOp::create(
+            rewriter, loc, packedFourStateRef, rewriter.getStringAttr("value"));
+        Value unknownRef = llhd::SigStructExtractOp::create(
+            rewriter, loc, packedFourStateRef, rewriter.getStringAttr("unknown"));
+        Value valueSlice = llhd::SigExtractOp::create(
+            rewriter, loc, llhd::RefType::get(resultValueType), valueRef, amount);
+        Value unknownSlice = llhd::SigExtractOp::create(
+            rewriter, loc, llhd::RefType::get(resultUnknownType), unknownRef,
+            amount);
+
+        Value init = hw::StructCreateOp::create(
+            rewriter, loc, resultStructType,
+            ValueRange{llhd::ProbeOp::create(rewriter, loc, valueSlice),
+                       llhd::ProbeOp::create(rewriter, loc, unknownSlice)});
+        auto signal = llhd::SignalOp::create(rewriter, loc, resultType,
+                                             StringAttr{}, init);
+        rewriter.replaceOp(op, signal.getResult());
+        return success();
+      }
+
+      if (!isa<IntegerType>(resultRefType.getNestedType()))
+        return failure();
+      auto packedIntRefType = llhd::RefType::get(rewriter.getIntegerType(width));
+      Value packedIntRef = UnrealizedConversionCastOp::create(
+                               rewriter, loc, packedIntRefType, adaptor.getInput())
+                               .getResult(0);
+      rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(op, resultType, packedIntRef,
+                                                       amount);
+      return success();
+    }
 
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       int64_t width = hw::getBitWidth(inputType);
@@ -13840,6 +14014,8 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         Value idx = getConvertedValue(dynExtractRef.getLowBit());
         if (!idx)
           return failure();
+        if (isFourStateStructType(idx.getType()))
+          idx = extractFourStateValue(rewriter, loc, idx);
         auto resultType =
             this->getTypeConverter()->convertType(dynExtractRef.getResult().getType());
         if (auto resultRefType = dyn_cast<llhd::RefType>(resultType)) {
