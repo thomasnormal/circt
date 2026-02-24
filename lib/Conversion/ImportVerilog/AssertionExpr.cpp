@@ -1532,19 +1532,32 @@ struct AssertionExprVisitor {
                                "assertion variable");
           return failure();
         }
+        auto offset = context.getAssertionSequenceOffset();
+        auto *binding = context.lookupAssertionLocalVarBinding(local);
+        auto initializeFromDecl = [&]() -> bool {
+          auto *initializer = local->getInitializer();
+          if (!initializer)
+            return false;
+          auto init = context.convertRvalueExpression(*initializer);
+          if (!init)
+            return false;
+          context.setAssertionLocalVarBinding(local, init, offset);
+          binding = context.lookupAssertionLocalVarBinding(local);
+          return binding != nullptr;
+        };
         Value rhs;
         if (assign.isCompound()) {
-          auto *binding = context.lookupAssertionLocalVarBinding(local);
-          if (!binding) {
-            mlir::emitError(loc, "local assertion variable referenced before "
-                                 "assignment");
-            return failure();
-          }
-          auto offset = context.getAssertionSequenceOffset();
-          if (offset < binding->offset) {
-            mlir::emitError(loc, "local assertion variable referenced before "
-                                 "assignment time");
-            return failure();
+          if (!binding || offset < binding->offset) {
+            if (!initializeFromDecl()) {
+              if (!binding) {
+                mlir::emitError(loc, "local assertion variable referenced "
+                                     "before assignment");
+              } else {
+                mlir::emitError(loc, "local assertion variable referenced "
+                                     "before assignment time");
+              }
+              return failure();
+            }
           }
           Value lhs;
           if (offset == binding->offset) {
@@ -1613,6 +1626,31 @@ struct AssertionExprVisitor {
                                "assertion variable");
           return failure();
         }
+        auto offset = context.getAssertionSequenceOffset();
+        auto *binding = context.lookupAssertionLocalVarBinding(local);
+        auto initializeFromDecl = [&]() -> bool {
+          auto *initializer = local->getInitializer();
+          if (!initializer)
+            return false;
+          auto init = context.convertRvalueExpression(*initializer);
+          if (!init)
+            return false;
+          context.setAssertionLocalVarBinding(local, init, offset);
+          binding = context.lookupAssertionLocalVarBinding(local);
+          return binding != nullptr;
+        };
+        if (!binding || offset < binding->offset) {
+          if (!initializeFromDecl()) {
+            if (!binding) {
+              mlir::emitError(loc, "local assertion variable referenced before "
+                                   "assignment");
+            } else {
+              mlir::emitError(loc, "local assertion variable referenced before "
+                                   "assignment time");
+            }
+            return failure();
+          }
+        }
         auto base = context.convertRvalueExpression(unary.operand());
         if (!base)
           return failure();
@@ -1665,7 +1703,7 @@ struct AssertionExprVisitor {
           return failure();
         }
         context.setAssertionLocalVarBinding(
-            local, updated, context.getAssertionSequenceOffset());
+            local, updated, offset);
         break;
       }
       case slang::ast::ExpressionKind::Call: {
