@@ -7295,3 +7295,51 @@ Based on these findings, the circt-sim compiled process architecture:
   - surprises:
     - second trigger in same process/time slot can toggle event representation
       bit back to `0`; boolean payload alone is insufficient for `.triggered`.
+
+## 2026-02-24: coverage control lowering/runtime parity
+
+### Gap identified
+- `$coverage_control` side effects were being compiled away.
+- Repro:
+  - `test/Tools/circt-sim/syscall-coverage-control-effect.sv` tightened to
+    assert stop semantics (`stopped_cov=33`, `restarted_cov=66`) failed with:
+    - `stopped_cov=100`
+    - `restarted_cov=100`
+- Root cause:
+  - `ImportVerilog` lowered `$coverage_control` / `$coverage_get_max` to
+    constants, so no runtime call was emitted in lowered MLIR.
+
+### Implementation
+- Added Moore builtins:
+  - `moore.builtin.coverage_control`
+  - `moore.builtin.coverage_get_max`
+  - file: `include/circt/Dialect/Moore/MooreOps.td`
+- Import lowering:
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`
+  - lowered `$coverage_control` / `$coverage_get_max` to the new builtins
+    with i32 argument conversion/defaulting.
+- MooreToCore lowering:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - mapped new builtins to:
+    - `__moore_coverage_control(i32, i32) -> i32`
+    - `__moore_coverage_get_max(i32) -> i32`
+- Runtime/interpreter semantics:
+  - `lib/Runtime/MooreRuntime.cpp`
+    - added coverage stop gate in runtime (`coverpoint` + `cross` sample).
+    - `__moore_coverage_control` now returns `1` for start/stop/reset/check.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - return value for `__moore_coverage_control` now delegated to runtime.
+
+### Validation
+- `ninja -C build-test circt-verilog circt-sim` -> PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-sim/syscall-coverage-control-effect.sv`
+  - before fix: FAIL (`stopped_cov=100`).
+  - after fix: PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/coverage-control-builtins.sv` -> PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 4 build-test/test/Tools/circt-sim --filter='syscall-coverage-(returns|save-returns|get-max|control-effect)'` -> PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*'` -> PASS (`126/126`).
+
+### Realizations / surprises
+- Even though simulator runtime already had partial coverage-control handling,
+  it was unreachable in normal flow until ImportVerilog stopped folding the
+  calls into constants.

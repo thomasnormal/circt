@@ -27989,14 +27989,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           getValue(procId, callOp.getOperand(0)).getUInt64());
       int32_t covType = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(1)).getUInt64());
-      (void)covType;
       // IEEE 1800-2017 §44.3: control values:
       // 1 = $cov_start, 2 = $cov_stop, 3 = $cov_reset, 4 = $cov_check
       if (control == 2) // $cov_stop
         coverageStopped = true;
       else if (control == 1) // $cov_start
         coverageStopped = false;
-      int32_t result = 0; // return success
+      int32_t result = __moore_coverage_control(control, covType);
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
                  InterpretedValue(APInt(32, static_cast<uint32_t>(result))));

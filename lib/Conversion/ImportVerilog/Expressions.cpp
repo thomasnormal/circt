@@ -7505,21 +7505,42 @@ struct RvalueExprVisitor : public ExprVisitor {
     }
 
     // Handle coverage control functions (IEEE 1800-2017 Section 20.14).
-    // $coverage_control: returns 1 on success (IEEE 1800-2017 §20.14.1)
-    // $coverage_get_max: returns max coverage count (100 for percentage-based)
-    // $coverage_merge: returns 0 on success
-    // $coverage_save: returns 0 on success
+    // $coverage_control and $coverage_get_max must be lowered to runtime calls
+    // so their side effects are preserved in simulation.
+    auto getCoverageI32Arg = [&](size_t argIndex,
+                                 int32_t defaultValue) -> FailureOr<Value> {
+      auto intTy = moore::IntType::getInt(context.getContext(), 32);
+      if (argIndex >= args.size() ||
+          args[argIndex]->kind == slang::ast::ExpressionKind::EmptyArgument)
+        return Value(moore::ConstantOp::create(builder, loc, intTy,
+                                               defaultValue));
+      Value arg = context.convertRvalueExpression(*args[argIndex]);
+      if (!arg)
+        return failure();
+      if (arg.getType() != intTy)
+        arg = moore::ConversionOp::create(builder, loc, intTy, arg);
+      return arg;
+    };
+
     if (subroutine.name == "$coverage_control") {
       auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      auto result = moore::ConstantOp::create(builder, loc, intTy, 1);
+      auto control = getCoverageI32Arg(0, 0);
+      auto covType = getCoverageI32Arg(1, 0);
+      if (failed(control) || failed(covType))
+        return {};
+      auto result = moore::CoverageControlBIOp::create(
+          builder, loc, intTy, *control, *covType);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, result, expr.type->isSigned(),
                                            loc);
     }
     if (subroutine.name == "$coverage_get_max") {
-      // Return 100 as the maximum coverage count (percentage-based).
       auto intTy = moore::IntType::getInt(context.getContext(), 32);
-      auto result = moore::ConstantOp::create(builder, loc, intTy, 100);
+      auto covType = getCoverageI32Arg(0, 0);
+      if (failed(covType))
+        return {};
+      auto result =
+          moore::CoverageGetMaxBIOp::create(builder, loc, intTy, *covType);
       auto ty = context.convertType(*expr.type);
       return context.materializeConversion(ty, result, expr.type->isSigned(),
                                            loc);

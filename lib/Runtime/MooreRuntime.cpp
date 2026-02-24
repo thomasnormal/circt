@@ -3290,6 +3290,9 @@ thread_local std::vector<MooreCovergroup *> registeredCovergroups;
 /// This is used when saving coverage databases to identify the test run.
 thread_local std::string globalTestName;
 
+/// Global coverage sampling enable state, controlled via $coverage_control.
+thread_local bool coverageSamplingStopped = false;
+
 /// Helper to track unique values seen by a coverpoint using a simple set.
 /// For production use, this could be replaced with a more efficient data
 /// structure like a hash set or bit vector.
@@ -3507,6 +3510,9 @@ bool checkIgnoreBinsInternal(MooreCoverpoint *cp, int64_t value);
 
 extern "C" void __moore_coverpoint_sample(void *cg, int32_t cp_index,
                                            int64_t value) {
+  if (coverageSamplingStopped)
+    return;
+
   auto *covergroup = static_cast<MooreCovergroup *>(cg);
   if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
     return;
@@ -4753,6 +4759,9 @@ extern "C" int32_t __moore_cross_create(void *cg, const char *name,
 
 extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
                                      int32_t num_values) {
+  if (coverageSamplingStopped)
+    return;
+
   auto *covergroup = static_cast<MooreCovergroup *>(cg);
   if (!covergroup || !cp_values)
     return;
@@ -5201,9 +5210,20 @@ extern "C" int32_t __moore_coverage_get_num_covergroups(void) {
 }
 
 extern "C" int32_t __moore_coverage_control(int32_t control, int32_t covType) {
-  (void)control;
   (void)covType;
-  return 0;
+  switch (control) {
+  case 1: // $cov_start
+    coverageSamplingStopped = false;
+    return 1;
+  case 2: // $cov_stop
+    coverageSamplingStopped = true;
+    return 1;
+  case 3: // $cov_reset
+  case 4: // $cov_check
+    return 1;
+  default:
+    return 0;
+  }
 }
 
 extern "C" int32_t __moore_coverage_get_max(int32_t covType) {

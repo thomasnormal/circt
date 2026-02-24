@@ -5454,6 +5454,56 @@ struct GetCoverageBIOpConversion
   }
 };
 
+/// Conversion for moore.builtin.coverage_control ->
+/// __moore_coverage_control(control, covType).
+struct CoverageControlBIOpConversion
+    : public OpConversionPattern<CoverageControlBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CoverageControlBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty, i32Ty});
+    auto fn = getOrCreateRuntimeFunc(mod, rewriter, "__moore_coverage_control",
+                                     fnTy);
+    auto callOp = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{adaptor.getControl(), adaptor.getCovType()});
+    rewriter.replaceOp(op, callOp.getResult());
+    return success();
+  }
+};
+
+/// Conversion for moore.builtin.coverage_get_max ->
+/// __moore_coverage_get_max(covType).
+struct CoverageGetMaxBIOpConversion
+    : public OpConversionPattern<CoverageGetMaxBIOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CoverageGetMaxBIOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+    ModuleOp mod = op->getParentOfType<ModuleOp>();
+
+    auto i32Ty = IntegerType::get(ctx, 32);
+    auto fnTy = LLVM::LLVMFunctionType::get(i32Ty, {i32Ty});
+    auto fn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_coverage_get_max", fnTy);
+    auto callOp = LLVM::CallOp::create(
+        rewriter, loc, TypeRange{i32Ty}, SymbolRefAttr::get(fn),
+        ValueRange{adaptor.getCovType()});
+    rewriter.replaceOp(op, callOp.getResult());
+    return success();
+  }
+};
+
 //===----------------------------------------------------------------------===//
 // Constraint Expression Operations Lowering
 //===----------------------------------------------------------------------===//
@@ -29086,6 +29136,10 @@ static void populateOpConversion(ConversionPatternSet &patterns,
   patterns.add<CovergroupGetInstCoverageOpConversion>(typeConverter,
                                                       patterns.getContext());
   patterns.add<GetCoverageBIOpConversion>(typeConverter, patterns.getContext());
+  patterns.add<CoverageControlBIOpConversion>(typeConverter,
+                                              patterns.getContext());
+  patterns.add<CoverageGetMaxBIOpConversion>(typeConverter,
+                                             patterns.getContext());
 
   // Constraint patterns (processed during RandomizeOp lowering, then erased).
   patterns.add<ConstraintBlockOpConversion>(typeConverter, patterns.getContext());
