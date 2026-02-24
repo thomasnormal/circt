@@ -30,6 +30,7 @@ mkdir -p "$OUT_DIR"
 
 CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build-test/bin/circt-verilog}"
 CIRCT_SIM="${CIRCT_SIM:-$CIRCT_ROOT/build-test/bin/circt-sim}"
+CIRCT_SIM_FALLBACK="${CIRCT_SIM_FALLBACK:-}"
 RUN_AVIP="${RUN_AVIP:-$SCRIPT_DIR/run_avip_circt_verilog.sh}"
 MBIT_DIR="${MBIT_DIR:-/home/thomas-ahle/mbit}"
 
@@ -57,6 +58,24 @@ elif command -v gtime >/dev/null 2>&1; then
   TIME_TOOL="$(command -v gtime)"
 fi
 
+tool_help_healthy() {
+  local tool="$1"
+  [[ -x "$tool" ]] || return 1
+  "$tool" --help >/dev/null 2>&1
+}
+
+if [[ -x "$CIRCT_SIM" ]] && ! tool_help_healthy "$CIRCT_SIM"; then
+  if [[ -n "$CIRCT_SIM_FALLBACK" ]] && \
+     [[ "$CIRCT_SIM_FALLBACK" != "$CIRCT_SIM" ]] && \
+     tool_help_healthy "$CIRCT_SIM_FALLBACK"; then
+    echo "warning: circt-sim probe failed for '$CIRCT_SIM'; falling back to '$CIRCT_SIM_FALLBACK'" >&2
+    CIRCT_SIM="$CIRCT_SIM_FALLBACK"
+  else
+    echo "error: circt-sim probe failed for '$CIRCT_SIM' (rebuild that binary or set CIRCT_SIM_FALLBACK)" >&2
+    exit 1
+  fi
+fi
+
 if [[ ! -x "$CIRCT_SIM" ]]; then
   echo "error: circt-sim not found or not executable: $CIRCT_SIM" >&2
   exit 1
@@ -69,6 +88,29 @@ if [[ ! -x "$RUN_AVIP" ]]; then
   echo "error: helper runner not found or not executable: $RUN_AVIP" >&2
   exit 1
 fi
+
+# Snapshot tool binaries once per run to avoid races with concurrent rebuilds.
+TOOL_SNAPSHOT_DIR="$OUT_DIR/.tool-snapshot"
+mkdir -p "$TOOL_SNAPSHOT_DIR"
+
+snapshot_tool() {
+  local src="$1"
+  local dst="$2"
+  if ! cp -f "$src" "$dst"; then
+    echo "error: failed to snapshot tool: $src -> $dst" >&2
+    exit 1
+  fi
+  chmod +x "$dst" 2>/dev/null || true
+}
+
+SNAPSHOT_CIRCT_VERILOG="$TOOL_SNAPSHOT_DIR/circt-verilog"
+SNAPSHOT_CIRCT_SIM="$TOOL_SNAPSHOT_DIR/circt-sim"
+snapshot_tool "$CIRCT_VERILOG" "$SNAPSHOT_CIRCT_VERILOG"
+snapshot_tool "$CIRCT_SIM" "$SNAPSHOT_CIRCT_SIM"
+
+# Use stable snapshots for the entire matrix execution.
+CIRCT_VERILOG="$SNAPSHOT_CIRCT_VERILOG"
+CIRCT_SIM="$SNAPSHOT_CIRCT_SIM"
 
 # name|avip_dir|filelist|tops|max_sim_fs|test_name
 AVIPS_CORE8=(
