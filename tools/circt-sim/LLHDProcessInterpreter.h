@@ -2518,6 +2518,8 @@ private:
     enum class LTLTruth : uint8_t { False, True, Unknown };
     /// Monotonic sampled-edge counter for this assertion checker.
     uint64_t sampleOrdinal = 0;
+    /// Optional rewritten property value used for runtime evaluation.
+    mlir::Value evaluationProperty;
     /// Per-operation history buffers for temporal runtime evaluation.
     /// Keys are temporal ops that need sampled history (e.g. implication,
     /// delay); values are oldest-to-newest truth samples.
@@ -2890,6 +2892,11 @@ private:
   /// Registered clocked assumption state keyed by (op, instanceId).
   llvm::DenseMap<std::pair<mlir::Operation *, InstanceId>, ClockedAssertionState>
       clockedAssumptionStates;
+
+  /// Cache of per-op rewritten assert-like sequence properties used only by
+  /// circt-sim runtime evaluation.
+  llvm::DenseMap<mlir::Operation *, mlir::Value>
+      clockedAssertLikeEvalPropertyCache;
 
   /// Registered clocked cover state keyed by (op, instanceId).
   llvm::DenseMap<std::pair<mlir::Operation *, InstanceId>, ClockedAssertionState>
@@ -3888,6 +3895,7 @@ private:
   struct FuncCallCacheEntry {
     mlir::func::FuncOp funcOp; // resolved FuncOp (null if unresolved)
     bool noInterception = false; // true if no UVM interceptor matches
+    void *nativeFuncPtr = nullptr; // compiled native function (Phase F1)
   };
   llvm::DenseMap<mlir::Operation *, FuncCallCacheEntry> funcCallCache;
 
