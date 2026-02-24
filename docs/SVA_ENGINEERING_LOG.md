@@ -2,6 +2,26 @@
 
 ## 2026-02-24
 
+- Iteration update (sv-tests sim: remove stale compile-only for ch9 event sequence controls):
+  - realization:
+    - `utils/sv-tests-sim-expect.txt` still marked
+      `9.4.3--event_sequence_controls` as `compile-only`.
+    - direct harness execution with `EXPECT_FILE=/dev/null` already passed full
+      compile+simulate and emitted a `.circt-sim.log`, so the override was
+      stale and masked runtime coverage.
+  - implemented:
+    - removed `9.4.3--event_sequence_controls` from
+      `utils/sv-tests-sim-expect.txt`.
+  - validation:
+    - `EXPECT_FILE=/dev/null KEEP_LOGS_DIR=/tmp/sv943-keep-noexpect TEST_FILTER='^9.4.3--event_sequence_controls$' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=1 pass=1 fail=0`.
+      - produced:
+        `chapter-9__9.4.3--event_sequence_controls.circt-sim.log`.
+    - `KEEP_LOGS_DIR=/tmp/sv943-keep-after TEST_FILTER='^9.4.3--event_sequence_controls$' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=1 pass=1 fail=0` with default expect file.
+      - produced:
+        `chapter-9__9.4.3--event_sequence_controls.circt-sim.log`.
+
 - Iteration update (randomize inline post-randomize signature regression lock):
   - realization:
     - `test/Conversion/ImportVerilog/randomize.sv` still expected

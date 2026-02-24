@@ -118,8 +118,7 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 16.9--sequence-rose-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
 16.9--sequence-stable-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
 
-# Ch9: Event sequence controls not supported
-9.4.3--event_sequence_controls	compile-only	Event sequence control not supported
+# Ch9: Event sequence controls now run in full simulation (no expect entry).
 
 # Ch9: Infinite loop tests (no $finish, run forever by design)
 9.2.2.1--always	skip	Infinite loop: always #5 a = ~a with no $finish
