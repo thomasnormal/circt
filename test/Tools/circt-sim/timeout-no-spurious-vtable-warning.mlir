@@ -1,4 +1,4 @@
-// RUN: not circt-sim %s --top test --timeout=2 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top test --timeout=2 --resource-guard=false 2>&1 | FileCheck %s
 
 // Regression: when timeout/abort triggers while executing a virtual
 // dispatch, the interpreter must not report a fake internal call_indirect
@@ -21,7 +21,8 @@ module {
     // we're in interpretFuncBody for this callee.
     %c0 = hw.constant 0 : i32
     %c1 = hw.constant 1 : i32
-    %limit = hw.constant 200000 : i32
+    // Keep this large enough that --timeout=2 reliably triggers on wall clock.
+    %limit = hw.constant 2000000000 : i32
     cf.br ^loop(%c0 : i32)
   ^loop(%i: i32):
     %cond = arith.cmpi ult, %i, %limit : i32
