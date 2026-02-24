@@ -1451,9 +1451,10 @@ struct ExprVisitor {
       return moore::StringGetCOp::create(builder, loc, value, index);
     }
 
-    if (!isa<moore::IntType, moore::ArrayType, moore::UnpackedArrayType,
-             moore::QueueType, moore::AssocArrayType,
-             moore::WildcardAssocArrayType, moore::OpenUnpackedArrayType>(
+    if (!isa<moore::IntType, moore::StructType, moore::UnionType,
+             moore::ArrayType, moore::UnpackedArrayType, moore::QueueType,
+             moore::AssocArrayType, moore::WildcardAssocArrayType,
+             moore::OpenUnpackedArrayType>(
             derefType)) {
       mlir::emitError(loc) << "unsupported expression: element select into "
                            << expr.value().type->toString() << "\n";

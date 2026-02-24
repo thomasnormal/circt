@@ -1,5 +1,36 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: packed aggregate bit-select + `%L` format compatibility
+
+### What changed
+- Updated:
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`
+  - `lib/Conversion/ImportVerilog/FormatStrings.cpp`
+- Added:
+  - `test/Conversion/ImportVerilog/packed-struct-element-select.sv`
+  - `test/Conversion/ImportVerilog/format-uppercase-l-compat.sv`
+
+### Realizations / surprises
+- BlackParrot repro no longer fails first on:
+  - `unsupported expression: element select into ...`
+  - `unsupported format specifier %L`
+- With those removed, the next blocker is deeper in MooreToCore legalization:
+  - `failed to legalize operation 'moore.extract_ref'`
+  - specifically for packed-struct part-select lvalue refs such as
+    `r_entry[0+:r_entry_low_bits_lp]` in `bp_tlb.sv`.
+
+### Validation snapshot
+- `ninja -C build-test circt-translate circt-verilog` -> pass.
+- `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/packed-struct-element-select.sv build-test/test/Conversion/ImportVerilog/format-uppercase-l-compat.sv` -> pass (`2/2`).
+- `llvm/build/bin/llvm-lit -sv --filter='.*(packed-struct-element-select|format-uppercase-l-compat|sva-.*(rose|fell|sampled|stable|changed)).*' build-test/test/Conversion/ImportVerilog` -> pass (`35/35`).
+- `%l` error preserved via direct check:
+  - `circt-translate --import-verilog /tmp/percent_l_error.sv` reports
+    `unsupported format specifier \`%l\``.
+- BlackParrot focused sv-tests run:
+  - `OUT=/tmp/svtests_bp_sim_after4.tsv TEST_FILTER='^bp_' ... run_sv_tests_circt_sim.sh`
+    remains `xfail=6`, but leading failure moved to packed-struct
+    `moore.extract_ref` legalization.
+
 ## 2026-02-24 Session: yosys-SVA VHDL-stub fallback robustness (`SKIP_VHDL=0`)
 
 ### What changed
