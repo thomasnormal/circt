@@ -2,6 +2,26 @@
 
 ## 2026-02-24
 
+- Iteration update (sv-tests sim: promote `16.2--assume-final` from compile-only):
+  - realization:
+    - `16.2--assume-final` remained marked `compile-only` despite lowering to
+      executable `verif.assume {bmc.final}` in the runtime path.
+    - direct `circt-sim` stress runs on the compiled MLIR were stable
+      (`30/30` exit-0), and default harness runs passed once simulation was
+      enabled.
+  - implemented:
+    - removed `16.2--assume-final` compile-only override from
+      `utils/sv-tests-sim-expect.txt`.
+  - validation:
+    - direct stress (single compiled MLIR):
+      - `build-test/bin/circt-sim --top=top /tmp/assume-final.mlir` repeated
+        `30` times: `30/30` exit-0.
+    - default harness:
+      - `KEEP_LOGS_DIR=/tmp/sv-16_2--assume-final-after-drop TEST_FILTER='^16.2--assume-final$' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=1 pass=1 fail=0`.
+      - produced:
+        `chapter-16__16.2--assume-final.circt-sim.log`.
+
 - Iteration update (sv-tests sim: promote `16.2--assume` and
   `16.2--assume0` from compile-only):
   - realization:

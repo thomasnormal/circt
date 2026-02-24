@@ -131,11 +131,11 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 # Should-fail local-var SVA simulation tests now fail correctly via runtime
 # evaluation and are handled as XFAIL by sv-tests metadata. No expect entries.
 
-# `16.2--assume` and `16.2--assume0` now run through full simulation and pass
-# consistently (no expect entries needed).
-# `16.2--assume-final` remains compile-only because final-time evaluation on an
-# undriven top input is still environment-dependent.
-16.2--assume-final	compile-only	Immediate assume final on undriven top input (runtime env-dependent)
+# Immediate assume smoke tests now run through full simulation (no expect
+# entries needed):
+#   - 16.2--assume
+#   - 16.2--assume0
+#   - 16.2--assume-final
 
 # Ch18: Class-only tests (auto-wrapped by harness with class instantiation + randomize)
 # These tests have no module; the harness generates a wrapper that creates the class,
