@@ -37270,7 +37270,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     return false;
   };
 
-  unsigned compiled = 0, nativeEligible = 0, intercepted = 0;
+  unsigned compiled = 0, nativeEligible = 0, intercepted = 0,
+           skippedGlobals = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
     if (funcOp.isExternal())
       return;
@@ -37283,8 +37284,31 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         ++intercepted;
         // Skip: let this function route through interpreter for interceptors.
       } else {
-        nativeFuncPtrs[funcOp.getOperation()] = ptr;
-        ++nativeEligible;
+        // Check if the function accesses MLIR globals via llvm.mlir.addressof.
+        // Native code has its own copy of globals (in the .so's BSS/data),
+        // which is separate from the interpreter's globalMemoryBlocks.
+        // Dispatching such functions natively causes them to read stale/zero
+        // global state, breaking singletons like UVM factory registries.
+        //
+        // Also check for func.call_indirect — vtable slots contain synthetic
+        // addresses (0xF0000000+N) that only the interpreter can resolve.
+        // Native code calling these addresses would produce undefined behavior.
+        bool unsafeForNative = false;
+        funcOp.walk([&](mlir::Operation *op) {
+          if (isa<mlir::LLVM::AddressOfOp>(op) ||
+              isa<mlir::func::CallIndirectOp>(op)) {
+            unsafeForNative = true;
+            return mlir::WalkResult::interrupt();
+          }
+          return mlir::WalkResult::advance();
+        });
+        if (unsafeForNative) {
+          ++skippedGlobals;
+          // Keep in interpreter — uses globals or call_indirect.
+        } else {
+          nativeFuncPtrs[funcOp.getOperation()] = ptr;
+          ++nativeEligible;
+        }
       }
     }
   });
@@ -37296,7 +37320,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions: " << nativeEligible
                  << " native-eligible, " << intercepted
-                 << " kept in interpreter (intercepted)\n";
+                 << " intercepted, " << skippedGlobals
+                 << " skipped (use globals)\n";
   }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
