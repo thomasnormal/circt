@@ -447,15 +447,30 @@ def rewrite_jtag_text(path: pathlib.Path, text: str):
     changed = False
 
     if path.name in ("JtagControllerDeviceAgentBfm.sv", "JtagTargetDeviceAgentBfm.sv"):
-        new_lines = []
-        for line in text.splitlines():
-            if line.strip().startswith("bind "):
-                changed = True
-                continue
-            new_lines.append(line)
-        new_text = "\n".join(new_lines)
-        if text.endswith("\n"):
-            new_text += "\n"
+        # Slang bind resolution is case-sensitive. Some AVIP sources bind the
+        # monitor BFM using a non-canonical lower-case name; normalize it.
+        new_text = re.sub(
+            r"\bbind\s+jtagControllerDeviceMonitorBfm\b",
+            "bind JtagControllerDeviceMonitorBfm",
+            text,
+        )
+        if new_text != text:
+            text = new_text
+            changed = True
+
+    if path.name == "JtagTargetDeviceAgentBfm.sv":
+        # Slang resolves bind expressions in the bound scope. The upstream AVIP
+        # binds to the *type* (JtagTargetDeviceMonitorBfm) but references the
+        # enclosing agent's 'jtagIf' handle, which is out-of-scope. Rewrite the
+        # bind to reference the interface's own ports instead.
+        new_text = re.sub(
+            r"\bbind\s+JtagTargetDeviceMonitorBfm\s+JtagTargetDeviceAssertions\s+TestVectrorTestingAssertions\s*"
+            r"\(\s*\.clk\(\s*jtagIf\.clk\s*\)\s*,\s*\.Tdo\(\s*jtagIf\.Tdo\s*\)\s*,\s*\.Tms\(\s*jtagIf\.Tms\s*\)\s*,\s*\.reset\(\s*jtagIf\.reset\s*\)\s*\)\s*;",
+            "bind JtagTargetDeviceMonitorBfm JtagTargetDeviceAssertions "
+            "TestVectrorTestingAssertions(.clk(clk),.Tdo(Tdo),.Tms(Tms),.reset(reset));",
+            text,
+            flags=re.S,
+        )
         if new_text != text:
             text = new_text
             changed = True

@@ -2,3 +2,4 @@
 +incdir+../src/hdlTop/jtagTargetDeviceAgentBfm
 ../src/hdlTop/jtagControllerDeviceAgentBfm/JtagControllerDeviceAgentBfm.sv
 ../src/hdlTop/jtagTargetDeviceAgentBfm/JtagTargetDeviceDriverBfm.sv
+../src/hdlTop/jtagTargetDeviceAgentBfm/JtagTargetDeviceAgentBfm.sv
