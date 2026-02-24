@@ -8834,8 +8834,8 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
 const SignalValue &
 LLHDProcessInterpreter::getSignalValueForContinuousEval(SignalId sigId) const {
   if (sampleClockedPropertyFromPreUpdateValues &&
-      scheduler.didSignalChangeThisDelta(sigId))
-    return scheduler.getSignalPreviousValue(sigId);
+      scheduler.didSignalChangeThisTime(sigId))
+    return scheduler.getSignalTimeStartValue(sigId);
   return scheduler.getSignalValue(sigId);
 }
 
@@ -8996,7 +8996,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           continue;
         }
 
-        const SignalValue &sv = scheduler.getSignalValue(sigId);
+        const SignalValue &sv = getSignalValueForContinuousEval(sigId);
         if (sv.isUnknown()) {
           if (auto encoded = getEncodedUnknownForType(current.getType()))
             finish(InterpretedValue(*encoded));
@@ -9520,7 +9520,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
             }
             continuousEvalVisitedSignals.erase(sigId);
           } else {
-            const SignalValue &sv = scheduler.getSignalValue(sigId);
+            const SignalValue &sv = getSignalValueForContinuousEval(sigId);
             finish(InterpretedValue::fromSignalValue(sv));
           }
         } else {

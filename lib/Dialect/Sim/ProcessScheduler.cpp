@@ -352,6 +352,8 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
   }
   if (id >= (unsigned)signalTriggeredThisDelta.size())
     signalTriggeredThisDelta.resize(id + 1, false);
+  if (id >= signalsChangedThisTimeBits.size())
+    signalsChangedThisTimeBits.resize(id + 1, false);
 
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width << "\n");
@@ -381,6 +383,8 @@ SignalId ProcessScheduler::registerSignal(const std::string &name,
   }
   if (id >= (unsigned)signalTriggeredThisDelta.size())
     signalTriggeredThisDelta.resize(id + 1, false);
+  if (id >= signalsChangedThisTimeBits.size())
+    signalsChangedThisTimeBits.resize(id + 1, false);
 
   LLVM_DEBUG(llvm::dbgs() << "Registered signal '" << name << "' with ID " << id
                           << " width=" << width
@@ -528,6 +532,7 @@ void ProcessScheduler::updateSignal(SignalId signalId,
     ++stats.edgesDetected;
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
+    recordSignalChangeAtCurrentTime(signalId, oldValue);
     if (signalChangeCallback)
       signalChangeCallback(signalId, normalizedValue);
     triggerSensitiveProcesses(signalId, oldValue, normalizedValue);
@@ -537,6 +542,12 @@ void ProcessScheduler::updateSignal(SignalId signalId,
 
 void ProcessScheduler::updateSignalFast(SignalId signalId, uint64_t rawValue,
                                         uint32_t width) {
+  // Suppress non-VPI drives to VPI-owned signals in the fast path as well.
+  // Without this, force/deposit semantics diverge depending on whether updates
+  // go through updateSignal() or updateSignalFast().
+  if (isVpiOwnershipSuppressionEnabled() && vpiOwnedSignals.count(signalId))
+    return;
+
   auto &sigState = signalStates[signalId];
   ++stats.signalUpdates;
 
@@ -558,6 +569,7 @@ void ProcessScheduler::updateSignalFast(SignalId signalId, uint64_t rawValue,
     ++stats.edgesDetected;
     const SignalValue &newVal = sigState.getCurrentValue();
     const SignalValue &oldVal = sigState.getPreviousValue();
+    recordSignalChangeAtCurrentTime(signalId, oldVal);
     if (signalChangeCallback)
       signalChangeCallback(signalId, newVal);
     triggerSensitiveProcesses(signalId, oldVal, newVal);
@@ -677,6 +689,7 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
     ++stats.edgesDetected;
     LLVM_DEBUG(llvm::dbgs() << "Signal " << signalId << " changed: edge="
                             << getEdgeTypeName(edge) << "\n");
+    recordSignalChangeAtCurrentTime(signalId, oldValue);
     if (signalChangeCallback)
       signalChangeCallback(signalId, normalizedResolved);
     triggerSensitiveProcesses(signalId, oldValue, normalizedResolved);
@@ -693,6 +706,29 @@ void ProcessScheduler::recordSignalChange(SignalId signalId) {
   } else {
     // Signal ID beyond bitvector size — always record (safe fallback).
     signalsChangedThisDelta.push_back(signalId);
+  }
+}
+
+void ProcessScheduler::recordSignalChangeAtCurrentTime(
+    SignalId signalId, const SignalValue &oldValue) {
+  uint64_t nowFs = getCurrentTime().realTime;
+  if (!signalsChangedThisTimeValid || signalsChangedThisTimeFs != nowFs) {
+    for (SignalId changed : signalsChangedThisTime)
+      if (changed < signalsChangedThisTimeBits.size())
+        signalsChangedThisTimeBits[changed] = false;
+    signalsChangedThisTime.clear();
+    signalTimeStartValues.clear();
+    signalsChangedThisTimeFs = nowFs;
+    signalsChangedThisTimeValid = true;
+  }
+
+  if (signalId >= signalsChangedThisTimeBits.size())
+    signalsChangedThisTimeBits.resize(signalId + 1, false);
+
+  if (!signalsChangedThisTimeBits[signalId]) {
+    signalsChangedThisTimeBits[signalId] = true;
+    signalsChangedThisTime.push_back(signalId);
+    signalTimeStartValues[signalId] = oldValue;
   }
 }
 
@@ -802,6 +838,14 @@ ProcessScheduler::getSignalPreviousValue(SignalId signalId) const {
   if (signalId >= signalStates.size())
     return unknownSignal;
   return signalStates[signalId].getPreviousValue();
+}
+
+const SignalValue &
+ProcessScheduler::getSignalTimeStartValue(SignalId signalId) const {
+  auto it = signalTimeStartValues.find(signalId);
+  if (it != signalTimeStartValues.end())
+    return it->second;
+  return getSignalValue(signalId);
 }
 
 bool ProcessScheduler::isAbortRequested() const {
@@ -1709,6 +1753,12 @@ void ProcessScheduler::reset() {
   signalsChangedThisDelta.clear();
   std::fill(signalsChangedThisDeltaBits.begin(),
             signalsChangedThisDeltaBits.end(), false);
+  signalsChangedThisTime.clear();
+  std::fill(signalsChangedThisTimeBits.begin(), signalsChangedThisTimeBits.end(),
+            false);
+  signalTimeStartValues.clear();
+  signalsChangedThisTimeFs = 0;
+  signalsChangedThisTimeValid = false;
   signalTriggeredThisDelta.reset();
   lastDeltaSignals.clear();
   processesExecutedThisDelta.clear();
