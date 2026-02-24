@@ -1,5 +1,48 @@
 # SVA Engineering Log
 
+## 2026-02-24
+
+- Iteration update (time-slot sampled assertion reads in `circt-sim`):
+  - realization:
+    - delta-local sampled reads (`didSignalChangeThisDelta` +
+      `getSignalPreviousValue`) are insufficient for IEEE sampled-value
+      behavior when a signal changes across multiple deltas in one simulation
+      time slot.
+    - this mismatch can create false sequence outcomes in clocked assertion
+      evaluation.
+  - implemented:
+    - `include/circt/Dialect/Sim/ProcessScheduler.h`
+      - added:
+        - `didSignalChangeThisTime`
+        - `getSignalTimeStartValue`
+      - added per-time-slot tracking storage.
+    - `lib/Dialect/Sim/ProcessScheduler.cpp`
+      - record first pre-change value for each changed signal at current time
+        via `recordSignalChangeAtCurrentTime`.
+      - wire recording through `updateSignal`, `updateSignalFast`, and
+        `updateSignalWithStrength`.
+      - reset lifecycle now clears time-slot sampled tracking state.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - `getSignalValueForContinuousEval` now samples from time-slot start
+        values (`didSignalChangeThisTime` + `getSignalTimeStartValue`).
+      - switched remaining direct continuous signal reads to sampled accessor.
+  - surprises:
+    - `llvm-lit` execution in this environment intermittently reported
+      `Permission denied` spawning `build-test/bin/circt-sim`, while direct
+      command invocation of the same binary succeeded.
+  - validation:
+    - `ninja -C build-test circt-sim` -> pass.
+    - direct reproducer commands:
+      - `sva-property-local-var-runtime.sv` -> `SVA_PASS` (exit 0).
+      - `sva-sequence-local-var-runtime.sv` -> still reports repeated sequence
+        assertion failures.
+      - `sva-implication-delay-range-final-runtime.sv` -> still exits success
+        without expected final assertion failure.
+  - remaining work:
+    - fix sequence-local-var in the `verif.clocked_assert` sequence path
+      (concat/delay shape).
+    - fix implication delay-range finalization semantics at end-of-trace.
+
 ## 2026-02-23
 
 - Iteration update (SVA ImportVerilog RUN-line migration + check hardening):

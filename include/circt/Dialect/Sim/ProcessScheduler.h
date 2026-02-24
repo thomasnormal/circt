@@ -1130,6 +1130,23 @@ public:
   /// Get the previous value of a signal (before the most recent update).
   const SignalValue &getSignalPreviousValue(SignalId signalId) const;
 
+  /// Return true if a signal changed at least once in the current delta cycle.
+  bool didSignalChangeThisDelta(SignalId signalId) const {
+    return signalId < signalsChangedThisDeltaBits.size() &&
+           signalsChangedThisDeltaBits[signalId];
+  }
+
+  /// Return true if a signal changed at least once at the current simulation
+  /// time (across all delta cycles at that time).
+  bool didSignalChangeThisTime(SignalId signalId) const {
+    return signalId < signalsChangedThisTimeBits.size() &&
+           signalsChangedThisTimeBits[signalId];
+  }
+
+  /// Get the signal value as it was at the start of the current simulation
+  /// time, before the first change at this time.
+  const SignalValue &getSignalTimeStartValue(SignalId signalId) const;
+
   //===--------------------------------------------------------------------===//
   // Fast-path signal and process access (zero-overhead hot loop support)
   //===--------------------------------------------------------------------===//
@@ -1173,6 +1190,10 @@ public:
   /// indexed by SignalId. Used by JIT-compiled code for zero-overhead
   /// signal reads via direct memory loads.
   uint64_t *getSignalMemoryBase() { return signalMemory.data(); }
+
+  /// Get the number of registered signals (next unused SignalId).
+  /// Used by AOT runtime to populate CirctSimHot::num_signals.
+  SignalId getNumSignals() const { return nextSigId; }
 
   /// Check if a signal uses the direct memory path (width <= 64 bits).
   bool isSignalDirect(SignalId signalId) const {
@@ -1399,6 +1420,11 @@ private:
   /// Record a signal change for delta-cycle diagnostics.
   void recordSignalChange(SignalId signalId);
 
+  /// Record the first pre-change value for a signal at the current simulation
+  /// time. Used for sampled-value semantics across multi-delta time slots.
+  void recordSignalChangeAtCurrentTime(SignalId signalId,
+                                       const SignalValue &oldValue);
+
   /// Record a signal-triggered schedule for delta-cycle diagnostics.
   void recordTriggerSignal(ProcessId id, SignalId signalId);
 
@@ -1501,6 +1527,12 @@ private:
   llvm::SmallVector<SignalId, 32> signalsChangedThisDelta;
   // Bitvector for O(1) dedup + O(n_changed) clear (vs DenseSet O(n_buckets)).
   std::vector<bool> signalsChangedThisDeltaBits;
+  // Signals updated at the current simulation time (across all delta cycles).
+  llvm::SmallVector<SignalId, 32> signalsChangedThisTime;
+  std::vector<bool> signalsChangedThisTimeBits;
+  llvm::DenseMap<SignalId, SignalValue> signalTimeStartValues;
+  uint64_t signalsChangedThisTimeFs = 0;
+  bool signalsChangedThisTimeValid = false;
   // Per-delta signal-level dedup: prevents walking the same signal's fanout
   // more than once per delta cycle. Reset at each delta boundary.
   llvm::BitVector signalTriggeredThisDelta;

@@ -2810,11 +2810,18 @@ struct StmtVisitor {
                                    assertionsEnabled)
           .getResult();
     };
-    auto materializeAssertLikeProperty = [&](Value property) -> Value {
+    auto materializeAssertLikeProperty = [&](Value property,
+                                             Value anchorSignal) -> Value {
       if (!isa<ltl::SequenceType>(property.getType()))
         return property;
       auto trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-      return ltl::ImplicationOp::create(builder, loc, trueVal, property);
+      Value antecedent = trueVal;
+      if (anchorSignal && anchorSignal.getType().isInteger(1)) {
+        auto notAnchor =
+            arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
+        antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
+      }
+      return ltl::ImplicationOp::create(builder, loc, antecedent, property);
     };
 
     if (context.currentAssertionClock && enclosingProc) {
@@ -2898,14 +2905,14 @@ struct StmtVisitor {
       case slang::ast::AssertionKind::Assert:
         verif::ClockedAssertOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::Assume:
         verif::ClockedAssumeOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
@@ -2913,7 +2920,7 @@ struct StmtVisitor {
         // Restrict constraints are treated as assumptions in lowering.
         verif::ClockedAssumeOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
@@ -2928,7 +2935,7 @@ struct StmtVisitor {
       case slang::ast::AssertionKind::Expect:
         verif::ClockedAssertOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
@@ -3023,14 +3030,14 @@ struct StmtVisitor {
             case slang::ast::AssertionKind::Assert:
               verif::ClockedAssertOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::Assume:
               verif::ClockedAssumeOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
@@ -3038,7 +3045,7 @@ struct StmtVisitor {
               // Restrict constraints are treated as assumptions in lowering.
               verif::ClockedAssumeOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
@@ -3053,7 +3060,7 @@ struct StmtVisitor {
             case slang::ast::AssertionKind::Expect:
               verif::ClockedAssertOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
@@ -3069,19 +3076,32 @@ struct StmtVisitor {
     if (failed(gatedEnable))
       return failure();
     auto assertionEnable = *gatedEnable;
+    Value assertLikeProperty = property;
+    switch (stmt.assertionKind) {
+    case slang::ast::AssertionKind::Assert:
+    case slang::ast::AssertionKind::Assume:
+    case slang::ast::AssertionKind::Restrict:
+    case slang::ast::AssertionKind::Expect:
+      if (isa<ltl::SequenceType>(property.getType()) &&
+          property.getDefiningOp<ltl::ConcatOp>())
+        assertLikeProperty = materializeAssertLikeProperty(property, Value{});
+      break;
+    default:
+      break;
+    }
 
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:
-      verif::AssertOp::create(builder, loc, property, assertionEnable,
+      verif::AssertOp::create(builder, loc, assertLikeProperty, assertionEnable,
                               assertLabel);
       return success();
     case slang::ast::AssertionKind::Assume:
-      verif::AssumeOp::create(builder, loc, property, assertionEnable,
+      verif::AssumeOp::create(builder, loc, assertLikeProperty, assertionEnable,
                               assertLabel);
       return success();
     case slang::ast::AssertionKind::Restrict:
       // Restrict constraints are treated as assumptions in lowering.
-      verif::AssumeOp::create(builder, loc, property, assertionEnable,
+      verif::AssumeOp::create(builder, loc, assertLikeProperty, assertionEnable,
                               assertLabel);
       return success();
     case slang::ast::AssertionKind::CoverProperty:
@@ -3093,7 +3113,7 @@ struct StmtVisitor {
                              assertLabel);
       return success();
     case slang::ast::AssertionKind::Expect:
-      verif::AssertOp::create(builder, loc, property, assertionEnable,
+      verif::AssertOp::create(builder, loc, assertLikeProperty, assertionEnable,
                               assertLabel);
       return success();
     default:
