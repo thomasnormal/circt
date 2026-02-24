@@ -1,5 +1,32 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: Yosys SVA mixed-language gap closure via VHDL stubs
+
+### What changed
+- Updated `utils/run_yosys_sva_circt_bmc.sh` to use curated SV fallback stubs
+  for VHDL-backed Yosys SVA cases when `SKIP_VHDL=1`:
+  - new knobs:
+    - `YOSYS_SVA_USE_VHDL_STUBS` (default `1`)
+    - `YOSYS_SVA_VHDL_STUB_DIR`
+- Added harness regression:
+  - `test/Tools/run-yosys-sva-bmc-vhdl-stub-fallback.test`
+
+### Why this mattered
+- `basic04` and `basic05` were previously counted as `SKIP(vhdl)` in the
+  BMC lane despite having maintained SV equivalents in
+  `utils/yosys-sva-vhdl-stubs/`.
+- Running them increases real SVA benchmark coverage without requiring
+  mixed-language frontend support in CIRCT itself.
+
+### Validation snapshot
+- lit harness checks:
+  - `4/4` pass for fallback + baseline expectation tests.
+- targeted Yosys SVA rerun:
+  - `basic04/basic05`: `2/2` pass, no VHDL skips.
+- full known-profile Yosys SVA rerun:
+  - `16 tests, failures=0`
+  - `basic04/basic05` now pass in both pass/fail profiles.
+
 ## 2026-02-24 Session: nested implication goto-repeat leakage fix (SVA runtime)
 
 ### What changed
