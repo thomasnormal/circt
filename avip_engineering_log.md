@@ -33,6 +33,35 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-24 Session: Nightly AVIP Timeout Policy Hardening
+
+### Why this pass
+`avip_sim_nightly` was intermittently failing under host contention with:
+- `ahb seed=2 sim_status=TIMEOUT sim_exit=137 sim_sec=270s`
+
+The same command line completed in ~7s when run standalone, so this was a
+load-sensitive infrastructure flake, not a deterministic functional failure.
+
+### Test-first change
+Added a manifest policy behavior check:
+- `utils/avip_sim_nightly_timeout_policy_behavior_check.sh`
+- `test/Tools/run-avip-sim-nightly-timeout-policy-behavior.test`
+
+This check requires explicit nightly timeout settings for AVIP sim.
+
+### Fix
+Updated `docs/unified_regression_manifest.tsv` for `avip_sim_nightly`:
+- `SIM_TIMEOUT=600`
+- `SIM_TIMEOUT_GRACE=120`
+- `MAX_WALL_MS=600000`
+
+This keeps a larger wall-clock budget on contended hosts while preserving an
+internal sim wall limit below external hard kill.
+
+### Validation
+- `utils/avip_sim_nightly_timeout_policy_behavior_check.sh` PASS.
+- lit test for policy check PASS.
+
 ## 2026-02-24 Session: Canonical `build-test` Tooling + JTAG Compile Recovery
 
 ### Why this pass

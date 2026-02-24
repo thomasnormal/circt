@@ -1,0 +1,1 @@
+// RUN: %S/../../utils/avip_sim_nightly_timeout_policy_behavior_check.sh
