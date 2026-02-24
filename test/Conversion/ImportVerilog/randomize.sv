@@ -227,7 +227,7 @@ endclass
 // CHECK:       %[[GT:.+]] = moore.sgt %[[XVAL]], %[[CONST0]] : i32 -> i1
 // CHECK:       moore.constraint.expr %[[GT]] : i1
 // CHECK:     }
-// CHECK:     moore.call_post_randomize %[[OBJ]] : <@InlineConstraintTx>
+// CHECK:     moore.call_post_randomize %[[OBJ]], %[[RAND_RESULT]] : <@InlineConstraintTx>
 // CHECK:     %[[CONV:.+]] = moore.conversion %[[RAND_RESULT]] : i1 -> !moore.i32
 // CHECK:     moore.blocking_assign %success, %[[CONV]] : i32
 // CHECK:     moore.return
