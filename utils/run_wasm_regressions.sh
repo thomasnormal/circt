@@ -17,6 +17,8 @@ SMOKE_WASM_SKIP_BUILD="${SMOKE_WASM_SKIP_BUILD:-1}"
 SMOKE_WASM_CHECK_CXX20_WARNINGS="${SMOKE_WASM_CHECK_CXX20_WARNINGS:-0}"
 SMOKE_WASM_REQUIRE_VERILOG="${SMOKE_WASM_REQUIRE_VERILOG:-1}"
 SMOKE_WASM_REQUIRE_CLEAN_CROSSCOMPILE="${SMOKE_WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
+LOCK_FILE="${WASM_REGRESSIONS_LOCK_FILE:-/tmp/circt-wasm-regressions.lock}"
+LOCK_WAIT_SECS="${WASM_REGRESSIONS_LOCK_WAIT_SECS:-0}"
 
 if [[ ! -f "$LIT_PY" ]]; then
   echo "[wasm-regressions] missing lit runner: $LIT_PY" >&2
@@ -24,6 +26,16 @@ if [[ ! -f "$LIT_PY" ]]; then
 fi
 if [[ ! -d "$SUITE_DIR" ]]; then
   echo "[wasm-regressions] missing lit suite: $SUITE_DIR" >&2
+  exit 1
+fi
+if ! [[ "$LOCK_WAIT_SECS" =~ ^[0-9]+$ ]]; then
+  echo "[wasm-regressions] invalid lock wait seconds: $LOCK_WAIT_SECS" >&2
+  exit 1
+fi
+
+exec 9>"$LOCK_FILE"
+if ! flock -w "$LOCK_WAIT_SECS" 9; then
+  echo "[wasm-regressions] lock busy: $LOCK_FILE (waited ${LOCK_WAIT_SECS}s)" >&2
   exit 1
 fi
 

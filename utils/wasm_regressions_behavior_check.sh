@@ -37,4 +37,27 @@ if ! grep -q '\[wasm-regressions\] summary: failures=0 xfails=0' "$tmpdir/focuse
   exit 1
 fi
 
+echo "[wasm-regressions-behavior] case: lock-contention-fails-cleanly"
+lock_file="$tmpdir/wasm-regressions.lock"
+exec 9>"$lock_file"
+flock -n 9
+set +e
+WASM_REGRESSIONS_LOCK_FILE="$lock_file" \
+WASM_REGRESSIONS_LOCK_WAIT_SECS=0 \
+RUN_SMOKE=0 \
+  "$RUNNER" >"$tmpdir/lock.out" 2>&1
+rc=$?
+set -e
+exec 9>&-
+if [[ "$rc" -eq 0 ]]; then
+  echo "[wasm-regressions-behavior] lock contention case unexpectedly passed" >&2
+  cat "$tmpdir/lock.out" >&2
+  exit 1
+fi
+if ! grep -q '\[wasm-regressions\] lock busy:' "$tmpdir/lock.out"; then
+  echo "[wasm-regressions-behavior] lock contention case missing lock-busy diagnostic" >&2
+  cat "$tmpdir/lock.out" >&2
+  exit 1
+fi
+
 echo "[wasm-regressions-behavior] PASS"
