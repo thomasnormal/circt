@@ -629,6 +629,31 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
   return boolVal;
 }
 
+/// Build the sampled operand used by edge functions ($rose/$fell).
+/// For packed integer vectors, IEEE sampled-value semantics use bit 0
+/// transitions instead of whole-vector truthiness.
+static Value buildSampledEdgeOperand(Context &context, Location loc, Value value,
+                                     StringRef funcName) {
+  if (!value) {
+    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    return {};
+  }
+
+  if (auto intTy = dyn_cast<moore::IntType>(value.getType())) {
+    if (intTy.getWidth() == 0) {
+      mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+      return {};
+    }
+    if (intTy.getWidth() == 1)
+      return value;
+    auto bitTy =
+        moore::IntType::get(context.getContext(), 1, intTy.getDomain());
+    return moore::ExtractOp::create(context.builder, loc, bitTy, value, 0);
+  }
+
+  return buildSampledBoolean(context, loc, value, funcName);
+}
+
 static const slang::ast::SignalEventControl *
 getCanonicalSignalEventControl(const slang::ast::TimingControl &ctrl) {
   if (auto *signal = ctrl.as_if<slang::ast::SignalEventControl>()) {
@@ -948,7 +973,9 @@ static Value lowerSampledValueFunctionWithSamplingControl(
     return {};
   }
 
-  bool boolCast = isRose || isFell;
+  bool useEdgeBitSample =
+      (isRose || isFell) && intType && intType.getWidth() > 1;
+  bool boolCast = (isRose || isFell) && !useEdgeBitSample;
   moore::IntType sampleType;
   moore::UnpackedType sampledStorageType;
   moore::IntType resultType;
@@ -966,7 +993,7 @@ static Value lowerSampledValueFunctionWithSamplingControl(
     sampledStorageType = sampleType;
     resultType = sampleType;
   } else {
-    sampleType = boolCast
+    sampleType = (isRose || isFell)
                      ? moore::IntType::get(builder.getContext(), 1,
                                            intType.getDomain())
                      : intType;
@@ -1079,6 +1106,8 @@ static Value lowerSampledValueFunctionWithSamplingControl(
             << "unsupported sampled value type for " << funcName;
         return {};
       }
+      if (useEdgeBitSample)
+        current = moore::ExtractOp::create(builder, loc, sampleType, current, 0);
       if (boolCast)
         current = moore::BoolCastOp::create(builder, loc, current);
       if (current.getType() != sampleType)
@@ -3863,7 +3892,7 @@ Value Context::convertAssertionCallExpression(
       return edge;
     }
 
-    Value current = buildSampledBoolean(*this, loc, value, funcName);
+    Value current = buildSampledEdgeOperand(*this, loc, value, funcName);
     if (!current)
       return {};
     Value sampled = current;

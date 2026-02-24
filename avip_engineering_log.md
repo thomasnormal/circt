@@ -1,5 +1,39 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: `$rose/$fell` packed-vector bit0 semantics
+
+### What changed
+- Updated `lib/Conversion/ImportVerilog/AssertionExpr.cpp` so sampled edge
+  functions on packed integers use bit 0 sampling semantics:
+  - added `buildSampledEdgeOperand(...)` helper.
+  - direct assertion lowering path now feeds `$rose/$fell` from that helper.
+  - helper-based sampled-value lowering (explicit clocking / controls) now
+    extracts bit 0 for packed vectors instead of bool-casting full vectors.
+- Added regressions:
+  - `test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-lsb.sv`
+  - `test/Tools/circt-sim/sva-sampled-vector-rose-fell-lsb-runtime.sv`
+
+### Realizations / surprises
+- Existing lowering treated packed vectors with whole-vector truthiness
+  (`bool_cast`), which flips `$rose/$fell` outcomes for transitions like
+  `2'b00 -> 2'b10` and `2'b10 -> 2'b11`.
+- The bug affected both import-only IR and runtime behavior, but in different
+  lowering paths, so both needed patching to keep semantics aligned.
+
+### Validation snapshot
+- red-first state:
+  - new import regression failed (`moore.extract` missing).
+  - new runtime regression failed with assertion violations at the expected
+    wrong cycles.
+- green state after patch:
+  - `ninja -C build-test circt-verilog` -> pass.
+  - `ninja -C build-test circt-translate` -> pass.
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-lsb.sv build-test/test/Tools/circt-sim/sva-sampled-vector-rose-fell-lsb-runtime.sv` -> pass (`2/2`).
+  - sampled-edge focused sweeps:
+    - ImportVerilog `34/34`,
+    - circt-sim `5/5`,
+    - circt-bmc `15/15`.
+
 ## 2026-02-24 Session: SVA sampled-value regression alignment (xprop/case_eq)
 
 ### What changed
