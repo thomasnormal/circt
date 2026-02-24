@@ -1559,3 +1559,95 @@
   - `utils/wasm_ci_contract_check.sh` passes.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=1 WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 NINJA_JOBS=1 utils/run_wasm_smoke.sh`
     passes end-to-end.
+
+## 2026-02-23 (follow-up: cocotb string-handle regression path for sample_module)
+- Gap identified (repro first):
+  - `PYGPI_PYTHON_BIN=python3.9 COCOTB_WORKDIR=/tmp/cocotb_test_now2 utils/run_cocotb_tests.sh test_cocotb`
+    failed with:
+    - `test_handle.test_string_ansi_color` missing
+      `stream_in_string_asciival_sum` (plus existing unrelated underscore /
+      escaped-identifier misses).
+  - `test_inertial_writes` remained passing.
+- Realization:
+  - compiling `sample_module` through the default full lowering path dropped
+    the string helper signal used by cocotb's ANSI-string check.
+  - compiling `sample_module` as LLHD keeps the helper signal/process visible
+    to `circt-sim` VPI.
+- Fix:
+  - updated `utils/run_cocotb_tests.sh` to compile `sample_module` with
+    `--ir-llhd` and removed forced `-D _VCP` for that design.
+- Validation:
+  - `PYGPI_PYTHON_BIN=python3.9 COCOTB_WORKDIR=/tmp/cocotb_test_patch1 utils/run_cocotb_tests.sh test_inertial_writes`
+    passes (`PASS (5 tests)`).
+  - `PYGPI_PYTHON_BIN=python3.9 COCOTB_WORKDIR=/tmp/cocotb_test_patch1 utils/run_cocotb_tests.sh test_cocotb`
+    now fails `3/286` (improved from `4/286`), and
+    `test_handle.test_string_ansi_color` is no longer failing.
+
+## 2026-02-24 (follow-up: unresolved wasm/circt-sim regressions)
+- Gap identified (regression-test first):
+  - unresolved list still had five wasm/circt-sim items:
+    - `timeout-no-spurious-vtable-warning.mlir`
+    - `uvm-phase-add-duplicate-fast-path.mlir`
+    - `vpi-string-put-value-test.sv`
+    - `wasm-plusargs-reentry.mlir`
+    - `wasm-uvm-stub-vcd.sv`
+  - coverage gaps:
+    - `wasm-plusargs-reentry.mlir` had no `RUN/CHECK`;
+    - `wasm-uvm-stub-vcd.sv` had no `RUN/CHECK`.
+  - pre-fix runtime failure:
+    - timeout test printed
+      `[circt-sim] Wall-clock timeout reached (global guard)`
+      but still exited `0`.
+- Fixes:
+  - added lit coverage for wasm reentry/vcd checks:
+    - `test/Tools/circt-sim/wasm-plusargs-reentry.mlir`
+    - `test/Tools/circt-sim/wasm-uvm-stub-vcd.sv`
+  - fixed timeout exit-code race in `tools/circt-sim/circt-sim.cpp`:
+    - join/check wall-clock guard thread before final exit-code decision;
+    - force non-zero exit when timeout guard fired.
+  - stabilized immediate VPI string regression test semantics:
+    - updated `test/Tools/circt-sim/vpi-string-put-value-test.c` to perform
+      write/readback in `cbAfterDelay` (after startup arming),
+      and validate immediate string readback behavior;
+    - updated `test/Tools/circt-sim/vpi-string-put-value-test.sv` checks and
+      `--max-time` to include scheduled callback window.
+- Validation:
+  - `build-test/bin/circt-sim test/Tools/circt-sim/timeout-no-spurious-vtable-warning.mlir --top test --timeout=2`
+    now exits `1`, prints timeout, and no spurious vtable diagnostics.
+  - `build-test/bin/circt-sim test/Tools/circt-sim/uvm-phase-add-duplicate-fast-path.mlir`
+    prints `phase-add calls=1`.
+  - `build-test/bin/circt-sim test/Tools/circt-sim/wasm-plusargs-reentry.mlir --top top ...`
+    matches expected `verbose/debug/missing` outcomes for no args, `+VERBOSE +DEBUG`,
+    and `+VERBOSE`.
+  - `vpi-string-put-value-test` flow (`cc` plugin + `circt-verilog` + `circt-sim`)
+    reports `VPI_STRING: 4 passed, 0 failed` and final `0 failed`.
+  - `wasm-uvm-stub-vcd` flow (`circt-verilog` + `circt-sim --vcd`) writes non-empty
+    VCD containing `$enddefinitions` and `sig` declaration.
+
+## 2026-02-24 (follow-up: focused wasm regressions gate with explicit fail/xfail counters)
+- Gap identified (regression-first):
+  - broad `lit` over `test/Tools/circt-sim` in this dirty workspace includes
+    many unrelated non-wasm failures, making wasm triage noisy.
+  - no single focused wasm gate emitted explicit `failures` and `xfails`
+    counters.
+- Fixes:
+  - added `utils/run_wasm_regressions.sh` to run a focused lit filter covering:
+    - `timeout-no-spurious-vtable-warning`
+    - `wasm-uvm-stub-vcd`
+    - `wasm-plusargs-reentry`
+    - `vpi-string-put-value-test`
+    - `uvm-phase-add-duplicate-fast-path`
+  - script emits summary:
+    - `[wasm-regressions] summary: failures=<n> xfails=<n>`
+    - exits non-zero unless both are zero.
+  - stabilized timeout regression to avoid resource-guard short-circuit:
+    - `test/Tools/circt-sim/timeout-no-spurious-vtable-warning.mlir`
+      now runs with `--resource-guard=false`.
+  - fixed VCD check ordering in:
+    - `test/Tools/circt-sim/wasm-uvm-stub-vcd.sv`
+    - `$var ... sig` now checked before `$enddefinitions`.
+- Validation:
+  - `utils/run_wasm_regressions.sh`
+    returns:
+    - `[wasm-regressions] summary: failures=0 xfails=0`
+    - `[wasm-regressions] PASS`.
