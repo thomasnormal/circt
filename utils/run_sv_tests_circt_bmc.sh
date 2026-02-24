@@ -1030,11 +1030,37 @@ top_module=${top_module}
   # For cover-only tests, SAT is therefore a PASS, while UNSAT is a FAIL.
   has_assert=0
   has_cover=0
-  if grep -Fq "verif.assert" "$mlir"; then
+  if grep -Eq "verif\\.assert|verif\\.clocked_assert" "$mlir"; then
     has_assert=1
   fi
-  if grep -Fq "verif.cover" "$mlir"; then
+  if grep -Eq "verif\\.cover|verif\\.clocked_cover" "$mlir"; then
     has_cover=1
+  fi
+
+  if [[ "$has_assert" != "1" && "$has_cover" != "1" ]]; then
+    # No formal checks are present in the compiled IR. There is nothing for
+    # circt-bmc to prove/disprove for this test.
+    if [[ "$force_xfail" == "1" ]]; then
+      result="XPASS"
+      xpass=$((xpass + 1))
+    elif [[ "$expect_compile_fail" == "1" ]]; then
+      result="FAIL"
+      fail=$((fail + 1))
+    elif [[ "$expect_bmc_violation" == "1" ]]; then
+      result="FAIL"
+      fail=$((fail + 1))
+    else
+      result="PASS"
+      pass=$((pass + 1))
+    fi
+    emit_result_row "$result" "$base" "$sv"
+    if [[ -n "$KEEP_LOGS_DIR" ]]; then
+      mkdir -p "$KEEP_LOGS_DIR"
+      cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
+      cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+        2>/dev/null || true
+    fi
+    continue
   fi
 
   check_mode="assert"

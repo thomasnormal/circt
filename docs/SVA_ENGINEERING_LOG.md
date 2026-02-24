@@ -7879,3 +7879,31 @@
     - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch16-ch20-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result: `total=101 pass=100 fail=0 xfail=0 xpass=0 error=1`
         (remaining: `20.2--stop`, non-SVA).
+
+- Iteration update (sv-tests BMC parity for no-formal-check workloads):
+  - realization:
+    - remaining chapter 16/20 BMC outlier was `20.2--stop` failing in
+      conversion (`sim.pause` path) despite having no formal checks to prove.
+    - BMC harness still invoked `circt-bmc` for compiled IR with no
+      `verif.assert`/`verif.cover` checks.
+  - implemented:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - added explicit no-formal-check short-circuit when compiled IR has none
+        of:
+        - `verif.assert`
+        - `verif.clocked_assert`
+        - `verif.cover`
+        - `verif.clocked_cover`
+      - classification for no-formal-check short-circuit:
+        - default => `PASS`
+        - expected compile-fail => `FAIL`
+        - expected violation => `FAIL`
+    - added regression:
+      - `test/Tools/run-sv-tests-bmc-no-formal-checks-classification.test`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='run-sv-tests-bmc-' build-test/test/Tools`
+      - result: `26/26` pass.
+    - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch16-ch20-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `total=101 pass=101 fail=0 xfail=0 xpass=0 error=0`.
+    - `TAG_REGEX='(^| )(18\\.|19\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch18-ch19-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `total=68 pass=68 fail=0 xfail=0 xpass=0 error=0`.
