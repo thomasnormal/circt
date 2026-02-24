@@ -7809,3 +7809,19 @@
       - result: `3/3` pass.
     - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch16-ch20-after-assume-nonfatal.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `total=98 pass=98 fail=0 xfail=0 xpass=0`.
+
+- Iteration update (lit parity cleanup for immediate assume runtime semantics):
+  - realization:
+    - the `sva-` `circt-sim` sweep had a single stale expectation:
+      `test/Tools/circt-sim/sva-immediate-assume-fail-runtime.sv` still
+      expected non-zero exit for immediate assume failure.
+  - implemented:
+    - updated `test/Tools/circt-sim/sva-immediate-assume-fail-runtime.sv` to
+      match non-fatal immediate assume runtime behavior:
+      - keep failure trace check,
+      - require normal simulation completion.
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-immediate-assume-fail-runtime.sv`
+      - result: `1/1` pass.
+    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='sva-' build-test/test/Tools/circt-sim`
+      - result: `104/104` pass.
