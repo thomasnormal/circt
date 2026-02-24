@@ -40,6 +40,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Verifier.h"
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -96,6 +97,12 @@ static llvm::cl::opt<bool>
 
 static llvm::cl::opt<bool>
     verbose("v", llvm::cl::desc("Verbose output"), llvm::cl::init(false));
+
+static llvm::cl::opt<bool> emitSnapshot(
+    "emit-snapshot",
+    llvm::cl::desc("Emit a snapshot directory (design.mlirbc + native.so + "
+                   "meta.json) instead of a bare .so"),
+    llvm::cl::init(false));
 
 //===----------------------------------------------------------------------===//
 // Lowering: func compilability check
@@ -2988,14 +2995,29 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   }
 
   // Determine output path.
-  std::string outPath = outputFilename;
-  if (outPath.empty()) {
-    if (inputFilename == "-") {
-      outPath = "a.out.so";
-    } else {
-      llvm::SmallString<256> p(inputFilename);
-      llvm::sys::path::replace_extension(p, ".so");
-      outPath = std::string(p);
+  // When --emit-snapshot is active, -o specifies the snapshot directory, not
+  // the .so. We write the .so to a temporary path and then move it into the
+  // snapshot directory later.
+  std::string outPath;
+  if (emitSnapshot) {
+    // .so goes to a temp file; it will be moved into the snapshot dir below.
+    llvm::SmallString<256> tmpSo;
+    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-sim-compile",
+                                                      "so", tmpSo)) {
+      llvm::errs() << "Error creating temp file: " << ec.message() << "\n";
+      return failure();
+    }
+    outPath = std::string(tmpSo);
+  } else {
+    outPath = outputFilename;
+    if (outPath.empty()) {
+      if (inputFilename == "-") {
+        outPath = "a.out.so";
+      } else {
+        llvm::SmallString<256> p(inputFilename);
+        llvm::sys::path::replace_extension(p, ".so");
+        outPath = std::string(p);
+      }
     }
   }
 
@@ -3089,6 +3111,94 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                << funcNames.size() << " functions, "
                << trampolineNames.size() << " trampolines, "
                << std::chrono::duration<double>(elapsed).count() << "s)\n";
+
+  // If --emit-snapshot, bundle the .so + MLIR bytecode + metadata into a
+  // snapshot directory that circt-sim can load directly.
+  if (emitSnapshot) {
+    // Determine snapshot directory path: use -o value or derive from input.
+    std::string snapDir = outputFilename;
+    if (snapDir.empty()) {
+      if (inputFilename == "-") {
+        snapDir = "a.out.csnap";
+      } else {
+        llvm::SmallString<256> p(inputFilename);
+        llvm::sys::path::replace_extension(p, ".csnap");
+        snapDir = std::string(p);
+      }
+    }
+    // Ensure the directory ends with .csnap for clarity (but don't force it).
+    if (auto ec = llvm::sys::fs::create_directories(snapDir)) {
+      llvm::errs() << "[circt-sim-compile] Error creating snapshot dir "
+                   << snapDir << ": " << ec.message() << "\n";
+      return failure();
+    }
+
+    // 1. Move the .so into the snapshot directory as native.so.
+    llvm::SmallString<256> soDestPath(snapDir);
+    llvm::sys::path::append(soDestPath, "native.so");
+    if (auto ec = llvm::sys::fs::rename(outPath, soDestPath)) {
+      // rename can fail across filesystems; fall back to copy + remove.
+      if (auto ec2 = llvm::sys::fs::copy_file(outPath, soDestPath)) {
+        llvm::errs() << "[circt-sim-compile] Error copying .so to snapshot: "
+                     << ec2.message() << "\n";
+        return failure();
+      }
+      llvm::sys::fs::remove(outPath);
+    }
+
+    // 2. Save the MLIR module as bytecode.
+    llvm::SmallString<256> bcPath(snapDir);
+    llvm::sys::path::append(bcPath, "design.mlirbc");
+    {
+      std::error_code ec;
+      llvm::raw_fd_ostream os(bcPath, ec);
+      if (ec) {
+        llvm::errs() << "[circt-sim-compile] Error opening " << bcPath << ": "
+                     << ec.message() << "\n";
+        return failure();
+      }
+      mlir::BytecodeWriterConfig bcConfig;
+      if (mlir::failed(
+              mlir::writeBytecodeToFile(module->getOperation(), os, bcConfig))) {
+        llvm::errs()
+            << "[circt-sim-compile] Error writing bytecode to " << bcPath
+            << "\n";
+        return failure();
+      }
+      os.flush();
+    }
+
+    // 3. Write meta.json with snapshot metadata.
+    llvm::SmallString<256> metaPath(snapDir);
+    llvm::sys::path::append(metaPath, "meta.json");
+    {
+      std::error_code ec;
+      llvm::raw_fd_ostream os(metaPath, ec);
+      if (ec) {
+        llvm::errs() << "[circt-sim-compile] Error opening " << metaPath
+                     << ": " << ec.message() << "\n";
+        return failure();
+      }
+      // Build a timestamp string.
+      auto now = std::chrono::system_clock::now();
+      auto nowTime = std::chrono::system_clock::to_time_t(now);
+      char timeBuf[64];
+      std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%SZ",
+                    std::gmtime(&nowTime));
+
+      os << "{\n";
+      os << "  \"abi_version\": " << CIRCT_SIM_ABI_VERSION << ",\n";
+      os << "  \"preprocessed\": true,\n";
+      os << "  \"timestamp\": \"" << timeBuf << "\",\n";
+      os << "  \"content_hash\": \"" << contentHash << "\"\n";
+      os << "}\n";
+      os.flush();
+    }
+
+    llvm::errs() << "[circt-sim-compile] Wrote snapshot to " << snapDir
+                 << "/\n";
+  }
+
   return success();
 }
 
