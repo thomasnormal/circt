@@ -1,5 +1,22 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: local-var initializer coverage expansion (rvalue + unary)
+
+### What changed
+- Added:
+  - `test/Conversion/ImportVerilog/sva-local-var-initializer-rvalue.sv`
+  - `test/Tools/circt-sim/sva-local-var-initializer-unary-runtime.sv`
+
+### Why this mattered
+- The previous fix touched three lookup/update paths (compound, unary, and
+  plain rvalue). Compound path had red-first coverage, but unary / plain-rvalue
+  still lacked dedicated regressions.
+
+### Validation snapshot
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-local-var-initializer-rvalue.sv build-test/test/Tools/circt-sim/sva-local-var-initializer-unary-runtime.sv` -> pass (`2/2`)
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog --filter='sva-.*local-var.*'` -> pass (`4/4`)
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*local-var.*'` -> pass (`6/6`)
+
 ## 2026-02-24 Session: SVA local assertion variable initializer + compound update parity
 
 ### What changed
