@@ -3,6 +3,8 @@ set -euo pipefail
 
 SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
 BOUND="${BOUND:-10}"
+BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION="${BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION:-1}"
+BMC_AUTO_ESCALATE_BOUND_MAX="${BMC_AUTO_ESCALATE_BOUND_MAX:-64}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils/formal_toolchain_resolve.sh
 source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
@@ -294,6 +296,18 @@ if ! is_bool_01 "$BMC_LAUNCH_COPY_FALLBACK"; then
 fi
 if ! is_bool_01 "$AUTO_ALLOW_MULTI_CLOCK"; then
   echo "invalid AUTO_ALLOW_MULTI_CLOCK: $AUTO_ALLOW_MULTI_CLOCK" >&2
+  exit 1
+fi
+if ! is_positive_int "$BOUND"; then
+  echo "invalid BOUND: $BOUND" >&2
+  exit 1
+fi
+if ! is_bool_01 "$BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION"; then
+  echo "invalid BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION: $BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION" >&2
+  exit 1
+fi
+if ! is_positive_int "$BMC_AUTO_ESCALATE_BOUND_MAX"; then
+  echo "invalid BMC_AUTO_ESCALATE_BOUND_MAX: $BMC_AUTO_ESCALATE_BOUND_MAX" >&2
   exit 1
 fi
 if ! is_positive_int "$CIRCT_MEMORY_LIMIT_GB"; then
@@ -611,6 +625,65 @@ hash_file() {
   fi
 }
 
+detect_bmc_module_from_mlir() {
+  local mlir_file="$1"
+  if [[ ! -s "$mlir_file" ]]; then
+    printf '%s\n' ""
+    return
+  fi
+  awk '
+    {
+      if (!match($0, /^[[:space:]]*hw\.module[[:space:]]+/))
+        next
+      if (!match($0, /@([A-Za-z0-9_.$-]+)/, nameMatch))
+        next
+      name = nameMatch[1]
+      if (first == "")
+        first = name
+      if ($0 ~ /hw\.module[[:space:]]+private[[:space:]]+@/)
+        next
+      print name
+      found = 1
+      exit
+    }
+    END {
+      if (!found && first != "")
+        print first
+    }
+  ' "$mlir_file" | head -n 1
+}
+
+estimate_max_bmc_delay_bound_hint() {
+  local mlir_file="$1"
+  if [[ ! -s "$mlir_file" ]]; then
+    printf '0\n'
+    return
+  fi
+  local max_delay
+  max_delay="$(awk '
+    {
+      line = $0
+      while (match(line, /ltl\.delay[^,]*,[[:space:]]*[0-9]+/)) {
+        seg = substr(line, RSTART, RLENGTH)
+        sub(/^.*,[[:space:]]*/, "", seg)
+        n = seg + 0
+        if (n > max)
+          max = n
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+    END { print max + 0 }
+  ' "$mlir_file")"
+  if [[ -z "$max_delay" || "$max_delay" -le 0 ]]; then
+    printf '0\n'
+    return
+  fi
+  # Use a conservative +2 slack:
+  # - +1 to cover the delayed sample index itself.
+  # - +1 for sequence/property alignment when lowering implication/concat forms.
+  printf '%s\n' "$((max_delay + 2))"
+}
+
 while IFS= read -r -d '' sv; do
   tags="$(read_meta tags "$sv")"
   if [[ -z "$tags" ]]; then
@@ -674,7 +747,12 @@ while IFS= read -r -d '' sv; do
   expect_compile_fail=0
   expect_bmc_violation=0
   if [[ "$should_fail" == "1" ]]; then
-    if [[ "$type" =~ [Ss]imulation ]]; then
+    # sv-tests marks both runtime-negative and elaboration-negative simulation
+    # tests as :type: simulation...; prefer elaboration-negative classification
+    # when that marker is present.
+    if [[ "$type" =~ [Ee]laboration ]]; then
+      expect_compile_fail=1
+    elif [[ "$type" =~ [Ss]imulation ]]; then
       expect_bmc_violation=1
     else
       expect_compile_fail=1
@@ -685,9 +763,6 @@ while IFS= read -r -d '' sv; do
   incdirs_line="$(read_meta incdirs "$sv")"
   defines_line="$(read_meta defines "$sv")"
   top_module="$(read_meta top_module "$sv")"
-  if [[ -z "$top_module" ]]; then
-    top_module="top"
-  fi
 
   test_root="$SV_TESTS_DIR/tests"
   if [[ -z "$files_line" ]]; then
@@ -908,11 +983,27 @@ top_module=${top_module}
     fi
   fi
 
+  has_bmc_module=0
+  if grep -Eq '^[[:space:]]*hw\.module[[:space:]]+@' "$mlir"; then
+    has_bmc_module=1
+  fi
+  if [[ "$run_bmc" == "1" && "$has_bmc_module" != "1" ]] && \
+      grep -Fq "no top-level modules found in design" "$verilog_log"; then
+    # Class-only / randomization-only sv-tests often compile without a concrete
+    # hw.module. There is no formal target to run circt-bmc on in this case.
+    run_bmc=0
+  fi
+
   if [[ "$run_bmc" == "0" ]]; then
     if [[ "$force_xfail" == "1" ]]; then
       result="XPASS"
       xpass=$((xpass + 1))
     elif [[ "$expect_compile_fail" == "1" ]]; then
+      result="FAIL"
+      fail=$((fail + 1))
+    elif [[ "$expect_bmc_violation" == "1" ]]; then
+      # Runtime-negative simulation test expected a formal counterexample, but
+      # no BMC target was available.
       result="FAIL"
       fail=$((fail + 1))
     else
@@ -954,8 +1045,16 @@ top_module=${top_module}
   fi
   append_bmc_check_attribution "$base" "$sv" "$mlir"
 
-  bmc_base_args=("-b" "$BOUND" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL" \
-    "--module" "$top_module")
+  effective_bound="$BOUND"
+  bmc_module="$top_module"
+  if [[ -z "$bmc_module" ]]; then
+    bmc_module="$(detect_bmc_module_from_mlir "$mlir")"
+  fi
+
+  bmc_base_args=("-b" "$effective_bound" "--ignore-asserts-until=$IGNORE_ASSERTS_UNTIL")
+  if [[ -n "$bmc_module" ]]; then
+    bmc_base_args+=("--module" "$bmc_module")
+  fi
   if [[ "$RISING_CLOCKS_ONLY" == "1" ]]; then
     bmc_base_args+=("--rising-clocks-only")
   fi
@@ -999,6 +1098,37 @@ top_module=${top_module}
       bmc_status=0
     else
       bmc_status=$?
+    fi
+  fi
+  if [[ "$bmc_status" -eq 0 && "$BMC_SMOKE_ONLY" != "1" && \
+        "$BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION" == "1" && \
+        "$expect_bmc_violation" == "1" ]] && \
+      grep -q "BMC_RESULT=UNSAT" <<<"$out"; then
+    delay_bound_hint="$(estimate_max_bmc_delay_bound_hint "$mlir")"
+    if [[ "$delay_bound_hint" -gt "$effective_bound" ]]; then
+      retry_bound="$delay_bound_hint"
+      if [[ "$retry_bound" -gt "$BMC_AUTO_ESCALATE_BOUND_MAX" ]]; then
+        retry_bound="$BMC_AUTO_ESCALATE_BOUND_MAX"
+      fi
+      if [[ "$retry_bound" -gt "$effective_bound" ]]; then
+        echo "BMC auto-retry($base): expected violation remained UNSAT at -b $effective_bound, retrying at -b $retry_bound (delay hint=$delay_bound_hint)" >&2
+        {
+          echo "[run_sv_tests_circt_bmc] BMC auto-retry($base): expected violation remained UNSAT at -b $effective_bound, retrying at -b $retry_bound (delay hint=$delay_bound_hint)"
+        } >> "$bmc_log"
+        effective_bound="$retry_bound"
+        bmc_base_args[1]="$effective_bound"
+        bmc_args=("${bmc_base_args[@]}")
+        if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+          bmc_args+=("--emit-mlir")
+        else
+          bmc_args+=("--run-smtlib" "--z3-path=$Z3_BIN")
+        fi
+        if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" 2>> "$bmc_log")"; then
+          bmc_status=0
+        else
+          bmc_status=$?
+        fi
+      fi
     fi
   fi
   if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" ]] && \

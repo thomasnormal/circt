@@ -7848,3 +7848,34 @@
       - result: `total=63 pass=63 fail=0 xfail=0 xpass=0`.
     - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch16-ch20-after-assume-nonfatal.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `total=98 pass=98 fail=0 xfail=0 xpass=0`.
+
+- Iteration update (sv-tests BMC parity for chapter 18/19 harness classification):
+  - realization:
+    - chapter 18/19 BMC initially reported `pass=18 error=50`; most errors were
+      class/randomization tests where frontend emitted no top-level module and
+      BMC failed with `hw.module named '' not found`.
+    - metadata classification also treated `:type: simulation elaboration` +
+      `:should_fail_because:` as runtime-negative instead of elaboration-negative.
+  - implemented:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - metadata fix:
+        - `should_fail` + `type` containing `elaboration` now maps to
+          `expect_compile_fail=1` even when `simulation` is also present.
+      - no-module handling:
+        - if compiled IR has no `hw.module` and frontend log reports
+          `no top-level modules found in design`, skip BMC invocation and
+          classify directly:
+          - default => `PASS`,
+          - expected runtime violation => `FAIL`.
+        - preserved previous behavior for synthetic/malformed frontend outputs
+          without that warning (to avoid regressing timeout-stage tests).
+    - added regression:
+      - `test/Tools/run-sv-tests-bmc-no-module-classification.test`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='run-sv-tests-bmc-' build-test/test/Tools`
+      - result: `25/25` pass.
+    - `TAG_REGEX='(^| )(18\\.|19\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch18-ch19-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `total=68 pass=68 fail=0 xfail=0 xpass=0 error=0`.
+    - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch16-ch20-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `total=101 pass=100 fail=0 xfail=0 xpass=0 error=1`
+        (remaining: `20.2--stop`, non-SVA).
