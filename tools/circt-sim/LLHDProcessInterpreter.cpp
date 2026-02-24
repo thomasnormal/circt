@@ -37199,31 +37199,75 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   if (!rootModule)
     return;
 
-  // When CIRCT_AOT_NO_FUNC_DISPATCH is set, skip populating nativeFuncPtrs.
-  // Compiled processes still run natively; only interpreter→function dispatch
-  // is affected. This is a safety valve: compiled stubs for UVM-intercepted
-  // functions return null, and calling code crashes when dereferencing the
-  // result. Disabling func dispatch ensures all calls go through the
-  // interpreter (with UVM interceptors).
+  // Safety valve: CIRCT_AOT_NO_FUNC_DISPATCH disables ALL native func dispatch.
   bool noFuncDispatch = std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr;
 
-  unsigned mapped = 0;
+  // Check whether a function has UVM/runtime interceptors in the interpreter.
+  // Intercepted functions must NOT be dispatched natively because native callers
+  // would bypass the interpreter where interceptors fire, causing crashes
+  // (e.g., factory returning null instead of creating objects).
+  auto isInterceptedFunc = [](llvm::StringRef name) -> bool {
+    // All uvm_ functions (factory, config_db, phasing, sequencer, etc.)
+    if (name.contains("uvm_"))
+      return true;
+    // Moore runtime support (__moore_delay, __moore_string_*, etc.)
+    if (name.starts_with("__moore_"))
+      return true;
+    // Standalone intercepted functions (short symbol names without uvm_ prefix)
+    if (name == "get_0" || name == "self" || name == "malloc" ||
+        name == "get_common_domain" || name == "get_global_hopper")
+      return true;
+    // String/class conversion
+    if (name.starts_with("to_string_") || name == "to_class" ||
+        name.starts_with("to_class_"))
+      return true;
+    // Random state management
+    if (name == "srandom" || name.starts_with("srandom_") ||
+        name == "get_randstate" || name.starts_with("get_randstate_") ||
+        name == "set_randstate" || name.starts_with("set_randstate_"))
+      return true;
+    // DB/port patterns (may exist outside uvm_ namespace)
+    if (name.contains("config_db") || name.contains("resource_db") ||
+        name.contains("analysis_port") || name.contains("seq_item_pull") ||
+        name.contains("sqr_if_base"))
+      return true;
+    // BFM protocol interceptors (driver_bfm::, monitor_bfm::, i3c_*_bfm::, etc.)
+    if (name.contains("_bfm::") || name.contains("Bfm::"))
+      return true;
+    // Die interceptor
+    if (name.ends_with("::die"))
+      return true;
+    return false;
+  };
+
+  unsigned compiled = 0, nativeEligible = 0, intercepted = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
     if (funcOp.isExternal())
       return;
     void *ptr = loader.lookupFunction(funcOp.getSymName());
     if (ptr) {
-      if (!noFuncDispatch)
+      ++compiled;
+      if (noFuncDispatch) {
+        // All dispatch disabled — don't populate nativeFuncPtrs at all.
+      } else if (isInterceptedFunc(funcOp.getSymName())) {
+        ++intercepted;
+        // Skip: let this function route through interpreter for interceptors.
+      } else {
         nativeFuncPtrs[funcOp.getOperation()] = ptr;
-      ++mapped;
+        ++nativeEligible;
+      }
     }
   });
 
-  llvm::errs() << "[circt-sim] Loaded " << mapped
-               << " compiled functions from .so"
-               << (noFuncDispatch ? " (func dispatch DISABLED)"
-                                  : " for native dispatch")
-               << "\n";
+  if (noFuncDispatch) {
+    llvm::errs() << "[circt-sim] Loaded " << compiled
+                 << " compiled functions (func dispatch DISABLED by env)\n";
+  } else {
+    llvm::errs() << "[circt-sim] Loaded " << compiled
+                 << " compiled functions: " << nativeEligible
+                 << " native-eligible, " << intercepted
+                 << " kept in interpreter (intercepted)\n";
+  }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
   // dispatch. Each trampoline has a sequential func_id and a name that
