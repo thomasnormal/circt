@@ -4,7 +4,6 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 import tempfile
 
 import lit.formats
@@ -64,7 +63,7 @@ tools = [
     'circt-capi-ir-test', 'circt-capi-om-test', 'circt-capi-firrtl-test',
     'circt-capi-firtool-test', 'circt-capi-rtg-test', 'circt-capi-rtgtest-test',
     'circt-capi-support-test', 'circt-cov', 'circt-dis', 'circt-lec',
-    'circt-mut',
+    'circt-mut', 'circt-sim', 'circt-sim-compile',
     'circt-reduce', 'circt-synth', 'circt-test', 'circt-translate',
     'domaintool', 'firld', 'firtool', 'hlstool', 'om-linker', 'kanagawatool'
 ]
@@ -95,10 +94,19 @@ if config.zlib == "1":
 if config.scheduling_or_tools != "":
   config.available_features.add('or-tools')
 
-# Add circt-verilog if the Slang frontend is enabled.
-if config.slang_frontend_enabled:
+# Add circt-verilog if the Slang frontend is enabled. Some local builds expose
+# circt-verilog even when the generated lit site config doesn't set
+# `slang_frontend_enabled`; detect that binary as a fallback so SVA tests run.
+slang_frontend_enabled = bool(config.slang_frontend_enabled)
+if not slang_frontend_enabled:
+  search_path = os.pathsep.join(tool_dirs + [config.environment.get('PATH', '')])
+  slang_frontend_enabled = shutil.which('circt-verilog', path=search_path) is not None
+
+if slang_frontend_enabled:
   config.available_features.add('slang')
-  tools.append('circt-verilog')
-  tools.append('circt-verilog-lsp-server')
+  if 'circt-verilog' not in tools:
+    tools.append('circt-verilog')
+  if 'circt-verilog-lsp-server' not in tools:
+    tools.append('circt-verilog-lsp-server')
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)

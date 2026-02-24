@@ -1,22 +1,23 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_stable_sat - | FileCheck %s --check-prefix=STABLE
+// RUN:   circt-bmc --run-smtlib -b 2 --module=sva_xprop_stable_sat - | FileCheck %s --check-prefix=STABLE
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_changed_sat - | FileCheck %s --check-prefix=CHANGED
+// RUN:   circt-bmc --run-smtlib -b 2 --module=sva_xprop_changed_sat - | FileCheck %s --check-prefix=CHANGED
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_xprop_stable_sat(input logic clk);
-  logic in;
-  assign in = 1'bx;
-  // $stable should propagate X if either sample is unknown.
+  logic in = 1'b0;
+  always @(posedge clk)
+    in <= 1'bx;
+  // If either sampled value is unknown, equality-to-1 can fail.
   assert property (@(posedge clk) ($stable(in) == 1'b1));
 endmodule
 
 module sva_xprop_changed_sat(input logic clk);
-  logic in;
-  assign in = 1'bx;
-  // $changed should propagate X if either sample is unknown.
+  logic in = 1'b0;
+  always @(posedge clk)
+    in <= 1'bx;
+  // If either sampled value is unknown, equality-to-0 can fail.
   assert property (@(posedge clk) ($changed(in) == 1'b0));
 endmodule
 

@@ -1,7 +1,6 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=top - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 1 --module=top - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module top;

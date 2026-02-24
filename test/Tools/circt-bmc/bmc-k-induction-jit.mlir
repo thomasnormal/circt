@@ -1,6 +1,5 @@
-// REQUIRES: bmc-jit
 // REQUIRES: z3
-// RUN: circt-bmc -b 1 --k-induction --module top %s | FileCheck %s
+// RUN: circt-bmc --run-smtlib -b 1 --k-induction --module top %s | FileCheck %s
 
 hw.module @top(out out: i1) attributes {num_regs = 0 : i32, initial_values = []} {
   %true = hw.constant true
