@@ -2195,7 +2195,10 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const llvm::SmallVector<std::string> &trampolineNames,
                                  const llvm::SmallVector<std::string> &procNames,
                                  const llvm::SmallVector<uint8_t> &procKinds,
-                                 const std::string &buildId) {
+                                 const std::string &buildId,
+                                 const llvm::SmallVector<std::string> &globalPatchNames,
+                                 const llvm::SmallVector<llvm::GlobalVariable *> &globalPatchVars,
+                                 const llvm::SmallVector<uint32_t> &globalPatchSizes) {
   auto &ctx = llvmModule.getContext();
   auto *i32Ty = llvm::Type::getInt32Ty(ctx);
   auto *ptrTy = llvm::PointerType::get(ctx, 0);
@@ -2318,11 +2321,63 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
     trampNamesGlobal = llvm::ConstantPointerNull::get(ptrTy);
   }
 
+  // Build patch table: string constants, address array, and size array.
+  unsigned numGlobalPatches = globalPatchNames.size();
+  llvm::Constant *globalPatchNamesGlobal = nullptr;
+  llvm::Constant *globalPatchAddrsGlobal = nullptr;
+  llvm::Constant *globalPatchSizesGlobal = nullptr;
+
+  if (numGlobalPatches > 0) {
+    // global_patch_names: string constants.
+    llvm::SmallVector<llvm::Constant *> patchNameGlobals;
+    for (unsigned i = 0; i < numGlobalPatches; ++i) {
+      auto *strConst =
+          llvm::ConstantDataArray::getString(ctx, globalPatchNames[i], true);
+      auto *strGlobal = new llvm::GlobalVariable(
+          llvmModule, strConst->getType(), true,
+          llvm::GlobalValue::PrivateLinkage, strConst,
+          "__circt_sim_gpname_" + std::to_string(i));
+      patchNameGlobals.push_back(strGlobal);
+    }
+    auto *patchNameArrayTy = llvm::ArrayType::get(ptrTy, numGlobalPatches);
+    auto *patchNameArray = llvm::ConstantArray::get(
+        patchNameArrayTy,
+        llvm::ArrayRef<llvm::Constant *>(patchNameGlobals));
+    globalPatchNamesGlobal = new llvm::GlobalVariable(
+        llvmModule, patchNameArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        patchNameArray, "__circt_sim_global_patch_names");
+
+    // global_patch_addrs: pointers to the actual globals in the .so.
+    llvm::SmallVector<llvm::Constant *> patchAddrConstants;
+    for (unsigned i = 0; i < numGlobalPatches; ++i)
+      patchAddrConstants.push_back(globalPatchVars[i]);
+    auto *patchAddrArrayTy = llvm::ArrayType::get(ptrTy, numGlobalPatches);
+    auto *patchAddrArray = llvm::ConstantArray::get(
+        patchAddrArrayTy,
+        llvm::ArrayRef<llvm::Constant *>(patchAddrConstants));
+    globalPatchAddrsGlobal = new llvm::GlobalVariable(
+        llvmModule, patchAddrArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        patchAddrArray, "__circt_sim_global_patch_addrs");
+
+    // global_patch_sizes: uint32_t[].
+    auto *i32ArrayTy = llvm::ArrayType::get(i32Ty, numGlobalPatches);
+    llvm::SmallVector<llvm::Constant *> sizeConstants;
+    for (unsigned i = 0; i < numGlobalPatches; ++i)
+      sizeConstants.push_back(
+          llvm::ConstantInt::get(i32Ty, globalPatchSizes[i]));
+    auto *sizeArray = llvm::ConstantArray::get(
+        i32ArrayTy, llvm::ArrayRef<llvm::Constant *>(sizeConstants));
+    globalPatchSizesGlobal = new llvm::GlobalVariable(
+        llvmModule, i32ArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        sizeArray, "__circt_sim_global_patch_sizes");
+  }
+
   // Build the CirctSimCompiledModule struct.
-  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr}
+  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr, i32, ptr, ptr, ptr}
   auto *descriptorTy = llvm::StructType::create(
       ctx,
-      {i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy, i32Ty, ptrTy},
+      {i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy, i32Ty, ptrTy,
+       i32Ty, ptrTy, ptrTy, ptrTy},
       "CirctSimCompiledModule");
 
   auto *nullPtr = llvm::ConstantPointerNull::get(ptrTy);
@@ -2339,6 +2394,10 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
           funcEntryGlobal,                                       // func_entry
           llvm::ConstantInt::get(i32Ty, numTrampolines),    // num_trampolines
           trampNamesGlobal,                                 // trampoline_names
+          llvm::ConstantInt::get(i32Ty, numGlobalPatches),  // num_global_patches
+          numGlobalPatches > 0 ? globalPatchNamesGlobal : nullPtr, // global_patch_names
+          numGlobalPatches > 0 ? globalPatchAddrsGlobal : nullPtr, // global_patch_addrs
+          numGlobalPatches > 0 ? globalPatchSizesGlobal : nullPtr, // global_patch_sizes
       });
 
   auto *descriptorGlobal = new llvm::GlobalVariable(
@@ -2969,9 +3028,30 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                         llvm::sys::getDefaultTargetTriple() + "-" +
                         contentHash;
 
+  // Collect mutable globals for the patch table.
+  llvm::SmallVector<std::string> globalPatchNames;
+  llvm::SmallVector<llvm::GlobalVariable *> globalPatchVars;
+  llvm::SmallVector<uint32_t> globalPatchSizes;
+  for (auto &global : llvmModule->globals()) {
+    if (global.isConstant() || global.isDeclaration())
+      continue;
+    if (!global.hasName() || global.getName().empty())
+      continue;
+    if (global.getName().starts_with("__circt_sim_"))
+      continue;
+    globalPatchNames.push_back(global.getName().str());
+    globalPatchVars.push_back(&global);
+    auto *type = global.getValueType();
+    uint64_t size = llvmModule->getDataLayout().getTypeAllocSize(type);
+    globalPatchSizes.push_back(static_cast<uint32_t>(size));
+  }
+  llvm::errs() << "[circt-sim-compile] Global patches: "
+               << globalPatchNames.size() << " mutable globals\n";
+
   // Synthesize descriptor and entrypoints into the LLVM IR module.
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
-                       procNames, procKinds, buildId);
+                       procNames, procKinds, buildId,
+                       globalPatchNames, globalPatchVars, globalPatchSizes);
 
   // Set hidden visibility on everything except entrypoints.
   setDefaultHiddenVisibility(*llvmModule);
