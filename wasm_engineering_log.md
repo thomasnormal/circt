@@ -34,6 +34,28 @@
     - `test/Tools/circt-sim/test_vpi.py`
       - added `test_vpi_startup_register_bridge` covering
         `vlog_startup_routines -> vpi_startup_register -> cbStart/cbEnd`.
+- Follow-up (cb_rtn=0 hook-only callbacks + async startup yield):
+  - realization:
+    - wasm JS library supported `cbFuncPtr=0`, but C++ registration still
+      rejected `cb_rtn == nullptr`, so hook-only callback registration silently
+      failed (`vpi_register_cb` returned null handle).
+    - this prevented `cbStartOfSimulation` hook dispatch in wasm-only setups and
+      manifested as simulation ending at time 0 with no startup callback work.
+  - implemented:
+    - `lib/Dialect/Sim/VPIRuntime.cpp`
+      - native callback fallback now null-checks before direct invocation.
+      - on `__EMSCRIPTEN__`, `registerCb` now accepts `cb_rtn == nullptr`
+        (hook-only mode); native path still requires non-null callback pointers.
+    - new node regression helper:
+      - `utils/wasm_vpi_startup_yield_check.sh`
+      - validates:
+        - pre-`callMain` `cbStartOfSimulation` registration with `cb_rtn=0`,
+        - async yield hook execution at startup,
+        - dynamic `cbAfterDelay` registration from the async hook,
+        - subsequent `cbAfterDelay` dispatch through the same hook.
+    - integrated into smoke flow:
+      - `utils/run_wasm_smoke.sh`
+      - `utils/wasm_smoke_contract_check.sh`
 - Validation performed:
   - `ninja -C build-wasm circt-sim` reaches and compiles updated files:
     - `lib/Dialect/Sim/VPIRuntime.cpp`
@@ -1938,3 +1960,52 @@
   - `ninja -C build-test CIRCTSimTests`: PASS.
   - `build-test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter=VPIRuntimeRegisterCbTest.*`: PASS (3 tests).
   - `pytest -q test/Tools/circt-sim/test_vpi.py -k startup_register_bridge`: PASS.
+
+## 2026-02-24 (follow-up: browser-style UVM malformed-attribute A/B recheck)
+- Goal:
+  - validate reported wasm abort (`Malformed attribute storage object`) with
+    strict old-vs-current comparison using
+    `utils/repro_wasm_uvm_browser_assert.mjs`.
+- A/B setup:
+  - old CIRCT worktree: `0246e937a9e11f602c85a80dc2fcb2c69c5e5a84`
+  - current CIRCT: `d349546a01e8cb6506fdc6ca483b1affe5603d7a`
+  - old LLVM submodule: `972cd847efb20661ea7ee8982dd19730aa040c75`
+  - current LLVM submodule: `d6b7ec99ca74fb0648237a5545f0878f14af6d44`
+- Realizations/surprises:
+  - old SHA had multiple wasm bootstrap/build issues in this environment:
+    missing `CONFIGURE_circt_NATIVE`, wasm `mlir-tblgen.js` used for host td
+    generation, and one source-level mismatch in ImportVerilog context fields.
+  - local temporary workarounds were required in `/tmp/circt-repro-0246` to
+    produce an old wasm artifact for comparison.
+- Result:
+  - old artifact run summary:
+    - `exitCode=0`, `callMainErrorPresent=false`, `outMlirBytes=25034335`,
+      `hasMalformed=false`, `hasAbort=false`.
+  - current artifact run summary:
+    - `exitCode=0`, `callMainErrorPresent=false`, `outMlirBytes=25034364`,
+      `hasMalformed=false`, `hasAbort=false`.
+- Conclusion:
+  - repro script did not reproduce malformed-attribute abort on either old or
+    current artifacts in this environment.
+  - likely environment/artifact drift in the original failure report; should be
+    reported upstream as “currently not reproducible.”
+
+## 2026-02-24 (follow-up: add browser-like UVM harness to wasm CI)
+- Goal:
+  - keep browser-like wasm UVM compile path covered in CI with the new harness.
+- Test-first sequence:
+  - strengthened `utils/wasm_ci_contract_check.sh` to require token:
+    - `utils/repro_wasm_uvm_browser_assert.mjs --expect-pass`
+  - pre-workflow-update contract run failed as expected with missing-token error.
+- CI update:
+  - updated `.github/workflows/wasmSmoke.yml` with step:
+    - install Playwright runtime: `npm install --no-save --no-package-lock @playwright/test`
+    - install browser binary: `npx playwright install chromium`
+    - run harness health check:
+      `node utils/repro_wasm_uvm_browser_assert.mjs --expect-pass`
+- Validation:
+  - `utils/wasm_ci_contract_check.sh`: PASS after workflow update.
+- Realization:
+  - harness itself is now suitable as a stability gate for healthy artifacts;
+    malformed-attribute abort remains environment/artifact dependent and is not
+    currently reproducible on this workspace default wasm artifact.
