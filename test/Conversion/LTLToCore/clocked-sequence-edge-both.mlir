@@ -17,4 +17,3 @@ module {
 // CHECK: verif.assume {{.*}}bmc.clock_edge = #ltl<clock_edge edge>
 // CHECK: verif.assume {{.*}}bmc.final
 // CHECK: verif.cover {{.*}}bmc.clock_edge = #ltl<clock_edge edge>
-// CHECK: verif.cover {{.*}}bmc.final

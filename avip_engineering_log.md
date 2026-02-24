@@ -7485,3 +7485,49 @@ Based on these findings, the circt-sim compiled process architecture:
   `LowerClockedAssertLike` canonical forms and strict abort guard assumptions
   in `LTLToCore`; widening the accepted guard forms resolved both sync and
   non-sync abort variants cleanly.
+
+## 2026-02-24: LTL implication fallback + conversion suite stabilization
+
+### Gap identified
+- After the abort-on shape fix, `Conversion/LTLToCore` showed one hard crash:
+  - `test/Conversion/LTLToCore/ltl-to-core.mlir`
+- Additional conversion tests had stale checks due evolved metadata/printing:
+  - `disable-iff.mlir`
+  - `disable-iff-nested.mlir`
+  - `clocked-property-gating.mlir`
+  - `clocked-sequence-edge-both.mlir`
+
+### Root cause
+- `lowerProperty` / implication lowering assumed boolean-convertible
+  consequents and defining-op-backed property values.
+- For opaque property block arguments (`!ltl.property` function args),
+  unsupported-property diagnostics dereferenced null defining ops.
+- Some check files were tied to older textual forms (`comb.or` vs `comb.or bin`,
+  exact attribute sets/order, and always-emitted final cover obligations).
+
+### Implementation
+- `lib/Conversion/LTLToCore/LTLToCore.cpp`
+  - implication lowering now preserves LTL implication when antecedent or
+    consequent cannot be reduced to `i1` safety values.
+  - unclocked implication lowering remains supported as safety-only.
+  - unsupported property block-arguments are preserved instead of crashing.
+  - pass-level lowering now skips adding replacement/final checks for
+    intentionally preserved (unlowered) property values.
+- Updated conversion checks to current behavior contracts:
+  - `test/Conversion/LTLToCore/ltl-to-core.mlir`
+  - `test/Conversion/LTLToCore/disable-iff.mlir`
+  - `test/Conversion/LTLToCore/disable-iff-nested.mlir`
+  - `test/Conversion/LTLToCore/clocked-property-gating.mlir`
+  - `test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/LTLToCore`
+  - result: `23/23 PASS`
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc`
+  - result: `325/325 PASS`
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*'`
+  - result: `126/126 PASS`
+
+### Realizations / surprises
+- The safest behavior for opaque property operands in this pass is explicit
+  non-lowering (preserve LTL form) rather than forcing conversion or erroring.
