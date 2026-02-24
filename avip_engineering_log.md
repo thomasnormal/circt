@@ -1,5 +1,22 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: assume abort_on async coverage closure (SVA)
+
+### What changed
+- Added two assume-path runtime regressions:
+  - `sva-assume-accept-on-async-pulse-pass-runtime.sv`
+  - `sva-assume-reject-on-async-pulse-fail-runtime.sv`
+
+### Why this mattered
+- The async abort pulse-latch implementation touched both assert and assume
+  runtime evaluators; without assume-side tests, regressions could hide.
+
+### Validation snapshot
+- new assume tests:
+  - `2/2` pass.
+- focused abort-on suite (assert + assume + sync):
+  - `12/12` pass.
+
 ## 2026-02-24 Session: reject_on runtime matrix completion (SVA)
 
 ### What changed
