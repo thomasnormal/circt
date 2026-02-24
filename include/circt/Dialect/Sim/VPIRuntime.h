@@ -531,6 +531,17 @@ public:
   /// Set the simulation control interface (for vpi_control finish/stop).
   void setSimulationControl(SimulationControl *ctrl) { simControl = ctrl; }
 
+  /// Configure optional codec callbacks for signal-backed string variables.
+  /// encodeStringSignal should translate a text string into a scheduler
+  /// SignalValue for the target signal. decodeStringSignal should translate
+  /// a scheduler SignalValue back into text.
+  void setStringSignalCallbacks(
+      std::function<bool(SignalId, llvm::StringRef, SignalValue &)> encode,
+      std::function<bool(SignalId, const SignalValue &, std::string &)> decode) {
+    encodeStringSignal = std::move(encode);
+    decodeStringSignal = std::move(decode);
+  }
+
   /// Build the VPI object hierarchy from the ProcessScheduler's signals.
   /// Call this after all signals are registered in the scheduler.
   void buildHierarchy();
@@ -662,6 +673,11 @@ public:
 
   /// Whether VPI is active (a library was loaded).
   bool isActive() const { return active; }
+
+  /// Explicitly enable or disable VPI dispatch.
+  /// Used by wasm flows where startup routines are registered from JS
+  /// without loading a native shared library via --vpi.
+  void setActive(bool enable) { active = enable; }
 
   /// Install VPIRuntime dispatch functions into the global VPI dispatch table
   /// (gVPIDispatch). This allows MooreRuntime's VPI stubs to delegate to
@@ -815,6 +831,12 @@ public:
 private:
   /// Optional hook called at the end of each cbAfterDelay cycle.
   std::function<void()> postCallbackHook;
+
+  /// Optional codec used for signal-backed VPI string vars.
+  std::function<bool(SignalId, llvm::StringRef, SignalValue &)>
+      encodeStringSignal;
+  std::function<bool(SignalId, const SignalValue &, std::string &)>
+      decodeStringSignal;
 };
 
 } // namespace sim

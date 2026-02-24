@@ -422,6 +422,56 @@ class TestVPIInlineC:
         assert "EMPTY: PASS" in output
         assert "EMPTY: done" in output
 
+    def test_vpi_startup_register_bridge(self, tmpdir):
+        """Verify vpi_startup_register can bootstrap callback registration."""
+        c_code = textwrap.dedent("""\
+            #include <stdio.h>
+            #include <stdint.h>
+            typedef void *vpiHandle;
+            typedef int PLI_INT32;
+            typedef char PLI_BYTE8;
+            struct t_vpi_time { PLI_INT32 type; unsigned high, low; double real; };
+            typedef struct t_vpi_time *p_vpi_time;
+            struct t_vpi_value { PLI_INT32 format; union { PLI_BYTE8 *str; PLI_INT32 scalar, integer; double real; struct t_vpi_time *time; void *vector; PLI_BYTE8 *misc; } value; };
+            typedef struct t_vpi_value *p_vpi_value;
+            struct t_cb_data { PLI_INT32 reason; PLI_INT32 (*cb_rtn)(struct t_cb_data *); void *obj; struct t_vpi_time *time; struct t_vpi_value *value; PLI_INT32 index; PLI_BYTE8 *user_data; };
+            typedef struct t_cb_data *p_cb_data;
+            #define cbStartOfSimulation 11
+            #define cbEndOfSimulation 12
+            extern vpiHandle vpi_register_cb(p_cb_data);
+            extern void vpi_startup_register(void (*fn)(void));
+            static PLI_INT32 sos_cb(struct t_cb_data *d) {
+                (void)d;
+                fprintf(stderr, "VPI_STARTUP_REGISTER: start\\n");
+                return 0;
+            }
+            static PLI_INT32 eos_cb(struct t_cb_data *d) {
+                (void)d;
+                fprintf(stderr, "VPI_STARTUP_REGISTER: end\\n");
+                return 0;
+            }
+            static void register_callbacks(void) {
+                struct t_cb_data c1 = {0};
+                c1.reason = cbStartOfSimulation;
+                c1.cb_rtn = sos_cb;
+                vpi_register_cb(&c1);
+                struct t_cb_data c2 = {0};
+                c2.reason = cbEndOfSimulation;
+                c2.cb_rtn = eos_cb;
+                vpi_register_cb(&c2);
+            }
+            static void init(void) {
+                vpi_startup_register(register_callbacks);
+            }
+            void (*vlog_startup_routines[])(void) = { init, NULL };
+        """)
+        so = self._write_and_compile_vpi(tmpdir, c_code)
+        mlir = _write_mlir(tmpdir, "startup_bridge", "in %clk : i1")
+        output, rc = _run_circt_sim(mlir, "startup_bridge", so)
+        assert rc == 0
+        assert "VPI_STARTUP_REGISTER: start" in output
+        assert "VPI_STARTUP_REGISTER: end" in output
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

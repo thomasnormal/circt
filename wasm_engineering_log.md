@@ -1,5 +1,51 @@
 # WASM Engineering Log
 
+## 2026-02-24
+- Goal: enable wasm-friendly VPI callback suspension and JS-side startup
+  registration for `circt-sim`.
+- Implemented:
+  - `lib/Dialect/Sim/VPIRuntime.cpp`
+    - callback dispatch now routes through `circt_vpi_wasm_yield(...)` helper
+      (native fallback still calls the callback directly).
+    - all callback fire paths (`cbAfterDelay`, `fireCallbacks`,
+      `fireValueChangeCallbacks`) now use the yield helper.
+  - `tools/circt-sim/circt-sim.cpp`
+    - added exported `vpi_startup_register(void (*fn)(void))`.
+    - added startup routine registry + invocation before
+      `fireStartOfSimulation()`.
+    - VPI activation now supports two modes:
+      - `--vpi=<library>` (existing path),
+      - pre-registered startup routines (wasm/JS path, no shared library).
+    - per-run `vpiEnabled` gating now controls value-change, ReadWrite/ReadOnly,
+      NextSimTime, and EndOfSimulation callback dispatch.
+  - `tools/circt-sim/CMakeLists.txt`
+    - added Emscripten async callback integration flags:
+      - `--js-library=tools/circt-sim/circt-sim-vpi-wasm.js`
+      - `-sASYNCIFY=1`
+      - `-sASYNCIFY_IMPORTS=['circt_vpi_wasm_yield']`
+    - added explicit wasm exports for VPI API entry points (including
+      `vpi_startup_register`) so JS can call them.
+  - `tools/circt-sim/circt-sim-vpi-wasm.js` (new)
+    - defines async JS import `circt_vpi_wasm_yield` and invokes callback
+      through the wasm table after an awaitable yield point.
+  - `include/circt/Runtime/MooreRuntime.h`
+    - added `vpi_startup_register` declaration in VPI stub section.
+  - Regression:
+    - `test/Tools/circt-sim/test_vpi.py`
+      - added `test_vpi_startup_register_bridge` covering
+        `vlog_startup_routines -> vpi_startup_register -> cbStart/cbEnd`.
+- Validation performed:
+  - `ninja -C build-wasm circt-sim` reaches and compiles updated files:
+    - `lib/Dialect/Sim/VPIRuntime.cpp`
+    - `tools/circt-sim/circt-sim.cpp`
+  - Full target build currently blocked by pre-existing unrelated errors in
+    `tools/circt-sim/AOTProcessCompiler.cpp` (e.g. `encodeJITDelay` undeclared,
+    incomplete `mlir::ExecutionEngine` type under wasm).
+  - Native `build-test` rebuild is currently blocked by an unrelated pre-existing
+    CMake regeneration issue (`JITSchedulerRuntime.cpp` missing in unittests).
+  - `pytest` is not installed in this environment, so the Python VPI regression
+    suite could not be executed here.
+
 ## 2026-02-23
 - Iteration update (UVM wasm frontend host-path + VCD regression coverage):
   - gap identified (regression first):
@@ -1705,3 +1751,41 @@
 - Validation:
   - `utils/run_regression_unified.sh --dry-run --profile smoke --engine circt --out-dir /tmp/unified-dryrun` exits 0.
   - `utils/wasm_regressions_behavior_check.sh` passes.
+
+## 2026-02-24 (follow-up: unified cocotb_vpi regressions to zero failures)
+- Gap identified (regression-first):
+  - `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^cocotb_vpi$'`
+    failed with three real cocotb failures:
+    - missing `_underscore_name` / escaped handles (`test_cocotb`)
+    - `test_first_on_coincident_triggers` timing out (no visible regs)
+    - array-of-struct VPI hierarchy mismatch (`test_array`)
+- Fixes:
+  - rebuilt `build-test/bin/circt-verilog` and `build-test/bin/circt-sim` from
+    current tree so `vpi.all_vars` synthesis path is active.
+  - fixed `circt-sim` link failure during rebuild by adding JIT deps in
+    `tools/circt-sim/CMakeLists.txt`:
+    - `MLIRExecutionEngine`
+    - `MLIRExecutionEngineUtils`
+  - fixed cocotb coincident-trigger compile path in
+    `utils/run_cocotb_tests.sh`:
+    - compile `test_first_on_coincident_triggers` with `--ir-llhd`.
+  - made cocotb workdir default per-process (when `COCOTB_WORKDIR` unset) in
+    `utils/run_cocotb_tests.sh` to avoid stale-result cross-run contamination.
+  - added regression test:
+    - `test/Conversion/ImportVerilog/vpi-struct-fields-array-of-struct.sv`
+  - fixed struct metadata emission for arrays-of-struct and struct array
+    fields in `lib/Conversion/ImportVerilog/Structure.cpp`:
+    - emit `vpi.struct_fields` for unpacked arrays whose element type is
+      unpacked struct;
+    - include field array metadata (`is_array`, bounds, element width).
+- Validation:
+  - `build-test/bin/circt-verilog ... | llvm/build/bin/FileCheck` passes for
+    `test/Conversion/ImportVerilog/vpi-struct-fields-array-of-struct.sv`.
+  - `COCOTB_WORKDIR=<tmp> utils/run_cocotb_tests.sh`:
+    - `test_cocotb` PASS (286 tests)
+    - `test_force_release` PASS (7 tests)
+    - `test_first_on_coincident_triggers` PASS (1 test)
+    - full suite PASS (`Total: 43, Pass: 43, Fail: 0`)
+  - unified lane PASS:
+    - `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^cocotb_vpi$'`
+      reports `selected=1 failures=0`.

@@ -57,6 +57,22 @@ static HandleArena &getArena() {
   static HandleArena arena;
   return arena;
 }
+
+#if defined(__EMSCRIPTEN__)
+extern "C" PLI_INT32 circt_vpi_wasm_yield(
+    PLI_INT32 (*cbFunc)(struct t_cb_data *), struct t_cb_data *cbData);
+#else
+static inline PLI_INT32
+circt_vpi_wasm_yield(PLI_INT32 (*cbFunc)(struct t_cb_data *),
+                     struct t_cb_data *cbData) {
+  return cbFunc(cbData);
+}
+#endif
+
+static inline void invokeCallbackWithYield(
+    PLI_INT32 (*cbFunc)(struct t_cb_data *), struct t_cb_data *cbData) {
+  (void)circt_vpi_wasm_yield(cbFunc, cbData);
+}
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1412,10 +1428,17 @@ void VPIRuntime::getValue(uint32_t objectId, struct t_vpi_value *value) {
     return env && env[0] != '\0' && env[0] != '0';
   }();
 
-  // Handle string variables: return the stored string value.
-  // Works for both signal-backed (signalId != 0) and synthetic (signalId == 0)
-  // string vars.  For signal-backed strings, use the VPI-stored value.
+  // Handle string variables.
+  // Synthetic string vars (signalId == 0) are metadata-only. For
+  // signal-backed string vars, refresh the cached string from the scheduler
+  // signal when a decode callback is configured.
   if (obj->type == VPIObjectType::StringVar) {
+    if (obj->signalId && scheduler && decodeStringSignal) {
+      const SignalValue &sv = scheduler->getSignalValue(obj->signalId);
+      std::string decoded;
+      if (decodeStringSignal(obj->signalId, sv, decoded))
+        obj->stringValue = std::move(decoded);
+    }
     if (value->format == vpiStringVal) {
       strBuffer = obj->stringValue;
       value->value.str = const_cast<PLI_BYTE8 *>(strBuffer.c_str());
@@ -1703,8 +1726,89 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
 
   // Handle string variables (both signal-backed and synthetic).
   if (obj->type == VPIObjectType::StringVar) {
-    if (value->format == vpiStringVal && value->value.str) {
-      obj->stringValue = value->value.str;
+    if (value->format != vpiStringVal || !value->value.str)
+      return objectId;
+
+    obj->stringValue = value->value.str;
+
+    // Synthetic string vars have no backing scheduler signal.
+    if (!obj->signalId || !scheduler)
+      return objectId;
+
+    SignalValue writtenValue(llvm::APInt(obj->width > 0 ? obj->width : 128, 0));
+    bool encoded = false;
+    if (encodeStringSignal) {
+      encoded =
+          encodeStringSignal(obj->signalId, obj->stringValue, writtenValue);
+    }
+    if (!encoded) {
+      // Fallback: pack {ptr, len} into low/high 64-bit fields.
+      // This allows basic readback even when no interpreter-side codec is
+      // installed.
+      uint32_t width = obj->width > 0 ? obj->width : 128;
+      if (width < 128)
+        return objectId;
+      uint64_t ptrVal =
+          reinterpret_cast<uint64_t>(obj->stringValue.data());
+      uint64_t lenVal = static_cast<uint64_t>(obj->stringValue.size());
+      llvm::APInt packed(width, 0);
+      packed |= llvm::APInt(width, ptrVal);
+      packed |= llvm::APInt(width, lenVal) << 64;
+      writtenValue = SignalValue(packed);
+    }
+
+    // Allow VPI to update this signal even if it is already VPI-owned from a
+    // previous putValue call.
+    scheduler->clearVpiOwned(obj->signalId);
+    scheduler->updateSignal(obj->signalId, writtenValue);
+
+    // Mark signal as VPI-owned and propagate to siblings.
+    scheduler->markVpiOwned(obj->signalId);
+    auto nameIt = scheduler->getSignalNames().find(obj->signalId);
+    if (nameIt != scheduler->getSignalNames().end()) {
+      llvm::StringRef sigName = nameIt->second;
+      auto dotPos = sigName.rfind('.');
+      std::string baseName =
+          dotPos != llvm::StringRef::npos ? sigName.substr(dotPos + 1).str()
+                                          : sigName.str();
+      auto sibIt = nameToSiblingSignals.find(baseName);
+      if (sibIt != nameToSiblingSignals.end()) {
+        for (SignalId sibId : sibIt->second) {
+          if (sibId == obj->signalId)
+            continue;
+          const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+          if (sibVal.getWidth() == writtenValue.getWidth()) {
+            scheduler->clearVpiOwned(sibId);
+            scheduler->updateSignal(sibId, writtenValue);
+            scheduler->markVpiOwned(sibId);
+          }
+        }
+      }
+    }
+
+    if (!batchingReadWriteWrites)
+      scheduler->executeCurrentTime();
+
+    if (flags == vpiForceFlag) {
+      forcedSignals[obj->signalId] = writtenValue;
+      auto nameIt2 = scheduler->getSignalNames().find(obj->signalId);
+      if (nameIt2 != scheduler->getSignalNames().end()) {
+        llvm::StringRef sigName2 = nameIt2->second;
+        auto dotPos2 = sigName2.rfind('.');
+        std::string baseName2 = dotPos2 != llvm::StringRef::npos
+            ? sigName2.substr(dotPos2 + 1).str()
+            : sigName2.str();
+        auto sibIt2 = nameToSiblingSignals.find(baseName2);
+        if (sibIt2 != nameToSiblingSignals.end()) {
+          for (SignalId sibId : sibIt2->second) {
+            if (sibId == obj->signalId)
+              continue;
+            const SignalValue &sibVal = scheduler->getSignalValue(sibId);
+            if (sibVal.getWidth() == writtenValue.getWidth())
+              forcedSignals[sibId] = writtenValue;
+          }
+        }
+      }
     }
     return objectId;
   }
@@ -2094,7 +2198,7 @@ uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
           static bool traceVpiTiming =
               std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
           auto tA = std::chrono::steady_clock::now();
-          cbFunc(&data);
+          invokeCallbackWithYield(cbFunc, &data);
           stats.callbacksFired++;
           auto tB = std::chrono::steady_clock::now();
           // Fire ReadWriteSynch callbacks after the delay callback completes.
@@ -2298,7 +2402,7 @@ void VPIRuntime::fireCallbacks(int32_t reason) {
     data.reason = reason;
     data.time = &cbTime;
     data.user_data = static_cast<PLI_BYTE8 *>(userData);
-    cbFunc(&data);
+    invokeCallbackWithYield(cbFunc, &data);
     stats.callbacksFired++;
 
     if (isOneShot) {
@@ -2425,7 +2529,7 @@ void VPIRuntime::fireValueChangeCallbacks(SignalId signalId) {
       data.time = &vcTime;
       data.user_data = static_cast<PLI_BYTE8 *>(userData);
       data.value = &cbValue;
-      cbFunc(&data);
+      invokeCallbackWithYield(cbFunc, &data);
       stats.callbacksFired++;
     }
   }
