@@ -1917,3 +1917,24 @@
     PASS
   - `utils/wasm_smoke_contract_check.sh`: PASS
   - `bash -n utils/run_wasm_smoke.sh utils/wasm_uvm_pkg_memfs_reentry_check.sh utils/wasm_smoke_contract_check.sh`: PASS
+
+## 2026-02-24 (follow-up: allow pre-active cbStartOfSimulation registration)
+- Gap identified (test-first):
+  - `vpi_register_cb` rejected all callback registrations when
+    `VPIRuntime::isActive()==false`.
+  - this blocks wasm/JS hosts that pre-register `cbStartOfSimulation` before
+    `callMain`.
+- Regression added first:
+  - new unit test: `unittests/Dialect/Sim/VPIRuntimeTest.cpp`
+    (`VPIRuntimeRegisterCbTest`).
+  - pre-fix behavior reproduced:
+    - `AllowsCbStartOfSimulationRegistrationWhileInactive` FAILED
+      (`handle == nullptr`).
+- Fix:
+  - updated `lib/Dialect/Sim/VPIRuntime.cpp` `vpi_register_cb` guard:
+    - allow pre-active registration iff reason is `cbStartOfSimulation`;
+      keep rejecting null callback data and non-start reasons while inactive.
+- Validation:
+  - `ninja -C build-test CIRCTSimTests`: PASS.
+  - `build-test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter=VPIRuntimeRegisterCbTest.*`: PASS (3 tests).
+  - `pytest -q test/Tools/circt-sim/test_vpi.py -k startup_register_bridge`: PASS.
