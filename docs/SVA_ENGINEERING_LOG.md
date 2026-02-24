@@ -7907,3 +7907,43 @@
       - result: `total=101 pass=101 fail=0 xfail=0 xpass=0 error=0`.
     - `TAG_REGEX='(^| )(18\\.|19\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch18-ch19-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result: `total=68 pass=68 fail=0 xfail=0 xpass=0 error=0`.
+
+- Iteration update (ExternalizeRegisters self-loop robustness + OVL handshake):
+  - realization:
+    - `ovl_sem_handshake` remained the last OVL semantic BMC failure in both
+      pass/fail modes, with crash:
+      - `'seq.firreg' op operation destroyed but still has uses`.
+    - minimal repro showed the same abort for direct self-loop regs:
+      - `%r = seq.compreg %r, %clk : i1`
+      - `%r = seq.firreg %r clock %clk : i1`
+      - `%r = seq.compreg %r, %clk reset %rst, %r : i1`
+    - root cause: after `replaceAllUsesWith(newInput)`, direct operand aliases
+      of the reg result (`next`/`resetValue`/`reset`) could still be appended
+      to module outputs, recreating uses of the soon-to-be-erased op.
+  - implemented:
+    - `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
+      - remap direct aliases of the original reg result in:
+        - `next`
+        - `reset`
+        - `resetValue`
+      - remap target is the externalized state input (`newInput`) before
+        creating the appended next-state output.
+    - added focused regression:
+      - `test/Tools/circt-bmc/externalize-registers-self-loop.mlir`.
+  - validation:
+    - red-first:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/externalize-registers-self-loop.mlir`
+        - before fix: crash (`operation destroyed but still has uses`).
+    - after fix:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/externalize-registers-self-loop.mlir`
+        - result: `1/1` pass.
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='externalize-registers' build-test/test/Tools/circt-bmc`
+        - result: `12/12` pass.
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-sv-tests-bmc-' build-test/test/Tools`
+        - result: `26/26` pass.
+      - `OUT=ovl-sva-sem-results-current.txt OVL_SEMANTIC_TEST_FILTER='.' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+        - result: `ovl semantic BMC summary: 110 tests, failures=0, xfail=0, xpass=0, skipped=0`.
+    - note:
+      - `ninja -C build-test check-circt-tools-circt-bmc` currently trips
+        unrelated existing compile errors in dirty `circt-sim` files from other
+        in-flight work; SVA/BMC-targeted validation above is clean.

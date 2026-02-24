@@ -926,6 +926,15 @@ LogicalResult ExternalizeRegistersPass::externalizeReg(
   // Replace the register with newInput and newOutput
   auto newInput = module.appendInput(newInputName, regType).second;
   result.replaceAllUsesWith(newInput);
+  // Graph regions allow direct self-referential regs (%r = ... %r ...).
+  // Remap any explicit operand aliases to avoid reintroducing uses of the
+  // erased op after replaceAllUsesWith.
+  auto remapSelfReference = [&](Value value) {
+    return value == result ? newInput : value;
+  };
+  reset = remapSelfReference(reset);
+  resetValue = remapSelfReference(resetValue);
+  next = remapSelfReference(next);
   regClockNames[module.getSymNameAttr()].push_back(clockName);
   regClockSources[module.getSymNameAttr()].push_back(clockSource);
   if (reset) {
