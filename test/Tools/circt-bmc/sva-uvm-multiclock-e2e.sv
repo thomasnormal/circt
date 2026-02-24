@@ -1,6 +1,7 @@
 // RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm-core/src --ir-hw %s | \
-// RUN:   circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers \
-// RUN:   --lower-to-bmc="top-module=sva_uvm_multiclock bound=5 allow-multi-clock" \
+// RUN:   circt-opt --lower-clocked-assert-like --lower-ltl-to-core \
+// RUN:   --externalize-registers="allow-multi-clock=true" \
+// RUN:   --lower-to-bmc="top-module=sva_uvm_multiclock bound=5 allow-multi-clock=true" \
 // RUN:   | FileCheck %s --check-prefix=CHECK-BMC
 // REQUIRES: slang, uvm
 // UVM multiclock test with UVM report function interception.

@@ -7564,3 +7564,29 @@
   - validation:
     - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/bmc-k-induction-jit.mlir build_test/test/Tools/circt-bmc/fail-on-violation.mlir build_test/test/Tools/circt-bmc/result-token.mlir build_test/test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv build_test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
     - result: `8/8` pass.
+
+- Iteration update (UVM feature gating + multiclock BMC lit option fix):
+  - realization:
+    - with `bmc-jit` removed, the remaining `sva-` unsupported bucket was UVM
+      feature-gated and not actively exercised by default.
+    - when activated, `sva-uvm-multiclock-e2e.sv` failed because
+      `externalize-registers` still ran with single-clock defaults while
+      `lower-to-bmc` requested multiclock.
+  - implemented:
+    - `test/lit.cfg.py`
+      - added `uvm` feature detection from repo-local runtime paths and
+        environment overrides (`CIRCT_UVM_PATH`, `UVM_PATH`, `UVM_HOME`).
+    - `test/Tools/circt-bmc/sva-uvm-multiclock-e2e.sv`
+      - fixed RUN pipeline to pass multiclock explicitly through both passes:
+        - `--externalize-registers="allow-multi-clock=true"`
+        - `--lower-to-bmc="... allow-multi-clock=true"`.
+  - validation:
+    - targeted:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/sva-uvm-multiclock-e2e.sv`
+      - result: pass.
+    - UVM SVA slice:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='sva-uvm-' build_test/test`
+      - result: `8/8` pass.
+    - full `circt-bmc` SVA sweep:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `177/177` pass.
