@@ -270,7 +270,8 @@
 - `i3c`: `circt-sim` parallel simulation can introduce real host thread-level
   concurrency, which breaks UVM's implicit single-thread assumptions and
   triggers spurious UVM errors (observed: `UVM/FIELD_OP/*` at time 0). Default
-  AVIP runs to `--parallel=1` to avoid this class of nondeterministic failures.
+  AVIP runs to `--parallel=1 --mlir-disable-threading` to avoid this class of
+  nondeterministic failures.
 - `jtag`: upstream AVIP contains a `bind` in
   `JtagTargetDeviceAgentBfm.sv` that references `jtagIf.*` even though slang
   resolves bind expressions in the bound scope; rewrite the bind to use the

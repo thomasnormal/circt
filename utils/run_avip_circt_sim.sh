@@ -50,9 +50,10 @@ UVM_VERBOSITY="${UVM_VERBOSITY:-UVM_LOW}"
 CIRCT_SIM_MODE="${CIRCT_SIM_MODE:-interpret}"
 # AVIPs run UVM-heavy testbenches. Parallel simulation can introduce real host
 # thread-level concurrency and break UVM's implicit single-thread assumptions,
-# leading to spurious UVM_ERRORs (e.g. uvm_field_op state checks). Default to a
-# single simulation thread; callers can override if desired.
-CIRCT_SIM_EXTRA_ARGS="${CIRCT_SIM_EXTRA_ARGS:---parallel=1}"
+# leading to spurious UVM_ERRORs (e.g. uvm_field_op state checks). Also disable
+# MLIR internal threading to reduce nondeterminism in complex SV/UVM workloads.
+# Callers can override if desired.
+CIRCT_SIM_EXTRA_ARGS="${CIRCT_SIM_EXTRA_ARGS:---parallel=1 --mlir-disable-threading}"
 CIRCT_SIM_WRITE_JIT_REPORT="${CIRCT_SIM_WRITE_JIT_REPORT:-0}"
 
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-20}"
