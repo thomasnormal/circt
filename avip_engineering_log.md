@@ -7008,3 +7008,17 @@ Based on these findings, the circt-sim compiled process architecture:
 - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='goto-repeat|nonconsecutive-repeat|goto-concat|nonconsecutive-concat|implication-goto|sva-goto|sva-nonconsecutive|repeat' build_test/test/Tools/circt-sim` -> `13/13` PASS.
 - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-' build_test/test/Tools/circt-sim` -> `123/123` PASS.
 - `OUT=/tmp/sv-tests-sim-ch16-after-goto-fix.txt DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX='(^| )16\\.' utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `42/42` PASS.
+
+## 2026-02-24: Non-Consecutive Repeat Leak Regression Added
+
+### Why
+- The `goto_repeat` implication leak fix also touched shared repetition-tracker
+  mechanics used by non-consecutive repetition. We needed a dedicated lock test
+  for `[=N]` with pre-antecedent hits.
+
+### Added regression
+- `test/Tools/circt-sim/sva-nonconsecutive-repeat-pre-antecedent-hit-leak-fail-runtime.sv`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-goto-repeat-pre-antecedent-hit-leak-fail-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-repeat-pre-antecedent-hit-leak-fail-runtime.sv` -> `2/2` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='goto-repeat|nonconsecutive-repeat|repeat-pre-antecedent-hit-leak|sva-goto|sva-nonconsecutive' build_test/test/Tools/circt-sim` -> `10/10` PASS.
