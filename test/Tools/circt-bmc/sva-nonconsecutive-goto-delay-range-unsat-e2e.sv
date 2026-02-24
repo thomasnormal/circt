@@ -1,7 +1,6 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 4 --module=sva_nonconsecutive_goto_delay_range_unsat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 4 --module=sva_nonconsecutive_goto_delay_range_unsat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_nonconsecutive_goto_delay_range_unsat(input logic clk);

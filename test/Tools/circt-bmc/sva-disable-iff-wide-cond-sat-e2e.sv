@@ -1,7 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
-// RUN:   circt-bmc -b 2 --module=sva_disable_iff_wide_cond_sat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 2 --module=sva_disable_iff_wide_cond_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_disable_iff_wide_cond_sat(input logic clk);
