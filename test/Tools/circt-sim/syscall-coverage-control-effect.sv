@@ -1,6 +1,7 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// Test coverage sampling works. $coverage_control is accepted but
-// start/stop semantics are not yet enforced — all samples are counted.
+// Test coverage sampling start/stop semantics.
+// After $coverage_control($cov_stop, ...), samples must not change coverage
+// until $cov_start is issued.
 module top;
   int val;
 
@@ -21,24 +22,25 @@ module top;
     // CHECK: before_stop_positive=1
     $display("before_stop_positive=%0d", cg_inst.get_inst_coverage() > 0.0);
 
-    // $coverage_control accepted but stop not enforced yet
+    // Stop coverage collection.
     $coverage_control(2, 1, 0, top);
 
-    // Samples still counted (stop not enforced)
+    // Samples should not be counted while stopped.
     val = 15;
     cg_inst.sample();
     val = 25;
     cg_inst.sample();
 
-    // All 3 bins hit so coverage=100%
-    // CHECK: stopped_cov=100
+    // Only the first bin should be hit => 1/3 bins => 33% (truncated).
+    // CHECK: stopped_cov=33
     $display("stopped_cov=%0d", $rtoi(cg_inst.get_inst_coverage()));
 
     $coverage_control(1, 1, 0, top);
 
     val = 15;
     cg_inst.sample();
-    // CHECK: restarted_cov=100
+    // Restarted collection should count new samples again => 2/3 bins => 66%.
+    // CHECK: restarted_cov=66
     $display("restarted_cov=%0d", $rtoi(cg_inst.get_inst_coverage()));
 
     $finish;

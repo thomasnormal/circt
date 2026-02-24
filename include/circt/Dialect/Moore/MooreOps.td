@@ -4277,6 +4277,33 @@ def GetCoverageBIOp : Builtin<"get_coverage"> {
   let assemblyFormat = "attr-dict `:` type($result)";
 }
 
+def CoverageControlBIOp : Builtin<"coverage_control"> {
+  let summary = "Control functional coverage sampling";
+  let description = [{
+    Corresponds to `$coverage_control(control, cov_type, scope_def, modules)`.
+    This operation models the runtime-visible start/stop/reset/check control
+    behavior, and returns a status code (1 for success, 0 for failure).
+
+    Currently only `control` and `cov_type` are semantically consumed by the
+    runtime backend.
+  }];
+  let arguments = (ins TwoValuedI32:$control, TwoValuedI32:$covType);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$control `,` $covType attr-dict";
+}
+
+def CoverageGetMaxBIOp : Builtin<"coverage_get_max"> {
+  let summary = "Get maximum achievable coverage value";
+  let description = [{
+    Corresponds to `$coverage_get_max(cov_type, scope_def, modules)`.
+    Returns the maximum coverage value for the selected coverage type.
+    The runtime currently returns percentage-based maxima (100).
+  }];
+  let arguments = (ins TwoValuedI32:$covType);
+  let results = (outs TwoValuedI32:$result);
+  let assemblyFormat = "$covType attr-dict";
+}
+
 //===----------------------------------------------------------------------===//
 // Constraint Expression Operations
 //===----------------------------------------------------------------------===//
