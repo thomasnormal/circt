@@ -1,11 +1,9 @@
 // RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=STATS
-// XFAIL: *
 //
 // Test that an eligible looping clock-toggle process is dispatched through the
 // compiled AOT callback path on every activation.
-// Requires Phase L (scheduler dispatch wire-up). XFAIL until then.
 //
 // The clock toggle process (1 wait, loops via cf.br, drives 1-bit signal) is
 // eligible for AOT compilation and activates multiple times per simulation.
