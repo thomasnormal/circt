@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-18
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-18/18.5--class-only.sv <<\"EOF\"\n/*\n:name: class_only\n:description: class-only test with no BMC target module\n:type: simulation elaboration\n:tags: 18.5\n*/\nclass c;\n  rand int x;\nendclass\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-18/18.5--simneg-no-module.sv <<\"EOF\"\n/*\n:name: simneg_no_module\n:description: runtime-negative simulation test but no emitted module\n:type: simulation\n:tags: 18.5\n:should_fail_because: assertion failure expected\n*/\nclass c;\n  rand int x;\nendclass\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"<unknown>:0: warning: no top-level modules found in design [-Wmissing-top]\" >&2\ncat <<\"MLIR\"\nmodule {\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-bmc.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"circt-bmc should not have been invoked\" >&2\nexit 77\nEOF\nchmod +x %t/fake-bmc.sh\n'
+// RUN: env OUT=%t/results.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )18\\.5( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/results.tsv | FileCheck %s --check-prefix=OUT
+
+// CHECK: sv-tests SVA summary: total=2 pass=1 fail=1 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// OUT-DAG: PASS{{[[:space:]]+}}18.5--class-only{{[[:space:]]+}}
+// OUT-DAG: FAIL{{[[:space:]]+}}18.5--simneg-no-module{{[[:space:]]+}}
