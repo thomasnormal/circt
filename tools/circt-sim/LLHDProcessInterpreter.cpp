@@ -22381,11 +22381,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     entry.funcOp = funcOp;
     entry.noInterception = true;
     // Check if a native compiled version exists (Phase F1).
-    if (!nativeFuncPtrs.empty()) {
-      auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
-      if (nativeIt != nativeFuncPtrs.end())
-        entry.nativeFuncPtr = nativeIt->second;
-    }
+    // DISABLED: func.call native dispatch causes two-copies problem
+    // (see comment at "=== Native dispatch (Phase F1) ===" below).
+    // if (!nativeFuncPtrs.empty()) {
+    //   auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
+    //   if (nativeIt != nativeFuncPtrs.end())
+    //     entry.nativeFuncPtr = nativeIt->second;
+    // }
     funcCallCache[callOp.getOperation()] = entry;
     ++funcCallCacheMisses;
   }
@@ -22439,7 +22441,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // === Native dispatch (Phase F1) ===
-  if (!nativeFuncPtrs.empty()) {
+  // DISABLED: func.call native dispatch causes the two-copies problem.
+  // Mutable globals exist in both the .so (patched at load time) and the
+  // interpreter (updated during simulation). Native code reads the stale
+  // .so copy while interpreted code writes to the interpreter copy.
+  // This caused $cast failures in UVM phase domain objects (get_NNNN
+  // accessor functions reading stale global state).
+  // Only call_indirect native dispatch is safe (depth-guarded, and the
+  // .so functions themselves have compiled-in global references that
+  // were patched correctly at load time).
+  if (false && !nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
       void *fptr = nativeIt->second;

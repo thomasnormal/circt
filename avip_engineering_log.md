@@ -7723,3 +7723,53 @@ Based on these findings, the circt-sim compiled process architecture:
 - The observed “gap” was mostly a scoring/expectation mismatch in a mixed
   BMC+sim harness. Fixing this improves signal quality before deeper SVA
   semantic work.
+
+## 2026-02-24: BMC SMT-LIB support for ordered real predicates
+
+### Gap identified (red-first)
+- Added:
+  - `test/Tools/circt-bmc/sva-past-real-gt-unsat-e2e.sv`
+- Pre-fix run failed:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-bmc/sva-past-real-gt-unsat-e2e.sv`
+  - error path: `solver must not contain any non-SMT operations`
+
+### Root cause
+- `FloatCmpCastOpRewrite` only handled eq/neq class predicates
+  (`OEQ/ONE/UEQ/UNE`), leaving ordered predicates (`OGT/OGE/OLT/OLE`, etc.)
+  as `arith.cmpf` in solver regions.
+- Additional non-SMT leakage came from residual
+  `builtin.unrealized_conversion_cast` bridges from integer constants to
+  bitvectors (e.g. `i64 -> !smt.bv<64>`) after lowering.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - extended float compare rewrite coverage to:
+    - ordered/unordered relation predicates:
+      - `OGT/OGE/OLT/OLE/UGT/UGE/ULT/ULE`
+    - predicate shorthands:
+      - `ORD`, `UNO`, `AlwaysTrue`, `AlwaysFalse`
+  - implemented ordered float relation on bitpatterns with:
+    - sign-aware ordering (including negative-range inversion)
+    - signed-zero equivalence (`+0.0` vs `-0.0`)
+    - NaN handling via ordered/unordered gates.
+  - added `IntBVCastOpRewrite` for conservative bridge-cast cleanup:
+    - integer constant -> bv constant fold
+    - already-bridged cast canonicalization.
+  - post-pass cast-cleanup order:
+    - `IntBVCastOpRewrite`, `FloatCmpCastOpRewrite`, `BoolBVCastOpRewrite`.
+
+### Validation
+- New regression:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-bmc/sva-past-real-gt-unsat-e2e.sv`
+  - result: `1/1 PASS`
+- Focused BMC SVA sweep:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-past-real-(eq|gt)-unsat-e2e|sva-.*|bmc-run-smtlib-seq-initial-assert|clocked-assert-constant-false-clock-unsat'`
+  - result: `182/182 PASS`
+- Manual repro confirmation:
+  - `circt-bmc --run-smtlib ... /tmp/sva_real_cmp_oge_repro.mlir`
+  - output: `BMC_RESULT=UNSAT`, no solver non-SMT-op abort.
+
+### Realizations / surprises
+- The ordered-predicate gap and bridge-cast leakage were coupled in practice:
+  fixing one without the other still left SMT-LIB export fragile for real
+  sampled paths.
