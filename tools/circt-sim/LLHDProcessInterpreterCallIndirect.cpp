@@ -613,9 +613,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // DISABLED: Native dispatch in Path 1 (X-fallback) causes stack
         // overflow on deep UVM stacks via native→trampoline→interpreter
         // recursion. Re-enable when shared globals unlock more functions.
-#if 1
+#if 0
         // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
-        if (processStates[procId].callDepth < 50) {
+        if (processStates[procId].callDepth < 150) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end()) {
             unsigned numArgs = funcOp.getNumArguments();
@@ -1370,9 +1370,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // DISABLED: Native dispatch in Path 3 (static fallback) causes stack
         // overflow on deep UVM stacks. Re-enable when shared globals unlock
         // more functions.
-#if 1
+#if 0
         // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
-        if (processStates[procId].callDepth < 50) {
+        if (processStates[procId].callDepth < 150) {
           auto nativeIt = nativeFuncPtrs.find(fOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end()) {
             unsigned numArgs = fOp.getNumArguments();
@@ -1714,10 +1714,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           fastArgs.push_back(getValue(procId, arg));
         // DISABLED: Site cache native dispatch causes stack overflow on deep
         // UVM stacks. Re-enable when shared globals unlock more functions.
-#if 1
+#if 0
         // AOT: Try native dispatch first via site cache (skip if deep).
         if (siteIt->second.nativeFuncPtr &&
-            processStates[procId].callDepth < 50) {
+            processStates[procId].callDepth < 150) {
           auto &entry = siteIt->second;
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
@@ -3619,7 +3619,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.hadVtableOverride = false;
         // DISABLED: Site cache native pointer population. Re-enable when
         // shared globals unlock more functions.
-#if 1
+#if 0
         // Populate native function pointer from nativeFuncPtrs map.
         if (!nativeFuncPtrs.empty()) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
@@ -3636,10 +3636,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // DISABLED: Main AOT native dispatch (Path 2 slow path) causes stack
     // overflow on deep UVM stacks. Re-enable when shared globals unlock
     // more functions.
-#if 1
+#if 0
     // AOT: Try native dispatch before interpretFuncBody (only if not too deep,
     // to prevent native→trampoline→interpreter→call_indirect→native recursion).
-    if (!nativeFuncPtrs.empty() && callState.callDepth < 50) {
+    if (!nativeFuncPtrs.empty() && callState.callDepth < 150) {
       auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
       if (nativeIt != nativeFuncPtrs.end()) {
         void *fptr = nativeIt->second;
