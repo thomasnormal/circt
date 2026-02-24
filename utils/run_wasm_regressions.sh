@@ -7,7 +7,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIT_PY="${LIT_PY:-$REPO_ROOT/llvm/llvm/utils/lit/lit.py}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build-test}"
 SUITE_DIR="${SUITE_DIR:-$BUILD_DIR/test/Tools/circt-sim}"
-FILTER="${FILTER:-(timeout-no-spurious-vtable-warning|wasm-uvm-stub-vcd|wasm-plusargs-reentry|vpi-string-put-value-test|vpi-string-put-value-delayed-test|uvm-phase-add-duplicate-fast-path)}"
+FILTER_BASE="${FILTER_BASE:-(timeout-no-spurious-vtable-warning|wasm-plusargs-reentry|uvm-phase-add-duplicate-fast-path)}"
+FILTER_OVERRIDE="${FILTER:-}"
+RUN_NATIVE_SV_LIT="${RUN_NATIVE_SV_LIT:-0}"
+NATIVE_SV_FILTER="${NATIVE_SV_FILTER:-(wasm-uvm-stub-vcd|vpi-string-put-value-test|vpi-string-put-value-delayed-test)}"
 RUN_SMOKE="${RUN_SMOKE:-1}"
 SMOKE_SCRIPT="${SMOKE_SCRIPT:-$REPO_ROOT/utils/run_wasm_smoke.sh}"
 SMOKE_WASM_SKIP_BUILD="${SMOKE_WASM_SKIP_BUILD:-1}"
@@ -22,6 +25,13 @@ fi
 if [[ ! -d "$SUITE_DIR" ]]; then
   echo "[wasm-regressions] missing lit suite: $SUITE_DIR" >&2
   exit 1
+fi
+
+FILTER="$FILTER_BASE"
+if [[ -n "$FILTER_OVERRIDE" ]]; then
+  FILTER="$FILTER_OVERRIDE"
+elif [[ "$RUN_NATIVE_SV_LIT" == "1" ]]; then
+  FILTER="($FILTER_BASE|$NATIVE_SV_FILTER)"
 fi
 
 tmp_log="$(mktemp)"
