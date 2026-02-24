@@ -145,10 +145,13 @@ while IFS= read -r -d '' sv; do
     continue
   fi
 
-  # Apply tag filter if set
-  if [[ -n "$TAG_REGEX" ]] && [[ -n "$tags" ]] && ! [[ "$tags" =~ $TAG_REGEX ]]; then
-    skip=$((skip + 1))
-    continue
+  # Apply tag filter if set. Untagged tests should be excluded when a
+  # TAG_REGEX is explicitly provided.
+  if [[ -n "$TAG_REGEX" ]]; then
+    if [[ -z "$tags" ]] || ! [[ "$tags" =~ $TAG_REGEX ]]; then
+      skip=$((skip + 1))
+      continue
+    fi
   fi
 
   # Apply test name filter if set

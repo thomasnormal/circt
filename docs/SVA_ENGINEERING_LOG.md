@@ -2,6 +2,25 @@
 
 ## 2026-02-24
 
+- Iteration update (sv-tests sim tag filter correctness):
+  - realization:
+    - `utils/run_sv_tests_circt_sim.sh` applied `TAG_REGEX` only when tags were
+      present, so untagged tests bypassed the filter and were included.
+    - this polluted chapter-focused SVA sweeps with unrelated untagged tests.
+  - implemented:
+    - `utils/run_sv_tests_circt_sim.sh`
+      - changed filter logic so `TAG_REGEX` excludes both:
+        - mismatching tagged tests
+        - untagged tests
+    - added regression:
+      - `test/Tools/run-sv-tests-sim-tag-regex-empty-tags.test`
+  - validation:
+    - red state before fix:
+      - summary showed `total=2 pass=2 skip=0` for one tagged + one untagged
+        fixture under `TAG_REGEX`.
+    - green state after fix:
+      - summary shows `total=1 pass=1 skip=1`.
+
 - Iteration update (deferred immediate assertion no-spin lowering):
   - realization:
     - module-scope deferred immediate assertions (for example `assume #0`,

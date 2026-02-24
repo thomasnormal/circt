@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16 %t/sv-tests/tests/misc
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.1--tagged-case.sv <<\"EOF\"\n/*\n:name: tagged_case\n:description: tagged simulation case\n:type: simulation\n:tags: 16.1\n*/\nmodule top;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/misc/untagged-case.sv <<\"EOF\"\n/*\n:name: untagged_case\n:description: untagged simulation case\n:type: simulation\n*/\nmodule top;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-sim.sh <<\"EOF\"\n#!/usr/bin/env bash\nexit 0\nEOF\nchmod +x %t/fake-sim.sh\n'
+// RUN: env OUT=%t/results.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_SIM=%t/fake-sim.sh DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )16\\.1( |$)" %S/../../utils/run_sv_tests_circt_sim.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/results.tsv | FileCheck %s --check-prefix=OUT
+
+// CHECK: === sv-tests Simulation Summary ===
+// CHECK: total=1 pass=1 fail=0 xfail=0 xpass=0
+// CHECK: compile_fail=0 timeout=0 error=0 skip=1
+// OUT: PASS{{[[:space:]]+}}16.1--tagged-case{{[[:space:]]+}}
+// OUT-NOT: untagged-case
+
