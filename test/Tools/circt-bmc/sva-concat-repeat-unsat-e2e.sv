@@ -1,7 +1,6 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 4 --module=sva_concat_repeat_unsat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 4 --module=sva_concat_repeat_unsat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_concat_repeat_unsat(input logic clk);
