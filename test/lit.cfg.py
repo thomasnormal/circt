@@ -109,4 +109,16 @@ if slang_frontend_enabled:
   if 'circt-verilog-lsp-server' not in tools:
     tools.append('circt-verilog-lsp-server')
 
+# Enable UVM-gated tests when a usable UVM runtime source tree is available.
+repo_root = os.path.normpath(os.path.join(config.test_source_root, '..'))
+uvm_candidates = [
+    os.path.join(repo_root, 'lib', 'Runtime', 'uvm-core', 'src'),
+    os.path.join(repo_root, 'lib', 'Runtime', 'uvm'),
+    config.environment.get('CIRCT_UVM_PATH', ''),
+    config.environment.get('UVM_PATH', ''),
+    config.environment.get('UVM_HOME', ''),
+]
+if any(path and os.path.isdir(path) for path in uvm_candidates):
+  config.available_features.add('uvm')
+
 llvm_config.add_tool_substitutions(tools, tool_dirs)
