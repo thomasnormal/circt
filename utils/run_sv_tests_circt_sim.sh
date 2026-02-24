@@ -140,6 +140,13 @@ while IFS= read -r -d '' sv; do
   if [[ -n "$should_fail_because" ]]; then
     should_fail="1"
   fi
+  expect_compile_fail=0
+  # sv-tests uses :should_fail_because: for both runtime-negative simulation
+  # tests and elaboration-negative tests. Treat elaboration-typed negatives as
+  # expected compile failures.
+  if [[ "$should_fail" == "1" ]] && [[ "$type" =~ [Ee]laboration ]]; then
+    expect_compile_fail=1
+  fi
   if [[ "$should_fail" == "1" ]] && [[ -n "$type" ]] && ! [[ "$type" =~ [Ss]imulation ]]; then
     skip=$((skip + 1))
     continue
@@ -299,6 +306,9 @@ while IFS= read -r -d '' sv; do
     if [[ "$expect" == "xfail" ]]; then
       result="XFAIL"
       xfail=$((xfail + 1))
+    elif [[ "$expect_compile_fail" == "1" ]]; then
+      result="PASS"
+      pass=$((pass + 1))
     else
       result="COMPILE_FAIL"
       compile_fail=$((compile_fail + 1))
@@ -316,6 +326,14 @@ while IFS= read -r -d '' sv; do
   # For simulation-negative tests, should_fail means runtime failure is the
   # success condition. Compilation failures are still reported as compile
   # failures above.
+  if [[ "$expect_compile_fail" == "1" ]]; then
+    # Elaboration-negative tests are expected to fail during compile/elaboration
+    # before simulation starts. If we get here, compilation unexpectedly passed.
+    result="FAIL"
+    fail=$((fail + 1))
+    printf "%s\t%s\t%s\n" "$result" "$base" "$sv" >> "$results_tmp"
+    continue
+  fi
 
   # Check if compiled output is empty or has no module
   if [[ ! -s "$mlir" ]]; then
