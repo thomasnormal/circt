@@ -548,6 +548,115 @@ stripNonLLVMFunctions(ModuleOp microModule) {
 // Trampoline generation for uncompiled functions
 //===----------------------------------------------------------------------===//
 
+/// Count how many uint64_t slots a type needs when flattened for trampoline ABI.
+/// Returns 0 if the type can't be handled.
+static unsigned countTrampolineSlots(Type ty) {
+  if (isa<IntegerType>(ty) || isa<LLVM::LLVMPointerType>(ty) ||
+      isa<FloatType>(ty))
+    return 1;
+  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(ty)) {
+    unsigned total = 0;
+    for (Type fieldTy : structTy.getBody()) {
+      unsigned fieldSlots = countTrampolineSlots(fieldTy);
+      if (fieldSlots == 0)
+        return 0; // nested unsupported type
+      total += fieldSlots;
+    }
+    return total;
+  }
+  return 0; // unsupported
+}
+
+/// Recursively pack a value into consecutive uint64_t slots in argsArray.
+/// Returns the next slot index after packing.
+static unsigned emitPackValue(OpBuilder &builder, Location loc, Value val,
+                              Type ty, Value argsArray, unsigned slotIdx,
+                              Type i64Ty, Type ptrTy) {
+  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(ty)) {
+    for (auto [fieldIdx, fieldTy] : llvm::enumerate(structTy.getBody())) {
+      Value field = LLVM::ExtractValueOp::create(
+          builder, loc, val, ArrayRef<int64_t>{(int64_t)fieldIdx});
+      slotIdx = emitPackValue(builder, loc, field, fieldTy, argsArray, slotIdx,
+                              i64Ty, ptrTy);
+    }
+    return slotIdx;
+  }
+
+  // Scalar: pack into one slot.
+  Value packed;
+  if (isa<LLVM::LLVMPointerType>(ty)) {
+    packed = LLVM::PtrToIntOp::create(builder, loc, i64Ty, val);
+  } else if (auto intTy = dyn_cast<IntegerType>(ty)) {
+    if (intTy.getWidth() < 64)
+      packed = LLVM::ZExtOp::create(builder, loc, i64Ty, val);
+    else if (intTy.getWidth() == 64)
+      packed = val;
+    else
+      packed = LLVM::TruncOp::create(builder, loc, i64Ty, val);
+  } else {
+    // Float/double: bitcast to i64.
+    packed = LLVM::BitcastOp::create(builder, loc, i64Ty, val);
+  }
+
+  Value slot;
+  if (slotIdx == 0) {
+    slot = argsArray;
+  } else {
+    auto idxVal = LLVM::ConstantOp::create(builder, loc, i64Ty,
+                                            builder.getI64IntegerAttr(slotIdx));
+    slot = LLVM::GEPOp::create(builder, loc, ptrTy, i64Ty, argsArray,
+                                ValueRange{idxVal});
+  }
+  LLVM::StoreOp::create(builder, loc, packed, slot);
+  return slotIdx + 1;
+}
+
+/// Recursively unpack consecutive uint64_t slots from retsArray into a value of
+/// the given type. Returns {value, next_slot_index}.
+static std::pair<Value, unsigned>
+emitUnpackValue(OpBuilder &builder, Location loc, Type ty, Value retsArray,
+                unsigned slotIdx, Type i64Ty, Type ptrTy) {
+  if (auto structTy = dyn_cast<LLVM::LLVMStructType>(ty)) {
+    Value result = LLVM::UndefOp::create(builder, loc, structTy);
+    for (auto [fieldIdx, fieldTy] : llvm::enumerate(structTy.getBody())) {
+      auto [fieldVal, nextSlot] = emitUnpackValue(builder, loc, fieldTy,
+                                                   retsArray, slotIdx, i64Ty,
+                                                   ptrTy);
+      result = LLVM::InsertValueOp::create(builder, loc, result, fieldVal,
+                                            ArrayRef<int64_t>{(int64_t)fieldIdx});
+      slotIdx = nextSlot;
+    }
+    return {result, slotIdx};
+  }
+
+  // Scalar: read one slot.
+  Value slot;
+  if (slotIdx == 0) {
+    slot = retsArray;
+  } else {
+    auto idxVal = LLVM::ConstantOp::create(builder, loc, i64Ty,
+                                            builder.getI64IntegerAttr(slotIdx));
+    slot = LLVM::GEPOp::create(builder, loc, ptrTy, i64Ty, retsArray,
+                                ValueRange{idxVal});
+  }
+  Value raw = LLVM::LoadOp::create(builder, loc, i64Ty, slot);
+
+  Value result;
+  if (isa<LLVM::LLVMPointerType>(ty)) {
+    result = LLVM::IntToPtrOp::create(builder, loc, ty, raw);
+  } else if (auto intTy = dyn_cast<IntegerType>(ty)) {
+    if (intTy.getWidth() < 64)
+      result = LLVM::TruncOp::create(builder, loc, ty, raw);
+    else if (intTy.getWidth() == 64)
+      result = raw;
+    else
+      result = LLVM::ZExtOp::create(builder, loc, ty, raw);
+  } else {
+    result = LLVM::BitcastOp::create(builder, loc, ty, raw);
+  }
+  return {result, slotIdx + 1};
+}
+
 /// Generate trampoline bodies for external function declarations in the
 /// micro-module. Each trampoline packs arguments into a uint64_t array,
 /// calls __circt_sim_call_interpreted() to dispatch to the MLIR interpreter,
@@ -608,22 +717,22 @@ generateTrampolines(ModuleOp microModule) {
     // Skip vararg functions (can't pack cleanly).
     if (funcOp.isVarArg())
       continue;
-    // Skip functions with aggregate arg/return types that we can't pack
-    // into uint64_t slots.
+    // Skip functions with types we can't flatten into uint64_t slots.
     auto funcTy = funcOp.getFunctionType();
     bool hasUnsupported = false;
+    unsigned totalArgSlots = 0;
     for (unsigned i = 0; i < funcTy.getNumParams(); ++i) {
-      auto ty = funcTy.getParamType(i);
-      if (!isa<IntegerType>(ty) && !isa<LLVM::LLVMPointerType>(ty) &&
-          !isa<FloatType>(ty)) {
+      unsigned slots = countTrampolineSlots(funcTy.getParamType(i));
+      if (slots == 0) {
         hasUnsupported = true;
         break;
       }
+      totalArgSlots += slots;
     }
+    unsigned totalRetSlots = 0;
     if (!hasUnsupported && !isa<LLVM::LLVMVoidType>(funcTy.getReturnType())) {
-      auto retTy = funcTy.getReturnType();
-      if (!isa<IntegerType>(retTy) && !isa<LLVM::LLVMPointerType>(retTy) &&
-          !isa<FloatType>(retTy))
+      totalRetSlots = countTrampolineSlots(funcTy.getReturnType());
+      if (totalRetSlots == 0)
         hasUnsupported = true;
     }
     if (hasUnsupported)
@@ -636,8 +745,15 @@ generateTrampolines(ModuleOp microModule) {
     auto funcTy = funcOp.getFunctionType();
     unsigned numArgs = funcTy.getNumParams();
     auto retTy = funcTy.getReturnType();
-    bool hasResult = !isa<LLVM::LLVMVoidType>(retTy);
     auto funcLoc = funcOp.getLoc();
+
+    // Recompute flattened slot counts for this function.
+    unsigned totalArgSlots = 0;
+    for (unsigned i = 0; i < numArgs; ++i)
+      totalArgSlots += countTrampolineSlots(funcTy.getParamType(i));
+    unsigned totalRetSlots = 0;
+    if (!isa<LLVM::LLVMVoidType>(retTy))
+      totalRetSlots = countTrampolineSlots(retTy);
 
     // Add entry block with arguments matching the function signature.
     Region &body = funcOp.getBody();
@@ -654,91 +770,61 @@ generateTrampolines(ModuleOp microModule) {
                                              "__circt_sim_ctx");
     auto ctx = LLVM::LoadOp::create(builder, funcLoc, ptrTy, ctxAddr);
 
-    // Allocate uint64_t args[numArgs].
+    // Allocate uint64_t args[totalArgSlots].
     Value argsArray;
-    if (numArgs > 0) {
-      auto countVal = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
-                                               builder.getI64IntegerAttr(numArgs));
+    if (totalArgSlots > 0) {
+      auto countVal = LLVM::ConstantOp::create(
+          builder, funcLoc, i64Ty,
+          builder.getI64IntegerAttr(totalArgSlots));
       argsArray = LLVM::AllocaOp::create(builder, funcLoc, ptrTy, i64Ty,
-                                         countVal);
+                                          countVal);
 
-      // Pack each argument into the array.
+      // Pack each argument into the array (recursively for structs).
+      unsigned slotIdx = 0;
       for (unsigned i = 0; i < numArgs; ++i) {
-        Value slot;
-        if (i == 0) {
-          slot = argsArray;
-        } else {
-          auto idxVal = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
-                                                 builder.getI64IntegerAttr(i));
-          slot = LLVM::GEPOp::create(builder, funcLoc, ptrTy, i64Ty,
-                                     argsArray, ValueRange{idxVal});
-        }
-
         auto arg = entry->getArgument(i);
-        Value packed;
-        if (isa<LLVM::LLVMPointerType>(arg.getType())) {
-          packed = LLVM::PtrToIntOp::create(builder, funcLoc, i64Ty, arg);
-        } else if (auto intTy = dyn_cast<IntegerType>(arg.getType())) {
-          if (intTy.getWidth() < 64)
-            packed = LLVM::ZExtOp::create(builder, funcLoc, i64Ty, arg);
-          else if (intTy.getWidth() == 64)
-            packed = arg;
-          else
-            packed = LLVM::TruncOp::create(builder, funcLoc, i64Ty, arg);
-        } else {
-          // Float/double: bitcast to i64.
-          packed = LLVM::BitcastOp::create(builder, funcLoc, i64Ty, arg);
-        }
-        LLVM::StoreOp::create(builder, funcLoc, packed, slot);
+        slotIdx = emitPackValue(builder, funcLoc, arg,
+                                funcTy.getParamType(i), argsArray, slotIdx,
+                                i64Ty, ptrTy);
       }
     } else {
       Value zero = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
-                                            builder.getI64IntegerAttr(0));
+                                             builder.getI64IntegerAttr(0));
       argsArray = LLVM::IntToPtrOp::create(builder, funcLoc, ptrTy, zero);
     }
 
-    // Allocate uint64_t rets[numRets].
-    unsigned numRets = hasResult ? 1 : 0;
+    // Allocate uint64_t rets[totalRetSlots].
     Value retsArray;
-    if (hasResult) {
-      Value oneVal = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
-                                              builder.getI64IntegerAttr(1));
+    if (totalRetSlots > 0) {
+      Value retCountVal = LLVM::ConstantOp::create(
+          builder, funcLoc, i64Ty,
+          builder.getI64IntegerAttr(totalRetSlots));
       retsArray = LLVM::AllocaOp::create(builder, funcLoc, ptrTy, i64Ty,
-                                         oneVal);
+                                          retCountVal);
     } else {
       Value zero = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
-                                            builder.getI64IntegerAttr(0));
+                                             builder.getI64IntegerAttr(0));
       retsArray = LLVM::IntToPtrOp::create(builder, funcLoc, ptrTy, zero);
     }
 
-    // Call __circt_sim_call_interpreted(ctx, funcId, args, numArgs, rets,
-    // numRets).
-    auto funcIdVal = LLVM::ConstantOp::create(builder, funcLoc, i32Ty,
-                                              builder.getI32IntegerAttr(funcId));
+    // Call __circt_sim_call_interpreted(ctx, funcId, args, totalArgSlots,
+    //                                   rets, totalRetSlots).
+    auto funcIdVal = LLVM::ConstantOp::create(
+        builder, funcLoc, i32Ty, builder.getI32IntegerAttr(funcId));
     auto numArgsVal = LLVM::ConstantOp::create(
-        builder, funcLoc, i32Ty, builder.getI32IntegerAttr(numArgs));
+        builder, funcLoc, i32Ty,
+        builder.getI32IntegerAttr(totalArgSlots));
     auto numRetsVal = LLVM::ConstantOp::create(
-        builder, funcLoc, i32Ty, builder.getI32IntegerAttr(numRets));
+        builder, funcLoc, i32Ty,
+        builder.getI32IntegerAttr(totalRetSlots));
     LLVM::CallOp::create(builder, funcLoc, callInterpDecl,
-                         ValueRange{ctx, funcIdVal, argsArray, numArgsVal,
-                                    retsArray, numRetsVal});
+                          ValueRange{ctx, funcIdVal, argsArray, numArgsVal,
+                                     retsArray, numRetsVal});
 
     // Unpack return value.
-    if (hasResult) {
-      Value retI64 = LLVM::LoadOp::create(builder, funcLoc, i64Ty, retsArray);
-      Value result;
-      if (isa<LLVM::LLVMPointerType>(retTy)) {
-        result = LLVM::IntToPtrOp::create(builder, funcLoc, retTy, retI64);
-      } else if (auto intTy = dyn_cast<IntegerType>(retTy)) {
-        if (intTy.getWidth() < 64)
-          result = LLVM::TruncOp::create(builder, funcLoc, retTy, retI64);
-        else if (intTy.getWidth() == 64)
-          result = retI64;
-        else
-          result = LLVM::ZExtOp::create(builder, funcLoc, retTy, retI64);
-      } else {
-        result = LLVM::BitcastOp::create(builder, funcLoc, retTy, retI64);
-      }
+    if (totalRetSlots > 0) {
+      auto [result, _] = emitUnpackValue(builder, funcLoc, retTy,
+                                          retsArray, 0, i64Ty, ptrTy);
       LLVM::ReturnOp::create(builder, funcLoc, result);
     } else {
       LLVM::ReturnOp::create(builder, funcLoc, ValueRange{});

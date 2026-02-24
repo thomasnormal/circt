@@ -37265,6 +37265,100 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
                  << trampolineNative << " native fallbacks\n";
 }
 
+/// Get the bit width of a type for trampoline packing purposes.
+/// Structs are the sum of field widths (no alignment padding).
+static unsigned getScalarOrStructBitWidth(mlir::Type ty) {
+  if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(ty))
+    return intTy.getWidth();
+  if (mlir::isa<mlir::LLVM::LLVMPointerType>(ty))
+    return 64;
+  if (mlir::isa<mlir::FloatType>(ty)) {
+    if (ty.isF32())
+      return 32;
+    if (ty.isF64())
+      return 64;
+    if (ty.isF16())
+      return 16;
+    return 64; // default
+  }
+  if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(ty)) {
+    unsigned total = 0;
+    for (mlir::Type fieldTy : structTy.getBody())
+      total += getScalarOrStructBitWidth(fieldTy);
+    return total;
+  }
+  return 64; // fallback
+}
+
+/// Recursively unpack uint64_t slots into an InterpretedValue for the given
+/// type. Advances slotIdx past the consumed slots.
+static InterpretedValue unpackTrampolineArg(mlir::Type ty,
+                                            const uint64_t *args,
+                                            uint32_t &slotIdx,
+                                            uint32_t numSlots) {
+  if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(ty)) {
+    // Compute total bit width: sum of field widths (no alignment padding).
+    auto body = structTy.getBody();
+    unsigned totalBits = 0;
+    for (mlir::Type fieldTy : body)
+      totalBits += getScalarOrStructBitWidth(fieldTy);
+
+    llvm::APInt result = llvm::APInt::getZero(totalBits);
+    unsigned bitOffset = 0;
+    for (mlir::Type fieldTy : body) {
+      InterpretedValue fieldVal =
+          unpackTrampolineArg(fieldTy, args, slotIdx, numSlots);
+      unsigned fieldBits = getScalarOrStructBitWidth(fieldTy);
+      llvm::APInt fieldAPInt = fieldVal.getAPInt();
+      if (fieldAPInt.getBitWidth() < fieldBits)
+        fieldAPInt = fieldAPInt.zext(fieldBits);
+      else if (fieldAPInt.getBitWidth() > fieldBits)
+        fieldAPInt = fieldAPInt.trunc(fieldBits);
+      // Insert at bitOffset (low-to-high, matching LLVM aggregate layout).
+      result.insertBits(fieldAPInt, bitOffset);
+      bitOffset += fieldBits;
+    }
+    return InterpretedValue(result);
+  }
+
+  // Scalar: consume one slot.
+  if (slotIdx >= numSlots)
+    return InterpretedValue(llvm::APInt::getZero(64));
+
+  uint64_t val = args[slotIdx++];
+  unsigned bits = 64;
+  if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(ty))
+    bits = intTy.getWidth();
+  else if (mlir::isa<mlir::LLVM::LLVMPointerType>(ty))
+    bits = 64;
+  // Float types: just treat as 64-bit (bitcast happened on trampoline side).
+  return InterpretedValue(llvm::APInt(bits, val));
+}
+
+/// Recursively pack an InterpretedValue into uint64_t slots for a struct type.
+/// Advances slotIdx past the written slots.
+static void packTrampolineResult(mlir::Type ty, const InterpretedValue &val,
+                                 uint64_t *rets, uint32_t &slotIdx,
+                                 uint32_t numSlots) {
+  if (auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(ty)) {
+    auto body = structTy.getBody();
+    unsigned bitOffset = 0;
+    llvm::APInt apint = val.getAPInt();
+    for (mlir::Type fieldTy : body) {
+      unsigned fieldBits = getScalarOrStructBitWidth(fieldTy);
+      llvm::APInt fieldVal = apint.extractBits(fieldBits, bitOffset);
+      InterpretedValue fieldIV(fieldVal);
+      packTrampolineResult(fieldTy, fieldIV, rets, slotIdx, numSlots);
+      bitOffset += fieldBits;
+    }
+    return;
+  }
+
+  // Scalar: write one slot.
+  if (slotIdx < numSlots)
+    rets[slotIdx++] = val.getUInt64();
+}
+
 void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
                                                  const char *funcName,
                                                  const uint64_t *args,
@@ -37328,16 +37422,14 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   ProcessId procId = activeProcessId;
 
   // Convert uint64_t args to InterpretedValue with correct widths from the
-  // function signature.
+  // function signature. Struct args consume multiple uint64_t slots.
   llvm::SmallVector<InterpretedValue, 8> interpArgs;
   auto argTypes = funcOp.getArgumentTypes();
-  for (uint32_t i = 0; i < numArgs; ++i) {
-    unsigned bits = 64;
-    if (i < argTypes.size()) {
-      if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(argTypes[i]))
-        bits = intTy.getWidth();
-    }
-    interpArgs.push_back(InterpretedValue(args[i], bits));
+  uint32_t slotIdx = 0;
+  for (unsigned argIdx = 0;
+       argIdx < argTypes.size() && slotIdx < numArgs; ++argIdx) {
+    mlir::Type argTy = argTypes[argIdx];
+    interpArgs.push_back(unpackTrampolineArg(argTy, args, slotIdx, numArgs));
   }
 
   // Call the interpreter.
@@ -37348,9 +37440,22 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
                           /*callOp=*/nullptr);
   --callState.callDepth;
 
-  // Convert results back to uint64_t.
-  for (uint32_t i = 0; i < numRets && i < interpResults.size(); ++i)
-    rets[i] = interpResults[i].getUInt64();
+  // Convert results back to uint64_t (handle structs consuming multiple slots).
+  if (!interpResults.empty() && numRets > 0) {
+    auto resultTypes = funcOp.getFunctionType().getResults();
+    uint32_t retSlotIdx = 0;
+    for (unsigned i = 0;
+         i < interpResults.size() && retSlotIdx < numRets; ++i) {
+      mlir::Type retTy =
+          (i < resultTypes.size()) ? resultTypes[i] : nullptr;
+      if (retTy && mlir::isa<mlir::LLVM::LLVMStructType>(retTy)) {
+        packTrampolineResult(retTy, interpResults[i], rets, retSlotIdx,
+                             numRets);
+      } else {
+        rets[retSlotIdx++] = interpResults[i].getUInt64();
+      }
+    }
+  }
 }
 
 void LLHDProcessInterpreter::loadCompiledProcesses(
