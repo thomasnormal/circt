@@ -1,7 +1,6 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 2 --module=sva_xprop_implication_consequent_sat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 2 --module=sva_xprop_implication_consequent_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_xprop_implication_consequent_sat(input logic clk, input logic in);

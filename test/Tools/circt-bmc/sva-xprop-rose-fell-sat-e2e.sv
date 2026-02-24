@@ -1,9 +1,8 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_rose_sat - | FileCheck %s --check-prefix=ROSE
+// RUN:   circt-bmc --run-smtlib -b 1 --module=sva_xprop_rose_sat - | FileCheck %s --check-prefix=ROSE
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_fell_sat - | FileCheck %s --check-prefix=FELL
+// RUN:   circt-bmc --run-smtlib -b 1 --module=sva_xprop_fell_sat - | FileCheck %s --check-prefix=FELL
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_xprop_rose_sat(input logic clk);
