@@ -7558,7 +7558,9 @@
       - `test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv`
       - `test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
     - switched affected RUN lines to explicit `circt-bmc --run-smtlib` for
-      mode clarity and future-proofing.
+      mode clarity and future-proofing, except `result-token.mlir`.
+    - kept `result-token.mlir` on no-flag invocation as a regression for
+      default `--run-smtlib` behavior.
   - validation:
     - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/bmc-k-induction-jit.mlir build_test/test/Tools/circt-bmc/fail-on-violation.mlir build_test/test/Tools/circt-bmc/result-token.mlir build_test/test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv build_test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
     - result: `8/8` pass.
