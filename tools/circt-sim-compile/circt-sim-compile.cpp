@@ -2762,6 +2762,62 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   cloneReferencedDeclarations(microModule, *module, mapping);
 
+  // Strip bodies of UVM-intercepted functions so they become external
+  // declarations → trampolines. This ensures compiled code calls back into
+  // the interpreter for these functions, where UVM interceptors can fire.
+  // Without this, compiled stubs return null and cause crashes when the
+  // calling code dereferences the result.
+  {
+    static const char *const interceptedPrefixes[] = {
+        "uvm_pkg::uvm_factory::create_component_by_name",
+        "uvm_pkg::uvm_factory::create_component_by_type",
+        "uvm_pkg::uvm_factory::create_object_by_name",
+        "uvm_pkg::uvm_factory::create_object_by_type",
+        "uvm_pkg::uvm_default_factory::create_component_by_name",
+        "uvm_pkg::uvm_default_factory::create_component_by_type",
+        "uvm_pkg::uvm_default_factory::create_object_by_name",
+        "uvm_pkg::uvm_default_factory::create_object_by_type",
+        "uvm_pkg::uvm_factory::set_type_alias",
+        "uvm_pkg::uvm_coreservice_t::get",
+        "uvm_pkg::uvm_default_coreservice_t::get_factory",
+        "uvm_pkg::uvm_config_db_default_implementation_t",
+    };
+    unsigned demoted = 0;
+    llvm::SmallVector<func::FuncOp> toDemote;
+    microModule.walk([&](func::FuncOp funcOp) {
+      if (funcOp.isExternal())
+        return;
+      llvm::StringRef name = funcOp.getSymName();
+      for (const char *prefix : interceptedPrefixes) {
+        if (name.starts_with(prefix)) {
+          toDemote.push_back(funcOp);
+          return;
+        }
+      }
+    });
+    for (auto funcOp : toDemote) {
+      llvm::StringRef name = funcOp.getSymName();
+      // Erase and re-create as external declaration (empty body).
+      auto funcType = funcOp.getFunctionType();
+      auto loc = funcOp.getLoc();
+      auto symName = funcOp.getSymName().str();
+      funcOp.erase();
+      builder.setInsertionPointToEnd(microModule.getBody());
+      auto newDecl = builder.create<func::FuncOp>(loc, symName, funcType);
+      newDecl.setPrivate();
+      ++demoted;
+      for (auto &fn : funcNames) {
+        if (fn == name)
+          fn.clear();
+      }
+    }
+    // Clean up empty names.
+    llvm::erase_if(funcNames, [](const std::string &s) { return s.empty(); });
+    if (demoted > 0)
+      llvm::errs() << "[circt-sim-compile] Demoted " << demoted
+                   << " intercepted functions to trampolines\n";
+  }
+
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
     llvm::errs() << "[circt-sim-compile] clone: "
