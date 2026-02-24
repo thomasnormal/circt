@@ -7796,6 +7796,81 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
           loc, "input type must be llhd.ref, not LLVM pointer");
     Type inputType = inputRefType.getNestedType();
 
+    // Packed structs are bit-addressable in SystemVerilog. Use the original
+    // Moore packed type width (not the converted storage layout) and slice a
+    // packed bit view of the signal.
+    if (auto structType = dyn_cast<hw::StructType>(inputType)) {
+      auto mooreInputRefType = dyn_cast<moore::RefType>(op.getInput().getType());
+      auto moorePackedType = mooreInputRefType
+                                 ? dyn_cast<moore::PackedType>(
+                                       mooreInputRefType.getNestedType())
+                                 : nullptr;
+      auto packedWidth = moorePackedType ? moorePackedType.getBitSize()
+                                         : std::optional<unsigned>{};
+      if (!packedWidth || *packedWidth == 0)
+        return failure();
+
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (!resultRefType)
+        return rewriter.notifyMatchFailure(
+            loc, "result type must be llhd.ref for struct extraction");
+
+      unsigned width = *packedWidth;
+      Value lowBit =
+          hw::ConstantOp::create(rewriter, op.getLoc(),
+                                 rewriter.getIntegerType(llvm::Log2_64_Ceil(width)),
+                                 adaptor.getLowBit());
+
+      if (isFourStateStructType(resultRefType.getNestedType())) {
+        auto resultStructType = cast<hw::StructType>(resultRefType.getNestedType());
+        auto resultValueType =
+            cast<IntegerType>(resultStructType.getElements()[0].type);
+        auto resultUnknownType =
+            cast<IntegerType>(resultStructType.getElements()[1].type);
+        auto packedFourStateRefType =
+            llhd::RefType::get(getFourStateStructType(rewriter.getContext(), width));
+        Value packedFourStateRef = UnrealizedConversionCastOp::create(
+                                       rewriter, loc, packedFourStateRefType,
+                                       adaptor.getInput())
+                                       .getResult(0);
+
+        Value valueRef = llhd::SigStructExtractOp::create(
+            rewriter, loc, packedFourStateRef, rewriter.getStringAttr("value"));
+        Value unknownRef = llhd::SigStructExtractOp::create(
+            rewriter, loc, packedFourStateRef, rewriter.getStringAttr("unknown"));
+        auto valueSliceRefType = llhd::RefType::get(resultValueType);
+        auto unknownSliceRefType = llhd::RefType::get(resultUnknownType);
+        Value valueSlice =
+            llhd::SigExtractOp::create(rewriter, loc, valueSliceRefType, valueRef,
+                                       lowBit);
+        Value unknownSlice = llhd::SigExtractOp::create(
+            rewriter, loc, unknownSliceRefType, unknownRef, lowBit);
+
+        Value init = hw::StructCreateOp::create(
+            rewriter, loc, resultStructType,
+            ValueRange{
+                llhd::ProbeOp::create(rewriter, loc, valueSlice),
+                llhd::ProbeOp::create(rewriter, loc, unknownSlice),
+            });
+        auto signal = llhd::SignalOp::create(rewriter, loc, resultType,
+                                             StringAttr{}, init);
+        rewriter.replaceOp(op, signal.getResult());
+        return success();
+      }
+
+      if (!isa<IntegerType>(resultRefType.getNestedType()))
+        return rewriter.notifyMatchFailure(
+            loc, "result type must be integer/four-state llhd.ref");
+
+      auto intRefType = llhd::RefType::get(rewriter.getIntegerType(width));
+      Value intRef = UnrealizedConversionCastOp::create(
+                         rewriter, loc, intRefType, adaptor.getInput())
+                         .getResult(0);
+      rewriter.replaceOpWithNewOp<llhd::SigExtractOp>(op, resultType, intRef,
+                                                       lowBit);
+      return success();
+    }
+
     if (auto intType = dyn_cast<IntegerType>(inputType)) {
       int64_t width = hw::getBitWidth(inputType);
       if (width == -1)
@@ -13294,6 +13369,18 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                                                         targetType, value);
     };
 
+    auto getPackedRefLogicalWidth = [&](Value refValue) -> std::optional<unsigned> {
+      auto mooreRefType = dyn_cast<moore::RefType>(refValue.getType());
+      auto packedType =
+          mooreRefType ? dyn_cast<moore::PackedType>(mooreRefType.getNestedType())
+                       : nullptr;
+      auto bitSize = packedType ? packedType.getBitSize()
+                                : std::optional<unsigned>{};
+      if (!bitSize || *bitSize == 0)
+        return std::nullopt;
+      return bitSize;
+    };
+
     auto emitFourStateExtractAssign = [&](Value baseRef, Value idx,
                                           Type resultType) -> LogicalResult {
       auto resultRefType = dyn_cast<llhd::RefType>(resultType);
@@ -13580,6 +13667,82 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       return failure();
     };
 
+    auto emitPackedStructExtractAssign = [&](Value baseRef, Value idx,
+                                             Type resultType)
+        -> LogicalResult {
+      auto baseRefType = dyn_cast<llhd::RefType>(baseRef.getType());
+      if (!baseRefType)
+        return failure();
+      auto baseStructType = dyn_cast<hw::StructType>(baseRefType.getNestedType());
+      if (!baseStructType || isFourStateStructType(baseStructType))
+        return failure();
+
+      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+      if (!resultRefType)
+        return failure();
+      auto resultIntType = dyn_cast<IntegerType>(resultRefType.getNestedType());
+      if (!resultIntType)
+        return failure();
+
+      int64_t baseWidth = hw::getBitWidth(baseStructType);
+      if (baseWidth <= 0)
+        return failure();
+      int64_t sliceWidth = resultIntType.getWidth();
+      if (sliceWidth <= 0 || sliceWidth > baseWidth)
+        return failure();
+
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+      idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth), loc);
+
+      Value baseStructValue = llhd::ProbeOp::create(rewriter, loc, baseRef);
+      auto baseIntType = rewriter.getIntegerType(baseWidth);
+      Value baseInt =
+          rewriter.createOrFold<hw::BitcastOp>(loc, baseIntType, baseStructValue);
+
+      Value driveValue = srcValue;
+      if (isFourStateStructType(driveValue.getType()))
+        driveValue = extractFourStateValue(rewriter, loc, driveValue);
+      driveValue =
+          adjustIntegerWidth(rewriter, driveValue, sliceWidth, loc);
+
+      Value shiftAmount = adjustIntegerWidth(rewriter, idx, baseWidth, loc);
+      APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
+      Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
+      Value shiftedMask = maskConst;
+      if (sliceWidth != baseWidth)
+        shiftedMask =
+            comb::ShlOp::create(rewriter, loc, maskConst, shiftAmount);
+
+      Value allOnes = hw::ConstantOp::create(
+          rewriter, loc, APInt::getAllOnes(baseWidth));
+      Value maskInv = comb::XorOp::create(rewriter, loc, shiftedMask, allOnes);
+
+      Value baseCleared = comb::AndOp::create(rewriter, loc, baseInt, maskInv);
+      Value driveWide =
+          adjustIntegerWidth(rewriter, driveValue, baseWidth, loc);
+      Value driveShifted = driveWide;
+      if (sliceWidth != baseWidth)
+        driveShifted =
+            comb::ShlOp::create(rewriter, loc, driveWide, shiftAmount);
+      Value driveMasked =
+          comb::AndOp::create(rewriter, loc, driveShifted, shiftedMask);
+      Value newInt =
+          comb::OrOp::create(rewriter, loc, baseCleared, driveMasked);
+      Value newStruct =
+          rewriter.createOrFold<hw::BitcastOp>(loc, baseStructType, newInt);
+
+      llhd::DriveOp::create(rewriter, loc, baseRef, newStruct, delay, Value{},
+                            llhdStrength0, llhdStrength1);
+      rewriter.eraseOp(op);
+      return success();
+    };
+
+    auto eraseDeadExtractRef = [&](Operation *extractOp) {
+      if (extractOp && extractOp->use_empty())
+        rewriter.eraseOp(extractOp);
+    };
+
     if (auto extractRef = op.getDst().template getDefiningOp<ExtractRefOp>()) {
       Value baseRef = getConvertedValue(extractRef.getInput());
       auto baseRefType = baseRef ? dyn_cast<llhd::RefType>(baseRef.getType())
@@ -13595,6 +13758,37 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
             this->getTypeConverter()->convertType(extractRef.getResult().getType());
         if (failed(emitFourStateExtractAssign(baseRef, idx, resultType)))
           return failure();
+        eraseDeadExtractRef(extractRef);
+        return success();
+      }
+      if (baseRefType && isa<hw::StructType>(baseRefType.getNestedType())) {
+        auto packedWidth = getPackedRefLogicalWidth(extractRef.getInput());
+        if (!packedWidth)
+          return failure();
+        Value idx = hw::ConstantOp::create(
+            rewriter, loc,
+            rewriter.getIntegerType(llvm::Log2_64_Ceil(*packedWidth)),
+            extractRef.getLowBit());
+        auto resultType =
+            this->getTypeConverter()->convertType(extractRef.getResult().getType());
+        if (auto resultRefType = dyn_cast<llhd::RefType>(resultType)) {
+          if (isFourStateStructType(resultRefType.getNestedType())) {
+            auto packedFourStateRefType = llhd::RefType::get(
+                getFourStateStructType(rewriter.getContext(), *packedWidth));
+            Value packedFourStateRef = UnrealizedConversionCastOp::create(
+                                           rewriter, loc, packedFourStateRefType,
+                                           baseRef)
+                                           .getResult(0);
+            if (failed(
+                    emitFourStateExtractAssign(packedFourStateRef, idx, resultType)))
+              return failure();
+            eraseDeadExtractRef(extractRef);
+            return success();
+          }
+        }
+        if (failed(emitPackedStructExtractAssign(baseRef, idx, resultType)))
+          return failure();
+        eraseDeadExtractRef(extractRef);
         return success();
       }
       if (!baseRefType && baseRef &&
@@ -13610,6 +13804,7 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                 baseRef, mooreRefType.getNestedType(),
                 mooreResultRefType.getNestedType(), idx)))
           return failure();
+        eraseDeadExtractRef(extractRef);
         return success();
       }
     }
@@ -13635,6 +13830,36 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
             this->getTypeConverter()->convertType(dynExtractRef.getResult().getType());
         if (failed(emitFourStateExtractAssign(baseRef, idx, resultType)))
           return failure();
+        eraseDeadExtractRef(dynExtractRef);
+        return success();
+      }
+      if (baseRefType && isa<hw::StructType>(baseRefType.getNestedType())) {
+        auto packedWidth = getPackedRefLogicalWidth(dynExtractRef.getInput());
+        if (!packedWidth)
+          return failure();
+        Value idx = getConvertedValue(dynExtractRef.getLowBit());
+        if (!idx)
+          return failure();
+        auto resultType =
+            this->getTypeConverter()->convertType(dynExtractRef.getResult().getType());
+        if (auto resultRefType = dyn_cast<llhd::RefType>(resultType)) {
+          if (isFourStateStructType(resultRefType.getNestedType())) {
+            auto packedFourStateRefType = llhd::RefType::get(
+                getFourStateStructType(rewriter.getContext(), *packedWidth));
+            Value packedFourStateRef = UnrealizedConversionCastOp::create(
+                                           rewriter, loc, packedFourStateRefType,
+                                           baseRef)
+                                           .getResult(0);
+            if (failed(
+                    emitFourStateExtractAssign(packedFourStateRef, idx, resultType)))
+              return failure();
+            eraseDeadExtractRef(dynExtractRef);
+            return success();
+          }
+        }
+        if (failed(emitPackedStructExtractAssign(baseRef, idx, resultType)))
+          return failure();
+        eraseDeadExtractRef(dynExtractRef);
         return success();
       }
       if (!baseRefType && baseRef &&
@@ -13654,6 +13879,7 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                 baseRef, mooreRefType.getNestedType(),
                 mooreResultRefType.getNestedType(), idx)))
           return failure();
+        eraseDeadExtractRef(dynExtractRef);
         return success();
       }
     }
