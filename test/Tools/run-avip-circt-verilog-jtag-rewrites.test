@@ -4,12 +4,17 @@
 // RUN: cat %t.log | FileCheck %s --check-prefix=ARGS
 // RUN: driver_tmp=$(grep -F '/.avip_tmp/JtagTargetDeviceDriverBfm.sv' %t.log | head -n1) && test -n "$driver_tmp" && cat "$driver_tmp" | FileCheck %s --check-prefix=DRIVER
 // RUN: agent_tmp=$(grep -F '/.avip_tmp/JtagControllerDeviceAgentBfm.sv' %t.log | head -n1) && test -n "$agent_tmp" && cat "$agent_tmp" | FileCheck %s --check-prefix=AGENT
+// RUN: target_agent_tmp=$(grep -F '/.avip_tmp/JtagTargetDeviceAgentBfm.sv' %t.log | head -n1) && test -n "$target_agent_tmp" && cat "$target_agent_tmp" | FileCheck %s --check-prefix=TARGET-AGENT
 
 // ARGS: .avip_tmp/JtagControllerDeviceAgentBfm.sv
 // ARGS: .avip_tmp/JtagTargetDeviceDriverBfm.sv
+// ARGS: .avip_tmp/JtagTargetDeviceAgentBfm.sv
 
 // DRIVER: registerBank[JtagInstructionOpcodeEnum'(instructionRegister)]
 // DRIVER-NOT: registerBank[instructionRegister]
 
 // AGENT: bind JtagControllerDeviceMonitorBfm JtagControllerDeviceAssertions
 // AGENT-NOT: bind jtagControllerDeviceMonitorBfm JtagControllerDeviceAssertions
+
+// TARGET-AGENT: bind JtagTargetDeviceMonitorBfm JtagTargetDeviceAssertions TestVectrorTestingAssertions(.clk(clk),.Tdo(Tdo),.Tms(Tms),.reset(reset));
+// TARGET-AGENT-NOT: jtagIf.
