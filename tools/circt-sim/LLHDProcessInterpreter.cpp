@@ -2706,6 +2706,25 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.inputMap = instanceInputMap;
       state.cacheable = isProcessCacheableBody(processOp);
       ProcessId procId = scheduler.registerProcess(procName, []() {});
+
+      // Compute canonical module-scoped name for AOT matching.
+      // Same logic as top-level registerProcess(): "<module_sym>.process_<N>".
+      if (auto hwModule = processOp->getParentOfType<hw::HWModuleOp>()) {
+        std::string moduleSym = hwModule.getSymName().str();
+        unsigned localIndex = 0;
+        for (auto &op : hwModule.getBodyBlock()->getOperations()) {
+          if (isa<llhd::ProcessOp>(op)) {
+            if (&op == processOp.getOperation())
+              break;
+            localIndex++;
+          }
+        }
+        std::string canonicalName =
+            moduleSym + ".process_" + std::to_string(localIndex);
+        processNameToId[canonicalName] = procId;
+      } else {
+        processNameToId[procName] = procId;
+      }
       if (auto *process = scheduler.getProcess(procId))
         process->setCallback([this, procId]() { executeProcess(procId); });
 
@@ -2740,6 +2759,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.currentOp = state.currentBlock->begin();
 
       ProcessId procId = scheduler.registerProcess(combName, []() {});
+      processNameToId[combName] = procId;
       if (auto *process = scheduler.getProcess(procId)) {
         process->setCallback([this, procId]() { executeProcess(procId); });
         process->setCombinational(true);
@@ -2795,6 +2815,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.inputMap = instanceInputMap;
       state.cacheable = false;
       ProcessId procId = scheduler.registerProcess(initName, []() {});
+      processNameToId[initName] = procId;
       if (auto *process = scheduler.getProcess(procId))
         process->setCallback([this, procId]() { executeProcess(procId); });
 
@@ -4028,7 +4049,7 @@ LLHDProcessInterpreter::registerProcesses(const DiscoveredOps &ops) {
 }
 
 ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
-  // Generate a process name
+  // Generate a display name for debugging/scheduling.
   std::string name = "llhd_process_" + std::to_string(processStates.size());
 
   // Create the execution state for this process
@@ -4037,6 +4058,26 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
 
   // Register with the scheduler, then bind the callback to the real ID.
   ProcessId procId = scheduler.registerProcess(name, []() {});
+
+  // Compute canonical module-scoped name for AOT compiled process matching.
+  // Format: "<hw_module_sym>.process_<local_index>" — must match the naming
+  // in circt-sim-compile's compileProcessBodies().
+  if (auto hwModule = processOp->getParentOfType<hw::HWModuleOp>()) {
+    std::string moduleSym = hwModule.getSymName().str();
+    unsigned localIndex = 0;
+    for (auto &op : hwModule.getBodyBlock()->getOperations()) {
+      if (isa<llhd::ProcessOp>(op)) {
+        if (&op == processOp.getOperation())
+          break;
+        localIndex++;
+      }
+    }
+    std::string canonicalName =
+        moduleSym + ".process_" + std::to_string(localIndex);
+    processNameToId[canonicalName] = procId;
+  } else {
+    processNameToId[name] = procId;
+  }
   if (auto *process = scheduler.getProcess(procId))
     process->setCallback([this, procId]() { executeProcess(procId); });
 
@@ -36740,6 +36781,51 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
 
   llvm::errs() << "[circt-sim] Loaded " << mapped
                << " compiled functions from .so for native dispatch\n";
+}
+
+void LLHDProcessInterpreter::loadCompiledProcesses(
+    CompiledModuleLoader &loader) {
+  auto *mod = loader.getModule();
+  if (!mod || mod->num_procs == 0)
+    return;
+
+  // Capture a double-pointer to the __circt_sim_ctx global in the .so so the
+  // callback can dereference it at call time (after setRuntimeContext runs).
+  void **ctxPtr = loader.getRuntimeContextPtr();
+  if (!ctxPtr) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "[circt-sim] No runtime context slot in .so; "
+               << "skipping compiled process wiring\n");
+    return;
+  }
+
+  unsigned matched = 0;
+  for (uint32_t i = 0; i < mod->num_procs; i++) {
+    llvm::StringRef procName(mod->proc_names[i]);
+    auto it = processNameToId.find(procName);
+    if (it == processNameToId.end()) {
+      LLVM_DEBUG(llvm::dbgs() << "[circt-sim] Compiled process '" << procName
+                               << "' not found in scheduler\n");
+      continue;
+    }
+
+    ProcessId procId = it->second;
+    uint8_t kind = mod->proc_kind[i];
+    void *entry = const_cast<void *>(mod->proc_entry[i]);
+
+    if (kind == CIRCT_PROC_CALLBACK || kind == CIRCT_PROC_MINNOW) {
+      // Replace interpreter callback with native dispatch.
+      // Signal IDs are compile-time constants baked into the compiled body.
+      auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
+      scheduler.getProcess(procId)->setCallback([fptr, ctxPtr]() {
+        fptr(*ctxPtr, nullptr); // frame=nullptr; signal IDs are compile-time constants
+      });
+      matched++;
+    }
+    // COROUTINE kind: skip for now (stay interpreted)
+  }
+  llvm::errs() << "[circt-sim] Compiled process dispatch: " << matched << "/"
+               << mod->num_procs << " processes wired\n";
 }
 
 // interpretMooreWaitConditionCall is defined in

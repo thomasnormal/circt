@@ -763,15 +763,18 @@ public:
   /// nativeFuncPtrs map for native dispatch.
   void setCompiledModule(std::unique_ptr<CompiledModuleLoader> loader) {
     compiledLoader = std::move(loader);
-    if (llhdInterpreter)
-      llhdInterpreter->loadCompiledFunctions(*compiledLoader);
 
     // Wire up trampoline support: set the global compiled module descriptor
     // and the __circt_sim_ctx pointer so trampolines can call back into
-    // the interpreter.
+    // the interpreter. Must be done BEFORE loadCompiledProcesses() so that
+    // the context slot is populated before process callbacks are created.
     g_compiledModule = compiledLoader->getModule();
-    compiledLoader->setRuntimeContext(
-        reinterpret_cast<void *>(this));
+    compiledLoader->setRuntimeContext(reinterpret_cast<void *>(this));
+
+    if (llhdInterpreter) {
+      llhdInterpreter->loadCompiledFunctions(*compiledLoader);
+      llhdInterpreter->loadCompiledProcesses(*compiledLoader);
+    }
   }
 
   /// Dump signals that changed in the last delta cycle.

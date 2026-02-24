@@ -102,6 +102,12 @@ public:
       *ctxGlobalPtr = ctx;
   }
 
+  /// Get a pointer to the __circt_sim_ctx global slot in the loaded .so.
+  /// The returned double-pointer can be captured in callbacks that need to
+  /// dereference the context at call time (after setRuntimeContext has run).
+  /// Returns nullptr if no context slot was found in the .so.
+  void **getRuntimeContextPtr() const { return ctxGlobalPtr; }
+
 private:
   CompiledModuleLoader() = default;
 
