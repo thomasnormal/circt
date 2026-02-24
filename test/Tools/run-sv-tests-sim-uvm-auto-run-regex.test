@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/tests/chapter-18 %t/tests/chapter-x
+// RUN: printf '/*\n:tags: uvm\n*/\nmodule top; initial $finish; endmodule\n' > %t/tests/chapter-18/18.1--uvm-promoted.sv
+// RUN: printf '/*\n:tags: uvm\n*/\nmodule top; initial $finish; endmodule\n' > %t/tests/chapter-x/uvm_unlisted.sv
+// RUN: env EXPECT_FILE=/dev/null OUT=%t/results.tsv TEST_FILTER='^(18.1--uvm-promoted|uvm_unlisted)$' \
+// RUN:   DISABLE_UVM_AUTO_INCLUDE=1 CIRCT_VERILOG=/bin/false CIRCT_SIM=/bin/false \
+// RUN:   %S/../../utils/run_sv_tests_circt_sim.sh %t > %t/out.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+//
+// SUMMARY: total=2 pass=1 fail=0 xfail=0 xpass=0
+// SUMMARY: compile_fail=1
+// RESULTS: COMPILE_FAIL{{[[:space:]]+}}18.1--uvm-promoted
+// RESULTS: PASS{{[[:space:]]+}}uvm_unlisted
