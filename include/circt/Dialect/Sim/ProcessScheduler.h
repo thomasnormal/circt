@@ -1195,12 +1195,6 @@ public:
   /// Used by AOT runtime to populate CirctSimHot::num_signals.
   SignalId getNumSignals() const { return nextSigId; }
 
-  /// Check whether a signal changed in the current delta cycle.
-  bool didSignalChangeThisDelta(SignalId signalId) const {
-    return signalId < signalsChangedThisDeltaBits.size() &&
-           signalsChangedThisDeltaBits[signalId];
-  }
-
   /// Check if a signal uses the direct memory path (width <= 64 bits).
   bool isSignalDirect(SignalId signalId) const {
     return signalId < signalIsDirect.size() && signalIsDirect[signalId];
