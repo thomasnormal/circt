@@ -2216,17 +2216,30 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
       if (auto *local =
               expr.symbol.as_if<slang::ast::LocalAssertionVarSymbol>()) {
-        auto *binding = context.lookupAssertionLocalVarBinding(local);
-        if (!binding) {
-          mlir::emitError(loc, "local assertion variable referenced before "
-                               "assignment");
-          return {};
-        }
         auto offset = context.getAssertionSequenceOffset();
-        if (offset < binding->offset) {
-          mlir::emitError(loc, "local assertion variable referenced before "
-                               "assignment time");
-          return {};
+        auto *binding = context.lookupAssertionLocalVarBinding(local);
+        auto initializeFromDecl = [&]() -> bool {
+          auto *initializer = local->getInitializer();
+          if (!initializer)
+            return false;
+          auto init = context.convertRvalueExpression(*initializer);
+          if (!init)
+            return false;
+          context.setAssertionLocalVarBinding(local, init, offset);
+          binding = context.lookupAssertionLocalVarBinding(local);
+          return binding != nullptr;
+        };
+        if (!binding || offset < binding->offset) {
+          if (!initializeFromDecl()) {
+            if (!binding) {
+              mlir::emitError(loc, "local assertion variable referenced before "
+                                   "assignment");
+            } else {
+              mlir::emitError(loc, "local assertion variable referenced before "
+                                   "assignment time");
+            }
+            return {};
+          }
         }
         if (offset == binding->offset)
           return binding->value;
@@ -8984,6 +8997,12 @@ struct LvalueExprVisitor : public ExprVisitor {
 
         auto *binding = context.lookupAssertionLocalVarBinding(local);
         auto createDefaultLocalInit = [&]() -> Value {
+          if (auto *initializer = local->getInitializer()) {
+            auto init = context.convertRvalueExpression(*initializer);
+            if (init)
+              return init;
+            return {};
+          }
           auto loweredTy = context.convertType(*expr.type);
           if (!loweredTy)
             return {};

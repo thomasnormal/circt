@@ -1,5 +1,37 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: SVA local assertion variable initializer + compound update parity
+
+### What changed
+- Updated:
+  - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`
+- Added regressions:
+  - `test/Conversion/ImportVerilog/sva-local-var-initializer-compound.sv`
+  - `test/Tools/circt-sim/sva-local-var-initializer-compound-runtime.sv`
+
+### Realizations / surprises
+- Local assertion variable declarations with initializers (`int v = 0;`) were
+  not participating in first-use compound/unary match-item paths, so legal
+  expressions such as `v += 1` were rejected as unassigned locals.
+- The failure was in CIRCT assertion lowering (not parsing): the lowering path
+  only accepted pre-existing bindings and did not seed from declaration
+  initializer at the current sequence offset.
+
+### Validation snapshot
+- red-first:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-local-var-initializer-compound.sv build-test/test/Tools/circt-sim/sva-local-var-initializer-compound-runtime.sv`
+    - before fix: `2/2` fail with
+      `local assertion variable referenced before assignment`.
+    - after fix: `2/2` pass.
+- focused local-var sweeps:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog --filter='sva-.*local-var.*|sva-local-var-initializer-compound'` -> pass (`3/3`)
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*local-var.*|sva-local-var-initializer-compound-runtime'` -> pass (`5/5`)
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-.*local-var.*'` -> pass (`7/7`)
+- sv-tests local-var probes (no expectation masking):
+  - BMC: `16.10--property-local-var`, `16.10--sequence-local-var` -> `2/2`.
+  - sim: `16.10--property-local-var`, `16.10--sequence-local-var` -> `2/2`.
+
 ## 2026-02-24 Session: randomize-with `this` lookup for element-selected class receivers
 
 ### What changed
