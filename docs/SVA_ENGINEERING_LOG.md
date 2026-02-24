@@ -2,6 +2,44 @@
 
 ## 2026-02-24
 
+- Iteration update (ImportVerilog: enforce mixed/multi continuous variable
+  driver legality):
+  - realization:
+    - full `sv-tests` simulation sweeps with `EXPECT_FILE=/dev/null` still had
+      3 unmasked failures:
+      - `6.5--variable_mixed_assignments`
+      - `6.5--variable_multiple_assignments`
+      - `11.9--tagged_union_member_access_inv`
+    - the chapter-6 failures showed we were still accepting illegal variable
+      driver patterns that should fail at elaboration.
+    - existing regression `test/Conversion/ImportVerilog/driver-errors.sv`
+      was red for the same reason.
+  - implemented:
+    - added variable-driver tracking in frontend lowering:
+      - `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+      - `lib/Conversion/ImportVerilog/Structure.cpp`
+      - `lib/Conversion/ImportVerilog/Expressions.cpp`
+    - new behavior:
+      - reject multiple continuous assignments to one variable.
+      - reject mixed continuous + procedural assignments to one variable.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Conversion/ImportVerilog/driver-errors.sv`
+      - result: `1/1` pass.
+    - direct frontend checks:
+      - `6.5--variable_mixed_assignments`: `circt-verilog` now exits `1` with
+        `cannot mix continuous and procedural assignments to variable 'v'`.
+      - `6.5--variable_multiple_assignments`: `circt-verilog` now exits `1`
+        with `cannot have multiple continuous assignments to variable 'v'`.
+    - targeted sv-tests:
+      - `EXPECT_FILE=/dev/null ... TEST_FILTER='^(11\\.9--tagged_union_member_access_inv|6\\.5--variable_mixed_assignments|6\\.5--variable_multiple_assignments)$' ...`
+      - result: `pass=2 fail=1`.
+    - full no-expect sweep:
+      - before: `total=1504 pass=1239 fail=3`.
+      - after: `total=1504 pass=1241 fail=1`.
+  - remaining gap:
+    - `11.9--tagged_union_member_access_inv` still needs runtime invalid-member
+      failure semantics for tagged unions.
+
 - Iteration update (sv-tests sim: promote `16.2--assume-final` from compile-only):
   - realization:
     - `16.2--assume-final` remained marked `compile-only` despite lowering to
@@ -8072,3 +8110,38 @@
     - full tool suite:
       - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc`
         - result: `322/322` pass.
+
+- Iteration update (cross-object inline randomization equality + lit feature gating):
+  - realization:
+    - `test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv`
+      was hidden as `Unsupported` because top-level lit config did not expose a
+      `circt-sim` feature, even when `build-test/bin/circt-sim` existed.
+    - once enabled, test executed and failed (`cross_eq_ok=0`), confirming
+      inline cross-object equality constraints were dropped into unconstrained
+      fallback randomization for the constrained object.
+  - implemented:
+    - `test/lit.cfg.py`
+      - add `circt-sim` to `available_features` when tool discovery finds the
+        executable in tool paths.
+    - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+      - add dynamic-equality extraction support (`EqOp` / `WildcardEqOp`) for
+        inline randomize constraints.
+      - treat only same-class property bounds as pre-pass dynamic-property
+        constraints; allow cross-object property bounds through inline lowering.
+      - add `DynValueAssignFixup` path to materialize equality constraints as
+        direct value assignment (`x = bound`) guarded by `rand_mode`.
+      - normalize dynamic load/store types with `convertToLLVMType` and
+        `convertValueToLLVMType` to avoid invalid LLVM ops on `hw.struct`
+        payloads.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --show-suites build-test/test/Conversion/ImportVerilog`
+      - `Available Features` now includes `circt-sim`.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -v build-test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv`
+      - before feature fix: `Unsupported`.
+      - after feature fix but before lowering fix: `FAIL` with `cross_eq_ok=0`.
+      - after lowering fix: `1/1` pass.
+    - focused constraint/randomization sanity:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv build-test/test/Conversion/ImportVerilog/class-randomization-constraints.sv build-test/test/Conversion/ImportVerilog/runtime-randomization.sv build-test/test/Conversion/ImportVerilog/randomize.sv build-test/test/Conversion/ImportVerilog/constraint-solve.sv build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv`
+      - result: `7 passed, 1 failed`.
+      - note: the `randomize.sv` failure is an existing dirty-tree expectation
+        mismatch and not caused by this change set.

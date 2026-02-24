@@ -17,6 +17,7 @@
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
 #include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/NetType.h"
 #include "slang/syntax/AllSyntax.h"
 #include "llvm/ADT/ScopeExit.h"
@@ -94,6 +95,61 @@ getInterfaceArrayIndices(const slang::ast::InstanceSymbol &instSym,
     indices.push_back(actualIndex);
   }
   return true;
+}
+
+static constexpr unsigned kContinuousAssignmentBit = 1u << 0;
+static constexpr unsigned kProceduralAssignmentBit = 1u << 1;
+
+static const slang::ast::VariableSymbol *
+getDirectAssignedVariable(const slang::ast::Expression &lhs) {
+  if (auto *named = lhs.as_if<slang::ast::NamedValueExpression>())
+    return named->symbol.as_if<slang::ast::VariableSymbol>();
+  if (auto *hier = lhs.as_if<slang::ast::HierarchicalValueExpression>())
+    return hier->symbol.as_if<slang::ast::VariableSymbol>();
+  return nullptr;
+}
+
+static LogicalResult noteVariableAssignmentKind(
+    Context &context, const slang::ast::Expression &lhs, Location assignLoc,
+    unsigned kindBit) {
+  auto *var = getDirectAssignedVariable(lhs);
+  if (!var)
+    return success();
+
+  auto &recordedKinds = context.variableAssignmentKinds[var];
+  if (kindBit == kContinuousAssignmentBit &&
+      (recordedKinds & kContinuousAssignmentBit)) {
+    mlir::emitError(assignLoc)
+        << "cannot have multiple continuous assignments to variable '"
+        << var->name << "'";
+    return failure();
+  }
+
+  if ((kindBit == kContinuousAssignmentBit &&
+       (recordedKinds & kProceduralAssignmentBit)) ||
+      (kindBit == kProceduralAssignmentBit &&
+       (recordedKinds & kContinuousAssignmentBit))) {
+    auto diagLoc = context.convertLocation(var->location);
+    mlir::emitError(diagLoc)
+        << "cannot mix continuous and procedural assignments to variable '"
+        << var->name << "'";
+    return failure();
+  }
+
+  recordedKinds |= kindBit;
+  return success();
+}
+
+LogicalResult
+Context::noteContinuousVariableAssignment(const slang::ast::Expression &lhs,
+                                          Location loc) {
+  return noteVariableAssignmentKind(*this, lhs, loc, kContinuousAssignmentBit);
+}
+
+LogicalResult
+Context::noteProceduralVariableAssignment(const slang::ast::Expression &lhs,
+                                          Location loc) {
+  return noteVariableAssignmentKind(*this, lhs, loc, kProceduralAssignmentBit);
 }
 
 static bool
@@ -1441,6 +1497,8 @@ struct ModuleVisitor : public BaseVisitor {
           << "expected assignment expression in continuous assignment";
       return failure();
     }
+    if (failed(context.noteContinuousVariableAssignment(expr->left(), loc)))
+      return failure();
 
     auto lhs = context.convertLvalueExpression(expr->left());
     if (!lhs)

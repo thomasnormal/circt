@@ -242,7 +242,9 @@ while IFS= read -r -d '' sv; do
     needs_uvm=1
   fi
   # Auto-fast-skip UVM tests not in expect file (each takes ~3-10min to simulate)
-  if [[ "$needs_uvm" -eq 1 ]] && [[ -z "$expect" ]] && [[ "${VERIFY_UVM_COMPILE:-0}" != "1" ]]; then
+  if [[ "$needs_uvm" -eq 1 ]] && [[ -z "$expect" ]] &&
+     [[ "${VERIFY_UVM_COMPILE:-0}" != "1" ]] &&
+     [[ "$expect_compile_fail" != "1" ]]; then
     pass=$((pass + 1))
     printf "%s\t%s\t%s\n" "PASS" "$base" "$sv" >> "$results_tmp"
     continue

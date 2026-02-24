@@ -36,6 +36,7 @@ class Pattern;
 class InstanceSymbol;
 class HierarchicalReference;
 class TimingControl;
+class VariableSymbol;
 enum class CaseStatementCondition;
 } // namespace ast
 } // namespace slang
@@ -247,6 +248,12 @@ struct Context {
   Value convertRvalueExpression(const slang::ast::Expression &expr,
                                 Type requiredType = {});
   Value convertLvalueExpression(const slang::ast::Expression &expr);
+  LogicalResult
+  noteContinuousVariableAssignment(const slang::ast::Expression &lhs,
+                                   Location loc);
+  LogicalResult
+  noteProceduralVariableAssignment(const slang::ast::Expression &lhs,
+                                   Location loc);
 
   // Synthesize a struct initial value from field defaults (IEEE 1800-2017
   // §7.2.1). Returns null if the type is not a struct or has no field defaults.
@@ -570,6 +577,12 @@ struct Context {
       llvm::ScopedHashTable<const slang::ast::ValueSymbol *, Value>;
   using ValueSymbolScope = ValueSymbols::ScopeTy;
   ValueSymbols valueSymbols;
+
+  /// Tracks how each source variable is driven so we can diagnose illegal
+  /// combinations such as multiple continuous assignments or mixed
+  /// continuous/procedural assignments.
+  DenseMap<const slang::ast::VariableSymbol *, unsigned>
+      variableAssignmentKinds;
 
   /// A table mapping iterator variables to their index values for use with
   /// the `item.index` property in array locator methods.
