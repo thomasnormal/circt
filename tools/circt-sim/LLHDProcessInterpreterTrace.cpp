@@ -2464,6 +2464,12 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << " entries=" << callIndirectSiteCache.size() << "\n";
   }
 
+  // Native call_indirect dispatch stats.
+  if (profileSummaryAtExitEnabled && nativeCallIndirectDispatchCount > 0) {
+    os << "[circt-sim] native call_indirect dispatch: count="
+       << nativeCallIndirectDispatchCount << "\n";
+  }
+
   // Function symbol lookup cache stats.
   if (profileSummaryAtExitEnabled &&
       (funcLookupCacheHits || funcLookupCacheMisses ||

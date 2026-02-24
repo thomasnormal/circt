@@ -1014,6 +1014,10 @@ void LLHDProcessInterpreter::printCompileReport() const {
                         "%.1f", 100.0 * interpretedFuncCallCount / funcTotal)
                  << "%)\n";
     llvm::errs() << "  Native func ptrs:  " << nativeFuncPtrs.size() << "\n";
+    if (nativeCallIndirectDispatchCount > 0) {
+      llvm::errs() << "  Native CI dispatch: "
+                   << nativeCallIndirectDispatchCount << "\n";
+    }
   }
 
   llvm::errs() << "===============================\n";
