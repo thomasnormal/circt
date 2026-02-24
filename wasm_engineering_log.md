@@ -1789,3 +1789,36 @@
   - unified lane PASS:
     - `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^cocotb_vpi$'`
       reports `selected=1 failures=0`.
+
+## 2026-02-24 (follow-up: circt-sim/wasm regression compatibility + UVM auto-include gating)
+- Gap identified (regression-first):
+  - focused lit repro showed `test/Tools/circt-sim/dyn-array-new-copy-after-wait.sv`
+    failing because `circt-sim` no longer accepted legacy
+    `--jit-compile-budget=0`.
+  - broader `test/Tools/circt-sim` sweeps also exposed parse failures in
+    non-UVM tests when `circt-verilog` auto-injected UVM by default.
+- Fixes:
+  - restored CLI compatibility in `tools/circt-sim/circt-sim.cpp` by accepting
+    legacy JIT knobs as no-op flags:
+    - `--jit-compile-budget`
+    - `--jit-hot-threshold`
+    - `--jit-cache-policy`
+    - `--jit-fail-on-deopt`
+    - `--jit-report`
+  - tightened UVM auto-injection in `tools/circt-verilog/circt-verilog.cpp`:
+    - only auto-inject UVM when sources appear to reference UVM
+      (or when `--uvm-path` is explicitly provided).
+- Validation:
+  - targeted lit repros pass:
+    - `test/Tools/circt-sim/dyn-array-new-copy-after-wait.sv`
+    - `test/Tools/circt-sim/process-kill-await.sv`
+    - `test/Tools/circt-sim/interface-pullup-distinct-driver-sensitivity.sv`
+    - `test/Tools/circt-sim/fork-disable-ready-wakeup.sv`
+    - `test/Tools/circt-sim/config-db.sv`
+    - `test/Tools/circt-sim/uvm-wait-for-nba-region.sv`
+  - unified lane still PASS:
+    - `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^cocotb_vpi$'`
+      reports `selected=1 failures=0`.
+  - wasm regression gate now clean:
+    - `utils/run_wasm_regressions.sh`
+      reports `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`.

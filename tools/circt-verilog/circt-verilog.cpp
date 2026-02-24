@@ -44,6 +44,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
@@ -508,11 +509,33 @@ static bool hasUvmMacrosInput() {
   return false;
 }
 
+static bool sourceMentionsUvm() {
+  for (const auto &inputFilename : opts.inputFilenames) {
+    auto ext = llvm::sys::path::extension(inputFilename).lower();
+    if (ext != ".sv" && ext != ".svh" && ext != ".v" && ext != ".vh")
+      continue;
+
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(inputFilename);
+    if (!bufferOrErr)
+      continue;
+
+    llvm::StringRef content = bufferOrErr.get()->getBuffer();
+    if (content.contains("uvm_pkg") || content.contains("`uvm_") ||
+        content.contains("uvm_"))
+      return true;
+  }
+  return false;
+}
+
 static void addUvmSupportIfAvailable() {
   if (opts.noUvmAutoInclude)
     return;
 
   if (opts.format != Format::SV)
+    return;
+
+  // Avoid injecting UVM into non-UVM sources by default.
+  if (opts.uvmPath.empty() && !sourceMentionsUvm())
     return;
 
   // Only warn about missing UVM if the user explicitly pointed us at a UVM

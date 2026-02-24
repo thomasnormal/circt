@@ -589,6 +589,38 @@ static llvm::cl::opt<std::string> compiledModulePath(
     llvm::cl::value_desc("path"), llvm::cl::init(""),
     llvm::cl::cat(mainCategory));
 
+// Legacy JIT knobs retained as no-op flags for CLI compatibility with older
+// scripts/tests that still pass these arguments in compile mode.
+static llvm::cl::opt<int64_t>
+    jitCompileBudgetCompat("jit-compile-budget",
+                           llvm::cl::desc("Deprecated no-op compatibility flag"),
+                           llvm::cl::init(0), llvm::cl::Hidden,
+                           llvm::cl::cat(mainCategory));
+
+static llvm::cl::opt<unsigned>
+    jitHotThresholdCompat("jit-hot-threshold",
+                          llvm::cl::desc("Deprecated no-op compatibility flag"),
+                          llvm::cl::init(0), llvm::cl::Hidden,
+                          llvm::cl::cat(mainCategory));
+
+static llvm::cl::opt<std::string>
+    jitCachePolicyCompat("jit-cache-policy",
+                         llvm::cl::desc("Deprecated no-op compatibility flag"),
+                         llvm::cl::init("memory"), llvm::cl::Hidden,
+                         llvm::cl::cat(mainCategory));
+
+static llvm::cl::opt<bool>
+    jitFailOnDeoptCompat("jit-fail-on-deopt",
+                         llvm::cl::desc("Deprecated no-op compatibility flag"),
+                         llvm::cl::init(false), llvm::cl::Hidden,
+                         llvm::cl::cat(mainCategory));
+
+static llvm::cl::opt<std::string>
+    jitReportCompat("jit-report",
+                    llvm::cl::desc("Deprecated no-op compatibility flag"),
+                    llvm::cl::value_desc("path"), llvm::cl::init(""),
+                    llvm::cl::Hidden, llvm::cl::cat(mainCategory));
+
 
 static llvm::StringRef getRunModeName(RunMode mode) {
   switch (mode) {
