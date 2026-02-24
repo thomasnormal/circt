@@ -6957,3 +6957,21 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - The gap was invisible in assertion-focused testing; cover-path parity needed
   explicit VCD signal checks to expose async-abort behavior.
+
+## 2026-02-24: Cover `reject_on` Async/Sync Matrix Locked
+
+### Gap identified
+- After wiring async abort handling for covers, we still lacked explicit
+  `reject_on` coverage proving async vs sync distinction in VCD-observable hits.
+
+### Added regressions
+- `test/Tools/circt-sim/sva-vcd-cover-reject-on-async-pulse-runtime.sv`
+- `test/Tools/circt-sim/sva-vcd-cover-sync-reject-on-async-pulse-runtime.sv`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-vcd-cover-accept-on-async-pulse-runtime.sv build_test/test/Tools/circt-sim/sva-vcd-cover-sync-accept-on-async-pulse-runtime.sv build_test/test/Tools/circt-sim/sva-vcd-cover-reject-on-async-pulse-runtime.sv build_test/test/Tools/circt-sim/sva-vcd-cover-sync-reject-on-async-pulse-runtime.sv` -> `4/4` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='vcd-cover|accept-on|reject-on|disable-iff' build_test/test/Tools/circt-sim` -> `22/22` PASS.
+
+### Realizations / surprises
+- Implication-based cover tests can accidentally become vacuous; sequence-based
+  one-shot setups gave a clearer semantic discriminator for `reject_on`.
