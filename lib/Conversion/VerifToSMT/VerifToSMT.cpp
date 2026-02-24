@@ -2257,6 +2257,70 @@ struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
   }
 };
 
+/// Lower integer<->bitvector bridge casts that remain after solver lowering.
+/// Keep this rewrite intentionally conservative and only fold constant or
+/// already-bridged casts.
+struct IntBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern<UnrealizedConversionCastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return failure();
+
+    Value input = op.getInputs()[0];
+    Type srcTy = input.getType();
+    Type dstTy = op.getOutputs()[0].getType();
+
+    auto foldIntToBV = [&](Value intValue, Type resultTy) -> FailureOr<Value> {
+      auto intTy = dyn_cast<IntegerType>(intValue.getType());
+      auto bvTy = dyn_cast<smt::BitVectorType>(resultTy);
+      if (!intTy || !bvTy || intTy.getWidth() != bvTy.getWidth())
+        return failure();
+
+      if (auto cst = intValue.getDefiningOp<arith::ConstantOp>())
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+          return Value(smt::BVConstantOp::create(
+              rewriter, cst.getLoc(),
+              intAttr.getValue().zextOrTrunc(bvTy.getWidth())));
+
+      if (auto innerCast = intValue.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (innerCast.getInputs().size() == 1 && innerCast.getOutputs().size() == 1)
+          if (auto innerBVTy =
+                  dyn_cast<smt::BitVectorType>(innerCast.getInputs()[0].getType()))
+            if (innerBVTy.getWidth() == bvTy.getWidth())
+              return innerCast.getInputs()[0];
+      }
+
+      return failure();
+    };
+
+    auto folded = foldIntToBV(input, dstTy);
+    if (succeeded(folded)) {
+      rewriter.replaceOp(op, *folded);
+      return success();
+    }
+
+    // Canonicalize the mirror bridge when the source is a single-value BV cast.
+    if (auto srcBV = dyn_cast<smt::BitVectorType>(srcTy)) {
+      if (auto dstInt = dyn_cast<IntegerType>(dstTy)) {
+        if (srcBV.getWidth() == dstInt.getWidth()) {
+          if (auto innerCast = input.getDefiningOp<UnrealizedConversionCastOp>()) {
+            if (innerCast.getInputs().size() == 1 &&
+                innerCast.getOutputs().size() == 1 &&
+                innerCast.getOutputs()[0].getType() == input.getType()) {
+              rewriter.replaceOp(op, innerCast.getInputs()[0]);
+              return success();
+            }
+          }
+        }
+      }
+    }
+
+    return failure();
+  }
+};
+
 /// Lower select float compare casts used in BMC solver regions into pure SMT
 /// bitvector predicates so SMT-LIB export remains legal.
 struct FloatCmpCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
@@ -2387,26 +2451,93 @@ struct FloatCmpCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
     Value rhsZero = buildIsZeroIgnoringSign(rhsBits, rhsWidth);
     Value bothZero = createSMTAndFolded(rewriter, loc, lhsZero, rhsZero);
     Value eqOrBothZero = createSMTOrFolded(rewriter, loc, bitEq, bothZero);
+    Value notEqOrBothZero = smt::NotOp::create(rewriter, loc, eqOrBothZero);
 
     Value lhsNaN = buildIsNaN(lhsBits, lhsWidth);
     Value rhsNaN = buildIsNaN(rhsBits, rhsWidth);
     Value anyNaN = createSMTOrFolded(rewriter, loc, lhsNaN, rhsNaN);
     Value notAnyNaN = smt::NotOp::create(rewriter, loc, anyNaN);
-    Value notEqOrBothZero = smt::NotOp::create(rewriter, loc, eqOrBothZero);
+
+    auto buildOrderedLt = [&](Value lhs, Value rhs, Value bothZeros) -> Value {
+      auto oneBitTy = smt::BitVectorType::get(rewriter.getContext(), 1);
+      Value one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+      Value lhsSign =
+          smt::ExtractOp::create(rewriter, loc, oneBitTy, lhsWidth - 1, lhs);
+      Value rhsSign =
+          smt::ExtractOp::create(rewriter, loc, oneBitTy, lhsWidth - 1, rhs);
+
+      Value sameSign = smt::EqOp::create(rewriter, loc, lhsSign, rhsSign);
+      Value lhsNeg = smt::EqOp::create(rewriter, loc, lhsSign, one);
+      Value rhsNeg = smt::EqOp::create(rewriter, loc, rhsSign, one);
+      Value rhsPos = smt::NotOp::create(rewriter, loc, rhsNeg);
+      Value signDiffLt = createSMTAndFolded(rewriter, loc, lhsNeg, rhsPos);
+
+      Value posLt = smt::BVCmpOp::create(rewriter, loc, smt::BVCmpPredicate::ult,
+                                         lhs, rhs);
+      Value negLt = smt::BVCmpOp::create(rewriter, loc, smt::BVCmpPredicate::ugt,
+                                         lhs, rhs);
+      Value sameSignLt = smt::IteOp::create(rewriter, loc, lhsNeg, negLt, posLt);
+      Value sameSignPart =
+          createSMTAndFolded(rewriter, loc, sameSign, sameSignLt);
+      Value rawLt = createSMTOrFolded(rewriter, loc, signDiffLt, sameSignPart);
+      Value notBothZeros = smt::NotOp::create(rewriter, loc, bothZeros);
+      return createSMTAndFolded(rewriter, loc, rawLt, notBothZeros);
+    };
+
+    Value orderedLt = buildOrderedLt(lhsBits, rhsBits, bothZero);
+    Value orderedGt = buildOrderedLt(rhsBits, lhsBits, bothZero);
+    Value orderedLe = createSMTOrFolded(rewriter, loc, orderedLt, eqOrBothZero);
+    Value orderedGe = createSMTOrFolded(rewriter, loc, orderedGt, eqOrBothZero);
 
     Value pred;
     switch (cmpf.getPredicate()) {
     case arith::CmpFPredicate::OEQ:
       pred = createSMTAndFolded(rewriter, loc, notAnyNaN, eqOrBothZero);
       break;
+    case arith::CmpFPredicate::OGT:
+      pred = createSMTAndFolded(rewriter, loc, notAnyNaN, orderedGt);
+      break;
+    case arith::CmpFPredicate::OGE:
+      pred = createSMTAndFolded(rewriter, loc, notAnyNaN, orderedGe);
+      break;
+    case arith::CmpFPredicate::OLT:
+      pred = createSMTAndFolded(rewriter, loc, notAnyNaN, orderedLt);
+      break;
+    case arith::CmpFPredicate::OLE:
+      pred = createSMTAndFolded(rewriter, loc, notAnyNaN, orderedLe);
+      break;
     case arith::CmpFPredicate::ONE:
       pred = createSMTAndFolded(rewriter, loc, notAnyNaN, notEqOrBothZero);
+      break;
+    case arith::CmpFPredicate::ORD:
+      pred = notAnyNaN;
       break;
     case arith::CmpFPredicate::UEQ:
       pred = createSMTOrFolded(rewriter, loc, anyNaN, eqOrBothZero);
       break;
+    case arith::CmpFPredicate::UGT:
+      pred = createSMTOrFolded(rewriter, loc, anyNaN, orderedGt);
+      break;
+    case arith::CmpFPredicate::UGE:
+      pred = createSMTOrFolded(rewriter, loc, anyNaN, orderedGe);
+      break;
+    case arith::CmpFPredicate::ULT:
+      pred = createSMTOrFolded(rewriter, loc, anyNaN, orderedLt);
+      break;
+    case arith::CmpFPredicate::ULE:
+      pred = createSMTOrFolded(rewriter, loc, anyNaN, orderedLe);
+      break;
     case arith::CmpFPredicate::UNE:
       pred = createSMTOrFolded(rewriter, loc, anyNaN, notEqOrBothZero);
+      break;
+    case arith::CmpFPredicate::UNO:
+      pred = anyNaN;
+      break;
+    case arith::CmpFPredicate::AlwaysTrue:
+      pred = smt::BoolConstantOp::create(rewriter, loc, true);
+      break;
+    case arith::CmpFPredicate::AlwaysFalse:
+      pred = smt::BoolConstantOp::create(rewriter, loc, false);
       break;
     default:
       return failure();
@@ -9807,7 +9938,8 @@ void ConvertVerifToSMTPass::runOnOperation() {
     return signalPassFailure();
 
   RewritePatternSet postPatterns(&getContext());
-  postPatterns.add<FloatCmpCastOpRewrite, BoolBVCastOpRewrite>(&getContext());
+  postPatterns.add<IntBVCastOpRewrite, FloatCmpCastOpRewrite,
+                   BoolBVCastOpRewrite>(&getContext());
   if (failed(applyPatternsGreedily(getOperation(), std::move(postPatterns))))
     return signalPassFailure();
 
