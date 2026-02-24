@@ -37199,19 +37199,31 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   if (!rootModule)
     return;
 
+  // When CIRCT_AOT_NO_FUNC_DISPATCH is set, skip populating nativeFuncPtrs.
+  // Compiled processes still run natively; only interpreter→function dispatch
+  // is affected. This is a safety valve: compiled stubs for UVM-intercepted
+  // functions return null, and calling code crashes when dereferencing the
+  // result. Disabling func dispatch ensures all calls go through the
+  // interpreter (with UVM interceptors).
+  bool noFuncDispatch = std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr;
+
   unsigned mapped = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
     if (funcOp.isExternal())
       return;
     void *ptr = loader.lookupFunction(funcOp.getSymName());
     if (ptr) {
-      nativeFuncPtrs[funcOp.getOperation()] = ptr;
+      if (!noFuncDispatch)
+        nativeFuncPtrs[funcOp.getOperation()] = ptr;
       ++mapped;
     }
   });
 
   llvm::errs() << "[circt-sim] Loaded " << mapped
-               << " compiled functions from .so for native dispatch\n";
+               << " compiled functions from .so"
+               << (noFuncDispatch ? " (func dispatch DISABLED)"
+                                  : " for native dispatch")
+               << "\n";
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
   // dispatch. Each trampoline has a sequential func_id and a name that
@@ -37494,9 +37506,14 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       // the correct delay). The compiled callback is installed after the
       // first wait sets callbackFrames[procId].initialized = true.
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-      pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr]() {
+      pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
         ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr);
+        // Re-arm if the process is a minnow (time-based callback).
+        // The AOT compiler currently marks all processes as CALLBACK,
+        // but many are actually time-only (minnow) processes.
+        if (scheduler.isMinnowProcess(procId))
+          scheduler.rearmMinnow(procId);
       };
       matched++;
     } else if (kind == CIRCT_PROC_MINNOW) {
