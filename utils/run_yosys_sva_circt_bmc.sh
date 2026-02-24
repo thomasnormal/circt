@@ -114,6 +114,8 @@ DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 Z3_BIN="${Z3_BIN:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
+YOSYS_SVA_USE_VHDL_STUBS="${YOSYS_SVA_USE_VHDL_STUBS:-1}"
+YOSYS_SVA_VHDL_STUB_DIR="${YOSYS_SVA_VHDL_STUB_DIR:-$SCRIPT_DIR/yosys-sva-vhdl-stubs}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 SIM_ONLY_TOGGLE_STEPS="${SIM_ONLY_TOGGLE_STEPS:-20}"
@@ -8452,6 +8454,7 @@ append_bmc_check_attribution() {
 run_case() {
   local sv="$1"
   local mode="$2"
+  local extra_sv="${3:-}"
   local base
   base="$(basename "$sv" .sv)"
   local ys_file="$YOSYS_SVA_DIR/${base}.ys"
@@ -8615,6 +8618,9 @@ EOF
   fi
   : > "$verilog_log"
   verilog_cmd=("$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" "${extra_def[@]}" "$sv")
+  if [[ -n "$extra_sv" ]]; then
+    verilog_cmd+=("$extra_sv")
+  fi
   launch_attempt=0
   launch_copy_fallback_used=0
   while true; do
@@ -8758,16 +8764,22 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     fi
   fi
   base="$(basename "$sv" .sv)"
+  extra_sv=""
   if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
-    profile="$(case_profile)"
-    report_skipped_case "$base" pass "$profile" "vhdl" 1 "$sv"
-    report_skipped_case "$base" fail "$profile" "vhdl" 0 "$sv"
-    skipped=$((skipped + 1))
-    continue
+    stub_sv="$YOSYS_SVA_VHDL_STUB_DIR/$base.sv"
+    if [[ "$YOSYS_SVA_USE_VHDL_STUBS" == "1" && -f "$stub_sv" ]]; then
+      extra_sv="$stub_sv"
+    else
+      profile="$(case_profile)"
+      report_skipped_case "$base" pass "$profile" "vhdl" 1 "$sv"
+      report_skipped_case "$base" fail "$profile" "vhdl" 0 "$sv"
+      skipped=$((skipped + 1))
+      continue
+    fi
   fi
   total=$((total + 1))
-  run_case "$sv" pass
-  run_case "$sv" fail
+  run_case "$sv" pass "$extra_sv"
+  run_case "$sv" fail "$extra_sv"
 done
 
 if [[ -n "$EXPECT_DIFF_BASELINE" ]]; then
