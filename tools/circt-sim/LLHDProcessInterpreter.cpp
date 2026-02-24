@@ -8378,7 +8378,11 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     uint64_t delay = delayOp.getDelay();
 
     auto &history = state.temporalHistory[op];
-    history.push_back(input);
+    auto &lastSampleOrdinal = state.delayLastSampleOrdinal[op];
+    if (lastSampleOrdinal != state.sampleOrdinal) {
+      history.push_back(input);
+      lastSampleOrdinal = state.sampleOrdinal;
+    }
 
     uint64_t maxOffset = delay;
     if (length) {

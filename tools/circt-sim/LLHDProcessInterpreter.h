@@ -758,6 +758,9 @@ struct DiscoveredOps {
   /// seq.firreg operations found in the module.
   llvm::SmallVector<seq::FirRegOp, 32> firRegs;
 
+  /// seq.compreg operations found in the module.
+  llvm::SmallVector<seq::CompRegOp, 32> compRegs;
+
   /// verif.clocked_assert operations found at module level.
   llvm::SmallVector<verif::ClockedAssertOp, 4> clockedAsserts;
 
@@ -777,6 +780,7 @@ struct DiscoveredOps {
     initials.clear();
     moduleDrives.clear();
     firRegs.clear();
+    compRegs.clear();
     clockedAsserts.clear();
     clockedAssumes.clear();
     clockedCovers.clear();
@@ -1203,6 +1207,13 @@ private:
   /// Execute a single seq.firreg register update.
   void executeFirReg(seq::FirRegOp regOp, InstanceId instanceId);
 
+  /// Register seq.compreg operations using pre-discovered operations.
+  void registerCompRegs(const DiscoveredOps &ops, InstanceId instanceId,
+                        const InstanceInputMapping &inputMap);
+
+  /// Execute a single seq.compreg register update.
+  void executeCompReg(seq::CompRegOp regOp, InstanceId instanceId);
+
   /// Register verif.clocked_assert operations as reactive processes.
   void registerClockedAssertions(const DiscoveredOps &ops,
                                  InstanceId instanceId,
@@ -1306,6 +1317,11 @@ private:
 
   /// Helper for iterative continuous-value evaluation with cycle detection.
   InterpretedValue evaluateContinuousValueImpl(mlir::Value value);
+
+  /// Read a signal value for continuous evaluation.
+  /// When sampled clocked-property mode is active, this returns pre-update
+  /// values for signals changed in the current delta.
+  const SignalValue &getSignalValueForContinuousEval(SignalId sigId) const;
 
   /// Evaluate an llhd.combinational op and return its yielded values.
   /// When \p traceThrough is true, probes inside the body use
@@ -2430,6 +2446,10 @@ private:
   /// recursive evaluateContinuousValue chain. Used to detect cycles.
   llvm::DenseSet<mlir::Operation *> continuousEvalVisitedProcesses;
 
+  /// When true, evaluateContinuousValue reads sampled signal values for
+  /// clocked property evaluation (IEEE 1800 sampled-value semantics).
+  bool sampleClockedPropertyFromPreUpdateValues = false;
+
   /// Set of (procId, waitOp) pairs that have already been through the
   /// empty-sensitivity "always @(*)" fallback delta-resume path at least once.
   /// Used to prevent infinite delta cycles for processes that have no
@@ -2470,6 +2490,14 @@ private:
       instanceOpToProcessId;
 
   struct FirRegState {
+    SignalId signalId = 0;
+    InterpretedValue prevClock;
+    bool hasPrevClock = false;
+    InstanceId instanceId = 0;
+    InstanceInputMapping inputMap;
+  };
+
+  struct CompRegState {
     SignalId signalId = 0;
     InterpretedValue prevClock;
     bool hasPrevClock = false;
@@ -2537,6 +2565,7 @@ private:
         repetitionHitTrackers;
     llvm::DenseMap<mlir::Operation *, ImplicationTracker> implicationTrackers;
     llvm::DenseMap<mlir::Operation *, ConcatTracker> concatTrackers;
+    llvm::DenseMap<mlir::Operation *, uint64_t> delayLastSampleOrdinal;
     llvm::DenseMap<mlir::Operation *, uint64_t> pastLastSampleOrdinal;
     llvm::DenseMap<mlir::Operation *, LTLTruth> firstMatchPrevInput;
   };
@@ -2550,6 +2579,10 @@ private:
   /// Map from instance IDs to per-instance firreg state maps.
   llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, FirRegState>>
       instanceFirRegStates;
+
+  /// Map from instance IDs to per-instance compreg state maps.
+  llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, CompRegState>>
+      instanceCompRegStates;
 
   /// Map from instance IDs to instance result maps (result value -> output info).
   llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Value, InstanceOutputInfo>>
@@ -2824,6 +2857,9 @@ private:
 
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
+
+  /// Registered seq.compreg state keyed by op.
+  llvm::DenseMap<mlir::Operation *, CompRegState> compRegStates;
 
   /// Pending firreg signal updates for two-phase evaluation.
   /// During NBA region execution, firregs evaluate inputs using pre-update
@@ -3899,6 +3935,10 @@ private:
   /// AOT invocation counters (for --stats reporting).
   uint64_t compiledCallbackInvocations = 0;
   uint64_t interpreterProcessInvocations = 0;
+
+  /// Compiled callbacks waiting for the process's first interpreted run
+  /// (entry block → llhd.wait) to complete before being installed.
+  llvm::DenseMap<ProcessId, std::function<void()>> pendingCompiledCallbacks;
 };
 
 } // namespace sim

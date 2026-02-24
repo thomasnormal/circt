@@ -6373,3 +6373,59 @@ Based on these findings, the circt-sim compiled process architecture:
    outstanding sequence delay/concat endpoint/start-time semantics mismatch in
    runtime evaluation (or equivalent lowering mismatch), not the implication
    finalization path.
+
+## 2026-02-24 Session: Sequence local-var assert fix via assert-like sequence implication lowering
+
+### Problem
+1. After fixing sampled-past compreg timing and implication finalization, the
+   property local-var runtime test passed but sequence local-var runtime still
+   failed in `circt-sim`.
+2. Failing pattern (before this fix):
+   - `sva-sequence-local-var-runtime.sv` failed at `350/450/550/650 fs`.
+
+### Investigation
+1. Manual MLIR experiment showed that replacing the emitted top-level sequence
+   clocked assert with `ltl.implication(true, <same-sequence>)` made the test
+   pass without touching DUT semantics.
+2. This indicated a lowering/runtime integration gap for assert-like uses of
+   top-level sequence properties in clocked verif ops.
+
+### Changes
+1. `lib/Conversion/ImportVerilog/Statements.cpp`
+   - for clocked `assert/assume/restrict/expect`, if the emitted property is a
+     sequence, wrap it as:
+     - `ltl.implication(hw.constant true, sequence)`
+   - applied in both direct procedural-clock and hoisted explicit-clock paths.
+2. `tools/circt-sim/LLHDProcessInterpreter.h`
+   - added `delayLastSampleOrdinal` to `ClockedAssertionState`.
+3. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - `ltl.delay` now appends history once per `sampleOrdinal` (prevents
+     over-advancing history if recursively visited multiple times in one sample).
+4. Runtime regressions:
+   - `test/Tools/circt-sim/sva-property-local-var-runtime.sv`
+   - `test/Tools/circt-sim/sva-sequence-local-var-runtime.sv`
+   - updated RUN max time to `1100000000` so `#1000` check emits `SVA_PASS`
+     before simulation cutoff.
+
+### Validation
+1. Build
+   - `ninja -C build-test circt-verilog circt-sim` -> PASS
+2. Focused checks
+   - property local-var:
+     - `build-test/bin/circt-verilog --no-uvm-auto-include test/Tools/circt-sim/sva-property-local-var-runtime.sv --ir-llhd -o /tmp/sva-property-local-var-runtime.mlir`
+     - `build-test/bin/circt-sim /tmp/sva-property-local-var-runtime.mlir --top top --max-time=1100000000 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/sva-property-local-var-runtime.sv`
+     - PASS
+   - sequence local-var:
+     - `build-test/bin/circt-verilog --no-uvm-auto-include test/Tools/circt-sim/sva-sequence-local-var-runtime.sv --ir-llhd -o /tmp/sva-sequence-local-var-runtime.mlir`
+     - `build-test/bin/circt-sim /tmp/sva-sequence-local-var-runtime.mlir --top top --max-time=1100000000 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/sva-sequence-local-var-runtime.sv`
+     - PASS
+3. Lit
+   - `llvm/build/bin/llvm-lit -sv -j 2 build-test/test/Tools/circt-sim/sva-property-local-var-runtime.sv build-test/test/Tools/circt-sim/sva-sequence-local-var-runtime.sv`
+   - Result: `2/2` PASS.
+
+### Realizations / surprises
+1. The sequence-local-var failure was not primarily a compreg/past bug after
+   implication-path fixes; the decisive fix was assert-like sequence lowering
+   shape (`implication(true, seq)`) for clocked verif ops.
+2. With `max-time` exactly equal to the `#1000` checkpoint, `SVA_PASS` may not
+   be emitted before cutoff; using `1100000000` makes these tests deterministic.
