@@ -1892,3 +1892,28 @@
   - wasm repro command:
     - `node build-wasm/bin/circt-verilog.js --resource-guard=false --ir-llhd --timescale 1ns/1ns --uvm-path lib/Runtime/uvm-core -I lib/Runtime/uvm-core/src --top tb_top -o <tmp>/design.llhd.mlir <tmp>/tb_top.sv`
     - exit code `0`; output generated (`~25 MB` MLIR); no wasm trap.
+
+## 2026-02-24 (follow-up: browser-style UVM MEMFS regression hardening)
+- Gap identified (repro-first):
+  - user-reported browser worker crash path (`Malformed attribute storage object`)
+    did not reproduce in local Node CLI runs, including stack-size sweeps and
+    same-instance reruns.
+  - to reduce risk of browser-vs-node drift, added a dedicated Node MEMFS
+    regression that mirrors browser worker file loading semantics.
+- Fixes:
+  - added `utils/wasm_uvm_pkg_memfs_reentry_check.sh`:
+    - loads `circt-verilog.js` into a VM context with `noInitialRun`.
+    - copies full `lib/Runtime/uvm-core` into wasm MEMFS.
+    - compiles a minimal `tb_top` importing full `uvm_pkg` twice via
+      `callMain` in one wasm instance (re-entry).
+    - fails on non-zero exit, missing output, `Aborted(`, or
+      `Malformed attribute storage object`.
+  - wired new helper into `utils/run_wasm_smoke.sh` when
+    `circt-verilog` target is available.
+  - extended `utils/wasm_smoke_contract_check.sh` with tokens for the new
+    helper integration.
+- Validation:
+  - `BUILD_DIR=build-wasm NODE_BIN=node utils/wasm_uvm_pkg_memfs_reentry_check.sh`:
+    PASS
+  - `utils/wasm_smoke_contract_check.sh`: PASS
+  - `bash -n utils/run_wasm_smoke.sh utils/wasm_uvm_pkg_memfs_reentry_check.sh utils/wasm_smoke_contract_check.sh`: PASS

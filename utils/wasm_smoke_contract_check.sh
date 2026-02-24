@@ -32,6 +32,7 @@ required_tokens=(
   "PLUSARGS_HELPER"
   "RESOURCE_GUARD_HELPER"
   "UVM_STUB_VCD_HELPER"
+  "UVM_PKG_MEMFS_HELPER"
   'REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"'
   'REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"'
   'REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"'
@@ -42,8 +43,11 @@ required_tokens=(
   'missing executable helper script: $PLUSARGS_HELPER'
   'missing executable helper script: $RESOURCE_GUARD_HELPER'
   'missing executable helper script: $UVM_STUB_VCD_HELPER'
+  'missing executable helper script: $UVM_PKG_MEMFS_HELPER'
   "UVM stub frontend+sim+VCD"
+  "UVM pkg frontend MEMFS re-entry"
   "utils/wasm_uvm_stub_vcd_check.sh"
+  "utils/wasm_uvm_pkg_memfs_reentry_check.sh"
   "git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake"
   "unable to inspect llvm submodule CrossCompile.cmake status"
   'git_rc=$?'
