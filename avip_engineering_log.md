@@ -33,6 +33,47 @@ Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcel
 
 ---
 
+## 2026-02-24 Session: Canonical `build-test` Tooling + JTAG Compile Recovery
+
+### Why this pass
+AVIP smoke runs showed two local reliability gaps:
+1. mixed tool roots (`build-test` vs `build_test`) causing unstable runtime selection.
+2. JTAG compile failures inside `run_avip_circt_sim.sh` (`compile_status=FAIL`) while other AVIPs passed.
+
+### Changes
+1. Rebuilt current tooling in canonical tree:
+   - `ninja -C /home/thomas-ahle/circt/build-test circt-sim circt-verilog`
+2. Hardened AVIP sim runner tool selection:
+   - `utils/run_avip_circt_sim.sh`
+   - `CIRCT_SIM_FALLBACK` is now opt-in only (empty by default).
+   - primary `CIRCT_SIM` health is probed with `--help`; if unhealthy and no explicit fallback is provided, runner fails fast with an actionable error.
+3. Added per-run tool snapshoting (already in-tree this session) and locked behavior with tests:
+   - `utils/avip_circt_sim_tool_snapshot_behavior_check.sh`
+4. Added/kept IR sanitation guard behavior test:
+   - `utils/avip_circt_verilog_sanitize_behavior_check.sh`
+5. Fixed JTAG front-end compatibility in AVIP compile wrapper:
+   - `utils/run_avip_circt_verilog.sh`
+   - new JTAG rewrite path:
+     - remove problematic `bind` lines in:
+       - `JtagControllerDeviceAgentBfm.sv`
+       - `JtagTargetDeviceAgentBfm.sv`
+     - add explicit enum cast for JTAG register-bank indexing in:
+       - `JtagTargetDeviceDriverBfm.sv`
+6. Added JTAG rewrite regression test:
+   - `utils/avip_jtag_rewrite_behavior_check.sh`
+
+### Validation
+1. Tool health:
+   - `/home/thomas-ahle/circt/build-test/bin/circt-sim --help` -> exit 0.
+   - `/home/thomas-ahle/circt/build-test/bin/circt-verilog --help` -> exit 0.
+2. Behavior checks:
+   - `utils/avip_circt_sim_tool_snapshot_behavior_check.sh` PASS.
+   - `utils/avip_circt_verilog_sanitize_behavior_check.sh` PASS.
+   - `utils/avip_jtag_rewrite_behavior_check.sh` PASS.
+3. Real JTAG compile/sim recheck:
+   - `AVIPS=jtag SEEDS=1 utils/run_avip_circt_sim.sh /tmp/avip-jtag-only-recheck`
+   - result: `jtag compile_status=OK`, `jtag sim_status=OK`.
+
 ## 2026-02-22 Session: OVL BMC Matrix Harness Integration
 
 ### Why this pass
@@ -6283,3 +6324,52 @@ Based on these findings, the circt-sim compiled process architecture:
    - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`: PASS
 5. Profiling sample:
    - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`: `real=0.007s`
+
+## 2026-02-24 Session: SVA local-variable runtime follow-up (implication fixed, sequence gap remains)
+
+### Problem
+1. `circt-sim` local assertion variable runtime regressions were failing in:
+   - `test/Tools/circt-sim/sva-property-local-var-runtime.sv`
+   - `test/Tools/circt-sim/sva-sequence-local-var-runtime.sv`
+2. Observed issues:
+   - repeated mid-run failures for property/sequence variants.
+   - end-of-run false failure for the property variant at `max-time`.
+
+### Changes
+1. `tools/circt-sim/LLHDProcessInterpreter.cpp`
+   - sampled-past `seq.compreg` input evaluation now uses pre-update sampling
+     mode (`sampleClockedPropertyFromPreUpdateValues`) when the op carries
+     `circt.sva.sampled_past`.
+   - sampled-past compregs are scheduled in `Postponed` (instead of `NBA`) so
+     `Observed` assertion checks do not see same-slot updated history.
+   - added `Postponed` post-region flush for deferred reg updates.
+   - added compreg initialization fallback for `seq.initial` by decoding
+     single-result `seq.yield` when direct init evaluation is unknown.
+2. End-of-run implication finalization
+   - unresolved implication obligations are now considered failures only when
+     the bounded/unbounded window is mature (`age >= boundedMaxShift` or
+     `age >= unboundedMinShift`).
+
+### Validation
+1. Build
+   - `ninja -C build-test circt-sim` -> PASS
+2. Property local-var runtime
+   - `build-test/bin/circt-verilog --no-uvm-auto-include test/Tools/circt-sim/sva-property-local-var-runtime.sv --ir-llhd -o /tmp/sva-property-local-var-runtime.mlir`
+   - `build-test/bin/circt-sim /tmp/sva-property-local-var-runtime.mlir --top top --max-time=1000000000`
+   - Result: PASS (no assertion failures after implication-finalization fix).
+3. Sequence local-var runtime
+   - `build-test/bin/circt-verilog --no-uvm-auto-include test/Tools/circt-sim/sva-sequence-local-var-runtime.sv --ir-llhd -o /tmp/sva-sequence-local-var-runtime.mlir`
+   - `build-test/bin/circt-sim /tmp/sva-sequence-local-var-runtime.mlir --top top --max-time=1000000000`
+   - Result: still FAIL at `350/450/550/650 fs`.
+
+### Realizations / surprises
+1. Moving sampled-past compregs to `Postponed` without a post-`Postponed`
+   deferred-write flush made compreg signals appear stuck; they were being
+   deferred but never committed in that slot.
+2. The property-local-var end-of-run failure was not a sampled-value failure;
+   it was a finalization maturity bug (pending bounded implication windows were
+   treated as hard failures even when not mature yet).
+3. The remaining sequence-local-var failure pattern strongly points to
+   outstanding sequence delay/concat endpoint/start-time semantics mismatch in
+   runtime evaluation (or equivalent lowering mismatch), not the implication
+   finalization path.
