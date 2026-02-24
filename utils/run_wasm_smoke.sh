@@ -13,6 +13,7 @@ REENTRY_HELPER="utils/wasm_callmain_reentry_check.js"
 PLUSARGS_HELPER="utils/wasm_plusargs_reentry_check.sh"
 RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
 UVM_STUB_VCD_HELPER="utils/wasm_uvm_stub_vcd_check.sh"
+UVM_PKG_MEMFS_HELPER="utils/wasm_uvm_pkg_memfs_reentry_check.sh"
 REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"
 REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"
@@ -89,6 +90,10 @@ if [[ ! -x "$RESOURCE_GUARD_HELPER" ]]; then
 fi
 if [[ ! -x "$UVM_STUB_VCD_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $UVM_STUB_VCD_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$UVM_PKG_MEMFS_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $UVM_PKG_MEMFS_HELPER" >&2
   exit 1
 fi
 
@@ -351,6 +356,9 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] UVM stub frontend+sim+VCD"
   BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_STUB_VCD_HELPER"
+
+  echo "[wasm-smoke] UVM pkg frontend MEMFS re-entry"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_PKG_MEMFS_HELPER"
 fi
 
 if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake 2>"$tmpdir/crosscompile.err"; then
