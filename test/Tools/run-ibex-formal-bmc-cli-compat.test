@@ -1,7 +1,8 @@
 // RUN: rg -- '-b' %S/../../utils/run_ibex_formal_circt_bmc.sh | FileCheck %s --check-prefix=BOUND
 // RUN: rg -- '--module=' %S/../../utils/run_ibex_formal_circt_bmc.sh | FileCheck %s --check-prefix=MODULE
+// RUN: rg -- '--top=' %S/../../utils/run_ibex_formal_circt_bmc.sh | FileCheck %s --check-prefix=TOP
 // RUN: not rg -- '--bound=' %S/../../utils/run_ibex_formal_circt_bmc.sh
-// RUN: not rg -- '--top=' %S/../../utils/run_ibex_formal_circt_bmc.sh
 
 // BOUND: -b "$BMC_BOUND"
 // MODULE: --module="$target"
+// TOP: --top=
