@@ -801,16 +801,41 @@ def sanitize_ir_output(out_path: pathlib.Path, warnings_path: pathlib.Path):
         if is_module_start(line):
             start = i
             break
-    if start is None or start == 0:
+    if start is None:
+        return
+
+    body = lines[start:]
+    if not body:
+        return
+
+    # Trim trailing non-IR output after the first top-level module close.
+    # A valid top-level close is a line containing only "}" at column 0.
+    end = None
+    for i, line in enumerate(body):
+        if line.rstrip("\r\n") == "}":
+            end = i
+            break
+    if end is None:
+        end = len(body) - 1
+
+    prefix = lines[:start]
+    suffix = body[end + 1:]
+    has_suffix_noise = any(line.strip() for line in suffix)
+    if not prefix and not has_suffix_noise:
         return
 
     try:
         with warnings_path.open("a") as wlog:
-            wlog.write("\n# stdout diagnostics moved from IR output\n")
-            for line in lines[:start]:
-                wlog.write(line)
+            if prefix:
+                wlog.write("\n# stdout diagnostics moved from IR output\n")
+                for line in prefix:
+                    wlog.write(line)
+            if has_suffix_noise:
+                wlog.write("\n# trailing stdout diagnostics moved from IR output\n")
+                for line in suffix:
+                    wlog.write(line)
         with out_path.open("w") as out:
-            for line in lines[start:]:
+            for line in body[:end + 1]:
                 out.write(line)
     except OSError:
         return
