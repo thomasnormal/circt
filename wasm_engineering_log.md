@@ -1841,3 +1841,54 @@
   - `utils/run_wasm_regressions.sh` remains clean:
     - `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`
     - `[wasm-regressions] PASS`.
+
+## 2026-02-24 (follow-up: remove cocotb allowlist, fix string/VPI root cause)
+- Gap identified (regression-first):
+  - `test_handle.test_string_ansi_color` in cocotb only passed via a temporary
+    allowlist in `utils/run_cocotb_tests.sh`.
+  - direct repro in `vpi-string-put-value-test` failed:
+    - `FAIL: string write propagated to asciival_sum`
+    - `VPI_STRING: FINAL: ... 1 failed`
+- Root cause:
+  - the interpreter collapsed LLHD `delta` and `epsilon` into one counter for
+    immediate-drive visibility checks, so blocking assignments lowered as
+    `<0ns,0d,1e>` were treated like NBA updates for same-process reads.
+- Fixes:
+  - in `tools/circt-sim/LLHDProcessInterpreter.cpp`, `interpretDrive` now
+    treats zero-time epsilon-only delays as immediate for
+    `pendingEpsilonDrives`, while keeping true delta/NBA behavior distinct.
+  - removed cocotb known-failure passthrough in `utils/run_cocotb_tests.sh`.
+  - added regression test pair:
+    - `test/Tools/circt-sim/vpi-string-put-value-test.sv`
+    - `test/Tools/circt-sim/vpi-string-put-value-test.c`
+- Validation:
+  - `ninja -C build-test circt-sim`: PASS
+  - `cc -shared -fPIC -o /tmp/vpi-string-put-value-test.so test/Tools/circt-sim/vpi-string-put-value-test.c -ldl && build-test/bin/circt-verilog test/Tools/circt-sim/vpi-string-put-value-test.sv --ir-moore --ir-hw --ir-llhd -o /tmp/vpi-string-put-value-test.mlir && build-test/bin/circt-sim /tmp/vpi-string-put-value-test.mlir --top vpi_string_test --max-time=100000 --vpi=/tmp/vpi-string-put-value-test.so`: PASS (`VPI_STRING: FINAL: 6 passed, 0 failed`)
+  - `utils/run_cocotb_tests.sh test_cocotb`: PASS (`286 tests`)
+
+## 2026-02-24 (follow-up: circt-verilog.wasm UVM compile trap after output emission)
+- Gap identified (repro-first):
+  - wasm `circt-verilog.js` compiling a minimal `tb_top.sv` that imports full
+    `uvm_pkg` produced output MLIR, then trapped in Node with:
+    - `RuntimeError: memory access out of bounds`
+  - same input succeeded natively; issue was wasm-runtime specific.
+- Realization:
+  - enabling heap growth alone (`-sALLOW_MEMORY_GROWTH=1`) was not sufficient;
+    the compile path still needed a larger fixed wasm stack budget.
+- Fixes:
+  - in `tools/circt-verilog/CMakeLists.txt`:
+    - added `CIRCT_VERILOG_WASM_STACK_SIZE` (bytes, default `33554432`).
+    - validates numeric/positive values under `EMSCRIPTEN`.
+    - links `circt-verilog` with `-sSTACK_SIZE=<value>`.
+  - in `utils/configure_wasm_build.sh`:
+    - added `CIRCT_VERILOG_WASM_STACK_SIZE` env passthrough + validation.
+    - threads option into cmake configure command.
+  - in `utils/wasm_configure_contract_check.sh`:
+    - added command-token/source-token checks for the new stack-size knob.
+    - added invalid override cases (`maybe`, `0`) with explicit diagnostics.
+- Validation:
+  - `utils/wasm_configure_contract_check.sh`: PASS.
+  - `ninja -C build-wasm circt-verilog`: PASS.
+  - wasm repro command:
+    - `node build-wasm/bin/circt-verilog.js --resource-guard=false --ir-llhd --timescale 1ns/1ns --uvm-path lib/Runtime/uvm-core -I lib/Runtime/uvm-core/src --top tb_top -o <tmp>/design.llhd.mlir <tmp>/tb_top.sv`
+    - exit code `0`; output generated (`~25 MB` MLIR); no wasm trap.
