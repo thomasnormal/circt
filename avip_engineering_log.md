@@ -6923,3 +6923,37 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Validation
 - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-assume-accept-on-bounded-window-abort-pass-runtime.sv build_test/test/Tools/circt-sim/sva-assume-disable-iff-bounded-window-abort-pass-runtime.sv` -> `2/2` PASS.
 - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='assume-.*accept-on|assume-.*reject-on|assume-.*disable-iff|accept-on|reject-on|disable-iff' build_test/test/Tools/circt-sim` -> `17/17` PASS.
+
+## 2026-02-24: Clocked Cover Async `accept_on` Gap + Fix
+
+### Gap identified
+- Async abort handling (`accept_on` / `reject_on` between-edge pulses) existed
+  for clocked assertions/assumptions, but not for clocked covers.
+- Repro showed:
+  - `cover property (@(posedge clk) accept_on(c) (1'b1 |-> ##1 b));`
+  - with `b=0` and only an async pulse on `c`, cover signal stayed `0` (no hit),
+    while async `accept_on` should produce a vacuous-success hit.
+
+### Fix
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - extended `registerClockedCovers` with:
+    - `evaluationProperty` canonicalization.
+    - async abort-condition extraction.
+    - async abort watcher process + sticky latch.
+  - extended `executeClockedCover` with:
+    - sampled async-abort truth overrides.
+    - override cleanup scope guard.
+    - disable-time temporal-state reset for cover consistency.
+
+### New regressions
+- `test/Tools/circt-sim/sva-vcd-cover-accept-on-async-pulse-runtime.sv`
+- `test/Tools/circt-sim/sva-vcd-cover-sync-accept-on-async-pulse-runtime.sv`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-vcd-cover-accept-on-async-pulse-runtime.sv build_test/test/Tools/circt-sim/sva-vcd-cover-sync-accept-on-async-pulse-runtime.sv build_test/test/Tools/circt-sim/sva-vcd-cover-signal-runtime.sv build_test/test/Tools/circt-sim/sva-vcd-immediate-cover-signal-runtime.sv` -> `4/4` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='cover|accept-on|reject-on|disable-iff' build_test/test/Tools/circt-sim` -> `33/33` PASS.
+- `OUT=/tmp/sv-tests-sim-ch16-after-cover-abort-fix.txt DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX='(^| )16\\.' utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `42/42` PASS.
+
+### Realizations / surprises
+- The gap was invisible in assertion-focused testing; cover-path parity needed
+  explicit VCD signal checks to expose async-abort behavior.
