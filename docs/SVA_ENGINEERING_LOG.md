@@ -2,6 +2,36 @@
 
 ## 2026-02-24
 
+- Iteration update (deferred immediate assertion no-spin lowering):
+  - realization:
+    - module-scope deferred immediate assertions (for example `assume #0`,
+      `assume final`) were lowered into `always` procedures that MooreToCore
+      converted into tight back-edge loops with no `llhd.wait`.
+    - runtime symptom was per-activation guard kills:
+      `exceeded per-activation step limit (10000000)`.
+  - implemented:
+    - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+      - detect `always` procedures containing deferred immediate assert-like
+        ops and no explicit wait ops.
+      - lower these with implicit observed-value wait scheduling (same
+        activation shape used for `always_comb`/`always_latch`) so each
+        activation yields via `llhd.wait` instead of immediate self-looping.
+    - added regressions:
+      - `test/Conversion/MooreToCore/deferred-assert-always-wait.mlir`
+      - `test/Tools/circt-sim/sva-deferred-immediate-no-spin-runtime.sv`
+    - updated:
+      - `test/Conversion/MooreToCore/sva-assertions.mlir`
+  - validation:
+    - deferred no-spin conversion/runtime regressions: pass.
+    - focused `verif-noop` regressions: pass.
+    - forced Chapter 16 sv-tests runtime sweep:
+      - before: `total=42 pass=20 fail=19 xfail=3`
+      - after: `total=42 pass=36 fail=3 xfail=3`
+      - remaining fails are only:
+        - `16.2--assume`
+        - `16.2--assume0`
+        - `16.2--assume-final`
+
 - Iteration update (sequence-local-var + implication finalization parity):
   - realizations:
     - `sva-sequence-local-var-runtime.sv` was still emitted as

@@ -29,15 +29,19 @@ moore.module @ImmediateAssertions(in %cond : !moore.l1, in %cond2 : !moore.l1) {
 moore.module @DeferredAssertions(in %cond : !moore.l1) {
   moore.procedure always {
     // Observed deferred assertion (assert #0)
+    // CHECK: llhd.process {
     // CHECK: %[[VAL1:.*]] = hw.struct_extract %cond["value"]
     // CHECK: verif.assert %[[VAL1]] label "" : i1
     moore.assert observed %cond : l1
 
-  // Final deferred assertion (assert final)
-  // CHECK: %[[VAL2:.*]] = hw.struct_extract %cond["value"]
-  // CHECK: verif.assert %[[VAL2]] label "" {bmc.final} : i1
-  moore.assert final %cond : l1
+    // Final deferred assertion (assert final)
+    // CHECK: %[[VAL2:.*]] = hw.struct_extract %cond["value"]
+    // CHECK: verif.assert %[[VAL2]] label "" {bmc.final} : i1
+    moore.assert final %cond : l1
 
+    // Deferred immediate assertions in `always` now wait for observed changes
+    // between activations instead of spinning in a tight self-loop.
+    // CHECK: llhd.wait
     moore.return
   }
 }

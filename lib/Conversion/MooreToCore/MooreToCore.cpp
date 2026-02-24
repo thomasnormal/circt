@@ -2280,10 +2280,29 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
   LogicalResult
   matchAndRewrite(ProcedureOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    bool needsDeferredAssertionWaitLoop = false;
+    if (op.getKind() == ProcedureKind::Always) {
+      bool hasExplicitWait = !op.getBody().getOps<WaitEventOp>().empty() ||
+                             !op.getBody().getOps<WaitDelayOp>().empty();
+      if (!hasExplicitWait) {
+        auto hasDeferredAssertLike = [&](auto assertLikeOp) {
+          if (assertLikeOp.getDefer() != DeferAssert::Immediate)
+            needsDeferredAssertionWaitLoop = true;
+        };
+        op.walk([&](AssertOp assertOp) { hasDeferredAssertLike(assertOp); });
+        op.walk([&](AssumeOp assumeOp) { hasDeferredAssertLike(assumeOp); });
+        op.walk([&](CoverOp coverOp) { hasDeferredAssertLike(coverOp); });
+      }
+    }
+
+    bool needsImplicitWaitLoop =
+        op.getKind() == ProcedureKind::AlwaysComb ||
+        op.getKind() == ProcedureKind::AlwaysLatch ||
+        needsDeferredAssertionWaitLoop;
+
     // Collect values to observe before we do any modifications to the region.
     SmallVector<Value> observedValues;
-    if (op.getKind() == ProcedureKind::AlwaysComb ||
-        op.getKind() == ProcedureKind::AlwaysLatch) {
+    if (needsImplicitWaitLoop) {
       SmallDenseSet<Value> assignedValues;
       collectAssignedValues(op.getBody(), assignedValues);
       auto setInsertionPoint = [&](Value value) {
@@ -2478,8 +2497,7 @@ struct ProcedureOpConversion : public OpConversionPattern<ProcedureOp> {
     // we create another basic block that contains the implicit wait, and make
     // all `moore.return` ops branch to that wait block instead of immediately
     // jumping back up to the body.
-    if (op.getKind() == ProcedureKind::AlwaysComb ||
-        op.getKind() == ProcedureKind::AlwaysLatch) {
+    if (needsImplicitWaitLoop) {
       Block *waitBlock = rewriter.createBlock(&newOp.getBody());
       llhd::WaitOp::create(rewriter, loc, ValueRange{}, Value(), observedValues,
                            ValueRange{}, block);
