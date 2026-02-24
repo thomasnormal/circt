@@ -62,6 +62,35 @@ internal sim wall limit below external hard kill.
 - `utils/avip_sim_nightly_timeout_policy_behavior_check.sh` PASS.
 - lit test for policy check PASS.
 
+## 2026-02-24 Session: AVIP Verilog Tool Snapshot Hardening
+
+### Why this pass
+`avip_verilog_smoke` intermittently failed in unified regression with:
+- `PermissionError: [Errno 13] Permission denied: '/home/thomas-ahle/circt/build-test/bin/circt-verilog'`
+
+This is consistent with a mutable tool-path race during local rebuilds.
+
+### Test-first change
+Added a focused behavior check:
+- `utils/avip_circt_verilog_tool_snapshot_behavior_check.sh`
+- `test/Tools/run-avip-circt-verilog-tool-snapshot-behavior.test`
+
+The test verifies that:
+- a non-executable source tool path can still be used,
+- runner invokes an executable snapshot path (not the mutable source path),
+- source tool permissions are not mutated.
+
+### Fix
+Updated `utils/run_avip_circt_verilog.sh`:
+- snapshot `CIRCT_VERILOG` into `$(dirname "$OUT")/.tool-snapshot/circt-verilog`
+- `chmod +x` the snapshot
+- execute the snapshot path in the python frontend driver.
+
+### Validation
+- `utils/avip_circt_verilog_tool_snapshot_behavior_check.sh` PASS.
+- lit behavior test PASS.
+- `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^avip_verilog_smoke$'` PASS.
+
 ## 2026-02-24 Session: Canonical `build-test` Tooling + JTAG Compile Recovery
 
 ### Why this pass
