@@ -7682,3 +7682,44 @@ Based on these findings, the circt-sim compiled process architecture:
 - The failure was not in front-end SVA lowering; it was an export-contract gap:
   solver-region purity for SMT-LIB required bridging float compare chains to
   SMT bitvector predicates before emission.
+
+## 2026-02-24: Yosys SVA sim-only fail-mode skip classification
+
+### Gap identified
+- `yosys/tests/sva` lane was green functionally, but had a persistent mode
+  hygiene issue:
+  - `sva_value_change_sim` produced `SKIP(sim-only)` in fail mode and was
+    counted as `skip_unexpected` because default expectation is `pass`.
+- This was a harness contract issue, not an SVA lowering/runtime correctness
+  issue.
+
+### Root cause
+- In `utils/run_yosys_sva_circt_bmc.sh`, sim-only cases (tests with `.ys` and
+  no `<test>_<mode>.sby`) forced fail mode to immediate skip, and
+  `report_skipped_case` had no way to mark that skip as expected.
+- Fail-mode sim-only execution also lacked `-DFAIL` injection even when a
+  source had a FAIL macro branch.
+
+### Implementation
+- `utils/run_yosys_sva_circt_bmc.sh`
+  - extended `report_skipped_case` with optional expected-outcome override.
+  - fail-mode sim-only dispatch:
+    - if source has a FAIL macro branch, run sim-only path (with `-DFAIL`).
+    - otherwise classify skip as expected (`skip`) directly.
+  - sim-only compile path now passes `-DFAIL` in fail mode.
+- Updated regression expectations:
+  - `test/Tools/run-yosys-sva-bmc-sim-only-run.test`
+  - `test/Tools/run-yosys-sva-bmc-sim-only-cycles.test`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/run-yosys-sva-bmc-sim-only-run.test build-test/test/Tools/run-yosys-sva-bmc-sim-only-cycles.test build-test/test/Tools/run-yosys-sva-bmc-sim-only-skip.test`
+  - result: `3/3 PASS`
+- `OUT=/tmp/yosys-sva-bmc-now3.txt TEST_FILTER='.' BMC_SMOKE_ONLY=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+  - `PASS(pass): sva_value_change_sim`
+  - `SKIP_EXPECTED(fail): sva_value_change_sim [known]`
+  - mode summary: `skip_unexpected=0`
+
+### Realizations / surprises
+- The observed “gap” was mostly a scoring/expectation mismatch in a mixed
+  BMC+sim harness. Fixing this improves signal quality before deeper SVA
+  semantic work.
