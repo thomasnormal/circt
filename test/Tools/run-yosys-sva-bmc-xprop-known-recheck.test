@@ -1,0 +1,24 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: echo 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule' > %t/simple.sv
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-verilog.sh && echo 'echo "// dummy mlir"' >> %t/fake-verilog.sh
+// RUN: echo '#!/usr/bin/env bash' > %t/fake-bmc.sh
+// RUN: echo 'for arg in "$@"; do' >> %t/fake-bmc.sh
+// RUN: echo '  if [[ "$arg" == "--assume-known-inputs" ]]; then' >> %t/fake-bmc.sh
+// RUN: echo '    echo "BMC_RESULT=UNSAT"' >> %t/fake-bmc.sh
+// RUN: echo '    echo "Bound reached with no violations!"' >> %t/fake-bmc.sh
+// RUN: echo '    exit 0' >> %t/fake-bmc.sh
+// RUN: echo '  fi' >> %t/fake-bmc.sh
+// RUN: echo 'done' >> %t/fake-bmc.sh
+// RUN: echo 'echo "BMC_RESULT=SAT"' >> %t/fake-bmc.sh
+// RUN: echo 'echo "Assertion can be violated!"' >> %t/fake-bmc.sh
+// RUN: echo 'exit 0' >> %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_BIN=/bin/true BMC_ASSUME_KNOWN_INPUTS=0 SKIP_VHDL=0 \
+// RUN:   DISABLE_UVM_AUTO_INCLUDE=1 SKIP_FAIL_WITHOUT_MACRO=0 \
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t | FileCheck %s
+
+// CHECK: PASS_RECHECK_ASSUME_KNOWN(pass): simple
+// CHECK: PASS(pass): simple
+// CHECK: PASS(fail): simple
+// CHECK: yosys SVA summary: 1 tests, failures=0
