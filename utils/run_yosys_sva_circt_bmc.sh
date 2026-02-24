@@ -8368,6 +8368,7 @@ report_skipped_case() {
   local reason="$4"
   local emit_line="${5:-1}"
   local case_path="${6:-$YOSYS_SVA_DIR/$base.sv}"
+  local expected_override="${7:-}"
   mode_total=$((mode_total + 1))
   mode_skipped=$((mode_skipped + 1))
   case "$mode" in
@@ -8382,7 +8383,11 @@ report_skipped_case() {
   esac
   record_skipped_case "$base" "$mode" "$profile"
   local expected
-  expected="$(lookup_expected_case "$base" "$mode" "$profile")"
+  if [[ -n "$expected_override" ]]; then
+    expected="$expected_override"
+  else
+    expected="$(lookup_expected_case "$base" "$mode" "$profile")"
+  fi
   if [[ "$emit_line" == "1" ]]; then
     echo "SKIP($reason): $base"
   fi
@@ -8471,10 +8476,23 @@ run_case() {
       if [[ "$mode" == "pass" ]]; then
         run_sim_only_case=1
       else
-        report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
-        return
+        # Fail-mode sim-only needs either a dedicated fail harness or a FAIL
+        # macro branch. Otherwise it is an expected skip.
+        if grep -qE '^\s*`(ifn?def|if)\s+FAIL\b' "$sv"; then
+          run_sim_only_case=1
+        else
+          report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv" "skip"
+          return
+        fi
       fi
     fi
+  fi
+
+  # In smoke mode we treat sim-only tests as unsupported by BMC and skip them
+  # for both pass/fail profiles to keep the lane deterministic.
+  if [[ "$run_sim_only_case" == "1" && "$BMC_SMOKE_ONLY" == "1" ]]; then
+    report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
+    return
   fi
 
   if [[ "$run_sim_only_case" == "1" ]]; then
@@ -8541,6 +8559,10 @@ run_case() {
     local verilog_log="$tmpdir/${base}_${mode}.circt-verilog.log"
     local sim_log="$tmpdir/${base}_${mode}.circt-sim.log"
     local wrapper="$tmpdir/${base}_${mode}.sim-only-wrapper.sv"
+    local sim_extra_def=()
+    if [[ "$mode" == "fail" ]]; then
+      sim_extra_def=(-DFAIL)
+    fi
 
     cat > "$wrapper" <<EOF
 module __circt_yosys_sim_tb;
@@ -8565,7 +8587,7 @@ EOF
       verilog_args+=("${extra_args[@]}")
     fi
     : > "$verilog_log"
-    if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" "$sv" "$wrapper" \
+    if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" "${sim_extra_def[@]}" "$sv" "$wrapper" \
       > "$mlir" 2>> "$verilog_log"; then
       report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
       if [[ -n "$KEEP_LOGS_DIR" ]]; then

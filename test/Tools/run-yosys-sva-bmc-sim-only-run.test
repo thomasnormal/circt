@@ -13,3 +13,4 @@
 // CHECK: PASS(pass): simonly
 // CHECK: SKIP(sim-only): simonly
 // CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+// CHECK: yosys SVA mode summary: total=2 pass=1 fail=0 xfail=0 xpass=0 epass=0 efail=0 unskip=0 skipped=1 skip_pass=0 skip_fail=1 skip_expected=1 skip_unexpected=0
