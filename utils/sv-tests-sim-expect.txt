@@ -126,9 +126,8 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 # Should-fail tests detected via frontend analysis:
 # 6.5--variable_mixed_assignments: correctly rejected (mixed procedural/continuous)
 # 6.5--variable_multiple_assignments: correctly rejected (multiple continuous assigns)
-# Remaining gap:
-# 11.9--tagged_union_member_access_inv still needs runtime invalid-member failure
-# semantics for tagged unions.
+# 11.9--tagged_union_member_access_inv: runtime invalid-member failure now
+# emitted via tagged-union guard.
 
 # Should-fail local-var SVA simulation tests now fail correctly via runtime
 # evaluation and are handled as XFAIL by sv-tests metadata. No expect entries.

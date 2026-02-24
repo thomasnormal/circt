@@ -23354,7 +23354,7 @@ static LogicalResult convert(FinishBIOp op, FinishBIOp::Adaptor adaptor,
 
 // moore.builtin.severity -> runtime function call
 // Calls __moore_error, __moore_warning, or __moore_info to track counts.
-// Note: $fatal is handled separately with FinishBIOp.
+// For fatal severity, also emit a failing sim.terminate.
 static LogicalResult convert(SeverityBIOp op, SeverityBIOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
   auto loc = op.getLoc();
@@ -23417,6 +23417,11 @@ static LogicalResult convert(SeverityBIOp op, SeverityBIOp::Adaptor adaptor,
   // The actual message was already printed above.
   auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
   LLVM::CallOp::create(rewriter, loc, fn, ValueRange{nullPtr});
+
+  // Fatal severity must terminate simulation with a failing exit code.
+  if (op.getSeverity() == Severity::Fatal)
+    sim::TerminateOp::create(rewriter, loc, /*success=*/false,
+                             /*verbose=*/false);
 
   rewriter.eraseOp(op);
   return success();
