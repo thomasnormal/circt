@@ -6705,6 +6705,15 @@ void LLHDProcessInterpreter::registerClockedCovers(
     ClockedAssertionState state;
     state.instanceId = instanceId;
     state.inputMap = inputMap;
+    state.evaluationProperty = getClockedAssertLikeEvalProperty(
+        coverOp.getOperation(), coverOp.getProperty(), coverOp.getClock(),
+        clockedAssertLikeEvalPropertyCache);
+    Value asyncAbortCondition;
+    if (extractAsyncAbortCondition(
+            state.evaluationProperty ? state.evaluationProperty
+                                     : coverOp.getProperty(),
+            asyncAbortCondition))
+      state.asyncAbortCondition = asyncAbortCondition;
     std::string traceName;
     if (!label.empty())
       traceName = "__sva__cover_" + sanitizeSvaTraceName(label);
@@ -6739,6 +6748,35 @@ void LLHDProcessInterpreter::registerClockedCovers(
       scheduler.addSensitivity(procId, sig, EdgeType::AnyEdge);
 
     scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+
+    if (state.asyncAbortCondition) {
+      llvm::SmallVector<SignalId, 8> abortSignals;
+      collectSignalIds(state.asyncAbortCondition, abortSignals);
+      if (!abortSignals.empty()) {
+        std::string abortProcName = procName + "_async_abort";
+        auto key = std::make_pair(coverOp.getOperation(), instanceId);
+        ProcessId abortProcId =
+            scheduler.registerProcess(abortProcName, [this, key]() {
+              auto it = clockedCoverStates.find(key);
+              if (it == clockedCoverStates.end())
+                return;
+              ClockedAssertionState &state = it->second;
+              if (!state.asyncAbortCondition)
+                return;
+              ScopedInstanceContext instScope(*this, state.instanceId);
+              ScopedInputValueMap inputScope(*this, state.inputMap);
+              InterpretedValue condVal =
+                  evaluateContinuousValue(state.asyncAbortCondition);
+              if (!condVal.isX() && !condVal.getAPInt().isZero())
+                state.asyncAbortSticky = true;
+            });
+        if (auto *process = scheduler.getProcess(abortProcId))
+          process->setPreferredRegion(SchedulingRegion::Observed);
+        for (SignalId sig : abortSignals)
+          scheduler.addSensitivity(abortProcId, sig, EdgeType::AnyEdge);
+        scheduler.scheduleProcess(abortProcId, SchedulingRegion::Active);
+      }
+    }
   }
 }
 
@@ -6787,19 +6825,35 @@ void LLHDProcessInterpreter::executeClockedCover(verif::ClockedCoverOp coverOp,
   if (!edgeDetected)
     return;
 
+  Value evalProperty =
+      state.evaluationProperty ? state.evaluationProperty : coverOp.getProperty();
+
   if (coverOp.getEnable()) {
     InterpretedValue enableVal = evaluateContinuousValue(coverOp.getEnable());
-    if (enableVal.isX() || enableVal.getAPInt().isZero())
+    if (enableVal.isX() || enableVal.getAPInt().isZero()) {
+      // disable iff aborts active attempts for cover properties as well.
+      resetTemporalStateForValue(evalProperty, state);
+      state.asyncAbortSticky = false;
+      state.sampledTruthOverrides.clear();
       return;
+    }
   }
 
   ++state.sampleOrdinal;
+  if (state.asyncAbortCondition) {
+    if (state.asyncAbortSticky)
+      state.sampledTruthOverrides[state.asyncAbortCondition] =
+          ClockedAssertionState::LTLTruth::True;
+    state.asyncAbortSticky = false;
+  }
   bool savedSampleMode = sampleClockedPropertyFromPreUpdateValues;
   sampleClockedPropertyFromPreUpdateValues = true;
   auto restoreSampleMode = llvm::make_scope_exit([&]() {
     sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
   });
-  auto propTruth = evaluateLTLProperty(coverOp.getProperty(), state);
+  auto clearOverrides =
+      llvm::make_scope_exit([&]() { state.sampledTruthOverrides.clear(); });
+  auto propTruth = evaluateLTLProperty(evalProperty, state);
   if (propTruth == ClockedAssertionState::LTLTruth::True) {
     ++clockedCoverHits;
     setCoveredSignal();
