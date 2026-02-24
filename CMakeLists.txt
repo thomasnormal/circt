@@ -124,9 +124,13 @@ else()
   set(MLIR_MAIN_SRC_DIR ${LLVM_MAIN_SRC_DIR}/../mlir ) # --src-root
   set(MLIR_INCLUDE_DIR ${MLIR_MAIN_SRC_DIR}/include ) # --includedir
   set(MLIR_TABLEGEN_OUTPUT_DIR ${LLVM_BINARY_DIR}/tools/mlir/include)
-  if (CMAKE_CROSSCOMPILING AND DEFINED MLIR_TABLEGEN AND NOT "${MLIR_TABLEGEN}" STREQUAL "")
-    # In cross builds, tablegen must run as a native host tool.
-    set(MLIR_TABLEGEN_EXE ${MLIR_TABLEGEN})
+  if (CMAKE_CROSSCOMPILING)
+    # Keep the host-native mlir-tblgen selected by upstream TableGen logic.
+    # Only override when MLIR_TABLEGEN is an explicit path.
+    if (DEFINED MLIR_TABLEGEN AND NOT "${MLIR_TABLEGEN}" STREQUAL "" AND
+        (IS_ABSOLUTE "${MLIR_TABLEGEN}" OR "${MLIR_TABLEGEN}" MATCHES "[/\\\\]"))
+      set(MLIR_TABLEGEN_EXE "${MLIR_TABLEGEN}")
+    endif()
   else()
     set(MLIR_TABLEGEN_EXE $<TARGET_FILE:mlir-tblgen>)
   endif()
@@ -633,6 +637,19 @@ endif()
 
 if (CIRCT_INCLUDE_TESTS)
   add_definitions(-DCIRCT_INCLUDE_TESTS)
+endif()
+
+# In cross builds that execute host tablegen tools, create CIRCT's native helper
+# targets so build_native_tool() can depend on CONFIGURE_${PROJECT_NAME}_NATIVE.
+if (CMAKE_CROSSCOMPILING AND LLVM_USE_HOST_TOOLS AND NOT LLVM_NATIVE_TOOL_DIR)
+  set(circt_native_extra_args)
+  if (DEFINED LLVM_NATIVE_BUILD AND NOT "${LLVM_NATIVE_BUILD}" STREQUAL "")
+    list(APPEND circt_native_extra_args
+      -DLLVM_DIR=${LLVM_NATIVE_BUILD}/lib/cmake/llvm
+      -DMLIR_DIR=${LLVM_NATIVE_BUILD}/lib/cmake/mlir)
+  endif()
+  llvm_create_cross_target(${PROJECT_NAME} NATIVE "" Release
+    ${circt_native_extra_args})
 endif()
 
 # Add circt-tblgen early, since it sets a few variables needed by other parts of
