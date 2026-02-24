@@ -15,7 +15,7 @@
 // CHECK:   moore.class.propertydecl @data : !moore.i32 rand_mode rand
 // CHECK: }
 
-// CHECK: func.func private @"PreRandomizeClass::pre_randomize"(%arg0: !moore.class<@PreRandomizeClass>) {
+// CHECK: func.func @"PreRandomizeClass::pre_randomize"(%arg0: !moore.class<@PreRandomizeClass>) {
 // CHECK:   return
 // CHECK: }
 
@@ -33,7 +33,7 @@ endclass
 // CHECK:   moore.class.propertydecl @value : !moore.i32 rand_mode rand
 // CHECK: }
 
-// CHECK: func.func private @"PostRandomizeClass::post_randomize"(%arg0: !moore.class<@PostRandomizeClass>) {
+// CHECK: func.func @"PostRandomizeClass::post_randomize"(%arg0: !moore.class<@PostRandomizeClass>) {
 // CHECK:   return
 // CHECK: }
 
@@ -51,8 +51,8 @@ endclass
 // CHECK:   moore.class.propertydecl @x : !moore.i32 rand_mode rand
 // CHECK: }
 
-// CHECK: func.func private @"BothCallbacksClass::pre_randomize"
-// CHECK: func.func private @"BothCallbacksClass::post_randomize"
+// CHECK: func.func @"BothCallbacksClass::pre_randomize"
+// CHECK: func.func @"BothCallbacksClass::post_randomize"
 
 class BothCallbacksClass;
     rand int x;
@@ -76,7 +76,7 @@ endclass
 // CHECK:     %[[READ:.+]] = moore.read %obj
 // CHECK:     moore.call_pre_randomize %[[READ]] : <@BothCallbacksClass>
 // CHECK:     %[[RESULT:.+]] = moore.randomize %[[READ]]
-// CHECK:     moore.call_post_randomize %[[READ]] : <@BothCallbacksClass>
+// CHECK:     moore.call_post_randomize %[[READ]], %[[RESULT]] : <@BothCallbacksClass>
 // CHECK:   }
 // CHECK: }
 
@@ -124,7 +124,7 @@ endmodule
 // CHECK:   moore.class.propertydecl @value : !moore.i32 rand_mode rand
 // CHECK: }
 
-// CHECK: func.func private @"ConstraintSetupClass::pre_randomize"
+// CHECK: func.func @"ConstraintSetupClass::pre_randomize"
 
 class ConstraintSetupClass;
     rand int value;
@@ -143,7 +143,7 @@ endclass
 // CHECK:   moore.class.propertydecl @raw_value : !moore.i32 rand_mode rand
 // CHECK: }
 
-// CHECK: func.func private @"ValidationClass::post_randomize"
+// CHECK: func.func @"ValidationClass::post_randomize"
 
 class ValidationClass;
     rand int raw_value;

@@ -1,5 +1,33 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: randomize-with `this` lookup for element-selected class receivers
+
+### What changed
+- Extended local slang patch:
+  - `patches/slang-randomize-with-scope.patch`
+- Updated regression checks:
+  - `test/Conversion/ImportVerilog/pre-post-randomize.sv`
+
+### Realizations / surprises
+- The failing `this.mode` case in
+  `elems[0].randomize() with { this.mode == 3; }` was not CIRCT lowering; it
+  failed in slang lookup before IR generation.
+- `randomizeDetails.thisVar` can resolve to a non-class symbol when the
+  randomize receiver is an element-select, which breaks explicit `this.*`
+  resolution unless class fallback is enforced.
+
+### Validation snapshot
+- `ninja -C build-test circt-verilog` -> pass.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/randomize-array-element-this.sv`
+  - before fix: fail (`invalid member access for type 'unpacked array [2] of Elem'`).
+  - after fix: pass (`1/1`).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/pre-post-randomize.sv`
+  - after check refresh: pass (`1/1`).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog --filter='randomize-|pre-post-randomize|constraint-solve|class-randomization-.*'`
+  - result: pass (`9/9`).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog --filter='sva-.*|constraint-.*|class-randomization-.*|randomize.*|covergroup.*|binsof.*'`
+  - result: pass (`183/183`).
+
 ## 2026-02-24 Session: Yosys SVA mixed-language gap closure via VHDL stubs
 
 ### What changed
