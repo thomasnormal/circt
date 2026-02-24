@@ -6795,14 +6795,17 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
       }
       if (auto implOp = dyn_cast<ltl::ImplicationOp>(def)) {
         auto trackerIt = state.implicationTrackers.find(def);
-        if (trackerIt != state.implicationTrackers.end() &&
-            (trackerIt->second.hasBoundedWindow ||
-             trackerIt->second.hasUnboundedWindow)) {
+        if (trackerIt != state.implicationTrackers.end()) {
           const auto &tracker = trackerIt->second;
-          for (const auto &pending : tracker.pendingAntecedents) {
-            if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
-              unresolvedStrongEventually = true;
-              break;
+          if (tracker.hasUnboundedWindow) {
+            for (const auto &pending : tracker.pendingAntecedents) {
+              if (pending.sawConsequentTrue || pending.sawConsequentUnknown)
+                continue;
+              uint64_t age = state.sampleOrdinal - pending.triggerSampleOrdinal;
+              if (age >= tracker.unboundedMinShift) {
+                unresolvedStrongEventually = true;
+                break;
+              }
             }
           }
         }
@@ -7015,14 +7018,17 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
       }
       if (auto implOp = dyn_cast<ltl::ImplicationOp>(def)) {
         auto trackerIt = state.implicationTrackers.find(def);
-        if (trackerIt != state.implicationTrackers.end() &&
-            (trackerIt->second.hasBoundedWindow ||
-             trackerIt->second.hasUnboundedWindow)) {
+        if (trackerIt != state.implicationTrackers.end()) {
           const auto &tracker = trackerIt->second;
-          for (const auto &pending : tracker.pendingAntecedents) {
-            if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
-              unresolvedStrongEventually = true;
-              break;
+          if (tracker.hasUnboundedWindow) {
+            for (const auto &pending : tracker.pendingAntecedents) {
+              if (pending.sawConsequentTrue || pending.sawConsequentUnknown)
+                continue;
+              uint64_t age = state.sampleOrdinal - pending.triggerSampleOrdinal;
+              if (age >= tracker.unboundedMinShift) {
+                unresolvedStrongEventually = true;
+                break;
+              }
             }
           }
         }
