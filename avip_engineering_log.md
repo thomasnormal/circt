@@ -1,5 +1,26 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: sync_abort_on runtime coverage closure (SVA)
+
+### What changed
+- Added four `circt-sim` SVA runtime regressions to close missing sync-abort
+  semantics coverage:
+  - `sva-sync-accept-on-sampled-pass-runtime.sv`
+  - `sva-sync-accept-on-async-pulse-fail-runtime.sv`
+  - `sva-sync-reject-on-sampled-fail-runtime.sv`
+  - `sva-sync-reject-on-async-pulse-pass-runtime.sv`
+
+### Realization
+- After fixing async abort pulse latching, sync abort semantics were working but
+  under-specified in runtime tests. This was a parity-risky blind spot.
+
+### Validation snapshot
+- direct test set:
+  - `4/4` pass (new tests).
+- focused abort-on runtime suite:
+  - `8/8` pass with filter:
+    `accept-on|reject-on|abort-on|sync-reject-on|sync-accept-on`.
+
 ## 2026-02-24 Session: Async abort_on pulse semantics (SVA runtime parity)
 
 ### What was fixed
