@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk);\nendmodule\n' > %t/simonly.sv
+// RUN: printf 'read -sv simonly.sv\nhierarchy -top top\nsim -clock clk\n' > %t/simonly.ys
+// RUN: printf '#!/usr/bin/env bash\necho should_not_run_verilog >&2\nexit 9\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\necho should_not_run_bmc >&2\nexit 9\n' > %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null SKIP_VHDL=0 DISABLE_UVM_AUTO_INCLUDE=1 \
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t \
+// RUN:   | FileCheck %s
+
+// CHECK: SKIP(sim-only): simonly
+// CHECK: SKIP(sim-only): simonly
+// CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0

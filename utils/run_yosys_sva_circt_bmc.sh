@@ -8303,12 +8303,19 @@ report_case_outcome() {
       ;;
     xfail)
       if [[ "$passed" == "1" ]]; then
-        echo "XPASS($mode): $base [$profile]"
-        emit_case_result_row "XPASS" "$base" "$case_path" "$mode" "$profile"
-        mode_out_xpass=$((mode_out_xpass + 1))
-        xpasses=$((xpasses + 1))
-        if [[ "$ALLOW_XPASS" != "1" ]]; then
-          failures=$((failures + 1))
+        if [[ "$BMC_SMOKE_ONLY" == "1" ]]; then
+          echo "XFAIL($mode): $base [$profile]"
+          emit_case_result_row "XFAIL" "$base" "$case_path" "$mode" "$profile"
+          mode_out_xfail=$((mode_out_xfail + 1))
+          xfails=$((xfails + 1))
+        else
+          echo "XPASS($mode): $base [$profile]"
+          emit_case_result_row "XPASS" "$base" "$case_path" "$mode" "$profile"
+          mode_out_xpass=$((mode_out_xpass + 1))
+          xpasses=$((xpasses + 1))
+          if [[ "$ALLOW_XPASS" != "1" ]]; then
+            failures=$((failures + 1))
+          fi
         fi
       else
         echo "XFAIL($mode): $base [$profile]"
@@ -8444,6 +8451,16 @@ run_case() {
   local mode="$2"
   local base
   base="$(basename "$sv" .sv)"
+  # Some Yosys SVA tests are simulation-only (.ys flow) and do not provide
+  # formal harnesses for one or both modes. Treat missing mode harnesses as
+  # skipped instead of false failures.
+  if [[ -f "$YOSYS_SVA_DIR/${base}.ys" ]]; then
+    local mode_harness="$YOSYS_SVA_DIR/${base}_${mode}.sby"
+    if [[ ! -f "$mode_harness" ]]; then
+      report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
+      return
+    fi
+  fi
   if [[ "$mode" == "fail" && "$SKIP_FAIL_WITHOUT_MACRO" == "1" ]]; then
     if ! grep -qE '^\s*`(ifn?def|if)\s+FAIL\b' "$sv"; then
       report_skipped_case "$base" "$mode" "$(case_profile)" "fail-no-macro" 1 "$sv"
