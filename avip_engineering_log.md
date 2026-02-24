@@ -1,5 +1,20 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: reject_on runtime matrix completion (SVA)
+
+### What changed
+- Added two `circt-sim` runtime tests to complete non-sync `reject_on`
+  pass/fail coverage:
+  - `sva-reject-on-implication-pass-runtime.sv`
+  - `sva-reject-on-sampled-fail-runtime.sv`
+
+### Validation snapshot
+- new tests:
+  - `2/2` pass.
+- focused abort-on runtime suite:
+  - `10/10` pass with filter:
+    `accept-on|reject-on|sync-accept-on|sync-reject-on|abort-on`.
+
 ## 2026-02-24 Session: sync_abort_on formal coverage closure (BMC)
 
 ### What changed
