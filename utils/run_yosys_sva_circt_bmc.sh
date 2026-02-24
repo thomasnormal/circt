@@ -8472,6 +8472,8 @@ run_case() {
   if [[ "$run_sim_only_case" == "1" ]]; then
     local clock_name=""
     local sim_top_name=""
+    local sim_cycles=""
+    local sim_toggle_steps="$SIM_ONLY_TOGGLE_STEPS"
     sim_top_name="$(awk '
       /^[[:space:]]*hierarchy([[:space:]]|$)/ {
         for (i = 1; i <= NF; ++i) {
@@ -8488,6 +8490,19 @@ run_case() {
     if [[ -z "$sim_top_name" || ! "$sim_top_name" =~ ^[a-zA-Z_][a-zA-Z0-9_$]*$ ]]; then
       report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
       return
+    fi
+    sim_cycles="$(awk '
+      /^[[:space:]]*sim([[:space:]]|$)/ {
+        for (i = 1; i <= NF; ++i) {
+          if ($i == "-n" && i < NF) {
+            print $(i + 1)
+            exit
+          }
+        }
+      }
+    ' "$ys_file")"
+    if [[ -n "$sim_cycles" && "$sim_cycles" =~ ^[0-9]+$ && "$sim_cycles" -gt 0 ]]; then
+      sim_toggle_steps=$((sim_cycles * 2))
     fi
     clock_name="$(awk '
       /^[[:space:]]*sim([[:space:]]|$)/ {
@@ -8525,7 +8540,7 @@ module __circt_yosys_sim_tb;
   $sim_top_name dut(.$clock_name($clock_name));
   initial begin
     $clock_name = 1'b0;
-    repeat ($SIM_ONLY_TOGGLE_STEPS) begin
+    repeat ($sim_toggle_steps) begin
       #1 $clock_name = ~$clock_name;
     end
     \$finish;
