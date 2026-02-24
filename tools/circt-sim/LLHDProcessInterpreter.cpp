@@ -120,6 +120,35 @@ static bool computeMemoryBackedArrayBitOffset(hw::ArrayType arrayType,
   return true;
 }
 
+// circt-sim evaluates clocked assertions/assumptions through the LTL runtime
+// evaluator. For sequence-typed assert-like properties, routing evaluation
+// through an implication form preserves established runtime behavior without
+// changing importer/BMC IR semantics.
+static Value getClockedAssertLikeEvalProperty(
+    mlir::Operation *assertLikeOp, Value property, Value anchorSignal,
+    llvm::DenseMap<mlir::Operation *, mlir::Value> &cache) {
+  if (!assertLikeOp || !property || !isa<ltl::SequenceType>(property.getType()))
+    return property;
+  if (!property.getDefiningOp<ltl::ConcatOp>())
+    return property;
+  auto it = cache.find(assertLikeOp);
+  if (it != cache.end())
+    return it->second;
+
+  OpBuilder builder(assertLikeOp);
+  Location loc = assertLikeOp->getLoc();
+  Value trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+  Value antecedent = trueVal;
+  if (anchorSignal && anchorSignal.getType().isInteger(1)) {
+    Value notAnchor = arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
+    antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
+  }
+  Value evalProperty =
+      ltl::ImplicationOp::create(builder, loc, antecedent, property);
+  cache[assertLikeOp] = evalProperty;
+  return evalProperty;
+}
+
 static std::optional<llvm::APFloat>
 decodeFloatValueBits(const InterpretedValue &value, Type floatValueType) {
   auto floatType = dyn_cast<FloatType>(floatValueType);
@@ -6168,6 +6197,9 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     ClockedAssertionState state;
     state.instanceId = instanceId;
     state.inputMap = inputMap;
+    state.evaluationProperty = getClockedAssertLikeEvalProperty(
+        assertOp.getOperation(), assertOp.getProperty(), assertOp.getClock(),
+        clockedAssertLikeEvalPropertyCache);
     std::string traceName;
     if (!label.empty())
       traceName = "__sva__" + sanitizeSvaTraceName(label);
@@ -6279,7 +6311,9 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   auto restoreSampleMode = llvm::make_scope_exit([&]() {
     sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
   });
-  auto propTruth = evaluateLTLProperty(assertOp.getProperty(), state);
+  Value evalProperty =
+      state.evaluationProperty ? state.evaluationProperty : assertOp.getProperty();
+  auto propTruth = evaluateLTLProperty(evalProperty, state);
   bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssertionSignal(propHolds);
   if (!propHolds) {
@@ -6317,6 +6351,9 @@ void LLHDProcessInterpreter::registerClockedAssumptions(
     ClockedAssertionState state;
     state.instanceId = instanceId;
     state.inputMap = inputMap;
+    state.evaluationProperty = getClockedAssertLikeEvalProperty(
+        assumeOp.getOperation(), assumeOp.getProperty(), assumeOp.getClock(),
+        clockedAssertLikeEvalPropertyCache);
     std::string traceName;
     if (!label.empty())
       traceName = "__sva__assume_" + sanitizeSvaTraceName(label);
@@ -6416,7 +6453,9 @@ void LLHDProcessInterpreter::executeClockedAssumption(
   auto restoreSampleMode = llvm::make_scope_exit([&]() {
     sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
   });
-  auto propTruth = evaluateLTLProperty(assumeOp.getProperty(), state);
+  Value evalProperty =
+      state.evaluationProperty ? state.evaluationProperty : assumeOp.getProperty();
+  auto propTruth = evaluateLTLProperty(evalProperty, state);
   bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssumptionSignal(propHolds);
   if (!propHolds) {
@@ -6676,7 +6715,9 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
     ScopedInputValueMap inputScope(*this, state.inputMap);
 
     bool unresolvedStrongEventually = false;
-    llvm::SmallVector<Value, 16> worklist{assertOp.getProperty()};
+    Value evalProperty =
+        state.evaluationProperty ? state.evaluationProperty : assertOp.getProperty();
+    llvm::SmallVector<Value, 16> worklist{evalProperty};
     while (!worklist.empty() && !unresolvedStrongEventually) {
       Value cur = worklist.pop_back_val();
       if (!cur)
@@ -6896,7 +6937,9 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
     ScopedInputValueMap inputScope(*this, state.inputMap);
 
     bool unresolvedStrongEventually = false;
-    llvm::SmallVector<Value, 16> worklist{assumeOp.getProperty()};
+    Value evalProperty =
+        state.evaluationProperty ? state.evaluationProperty : assumeOp.getProperty();
+    llvm::SmallVector<Value, 16> worklist{evalProperty};
     while (!worklist.empty() && !unresolvedStrongEventually) {
       Value cur = worklist.pop_back_val();
       if (!cur)
@@ -21846,6 +21889,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     FuncCallCacheEntry entry;
     entry.funcOp = funcOp;
     entry.noInterception = true;
+    // Check if a native compiled version exists (Phase F1).
+    if (!nativeFuncPtrs.empty()) {
+      auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
+      if (nativeIt != nativeFuncPtrs.end())
+        entry.nativeFuncPtr = nativeIt->second;
+    }
     funcCallCache[callOp.getOperation()] = entry;
     ++funcCallCacheMisses;
   }
@@ -22118,6 +22167,102 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   bool addedToVisited = hasArg0;
   if (hasArg0)
     ++depthMap[arg0Val];
+
+  // === Native dispatch (Phase F1) — cached path ===
+  // Look up from the cache entry populated during slow-path creation.
+  void *nfp = nullptr;
+  {
+    auto cacheIt = funcCallCache.find(callOp.getOperation());
+    if (cacheIt != funcCallCache.end())
+      nfp = cacheIt->second.nativeFuncPtr;
+  }
+  if (nfp) {
+    unsigned numArgs = args.size();
+    unsigned numResults = callOp.getNumResults();
+    if (numArgs <= 8 && numResults <= 1) {
+      uint64_t a[8] = {};
+      bool canDispatch = true;
+      for (unsigned i = 0; i < numArgs; ++i) {
+        if (args[i].getWidth() <= 64)
+          a[i] = args[i].getUInt64();
+        else {
+          canDispatch = false;
+          break;
+        }
+      }
+      if (canDispatch && numResults == 1) {
+        unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
+        if (resWidth > 64)
+          canDispatch = false;
+      }
+      if (canDispatch) {
+        ++nativeFuncCallCount;
+        ++state.callDepth;
+        using F0 = uint64_t (*)();
+        using F1 = uint64_t (*)(uint64_t);
+        using F2 = uint64_t (*)(uint64_t, uint64_t);
+        using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+        using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+        using F5 =
+            uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+        using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                uint64_t, uint64_t);
+        using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                uint64_t, uint64_t, uint64_t);
+        using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                uint64_t, uint64_t, uint64_t, uint64_t);
+        uint64_t retVal = 0;
+        switch (numArgs) {
+        case 0:
+          retVal = reinterpret_cast<F0>(nfp)();
+          break;
+        case 1:
+          retVal = reinterpret_cast<F1>(nfp)(a[0]);
+          break;
+        case 2:
+          retVal = reinterpret_cast<F2>(nfp)(a[0], a[1]);
+          break;
+        case 3:
+          retVal = reinterpret_cast<F3>(nfp)(a[0], a[1], a[2]);
+          break;
+        case 4:
+          retVal = reinterpret_cast<F4>(nfp)(a[0], a[1], a[2], a[3]);
+          break;
+        case 5:
+          retVal =
+              reinterpret_cast<F5>(nfp)(a[0], a[1], a[2], a[3], a[4]);
+          break;
+        case 6:
+          retVal = reinterpret_cast<F6>(nfp)(a[0], a[1], a[2], a[3], a[4],
+                                              a[5]);
+          break;
+        case 7:
+          retVal = reinterpret_cast<F7>(nfp)(a[0], a[1], a[2], a[3], a[4],
+                                              a[5], a[6]);
+          break;
+        case 8:
+          retVal = reinterpret_cast<F8>(nfp)(a[0], a[1], a[2], a[3], a[4],
+                                              a[5], a[6], a[7]);
+          break;
+        }
+        --state.callDepth;
+        if (addedToVisited) {
+          auto &depthRef =
+              processStates[procId].recursionVisited[funcKey][arg0Val];
+          if (depthRef > 0)
+            --depthRef;
+        }
+        if (numResults == 1) {
+          unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
+          setValue(procId, callOp.getResult(0),
+                   InterpretedValue(llvm::APInt(resWidth, retVal)));
+        }
+        return success();
+      }
+    }
+    // Fell through — can't native dispatch (wide args), use interpreter
+    ++interpretedFuncCallCount;
+  }
 
   // Execute function body.
   ++state.callDepth;
