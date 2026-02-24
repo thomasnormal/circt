@@ -1636,6 +1636,7 @@
     - `wasm-uvm-stub-vcd`
     - `wasm-plusargs-reentry`
     - `vpi-string-put-value-test`
+    - `vpi-string-put-value-delayed-test`
     - `uvm-phase-add-duplicate-fast-path`
   - script emits summary:
     - `[wasm-regressions] summary: failures=<n> xfails=<n>`
