@@ -112,6 +112,37 @@ static std::string sanitizeSvaTraceName(llvm::StringRef name) {
 constexpr const char kAbortOnActionAttr[] = "sva.abort_on.action";
 constexpr const char kAbortOnSyncAttr[] = "sva.abort_on.sync";
 
+static bool splitAbortOnInputs(ValueRange inputs, Value &conditionInput,
+                               Value &propertyInput) {
+  conditionInput = Value{};
+  propertyInput = Value{};
+  if (inputs.size() != 2)
+    return false;
+
+  auto isPropOrSeq = [](Type type) {
+    return isa<ltl::PropertyType, ltl::SequenceType>(type);
+  };
+
+  Value lhs = inputs[0];
+  Value rhs = inputs[1];
+  bool lhsIsProp = isPropOrSeq(lhs.getType());
+  bool rhsIsProp = isPropOrSeq(rhs.getType());
+  bool lhsIsBool = lhs.getType().isInteger(1);
+  bool rhsIsBool = rhs.getType().isInteger(1);
+
+  if (lhsIsBool && rhsIsProp) {
+    conditionInput = lhs;
+    propertyInput = rhs;
+    return true;
+  }
+  if (rhsIsBool && lhsIsProp) {
+    conditionInput = rhs;
+    propertyInput = lhs;
+    return true;
+  }
+  return false;
+}
+
 static bool extractAsyncAbortCondition(Value property, Value &condition) {
   condition = Value{};
   if (!property)
@@ -7261,6 +7292,34 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
   return finalFailures;
 }
 
+void LLHDProcessInterpreter::resetTemporalStateForValue(
+    mlir::Value val, ClockedAssertionState &state) {
+  if (!val)
+    return;
+  llvm::SmallVector<Value, 16> worklist{val};
+  llvm::DenseSet<Operation *> visited;
+  while (!worklist.empty()) {
+    Value cur = worklist.pop_back_val();
+    Operation *def = cur.getDefiningOp();
+    if (!def || !visited.insert(def).second)
+      continue;
+
+    state.temporalHistory.erase(def);
+    state.eventuallyTrackers.erase(def);
+    state.unboundedDelayTrackers.erase(def);
+    state.repeatTrackers.erase(def);
+    state.repetitionHitTrackers.erase(def);
+    state.implicationTrackers.erase(def);
+    state.concatTrackers.erase(def);
+    state.delayLastSampleOrdinal.erase(def);
+    state.pastLastSampleOrdinal.erase(def);
+    state.firstMatchPrevInput.erase(def);
+
+    for (Value operand : def->getOperands())
+      worklist.push_back(operand);
+  }
+}
+
 LLHDProcessInterpreter::ClockedAssertionState::LTLTruth
 LLHDProcessInterpreter::evaluateLTLProperty(
     mlir::Value val, ClockedAssertionState &state) {
@@ -7797,6 +7856,23 @@ LLHDProcessInterpreter::evaluateLTLProperty(
 
   // ltl.or — three-valued disjunction (also encodes disable iff).
   if (auto orOp = dyn_cast<ltl::OrOp>(op)) {
+    if (auto action = orOp->getAttrOfType<StringAttr>(kAbortOnActionAttr)) {
+      if (action.getValue() == "accept") {
+        Value abortCondition;
+        Value wrappedProperty;
+        if (splitAbortOnInputs(orOp.getInputs(), abortCondition,
+                               wrappedProperty)) {
+          LTLTruth abortTruth = evaluateLTLProperty(abortCondition, state);
+          if (abortTruth == LTLTruth::True) {
+            resetTemporalStateForValue(wrappedProperty, state);
+            return LTLTruth::True;
+          }
+          LTLTruth propertyTruth =
+              evaluateLTLProperty(wrappedProperty, state);
+          return truthOr(abortTruth, propertyTruth);
+        }
+      }
+    }
     LTLTruth result = LTLTruth::False;
     for (Value input : orOp.getInputs()) {
       result = truthOr(result, evaluateLTLProperty(input, state));
@@ -7808,6 +7884,29 @@ LLHDProcessInterpreter::evaluateLTLProperty(
 
   // ltl.and — three-valued conjunction.
   if (auto andOp = dyn_cast<ltl::AndOp>(op)) {
+    if (auto action = andOp->getAttrOfType<StringAttr>(kAbortOnActionAttr)) {
+      if (action.getValue() == "reject") {
+        Value rejectGuard;
+        Value wrappedProperty;
+        if (splitAbortOnInputs(andOp.getInputs(), rejectGuard, wrappedProperty)) {
+          LTLTruth rejectTruth;
+          if (auto notOp = rejectGuard.getDefiningOp<ltl::NotOp>()) {
+            rejectTruth = evaluateLTLProperty(notOp.getInput(), state);
+          } else {
+            // Fallback for non-canonical forms.
+            rejectTruth = truthNot(evaluateLTLProperty(rejectGuard, state));
+          }
+          if (rejectTruth == LTLTruth::True) {
+            resetTemporalStateForValue(wrappedProperty, state);
+            return LTLTruth::False;
+          }
+          LTLTruth guardTruth = truthNot(rejectTruth);
+          LTLTruth propertyTruth =
+              evaluateLTLProperty(wrappedProperty, state);
+          return truthAnd(guardTruth, propertyTruth);
+        }
+      }
+    }
     LTLTruth result = LTLTruth::True;
     for (Value input : andOp.getInputs()) {
       result = truthAnd(result, evaluateLTLProperty(input, state));

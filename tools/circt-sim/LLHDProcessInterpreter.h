@@ -2592,6 +2592,11 @@ private:
   ClockedAssertionState::LTLTruth
   evaluateLTLProperty(mlir::Value val, ClockedAssertionState &state);
 
+  /// Clear temporal trackers rooted at a property/sequence value.
+  /// Used by aborting wrappers (accept_on / reject_on) to discard pending
+  /// obligations from the aborted subproperty.
+  void resetTemporalStateForValue(mlir::Value val, ClockedAssertionState &state);
+
   /// Map from instance IDs to per-instance firreg state maps.
   llvm::DenseMap<InstanceId, llvm::DenseMap<mlir::Operation *, FirRegState>>
       instanceFirRegStates;

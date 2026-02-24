@@ -6836,3 +6836,37 @@ Based on these findings, the circt-sim compiled process architecture:
 - `compile_pass` will increase (stub compiles), and many of those cases will
   move into the `COCOTB_FAIL` (functional mismatch) bucket, which is cleaner
   for infra tracking.
+
+## 2026-02-24: SVA `accept_on` Pending-Window Persistence Fix (circt-sim)
+
+### Problem
+- Repro: `accept_on(c) (a |-> ##[1:3] b)` could still fail after `c` asserted
+  while the implication window was pending.
+- Root cause in `circt-sim` runtime:
+  - abort wrappers (`ltl.or/ltl.and` with `sva.abort_on.action`) short-circuit
+    truth at sample time, but do not clear temporal trackers for the wrapped
+    property subtree.
+  - stale `implicationTrackers` / temporal history survived the abort and later
+    closed as failure.
+
+### Change
+- `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`
+  - added `resetTemporalStateForValue` to clear all temporal bookkeeping for a
+    property subtree.
+  - wired abort-aware handling in `evaluateLTLProperty`:
+    - `accept_on`: on abort true, reset wrapped property state and return true.
+    - `reject_on`: on abort true, reset wrapped property state and return false.
+
+### New regression (test-first lock)
+- `test/Tools/circt-sim/sva-accept-on-bounded-window-abort-pass-runtime.sv`
+  - ensures bounded-window obligations are actually killed by abort activation.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-accept-on-bounded-window-abort-pass-runtime.sv` -> PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='accept-on|reject-on|sync-accept-on|sync-reject-on|abort-on' build_test/test/Tools/circt-sim` -> `13/13` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-bmc/sva-abort-on-e2e.sv build_test/test/Tools/circt-bmc/sva-sync-abort-on-e2e.sv build_test/test/Conversion/ImportVerilog/sva-abort-on.sv` -> `3/3` PASS.
+
+### Realizations / surprises
+- `circt-sim` evaluates LTL directly in `LLHDProcessInterpreter`; `LTLToCore`
+  changes alone do not fix this runtime path.
+- The bug was not in truth-table OR/AND itself, but in temporal state lifetime.
