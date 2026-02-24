@@ -11,7 +11,9 @@
     extracts bit 0 for packed vectors instead of bool-casting full vectors.
 - Added regressions:
   - `test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-lsb.sv`
+  - `test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-explicit-clock.sv`
   - `test/Tools/circt-sim/sva-sampled-vector-rose-fell-lsb-runtime.sv`
+  - `test/Tools/circt-sim/sva-sampled-vector-rose-fell-explicit-clock-runtime.sv`
 
 ### Realizations / surprises
 - Existing lowering treated packed vectors with whole-vector truthiness
@@ -28,10 +30,10 @@
 - green state after patch:
   - `ninja -C build-test circt-verilog` -> pass.
   - `ninja -C build-test circt-translate` -> pass.
-  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-lsb.sv build-test/test/Tools/circt-sim/sva-sampled-vector-rose-fell-lsb-runtime.sv` -> pass (`2/2`).
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-lsb.sv build-test/test/Tools/circt-sim/sva-sampled-vector-rose-fell-lsb-runtime.sv build-test/test/Conversion/ImportVerilog/sva-sampled-vector-rose-fell-explicit-clock.sv build-test/test/Tools/circt-sim/sva-sampled-vector-rose-fell-explicit-clock-runtime.sv` -> pass (`4/4`).
   - sampled-edge focused sweeps:
-    - ImportVerilog `34/34`,
-    - circt-sim `5/5`,
+    - ImportVerilog `35/35`,
+    - circt-sim `6/6`,
     - circt-bmc `15/15`.
 
 ## 2026-02-24 Session: SVA sampled-value regression alignment (xprop/case_eq)
