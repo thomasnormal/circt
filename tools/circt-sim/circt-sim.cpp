@@ -181,9 +181,14 @@ static void runRegisteredVPIStartupRoutines() {
 }
 
 extern "C" void vpi_startup_register(VPIStartupRoutine routine) {
-  if (!routine)
-    return;
   auto &routines = getRegisteredVPIStartupRoutines();
+  if (!routine) {
+    // Null acts as a "just enable VPI" marker for WASM/JS callers that cannot
+    // create C function pointers (no Emscripten addFunction needed).
+    if (routines.empty())
+      routines.push_back(nullptr);
+    return;
+  }
   if (std::find(routines.begin(), routines.end(), routine) == routines.end())
     routines.push_back(routine);
 }

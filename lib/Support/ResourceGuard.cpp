@@ -8,6 +8,7 @@
 
 #include "circt/Support/ResourceGuard.h"
 
+#include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/StringSaver.h"
 #include "llvm/Support/CommandLine.h"
