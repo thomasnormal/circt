@@ -1,5 +1,5 @@
 diff --git a/source/ast/Lookup.cpp b/source/ast/Lookup.cpp
-index 5920ead..b70b410 100644
+index 5920ead..ea2f6d0 100644
 --- a/source/ast/Lookup.cpp
 +++ b/source/ast/Lookup.cpp
 @@ -1568,7 +1568,8 @@ bool Lookup::ensureAccessible(const Symbol& symbol, const ASTContext& context,
@@ -12,3 +12,36 @@ index 5920ead..b70b410 100644
          if (sourceRange) {
              auto& diag = context.addDiag(diag::NestedNonStaticClassProperty, *sourceRange);
              diag << symbol.name << parent->name;
+@@ -1637,12 +1638,14 @@ bool Lookup::withinClassRandomize(const ASTContext& context, const NameSyntax& s
+ 
+     auto findSuperScope = [&]() -> const Scope& {
+         if (details.thisVar) {
+-            auto dt = details.thisVar->getDeclaredType();
+-            SLANG_ASSERT(dt);
+-            return dt->getType().getCanonicalType().as<ClassType>();
++            if (auto dt = details.thisVar->getDeclaredType()) {
++                auto& thisType = dt->getType().getCanonicalType();
++                if (thisType.isClass())
++                    return thisType.as<ClassType>();
++            }
+         }
+ 
+-        return *context.scope;
++        return classScope;
+     };
+ 
+     NameComponents name = *first;
+@@ -1669,6 +1672,13 @@ bool Lookup::withinClassRandomize(const ASTContext& context, const NameSyntax& s
+             break;
+         case SyntaxKind::ThisHandle:
+             result.found = details.thisVar;
++            if (result.found) {
++                auto dt = result.found->getDeclaredType();
++                if (!dt || !dt->getType().getCanonicalType().isClass())
++                    result.found = nullptr;
++            }
++            if (!result.found)
++                result.found = classScope.asSymbol().as<ClassType>().thisVar;
+             if (!result.found)
+                 result.found = findThisHandle(*context.scope, flags, name.range, result);
+ 
