@@ -8218,10 +8218,18 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     if (gotoRepeatOp.getBase() == 0)
       return setRepetitionResult(LTLTruth::True);
     LTLTruth input = evaluateLTLProperty(gotoRepeatOp.getInput(), state);
-    if (input == LTLTruth::True)
+    constexpr size_t kRepetitionHitHistoryLimit = 4098;
+    if (input == LTLTruth::True) {
       ++tracker.trueHits;
-    else if (input == LTLTruth::Unknown)
+      tracker.trueHitSampleOrdinals.push_back(state.sampleOrdinal);
+      while (tracker.trueHitSampleOrdinals.size() > kRepetitionHitHistoryLimit)
+        tracker.trueHitSampleOrdinals.pop_front();
+    } else if (input == LTLTruth::Unknown) {
       tracker.hasUnknown = true;
+      tracker.unknownSampleOrdinals.push_back(state.sampleOrdinal);
+      while (tracker.unknownSampleOrdinals.size() > kRepetitionHitHistoryLimit)
+        tracker.unknownSampleOrdinals.pop_front();
+    }
     if (tracker.trueHits >= gotoRepeatOp.getBase() &&
         input == LTLTruth::True) {
       if (tracker.hasUnknown)
@@ -8249,10 +8257,18 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     if (nonConsecutiveOp.getBase() == 0)
       return setRepetitionResult(LTLTruth::True);
     LTLTruth input = evaluateLTLProperty(nonConsecutiveOp.getInput(), state);
-    if (input == LTLTruth::True)
+    constexpr size_t kRepetitionHitHistoryLimit = 4098;
+    if (input == LTLTruth::True) {
       ++tracker.trueHits;
-    else if (input == LTLTruth::Unknown)
+      tracker.trueHitSampleOrdinals.push_back(state.sampleOrdinal);
+      while (tracker.trueHitSampleOrdinals.size() > kRepetitionHitHistoryLimit)
+        tracker.trueHitSampleOrdinals.pop_front();
+    } else if (input == LTLTruth::Unknown) {
       tracker.hasUnknown = true;
+      tracker.unknownSampleOrdinals.push_back(state.sampleOrdinal);
+      while (tracker.unknownSampleOrdinals.size() > kRepetitionHitHistoryLimit)
+        tracker.unknownSampleOrdinals.pop_front();
+    }
     if (tracker.trueHits >= nonConsecutiveOp.getBase()) {
       if (tracker.hasUnknown)
         return setRepetitionResult(LTLTruth::Unknown);
@@ -8654,6 +8670,117 @@ LLHDProcessInterpreter::evaluateLTLProperty(
       if (auto minLen = getMinSequenceLength(trackedConsequentValue))
         if (*minLen > 0)
           minShift = *minLen - 1;
+
+      auto countSamplesSince = [](const std::deque<uint64_t> &samples,
+                                  uint64_t triggerSample) -> uint64_t {
+        auto it = std::lower_bound(samples.begin(), samples.end(), triggerSample);
+        return static_cast<uint64_t>(std::distance(it, samples.end()));
+      };
+      auto hasSampleSince = [](const std::deque<uint64_t> &samples,
+                               uint64_t triggerSample) -> bool {
+        auto it = std::lower_bound(samples.begin(), samples.end(), triggerSample);
+        return it != samples.end();
+      };
+
+      if (auto gotoRepeatOp =
+              trackedConsequentValue.getDefiningOp<ltl::GoToRepeatOp>()) {
+        // Update the repetition tracker for the current sample and then resolve
+        // implication obligations against per-attempt hit counts.
+        (void)evaluateLTLProperty(trackedConsequentValue, state);
+        auto &repTracker =
+            state.repetitionHitTrackers[gotoRepeatOp.getOperation()];
+        bool hitNow = !repTracker.trueHitSampleOrdinals.empty() &&
+                      repTracker.trueHitSampleOrdinals.back() ==
+                          state.sampleOrdinal;
+
+        auto &tracker = state.implicationTrackers[op];
+        tracker.hasUnboundedWindow = true;
+        tracker.unboundedMinShift = minShift;
+
+        if (ante == LTLTruth::True) {
+          ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+          pending.triggerSampleOrdinal = state.sampleOrdinal;
+          tracker.pendingAntecedents.push_back(pending);
+        }
+
+        for (auto pendingIt = tracker.pendingAntecedents.begin();
+             pendingIt != tracker.pendingAntecedents.end();) {
+          uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
+          if (age >= minShift) {
+            uint64_t hitsSince = countSamplesSince(
+                repTracker.trueHitSampleOrdinals,
+                pendingIt->triggerSampleOrdinal);
+            bool unknownSince = hasSampleSince(repTracker.unknownSampleOrdinals,
+                                               pendingIt->triggerSampleOrdinal);
+            if (hitNow && hitsSince >= gotoRepeatOp.getBase())
+              pendingIt->sawConsequentTrue = true;
+            else if (unknownSince)
+              pendingIt->sawConsequentUnknown = true;
+          }
+
+          if (pendingIt->sawConsequentTrue) {
+            pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+            continue;
+          }
+          ++pendingIt;
+        }
+
+        if (!tracker.pendingAntecedents.empty())
+          return LTLTruth::Unknown;
+        if (ante == LTLTruth::Unknown)
+          return LTLTruth::Unknown;
+        return LTLTruth::True;
+      }
+
+      if (auto nonConsecutiveOp =
+              trackedConsequentValue
+                  .getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
+        (void)evaluateLTLProperty(trackedConsequentValue, state);
+        auto &repTracker =
+            state.repetitionHitTrackers[nonConsecutiveOp.getOperation()];
+
+        auto &tracker = state.implicationTrackers[op];
+        tracker.hasUnboundedWindow = true;
+        tracker.unboundedMinShift = minShift;
+
+        if (ante == LTLTruth::True) {
+          ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
+          pending.triggerSampleOrdinal = state.sampleOrdinal;
+          tracker.pendingAntecedents.push_back(pending);
+        }
+
+        for (auto pendingIt = tracker.pendingAntecedents.begin();
+             pendingIt != tracker.pendingAntecedents.end();) {
+          uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
+          if (age >= minShift) {
+            uint64_t hitsSince = countSamplesSince(
+                repTracker.trueHitSampleOrdinals,
+                pendingIt->triggerSampleOrdinal);
+            bool unknownSince = hasSampleSince(repTracker.unknownSampleOrdinals,
+                                               pendingIt->triggerSampleOrdinal);
+            if (hitsSince >= nonConsecutiveOp.getBase()) {
+              if (unknownSince)
+                pendingIt->sawConsequentUnknown = true;
+              else
+                pendingIt->sawConsequentTrue = true;
+            } else if (unknownSince) {
+              pendingIt->sawConsequentUnknown = true;
+            }
+          }
+
+          if (pendingIt->sawConsequentTrue) {
+            pendingIt = tracker.pendingAntecedents.erase(pendingIt);
+            continue;
+          }
+          ++pendingIt;
+        }
+
+        if (!tracker.pendingAntecedents.empty())
+          return LTLTruth::Unknown;
+        if (ante == LTLTruth::Unknown)
+          return LTLTruth::Unknown;
+        return LTLTruth::True;
+      }
 
       LTLTruth consequentNow = evaluateLTLProperty(trackedConsequentValue, state);
       auto &tracker = state.implicationTrackers[op];

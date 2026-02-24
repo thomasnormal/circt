@@ -977,6 +977,12 @@ public:
     jitRuntimeIndirectProfileEnabled = enable;
   }
 
+  /// Get the interpreter's global memory blocks (populated during initialize).
+  /// Used by the AOT patch table to copy initialized global state into the .so.
+  const llvm::StringMap<MemoryBlock> &getGlobalMemoryBlocks() const {
+    return globalMemoryBlocks;
+  }
+
   /// Load compiled function pointers from an AOT-compiled .so module into the
   /// nativeFuncPtrs map. Walks all func.func ops in the root module and checks
   /// the loader for a compiled version by name.
@@ -2570,6 +2576,8 @@ private:
     struct RepetitionHitTracker {
       uint64_t trueHits = 0;
       bool hasUnknown = false;
+      std::deque<uint64_t> trueHitSampleOrdinals;
+      std::deque<uint64_t> unknownSampleOrdinals;
       uint64_t lastSampleOrdinal = std::numeric_limits<uint64_t>::max();
       LTLTruth lastResult = LTLTruth::Unknown;
     };

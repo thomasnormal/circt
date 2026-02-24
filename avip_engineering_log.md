@@ -6975,3 +6975,36 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - Implication-based cover tests can accidentally become vacuous; sequence-based
   one-shot setups gave a clearer semantic discriminator for `reject_on`.
+
+## 2026-02-24: `a |-> b[->2]` Pre-Antecedent Hit Leak (Runtime Bug)
+
+### Problem
+- Repro:
+  - one `b` hit before antecedent,
+  - one `b` hit after antecedent,
+  - property: `assert property (@(posedge clk) a |-> b[->2]);`
+- Expected: FAIL (needs two hits after antecedent trigger).
+- Observed before fix: PASS (pre-antecedent hit incorrectly counted).
+
+### Root cause
+- Implication handling for unbounded-gap sequence consequents relied on
+  global repetition hit counters (`repetitionHitTrackers.trueHits`) instead of
+  per-attempt hit counts since each pending antecedent trigger.
+
+### Fix
+- `tools/circt-sim/LLHDProcessInterpreter.{h,cpp}`
+  - added sampled hit/unknown ordinal history to `RepetitionHitTracker`.
+  - recorded those ordinals in `ltl.goto_repeat` and
+    `ltl.non_consecutive_repeat` evaluation.
+  - implication path now resolves direct repetition consequents per pending
+    antecedent by counting hits/unknowns since trigger sample.
+
+### New regression (test-first lock)
+- `test/Tools/circt-sim/sva-goto-repeat-pre-antecedent-hit-leak-fail-runtime.sv`
+  - was failing (no assertion failure reported); now passes.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-goto-repeat-pre-antecedent-hit-leak-fail-runtime.sv` -> `1/1` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='goto-repeat|nonconsecutive-repeat|goto-concat|nonconsecutive-concat|implication-goto|sva-goto|sva-nonconsecutive|repeat' build_test/test/Tools/circt-sim` -> `13/13` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-' build_test/test/Tools/circt-sim` -> `123/123` PASS.
+- `OUT=/tmp/sv-tests-sim-ch16-after-goto-fix.txt DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX='(^| )16\\.' utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `42/42` PASS.
