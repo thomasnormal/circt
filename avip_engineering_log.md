@@ -7131,3 +7131,40 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - The LEC VHDL skip gap was straightforward; the z3 absolute-path issue was the hidden blocker behind initial post-fallback `ERROR` results.
 - Matching runner conventions across BMC and LEC (tool discovery + feature knobs) removes avoidable divergence and simplifies future maintenance.
+
+## 2026-02-24: sv-tests SVA expect hygiene (stale skip removal + lint)
+
+### Gap identified
+- `utils/sv-tests-sim-expect.txt` contained `16.15--property-iff-uvm-fail`, but
+  there is no matching `sv-tests` source basename.
+- This stale expectation could silently mask real SVA chapter-16 coverage
+  progress and make expectation drift hard to detect.
+
+### Checks
+- Direct probe with expectations disabled:
+  - `OUT=/tmp/sv16-iff-uvm/results.txt EXPECT_FILE=/dev/null TEST_FILTER='^16.15--property-iff-uvm$' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+  - result: `PASS`.
+- Name-set diff:
+  - expect names vs `/home/thomas-ahle/sv-tests/tests/**/*.sv` basenames had
+    exactly one stale entry: `16.15--property-iff-uvm-fail`.
+
+### Implementation
+- Removed stale entry from `utils/sv-tests-sim-expect.txt`.
+- Added lint utility: `utils/lint_sv_tests_expect.sh`.
+  - validates every non-comment expect entry name against real sv-tests file
+    basenames.
+  - exits nonzero and prints stale entries when drift is detected.
+- Added lit regressions:
+  - `test/Tools/lint-sv-tests-expect-stale-entry.test`
+  - `test/Tools/lint-sv-tests-expect-valid.test`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/lint-sv-tests-expect-stale-entry.test build_test/test/Tools/lint-sv-tests-expect-valid.test` -> `2/2 PASS`.
+- `utils/lint_sv_tests_expect.sh /home/thomas-ahle/sv-tests utils/sv-tests-sim-expect.txt` -> `expect lint OK`.
+- `utils/lint_sv_tests_expect.sh /home/thomas-ahle/sv-tests utils/sv-tests-bmc-expect.txt` -> `expect lint OK`.
+- `OUT=/tmp/sv-tests-sim-ch16-after-stale-skip-removal.txt TAG_REGEX='(^| )16\\.' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `total=42 pass=42 fail=0 xfail=0 xpass=0`.
+
+### Realizations / surprises
+- The stale entry targeted a synthetic `-fail` suffix that no current runner or
+  source test emits; the drift was pure metadata debt, not a live semantic gap.
+- A tiny lint utility gives cheap guardrails against future expectation drift.

@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16
+// RUN: printf 'module keep; endmodule\n' > %t/sv-tests/tests/chapter-16/keep.sv
+// RUN: printf '# comment\nkeep\tskip\tcovered\n' > %t/expect.txt
+// RUN: %S/../../utils/lint_sv_tests_expect.sh %t/sv-tests %t/expect.txt | FileCheck %s
+//
+// CHECK: expect lint OK: {{.*}}expect.txt
