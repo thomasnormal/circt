@@ -17,8 +17,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
-#include "JITBlockCompiler.h"
-#include "JITCompileManager.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
@@ -1016,32 +1014,6 @@ void LLHDProcessInterpreter::printCompileReport() const {
                         "%.1f", 100.0 * interpretedFuncCallCount / funcTotal)
                  << "%)\n";
     llvm::errs() << "  Native func ptrs:  " << nativeFuncPtrs.size() << "\n";
-  }
-
-  // AOT rejection reasons (populated during AOT compilation if aotEnabled).
-  if (aotCompiler && !aotCompiler->rejectionStats.empty()) {
-    llvm::errs() << "AOT process rejection reasons:\n";
-    std::vector<std::pair<std::string, unsigned>> sorted;
-    for (auto &entry : aotCompiler->rejectionStats)
-      sorted.emplace_back(entry.getKey().str(), entry.getValue());
-    llvm::sort(sorted, [](const auto &a, const auto &b) {
-      return a.second > b.second;
-    });
-    for (auto &[name, count] : sorted)
-      llvm::errs() << "  " << name << ": " << count << "\n";
-  }
-
-  // F1 func rejection reasons.
-  if (aotCompiler && !aotCompiler->funcRejectionStats.empty()) {
-    llvm::errs() << "AOT func rejection reasons:\n";
-    std::vector<std::pair<std::string, unsigned>> sorted;
-    for (auto &entry : aotCompiler->funcRejectionStats)
-      sorted.emplace_back(entry.getKey().str(), entry.getValue());
-    llvm::sort(sorted, [](const auto &a, const auto &b) {
-      return a.second > b.second;
-    });
-    for (auto &[name, count] : sorted)
-      llvm::errs() << "  " << name << ": " << count << "\n";
   }
 
   llvm::errs() << "===============================\n";

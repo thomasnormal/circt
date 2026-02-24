@@ -78,8 +78,27 @@ CompiledModuleLoader::load(llvm::StringRef path) {
     }
   }
 
+  // Build the trampoline ID map from the descriptor.
+  uint32_t numTrampolines = loader->compiledModule->num_trampolines;
+  if (numTrampolines > 0 && loader->compiledModule->trampoline_names) {
+    for (uint32_t i = 0; i < numTrampolines; ++i) {
+      const char *name = loader->compiledModule->trampoline_names[i];
+      if (name)
+        loader->trampolineIdMap[name] = static_cast<int32_t>(i);
+    }
+  }
+
+  // Set the __circt_sim_ctx global in the .so so trampolines can find
+  // the runtime context. The actual value is set later when the interpreter
+  // is ready.
+  auto *ctxGlobalSym = dlsym(loader->dlHandle, "__circt_sim_ctx");
+  if (ctxGlobalSym)
+    loader->ctxGlobalPtr = reinterpret_cast<void **>(ctxGlobalSym);
+
   llvm::errs() << "[circt-sim] Loaded compiled module '" << path << "': "
                << loader->funcMap.size() << " functions";
+  if (numTrampolines > 0)
+    llvm::errs() << ", " << numTrampolines << " trampolines";
   if (loader->compiledModule->num_procs > 0)
     llvm::errs() << ", " << loader->compiledModule->num_procs << " processes";
   if (!loader->buildId.empty())

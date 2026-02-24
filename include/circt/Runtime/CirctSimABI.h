@@ -44,7 +44,7 @@ extern "C" {
 /// Bump this on any breaking change to the ABI (struct layout, function
 /// signature changes, removed functions). Adding new functions is NOT a
 /// breaking change.
-#define CIRCT_SIM_ABI_VERSION 1
+#define CIRCT_SIM_ABI_VERSION 2
 
 //===----------------------------------------------------------------------===//
 // Opaque Types
@@ -120,6 +120,18 @@ typedef struct {
   /// Native function pointers, one per function. Signature matches the
   /// original func.func with LLVM-native ABI (scalars and pointers only).
   const void *const *func_entry;
+
+  /// Number of trampoline functions (compiled-to-interpreted fallbacks).
+  /// These are functions referenced by compiled code but not compiled
+  /// themselves. The .so contains trampoline bodies that call
+  /// __circt_sim_call_interpreted() to dispatch back to the MLIR interpreter.
+  uint32_t num_trampolines;
+
+  /// Trampoline target function names. Array of num_trampolines NUL-terminated
+  /// strings. The index into this array is the func_id passed to
+  /// __circt_sim_call_interpreted(). The runtime uses these names to find
+  /// the corresponding MLIR function in the interpreter.
+  const char *const *trampoline_names;
 } CirctSimCompiledModule;
 
 //===----------------------------------------------------------------------===//

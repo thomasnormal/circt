@@ -431,7 +431,8 @@ void LLHDProcessInterpreter::maybeTraceIterativeDiscoverySummary(
     size_t instanceCount, size_t signalCount, size_t outputCount,
     size_t processCount, size_t combinationalCount, size_t initialCount,
     size_t moduleDriveCount, size_t firRegCount,
-    size_t clockedAssertCount) const {
+    size_t clockedAssertCount, size_t clockedAssumeCount,
+    size_t clockedCoverCount) const {
   llvm::dbgs() << "  Iterative discovery found: "
                << instanceCount << " instances, "
                << signalCount << " signals, "
@@ -441,7 +442,9 @@ void LLHDProcessInterpreter::maybeTraceIterativeDiscoverySummary(
                << initialCount << " initials, "
                << moduleDriveCount << " module drives, "
                << firRegCount << " firRegs, "
-               << clockedAssertCount << " clocked assertions\n";
+               << clockedAssertCount << " clocked assertions, "
+               << clockedAssumeCount << " clocked assumptions, "
+               << clockedCoverCount << " clocked covers\n";
 }
 
 void LLHDProcessInterpreter::maybeTraceRegisteredPortSignal(
@@ -1901,6 +1904,15 @@ void LLHDProcessInterpreter::maybeTraceSvaAssertionFailed(
                << " fs (" << loc << ")\n";
 }
 
+void LLHDProcessInterpreter::maybeTraceSvaAssumptionFailed(
+    llvm::StringRef label, int64_t timeFs, mlir::Location loc) const {
+  llvm::errs() << "[circt-sim] SVA assumption failed";
+  if (!label.empty())
+    llvm::errs() << ": " << label;
+  llvm::errs() << " at time " << timeFs
+               << " fs (" << loc << ")\n";
+}
+
 void LLHDProcessInterpreter::maybeTraceImmediateAssertionFailed(
     llvm::StringRef label, mlir::Location loc) const {
   llvm::errs() << "[circt-sim] Assertion failed";
@@ -2176,16 +2188,6 @@ void LLHDProcessInterpreter::noteJitRuntimeIndirectUnresolved(
   ++site.unresolvedCalls;
 }
 
-std::string
-LLHDProcessInterpreter::getJitDeoptProcessName(ProcessId procId) const {
-  if (const Process *proc = scheduler.getProcess(procId))
-    return proc->getName();
-  return {};
-}
-
-uint64_t LLHDProcessInterpreter::getJitCompileHotThreshold() const {
-  return 1;
-}
 
 std::optional<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
 LLHDProcessInterpreter::lookupJitRuntimeIndirectSiteProfile(

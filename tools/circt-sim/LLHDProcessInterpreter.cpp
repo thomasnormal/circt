@@ -16,8 +16,6 @@
 #include "UcontextProcess.h"
 #include "LLHDProcessInterpreter.h"
 #include "LLHDProcessInterpreterStorePatterns.h"
-#include "JITBlockCompiler.h"
-#include "JITSchedulerRuntime.h"
 
 // Global crash diagnostic — last LLVM callee name
 char g_lastLLVMCallCalleeBuf[256] = {};
@@ -593,9 +591,8 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   deferFirRegUpdates = true;
 }
 
-// Destructor defined here (not in header) so that JITBlockCompiler,
-// JITBlockSpec, and BytecodeProgram are complete types when unique_ptr
-// destructors fire.
+// Destructor defined here (not in header) so that BytecodeProgram is a
+// complete type when unique_ptr destructors fire.
 LLHDProcessInterpreter::~LLHDProcessInterpreter() = default;
 
 bool LLHDProcessInterpreter::isAhbMonitorSampleFunctionForTrace(
@@ -682,22 +679,6 @@ bool LLHDProcessInterpreter::decodeMooreStringSignalValue(
   return tryReadStringKey(/*procId=*/0, ptr, static_cast<int64_t>(len), out);
 }
 
-void LLHDProcessInterpreter::setCompileModeEnabled(bool enable) {
-  compileModeEnabled = enable;
-  // Keep block-level JIT disabled until compile-mode parity is restored.
-  // The native-thunk path remains active in compile mode.
-  setBlockJITEnabled(false);
-}
-
-void LLHDProcessInterpreter::setBlockJITEnabled(bool enable) {
-  blockJITEnabled = enable;
-  if (enable && !jitBlockCompiler) {
-    // Lazily create the JIT block compiler. It needs an MLIRContext, which
-    // we get from the first moduleOp we see during initialization.
-    // Actual creation is deferred to first use (when we have the context).
-    LLVM_DEBUG(llvm::dbgs() << "[JIT] Block-level JIT enabled\n");
-  }
-}
 
 bool LLHDProcessInterpreter::getCachedCallIndirectStaticMethodIndex(
     mlir::func::CallIndirectOp callOp, int64_t &methodIndex) {
@@ -1723,13 +1704,6 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Store the root module for symbol lookup
   rootModule = hwModule->getParentOfType<ModuleOp>();
 
-  // Lazily create the JIT block compiler now that we have an MLIRContext.
-  if (blockJITEnabled && !jitBlockCompiler && rootModule) {
-    jitBlockCompiler = std::make_unique<JITBlockCompiler>(
-        *rootModule->getContext());
-    LLVM_DEBUG(llvm::dbgs() << "[JIT] Created JITBlockCompiler\n");
-  }
-
   // Register VPI parameters from the top-level module so that cocotb can
   // access them via dut.PARAM_NAME.value.
   if (auto paramsAttr = hwModule->getAttrOfType<mlir::DictionaryAttr>(
@@ -1799,16 +1773,6 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   if (failed(registerProcesses(discoveredOps)))
     return failure();
   reportInitStage("registerProcesses");
-
-  // AOT batch compilation: compile eligible callback processes to native code.
-  // Must run after registerProcesses() (needs processExecModels, opToProcessId,
-  // valueToSignal) and after rootModule is set.
-  aotCompileProcesses();
-  reportInitStage("aotCompile");
-
-  // Phase F1: compile eligible func.func bodies to native code.
-  aotCompileFuncBodies();
-  reportInitStage("aotCompileFunc");
 
   // Recursively process child module instances EXCEPT module-level ops.
   // We must register child signals and instance mappings first so that
@@ -6409,6 +6373,73 @@ SignalId LLHDProcessInterpreter::getOrCreateImmediateCoverSignal(
 
 size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
   size_t finalFailures = 0;
+  auto fromInterpreted = [](const InterpretedValue &v) {
+    if (v.isX())
+      return ClockedAssertionState::LTLTruth::Unknown;
+    return v.getUInt64() != 0 ? ClockedAssertionState::LTLTruth::True
+                              : ClockedAssertionState::LTLTruth::False;
+  };
+  auto getCurrentCombinationalTruth = [&](Value value,
+                                          ClockedAssertionState &state) {
+    if (!value)
+      return ClockedAssertionState::LTLTruth::Unknown;
+    auto *def = value.getDefiningOp();
+    if (def) {
+      auto histIt = state.temporalHistory.find(def);
+      if (histIt != state.temporalHistory.end() && !histIt->second.empty())
+        return histIt->second.back();
+      if (auto boolConst = dyn_cast<ltl::BooleanConstantOp>(def))
+        return boolConst.getValue() ? ClockedAssertionState::LTLTruth::True
+                                    : ClockedAssertionState::LTLTruth::False;
+      if (auto hwConst = dyn_cast<hw::ConstantOp>(def))
+        return hwConst.getValue().isZero()
+                   ? ClockedAssertionState::LTLTruth::False
+                   : ClockedAssertionState::LTLTruth::True;
+    }
+    if (isa<ltl::SequenceType, ltl::PropertyType>(value.getType()))
+      return ClockedAssertionState::LTLTruth::Unknown;
+    return fromInterpreted(evaluateContinuousValue(value));
+  };
+  auto hasPendingStrongAlwaysLowerBound = [&](ltl::EventuallyOp eventuallyOp,
+                                               ClockedAssertionState &state) {
+    auto matchProgressGuard = [&](Value lhs,
+                                  Value rhs) -> std::optional<ltl::DelayOp> {
+      auto delayOp = lhs.getDefiningOp<ltl::DelayOp>();
+      auto implicationOp = rhs.getDefiningOp<ltl::ImplicationOp>();
+      if (!delayOp || !implicationOp || implicationOp.getAntecedent() != lhs)
+        return std::nullopt;
+      auto length = delayOp.getLength();
+      if (length && *length != 0)
+        return std::nullopt;
+      bool constantTrue = false;
+      if (auto ltlConstantOp =
+              delayOp.getInput().getDefiningOp<ltl::BooleanConstantOp>())
+        constantTrue = ltlConstantOp.getValue();
+      else if (auto hwConstantOp =
+                   delayOp.getInput().getDefiningOp<hw::ConstantOp>())
+        constantTrue = hwConstantOp.getValue().isOne();
+      if (!constantTrue)
+        return std::nullopt;
+      return delayOp;
+    };
+
+    auto notOp = eventuallyOp.getInput().getDefiningOp<ltl::NotOp>();
+    if (!notOp)
+      return false;
+    auto andOp = notOp.getInput().getDefiningOp<ltl::AndOp>();
+    if (!andOp || andOp.getInputs().size() != 2)
+      return false;
+
+    std::optional<ltl::DelayOp> delayOp =
+        matchProgressGuard(andOp.getInputs()[0], andOp.getInputs()[1]);
+    if (!delayOp)
+      delayOp = matchProgressGuard(andOp.getInputs()[1], andOp.getInputs()[0]);
+    if (!delayOp)
+      return false;
+
+    return state.sampleOrdinal <= delayOp->getDelay();
+  };
+
   for (auto &entry : clockedAssertionStates) {
     auto assertOp = cast<verif::ClockedAssertOp>(entry.first.first);
     ClockedAssertionState &state = entry.second;
@@ -6475,6 +6506,8 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
               unresolvedStrongEventually = true;
           }
         }
+        if (hasPendingStrongAlwaysLowerBound(eventuallyOp, state))
+          unresolvedStrongEventually = true;
         continue;
       }
       if (auto delayOp = dyn_cast<ltl::DelayOp>(def)) {
@@ -6505,6 +6538,36 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
         worklist.push_back(implOp.getConsequent());
         continue;
       }
+      if (auto orOp = dyn_cast<ltl::OrOp>(def)) {
+        bool maskedTrue = false;
+        for (Value input : orOp.getInputs()) {
+          if (getCurrentCombinationalTruth(input, state) ==
+              ClockedAssertionState::LTLTruth::True) {
+            maskedTrue = true;
+            break;
+          }
+        }
+        if (maskedTrue)
+          continue;
+        for (Value input : orOp.getInputs())
+          worklist.push_back(input);
+        continue;
+      }
+      if (auto andOp = dyn_cast<ltl::AndOp>(def)) {
+        bool maskedFalse = false;
+        for (Value input : andOp.getInputs()) {
+          if (getCurrentCombinationalTruth(input, state) ==
+              ClockedAssertionState::LTLTruth::False) {
+            maskedFalse = true;
+            break;
+          }
+        }
+        if (maskedFalse)
+          continue;
+        for (Value input : andOp.getInputs())
+          worklist.push_back(input);
+        continue;
+      }
       for (Value operand : def->getOperands())
         worklist.push_back(operand);
     }
@@ -6529,6 +6592,73 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
 
 size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
   size_t finalFailures = 0;
+  auto fromInterpreted = [](const InterpretedValue &v) {
+    if (v.isX())
+      return ClockedAssertionState::LTLTruth::Unknown;
+    return v.getUInt64() != 0 ? ClockedAssertionState::LTLTruth::True
+                              : ClockedAssertionState::LTLTruth::False;
+  };
+  auto getCurrentCombinationalTruth = [&](Value value,
+                                          ClockedAssertionState &state) {
+    if (!value)
+      return ClockedAssertionState::LTLTruth::Unknown;
+    auto *def = value.getDefiningOp();
+    if (def) {
+      auto histIt = state.temporalHistory.find(def);
+      if (histIt != state.temporalHistory.end() && !histIt->second.empty())
+        return histIt->second.back();
+      if (auto boolConst = dyn_cast<ltl::BooleanConstantOp>(def))
+        return boolConst.getValue() ? ClockedAssertionState::LTLTruth::True
+                                    : ClockedAssertionState::LTLTruth::False;
+      if (auto hwConst = dyn_cast<hw::ConstantOp>(def))
+        return hwConst.getValue().isZero()
+                   ? ClockedAssertionState::LTLTruth::False
+                   : ClockedAssertionState::LTLTruth::True;
+    }
+    if (isa<ltl::SequenceType, ltl::PropertyType>(value.getType()))
+      return ClockedAssertionState::LTLTruth::Unknown;
+    return fromInterpreted(evaluateContinuousValue(value));
+  };
+  auto hasPendingStrongAlwaysLowerBound = [&](ltl::EventuallyOp eventuallyOp,
+                                               ClockedAssertionState &state) {
+    auto matchProgressGuard = [&](Value lhs,
+                                  Value rhs) -> std::optional<ltl::DelayOp> {
+      auto delayOp = lhs.getDefiningOp<ltl::DelayOp>();
+      auto implicationOp = rhs.getDefiningOp<ltl::ImplicationOp>();
+      if (!delayOp || !implicationOp || implicationOp.getAntecedent() != lhs)
+        return std::nullopt;
+      auto length = delayOp.getLength();
+      if (length && *length != 0)
+        return std::nullopt;
+      bool constantTrue = false;
+      if (auto ltlConstantOp =
+              delayOp.getInput().getDefiningOp<ltl::BooleanConstantOp>())
+        constantTrue = ltlConstantOp.getValue();
+      else if (auto hwConstantOp =
+                   delayOp.getInput().getDefiningOp<hw::ConstantOp>())
+        constantTrue = hwConstantOp.getValue().isOne();
+      if (!constantTrue)
+        return std::nullopt;
+      return delayOp;
+    };
+
+    auto notOp = eventuallyOp.getInput().getDefiningOp<ltl::NotOp>();
+    if (!notOp)
+      return false;
+    auto andOp = notOp.getInput().getDefiningOp<ltl::AndOp>();
+    if (!andOp || andOp.getInputs().size() != 2)
+      return false;
+
+    std::optional<ltl::DelayOp> delayOp =
+        matchProgressGuard(andOp.getInputs()[0], andOp.getInputs()[1]);
+    if (!delayOp)
+      delayOp = matchProgressGuard(andOp.getInputs()[1], andOp.getInputs()[0]);
+    if (!delayOp)
+      return false;
+
+    return state.sampleOrdinal <= delayOp->getDelay();
+  };
+
   for (auto &entry : clockedAssumptionStates) {
     auto assumeOp = cast<verif::ClockedAssumeOp>(entry.first.first);
     ClockedAssertionState &state = entry.second;
@@ -6593,6 +6723,8 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
               unresolvedStrongEventually = true;
           }
         }
+        if (hasPendingStrongAlwaysLowerBound(eventuallyOp, state))
+          unresolvedStrongEventually = true;
         continue;
       }
       if (auto delayOp = dyn_cast<ltl::DelayOp>(def)) {
@@ -6621,6 +6753,36 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
         }
         worklist.push_back(implOp.getAntecedent());
         worklist.push_back(implOp.getConsequent());
+        continue;
+      }
+      if (auto orOp = dyn_cast<ltl::OrOp>(def)) {
+        bool maskedTrue = false;
+        for (Value input : orOp.getInputs()) {
+          if (getCurrentCombinationalTruth(input, state) ==
+              ClockedAssertionState::LTLTruth::True) {
+            maskedTrue = true;
+            break;
+          }
+        }
+        if (maskedTrue)
+          continue;
+        for (Value input : orOp.getInputs())
+          worklist.push_back(input);
+        continue;
+      }
+      if (auto andOp = dyn_cast<ltl::AndOp>(def)) {
+        bool maskedFalse = false;
+        for (Value input : andOp.getInputs()) {
+          if (getCurrentCombinationalTruth(input, state) ==
+              ClockedAssertionState::LTLTruth::False) {
+            maskedFalse = true;
+            break;
+          }
+        }
+        if (maskedFalse)
+          continue;
+        for (Value input : andOp.getInputs())
+          worklist.push_back(input);
         continue;
       }
       for (Value operand : def->getOperands())
@@ -7367,6 +7529,11 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     auto setRepeatResult = [&](LTLTruth result) -> LTLTruth {
       tracker.lastSampleOrdinal = state.sampleOrdinal;
       tracker.lastResult = result;
+      auto &history = state.temporalHistory[op];
+      history.push_back(result);
+      constexpr size_t kRepetitionHistoryLimit = 4098;
+      while (history.size() > kRepetitionHistoryLimit)
+        history.pop_front();
       return result;
     };
 
@@ -7420,6 +7587,11 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     auto setRepetitionResult = [&](LTLTruth result) -> LTLTruth {
       tracker.lastSampleOrdinal = state.sampleOrdinal;
       tracker.lastResult = result;
+      auto &history = state.temporalHistory[op];
+      history.push_back(result);
+      constexpr size_t kRepetitionHistoryLimit = 4098;
+      while (history.size() > kRepetitionHistoryLimit)
+        history.pop_front();
       return result;
     };
 
@@ -7446,6 +7618,11 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     auto setRepetitionResult = [&](LTLTruth result) -> LTLTruth {
       tracker.lastSampleOrdinal = state.sampleOrdinal;
       tracker.lastResult = result;
+      auto &history = state.temporalHistory[op];
+      history.push_back(result);
+      constexpr size_t kRepetitionHistoryLimit = 4098;
+      while (history.size() > kRepetitionHistoryLimit)
+        history.pop_front();
       return result;
     };
 
@@ -8033,40 +8210,39 @@ LLHDProcessInterpreter::evaluateLTLProperty(
     if (inputs.size() == 2) {
       auto leftDelay = unwrapBoundedDelay(inputs[0]);
       auto rightDelay = unwrapBoundedDelay(inputs[1]);
+      auto getDelayInputSample = [&](ltl::DelayOp delayOp,
+                                     uint64_t offset) -> LTLTruth {
+        auto histIt = state.temporalHistory.find(delayOp.getOperation());
+        if (histIt == state.temporalHistory.end())
+          return LTLTruth::Unknown;
+        auto &history = histIt->second;
+        if (history.size() <= offset)
+          return LTLTruth::Unknown;
+        return history[history.size() - 1 - offset];
+      };
+      auto getSequenceOutputSample = [&](Value seq,
+                                         uint64_t offset) -> LTLTruth {
+        auto *seqOp = seq.getDefiningOp();
+        if (!seqOp)
+          return offset == 0 ? evaluateLTLProperty(seq, state)
+                             : LTLTruth::Unknown;
+        auto histIt = state.temporalHistory.find(seqOp);
+        if (histIt == state.temporalHistory.end())
+          return LTLTruth::Unknown;
+        auto &history = histIt->second;
+        if (history.size() <= offset)
+          return LTLTruth::Unknown;
+        return history[history.size() - 1 - offset];
+      };
+      constexpr uint64_t kMaxConcatOffsetScan = 4096;
       if (leftDelay && rightDelay) {
         (void)evaluateLTLProperty(inputs[0], state);
         (void)evaluateLTLProperty(inputs[1], state);
-
-        auto getDelayInputSample = [&](ltl::DelayOp delayOp,
-                                       uint64_t offset) -> LTLTruth {
-          auto histIt = state.temporalHistory.find(delayOp.getOperation());
-          if (histIt == state.temporalHistory.end())
-            return LTLTruth::Unknown;
-          auto &history = histIt->second;
-          if (history.size() <= offset)
-            return LTLTruth::Unknown;
-          return history[history.size() - 1 - offset];
-        };
-        auto getSequenceOutputSample = [&](Value seq,
-                                           uint64_t offset) -> LTLTruth {
-          auto *seqOp = seq.getDefiningOp();
-          if (!seqOp)
-            return offset == 0 ? evaluateLTLProperty(seq, state)
-                               : LTLTruth::Unknown;
-          auto histIt = state.temporalHistory.find(seqOp);
-          if (histIt == state.temporalHistory.end())
-            return LTLTruth::Unknown;
-          auto &history = histIt->second;
-          if (history.size() <= offset)
-            return LTLTruth::Unknown;
-          return history[history.size() - 1 - offset];
-        };
 
         uint64_t leftMin = leftDelay->delay.getDelay();
         uint64_t leftMax = leftMin + *leftDelay->delay.getLength();
         uint64_t rightMin = rightDelay->delay.getDelay();
         uint64_t rightMax = rightMin + *rightDelay->delay.getLength();
-        constexpr uint64_t kMaxConcatOffsetScan = 4096;
         if (leftMax > kMaxConcatOffsetScan || rightMax > kMaxConcatOffsetScan)
           return LTLTruth::Unknown;
 
@@ -8099,10 +8275,109 @@ LLHDProcessInterpreter::evaluateLTLProperty(
               return LTLTruth::Unknown;
             LTLTruth leftTruth =
                 getDelayInputSample(leftDelay->delay, composedLeftOffset);
+            if (leftOffset == 0 && rightOffset == 0) {
+              if (composedLeftOffset ==
+                  std::numeric_limits<uint64_t>::max())
+                return LTLTruth::Unknown;
+              uint64_t shiftedLeftOffset = composedLeftOffset + 1;
+              if (shiftedLeftOffset > kMaxConcatOffsetScan)
+                return LTLTruth::Unknown;
+              leftTruth = truthOr(
+                  leftTruth,
+                  getDelayInputSample(leftDelay->delay, shiftedLeftOffset));
+            }
             result = truthOr(result, truthAnd(leftTruth, rightTruth));
             if (result == LTLTruth::True)
               return result;
           }
+        }
+        return result;
+      }
+      if (leftDelay && !rightDelay) {
+        (void)evaluateLTLProperty(inputs[0], state);
+        (void)evaluateLTLProperty(inputs[1], state);
+
+        auto *rightOp = inputs[1].getDefiningOp();
+        if (!rightOp)
+          return LTLTruth::Unknown;
+        auto rightHistIt = state.temporalHistory.find(rightOp);
+        if (rightHistIt == state.temporalHistory.end())
+          return LTLTruth::Unknown;
+        const auto &rightHistory = rightHistIt->second;
+        if (rightHistory.empty())
+          return LTLTruth::Unknown;
+
+        uint64_t leftMin = leftDelay->delay.getDelay();
+        uint64_t leftMax = leftMin + *leftDelay->delay.getLength();
+        if (leftMax > kMaxConcatOffsetScan)
+          return LTLTruth::Unknown;
+
+        uint64_t maxRightOffset = rightHistory.size() - 1;
+        if (maxRightOffset > kMaxConcatOffsetScan)
+          maxRightOffset = kMaxConcatOffsetScan;
+
+        LTLTruth result = LTLTruth::False;
+        for (uint64_t rightOffset = 0; rightOffset <= maxRightOffset;
+             ++rightOffset) {
+          LTLTruth rightTruth = getSequenceOutputSample(inputs[1], rightOffset);
+          for (uint64_t leftOffset = leftMin; leftOffset <= leftMax;
+               ++leftOffset) {
+            if (rightOffset >
+                std::numeric_limits<uint64_t>::max() - leftOffset)
+              return LTLTruth::Unknown;
+            uint64_t composedLeftOffset = rightOffset + leftOffset;
+            if (composedLeftOffset > kMaxConcatOffsetScan)
+              return LTLTruth::Unknown;
+            LTLTruth leftTruth = leftDelay->wrappedFirstMatch
+                                     ? getSequenceOutputSample(inputs[0],
+                                                              composedLeftOffset)
+                                     : getDelayInputSample(leftDelay->delay,
+                                                           composedLeftOffset);
+            if (leftOffset == 0 && rightOffset == 0) {
+              if (composedLeftOffset ==
+                  std::numeric_limits<uint64_t>::max())
+                return LTLTruth::Unknown;
+              uint64_t shiftedLeftOffset = composedLeftOffset + 1;
+              if (shiftedLeftOffset > kMaxConcatOffsetScan)
+                return LTLTruth::Unknown;
+              LTLTruth shiftedLeftTruth =
+                  leftDelay->wrappedFirstMatch
+                      ? getSequenceOutputSample(inputs[0], shiftedLeftOffset)
+                      : getDelayInputSample(leftDelay->delay,
+                                            shiftedLeftOffset);
+              leftTruth = truthOr(leftTruth, shiftedLeftTruth);
+            }
+            result = truthOr(result, truthAnd(leftTruth, rightTruth));
+            if (result == LTLTruth::True)
+              return result;
+          }
+        }
+        return result;
+      }
+      if (!leftDelay && rightDelay) {
+        (void)evaluateLTLProperty(inputs[0], state);
+        (void)evaluateLTLProperty(inputs[1], state);
+
+        uint64_t rightMin = rightDelay->delay.getDelay();
+        uint64_t rightMax = rightMin + *rightDelay->delay.getLength();
+        if (rightMax > kMaxConcatOffsetScan)
+          return LTLTruth::Unknown;
+
+        LTLTruth result = LTLTruth::False;
+        for (uint64_t rightOffset = rightMin; rightOffset <= rightMax;
+             ++rightOffset) {
+          LTLTruth rightTruth =
+              getDelayInputSample(rightDelay->delay, rightOffset);
+          if (rightOffset ==
+              std::numeric_limits<uint64_t>::max())
+            return LTLTruth::Unknown;
+          uint64_t leftOffset = rightOffset + 1;
+          if (leftOffset > kMaxConcatOffsetScan)
+            return LTLTruth::Unknown;
+          LTLTruth leftTruth = getSequenceOutputSample(inputs[0], leftOffset);
+          result = truthOr(result, truthAnd(leftTruth, rightTruth));
+          if (result == LTLTruth::True)
+            return result;
         }
         return result;
       }
@@ -9989,16 +10264,6 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     }
   }
 
-  // AOT callback dispatch: if a process was AOT-compiled, call the native
-  // function pointer directly instead of interpreting. Skip the first
-  // activation (state.waiting==false) so the interpreter sets up minnow
-  // registration, sensitivity lists, and init preambles.
-  if (aotEnabled && state.waiting && aotCallbackProcs.count(procId)) {
-    ++activationsAOTCallback;
-    executeAOTCallbackProcess(procId);
-    return;
-  }
-
   // Direct fast paths for known hot process loop shapes. These execute
   // without compile-budgeted thunk installation and avoid repeated
   // compile-mode missing-thunk deopts for common AVIP clock loops.
@@ -10914,7 +11179,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       joinNoneDisableForkResumePollCount.erase(procId);
       disableForkDeferredToken.erase(procId);
       disableForkDeferredPollCount.erase(procId);
-      jitBlockSpecs.erase(procId);
+
       dropDequeuedForProc();
       notifyProcessAwaiters(procId);
       return;
@@ -10924,7 +11189,6 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   if (it != processStates.end()) {
     periodicToggleClockThunkSpecs.erase(procId);
     directProcessFastPathKinds.erase(procId);
-    jitBlockSpecs.erase(procId);
 
     removeObjectionZeroWaiter(procId);
     removeUvmSequencerGetWaiter(procId);
@@ -20233,10 +20497,27 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
     if (!hasUnknownArg) {
       uint64_t edgeKey = hashPhaseAddArgs(args);
-      // Salt with callsite identity to avoid accidental cross-callsite
-      // collisions collapsing distinct edges.
-      edgeKey ^=
-          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(callOp.getOperation()));
+      // Common hot path: add(phase, with_phase, null, null, null, null, null).
+      // Treat this as a logical set insertion keyed by (phase, with_phase),
+      // independent of callsite, so duplicate adds from different callsites
+      // are elided.
+      bool optionalAllNull = args.size() >= 7;
+      for (size_t i = 2; optionalAllNull && i < 7; ++i)
+        optionalAllNull = (args[i].getUInt64() == 0);
+
+      if (optionalAllNull) {
+        edgeKey = 0x9f0d98f6f4f5a22bULL;
+        for (size_t i = 0; i < 2; ++i) {
+          uint64_t bits = args[i].getUInt64();
+          edgeKey ^= bits + 0x9e3779b97f4a7c15ULL + (edgeKey << 6) +
+                     (edgeKey >> 2);
+        }
+      } else {
+        // Keep callsite salting for the general form to avoid accidental
+        // cross-callsite collisions on richer argument combinations.
+        edgeKey ^= static_cast<uint64_t>(
+            reinterpret_cast<uintptr_t>(callOp.getOperation()));
+      }
       if (!nativePhaseAddCallKeys.insert(edgeKey).second) {
         noteUvmFastPathActionHit("func.call.phase.add_duplicate");
         return success();
@@ -36440,255 +36721,6 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
   deferredChildModuleOps.clear();
 }
 
-//===----------------------------------------------------------------------===//
-// AOT Callback Dispatch — executeAOTCallbackProcess()
-//===----------------------------------------------------------------------===//
-
-void LLHDProcessInterpreter::executeAOTCallbackProcess(ProcessId procId) {
-  auto funcIt = aotCallbackProcs.find(procId);
-  if (funcIt == aotCallbackProcs.end())
-    return;
-
-  auto entryFunc = funcIt->second.entryFunc;
-  if (!entryFunc)
-    return;
-
-  // Watchdog: detect infinite firing at the same (time, delta).
-  {
-    static thread_local uint64_t watchdogTime = 0;
-    static thread_local uint32_t watchdogDelta = 0;
-    static thread_local unsigned watchdogCount = 0;
-    auto curTime = scheduler.getCurrentTime();
-    if (curTime.realTime == watchdogTime &&
-        curTime.deltaStep == watchdogDelta) {
-      if (++watchdogCount > 10000) {
-        llvm::errs() << "[AOT] WATCHDOG: proc " << procId
-                     << " fired >10000 times at (time=" << curTime.realTime
-                     << ", delta=" << curTime.deltaStep
-                     << ") — disabling AOT for this proc\n";
-        aotCallbackProcs.erase(procId);
-        watchdogCount = 0;
-        return;
-      }
-    } else {
-      watchdogTime = curTime.realTime;
-      watchdogDelta = curTime.deltaStep;
-      watchdogCount = 0;
-    }
-  }
-
-  // Set up the JIT runtime context so __arc_sched_read_signal /
-  // __arc_sched_drive_signal_fast can access the scheduler.
-  aotJitCtx->processId = procId;
-  setJITRuntimeContext(aotJitCtx.get());
-
-  LLVM_DEBUG(llvm::dbgs() << "[AOT] Executing callback proc=" << procId
-                          << "\n");
-
-  // Call the AOT-compiled native function. Signal IDs are baked as constants;
-  // the function reads/drives via __arc_sched_* runtime calls.
-  entryFunc();
-
-  clearJITRuntimeContext();
-
-  // Re-suspend the process based on its ExecModel.
-  auto modelIt = processExecModels.find(procId);
-  if (modelIt == processExecModels.end())
-    return;
-
-  switch (modelIt->second) {
-  case ExecModel::CallbackStaticObserved:
-    // Sensitivity was registered permanently in registerProcess().
-    // Just flip back to Waiting state.
-    scheduler.resuspendProcessFast(procId);
-    ++callbackFastResuspendCount;
-    break;
-
-  case ExecModel::CallbackTimeOnly:
-    // Minnow was registered during the first wait (interpreter path).
-    // Re-arm it for the next wake time.
-    if (scheduler.isMinnowProcess(procId)) {
-      scheduler.rearmMinnow(procId);
-      auto *proc = scheduler.getProcessDirect(procId);
-      if (proc)
-        proc->setState(ProcessState::Suspended);
-    }
-    break;
-
-  default:
-    // Other callback types shouldn't reach here (filtered in
-    // aotCompileProcesses), but handle gracefully.
-    break;
-  }
-}
-
-//===----------------------------------------------------------------------===//
-// AOT Batch Compilation — aotCompileProcesses()
-//===----------------------------------------------------------------------===//
-
-void LLHDProcessInterpreter::aotCompileProcesses() {
-  // Check CIRCT_SIM_AOT env var — only compile when explicitly enabled.
-  const char *aotEnv = std::getenv("CIRCT_SIM_AOT");
-  if (!aotEnv || std::string(aotEnv) != "1")
-    return;
-
-  if (!rootModule) {
-    LLVM_DEBUG(llvm::dbgs() << "[AOT] No root module — skipping\n");
-    return;
-  }
-
-  aotEnabled = true;
-
-  // Collect eligible (ProcessId, ProcessOp) pairs for callback-classified
-  // processes. Skip coroutines for now — they need ucontext integration.
-  llvm::SmallVector<std::pair<ProcessId, llhd::ProcessOp>> candidates;
-  for (auto &[op, procId] : opToProcessId) {
-    auto modelIt = processExecModels.find(procId);
-    if (modelIt == processExecModels.end())
-      continue;
-    ExecModel model = modelIt->second;
-    // Only compile high-value callback types that have an llhd.wait loop.
-    // Skip Coroutine (needs ucontext), OneShotCallback (no wait, runs once),
-    // and CallbackDynamicWait (needs runtime re-registration, lower priority).
-    if (model != ExecModel::CallbackStaticObserved)
-      continue;
-    auto processOp = dyn_cast<llhd::ProcessOp>(op);
-    if (!processOp)
-      continue;
-    candidates.push_back({procId, processOp});
-  }
-
-  // Report classification stats for debugging.
-  {
-    unsigned totalProcs = opToProcessId.size();
-    unsigned classifiedProcs = 0;
-    unsigned staticObs = 0, dynWait = 0, timeOnly = 0, oneShot = 0,
-             coroutine = 0;
-    for (auto &[op, procId] : opToProcessId) {
-      auto modelIt = processExecModels.find(procId);
-      if (modelIt == processExecModels.end())
-        continue;
-      ++classifiedProcs;
-      switch (modelIt->second) {
-      case ExecModel::CallbackStaticObserved:
-        ++staticObs;
-        break;
-      case ExecModel::CallbackDynamicWait:
-        ++dynWait;
-        break;
-      case ExecModel::CallbackTimeOnly:
-        ++timeOnly;
-        break;
-      case ExecModel::OneShotCallback:
-        ++oneShot;
-        break;
-      case ExecModel::Coroutine:
-        ++coroutine;
-        break;
-      }
-    }
-    llvm::errs() << "[circt-sim] [AOT] Process classification: "
-                 << totalProcs << " total, " << classifiedProcs << " classified"
-                 << " (StaticObs=" << staticObs << ", DynWait=" << dynWait
-                 << ", TimeOnly=" << timeOnly << ", OneShot=" << oneShot
-                 << ", Coroutine=" << coroutine << ")\n";
-  }
-
-  if (candidates.empty()) {
-    llvm::errs() << "[circt-sim] [AOT] No eligible callback processes\n";
-    return;
-  }
-
-  llvm::errs() << "[circt-sim] [AOT] Compiling " << candidates.size()
-               << " callback processes...\n";
-
-  // Ensure dialects needed for LLHD→LLVM lowering are loaded.
-  auto &ctx = *rootModule->getContext();
-  ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-  ctx.getOrLoadDialect<mlir::func::FuncDialect>();
-  ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
-  ctx.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
-
-  // Create the AOT compiler.
-  aotCompiler = std::make_unique<AOTProcessCompiler>(ctx);
-
-  // Set up the JIT runtime context so compiled code can call
-  // __arc_sched_read_signal / __arc_sched_drive_signal_fast etc.
-  aotJitCtx = std::make_unique<JITRuntimeContext>();
-  aotJitCtx->scheduler = &scheduler;
-
-  // Run batch compilation.
-  llvm::SmallVector<AOTCompiledProcess> results;
-  bool ok = aotCompiler->compileAllProcesses(
-      candidates, valueToSignal, rootModule, results);
-
-  if (!ok) {
-    llvm::errs() << "[circt-sim] [AOT] Batch compilation failed — "
-                 << "falling back to interpreter for all processes\n";
-    aotEnabled = false;
-    aotCompiler.reset();
-    aotJitCtx.reset();
-    return;
-  }
-
-  // Store compiled results and mark processes as AOT-compiled.
-  unsigned callbackCount = 0;
-  for (auto &result : results) {
-    aotCompiledProcesses.insert(result.procId);
-    if (result.isCallback) {
-      if (result.needsInitRun)
-        aotCallbackFirstActivation.insert(result.procId);
-      aotCallbackProcs[result.procId] = std::move(result);
-      ++callbackCount;
-    }
-  }
-
-  llvm::errs() << "[circt-sim] [AOT] Compiled " << results.size()
-               << " processes (" << callbackCount << " callbacks)\n";
-}
-
-void LLHDProcessInterpreter::aotCompileFuncBodies() {
-  const char *aotEnv = std::getenv("CIRCT_SIM_AOT");
-  if (!aotEnv || std::string(aotEnv) != "1")
-    return;
-
-  if (!rootModule) {
-    LLVM_DEBUG(llvm::dbgs() << "[AOT-F1] No root module — skipping\n");
-    return;
-  }
-
-  // Create compiler if not already created by aotCompileProcesses().
-  auto &ctx = *rootModule->getContext();
-  if (!aotCompiler) {
-    ctx.getOrLoadDialect<mlir::LLVM::LLVMDialect>();
-    ctx.getOrLoadDialect<mlir::func::FuncDialect>();
-    ctx.getOrLoadDialect<mlir::arith::ArithDialect>();
-    ctx.getOrLoadDialect<mlir::cf::ControlFlowDialect>();
-    aotCompiler = std::make_unique<AOTProcessCompiler>(ctx);
-  }
-
-  llvm::SmallVector<AOTCompiledFunc> funcResults;
-  bool ok = aotCompiler->compileAllFuncBodies(rootModule, funcResults);
-
-  if (!ok) {
-    llvm::errs() << "[circt-sim] [AOT-F1] No func bodies compiled\n";
-    return;
-  }
-
-  // Build the nativeFuncPtrs map: FuncOp (Operation*) → native ptr.
-  unsigned mapped = 0;
-  for (auto &compiled : funcResults) {
-    auto *symbolOp =
-        mlir::SymbolTable::lookupSymbolIn(rootModule, compiled.funcName);
-    if (!symbolOp)
-      continue;
-    nativeFuncPtrs[symbolOp] = compiled.funcPtr;
-    ++mapped;
-  }
-
-  llvm::errs() << "[circt-sim] [AOT-F1] Mapped " << mapped
-               << " native func ptrs for dispatch\n";
-}
 
 void LLHDProcessInterpreter::loadCompiledFunctions(
     const CompiledModuleLoader &loader) {

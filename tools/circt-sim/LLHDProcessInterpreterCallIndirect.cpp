@@ -222,7 +222,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       resolvedTargetName = name.str();
     };
     auto noteRuntimeIndirectProfileOnExit = llvm::make_scope_exit([&]() {
-      if (!jitRuntimeIndirectProfileEnabled || !compileModeEnabled)
+      if (!jitRuntimeIndirectProfileEnabled)
         return;
       if (sawResolvedTarget)
         noteJitRuntimeIndirectResolvedTarget(procId, callIndirectOp,

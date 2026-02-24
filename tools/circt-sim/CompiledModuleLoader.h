@@ -73,6 +73,35 @@ public:
   /// Get the .so file path.
   llvm::StringRef getPath() const { return soPath; }
 
+  /// Get number of trampolines (compiled-to-interpreted fallbacks).
+  uint32_t getNumTrampolines() const {
+    return compiledModule ? compiledModule->num_trampolines : 0;
+  }
+
+  /// Get the trampoline function name for a given func_id. Returns empty
+  /// string if func_id is out of range.
+  llvm::StringRef getTrampolineName(uint32_t funcId) const {
+    if (!compiledModule || funcId >= compiledModule->num_trampolines ||
+        !compiledModule->trampoline_names)
+      return {};
+    return compiledModule->trampoline_names[funcId];
+  }
+
+  /// Look up a trampoline ID by function name. Returns -1 if not found.
+  int32_t lookupTrampolineId(llvm::StringRef name) const {
+    auto it = trampolineIdMap.find(name);
+    if (it != trampolineIdMap.end())
+      return it->second;
+    return -1;
+  }
+
+  /// Set the __circt_sim_ctx global in the loaded .so. Must be called before
+  /// any compiled function that uses trampolines is invoked.
+  void setRuntimeContext(void *ctx) {
+    if (ctxGlobalPtr)
+      *ctxGlobalPtr = ctx;
+  }
+
 private:
   CompiledModuleLoader() = default;
 
@@ -80,7 +109,9 @@ private:
   const CirctSimCompiledModule *compiledModule = nullptr;
   std::string buildId;
   std::string soPath;
-  llvm::StringMap<void *> funcMap; // name → native function pointer
+  llvm::StringMap<void *> funcMap;          // name → native function pointer
+  llvm::StringMap<int32_t> trampolineIdMap; // name → trampoline func_id
+  void **ctxGlobalPtr = nullptr;            // pointer to __circt_sim_ctx in .so
 };
 
 } // namespace sim

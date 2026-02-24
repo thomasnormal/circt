@@ -20,7 +20,6 @@
 
 #include "CompiledModuleLoader.h"
 #include "LLHDProcessInterpreter.h"
-#include "JITCompileManager.h"
 #include "circt/Runtime/MooreRuntime.h"
 #include "circt/Conversion/ArcToLLVM.h"
 #include "circt/Conversion/CombToArith.h"
@@ -147,6 +146,50 @@ extern PLI_INT32 vpi_control(PLI_INT32, ...);
     reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_control)),
 };
 // NOLINTEND(cert-dcl50-cpp)
+
+//===----------------------------------------------------------------------===//
+// AOT Trampoline Runtime Support
+//===----------------------------------------------------------------------===//
+
+/// Trampoline dispatch callback type.
+/// Args: (funcId, funcName, args, numArgs, rets, numRets, userData)
+using TrampolineDispatchFn = void (*)(uint32_t, const char *, const uint64_t *,
+                                      uint32_t, uint64_t *, uint32_t, void *);
+
+/// Global trampoline dispatch callback. Set by the interpreter after
+/// initialization to wire up compiled-to-interpreted function calls.
+static TrampolineDispatchFn g_trampolineDispatch = nullptr;
+static void *g_trampolineUserData = nullptr;
+
+/// Trampoline name table. Set from CompiledModuleLoader after loading .so.
+static const CirctSimCompiledModule *g_compiledModule = nullptr;
+
+extern "C" void __circt_sim_call_interpreted(CirctSimCtx * /*ctx*/,
+                                             uint32_t funcId,
+                                             const uint64_t *args,
+                                             uint32_t numArgs, uint64_t *rets,
+                                             uint32_t numRets) {
+  // Look up the function name from the trampoline table.
+  const char *funcName = nullptr;
+  if (g_compiledModule && funcId < g_compiledModule->num_trampolines &&
+      g_compiledModule->trampoline_names)
+    funcName = g_compiledModule->trampoline_names[funcId];
+
+  if (g_trampolineDispatch && funcName) {
+    g_trampolineDispatch(funcId, funcName, args, numArgs, rets, numRets,
+                         g_trampolineUserData);
+    return;
+  }
+
+  // Fallback: abort with diagnostic. This means the interpreter dispatch
+  // hasn't been wired up yet (will be done when AOT is fully enabled).
+  llvm::errs() << "[circt-sim] FATAL: __circt_sim_call_interpreted called for "
+               << "func_id=" << funcId;
+  if (funcName)
+    llvm::errs() << " (" << funcName << ")";
+  llvm::errs() << " but interpreter fallback dispatch is not wired up.\n";
+  abort();
+}
 
 //===----------------------------------------------------------------------===//
 // Loop Partial-Width NBA Accumulation Fix
@@ -293,6 +336,7 @@ static int fixLoopPartialDriveAccumulation(Operation *moduleOp) {
 
 static std::atomic<bool> interruptRequested(false);
 static std::atomic<bool> simulationStarted(false);
+static std::atomic<bool> wallClockTimeoutTriggered(false);
 static void signalHandler(int) { interruptRequested.store(true); }
 
 /// Verilog plusargs (+key, +key=value) extracted from the command line.
@@ -499,32 +543,6 @@ static llvm::cl::opt<std::string> compiledModulePath(
     llvm::cl::value_desc("path"), llvm::cl::init(""),
     llvm::cl::cat(mainCategory));
 
-static llvm::cl::opt<std::string> jitReportPath(
-    "jit-report",
-    llvm::cl::desc("Write machine-readable JIT telemetry JSON report"),
-    llvm::cl::value_desc("path"), llvm::cl::init(""),
-    llvm::cl::cat(mainCategory));
-
-static llvm::cl::opt<uint64_t> jitHotThreshold(
-    "jit-hot-threshold",
-    llvm::cl::desc("Hotness threshold used by compile-mode JIT governor"),
-    llvm::cl::init(1), llvm::cl::cat(mainCategory));
-
-static llvm::cl::opt<int64_t> jitCompileBudget(
-    "jit-compile-budget",
-    llvm::cl::desc("Maximum compile promotions allowed (0 = disabled)"),
-    llvm::cl::init(100000), llvm::cl::cat(mainCategory));
-
-static llvm::cl::opt<std::string> jitCachePolicy(
-    "jit-cache-policy",
-    llvm::cl::desc("JIT cache policy label (for telemetry/governance)"),
-    llvm::cl::value_desc("policy"), llvm::cl::init("memory"),
-    llvm::cl::cat(mainCategory));
-
-static llvm::cl::opt<bool> jitFailOnDeopt(
-    "jit-fail-on-deopt",
-    llvm::cl::desc("Fail compile-mode run when any JIT deopt occurs"),
-    llvm::cl::init(false), llvm::cl::cat(mainCategory));
 
 static llvm::StringRef getRunModeName(RunMode mode) {
   switch (mode) {
@@ -663,26 +681,19 @@ public:
       llhdInterpreter->setMaxProcessSteps(maxSteps);
   }
 
-  /// Attach JIT compile manager for compile-mode thunk/deopt accounting.
-  void setJITCompileManager(JITCompileManager *manager) {
-    jitCompileManager = manager;
-    if (llhdInterpreter)
-      llhdInterpreter->setJITCompileManager(jitCompileManager);
-  }
-
-  /// Enable runtime func.call_indirect target-set profiling.
-  void setJitRuntimeIndirectProfileEnabled(bool enable) {
-    jitRuntimeIndirectProfileEnabled = enable;
-    if (llhdInterpreter)
-      llhdInterpreter->setJitRuntimeIndirectProfileEnabled(enable);
-  }
-
   /// Load AOT-compiled functions from a .so into the interpreter's
   /// nativeFuncPtrs map for native dispatch.
   void setCompiledModule(std::unique_ptr<CompiledModuleLoader> loader) {
     compiledLoader = std::move(loader);
     if (llhdInterpreter)
       llhdInterpreter->loadCompiledFunctions(*compiledLoader);
+
+    // Wire up trampoline support: set the global compiled module descriptor
+    // and the __circt_sim_ctx pointer so trampolines can call back into
+    // the interpreter.
+    g_compiledModule = compiledLoader->getModule();
+    compiledLoader->setRuntimeContext(
+        reinterpret_cast<void *>(this));
   }
 
   /// Dump signals that changed in the last delta cycle.
@@ -799,8 +810,6 @@ private:
 
   // LLHD Process interpreter
   std::unique_ptr<LLHDProcessInterpreter> llhdInterpreter;
-  JITCompileManager *jitCompileManager = nullptr;
-  bool jitRuntimeIndirectProfileEnabled = false;
 
   // AOT-compiled module loader (via --compiled flag)
   std::unique_ptr<CompiledModuleLoader> compiledLoader;
@@ -1232,8 +1241,6 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
         return abortRequested.load();
       });
       llhdInterpreter->setAbortCallback([this]() { handleAbort(); });
-      llhdInterpreter->setJitRuntimeIndirectProfileEnabled(
-          jitRuntimeIndirectProfileEnabled);
 
       // Set up terminate callback to signal SimulationControl (only once)
       llhdInterpreter->setTerminateCallback(
@@ -1344,11 +1351,6 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             }
           });
     }
-
-    llhdInterpreter->setCompileModeEnabled(runMode == RunMode::Compile);
-    llhdInterpreter->setJITCompileManager(jitCompileManager);
-    llhdInterpreter->setJitRuntimeIndirectProfileEnabled(
-        jitRuntimeIndirectProfileEnabled);
 
     // Provide port signal mappings so the interpreter can map non-ref-type
     // block arguments (e.g., four-state struct ports) to signal IDs.
@@ -2933,269 +2935,6 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
   os << "=============================\n";
 }
 
-static std::string resolveJitReportPath() {
-  if (!jitReportPath.empty())
-    return jitReportPath;
-  if (const char *envPath = std::getenv("CIRCT_SIM_JIT_REPORT_PATH"))
-    return std::string(envPath);
-  return {};
-}
-
-static uint64_t resolveUint64OptionOrEnv(const llvm::cl::opt<uint64_t> &option,
-                                         const char *envName) {
-  if (option.getNumOccurrences() > 0)
-    return option;
-  if (const char *env = std::getenv(envName)) {
-    char *end = nullptr;
-    errno = 0;
-    unsigned long long parsed = std::strtoull(env, &end, 10);
-    if (errno == 0 && end != env)
-      return static_cast<uint64_t>(parsed);
-    llvm::errs() << "[circt-sim] Warning: ignoring invalid " << envName
-                 << "='" << env << "'\n";
-  }
-  return option;
-}
-
-static int64_t resolveInt64OptionOrEnv(const llvm::cl::opt<int64_t> &option,
-                                       const char *envName) {
-  if (option.getNumOccurrences() > 0)
-    return option;
-  if (const char *env = std::getenv(envName)) {
-    char *end = nullptr;
-    errno = 0;
-    long long parsed = std::strtoll(env, &end, 10);
-    if (errno == 0 && end != env)
-      return static_cast<int64_t>(parsed);
-    llvm::errs() << "[circt-sim] Warning: ignoring invalid " << envName
-                 << "='" << env << "'\n";
-  }
-  return option;
-}
-
-static bool resolveBoolOptionOrEnv(const llvm::cl::opt<bool> &option,
-                                   const char *envName) {
-  if (option.getNumOccurrences() > 0)
-    return option;
-  if (const char *env = std::getenv(envName)) {
-    char c = env[0];
-    if (c == '1' || c == 'y' || c == 'Y' || c == 't' || c == 'T')
-      return true;
-    if (c == '0' || c == 'n' || c == 'N' || c == 'f' || c == 'F')
-      return false;
-    llvm::errs() << "[circt-sim] Warning: ignoring invalid " << envName
-                 << "='" << env << "'\n";
-  }
-  return option;
-}
-
-static std::string resolveJitCachePolicy() {
-  std::string policy = jitCachePolicy;
-  llvm::StringRef source = "--jit-cache-policy";
-  if (jitCachePolicy.getNumOccurrences() == 0) {
-    if (const char *env = std::getenv("CIRCT_SIM_JIT_CACHE_POLICY")) {
-      policy = env;
-      source = "CIRCT_SIM_JIT_CACHE_POLICY";
-    }
-  }
-
-  std::string normalized = llvm::StringRef(policy).trim().lower();
-  if (normalized.empty() || normalized == "memory")
-    return "memory";
-  if (normalized == "none")
-    return "none";
-
-  llvm::errs() << "[circt-sim] Warning: invalid " << source << "='" << policy
-               << "' (expected 'memory' or 'none'); using 'memory'\n";
-  return "memory";
-}
-
-static JITCompileManager::Config resolveJitCompileManagerConfig() {
-  JITCompileManager::Config config;
-  config.hotThreshold =
-      resolveUint64OptionOrEnv(jitHotThreshold, "CIRCT_SIM_JIT_HOT_THRESHOLD");
-  config.compileBudget = resolveInt64OptionOrEnv(
-      jitCompileBudget, "CIRCT_SIM_JIT_COMPILE_BUDGET");
-  config.cachePolicy = resolveJitCachePolicy();
-  config.failOnDeopt = resolveBoolOptionOrEnv(
-      jitFailOnDeopt, "CIRCT_SIM_JIT_FAIL_ON_DEOPT");
-  return config;
-}
-
-static LogicalResult emitJitReport(const SimulationContext &simContext,
-                                   const JITCompileManager &jitCompileManager,
-                                   uint64_t runWallMs, uint64_t totalWallMs) {
-  std::string reportPath = resolveJitReportPath();
-  if (reportPath.empty())
-    return success();
-
-  std::error_code ec;
-  llvm::raw_fd_ostream os(reportPath, ec, llvm::sys::fs::OF_Text);
-  if (ec) {
-    llvm::errs() << "[circt-sim] Failed to open JIT report file '"
-                 << reportPath << "': " << ec.message() << "\n";
-    return failure();
-  }
-
-  const auto &schedStats = simContext.getSchedulerStats();
-  const auto &ctrlStats = simContext.getControlStats();
-  const auto &jitConfig = jitCompileManager.getConfig();
-  const auto &jitStats = jitCompileManager.getStatistics();
-  const LLHDProcessInterpreter *interpreter = simContext.getInterpreter();
-
-  uint64_t uvmFastPathHitsTotal = 0;
-  uint64_t uvmFastPathActionKeysTotal = 0;
-  uint64_t uvmJitPromotedActionsTotal = 0;
-  uint64_t uvmJitHotThreshold = 0;
-  int64_t uvmJitPromotionBudgetRemaining = 0;
-  struct JitDeoptProcessEntry {
-    uint64_t processId;
-    std::string processName;
-    std::string reason;
-    std::string detail;
-  };
-  llvm::SmallVector<JitDeoptProcessEntry, 8> jitDeoptProcesses;
-  std::vector<LLHDProcessInterpreter::JitRuntimeIndirectSiteProfile>
-      jitRuntimeIndirectSites;
-  uint64_t jitRuntimeIndirectCallsTotal = 0;
-  uint64_t jitRuntimeIndirectUnresolvedTotal = 0;
-  if (interpreter) {
-    const auto &deoptDetails = interpreter->getJitDeoptDetailByProcess();
-    uvmFastPathHitsTotal = interpreter->getUvmFastPathHitsTotal();
-    uvmFastPathActionKeysTotal = interpreter->getUvmFastPathActionKeyCount();
-    uvmJitPromotedActionsTotal = interpreter->getUvmJitPromotedActionCount();
-    uvmJitHotThreshold = interpreter->getUvmJitHotThreshold();
-    uvmJitPromotionBudgetRemaining =
-        interpreter->getUvmJitPromotionBudgetRemaining();
-    jitRuntimeIndirectSites = interpreter->getJitRuntimeIndirectSiteProfiles();
-    for (const auto &site : jitRuntimeIndirectSites) {
-      jitRuntimeIndirectCallsTotal += site.callsTotal;
-      jitRuntimeIndirectUnresolvedTotal += site.unresolvedCalls;
-    }
-    for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
-      std::string detail;
-      auto detailIt = deoptDetails.find(entry.first);
-      if (detailIt != deoptDetails.end())
-        detail = detailIt->second;
-      jitDeoptProcesses.push_back({entry.first,
-                                   interpreter->getJitDeoptProcessName(
-                                       entry.first),
-                                   entry.second, std::move(detail)});
-    }
-    llvm::sort(jitDeoptProcesses, [](const auto &lhs, const auto &rhs) {
-      return lhs.processId < rhs.processId;
-    });
-  }
-
-  auto jos = llvm::json::OStream(os, 2);
-  jos.object([&] {
-    jos.attribute("schema_version", 1);
-    jos.attribute("mode", getRunModeName(runMode));
-    jos.attribute("exit_code", simContext.getExitCode());
-    jos.attribute("final_time_fs", simContext.getFinalTime().realTime);
-    jos.attribute("run_wall_ms", runWallMs);
-    jos.attribute("total_wall_ms", totalWallMs);
-
-    jos.attributeObject("jit_config", [&] {
-      jos.attribute("hot_threshold", jitConfig.hotThreshold);
-      jos.attribute("compile_budget", jitConfig.compileBudget);
-      jos.attribute("cache_policy", jitConfig.cachePolicy);
-      jos.attribute("fail_on_deopt", jitConfig.failOnDeopt ? 1 : 0);
-    });
-
-    jos.attributeObject("scheduler", [&] {
-      jos.attribute("processes_registered", schedStats.processesRegistered);
-      jos.attribute("processes_executed", schedStats.processesExecuted);
-      jos.attribute("delta_cycles_executed", schedStats.deltaCyclesExecuted);
-      jos.attribute("signal_updates", schedStats.signalUpdates);
-      jos.attribute("edges_detected", schedStats.edgesDetected);
-      jos.attribute("max_delta_cycles_reached", schedStats.maxDeltaCyclesReached);
-    });
-
-    jos.attributeObject("control", [&] {
-      jos.attribute("messages_reported", ctrlStats.messagesReported);
-      jos.attribute("messages_filtered", ctrlStats.messagesFiltered);
-      jos.attribute("finish_calls", ctrlStats.finishCalls);
-      jos.attribute("stop_calls", ctrlStats.stopCalls);
-      jos.attribute("errors", simContext.getErrorCount());
-      jos.attribute("warnings", simContext.getWarningCount());
-    });
-
-    jos.attributeObject("jit", [&] {
-      jos.attribute("jit_compiles_total", jitStats.jitCompilesTotal);
-      jos.attribute("jit_cache_hits_total", jitStats.jitCacheHitsTotal);
-      jos.attribute("jit_exec_hits_total", jitStats.jitExecHitsTotal);
-      jos.attribute("jit_deopts_total", jitStats.jitDeoptsTotal);
-      jos.attribute("jit_deopt_reason_unknown", jitStats.jitDeoptReasonUnknown);
-      jos.attribute("jit_deopt_reason_interpreter_fallback",
-                    jitStats.jitDeoptReasonInterpreterFallback);
-      jos.attribute("jit_deopt_reason_guard_failed",
-                    jitStats.jitDeoptReasonGuardFailed);
-      jos.attribute("jit_deopt_reason_unsupported_operation",
-                    jitStats.jitDeoptReasonUnsupportedOperation);
-      jos.attribute("jit_deopt_reason_missing_thunk",
-                    jitStats.jitDeoptReasonMissingThunk);
-      jos.attribute("jit_compile_wall_ms", jitStats.jitCompileWallMs);
-      jos.attribute("jit_exec_wall_ms", jitStats.jitExecWallMs);
-      jos.attribute("jit_strict_violations_total",
-                    jitStats.jitStrictViolationsTotal);
-      jos.attribute("jit_call_indirect_sites_total",
-                    static_cast<uint64_t>(jitRuntimeIndirectSites.size()));
-      jos.attribute("jit_call_indirect_calls_total",
-                    jitRuntimeIndirectCallsTotal);
-      jos.attribute("jit_call_indirect_unresolved_total",
-                    jitRuntimeIndirectUnresolvedTotal);
-      jos.attributeArray("jit_deopt_processes", [&] {
-        for (const auto &entry : jitDeoptProcesses) {
-          jos.object([&] {
-            jos.attribute("process_id", entry.processId);
-            jos.attribute("process_name", entry.processName);
-            jos.attribute("reason", entry.reason);
-            if (!entry.detail.empty())
-              jos.attribute("detail", entry.detail);
-          });
-        }
-      });
-      jos.attributeArray("jit_call_indirect_sites", [&] {
-        for (const auto &site : jitRuntimeIndirectSites) {
-          jos.object([&] {
-            jos.attribute("site_id", site.siteId);
-            jos.attribute("owner", site.owner);
-            jos.attribute("location", site.location);
-            jos.attribute("calls_total", site.callsTotal);
-            jos.attribute("unresolved_calls", site.unresolvedCalls);
-            jos.attribute("targets_total",
-                          static_cast<uint64_t>(site.targets.size()));
-            jos.attribute("target_set_version", site.targetSetVersion);
-            jos.attribute(
-                "target_set_hash",
-                (Twine("0x") + llvm::utohexstr(site.targetSetHash)).str());
-            jos.attributeArray("targets", [&] {
-              for (const auto &target : site.targets) {
-                jos.object([&] {
-                  jos.attribute("target_name", target.targetName);
-                  jos.attribute("calls", target.calls);
-                });
-              }
-            });
-          });
-        }
-      });
-    });
-
-    jos.attributeObject("uvm_fast_path", [&] {
-      jos.attribute("hits_total", uvmFastPathHitsTotal);
-      jos.attribute("action_keys_total", uvmFastPathActionKeysTotal);
-      jos.attribute("jit_promoted_actions_total", uvmJitPromotedActionsTotal);
-      jos.attribute("jit_hot_threshold", uvmJitHotThreshold);
-      jos.attribute("jit_promotion_budget_remaining",
-                    uvmJitPromotionBudgetRemaining);
-    });
-  });
-
-  os.flush();
-  return success();
-}
 
 //===----------------------------------------------------------------------===//
 // Main Processing Pipeline
@@ -3204,7 +2943,6 @@ static LogicalResult emitJitReport(const SimulationContext &simContext,
 static LogicalResult processInput(MLIRContext &context,
                                    llvm::SourceMgr &sourceMgr) {
   auto startTime = std::chrono::steady_clock::now();
-  JITCompileManager jitCompileManager(resolveJitCompileManagerConfig());
   auto lastStageTime = startTime;
   auto reportStage = [&lastStageTime, &startTime](llvm::StringRef stage) {
     auto now = std::chrono::steady_clock::now();
@@ -3222,12 +2960,14 @@ static LogicalResult processInput(MLIRContext &context,
     lastStageTime = now;
   };
 
+  wallClockTimeoutTriggered.store(false);
   std::unique_ptr<WallClockTimeout> wallClockTimeout;
   if (timeout > 0) {
     wallClockTimeout = std::make_unique<WallClockTimeout>(
         std::chrono::seconds(timeout), []() {
           llvm::errs()
               << "[circt-sim] Wall-clock timeout reached (global guard)\n";
+          wallClockTimeoutTriggered.store(true);
           interruptRequested.store(true);
           if (!simulationStarted.load())
             std::_Exit(1);
@@ -3495,9 +3235,6 @@ static LogicalResult processInput(MLIRContext &context,
 
   reportStage("init");
   SimulationContext simContext;
-  simContext.setJITCompileManager(&jitCompileManager);
-  simContext.setJitRuntimeIndirectProfileEnabled(
-      runMode == RunMode::Compile && !resolveJitReportPath().empty());
   simContext.setMaxDeltaCycles(maxDeltas);
   simContext.setMaxProcessSteps(maxProcessSteps);
   if (maxTime > 0)
@@ -3527,28 +3264,27 @@ static LogicalResult processInput(MLIRContext &context,
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - runStartTime)
           .count());
-  if (runMode == RunMode::Compile)
-    jitCompileManager.addExecWallMs(runWallMs);
-
   uint64_t totalWallMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - startTime)
           .count());
-  if (failed(runResult)) {
-    if (failed(
-            emitJitReport(simContext, jitCompileManager, runWallMs, totalWallMs)))
-      return failure();
+  if (failed(runResult))
     return failure();
+
+  // Join the timeout thread before final exit-code selection so timeout state
+  // is fully synchronized when the callback fired near simulation shutdown.
+  bool wallClockGuardFired = false;
+  if (wallClockTimeout) {
+    wallClockGuardFired = wallClockTimeout->hasFired();
+    wallClockTimeout.reset();
+    wallClockGuardFired =
+        wallClockGuardFired || wallClockTimeoutTriggered.load();
   }
 
   // Print statistics if requested
   if (printStats) {
     simContext.printStatistics(llvm::outs());
   }
-  if (failed(
-          emitJitReport(simContext, jitCompileManager, runWallMs, totalWallMs)))
-    return failure();
-
   // Use std::_Exit() here, before returning, to skip the expensive
   // SimulationContext destructor.  For UVM designs with millions of
   // operations, the destructor chain (DenseMap/StringMap/vector cleanup)
@@ -3557,56 +3293,9 @@ static LogicalResult processInput(MLIRContext &context,
   // because SimulationContext is stack-allocated and its destructor
   // runs when this function returns.
   int exitCode = simContext.getExitCode();
-  if (runMode == RunMode::Compile &&
-      jitCompileManager.getStatistics().jitStrictViolationsTotal > 0) {
-    llvm::errs() << "[circt-sim] Strict JIT policy violation: deopts_total="
-                 << jitCompileManager.getStatistics().jitDeoptsTotal
-                 << " (native-thunk coverage is not complete yet)\n";
-    if (const LLHDProcessInterpreter *interpreter = simContext.getInterpreter()) {
-      struct StrictDeoptProcessEntry {
-        uint64_t processId;
-        std::string processName;
-        std::string reason;
-        std::string detail;
-      };
-      llvm::SmallVector<StrictDeoptProcessEntry, 8> strictDeoptProcesses;
-      const auto &deoptDetails = interpreter->getJitDeoptDetailByProcess();
-      for (const auto &entry : interpreter->getJitDeoptReasonByProcess()) {
-        std::string detail;
-        auto detailIt = deoptDetails.find(entry.first);
-        if (detailIt != deoptDetails.end())
-          detail = detailIt->second;
-        strictDeoptProcesses.push_back(
-            {entry.first, interpreter->getJitDeoptProcessName(entry.first),
-             entry.second, std::move(detail)});
-      }
-      llvm::sort(strictDeoptProcesses, [](const auto &lhs, const auto &rhs) {
-        return lhs.processId < rhs.processId;
-      });
-
-      constexpr size_t kStrictDeoptLogLimit = 20;
-      size_t emitCount = std::min(strictDeoptProcesses.size(),
-                                  kStrictDeoptLogLimit);
-      for (size_t i = 0; i < emitCount; ++i) {
-        const auto &entry = strictDeoptProcesses[i];
-        llvm::StringRef name =
-            entry.processName.empty() ? llvm::StringRef("-")
-                                      : llvm::StringRef(entry.processName);
-        llvm::errs() << "[circt-sim] Strict JIT deopt process: id="
-                     << entry.processId << " name=" << name
-                     << " reason=" << entry.reason;
-        if (!entry.detail.empty())
-          llvm::errs() << " detail=" << entry.detail;
-        llvm::errs() << "\n";
-      }
-      if (strictDeoptProcesses.size() > kStrictDeoptLogLimit) {
-        llvm::errs() << "[circt-sim] Strict JIT deopt process: omitted="
-                     << (strictDeoptProcesses.size() - kStrictDeoptLogLimit)
-                     << " (log limit=" << kStrictDeoptLogLimit << ")\n";
-      }
-    }
+  if (exitCode == 0 &&
+      (wallClockTimeoutTriggered.load() || wallClockGuardFired))
     exitCode = 1;
-  }
   // Check for SVA clocked assertion/assumption failures.
   if (exitCode == 0) {
     if (auto *interp = simContext.getInterpreter()) {
