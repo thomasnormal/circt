@@ -37237,6 +37237,36 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     // Die interceptor
     if (name.ends_with("::die"))
       return true;
+    // UVM-generated class methods with package-qualified names (no "uvm_"
+    // prefix). These are emitted by uvm_component_utils/uvm_object_utils macros.
+    if (name == "create" || name.starts_with("create_") ||
+        name.ends_with("::create"))
+      return true;
+    if (name == "m_initialize" || name.starts_with("m_initialize_") ||
+        name.ends_with("::m_initialize"))
+      return true;
+    if (name.starts_with("m_register_cb"))
+      return true;
+    if (name.contains("get_object_type") || name.contains("get_type_name"))
+      return true;
+    // Type registry accessors (get_type_NNN mangled names)
+    if (name.starts_with("get_type_") || name.contains("::get_type_"))
+      return true;
+    // TLM imp port accessors (get_imp_NNN mangled names)
+    if (name.starts_with("get_imp_") || name.contains("::get_imp_"))
+      return true;
+    // Type name string helpers (type_name_NNN)
+    if (name.starts_with("type_name_"))
+      return true;
+    // Constructors (may allocate objects the interpreter tracks)
+    if (name.ends_with("::new"))
+      return true;
+    // UVM singleton/registry accessors
+    if (name.contains("::is_auditing") ||
+        name.contains("get_print_config_matches") ||
+        name.contains("get_root_blocks") ||
+        name == "get_inst" || name.starts_with("get_inst_"))
+      return true;
     return false;
   };
 
