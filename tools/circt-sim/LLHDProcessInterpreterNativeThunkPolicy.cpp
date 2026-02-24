@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
-#include "JITCompileManager.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
@@ -725,9 +724,10 @@ LLHDProcessInterpreter::ProcessThunkInstallResult
 LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
                                                ProcessExecutionState &state,
                                                std::string *deoptDetail) {
-  if (!jitCompileManager)
-    return ProcessThunkInstallResult::MissingThunk;
-
+  // JIT compile manager removed — thunk installation requires circt-sim-compile.
+  (void)procId; (void)state; (void)deoptDetail;
+  return ProcessThunkInstallResult::MissingThunk;
+#if 0  // Dead code — JIT removed
   // Known-safe guard: keep forked monitor sampling branches interpreted.
   // These fork children can carry parent-scope ref/aggregate interactions that
   // still have native-thunk parity gaps in I3C monitor sampling paths.
@@ -896,6 +896,7 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
 
   jitCompileManager->noteCompile();
   return ProcessThunkInstallResult::Installed;
+#endif // Dead code — JIT removed
 }
 
 std::string LLHDProcessInterpreter::getUnsupportedThunkDeoptDetail(
@@ -1060,7 +1061,7 @@ static NativeThunkSuspendAnalysisContext buildSuspendAnalysisContext(
   ctx.procId = procId;
   ctx.profileGuardSpecs = profileGuardSpecs;
   if (interpreter)
-    ctx.minProfileCalls = interpreter->getJitCompileHotThreshold();
+    ctx.minProfileCalls = 1; // Default threshold (JIT governor removed)
   return ctx;
 }
 

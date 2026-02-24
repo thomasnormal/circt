@@ -7,9 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
-#include "JITBlockCompiler.h"
-#include "JITCompileManager.h"
-#include "JITSchedulerRuntime.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -133,47 +130,9 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
       kindMask |=
           toFastPathMask(DirectProcessFastPathKind::BytecodeProcess);
 
-    // Block-level JIT: identify and compile a hot block, but DON'T add to
-    // kindMask yet. The first activation must be handled by the interpreter
-    // (or another thunk) to execute the entry block. The JIT kind will be
-    // activated on the second invocation once jitThunkResumeToken >= 1.
-    if (blockJITEnabled && jitBlockCompiler) {
-      auto processOp = state.getProcessOp();
-      if (processOp) {
-        JITBlockSpec blockSpec;
-        if (jitBlockCompiler->identifyHotBlock(processOp, valueToSignal,
-                                               scheduler, blockSpec)) {
-          if (jitBlockCompiler->compileBlock(blockSpec, state.getProcessOp()
-                                                 ->getParentOfType<mlir::ModuleOp>())) {
-            jitBlockSpecs[procId] = std::make_unique<JITBlockSpec>(std::move(blockSpec));
-            LLVM_DEBUG(llvm::dbgs()
-                       << "[JIT] Compiled block for proc=" << procId
-                       << " (deferred activation)\n");
-          }
-        }
-      }
-    }
-
     directProcessFastPathKinds[procId] = kindMask;
   } else {
     kindMask = kindIt->second;
-
-    // Deferred JIT activation: after the first activation (handled by
-    // interpreter or other thunks), add JIT kind if we have a compiled block
-    // and the process has been through at least one wait cycle.
-    if (!(kindMask &
-          toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock)) &&
-        state.jitThunkResumeToken >= 1) {
-      auto specIt = jitBlockSpecs.find(procId);
-      if (specIt != jitBlockSpecs.end() && specIt->second &&
-          specIt->second->nativeFunc) {
-        kindMask |=
-            toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock);
-        directProcessFastPathKinds[procId] = kindMask;
-        LLVM_DEBUG(llvm::dbgs()
-                   << "[JIT] Activated JIT block for proc=" << procId << "\n");
-      }
-    }
   }
 
   if (kindMask == 0)
@@ -182,10 +141,6 @@ bool LLHDProcessInterpreter::tryExecuteDirectProcessFastPath(
   auto clearKind = [&](DirectProcessFastPathKind kind) {
     kindMask &= ~toFastPathMask(kind);
     directProcessFastPathKinds[procId] = kindMask;
-    if ((kind == DirectProcessFastPathKind::JITCompiledBlock) &&
-        ((kindMask &
-          toFastPathMask(DirectProcessFastPathKind::JITCompiledBlock)) == 0))
-      jitBlockSpecs.erase(procId);
     if ((kind == DirectProcessFastPathKind::PeriodicToggleClock) &&
         ((kindMask &
           toFastPathMask(DirectProcessFastPathKind::PeriodicToggleClock)) == 0))
@@ -307,8 +262,6 @@ void LLHDProcessInterpreter::executeTrivialNativeThunk(
       }
       thunkState.deoptRequested = true;
       thunkState.deoptDetail = std::move(detail);
-      if (jitCompileManager)
-        jitCompileManager->invalidateProcessThunk(procId);
       jitProcessThunkIndirectSiteGuards.erase(procId);
     };
     for (const auto &guard : guardIt->second) {
@@ -2056,6 +2009,10 @@ bool LLHDProcessInterpreter::tryBuildYieldBasedToggleClockThunkSpec(
 bool LLHDProcessInterpreter::executeJITCompiledBlockNativeThunk(
     ProcessId procId, ProcessExecutionState &state,
     ProcessThunkExecutionState &thunkState) {
+  // JIT block compilation removed — always fall back to interpreter.
+  (void)procId; (void)state; (void)thunkState;
+  return false;
+#if 0  // Dead code — JIT removed
   auto specIt = jitBlockSpecs.find(procId);
   if (specIt == jitBlockSpecs.end() || !specIt->second)
     return false;
@@ -2152,6 +2109,7 @@ bool LLHDProcessInterpreter::executeJITCompiledBlockNativeThunk(
   thunkState.waiting = state.waiting;
   thunkState.resumeToken = state.jitThunkResumeToken;
   return true;
+#endif // Dead code — JIT removed
 }
 
 bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(

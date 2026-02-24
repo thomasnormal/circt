@@ -1,23 +1,5 @@
 set(LLVM_LINK_COMPONENTS Support native)
 
-# Block-level JIT: only wire ExecutionEngine/ORC when available.
-if(MLIR_ENABLE_EXECUTION_ENGINE)
-  add_compile_definitions(CIRCT_SIM_JIT_ENABLED)
-  set(CIRCT_SIM_JIT_DEPS
-    LLVMOrcJIT
-    MLIRExecutionEngine
-    MLIRBuiltinToLLVMIRTranslation
-    MLIRLLVMToLLVMIRTranslation
-    MLIRTargetLLVMIRExport
-    MLIRArithToLLVM
-    MLIRControlFlowToLLVM
-    MLIRFuncToLLVM
-    MLIRSCFToControlFlow
-    CIRCTCombToLLVM
-    CIRCTHWToLLVM
-  )
-endif()
-
 set(libs
   CIRCTArc
   CIRCTArcToLLVM
@@ -57,9 +39,6 @@ add_circt_tool(circt-sim
   AOTProcessCompiler.cpp
   CompiledModuleLoader.cpp
   circt-sim.cpp
-  JITCompileManager.cpp
-  JITSchedulerRuntime.cpp
-  JITBlockCompiler.cpp
   LLHDProcessInterpreter.cpp
   LLHDProcessInterpreterBytecode.cpp
   LLHDProcessInterpreterCallIndirect.cpp
@@ -79,7 +58,6 @@ add_circt_tool(circt-sim
 target_link_libraries(circt-sim
   PRIVATE
   ${libs}
-  ${CIRCT_SIM_JIT_DEPS}
   MooreRuntime
 )
 

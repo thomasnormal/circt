@@ -100,29 +100,12 @@ static llvm::cl::opt<bool>
 //===----------------------------------------------------------------------===//
 
 /// Check whether a func.func body contains only ops that can be lowered to
-/// LLVM dialect. Only arith/cf/func/LLVM ops with scalar types are accepted.
+/// LLVM dialect. Only arith/cf/func/LLVM ops are accepted. Aggregate types
+/// in signatures are allowed — they will be flattened by
+/// flattenAggregateFunctionABIs() after lowering to LLVM dialect.
 static bool isFuncBodyCompilable(func::FuncOp funcOp) {
   if (funcOp.isExternal())
     return false;
-
-  auto isScalarType = [](Type ty) -> bool {
-    if (auto intTy = dyn_cast<IntegerType>(ty))
-      return intTy.getWidth() <= 64;
-    if (isa<LLVM::LLVMPointerType>(ty))
-      return true;
-    if (isa<Float32Type, Float64Type>(ty))
-      return true;
-    if (isa<LLVM::LLVMVoidType>(ty))
-      return true;
-    return false;
-  };
-
-  for (auto argType : funcOp.getArgumentTypes())
-    if (!isScalarType(argType))
-      return false;
-  for (auto resType : funcOp.getResultTypes())
-    if (!isScalarType(resType))
-      return false;
 
   bool compilable = true;
   funcOp.walk([&](Operation *op) {
@@ -448,6 +431,383 @@ stripNonLLVMFunctions(ModuleOp microModule) {
 }
 
 //===----------------------------------------------------------------------===//
+// Trampoline generation for uncompiled functions
+//===----------------------------------------------------------------------===//
+
+/// Generate trampoline bodies for external function declarations in the
+/// micro-module. Each trampoline packs arguments into a uint64_t array,
+/// calls __circt_sim_call_interpreted() to dispatch to the MLIR interpreter,
+/// and unpacks the return value.
+///
+/// This allows compiled code to call functions that weren't compiled (e.g.,
+/// functions containing unsupported ops) without crashing at runtime.
+static llvm::SmallVector<std::string>
+generateTrampolines(ModuleOp microModule) {
+  llvm::SmallVector<std::string> trampolineNames;
+  auto *mlirCtx = microModule.getContext();
+  OpBuilder builder(mlirCtx);
+  auto loc = microModule.getLoc();
+  auto ptrTy = LLVM::LLVMPointerType::get(mlirCtx);
+  auto i32Ty = IntegerType::get(mlirCtx, 32);
+  auto i64Ty = IntegerType::get(mlirCtx, 64);
+  auto voidTy = LLVM::LLVMVoidType::get(mlirCtx);
+
+  // Declare the __circt_sim_ctx global (set by runtime before calling
+  // compiled code). Single-threaded, so a plain global suffices.
+  if (!microModule.lookupSymbol<LLVM::GlobalOp>("__circt_sim_ctx")) {
+    builder.setInsertionPointToEnd(microModule.getBody());
+    LLVM::GlobalOp::create(builder, loc, ptrTy, /*isConstant=*/false,
+                           LLVM::Linkage::External, "__circt_sim_ctx",
+                           /*value=*/Attribute());
+  }
+
+  // Declare __circt_sim_call_interpreted().
+  auto callInterpFuncTy = LLVM::LLVMFunctionType::get(
+      voidTy, {ptrTy, i32Ty, ptrTy, i32Ty, ptrTy, i32Ty}, /*isVarArg=*/false);
+  auto callInterpDecl = microModule.lookupSymbol<LLVM::LLVMFuncOp>(
+      "__circt_sim_call_interpreted");
+  if (!callInterpDecl) {
+    builder.setInsertionPointToEnd(microModule.getBody());
+    callInterpDecl = LLVM::LLVMFuncOp::create(
+        builder, loc, "__circt_sim_call_interpreted", callInterpFuncTy);
+  }
+
+  // Collect external functions that need trampolines.
+  llvm::SmallVector<LLVM::LLVMFuncOp> externals;
+  for (auto funcOp : microModule.getOps<LLVM::LLVMFuncOp>()) {
+    if (!funcOp.isExternal())
+      continue;
+    auto name = funcOp.getSymName();
+    // Skip runtime/system functions (resolved by dynamic linker).
+    if (name.starts_with("__circt_sim_") || name.starts_with("__moore_") ||
+        name.starts_with("__arc_sched_") || name.starts_with("llvm."))
+      continue;
+    // Skip vararg functions (can't pack cleanly).
+    if (funcOp.isVarArg())
+      continue;
+    // Skip functions with aggregate arg/return types that we can't pack
+    // into uint64_t slots.
+    auto funcTy = funcOp.getFunctionType();
+    bool hasUnsupported = false;
+    for (unsigned i = 0; i < funcTy.getNumParams(); ++i) {
+      auto ty = funcTy.getParamType(i);
+      if (!isa<IntegerType>(ty) && !isa<LLVM::LLVMPointerType>(ty) &&
+          !isa<FloatType>(ty)) {
+        hasUnsupported = true;
+        break;
+      }
+    }
+    if (!hasUnsupported && !isa<LLVM::LLVMVoidType>(funcTy.getReturnType())) {
+      auto retTy = funcTy.getReturnType();
+      if (!isa<IntegerType>(retTy) && !isa<LLVM::LLVMPointerType>(retTy) &&
+          !isa<FloatType>(retTy))
+        hasUnsupported = true;
+    }
+    if (hasUnsupported)
+      continue;
+    externals.push_back(funcOp);
+  }
+
+  unsigned funcId = 0;
+  for (auto funcOp : externals) {
+    auto funcTy = funcOp.getFunctionType();
+    unsigned numArgs = funcTy.getNumParams();
+    auto retTy = funcTy.getReturnType();
+    bool hasResult = !isa<LLVM::LLVMVoidType>(retTy);
+    auto funcLoc = funcOp.getLoc();
+
+    // Add entry block with arguments matching the function signature.
+    Region &body = funcOp.getBody();
+    Block *entry = new Block();
+    body.push_back(entry);
+    for (unsigned i = 0; i < numArgs; ++i)
+      entry->addArgument(funcTy.getParamType(i), funcLoc);
+    funcOp.setLinkage(LLVM::Linkage::External);
+
+    builder.setInsertionPointToStart(entry);
+
+    // Load ctx from __circt_sim_ctx global.
+    auto ctxAddr = LLVM::AddressOfOp::create(builder, funcLoc, ptrTy,
+                                             "__circt_sim_ctx");
+    auto ctx = LLVM::LoadOp::create(builder, funcLoc, ptrTy, ctxAddr);
+
+    // Allocate uint64_t args[numArgs].
+    Value argsArray;
+    if (numArgs > 0) {
+      auto countVal = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
+                                               builder.getI64IntegerAttr(numArgs));
+      argsArray = LLVM::AllocaOp::create(builder, funcLoc, ptrTy, i64Ty,
+                                         countVal);
+
+      // Pack each argument into the array.
+      for (unsigned i = 0; i < numArgs; ++i) {
+        Value slot;
+        if (i == 0) {
+          slot = argsArray;
+        } else {
+          auto idxVal = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
+                                                 builder.getI64IntegerAttr(i));
+          slot = LLVM::GEPOp::create(builder, funcLoc, ptrTy, i64Ty,
+                                     argsArray, ValueRange{idxVal});
+        }
+
+        auto arg = entry->getArgument(i);
+        Value packed;
+        if (isa<LLVM::LLVMPointerType>(arg.getType())) {
+          packed = LLVM::PtrToIntOp::create(builder, funcLoc, i64Ty, arg);
+        } else if (auto intTy = dyn_cast<IntegerType>(arg.getType())) {
+          if (intTy.getWidth() < 64)
+            packed = LLVM::ZExtOp::create(builder, funcLoc, i64Ty, arg);
+          else if (intTy.getWidth() == 64)
+            packed = arg;
+          else
+            packed = LLVM::TruncOp::create(builder, funcLoc, i64Ty, arg);
+        } else {
+          // Float/double: bitcast to i64.
+          packed = LLVM::BitcastOp::create(builder, funcLoc, i64Ty, arg);
+        }
+        LLVM::StoreOp::create(builder, funcLoc, packed, slot);
+      }
+    } else {
+      Value zero = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
+                                            builder.getI64IntegerAttr(0));
+      argsArray = LLVM::IntToPtrOp::create(builder, funcLoc, ptrTy, zero);
+    }
+
+    // Allocate uint64_t rets[numRets].
+    unsigned numRets = hasResult ? 1 : 0;
+    Value retsArray;
+    if (hasResult) {
+      Value oneVal = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
+                                              builder.getI64IntegerAttr(1));
+      retsArray = LLVM::AllocaOp::create(builder, funcLoc, ptrTy, i64Ty,
+                                         oneVal);
+    } else {
+      Value zero = LLVM::ConstantOp::create(builder, funcLoc, i64Ty,
+                                            builder.getI64IntegerAttr(0));
+      retsArray = LLVM::IntToPtrOp::create(builder, funcLoc, ptrTy, zero);
+    }
+
+    // Call __circt_sim_call_interpreted(ctx, funcId, args, numArgs, rets,
+    // numRets).
+    auto funcIdVal = LLVM::ConstantOp::create(builder, funcLoc, i32Ty,
+                                              builder.getI32IntegerAttr(funcId));
+    auto numArgsVal = LLVM::ConstantOp::create(
+        builder, funcLoc, i32Ty, builder.getI32IntegerAttr(numArgs));
+    auto numRetsVal = LLVM::ConstantOp::create(
+        builder, funcLoc, i32Ty, builder.getI32IntegerAttr(numRets));
+    LLVM::CallOp::create(builder, funcLoc, callInterpDecl,
+                         ValueRange{ctx, funcIdVal, argsArray, numArgsVal,
+                                    retsArray, numRetsVal});
+
+    // Unpack return value.
+    if (hasResult) {
+      Value retI64 = LLVM::LoadOp::create(builder, funcLoc, i64Ty, retsArray);
+      Value result;
+      if (isa<LLVM::LLVMPointerType>(retTy)) {
+        result = LLVM::IntToPtrOp::create(builder, funcLoc, retTy, retI64);
+      } else if (auto intTy = dyn_cast<IntegerType>(retTy)) {
+        if (intTy.getWidth() < 64)
+          result = LLVM::TruncOp::create(builder, funcLoc, retTy, retI64);
+        else if (intTy.getWidth() == 64)
+          result = retI64;
+        else
+          result = LLVM::ZExtOp::create(builder, funcLoc, retTy, retI64);
+      } else {
+        result = LLVM::BitcastOp::create(builder, funcLoc, retTy, retI64);
+      }
+      LLVM::ReturnOp::create(builder, funcLoc, result);
+    } else {
+      LLVM::ReturnOp::create(builder, funcLoc, ValueRange{});
+    }
+
+    trampolineNames.push_back(funcOp.getSymName().str());
+    ++funcId;
+  }
+
+  return trampolineNames;
+}
+
+//===----------------------------------------------------------------------===//
+// Aggregate ABI flattening: pass aggregates by pointer
+//===----------------------------------------------------------------------===//
+
+/// Check if a type is an aggregate that LLVM codegen cannot pass by value.
+static bool isAggregateType(Type ty) {
+  if (isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(ty))
+    return true;
+  if (auto intTy = dyn_cast<IntegerType>(ty))
+    return intTy.getWidth() > 64;
+  return false;
+}
+
+/// Flatten aggregate function ABIs by converting aggregate arguments and return
+/// values to pointer-based passing. Must be called after
+/// lowerFuncArithCfToLLVM() so we operate on LLVM dialect ops.
+///
+/// For aggregate arguments: the parameter type becomes !llvm.ptr and a load is
+/// inserted at the function entry. Call sites alloca+store the value and pass
+/// the pointer.
+///
+/// For aggregate return values: an extra !llvm.ptr "sret" parameter is prepended
+/// and the function becomes void-returning. The return value is stored through
+/// the pointer. Call sites alloca a buffer, pass it, and load the result.
+static void flattenAggregateFunctionABIs(ModuleOp moduleOp) {
+  MLIRContext *ctx = moduleOp.getContext();
+  Type ptrTy = LLVM::LLVMPointerType::get(ctx);
+  Type voidTy = LLVM::LLVMVoidType::get(ctx);
+
+  // Info needed to rewrite a function and its call sites.
+  struct FuncRewriteInfo {
+    LLVM::LLVMFuncOp funcOp;
+    LLVM::LLVMFunctionType oldFuncType;
+    LLVM::LLVMFunctionType newFuncType;
+    bool hasAggregateReturn;
+  };
+  llvm::StringMap<FuncRewriteInfo> rewriteMap;
+
+  // Phase 1: Identify non-external functions needing rewrite.
+  moduleOp.walk([&](LLVM::LLVMFuncOp funcOp) {
+    if (funcOp.isExternal())
+      return;
+    auto funcType = funcOp.getFunctionType();
+    bool needsRewrite = false;
+    for (auto argTy : funcType.getParams())
+      if (isAggregateType(argTy)) {
+        needsRewrite = true;
+        break;
+      }
+    Type retType = funcType.getReturnType();
+    bool hasAggRet = !isa<LLVM::LLVMVoidType>(retType) && isAggregateType(retType);
+    if (hasAggRet)
+      needsRewrite = true;
+    if (!needsRewrite)
+      return;
+
+    // Build the new parameter list.
+    SmallVector<Type> newParams;
+    if (hasAggRet)
+      newParams.push_back(ptrTy);
+    for (auto argTy : funcType.getParams())
+      newParams.push_back(isAggregateType(argTy) ? ptrTy : argTy);
+
+    Type newRetType = hasAggRet ? voidTy : retType;
+    auto newFuncType =
+        LLVM::LLVMFunctionType::get(newRetType, newParams, funcType.isVarArg());
+    rewriteMap[funcOp.getName()] = {funcOp, funcType, newFuncType, hasAggRet};
+  });
+
+  if (rewriteMap.empty())
+    return;
+
+  // Phase 2: Rewrite function bodies and signatures.
+  for (auto &kv : rewriteMap) {
+    auto &info = kv.second;
+    auto &funcOp = info.funcOp;
+    auto &oldFuncType = info.oldFuncType;
+    Block &entry = funcOp.getBody().front();
+    OpBuilder builder(ctx);
+    builder.setInsertionPointToStart(&entry);
+
+    // If the function had an aggregate return, prepend an sret pointer arg.
+    Value retBuf;
+    if (info.hasAggregateReturn)
+      retBuf = entry.insertArgument(0u, ptrTy, funcOp.getLoc());
+
+    // Replace each aggregate argument with a pointer + load.
+    unsigned offset = info.hasAggregateReturn ? 1 : 0;
+    for (unsigned i = 0; i < oldFuncType.getNumParams(); ++i) {
+      Type oldTy = oldFuncType.getParams()[i];
+      if (!isAggregateType(oldTy))
+        continue;
+      BlockArgument arg = entry.getArgument(i + offset);
+      arg.setType(ptrTy);
+      Value loaded = builder.create<LLVM::LoadOp>(funcOp.getLoc(), oldTy, arg);
+      arg.replaceAllUsesExcept(loaded, loaded.getDefiningOp());
+    }
+
+    // Rewrite return ops for aggregate returns.
+    if (info.hasAggregateReturn) {
+      SmallVector<LLVM::ReturnOp> returns;
+      funcOp.walk([&](LLVM::ReturnOp ret) { returns.push_back(ret); });
+      for (auto ret : returns) {
+        OpBuilder rb(ret);
+        if (ret.getNumOperands() > 0)
+          rb.create<LLVM::StoreOp>(ret.getLoc(), ret.getOperand(0), retBuf);
+        rb.create<LLVM::ReturnOp>(ret.getLoc(), ValueRange{});
+        ret.erase();
+      }
+    }
+
+    // Update the function's type to the new signature.
+    funcOp.setFunctionType(info.newFuncType);
+  }
+
+  // Phase 3: Rewrite call sites.
+  SmallVector<LLVM::CallOp> callsToRewrite;
+  moduleOp.walk([&](LLVM::CallOp callOp) {
+    auto callee = callOp.getCallee();
+    if (!callee)
+      return; // Indirect call — skip.
+    if (rewriteMap.count(*callee))
+      callsToRewrite.push_back(callOp);
+  });
+
+  for (auto callOp : callsToRewrite) {
+    auto callee = *callOp.getCallee();
+    auto &info = rewriteMap[callee];
+    auto &oldFuncType = info.oldFuncType;
+    OpBuilder builder(callOp);
+    Location loc = callOp.getLoc();
+
+    // Constant 1 for alloca sizes.
+    Value one = builder.create<LLVM::ConstantOp>(loc, builder.getI64Type(),
+                                                 builder.getI64IntegerAttr(1));
+
+    SmallVector<Value> newOperands;
+
+    // If the function had an aggregate return, alloca a result buffer.
+    Value retBuf;
+    if (info.hasAggregateReturn) {
+      Type retTy = oldFuncType.getReturnType();
+      retBuf = builder.create<LLVM::AllocaOp>(loc, ptrTy, retTy, one);
+      newOperands.push_back(retBuf);
+    }
+
+    // Process each argument.
+    for (unsigned i = 0; i < oldFuncType.getNumParams(); ++i) {
+      Value operand = callOp.getOperand(i);
+      Type oldArgTy = oldFuncType.getParams()[i];
+      if (isAggregateType(oldArgTy)) {
+        // Alloca + store + pass pointer.
+        Value buf = builder.create<LLVM::AllocaOp>(loc, ptrTy, oldArgTy, one);
+        builder.create<LLVM::StoreOp>(loc, operand, buf);
+        newOperands.push_back(buf);
+      } else {
+        newOperands.push_back(operand);
+      }
+    }
+
+    // Create the replacement call.
+    if (info.hasAggregateReturn) {
+      // Function now returns void; load result from buffer.
+      builder.create<LLVM::CallOp>(loc, TypeRange{}, callee, newOperands);
+      Value result =
+          builder.create<LLVM::LoadOp>(loc, oldFuncType.getReturnType(), retBuf);
+      callOp.getResult().replaceAllUsesWith(result);
+    } else {
+      // Return type unchanged — just update operands.
+      auto newCall = builder.create<LLVM::CallOp>(loc, callOp.getResultTypes(),
+                                                  callee, newOperands);
+      // LLVM::CallOp has at most one result; use getResult() with no args.
+      if (callOp.getNumResults() > 0)
+        callOp.getResult().replaceAllUsesWith(newCall.getResult());
+    }
+    callOp.erase();
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Descriptor synthesis: emit CirctSimCompiledModule as LLVM IR globals
 //===----------------------------------------------------------------------===//
 
@@ -460,6 +820,7 @@ stripNonLLVMFunctions(ModuleOp microModule) {
 ///   - circt_sim_get_build_id() returning a build ID string
 static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const llvm::SmallVector<std::string> &funcNames,
+                                 const llvm::SmallVector<std::string> &trampolineNames,
                                  const std::string &buildId) {
   auto &ctx = llvmModule.getContext();
   auto *i32Ty = llvm::Type::getInt32Ty(ctx);
@@ -508,10 +869,36 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
   // Processes will be added in a later phase.
   // For now num_procs = 0.
 
+  // Create trampoline name string constants and array.
+  unsigned numTrampolines = trampolineNames.size();
+  llvm::SmallVector<llvm::Constant *> trampNameGlobals;
+  for (unsigned i = 0; i < numTrampolines; ++i) {
+    auto *strConst =
+        llvm::ConstantDataArray::getString(ctx, trampolineNames[i], true);
+    auto *strGlobal = new llvm::GlobalVariable(
+        llvmModule, strConst->getType(), true,
+        llvm::GlobalValue::PrivateLinkage, strConst,
+        "__circt_sim_tname_" + std::to_string(i));
+    trampNameGlobals.push_back(strGlobal);
+  }
+
+  llvm::Constant *trampNamesGlobal;
+  if (numTrampolines > 0) {
+    auto *trampNameArrayTy = llvm::ArrayType::get(ptrTy, numTrampolines);
+    auto *trampNameArray = llvm::ConstantArray::get(
+        trampNameArrayTy, llvm::ArrayRef<llvm::Constant *>(trampNameGlobals));
+    trampNamesGlobal = new llvm::GlobalVariable(
+        llvmModule, trampNameArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        trampNameArray, "__circt_sim_trampoline_names");
+  } else {
+    trampNamesGlobal = llvm::ConstantPointerNull::get(ptrTy);
+  }
+
   // Build the CirctSimCompiledModule struct.
-  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr}
+  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr}
   auto *descriptorTy = llvm::StructType::create(
-      ctx, {i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy},
+      ctx,
+      {i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy, i32Ty, ptrTy},
       "CirctSimCompiledModule");
 
   auto *nullPtr = llvm::ConstantPointerNull::get(ptrTy);
@@ -526,6 +913,8 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
           llvm::ConstantInt::get(i32Ty, numFuncs),              // num_funcs
           funcNamesGlobal,                                       // func_names
           funcEntryGlobal,                                       // func_entry
+          llvm::ConstantInt::get(i32Ty, numTrampolines),    // num_trampolines
+          trampNamesGlobal,                                 // trampoline_names
       });
 
   auto *descriptorGlobal = new llvm::GlobalVariable(
@@ -585,6 +974,68 @@ static void setDefaultHiddenVisibility(llvm::Module &llvmModule) {
 }
 
 //===----------------------------------------------------------------------===//
+// Internalization and inlining preparation
+//===----------------------------------------------------------------------===//
+
+/// Mark all defined functions as internal linkage except the ABI entrypoints
+/// and runtime API declarations. This enables whole-program inlining and DCE.
+static void internalizeNonExported(llvm::Module &llvmModule) {
+  for (auto &F : llvmModule) {
+    if (F.isDeclaration())
+      continue;
+    llvm::StringRef name = F.getName();
+    if (name == "circt_sim_get_compiled_module" ||
+        name == "circt_sim_get_build_id" ||
+        name.starts_with("__circt_sim_") ||
+        name.starts_with("__moore_") ||
+        name.starts_with("__arc_sched_"))
+      continue;
+    F.setLinkage(llvm::GlobalValue::InternalLinkage);
+  }
+}
+
+/// Mark small defined functions (< 20 instructions) as alwaysinline to
+/// encourage the optimizer to inline them aggressively even at O1.
+static unsigned addAlwaysInlineToSmallFunctions(llvm::Module &llvmModule) {
+  unsigned count = 0;
+  for (auto &F : llvmModule) {
+    if (F.isDeclaration() || F.hasFnAttribute(llvm::Attribute::NoInline))
+      continue;
+    unsigned instCount = 0;
+    for (auto &BB : F)
+      instCount += BB.size();
+    if (instCount < 20) {
+      F.addFnAttr(llvm::Attribute::AlwaysInline);
+      ++count;
+    }
+  }
+  return count;
+}
+
+/// Statistics about a module used for pre/post-optimization comparison.
+struct ModuleStats {
+  unsigned definedFnCount = 0;
+  unsigned internalFnCount = 0;
+  unsigned callCount = 0;
+};
+
+static ModuleStats collectModuleStats(llvm::Module &llvmModule) {
+  ModuleStats stats;
+  for (auto &F : llvmModule) {
+    if (!F.isDeclaration()) {
+      ++stats.definedFnCount;
+      if (F.hasLocalLinkage())
+        ++stats.internalFnCount;
+    }
+    for (auto &BB : F)
+      for (auto &I : BB)
+        if (llvm::isa<llvm::CallInst>(I))
+          ++stats.callCount;
+  }
+  return stats;
+}
+
+//===----------------------------------------------------------------------===//
 // Object file emission via LLVM TargetMachine
 //===----------------------------------------------------------------------===//
 
@@ -596,7 +1047,12 @@ static void runOptimizationPasses(llvm::Module &llvmModule,
   llvm::CGSCCAnalysisManager cgam;
   llvm::ModuleAnalysisManager mam;
 
-  llvm::PassBuilder pb(tm);
+  // Use aggressive inlining threshold to encourage whole-program inlining of
+  // internalized helper functions. Default is ~225; 500 inlines more freely.
+  llvm::PipelineTuningOptions PTO;
+  PTO.InlinerThreshold = 500;
+
+  llvm::PassBuilder pb(tm, PTO);
   pb.registerModuleAnalyses(mam);
   pb.registerCGSCCAnalyses(cgam);
   pb.registerFunctionAnalyses(fam);
@@ -832,6 +1288,9 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     return failure();
   }
 
+  // Flatten aggregate ABIs: pass struct/array args by pointer.
+  flattenAggregateFunctionABIs(microModule);
+
   // Strip functions with residual non-LLVM ops.
   auto stripped = stripNonLLVMFunctions(microModule);
   if (!stripped.empty()) {
@@ -847,6 +1306,13 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     funcNames = std::move(survivingNames);
     llvm::errs() << "[circt-sim-compile] Stripped " << stripped.size()
                  << " functions with non-LLVM ops\n";
+  }
+
+  // Generate trampolines for uncompiled functions referenced by compiled code.
+  auto trampolineNames = generateTrampolines(microModule);
+  if (!trampolineNames.empty()) {
+    llvm::errs() << "[circt-sim-compile] Generated " << trampolineNames.size()
+                 << " interpreter trampolines\n";
   }
 
   llvm::errs() << "[circt-sim-compile] " << funcNames.size()
@@ -890,15 +1356,27 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                         llvm::sys::getDefaultTargetTriple();
 
   // Synthesize descriptor and entrypoints into the LLVM IR module.
-  synthesizeDescriptor(*llvmModule, funcNames, buildId);
+  synthesizeDescriptor(*llvmModule, funcNames, trampolineNames, buildId);
 
   // Set hidden visibility on everything except entrypoints.
   setDefaultHiddenVisibility(*llvmModule);
+
+  // Internalize non-exported functions to enable whole-program optimization
+  // (inlining across function boundaries, GlobalDCE of dead helpers).
+  internalizeNonExported(*llvmModule);
+
+  // Mark small functions as alwaysinline so the optimizer inlines them even
+  // at O1. This is cheap and produces significantly better codegen for the
+  // many small accessor/wrapper functions that appear in compiled MLIR.
+  unsigned alwaysInlineCount = addAlwaysInlineToSmallFunctions(*llvmModule);
 
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
     llvm::errs() << "[circt-sim-compile] translate: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
+    llvm::errs() << "[circt-sim-compile] internalize: marked "
+                 << alwaysInlineCount
+                 << " small functions as alwaysinline\n";
   }
 
   // Determine output path.
@@ -950,12 +1428,27 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     }
   }
 
+  ModuleStats preStats;
+  if (verbose) {
+    preStats = collectModuleStats(*llvmModule);
+    llvm::errs() << "[circt-sim-compile] pre-opt: " << preStats.definedFnCount
+                 << " functions (" << preStats.internalFnCount
+                 << " internal), " << preStats.callCount << " calls\n";
+  }
+
   if (failed(emitObjectFile(*llvmModule, objPath, optLevel))) {
     llvm::errs() << "[circt-sim-compile] Object emission failed\n";
     return failure();
   }
 
   if (verbose) {
+    auto postStats = collectModuleStats(*llvmModule);
+    unsigned dce = preStats.internalFnCount > postStats.internalFnCount
+                       ? preStats.internalFnCount - postStats.internalFnCount
+                       : 0;
+    llvm::errs() << "[circt-sim-compile] post-opt: " << postStats.definedFnCount
+                 << " functions (" << postStats.internalFnCount << " internal, "
+                 << dce << " DCE'd), " << postStats.callCount << " calls\n";
     auto elapsed = std::chrono::steady_clock::now() - startTime;
     llvm::errs() << "[circt-sim-compile] codegen: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
@@ -979,6 +1472,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   auto elapsed = std::chrono::steady_clock::now() - startTime;
   llvm::errs() << "[circt-sim-compile] Wrote " << outPath << " ("
                << funcNames.size() << " functions, "
+               << trampolineNames.size() << " trampolines, "
                << std::chrono::duration<double>(elapsed).count() << "s)\n";
   return success();
 }

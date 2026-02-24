@@ -2153,3 +2153,143 @@ The bytecode path helps RTL-heavy designs, not UVM-heavy workloads.
 | std::function Event construction | ~2% | Function pointer + void* |
 | getProcess not inlined | ~1.5% | Inline or use getProcessDirect |
 | executeProcess redundant lookups | ~1.5% | Cache on Process object |
+
+## Phase F1: AOT Chunked Compilation + Bulk Function Compilation (Feb 23, 2026)
+
+### Changes
+
+#### AOT Chunked Compilation (commit 198926432)
+- Restructured `compileAllProcesses()` from single-batch to chunked compilation (64 processes per micro-module)
+- Lowered LLVM optimizer from O2 to O1 to reduce compilation time
+- Added per-chunk timing diagnostics: `[AOT] Chunk N/M: X processes, Y ms`
+- Added callback watchdog: detects >10,000 firings at same (time, delta), disables AOT for that process
+- Non-fatal chunk failures — if one chunk fails, remaining chunks still compile
+- Previously: ALL eligible processes → ONE module → ONE LLVM O2 pass → hang
+
+#### Compile Coverage Report (commit 198926432)
+- New `CIRCT_SIM_COMPILE_REPORT=1` env var prints diagnostic at simulation end
+- Shows activation counters: AOT callback / bytecode / interpreter dispatch paths with percentages
+- Shows ExecModel breakdown: how many processes of each type (StaticObserved, DynamicWait, TimeOnly, etc.)
+- Shows AOT rejection reasons sorted by frequency
+
+#### Phase F1: Bulk Function Compilation (commit 7b5978f53)
+- New `compileAllFuncBodies()` + `compileFunctions()` in AOTProcessCompiler
+- Compiles all eligible `func.func` bodies to native code via chunked JIT (64 per micro-module)
+- Packed wrapper generation: `__packed_<name>` functions with uniform `(void** args, void** results)` ABI
+- Native dispatch in both `interpretFuncCallCachedPath` (hot path) and `interpretFuncCall` (slow path)
+- Arity switch for 0-8 args, scalar/ptr types only (≤64 bits)
+- Falls through to interpreter for unsupported signatures (struct args, >8 args, >64-bit values)
+
+### Key Discoveries
+
+#### Zero StaticObserved Processes in UVM Designs
+- AHB AVIP has only 7 processes total (2 DynamicWait, 1 TimeOnly, 2 OneShotCallback, 1 Coroutine)
+- ALL UVM processes use runtime-resolved signals (moore.wait_event) → cannot be StaticObserved
+- Process-level AOT is a dead end for UVM designs
+- Real speedup path: compile func.func bodies (F1)
+
+#### AVIP Function Compilability
+- AHB AVIP: 7,589 func.func bodies total
+- 98.9% (7,504) are compilable (contain only LLVM/arith/cf/scf/hw/comb ops)
+- 94% have only ptr/scalar args (easy marshaling targets)
+- Dominant arg types: !llvm.ptr (5567), !llvm.struct<(ptr,i64)> (2143), i64 (1250), i32 (618), i1 (366)
+
+#### Auto Symbol Resolution
+- MLIR ExecutionEngine uses `DynamicLibrarySearchGenerator::GetForCurrentProcess()`
+- ALL 604 `__moore_*` functions + libc auto-resolve from host process
+- No manual symbol registration needed for runtime functions
+
+### Test Results
+- circt-sim: 555/561 pass (98.9%), zero regressions from AOT/F1 changes
+- 6 pre-existing failures unrelated to AOT
+
+### Current Status
+- F1 crashes on AVIP due to type converter corruption from HW/comb lowering patterns
+- Fix in progress: stripping to minimal func/arith/cf→LLVM pipeline
+- Unit tests pass; AVIP validation pending
+
+### Performance Impact
+- Not yet measurable — F1 needs to work on AVIP before benchmarking
+- Expected: 10-50x speedup on func.call-heavy UVM code paths once stable
+- Combined with E-phase optimizations (5-6x): target 50-300x total
+
+## Phase F1: Single-Engine Bulk Function Compilation (Feb 23, 2026)
+
+### Summary
+Converted compileAllFuncBodies() from chunked compilation (64/batch, 384/3339 compiled)
+to single-engine approach (all eligible in one ExecutionEngine, 3198/3198 compiled).
+
+### Key Results (AHB AVIP, 500ns, ahb_single_write_test)
+
+| Metric | Baseline (no AOT) | F1 (single engine) | Change |
+|--------|-------------------|---------------------|--------|
+| Parse | 0.693s | 0.698s | — |
+| Passes | 1.044s | 1.038s | — |
+| Init | 4.671s | 23.114s | +18.4s (JIT) |
+| **Run** | **0.916s** | **0.428s** | **2.14x faster** |
+| Total | 7.324s | 25.278s | +18s init overhead |
+
+### Compile Report
+- F1 candidates: 3198/3339 eligible (95.8%), all 3198 compiled (100%)
+- 141 non-compilable functions (contain hw/comb/sim ops) → external declarations
+- Function calls: 247,831 native (98.72%) / 3,212 interpreted (1.28%)
+- Process activations: 148 (all interpreter — no StaticObserved processes in UVM)
+
+### Cumulative Performance (500ns AHB AVIP)
+| Phase | Run Time | Cumulative Speedup |
+|-------|----------|-------------------|
+| Pre-E1 baseline | 3.48s | 1.0x |
+| E0-E4 | 0.916s | 3.8x |
+| **E0-E4 + F1** | **0.428s** | **8.1x** |
+
+### Technical Details
+- Single ExecutionEngine with O1 optimization
+- Pipeline: func/arith/cf→LLVM only (no hw/comb/LLHD to avoid type converter corruption)
+- cloneReferencedDeclarations: only copies compilable function bodies; creates declarations for non-compilable
+- Native dispatch: arity switch (0-8 args), InterpretedValue→uint64_t marshaling
+- JIT compilation: 18.4s one-time cost (acceptable for init, cacheable in future)
+- Auto symbol resolution via DynamicLibrarySearchGenerator (all __moore_* functions resolve automatically)
+
+### Remaining 1.28% Interpreted Calls
+Functions falling through to interpreter:
+- Functions with >8 arguments (current arity switch limit)
+- Functions with struct return types
+- Functions with non-LLVM signature types (!llhd.ref, custom types)
+
+### Next Steps
+- F2: Extend arity switch to handle >8 args (vararg dispatch)
+- F3: Compile transitive call graph (currently external declarations for non-compilable callees)
+- Cache JIT compilation results to amortize 18.4s init overhead
+- Investigate if the 3,212 interpreted calls are hot (profile-guided)
+
+## Phase: JIT Removal (Feb 24, 2026)
+
+### Deleted Files
+- JITCompileManager.h/.cpp — JIT governance (hot threshold, compile budget, cache policy, deopt tracking)
+- JITBlockCompiler.h/.cpp — Hot-block JIT compilation (per-block O2 compilation with deopt guards)
+- JITSchedulerRuntime.h/.cpp — JIT symbol registration bridge (__arc_sched_*, __circt_sim_* symbols)
+- ExecutionEngineHandle.h — Type-erased unique_ptr<ExecutionEngine> wrapper
+
+### Key Design Patterns (preserved for reference)
+- **Hot-threshold governance**: `JITCompileManager` counted per-process activations and gated compile
+  attempts behind a configurable `hotThreshold` + `compileBudget`, with per-reason deopt telemetry
+  (`GuardFailed`, `UnsupportedOperation`, `MissingThunk`, etc.) and a `failOnDeopt` strict mode for testing.
+- **Block-level hot-block identification**: `JITBlockCompiler` looked for `wait → resume` patterns
+  (self-loop: `hotBlock → wait → hotBlock`; 2-block loop: `waitBlock → wait → hotBlock → br → waitBlock`)
+  and compiled only the resume block, emitting one micro-module per block with O2 optimization.
+- **Zero-copy signal reads via thread-local context**: `JITSchedulerRuntime` set a thread-local
+  `JITRuntimeContext*` before each JIT call; `__arc_sched_read_signal` returned a raw pointer into
+  APInt storage for zero-copy reads; `__arc_sched_drive_signal_fast` bypassed APInt construction for
+  ≤64-bit signals.
+- **Packed delay encoding**: Drive delays passed as packed `i64` (realTime[63:32] / delta[31:16] /
+  epsilon[15:0]) to avoid struct overhead in the ABI between JIT code and scheduler.
+- **Thread-local format arena**: `__circt_sim_fmt_*` helpers allocated into a thread-local
+  `std::vector<std::string>` arena and bulk-cleared after `__circt_sim_proc_print`, eliminating
+  per-format-call malloc.
+- **Type-erased engine handle**: `ExecutionEngineHandle` used `unique_ptr<void, NoopDelete>` in
+  non-JIT builds to avoid pulling in `mlir::ExecutionEngine` headers in hot paths.
+
+### Replaced By
+- circt-sim-compile tool (AOT .so compilation)
+- CompiledModuleLoader (dlopen-based loading)
+- CirctSimABI.h (stable C ABI contract)

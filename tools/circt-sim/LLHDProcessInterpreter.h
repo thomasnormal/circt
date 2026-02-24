@@ -83,11 +83,19 @@ class GlobalOp;
 namespace circt {
 namespace sim {
 
-class JITBlockCompiler;
-struct JITBlockSpec;
-class JITCompileManager;
 struct JITRuntimeContext;
-struct ProcessThunkExecutionState;
+
+/// Execution state for native process thunks. Originally in JITCompileManager.h,
+/// inlined here to avoid pulling in JIT headers.
+struct ProcessThunkExecutionState {
+  bool deoptRequested = false;
+  bool restoreSnapshotOnDeopt = true;
+  bool halted = false;
+  bool waiting = false;
+  uint64_t resumeToken = 0;
+  std::string deoptDetail;
+};
+
 class UcontextProcessManager;
 
 //===----------------------------------------------------------------------===//
@@ -888,17 +896,6 @@ public:
     return uvmJitPromotionBudget;
   }
 
-  /// Per-process first deopt reason observed by compile-mode dispatch.
-  const llvm::DenseMap<uint64_t, std::string> &getJitDeoptReasonByProcess()
-      const {
-    return jitDeoptReasonByProcess;
-  }
-
-  /// Per-process first deopt detail observed by compile-mode dispatch.
-  const llvm::DenseMap<uint64_t, std::string> &getJitDeoptDetailByProcess()
-      const {
-    return jitDeoptDetailByProcess;
-  }
 
   struct JitRuntimeIndirectTargetEntry {
     std::string targetName;
@@ -932,12 +929,6 @@ public:
   std::optional<JitRuntimeIndirectSiteProfile>
   lookupJitRuntimeIndirectSiteProfile(
       mlir::func::CallIndirectOp callOp) const;
-
-  /// Resolve scheduler-registered process name for a process ID.
-  std::string getJitDeoptProcessName(ProcessId procId) const;
-
-  /// Compile-mode JIT hot threshold, clamped to at least 1.
-  uint64_t getJitCompileHotThreshold() const;
 
   friend class LLHDProcessInterpreterTest;
   friend struct ScopedInstanceContext;
@@ -977,22 +968,9 @@ public:
     recomputePerOpInstrumentationActive();
   }
 
-  /// Enable or disable compile-mode execution behavior.
-  /// When enabled, also initializes the block-level JIT compiler.
-  void setCompileModeEnabled(bool enable);
-
-  /// Enable or disable block-level JIT (true native codegen).
-  /// Called by setCompileModeEnabled, or directly for testing.
-  void setBlockJITEnabled(bool enable);
-
   /// Enable or disable runtime call_indirect target-set profiling.
   void setJitRuntimeIndirectProfileEnabled(bool enable) {
     jitRuntimeIndirectProfileEnabled = enable;
-  }
-
-  /// Provide JIT compile manager for compile-mode thunk/deopt accounting.
-  void setJITCompileManager(JITCompileManager *manager) {
-    jitCompileManager = manager;
   }
 
   /// Load compiled function pointers from an AOT-compiled .so module into the
@@ -2911,17 +2889,6 @@ private:
   /// UVM initialization to complete (re-entrant calls set uvm_top properly).
   bool inGlobalInit = false;
 
-  /// True when simulation runs in compile mode.
-  bool compileModeEnabled = false;
-
-  /// Optional JIT manager used for thunk dispatch/deopt accounting.
-  JITCompileManager *jitCompileManager = nullptr;
-
-  /// First observed JIT deopt reason for each process ID.
-  llvm::DenseMap<uint64_t, std::string> jitDeoptReasonByProcess;
-
-  /// First observed JIT deopt detail for each process ID.
-  llvm::DenseMap<uint64_t, std::string> jitDeoptDetailByProcess;
 
   /// External port signal map provided by the simulation context.
   /// Used to populate valueToSignal for non-ref-type module ports.
@@ -2931,11 +2898,6 @@ private:
   llvm::DenseMap<ProcessId, PeriodicToggleClockThunkSpec>
       periodicToggleClockThunkSpecs;
 
-  /// Block-level JIT compiler (lazily created when block JIT is enabled).
-  std::unique_ptr<JITBlockCompiler> jitBlockCompiler;
-
-  /// Per-process JIT block specs for compiled hot blocks.
-  llvm::DenseMap<ProcessId, std::unique_ptr<JITBlockSpec>> jitBlockSpecs;
 
   /// Per-process compiled bytecode programs for the bytecode interpreter.
   llvm::DenseMap<ProcessId, std::unique_ptr<BytecodeProgram>>
@@ -2946,8 +2908,6 @@ private:
   unsigned bytecodeCompiled = 0;
   std::map<std::string, unsigned> bytecodeFailedOps;
 
-  /// Whether block-level JIT is enabled.
-  bool blockJITEnabled = false;
 
   /// Cached direct process fast-path classification mask by process.
   llvm::DenseMap<ProcessId, uint8_t> directProcessFastPathKinds;
@@ -3906,49 +3866,18 @@ private:
   // AOT (Ahead-of-Time) Compilation Support
   //===--------------------------------------------------------------------===//
 
-  /// Whether AOT compilation is enabled (via CIRCT_SIM_AOT=1).
-  bool aotEnabled = false;
-
-  /// The AOT process compiler (created lazily when aotEnabled).
-  std::unique_ptr<AOTProcessCompiler> aotCompiler;
-
   /// Ucontext manager for AOT coroutine processes.
   std::unique_ptr<UcontextProcessManager> ucontextMgr;
-
-  /// JIT runtime context for AOT-compiled code callbacks.
-  std::unique_ptr<JITRuntimeContext> aotJitCtx;
-
-  /// Set of processes compiled as coroutines (need ucontext resume).
-  llvm::DenseSet<ProcessId> aotCompiledProcesses;
-
-  /// Map of processes compiled as callbacks → their full compilation result.
-  llvm::DenseMap<ProcessId, AOTCompiledProcess> aotCallbackProcs;
-
-  /// Set of callback processes that haven't had their first activation yet.
-  /// These need one interpreter run to set up sensitivity, then switch to AOT.
-  llvm::DenseSet<ProcessId> aotCallbackFirstActivation;
-
-  /// Compile all eligible processes via AOT batch compilation.
-  void aotCompileProcesses();
-
-  /// Execute an AOT-compiled coroutine process (resume via ucontext).
-  void executeAOTProcess(ProcessId procId);
-
-  /// Execute an AOT-compiled callback process (direct function call).
-  void executeAOTCallbackProcess(ProcessId procId);
 
   // --- Phase F1: native func dispatch ---
 
   /// Map from func.func Operation* to native function pointer.
-  /// Populated by aotCompileFuncBodies() during init.
+  /// Populated by CompiledModuleLoader during init.
   llvm::DenseMap<mlir::Operation *, void *> nativeFuncPtrs;
 
   /// Counters for native vs interpreted dispatch (for compile report).
   uint64_t nativeFuncCallCount = 0;
   uint64_t interpretedFuncCallCount = 0;
-
-  /// Compile all eligible func.func bodies via AOT batch compilation.
-  void aotCompileFuncBodies();
 };
 
 } // namespace sim
