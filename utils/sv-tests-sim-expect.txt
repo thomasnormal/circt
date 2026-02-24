@@ -88,35 +88,7 @@ uvm_sequence	compile-only	UVM sequence testbench: compile-only (full UVM library
 uvm_resource_db_read_by_name	compile-only	UVM resource_db read_by_name (slow init)
 uvm_test_run_test	compile-only	UVM run_test (slow init)
 
-# Ch16: SVA UVM tests — compile-only because UVM MLIR init takes >5 min per test.
-# Concurrent assertions are not actively evaluated during simulation.
-16.10--property-local-var-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.10--sequence-local-var-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.11--sequence-subroutine-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.12--property-interface-prec-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.12--property-interface-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.12--property-prec-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.12--property-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.13--sequence-multiclock-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.14--assume-property-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.15--property-iff-uvm-fail	skip	SVA UVM: should-fail assertion iff
-16.15--property-iff-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.17--expect-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.2--assert0-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.2--assert-final-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.2--assert-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.2--assume-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.7--sequence-and-range-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.7--sequence-and-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.7--sequence-intersect-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.7--sequence-or-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.7--sequence-throughout-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.7--sequence-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.9--sequence-changed-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.9--sequence-fell-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.9--sequence-past-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.9--sequence-rose-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
-16.9--sequence-stable-uvm	compile-only	SVA UVM: compile-only (MLIR init >5min)
+# Ch16: SVA UVM tests now run in full simulation by default.
 
 # Ch9: Event sequence controls now run in full simulation (no expect entry).
 
