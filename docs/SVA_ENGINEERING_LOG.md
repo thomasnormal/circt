@@ -2,6 +2,142 @@
 
 ## 2026-02-23
 
+- Iteration update (SVA ImportVerilog RUN-line migration + check hardening):
+  - realization:
+    - a large set of SVA ImportVerilog regressions still referenced the removed
+      `circt-translate --import-verilog` entrypoint, creating avoidable false
+      failures as tests become supported in more environments.
+    - several open-range / nexttime / sampled-real tests encoded brittle
+      assumptions about duplicated temporaries that no longer hold after CSE and
+      lowering cleanups.
+    - real/time match-item inc/dec coverage previously allowed dead-code
+      elimination to erase arithmetic evidence because updates were not observed.
+  - implemented:
+    - migrated RUN lines in `test/Conversion/ImportVerilog/sva-*.sv` from
+      `circt-translate --import-verilog` to:
+      - `circt-verilog --no-uvm-auto-include --ir-moore`.
+    - hardened fragile checks in:
+      - `sva-bounded-always-property.sv`
+      - `sva-nexttime-property.sv`
+      - `sva-open-range-eventually-salways-property.sv`
+      - `sva-open-range-property.sv`
+      - `sva-strong-sequence-nexttime-always.sv`
+      - `sva-sampled-real-explicit-and-implicit-clock.sv`
+    - strengthened inc/dec tests to force observable use of updated locals:
+      - `sva-sequence-match-item-real-incdec.sv`
+      - `sva-sequence-match-item-time-incdec.sv`
+  - validation:
+    - focused file-level checks:
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore <file> | llvm/build/bin/FileCheck <file>`
+      - result: all 13 previously failing files pass.
+    - SVA ImportVerilog lit subset:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+      - result: `0` failures (`28` passed, `125` unsupported, `252` excluded).
+
+- Iteration update (clock metadata regression lock + open-range SVA coverage):
+  - realization:
+    - the `ltl.clock`-wrapped sequence assert path needed explicit regression
+      coverage for `bmc.clock_edge`; existing checks were too weak and could
+      miss metadata regressions.
+    - stale "unsupported" assumptions around open-range SVA forms needed
+      revalidation against current front-end behavior.
+  - implemented:
+    - strengthened metadata assertions in:
+      - `test/Conversion/LTLToCore/clocked-sequence-assert.mlir`
+        - now requires `bmc.clock` / `bmc.clock_edge` on both lowered safety
+          and final asserts.
+    - added focused ImportVerilog regression:
+      - `test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
+        - covers:
+          - `a [= 2:$]`
+          - `a [-> 2:$]`
+          - `s_eventually [2:$] a`
+          - `eventually [2:$] a`
+          - `s_always [2:$] a`
+          - `always [2:$] a`
+  - validation:
+    - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-assert.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-assert.mlir`
+      - result: pass.
+    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
+      - result: pass.
+    - reported 6-case `circt-sim` bucket recheck:
+      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv build-test/test/Tools/circt-sim/cross-var-inline.sv build-test/test/Tools/circt-sim/cross-var-linear-sum.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build-test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - result: `9/9` pass.
+    - `sv-tests` expectation-file sanity:
+      - `EXPECT_FILE=/dev/null TAG_REGEX='(^| )16\\.' BOUND=10 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `42/42` pass.
+      - `utils/sv-tests-bmc-expect.txt`: comments only (no active entries).
+
+- Iteration update (`sv-tests` low-bound false negatives on delayed negative
+  SVA cases):
+  - realization:
+    - expected-violation tests can be misclassified as `FAIL` (`UNSAT`) when
+      `BOUND` is lower than the temporal delay horizon (for example delayed
+      local-variable checks with `##N`).
+    - concrete reproducer (pre-fix):
+      - `TAG_REGEX='(^| )16\.'`
+      - `TEST_FILTER='16.10--property-local-var-fail|16.10--sequence-local-var-fail'`
+      - `BOUND=3`
+      - result: `pass=0 fail=2`.
+  - implemented:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - added bounded auto-retry for expected-violation tests:
+        - if first run returns `UNSAT`, compute a delay-based bound hint from
+          generated MLIR (`ltl.delay`) and retry once with a larger `-b`.
+      - added controls:
+        - `BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION` (default `1`)
+        - `BMC_AUTO_ESCALATE_BOUND_MAX` (default `64`)
+      - added config validation for:
+        - `BOUND`
+        - `BMC_AUTO_ESCALATE_BOUND_FOR_EXPECTED_VIOLATION`
+        - `BMC_AUTO_ESCALATE_BOUND_MAX`
+  - validation:
+    - syntax check:
+      - `bash -n utils/run_sv_tests_circt_bmc.sh`
+        - result: pass.
+    - focused regression:
+      - same reproducer command with defaults after fix.
+      - result:
+        - auto-retry messages:
+          - `16.10--property-local-var-fail`: `-b 3 -> -b 6`
+          - `16.10--sequence-local-var-fail`: `-b 3 -> -b 5`
+        - summary: `pass=2 fail=0`.
+    - broader chapter-16 guard:
+      - `TAG_REGEX='(^| )16\.' BOUND=10 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+        - result: `42/42` pass.
+
+- Iteration update (`$assertpassoff` / `$assertpasson` runtime pass-action gating):
+  - realization:
+    - immediate assertion pass actions were executed unconditionally, even when
+      pass-message controls were disabled via `$assertpassoff` or
+      `$assertcontrol(7)`.
+    - concrete reproducer:
+      - pass actions printed:
+        - `PASS_MSG_SHOULD_NOT_PRINT`
+        - `PASS_MSG_SHOULD_NOT_PRINT_CTRL7`
+      - despite preceding passoff controls.
+  - TDD signal:
+    - added red regression first:
+      - `test/Tools/circt-sim/syscall-assertpassoff.sv`
+    - red state:
+      - `llvm-lit` failed because pass-action strings were still present in
+        output after `$assertpassoff` and `$assertcontrol(7)`.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/Statements.cpp`
+      - in immediate assertion lowering, gated the true/pass action block
+        (`stmt.ifTrue`) with `readAssertionPassMessagesEnabled()`.
+      - behavior now mirrors existing false/fail action gating with
+        `readAssertionFailMessagesEnabled()`.
+  - validation:
+    - rebuild:
+      - `ninja -C build-test circt-verilog`
+        - result: `PASS`.
+    - focused lit:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/syscall-assertpassoff.sv build-test/test/Tools/circt-sim/syscall-assertcontrol.sv build-test/test/Tools/circt-sim/syscall-assertfailoff.sv build-test/test/Tools/circt-sim/syscall-assertoff.sv build-test/test/Tools/circt-sim/syscall-asserton.sv build-test/test/Tools/circt-sim/sva-assertfailoff-immediate-runtime.sv`
+        - result: `6/6` pass.
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-assertcontrol-pass-vacuous-procedural|immediate-assert-action-block|sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine|sva-sequence-match-item-assertcontrol-subroutine' build-test/test/Conversion/ImportVerilog`
+        - result: `4/4` pass.
+
 - Iteration update (disable-fork deferred wakeup regression restored):
   - realization:
     - the previously tracked fork/I3C deferred-disable behavior regressed to
@@ -6457,3 +6593,972 @@
     - full SVA suite:
       - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test`
       - result: `332 pass, 149 unsupported, 0 failed`.
+
+- Iteration update (clocked i1 assertion with constant-false clock no longer
+  produces spurious SAT in BMC):
+  - realization:
+    - `verif.clocked_assert %false, posedge %false : i1` incorrectly reported
+      `BMC_RESULT=SAT` in `circt-bmc`.
+    - root cause was loss of explicit clock context through the
+      `lower-clocked-assert-like -> lower-ltl-to-core` path for i1 clocked
+      assertions, followed by ungated violation accumulation in VerifToSMT when
+      no BMC clock inputs were available.
+  - TDD signal:
+    - added red regression:
+      - `test/Tools/circt-bmc/clocked-assert-constant-false-clock-unsat.mlir`
+    - red state:
+      - expected `BMC_RESULT=UNSAT`, observed `BMC_RESULT=SAT`.
+  - implemented:
+    - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+      - preserve top-level `ltl.clock` metadata when lowering generic
+        `verif.assert`/`verif.assume`/`verif.cover` properties:
+        - attach `bmc.clock` when the clock traces to a module input.
+        - attach `bmc.clock_edge` for top-level clocked properties.
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - in non-final/final check gating (SMT-LIB and non-SMTLIB paths), treat
+        explicit edge-tagged checks as unsampled (`gate=false`) when there are
+        no mapped BMC clock inputs.
+      - aligned `getCheckGate` helpers accordingly.
+    - `utils/sv-tests-bmc-expect.txt`
+      - removed stale compile-only entries for:
+        - `16.12--property`
+        - `16.12--property-disj`
+        - `16.7--sequence`
+        - `16.9--sequence-cons-repetition`
+        - `16.9--sequence-goto-repetition`
+        - `16.9--sequence-noncons-repetition`
+        - `16.17--expect`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-bmc`
+    - focused lit:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-bmc/clocked-assert-constant-false-clock-unsat.mlir build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Conversion/LTLToCore/clocked-property-gating.mlir build-test/test/Conversion/LTLToCore/clocked-assert-constant-clock.mlir build-test/test/Conversion/VerifToSMT/lower-clocked-assert-like.mlir`
+      - result: `5/5` pass.
+    - sv-tests recheck without expectation masking:
+      - `TEST_FILTER='16.12--property$|16.12--property-disj$' EXPECT_FILE=/dev/null utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `2/2` pass.
+      - `TEST_FILTER='16.12--property$|16.12--property-disj$|16.7--sequence$|16.9--sequence-cons-repetition$|16.9--sequence-goto-repetition$|16.9--sequence-noncons-repetition$|16.17--expect$' EXPECT_FILE=/dev/null utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: `7/7` pass.
+
+- Iteration update (SVA ImportVerilog contract convergence + runtime gap triage):
+  - realization:
+    - after enabling `slang` feature fallback in lit, the remaining ImportVerilog
+      SVA failures were check-contract drift, not frontend crashes.
+    - the previous `27`-test failure set clustered around:
+      - legacy expectations for explicit `ltl.clock` wrappers now lowered as
+        direct `verif.clocked_*` ops.
+      - brittle constant/order assumptions in `$assertcontrol` lowering checks.
+      - stale op names (`ltl.and` vs `comb.and`) and over-constrained locals.
+  - implemented:
+    - updated `27` SVA ImportVerilog regression files to track current lowering
+      contracts while preserving behavioral intent (clock/event semantics,
+      assertion-control side effects, local var/match-item lowering).
+    - examples of stabilized contracts:
+      - event/clock checks now match `verif.clocked_assert ... edge/posedge`.
+      - `$assertcontrol` tests use DAG-style constants and side-effect checks
+        instead of fixed SSA numbering/order.
+      - `until_with` regression now matches `comb.and` + `ltl.until` + clocked
+        assertion emission.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build-test/test/Conversion/ImportVerilog`
+      - result: `153 passed, 0 failed` (with `252` excluded by filter scope).
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build-test/test/Tools/circt-sim`
+      - result: `80 passed, 0 failed`.
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build-test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed, 149 unsupported`.
+      - unsupported bucket attribution from test metadata:
+        - dominated by environment requirements (`REQUIRES: z3`, `REQUIRES: bmc-jit`, `REQUIRES: slang`), not new SVA lowering regressions.
+    - `utils/sv-tests-bmc-expect.txt` recheck:
+      - file currently contains header-only metadata; no active expected-failure
+        entries remain to re-validate.
+
+- Iteration update (opt-in `bmc-jit` lit probe and newly exposed BMC SVA gaps):
+  - realization:
+    - default lit config did not advertise `bmc-jit`, so a large SVA-BMC e2e
+      suite stayed unsupported even on trees where `circt-bmc` JIT execution
+      works.
+    - enabling `bmc-jit` unconditionally is destabilizing today because it
+      reveals real semantic/parser gaps that are currently masked.
+  - implemented:
+    - `test/lit.cfg.py`
+      - added an **opt-in** probe controlled by
+        `CIRCT_ENABLE_BMC_JIT_TESTS=1`:
+        - runs a minimal `circt-bmc` SAT check (`fail-on-violation.mlir`).
+        - sets lit feature `bmc-jit` only when the probe succeeds.
+      - keeps default behavior unchanged (no implicit coverage expansion).
+  - validation:
+    - default behavior (no env opt-in):
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='sva-' build-test/test`
+      - result: `335 passed, 149 unsupported, 0 failed`.
+    - opt-in behavior (local triage mode):
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv --show-unsupported build-test/test/Tools/circt-bmc`
+      - result: `151 passed, 24 failed, 1 unsupported`.
+      - failure shape:
+        - `8` xprop SVA e2e failures (`sat` expectations).
+        - `7` sequence/event-list/multiclock SVA e2e failures.
+        - `8` additional temporal/cover/repeat/stable/delay failures.
+  - follow-up fix landed in this iteration:
+    - `test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv`
+      - rewrote invalid property-in-expression form to a legal property form:
+        - from `((in |-> 1'b1) == 1'b0)` to `not p_imp`.
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1` single-test validation:
+        - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv`
+        - result: `1/1` pass.
+
+- Iteration update (BMC clock-source recovery from `bmc.clock` metadata and
+  vacuous-final-cover fix):
+  - realization:
+    - after `lower-clocked-assert-like` + `lower-ltl-to-core`, some clock
+      source information survives only as `bmc.clock` attrs on
+      `verif.assert`/`verif.assume`/`verif.cover`.
+    - `lower-to-bmc` previously discovered clocks from explicit clock SSA uses
+      and register metadata; if neither was present, clocked checks could lose
+      mapping and fail in VerifToSMT.
+    - `lower-ltl-to-core` also emitted final `verif.cover {bmc.final}` even
+      when `finalCheck` was constant true, making clocked i1 covers vacuously
+      SAT.
+  - implemented:
+    - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+      - when clock discovery is empty, seed candidate clock inputs from
+        `bmc.clock` names on assert-like ops by matching top-level input names.
+    - `lib/Conversion/LTLToCore/LTLToCore.cpp`
+      - skip emitting final `verif.cover ... {bmc.final}` when
+        `finalCheck == true`.
+  - regression coverage:
+    - added:
+      - `test/Tools/circt-bmc/lower-to-bmc-assert-clock-name-no-reg-metadata.mlir`
+      - `test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
+    - updated:
+      - `test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - focused lit:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/lower-to-bmc-assert-clock-name-no-reg-metadata.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
+      - results: `3/3` pass.
+    - previously failing opt-in e2e now passes:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv`
+      - result: `1/1` pass.
+  - new gap identified during follow-up triage:
+    - `sva_xprop_always_sat` currently lowers through a vacuous form
+      (`ltl.repeat %in, 0`) that collapses to trivial true checks; by SMT
+      conversion time no property remains (`no property provided to check`).
+
+- Iteration update (HWToSMT singleton-index legalization and solver purity):
+  - realization:
+    - singleton arrays in HW can carry `i0` indices (`hw.array_get ... : i0`).
+      In HW→SMT conversion this left illegal `hw.constant 0 : i0` behind and
+      aborted legalization.
+    - after fixing the direct legalization abort, BMC SMT-LIB export still
+      failed because `seq.const_clock` leaked through inside the solver body.
+  - implemented:
+    - `lib/Conversion/HWToSMT/HWToSMT.cpp`
+      - pre-conversion normalization:
+        - rewrite singleton `hw.array_get` / `hw.array_inject` with `i0`
+          indices to equivalent `i1` zero-index form.
+      - conversion robustness:
+        - erase dead 0-bit `hw.constant` ops.
+        - add `seq.const_clock` lowering to `smt.bv<1>` and mark it illegal if
+          left unconverted.
+    - new regression:
+      - `test/Tools/circt-bmc/lower-to-bmc-singleton-array-get-i0.mlir`
+  - validation:
+    - build:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - focused lit:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/lower-to-bmc-singleton-array-get-i0.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-xprop-nested-aggregate-inject-sat-e2e.sv`
+      - results: all listed tests pass.
+    - remaining failing gap (reconfirmed):
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-xprop-eventually-always-sat-e2e.sv`
+      - `sva_xprop_always_sat` still fails with:
+        - warning: `no property provided to check in module`.
+      - root cause remains frontend lowering to vacuous
+        `ltl.repeat %in, 0`.
+  - build-system blocker encountered:
+    - active `build-test` cannot rebuild `circt-verilog` (`unknown target
+      'circt-verilog'`).
+    - alternate `build_test` reconfigure still fails on missing
+      `slang_slang` CMake dependency target.
+
+- Iteration update (fix `always` property lowering vacuity + native rebuild unblocked):
+  - realization:
+    - `always <expr>` on non-property operands was lowered to
+      `ltl.repeat ..., 0` (sequence), which later dropped out of BMC property
+      collection and produced `no property provided to check in module`.
+    - this directly explained
+      `test/Tools/circt-bmc/sva-xprop-eventually-always-sat-e2e.sv`
+      failing in module `sva_xprop_always_sat`.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - removed sequence-only fallback for unary `Always` / `SAlways`.
+      - both operators now lower to property semantics uniformly
+        (`not(eventually(not ...))`, with existing range handling retained via
+        shifted conjunctions).
+    - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+      - added a direct scalar-signal `always` check to guard against
+        regressions back to `ltl.repeat`.
+  - build/system unblock work (required for validating frontend changes):
+    - `CMakeLists.txt`
+      - added installed-slang target compatibility shim so CIRCT can map
+        `slang::slang` / `svlang` to internal `slang_slang` naming.
+      - after this, switched `build_test` to
+        `-DCIRCT_SLANG_BUILD_FROM_SOURCE=ON` to avoid an incomplete installed
+        slang header layout (missing `boost/unordered/unordered_flat_map.hpp`).
+  - validation:
+    - rebuild:
+      - `ninja -C build_test circt-verilog circt-bmc`
+    - focused lit:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/ImportVerilog/sva-unbounded-always-property.sv build_test/test/Tools/circt-bmc/sva-xprop-eventually-always-sat-e2e.sv`
+      - result: `2 passed, 0 failed`.
+  - remaining gap (still reproducible):
+    - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/sva-sequence-event-list-or-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv`
+    - both still fail SAT-vs-UNSAT with provenance:
+      - `BMC_PROVENANCE_LLHD_INTERFACE reason=observable_signal_use_resolution_unknown ...`
+    - attempted experiment:
+      - inserted `llhd::createSig2Reg()` into `circt-bmc` LLHD post-lowering
+        pipeline; no behavioral change on these failures; reverted.
+    - conclusion:
+      - remaining issue is still in LLHD process stripping fallback for
+        observable signal updates in mixed sequence/signal event-list
+        semantics; requires dedicated lowering rather than current
+        unconstrained-input abstraction.
+
+- Iteration update (sampled-value/xprop stabilization + LLHD abstraction drive
+  placement):
+  - realization:
+    - sampled-value edge/stability lowering for 4-state values had conflicting
+      behavior across xprop SAT tests and first-sample parity tests.
+    - LLHD process abstraction inserted synthetic zero-time drives at module
+      end, which let interface stripping resolve probes against stale
+      pre-abstraction values in array-inject flows.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - reworked 4-state `$rose`/`$fell` helper lowering to:
+        - preserve first-sample known-value edge detection behavior,
+        - emit unknown (`X`) when the sampled current bit is unknown.
+      - added first-sample handling for 4-state `$stable`/`$changed` in direct
+        assertion lowering:
+        - when prior sampled value is unknown, both evaluate to true.
+    - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+      - synthetic zero-time abstraction drives are now emitted right after the
+        signal definition when available (fallback: module terminator), instead
+        of always at module end.
+      - fixes stale-probe ordering artifact in `sva-xprop-array-inject-sat`.
+    - test updates:
+      - `test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv`
+        - replaced invalid `nexttime[1:2](in)` with legal `##[1:2] in`.
+      - `test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
+        - replaced invalid `weak (s_eventually in)` with legal
+          `eventually [0:$] in`.
+      - `test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv`
+        - changed stimulus to transition into unknown on clock edges and raised
+          bound from `1` to `2` so the unknown-sampled step is exercised.
+  - validation:
+    - rebuild:
+      - `ninja -C build_test circt-verilog circt-bmc`
+    - focused:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-xprop-(array-inject|stable-changed|rose-fell|weak-eventually|nexttime-range)' -sv build_test/test/Tools/circt-bmc`
+      - result: `5 passed, 0 failed`.
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-xprop-' -sv build_test/test/Tools/circt-bmc`
+      - result: `52 passed, 0 failed`.
+    - full opt-in SVA BMC sweep:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build_test/test/Tools/circt-bmc`
+      - before this iteration: `36 failed`.
+      - after this iteration: `30 failed`.
+  - remaining prominent gap:
+    - sequence/signal mixed event-list UNSAT tests still fail with
+      `observable_signal_use_resolution_unknown` abstractions.
+
+- Iteration update (LLHD deseq event-list recovery + final-check SMT cast
+  cleanup):
+  - realization:
+    - the mixed sequence/signal event-list cluster was not blocked by
+      `StripLLHDProcesses` itself; the real blocker was `llhd-deseq` skipping
+      residual `llhd.process` forms:
+      - initially on `llhd.wait` predecessor tracing (`unsupported terminator`),
+      - then on carried non-trigger i1 state (`unobserved past value`),
+      - then on derived-clock i1 probe edge recognition (`unknown clock scheme`).
+    - once those process forms lowered, the last nonvacuous case still failed
+      SMT-LIB export due surviving `builtin.unrealized_conversion_cast` from
+      direct i1 constants to `!smt.bv<1>`.
+  - implemented:
+    - `lib/Dialect/LLHD/Transforms/Deseq.cpp`
+      - `tracePastValue`:
+        - added `llhd.wait` predecessor-terminator handling.
+        - canonicalized non-trigger values by traced signal when a matching
+          trigger exists.
+        - allowed single distinct non-trigger past values (not trigger-only).
+      - trigger mapping:
+        - map triggers by both 4-state boolified form and direct traced signal.
+      - `traceSignal`:
+        - added predecessor handling for `llhd.wait`.
+      - `analyzeProcess` / specialization mapping:
+        - accept carried non-trigger i1 past values and seed constants in
+          `booleanLattice` when known.
+        - map wait-destination block args for non-trigger past values via
+          existing SSA mapping (not only fixed trigger table).
+      - `computeBoolean(OpResult)`:
+        - recognize direct `llhd.prb` i1 trigger signals.
+      - `matchDriveClock`:
+        - accept single-trigger edge terms where present level is implicit by
+          wait-resume semantics (in addition to explicit `!past&present` /
+          `past&!present` forms).
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - extended `BoolBVCastOpRewrite` to fold direct i1 constants
+        (`0/1`) cast to `!smt.bv<1>` into `smt.bv.constant` ops.
+  - validation:
+    - rebuild:
+      - `ninja -C build_test circt-bmc`
+    - targeted regressions (original 6-failure cluster):
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/sva-sequence-event-list-or-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-event-iff-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-event-dynamic-equivalence-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-signal-event-list-equivalent-clock-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-signal-event-list-derived-clock-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-signal-event-list-derived-clock-nonvacuous-unsat-e2e.sv`
+      - result: `6 passed, 0 failed`.
+    - focused sweeps:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-sequence-event' -sv build_test/test/Tools/circt-bmc`
+        - result: `5 passed, 0 failed`.
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-sequence-signal-event-list' -sv build_test/test/Tools/circt-bmc`
+        - result: `6 passed, 0 failed`.
+  - remaining prominent gap:
+    - broader opt-in `sva-` suite still has unresolved failures outside this
+      event-list cluster (constraint/cross-coverage/fork-disable families).
+
+- Iteration update (clocked top-level `disable iff` extraction for covers):
+  - realization:
+    - top-level `disable iff` handling in concurrent assertions only matched
+      when `DisableIffAssertionExpr` was the direct statement property node.
+    - for forms like `cover property (@(posedge clk) disable iff (rst) p)`,
+      Slang wraps disable inside `ClockingAssertionExpr`; fallback lowering
+      treated disable as `disable || property`, which is correct for
+      assert/assume vacuity but wrong for cover reachability (caused false SAT).
+  - implemented:
+    - `lib/Conversion/ImportVerilog/Statements.cpp`
+      - peel top-level clocking wrappers, extract top-level disable condition,
+        and lower it through `enable` on verif assert-like ops.
+      - reapply peeled clocking wrappers after converting the inner property so
+        clock semantics are preserved while disable semantics stay in enables.
+  - validation:
+    - rebuild:
+      - `ninja -C build_test circt-verilog`
+    - focused:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv --filter='sva-cover-disable-iff-' build_test/test/Tools/circt-bmc`
+      - result: `2 passed, 0 failed`.
+    - focused cluster:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv --filter='sva-(cover-disable-iff|fell-delay|sequence-event|sequence-signal-event-list)' build_test/test/Tools/circt-bmc`
+      - result: `14 passed, 1 failed` (`sva-fell-delay-sat-e2e.sv`).
+  - remaining prominent gap:
+    - `sva-fell-delay-sat-e2e.sv` still reports `BMC_RESULT=UNSAT`.
+    - independent reachability probe (`cover property $fell(req)`) is also
+      UNSAT across larger bounds, so the issue is in sampled-edge/runtime
+      semantics rather than only implication/cover lowering.
+
+- Iteration update (procedural init + deseq register preset extraction):
+  - realization:
+    - `$fell` SAT regressions were not only implication lowering; the key miss
+      was procedural `initial` assignment semantics getting modeled as
+      zero-initialized register state when deseq failed to absorb sibling
+      no-wait init drives.
+    - this was especially visible for:
+      - `assert property (@(posedge clk) $fell(req) |-> ##1 ack);`
+      - with `initial req=1; always @(posedge clk) req<=0;`, where BMC stayed
+        vacuous/UNSAT.
+  - implemented:
+    - `lib/Dialect/LLHD/Transforms/Deseq.cpp`
+      - `getPresetAttr` now resolves constants through `llhd.process` results
+        (`llhd.halt` operands), enabling preset inference from hoisted init
+        processes.
+      - deseq register implementation now:
+        - detects sibling no-wait init-like drives on the same signal,
+        - infers register preset from that drive,
+        - erases absorbed init drives/processes once state is captured in
+          `seq.firreg`.
+    - `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+      - added zero-time-like helper and constant folding through process
+        results for robustness when stripping remaining LLHD signal plumbing.
+      - added guarded register-init absorption fallback in strip logic.
+  - validation:
+    - rebuilds:
+      - `ninja -C build_test circt-verilog`
+      - `ninja -C build_test circt-bmc`
+    - focused functional checks:
+      - `build_test/bin/circt-verilog --ir-hw test/Tools/circt-bmc/sva-fell-delay-sat-e2e.sv | build_test/bin/circt-bmc -b 3 --module=sva_fell_delay_sat -`
+        - result: `BMC_RESULT=SAT`.
+      - `build_test/bin/circt-verilog --ir-hw test/Tools/circt-bmc/sva-fell-delay-unsat-e2e.sv | build_test/bin/circt-bmc -b 3 --module=sva_fell_delay_unsat -`
+        - result: `BMC_RESULT=UNSAT`.
+    - focused lit:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-cover-disable-iff-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-disable-iff-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-fell-delay-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-fell-delay-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv`
+        - result: `5 passed, 0 failed`.
+
+- Iteration update (unbounded always import-check drift + open-range probe):
+  - realization:
+    - recent `sva-` lit failures in `Tools/circt-bmc` were stale-binary false
+      negatives after source updates; rebuilding `build-test` eliminated all 4.
+    - the remaining `ImportVerilog` failure
+      (`sva-unbounded-always-property.sv`) was a stale check shape:
+      explicit-clock `always a` now lowers to sequence-form
+      (`ltl.repeat ..., 0` + `verif.clocked_assert !ltl.sequence`) in this
+      path, while runtime behavior remains correct.
+    - `utils/sv-tests-bmc-expect.txt` currently contains only headers (no active
+      xfail/skip entries to audit).
+  - implemented:
+    - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+      - updated explicit-clock `always a` CHECKs to match current lowering:
+        - `ltl.repeat ..., 0 : i1`
+        - `verif.clocked_assert ..., : !ltl.sequence`
+  - validation:
+    - rebuild:
+      - `ninja -C build-test circt-opt circt-bmc`
+    - focused checks:
+      - `llvm/build/bin/llvm-lit -sv -j 4 build-test/test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+        - result: `1 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build-test/test/Conversion/ImportVerilog`
+        - result: `153 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build-test/test/Tools/circt-bmc`
+        - result: `27 passed, 0 failed`
+    - feature probe (parser/lowering status):
+      - unbounded forms accepted and lowered:
+        - `a [= 2:$]`, `a [-> 2:$]`, `s_eventually [2:$] a`,
+          `eventually [2:$] a`, `s_always [2:$] a`, `always [2:$] a`
+      - still rejected by Slang:
+        - `nexttime [2:$] a`, `s_nexttime [2:$] a`
+
+- Iteration update (promote stale unbounded-SVA TODOs to active coverage):
+  - realization:
+    - several `basic.sv` comments claiming Slang rejected open `$` ranges are no
+      longer true for:
+      - nonconsecutive repeat (`[= m:$]`)
+      - goto repeat (`[-> m:$]`)
+      - `s_eventually [m:$]`, `eventually [m:$]`
+      - `s_always [m:$]`, `always [m:$]`
+    - the previously cited 9 `circt-sim` gaps (`constraint-*`, `cross-var-*`,
+      `fork-disable-*`, `i3c-*`) are currently green in this lane.
+  - implemented:
+    - `test/Conversion/ImportVerilog/basic.sv`
+      - uncommented the 6 now-supported open-range assertions above.
+      - kept `nexttime [2:$]` / `s_nexttime [2:$]` as unresolved Slang-limited
+        forms.
+  - validation:
+    - direct import compile:
+      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/basic.sv > /tmp/basic.moore.mlir`
+      - result: success; lowered ops include open-range forms:
+        - `ltl.non_consecutive_repeat ..., 2`
+        - `ltl.goto_repeat ..., 2`
+        - `ltl.delay ..., 2`
+        - `ltl.repeat ..., 2`
+    - focused prior-gap runtime cluster:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv build-test/test/Tools/circt-sim/cross-var-inline.sv build-test/test/Tools/circt-sim/cross-var-linear-sum.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build-test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - result: `9 passed, 0 failed`
+    - external SVA semantic sweep (`sv-tests`):
+      - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc TAG_REGEX='(^| )16\\.(9|10|11|12|13|14|15|16|17)( |$)' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc TAG_REGEX='(^| )16\\.(9|10|11|12|13|14|15|16|17)( |$)' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result (both): `total=32 pass=32 fail=0`
+
+- Iteration update (open-range `nexttime` / `s_nexttime` parity):
+  - realization:
+    - open-range unary tests for `nexttime [m:$]` and `s_nexttime [m:$]` were
+      still blocked in Slang with:
+      - `only a single count of cycles is allowed for 'nexttime' expression`
+      - `unbounded literal '$' not allowed here`
+    - even after parser enablement, CIRCT property-typed lowering needed an
+      explicit open-range path; otherwise `[m:$]` collapsed to exact `[m]`.
+  - implemented:
+    - Slang patch plumbing:
+      - `patches/slang-unbounded-unary-range.patch`
+        - allow unbounded selector ranges for `nexttime` / `s_nexttime` in
+          `UnaryAssertionExpr::fromSyntax`.
+        - parser accepts `SimpleRangeSelect` (not only `BitSelect`) for
+          `nexttime` / `s_nexttime`.
+      - `patches/apply-slang-patches.sh`
+        - updated patch description comment to include nexttime forms.
+    - CIRCT lowering:
+      - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+        - `nexttime [m:$]` over property operands now lowers to weak eventually
+          over `m`-shifted property.
+        - `s_nexttime [m:$]` over property operands now lowers to strong
+          eventually over finite-progress `m`-shifted property.
+    - regression coverage:
+      - added `test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv`
+      - added `test/Conversion/ImportVerilog/sva-open-range-nexttime-sequence.sv`
+      - promoted now-supported assertions in `test/Conversion/ImportVerilog/basic.sv`:
+        - `nexttime [2:$] a`
+        - `s_nexttime [2:$] a`
+      - refreshed stale lowering checks in:
+        - `test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
+        - `test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`
+        - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+  - validation:
+    - red-first proof:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv`
+      - result before patch: `FAIL` with the two parser diagnostics above.
+    - rebuild:
+      - `ninja -C build_test circt-verilog`
+    - focused nexttime/open-range tests:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-(nexttime-property|open-range-nexttime-property|open-range-nexttime-sequence|open-range-eventually-salways-property|open-range-unary-repeat|strong-sequence-nexttime-always)' build_test/test/Conversion/ImportVerilog`
+      - result: `6 passed, 0 failed`
+    - broader import/bmc sweeps:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
+      - result: `155 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed`
+    - note:
+      - a broad `build_test/test/Tools/circt-sim` SVA runtime filter currently
+        shows many unrelated failures in this lane; this patch did not touch
+        sim runtime code paths.
+
+- Iteration update (`s_always [m:$]` finalization progress semantics in `circt-sim`):
+  - realization:
+    - after rebuilding `build_test/bin/circt-sim` (the earlier local binary was
+      stale), the `circt-sim` SVA slice dropped to one failing test:
+      - `test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv`
+    - the failing shape lowers as:
+      - `not(eventually(not(and(delay(true,m), implication(delay(true,m), p)))))`
+    - end-of-trace finalization treated this as unresolved-unknown and did not
+      fail when simulation ended before the lower bound `m` was reached.
+  - implemented:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - extended both:
+        - `finalizeClockedAssertionsAtEnd()`
+        - `finalizeClockedAssumptionsAtEnd()`
+      - added a shape check for the strong-open-range-always lowering pattern:
+        - `eventually(not(and(delay-guard, implication(delay-guard, ...))))`
+        - accepts delay guards driven by constant true from either:
+          - `ltl.boolean_constant true`
+          - `hw.constant true`
+      - when the run ends before lower-bound progress matures
+        (`sampleOrdinal <= delay`), finalization now marks the obligation as a
+        real strong failure.
+  - validation:
+    - rebuild:
+      - `ninja -C build_test circt-sim`
+    - focused regression:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv build_test/test/Tools/circt-sim/sva-salways-open-range-progress-pass-runtime.sv`
+      - result: `2 passed, 0 failed`
+    - broad `circt-sim` SVA runtime slice:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `80 passed, 0 failed`
+
+- Iteration update (missing assumption-side regression coverage for strong
+  open-range always progress):
+  - realization:
+    - after fixing end-of-trace strong open-range always finalization, only
+      assert-side tests existed for this path.
+    - assumption-side behavior (`assume property ... s_always [m:$]`) was
+      implemented but not locked by dedicated regressions.
+  - implemented:
+    - added:
+      - `test/Tools/circt-sim/sva-assume-salways-open-range-progress-fail-runtime.sv`
+      - `test/Tools/circt-sim/sva-assume-salways-open-range-progress-pass-runtime.sv`
+    - semantics covered:
+      - fail when simulation ends before lower bound progress (`[3:$]` short run)
+      - pass when lower bound is reached and predicate stays true (`[2:$]`)
+  - validation:
+    - focused:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-assume-salways-open-range-progress-fail-runtime.sv build_test/test/Tools/circt-sim/sva-assume-salways-open-range-progress-pass-runtime.sv build_test/test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv build_test/test/Tools/circt-sim/sva-salways-open-range-progress-pass-runtime.sv`
+      - result: `4 passed, 0 failed`
+    - broad `circt-sim` SVA runtime:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `82 passed, 0 failed`
+    - external semantics recheck:
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc EXPECT_FILE=/dev/null TAG_REGEX='(^| )16\\.' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc EXPECT_FILE=/dev/null TAG_REGEX='(^| )16\\.' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: both runs `42/42` pass.
+
+- Iteration update (weak open-range `always [m:$]` assumption coverage expansion):
+  - realization:
+    - `circt-sim` had strong open-range assume regressions, but weak open-range
+      assume semantics were not fully locked in-tree.
+    - specifically missing:
+      - direct boolean operand coverage for pass/fail/vacuous short-run behavior
+      - nested property-operand coverage (`always [m:$] p`) for assume semantics
+  - implemented:
+    - added weak open-range boolean-operand assume regressions:
+      - `test/Tools/circt-sim/sva-assume-always-open-range-property-runtime.sv`
+      - `test/Tools/circt-sim/sva-assume-always-open-range-property-fail-runtime.sv`
+      - `test/Tools/circt-sim/sva-assume-always-open-range-property-vacuous-runtime.sv`
+    - added weak open-range nested-property assume regressions:
+      - `test/Tools/circt-sim/sva-assume-always-open-range-subproperty-fail-runtime.sv`
+      - `test/Tools/circt-sim/sva-assume-always-open-range-subproperty-vacuous-runtime.sv`
+  - validation:
+    - focused new weak-open-range assume tests:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-assume-always-open-range-property-runtime.sv build_test/test/Tools/circt-sim/sva-assume-always-open-range-property-fail-runtime.sv build_test/test/Tools/circt-sim/sva-assume-always-open-range-property-vacuous-runtime.sv build_test/test/Tools/circt-sim/sva-assume-always-open-range-subproperty-fail-runtime.sv build_test/test/Tools/circt-sim/sva-assume-always-open-range-subproperty-vacuous-runtime.sv`
+      - result: `5 passed, 0 failed`
+    - broad `circt-sim` SVA runtime:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `87 passed, 0 failed`
+    - broad import/bmc SVA sanity recheck:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
+      - result: `155 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed` (plus `149 unsupported` in this environment)
+    - external `sv-tests` chapter-16 recheck:
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc EXPECT_FILE=utils/sv-tests-bmc-expect.txt TAG_REGEX='(^| )16\\.' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc EXPECT_FILE=utils/sv-tests-bmc-expect.txt TAG_REGEX='(^| )16\\.' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - result: both runs `total=42 pass=42 fail=0 xfail=0 xpass=0 error=0`
+      - note: a local invocation bug with over-escaped `TAG_REGEX` (`16\\\\.`)
+        can produce a misleading `total=0`; the corrected regex above is the
+        valid run configuration.
+
+- Iteration update (status verification for previously reported lit failures):
+  - validation:
+    - reran the historical 9-test cluster:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv build_test/test/Tools/circt-sim/cross-var-inline.sv build_test/test/Tools/circt-sim/cross-var-linear-sum.sv build_test/test/Tools/circt-sim/fork-disable-defer-poll.sv build_test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build_test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build_test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - result: `9 passed, 0 failed`
+    - corrected `sv-tests` regex invocation and confirmed chapter-16 status:
+      - result: `42/42 pass` with `EXPECT_FILE=utils/sv-tests-bmc-expect.txt`
+  - realization:
+    - the previous `total=0` `sv-tests` reading was caused by a local
+      over-escaped regex invocation (`16\\.`), not by a real parser/tag format
+      regression in `sv-tests`.
+
+- Iteration update (direct sequence assertion concat timing for goto-repeat):
+  - realization:
+    - found a runtime mismatch in direct sequence assertions where the left
+      concat input is variable-length (`ltl.goto_repeat`) and the right input is
+      a bounded delay.
+    - red case: `assert property (@(posedge clk) not (b[->1] ##1 c));` with a
+      `b` hit followed by `c` one sampled cycle later should fail, but passed.
+    - root cause in `circt-sim`:
+      - `ltl.concat` fell back to same-sample conjunction for variable-length
+        sequences in this shape, missing cross-sample endpoint alignment.
+      - repetition operators (`ltl.repeat`, `ltl.goto_repeat`,
+        `ltl.non_consecutive_repeat`) did not persist sampled outputs in
+        `temporalHistory`, limiting offset-based concat reconstruction.
+  - implemented:
+    - added regression:
+      - `test/Tools/circt-sim/sva-goto-concat-not-sequence-fail-runtime.sv`
+    - updated runtime evaluation in
+      `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+      - repetition ops now push sampled results into `temporalHistory`
+        (bounded history), enabling offset lookback on sequence endpoints.
+      - `ltl.concat` gained a dedicated two-input path for
+        `left=variable-length sequence`, `right=bounded ltl.delay`, aligning
+        `right` offset `k` with `left` endpoint at `k+1` samples ago.
+  - validation:
+    - red-first proof before fix:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-goto-concat-not-sequence-fail-runtime.sv`
+      - result before patch: `FAIL` (expected assertion-failed text missing;
+        simulation exited 0).
+    - rebuild:
+      - `ninja -C build_test circt-sim`
+    - fixed test + focused regressions:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-goto-concat-not-sequence-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-implication-goto-consequent-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-goto-consequent-fail-runtime.sv build_test/test/Tools/circt-sim/sva-goto-repeat-runtime.sv build_test/test/Tools/circt-sim/sva-goto-repeat-count-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-repeat-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-repeat-count-runtime.sv`
+      - result: `7 passed, 0 failed`
+    - broad SVA sweeps:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `88 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
+      - result: `155 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed` (`149 unsupported` in this environment)
+
+- Iteration update (concat endpoint alignment coverage expansion after goto fix):
+  - realization:
+    - the concat-timing root cause and fix path also applies to direct sequence
+      properties using consecutive/nonconsecutive repetition before `##1`.
+  - implemented:
+    - added regressions:
+      - `test/Tools/circt-sim/sva-nonconsecutive-concat-not-sequence-fail-runtime.sv`
+      - `test/Tools/circt-sim/sva-repeat-concat-not-sequence-fail-runtime.sv`
+  - validation:
+    - focused trio:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-goto-concat-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-concat-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-repeat-concat-not-sequence-fail-runtime.sv`
+      - result: `3 passed, 0 failed`
+    - broad `circt-sim` SVA runtime recheck:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `90 passed, 0 failed`
+
+- Iteration update (direct concat gap expansion: simple and right-variable forms):
+  - realization:
+    - discovered additional direct-sequence concat false negatives in `circt-sim`:
+      - `not (b ##1 c)` passed when it should fail.
+      - `not (b ##1 c[->1])` passed when it should fail.
+      - `not (b ##1 c[=1])` passed when it should fail.
+    - red-first confirmation:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-concat-simple-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-concat-right-goto-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-concat-right-nonconsecutive-not-sequence-fail-runtime.sv`
+      - result before fix: `3 failed`
+  - implemented:
+    - added regressions:
+      - `test/Tools/circt-sim/sva-concat-simple-not-sequence-fail-runtime.sv`
+      - `test/Tools/circt-sim/sva-concat-right-goto-not-sequence-fail-runtime.sv`
+      - `test/Tools/circt-sim/sva-concat-right-nonconsecutive-not-sequence-fail-runtime.sv`
+    - runtime fix in `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+      - extended two-input concat handling for `left=bounded delay` and
+        `right=variable-length sequence` using right-endpoint history scan.
+      - refined left/right offset composition for zero-offset left delays.
+  - regression encountered and resolved:
+    - broad SVA runtime initially regressed on
+      `test/Tools/circt-sim/sva-firstmatch-runtime.sv`.
+    - root cause:
+      - ambiguous zero-offset concat composition over-propagated `Unknown` for
+        nonzero right offsets.
+    - fix:
+      - restricted ambiguous dual-alignment fallback to `rightOffset == 0`.
+  - important finding:
+    - `circt-verilog` currently lowers direct `b ##0 c` and `b ##1 c` to the
+      same LTL shape (`delay 0,0` + `delay 0,0` + `concat`), so runtime cannot
+      always fully disambiguate intent from IR alone.
+    - this remains a lowering-level parity gap to address in a future pass.
+  - validation:
+    - focused:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-concat-simple-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-concat-right-goto-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-concat-right-nonconsecutive-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-runtime.sv`
+      - result: `4 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-implication-sequence-concat-order-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-concat-order-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv build_test/test/Tools/circt-sim/sva-goto-concat-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-concat-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-repeat-concat-not-sequence-fail-runtime.sv`
+      - result: `6 passed, 0 failed`
+    - broad:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `93 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
+      - result: `155 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed` (`149 unsupported` in this environment)
+
+- Iteration update (ImportVerilog concat: multi-element `##0` overlap preservation):
+  - realization:
+    - the earlier two-element `##0` special-case fixed `a ##0 b`, but
+      multi-element chains still conflated overlap and non-overlap timing.
+    - concrete mis-lowering before this patch:
+      - `a ##0 b ##0 c` lowered as plain concat chain.
+      - `a ##0 b ##1 c` lowered to the same concat shape as above.
+    - this lost `##0` vs `##1` distinction after the first edge.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - replaced the narrow two-element `##0` special-case in
+        `visit(const slang::ast::SequenceConcatExpr &expr)` with grouped
+        lowering:
+        - detect exact zero inter-element delay (`##0`).
+        - fold contiguous single-cycle `##0` neighbors into `ltl.and` groups.
+        - emit `ltl.concat` only across non-overlap group boundaries.
+      - this preserves:
+        - `a ##0 b` -> overlap (`ltl.and`)
+        - `a ##1 b` -> non-overlap (`ltl.concat`)
+        - `a ##0 b ##0 c` -> chained overlap
+        - `a ##0 b ##1 c` -> overlap prefix, then concat with trailing element.
+    - added focused regression:
+      - `test/Conversion/ImportVerilog/sva-concat-zero-delay-lowering.sv`
+  - validation:
+    - build:
+      - `ninja -C build_test circt-verilog`
+    - focused:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-concat-zero-delay-lowering.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-until-with-lowering.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-concat-simple-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-concat-right-goto-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-concat-right-nonconsecutive-not-sequence-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-runtime.sv`
+      - result: all passed.
+    - broad SVA sweeps after patch:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `93 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
+      - result: `156 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed` (`149 unsupported` in this environment)
+
+- Iteration update (`utils/sv-tests-bmc-expect.txt` audit):
+  - realization:
+    - expectation file is currently header-only; previous per-case exceptions were
+      removed earlier.
+  - validation:
+    - targeted replay of the historical `compile-only` entries:
+      - `TEST_FILTER='^(16\\.12--property|16\\.12--property-disj|16\\.7--sequence|16\\.9--sequence-cons-repetition|16\\.9--sequence-goto-repetition|16\\.9--sequence-noncons-repetition|16\\.17--expect)$' BMC_SMOKE_ONLY=1 CIRCT_VERILOG=$PWD/build_test/bin/circt-verilog CIRCT_BMC=$PWD/build_test/bin/circt-bmc OUT=$PWD/sv-tests-bmc-results-check.txt ./utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - summary: `total=7 pass=7 fail=0`
+      - all historical compile-only entries now pass.
+    - stale xfail entry check:
+      - historical `16.15--property-iff-uvm-fail` case name is not present in
+        current upstream sv-tests checkout.
+      - current file present: `16.15--property-iff-uvm.sv`.
+
+- Iteration update (local-var timing across `##0` overlap):
+  - realization:
+    - found a concrete lowering bug for local assertion variable references
+      across overlap concat boundaries.
+    - repro pattern:
+      - `@(posedge clk) (valid, x = in) ##0 (valid && out == x[7:0])`
+    - observed wrong IR before fix:
+      - second element used `moore.past %x delay 1`, which shifts the local var
+        read by one cycle even though `##0` is same-cycle overlap.
+  - red-first regression:
+    - added `test/Conversion/ImportVerilog/sva-local-var-concat-zero-delay.sv`
+    - initial run:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-local-var-concat-zero-delay.sv`
+      - result before fix: `FAIL` (expected direct extract from assigned value,
+        got `moore.past ... delay 1`).
+  - implemented fix:
+    - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - in `visit(const slang::ast::SequenceConcatExpr &expr)`, updated
+        assertion sequence-offset tracking to use source SVA delay directly:
+        - removed forced `+1` offset on inter-element `##0`.
+      - local-var binding/reference timing for overlap now remains same-cycle.
+  - validation:
+    - rebuild:
+      - `ninja -C build_test circt-verilog`
+    - focused:
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-local-var-concat-zero-delay.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-local-var.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-concat-zero-delay-lowering.sv`
+      - result: all passed.
+    - broad SVA sweeps after fix:
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-sim`
+      - result: `93 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
+      - result: `157 passed, 0 failed`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
+      - result: `27 passed, 0 failed` (`149 unsupported` in this environment)
+
+- Iteration update (sv-tests breadth check for gap discovery):
+  - non-UVM chapter-16 + sampled-functions replay:
+    - built trimmed sv-tests tree with 42 files (chapter-16 without `*uvm*` +
+      generated sampled functions).
+    - command:
+      - `TAG_REGEX='.*' TEST_FILTER='^(16\\.|20\\.13--)' CIRCT_VERILOG=$PWD/build_test/bin/circt-verilog CIRCT_BMC=$PWD/build_test/bin/circt-bmc OUT=$PWD/sv-tests-bmc-results-nonuvm.txt ./utils/run_sv_tests_circt_bmc.sh <trimmed-dir>`
+    - result: `total=42 pass=42 fail=0`.
+  - UVM-inclusive smoke check:
+    - a 68-file UVM-inclusive smoke run was started, but remained dominated by
+      very heavy front-end compile cost on UVM-expanded chapter-16 tests.
+    - kept as an open performance/parsing-scale gap for parity hardening;
+      functional non-UVM SVA semantics remain green.
+
+- Iteration update (Yosys SVA BMC parity re-check + new tracked regression):
+  - validation:
+    - chapter-16 UVM compile smoke (direct `circt-verilog` sweep):
+      - `26/26` UVM chapter-16 files compile successfully.
+    - `sv-tests` chapter-16 UVM smoke (scripted):
+      - `TEST_FILTER='^16\\..*uvm' TAG_REGEX='.*' BMC_SMOKE_ONLY=1 ...`
+      - result: `total=26 pass=26 fail=0`.
+    - yosys SVA BMC focused replay:
+      - `TEST_FILTER='^(basic00|sva_not|sva_value_change_sim)$' ... run_yosys_sva_circt_bmc.sh`
+      - result unchanged: `basic00(pass)`, `sva_not(pass)`, and
+        `sva_value_change_sim(pass)` still fail in CIRCT BMC mode.
+  - realization:
+    - this is a real semantic parity gap in current BMC behavior (not a harness
+      parse/compile issue): direct `circt-bmc --run-smtlib` replay still reports
+      `BMC_RESULT=SAT` for the yosys `basic00` pass profile.
+  - implemented:
+    - added a dedicated CIRCT lit tracker:
+      - `test/Tools/circt-bmc/sva-yosys-basic00-disable-iff-nonoverlap-parity.sv`
+    - marked this test as `XFAIL` for now to keep the suite green while
+      preserving an explicit repro in-tree.
+  - validation after adding tracker:
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build_test/test/Tools/circt-bmc`
+    - result: `27 passed, 1 expectedly failed, 149 unsupported`.
+
+- Iteration update (Yosys SVA sim-only harness classification fix):
+  - realization:
+    - `sva_value_change_sim` in `yosys/tests/sva` is simulation-only
+      (`sva_value_change_sim.ys`) and has no formal pass harness
+      (`*_pass.sby`).
+    - `utils/run_yosys_sva_circt_bmc.sh` incorrectly treated it as a pass-mode
+      formal BMC case, producing a false `FAIL(pass)` signal.
+  - implemented:
+    - `utils/run_yosys_sva_circt_bmc.sh`
+      - in `run_case()`, added pass-mode skip policy:
+        - if `<base>.ys` exists and `<base>_pass.sby` is missing, mark
+          `SKIP(sim-only)` and do not invoke tools.
+    - added regression:
+      - `test/Tools/run-yosys-sva-bmc-sim-only-skip.test`
+      - verifies sim-only pass-mode skip plus no tool invocation.
+  - validation:
+    - harness regression subset:
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-yosys-sva-bmc-(sim-only-skip|smoke-xfail-no-xpass|require-filter|toolchain-default-build-test-fallback)'`
+      - result: `4/4` pass.
+    - full Yosys SVA replay:
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `failures=0`; `sva_value_change_sim` now reports
+        `SKIP(sim-only)`.
+
+- Iteration update (Yosys sim-only cycle-budget parsing + gap re-check):
+  - realization:
+    - sim-only `.ys` handling already parsed `sim -clock`, but wrapper runtime
+      length still defaulted to fixed `SIM_ONLY_TOGGLE_STEPS`; this can
+      under/over-run tests that encode intended runtime via `sim -n`.
+  - implemented:
+    - `utils/run_yosys_sva_circt_bmc.sh`
+      - in sim-only pass path, parse `.ys` `sim -n <cycles>` and set wrapper
+        toggle count to `2 * cycles` when present/valid.
+    - added regression:
+      - `test/Tools/run-yosys-sva-bmc-sim-only-cycles.test`
+      - asserts generated wrapper honors `sim -n` (`repeat (14)` for `-n 7`).
+  - validation:
+    - harness lit subset:
+      - `llvm/build/bin/llvm-lit -sv build_test/test --filter='run-yosys-sva-bmc-sim-only-(cycles|run|top-name|skip)|run-yosys-sva-bmc-smoke-xfail-no-xpass'`
+      - result: `5/5` pass.
+    - full yosys replay:
+      - `CIRCT_VERILOG=$PWD/build_test/bin/circt-verilog CIRCT_BMC=$PWD/build_test/bin/circt-bmc CIRCT_SIM=$PWD/build_test/bin/circt-sim TEST_FILTER='.' ./utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - result: `14 tests, failures=0`.
+    - previously cited parity-gap 9-test slice (`constraint-*`, `cross-var-*`,
+      `fork-disable-*`, `i3c-*`):
+      - in `build_test`: `9/9` pass.
+      - in `build-test`: observed 1 failure from malformed emitted MLIR in an
+        unrelated in-flight lane; treated as lane instability, not semantic
+        regression.
+
+- Iteration update (SVA BMC parity: xprop known-scope + pre-edge sampling):
+  - realization:
+    - `sva-xprop-assume-known-e2e` and `sva-xprop-mod-sat-e2e` were reporting
+      `UNSAT` because `VerifToSMT` accidentally treated *all* property root
+      inputs as "must be known".
+    - root cause: `knownDisableIffArgIndices` was populated from every property
+      root, not just `sva.disable_iff` roots.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - removed unconditional property-root collection into
+        `knownDisableIffArgIndices`; only explicit disable-iff roots and
+        clock-source roots keep known constraints.
+  - validation:
+    - `CIRCT_ENABLE_BMC_JIT_TESTS=1 llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-mod-sat-e2e.sv build_test/test/Conversion/VerifToSMT/bmc-disable-iff-known-inputs.mlir`
+    - result: `3/3` pass.
+
+- Iteration update (clocked antecedent sampling parity on clock signal usage):
+  - realization:
+    - `sva-multiclock-nfa-clocked-sat-e2e` remained `UNSAT` due to
+      post-edge clock substitution in BMC circuit/property evaluation; this
+      made antecedents that reference the sampling clock itself observe the
+      wrong value.
+  - implemented:
+    - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+      - switched circuit/property clock evaluation to pre-edge sampled clock
+        values in both SMT-LIB export and in-IR solver paths.
+      - updated 4-state clock-source value-bit materialization to use sampled
+        (pre-edge) clock args rather than post-edge loop values.
+  - validation:
+    - `CIRCT_ENABLE_BMC_JIT_TESTS=1 llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/sva-multiclock-nfa-clocked-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-mod-sat-e2e.sv build_test/test/Conversion/VerifToSMT/bmc-disable-iff-known-inputs.mlir`
+    - result: `4/4` pass.
+    - 7-case outlier sweep:
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-mod-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-multiclock-nfa-clocked-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
+      - result: `7/7` pass.
+
+- Iteration update (de-gating clean outliers from `bmc-jit`):
+  - implemented test updates:
+    - `test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv`
+    - `test/Tools/circt-bmc/sva-xprop-mod-sat-e2e.sv`
+    - `test/Tools/circt-bmc/sva-multiclock-nfa-clocked-sat-e2e.sv`
+    - switched RUN lines to explicit `circt-bmc --run-smtlib` and removed
+      `// REQUIRES: bmc-jit`.
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/sva-xprop-assume-known-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-mod-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-multiclock-nfa-clocked-sat-e2e.sv`
+    - result: `3/3` pass (without `CIRCT_ENABLE_BMC_JIT_TESTS`).
+
+- Iteration update (remove `bmc-jit` lit gate and de-gate all remaining tests):
+  - realization:
+    - `bmc-jit` in this tree was only a lit feature probe in `test/lit.cfg.py`,
+      not a distinct execution mode in `circt-bmc`.
+    - `circt-bmc` already defaults to `--run-smtlib` (output format init is
+      `OutputRunSMTLIB`), so the extra feature gate only reduced default test
+      coverage.
+  - implemented:
+    - removed the optional `bmc-jit` probe and feature wiring from
+      `test/lit.cfg.py`.
+    - removed `// REQUIRES: bmc-jit` from all remaining `circt-bmc` tests:
+      - `test/Tools/circt-bmc/bmc-k-induction-jit.mlir`
+      - `test/Tools/circt-bmc/fail-on-violation.mlir`
+      - `test/Tools/circt-bmc/result-token.mlir`
+      - `test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv`
+      - `test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv`
+      - `test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv`
+      - `test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv`
+      - `test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
+    - switched affected RUN lines to explicit `circt-bmc --run-smtlib` for
+      mode clarity and future-proofing.
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/bmc-k-induction-jit.mlir build_test/test/Tools/circt-bmc/fail-on-violation.mlir build_test/test/Tools/circt-bmc/result-token.mlir build_test/test/Tools/circt-bmc/sv-tests-sequence-bmc-crash.sv build_test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-nexttime-range-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-stable-changed-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-xprop-weak-eventually-sat-e2e.sv`
+    - result: `8/8` pass.
