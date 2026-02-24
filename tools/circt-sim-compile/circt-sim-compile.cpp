@@ -25,6 +25,7 @@
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Support/FourStateUtils.h"
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
@@ -466,6 +467,18 @@ stripNonLLVMFunctions(ModuleOp microModule) {
     global.erase();
   }
 
+  // Erase any remaining func::FuncOp operations. These should have been
+  // lowered to llvm.func by the lowering pipeline; any that remain have
+  // non-LLVM types and cannot be translated to LLVM IR.
+  llvm::SmallVector<func::FuncOp> funcOpsToErase;
+  microModule.walk([&](func::FuncOp funcOp) {
+    funcOpsToErase.push_back(funcOp);
+  });
+  for (auto funcOp : funcOpsToErase) {
+    stripped.push_back(funcOp.getSymName().str());
+    funcOp.erase();
+  }
+
   return stripped;
 }
 
@@ -847,6 +860,789 @@ static void flattenAggregateFunctionABIs(ModuleOp moduleOp) {
 }
 
 //===----------------------------------------------------------------------===//
+// Process body compilation (Phase A: callback processes)
+//===----------------------------------------------------------------------===//
+
+/// Check if an llhd.process op can be compiled as a callback function.
+/// Phase A requirements:
+///   - At most 1 llhd.wait (0 = one-shot/halt, 1 = callback loop)
+///   - No yield operands on the wait (no process results)
+///   - No wait dest operands (no loop-carried state through wait)
+///   - All probed/driven signals are integer type ≤64 bits with known IDs
+///   - Only supported ops (llhd, arith, cf, func, LLVM, comb, hw.constant)
+static bool isProcessCallbackEligible(
+    llhd::ProcessOp procOp,
+    const DenseMap<Value, uint32_t> &signalIdMap) {
+  unsigned waitCount = 0;
+  bool eligible = true;
+
+  procOp.walk([&](Operation *op) -> WalkResult {
+    if (auto waitOp = dyn_cast<llhd::WaitOp>(op)) {
+      ++waitCount;
+      if (waitCount > 1) {
+        eligible = false;
+        return WalkResult::interrupt();
+      }
+      if (!waitOp.getYieldOperands().empty() ||
+          !waitOp.getDestOperands().empty()) {
+        eligible = false;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    }
+    if (auto prbOp = dyn_cast<llhd::ProbeOp>(op)) {
+      auto resultTy = prbOp.getResult().getType();
+      bool ok = false;
+      if (auto intTy = dyn_cast<IntegerType>(resultTy))
+        ok = intTy.getWidth() <= 64;
+      else if (auto w = getFourStateValueWidth(resultTy))
+        ok = *w <= 64;
+      if (!ok) {
+        eligible = false;
+        return WalkResult::interrupt();
+      }
+      if (!signalIdMap.count(prbOp.getSignal())) {
+        eligible = false;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    }
+    if (auto drvOp = dyn_cast<llhd::DriveOp>(op)) {
+      auto valTy = drvOp.getValue().getType();
+      bool ok = false;
+      if (auto intTy = dyn_cast<IntegerType>(valTy))
+        ok = intTy.getWidth() <= 64;
+      else if (auto w = getFourStateValueWidth(valTy))
+        ok = *w <= 64;
+      if (!ok) {
+        eligible = false;
+        return WalkResult::interrupt();
+      }
+      if (!signalIdMap.count(drvOp.getSignal())) {
+        eligible = false;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    }
+    if (isa<llhd::HaltOp, llhd::IntToTimeOp, llhd::ConstantTimeOp,
+            llhd::ProcessOp>(op))
+      return WalkResult::advance();
+    if (isa<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect,
+            func::FuncDialect>(op->getDialect()))
+      return WalkResult::advance();
+    if (isa<comb::CombDialect>(op->getDialect())) {
+      if (isa<comb::XorOp, comb::AndOp, comb::OrOp, comb::AddOp,
+              comb::SubOp, comb::MulOp, comb::ICmpOp, comb::MuxOp>(op))
+        return WalkResult::advance();
+      eligible = false;
+      return WalkResult::interrupt();
+    }
+    if (isa<hw::ConstantOp, hw::StructExtractOp, hw::StructCreateOp,
+            hw::AggregateConstantOp>(op))
+      return WalkResult::advance();
+    eligible = false;
+    return WalkResult::interrupt();
+  });
+
+  return eligible;
+}
+
+/// Lower a variadic comb op to chained binary arith ops.
+template <typename ArithOp>
+static Value lowerVariadicToArith(OperandRange operands, OpBuilder &builder,
+                                  Location loc, IRMapping &mapping) {
+  if (operands.empty())
+    return nullptr;
+  Value result = mapping.lookupOrDefault(operands[0]);
+  for (unsigned i = 1; i < operands.size(); ++i) {
+    Value rhs = mapping.lookupOrDefault(operands[i]);
+    result = ArithOp::create(builder, loc, result, rhs);
+  }
+  return result;
+}
+
+/// Convert a comb::ICmpPredicate to arith::CmpIPredicate.
+/// Returns std::nullopt for predicates without an arith equivalent (ceq, etc.).
+static std::optional<arith::CmpIPredicate>
+convertCombPredicate(comb::ICmpPredicate pred) {
+  switch (pred) {
+  case comb::ICmpPredicate::eq:
+    return arith::CmpIPredicate::eq;
+  case comb::ICmpPredicate::ne:
+    return arith::CmpIPredicate::ne;
+  case comb::ICmpPredicate::slt:
+    return arith::CmpIPredicate::slt;
+  case comb::ICmpPredicate::sle:
+    return arith::CmpIPredicate::sle;
+  case comb::ICmpPredicate::sgt:
+    return arith::CmpIPredicate::sgt;
+  case comb::ICmpPredicate::sge:
+    return arith::CmpIPredicate::sge;
+  case comb::ICmpPredicate::ult:
+    return arith::CmpIPredicate::ult;
+  case comb::ICmpPredicate::ule:
+    return arith::CmpIPredicate::ule;
+  case comb::ICmpPredicate::ugt:
+    return arith::CmpIPredicate::ugt;
+  case comb::ICmpPredicate::uge:
+    return arith::CmpIPredicate::uge;
+  default:
+    return std::nullopt;
+  }
+}
+
+/// Extract eligible llhd.process bodies into func.func ops with all
+/// LLHD/comb/hw ops lowered to arith/cf/func ops. The resulting functions
+/// are ready for the standard compilation pipeline.
+///
+/// Phase A: Only compiles the "body" portion of callback processes (the blocks
+/// between the resume point and the next wait). The init path is left for the
+/// interpreter. Each compiled function has signature void(ptr ctx, ptr frame).
+static unsigned compileProcessBodies(
+    ModuleOp module,
+    llvm::SmallVectorImpl<std::string> &procNames,
+    llvm::SmallVectorImpl<uint8_t> &procKinds) {
+  auto *mlirCtx = module.getContext();
+  auto loc = module.getLoc();
+  auto ptrTy = LLVM::LLVMPointerType::get(mlirCtx);
+  auto i32Ty = IntegerType::get(mlirCtx, 32);
+  auto i64Ty = IntegerType::get(mlirCtx, 64);
+  auto i8Ty = IntegerType::get(mlirCtx, 8);
+
+  // Step 1: Assign signal IDs. Walk all llhd.sig ops in module order.
+  DenseMap<Value, uint32_t> signalIdMap;
+  uint32_t nextSigId = 0;
+  module.walk([&](llhd::SignalOp sigOp) {
+    signalIdMap[sigOp.getResult()] = nextSigId++;
+  });
+
+  if (nextSigId == 0)
+    return 0;
+
+  // Step 2: Declare runtime functions in the parent module.
+  OpBuilder moduleBuilder(mlirCtx);
+  moduleBuilder.setInsertionPointToEnd(module.getBody());
+
+  auto getOrDeclareFunc = [&](StringRef name, FunctionType funcTy) {
+    if (module.lookupSymbol<func::FuncOp>(name))
+      return;
+    auto decl = func::FuncOp::create(moduleBuilder, loc, name, funcTy);
+    decl.setVisibility(SymbolTable::Visibility::Private);
+  };
+
+  getOrDeclareFunc("__circt_sim_signal_read_u64",
+                   FunctionType::get(mlirCtx, {ptrTy, i32Ty}, {i64Ty}));
+  getOrDeclareFunc("__circt_sim_signal_drive_u64",
+                   FunctionType::get(mlirCtx, {ptrTy, i32Ty, i64Ty, i8Ty,
+                                               i64Ty},
+                                     {}));
+  // 4-state narrow fast lane: read/drive {value, xz} as u64 pair.
+  getOrDeclareFunc("__circt_sim_signal_read4_u64",
+                   FunctionType::get(mlirCtx,
+                                     {ptrTy, i32Ty, ptrTy, ptrTy}, {}));
+  getOrDeclareFunc("__circt_sim_signal_drive4_u64",
+                   FunctionType::get(mlirCtx,
+                                     {ptrTy, i32Ty, i64Ty, i64Ty, i8Ty,
+                                      i64Ty},
+                                     {}));
+
+  // Step 3: Walk processes and extract eligible ones.
+  unsigned compiled = 0;
+  llvm::SmallVector<llhd::ProcessOp> processes;
+  module.walk([&](llhd::ProcessOp procOp) {
+    processes.push_back(procOp);
+  });
+
+  for (auto procOp : processes) {
+    if (!isProcessCallbackEligible(procOp, signalIdMap))
+      continue;
+
+    // Find the wait op (if any).
+    llhd::WaitOp waitOp = nullptr;
+    procOp.walk([&](llhd::WaitOp w) { waitOp = w; });
+
+    Region &procRegion = procOp.getBody();
+    Block *waitBlock = waitOp ? waitOp->getBlock() : nullptr;
+
+    // Determine body blocks.
+    llvm::SmallVector<Block *> bodyBlocks;
+    if (!waitOp) {
+      // One-shot process (no wait): all blocks are the body.
+      for (Block &block : procRegion)
+        bodyBlocks.push_back(&block);
+    } else {
+      // Callback loop: collect blocks reachable from resumeBlock,
+      // stopping at back-edges to waitBlock.
+      Block *resumeBlock = waitOp.getDest();
+      llvm::SmallPtrSet<Block *, 8> visited;
+      llvm::SmallVector<Block *, 8> worklist;
+      worklist.push_back(resumeBlock);
+      while (!worklist.empty()) {
+        Block *b = worklist.pop_back_val();
+        if (!visited.insert(b).second)
+          continue;
+        bodyBlocks.push_back(b);
+        for (Block *succ : b->getSuccessors()) {
+          if (succ != waitBlock)
+            worklist.push_back(succ);
+        }
+      }
+    }
+
+    if (bodyBlocks.empty())
+      continue;
+
+    // Skip if any body block references values from non-body process blocks.
+    llvm::SmallPtrSet<Block *, 8> bodyBlockSet(bodyBlocks.begin(),
+                                               bodyBlocks.end());
+    bool hasInvalidRef = false;
+    for (Block *b : bodyBlocks) {
+      for (Operation &op : *b) {
+        for (Value operand : op.getOperands()) {
+          if (auto *defBlock = operand.getParentBlock())
+            if (bodyBlockSet.contains(defBlock))
+              continue;
+          if (!procRegion.isAncestor(operand.getParentRegion()))
+            continue; // Module-level external — handled separately.
+          hasInvalidRef = true;
+          break;
+        }
+        if (hasInvalidRef)
+          break;
+      }
+      if (hasInvalidRef)
+        break;
+    }
+    if (hasInvalidRef)
+      continue;
+
+    // Create function: void(ptr ctx, ptr frame).
+    std::string funcName = "__circt_sim_proc_" + std::to_string(compiled);
+    auto funcType = FunctionType::get(mlirCtx, {ptrTy, ptrTy}, {});
+    auto funcOp = func::FuncOp::create(moduleBuilder, loc, funcName, funcType);
+    funcOp.setVisibility(SymbolTable::Visibility::Private);
+
+    Block *entry = funcOp.addEntryBlock();
+    Value ctxArg = entry->getArgument(0);
+
+    // Create cloned blocks in the function.
+    IRMapping mapping;
+    // Track 4-state struct values as {value, unknown} component pairs.
+    // Keys are ORIGINAL (source) SSA values from the process body.
+    DenseMap<Value, std::pair<Value, Value>> fourStateComponents;
+    DenseMap<Block *, Block *> blockMap;
+    for (Block *srcBlock : bodyBlocks) {
+      Block *newBlock = new Block();
+      funcOp.getBody().push_back(newBlock);
+      blockMap[srcBlock] = newBlock;
+      for (auto arg : srcBlock->getArguments())
+        mapping.map(arg, newBlock->addArgument(arg.getType(), arg.getLoc()));
+    }
+
+    // Entry: branch to first body block.
+    OpBuilder builder(entry, entry->begin());
+    cf::BranchOp::create(builder, loc, blockMap[bodyBlocks[0]]);
+
+    // Pre-scan: clone external constants into entry block.
+    bool extractionFailed = false;
+    for (Block *srcBlock : bodyBlocks) {
+      for (Operation &op : *srcBlock) {
+        // Skip operands of ops that will be replaced entirely (wait/halt).
+        if (isa<llhd::WaitOp, llhd::HaltOp>(&op))
+          continue;
+        for (Value operand : op.getOperands()) {
+          if (procRegion.isAncestor(operand.getParentRegion()))
+            continue;
+          if (mapping.contains(operand))
+            continue;
+          if (isa_and_nonnull<llhd::SignalOp>(operand.getDefiningOp()) ||
+              isa_and_nonnull<llhd::ConstantTimeOp>(operand.getDefiningOp()))
+            continue; // Handled during op lowering.
+
+          builder.setInsertionPoint(entry->getTerminator());
+          if (auto hwConst = operand.getDefiningOp<hw::ConstantOp>()) {
+            auto c = arith::ConstantOp::create(
+                builder, loc,
+                builder.getIntegerAttr(hwConst.getType(),
+                                       hwConst.getValue()));
+            mapping.map(operand, c.getResult());
+          } else if (auto arithConst =
+                         operand.getDefiningOp<arith::ConstantOp>()) {
+            auto *cloned = builder.clone(*arithConst);
+            mapping.map(operand, cloned->getResult(0));
+          } else if (auto llvmConst =
+                         operand.getDefiningOp<LLVM::ConstantOp>()) {
+            auto *cloned = builder.clone(*llvmConst);
+            mapping.map(operand, cloned->getResult(0));
+          } else if (auto aggConst =
+                         operand.getDefiningOp<hw::AggregateConstantOp>()) {
+            // Decompose 4-state aggregate constant into {value, unknown} pair.
+            if (auto w = getFourStateValueWidth(aggConst.getType())) {
+              auto fields = aggConst.getFields();
+              auto valAttr = cast<IntegerAttr>(fields[0]);
+              auto unkAttr = cast<IntegerAttr>(fields[1]);
+              auto valConst = arith::ConstantOp::create(builder, loc, valAttr);
+              auto unkConst = arith::ConstantOp::create(builder, loc, unkAttr);
+              fourStateComponents[operand] = {valConst, unkConst};
+              // Map to a dummy — actual uses go through fourStateComponents.
+              mapping.map(operand, valConst.getResult());
+            } else {
+              extractionFailed = true;
+              break;
+            }
+          } else {
+            extractionFailed = true;
+            break;
+          }
+        }
+        if (extractionFailed)
+          break;
+      }
+      if (extractionFailed)
+        break;
+    }
+    if (extractionFailed) {
+      funcOp.erase();
+      continue;
+    }
+
+    // Clone and lower ops from body blocks.
+    bool loweringFailed = false;
+    for (Block *srcBlock : bodyBlocks) {
+      Block *dstBlock = blockMap[srcBlock];
+      builder.setInsertionPointToEnd(dstBlock);
+
+      for (Operation &op : *srcBlock) {
+        auto opLoc = op.getLoc();
+
+        // === LLHD ops ===
+        if (auto prbOp = dyn_cast<llhd::ProbeOp>(&op)) {
+          uint32_t sigId = signalIdMap.lookup(prbOp.getSignal());
+          auto sigIdVal = arith::ConstantOp::create(
+              builder, opLoc, builder.getI32IntegerAttr(sigId));
+          auto resultTy = prbOp.getResult().getType();
+
+          if (auto w = getFourStateValueWidth(resultTy)) {
+            // 4-state narrow fast lane: physical width is 2*N.
+            unsigned logW = *w;
+            if (2 * logW <= 64) {
+              // Fits in one u64 read (physical ≤ 64 bits).
+              auto readCall = func::CallOp::create(
+                  builder, opLoc, "__circt_sim_signal_read_u64",
+                  TypeRange{i64Ty}, ValueRange{ctxArg, sigIdVal});
+              Value raw = readCall.getResult(0);
+              // HW struct bit order: value=high N bits, unknown=low N bits.
+              auto intLogTy = IntegerType::get(mlirCtx, logW);
+              Value xz = raw;
+              if (logW < 64)
+                xz = arith::TruncIOp::create(builder, opLoc, intLogTy, raw);
+              Value shifted = arith::ShRUIOp::create(
+                  builder, opLoc, raw,
+                  arith::ConstantOp::create(
+                      builder, opLoc,
+                      builder.getI64IntegerAttr(logW)));
+              Value val = shifted;
+              if (logW < 64)
+                val = arith::TruncIOp::create(builder, opLoc, intLogTy,
+                                              shifted);
+              fourStateComponents[prbOp.getResult()] = {val, xz};
+              mapping.map(prbOp.getResult(), val); // dummy
+            } else {
+              // 32 < N <= 64: use read4_u64 with alloca out-params.
+              auto one = arith::ConstantOp::create(
+                  builder, opLoc, builder.getI64IntegerAttr(1));
+              auto valAlloca =
+                  LLVM::AllocaOp::create(builder, opLoc, ptrTy, i64Ty, one);
+              auto xzAlloca =
+                  LLVM::AllocaOp::create(builder, opLoc, ptrTy, i64Ty, one);
+              func::CallOp::create(
+                  builder, opLoc, "__circt_sim_signal_read4_u64", TypeRange{},
+                  ValueRange{ctxArg, sigIdVal, valAlloca, xzAlloca});
+              Value valRaw =
+                  LLVM::LoadOp::create(builder, opLoc, i64Ty, valAlloca);
+              Value xzRaw =
+                  LLVM::LoadOp::create(builder, opLoc, i64Ty, xzAlloca);
+              auto intLogTy = IntegerType::get(mlirCtx, logW);
+              Value val = (logW < 64)
+                              ? (Value)arith::TruncIOp::create(
+                                    builder, opLoc, intLogTy, valRaw)
+                              : valRaw;
+              Value xz = (logW < 64)
+                             ? (Value)arith::TruncIOp::create(
+                                   builder, opLoc, intLogTy, xzRaw)
+                             : xzRaw;
+              fourStateComponents[prbOp.getResult()] = {val, xz};
+              mapping.map(prbOp.getResult(), val); // dummy
+            }
+          } else {
+            // 2-state integer signal.
+            auto readCall = func::CallOp::create(
+                builder, opLoc, "__circt_sim_signal_read_u64",
+                TypeRange{i64Ty}, ValueRange{ctxArg, sigIdVal});
+            Value result = readCall.getResult(0);
+            if (auto intTy = dyn_cast<IntegerType>(resultTy)) {
+              if (intTy.getWidth() < 64)
+                result =
+                    arith::TruncIOp::create(builder, opLoc, intTy, result);
+            }
+            mapping.map(prbOp.getResult(), result);
+          }
+          continue;
+        }
+
+        if (auto drvOp = dyn_cast<llhd::DriveOp>(&op)) {
+          uint32_t sigId = signalIdMap.lookup(drvOp.getSignal());
+          auto sigIdVal = arith::ConstantOp::create(
+              builder, opLoc, builder.getI32IntegerAttr(sigId));
+          auto delayKind = arith::ConstantOp::create(
+              builder, opLoc, builder.getI8IntegerAttr(0));
+          auto delayVal = arith::ConstantOp::create(
+              builder, opLoc, builder.getI64IntegerAttr(0));
+          auto valTy = drvOp.getValue().getType();
+
+          if (auto w = getFourStateValueWidth(valTy)) {
+            // 4-state narrow drive.
+            unsigned logW = *w;
+            auto it = fourStateComponents.find(drvOp.getValue());
+            if (it == fourStateComponents.end()) {
+              loweringFailed = true;
+              break;
+            }
+            Value valComp = it->second.first;
+            Value xzComp = it->second.second;
+
+            if (2 * logW <= 64) {
+              // Pack into single u64: (val << N) | xz.
+              Value valExt = valComp;
+              Value xzExt = xzComp;
+              if (logW < 64) {
+                valExt =
+                    arith::ExtUIOp::create(builder, opLoc, i64Ty, valComp);
+                xzExt =
+                    arith::ExtUIOp::create(builder, opLoc, i64Ty, xzComp);
+              }
+              Value shifted = arith::ShLIOp::create(
+                  builder, opLoc, valExt,
+                  arith::ConstantOp::create(
+                      builder, opLoc,
+                      builder.getI64IntegerAttr(logW)));
+              Value packed =
+                  arith::OrIOp::create(builder, opLoc, shifted, xzExt);
+              func::CallOp::create(
+                  builder, opLoc, "__circt_sim_signal_drive_u64", TypeRange{},
+                  ValueRange{ctxArg, sigIdVal, packed, delayKind, delayVal});
+            } else {
+              // Use drive4_u64 for wider 4-state signals.
+              Value valExt = (logW < 64)
+                                 ? (Value)arith::ExtUIOp::create(
+                                       builder, opLoc, i64Ty, valComp)
+                                 : valComp;
+              Value xzExt = (logW < 64)
+                                ? (Value)arith::ExtUIOp::create(
+                                      builder, opLoc, i64Ty, xzComp)
+                                : xzComp;
+              func::CallOp::create(
+                  builder, opLoc, "__circt_sim_signal_drive4_u64", TypeRange{},
+                  ValueRange{ctxArg, sigIdVal, valExt, xzExt, delayKind,
+                             delayVal});
+            }
+          } else {
+            // 2-state integer drive.
+            Value val = mapping.lookupOrDefault(drvOp.getValue());
+            if (auto intTy = dyn_cast<IntegerType>(val.getType())) {
+              if (intTy.getWidth() < 64)
+                val = arith::ExtUIOp::create(builder, opLoc, i64Ty, val);
+            }
+            func::CallOp::create(
+                builder, opLoc, "__circt_sim_signal_drive_u64", TypeRange{},
+                ValueRange{ctxArg, sigIdVal, val, delayKind, delayVal});
+          }
+          continue;
+        }
+
+        if (isa<llhd::WaitOp>(&op)) {
+          func::ReturnOp::create(builder, opLoc);
+          continue;
+        }
+
+        if (isa<llhd::HaltOp>(&op)) {
+          func::ReturnOp::create(builder, opLoc);
+          continue;
+        }
+
+        if (auto intToTimeOp = dyn_cast<llhd::IntToTimeOp>(&op)) {
+          mapping.map(intToTimeOp.getResult(),
+                      mapping.lookupOrDefault(intToTimeOp.getInput()));
+          continue;
+        }
+
+        if (auto ctOp = dyn_cast<llhd::ConstantTimeOp>(&op)) {
+          auto c = arith::ConstantOp::create(builder, opLoc,
+                                             builder.getI64IntegerAttr(0));
+          mapping.map(ctOp.getResult(), c.getResult());
+          continue;
+        }
+
+        // === Comb ops ===
+        if (auto xorOp = dyn_cast<comb::XorOp>(&op)) {
+          auto r = lowerVariadicToArith<arith::XOrIOp>(
+              xorOp.getOperands(), builder, opLoc, mapping);
+          if (!r) {
+            loweringFailed = true;
+            break;
+          }
+          mapping.map(xorOp.getResult(), r);
+          continue;
+        }
+
+        if (auto andOp = dyn_cast<comb::AndOp>(&op)) {
+          auto r = lowerVariadicToArith<arith::AndIOp>(
+              andOp.getOperands(), builder, opLoc, mapping);
+          if (!r) {
+            loweringFailed = true;
+            break;
+          }
+          mapping.map(andOp.getResult(), r);
+          continue;
+        }
+
+        if (auto orOp = dyn_cast<comb::OrOp>(&op)) {
+          auto r = lowerVariadicToArith<arith::OrIOp>(
+              orOp.getOperands(), builder, opLoc, mapping);
+          if (!r) {
+            loweringFailed = true;
+            break;
+          }
+          mapping.map(orOp.getResult(), r);
+          continue;
+        }
+
+        if (auto addOp = dyn_cast<comb::AddOp>(&op)) {
+          auto r = lowerVariadicToArith<arith::AddIOp>(
+              addOp.getOperands(), builder, opLoc, mapping);
+          if (!r) {
+            loweringFailed = true;
+            break;
+          }
+          mapping.map(addOp.getResult(), r);
+          continue;
+        }
+
+        if (auto mulOp = dyn_cast<comb::MulOp>(&op)) {
+          auto r = lowerVariadicToArith<arith::MulIOp>(
+              mulOp.getOperands(), builder, opLoc, mapping);
+          if (!r) {
+            loweringFailed = true;
+            break;
+          }
+          mapping.map(mulOp.getResult(), r);
+          continue;
+        }
+
+        if (auto subOp = dyn_cast<comb::SubOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(subOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(subOp.getRhs());
+          auto r = arith::SubIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(subOp.getResult(), r);
+          continue;
+        }
+
+        if (auto icmpOp = dyn_cast<comb::ICmpOp>(&op)) {
+          auto pred = convertCombPredicate(icmpOp.getPredicate());
+          if (!pred) {
+            loweringFailed = true;
+            break;
+          }
+          auto lhs = mapping.lookupOrDefault(icmpOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(icmpOp.getRhs());
+          auto r = arith::CmpIOp::create(builder, opLoc, *pred, lhs, rhs);
+          mapping.map(icmpOp.getResult(), r);
+          continue;
+        }
+
+        if (auto muxOp = dyn_cast<comb::MuxOp>(&op)) {
+          auto cond = mapping.lookupOrDefault(muxOp.getCond());
+          // Check if this mux operates on 4-state values.
+          auto trueIt = fourStateComponents.find(muxOp.getTrueValue());
+          auto falseIt = fourStateComponents.find(muxOp.getFalseValue());
+          if (trueIt != fourStateComponents.end() &&
+              falseIt != fourStateComponents.end()) {
+            // 4-state mux: select each component independently.
+            Value valR = arith::SelectOp::create(
+                builder, opLoc, cond, trueIt->second.first,
+                falseIt->second.first);
+            Value xzR = arith::SelectOp::create(
+                builder, opLoc, cond, trueIt->second.second,
+                falseIt->second.second);
+            fourStateComponents[muxOp.getResult()] = {valR, xzR};
+            mapping.map(muxOp.getResult(), valR); // dummy
+          } else {
+            auto tv = mapping.lookupOrDefault(muxOp.getTrueValue());
+            auto fv = mapping.lookupOrDefault(muxOp.getFalseValue());
+            auto r = arith::SelectOp::create(builder, opLoc, cond, tv, fv);
+            mapping.map(muxOp.getResult(), r);
+          }
+          continue;
+        }
+
+        // hw.constant → arith.constant
+        if (auto hwConst = dyn_cast<hw::ConstantOp>(&op)) {
+          auto c = arith::ConstantOp::create(
+              builder, opLoc,
+              builder.getIntegerAttr(hwConst.getType(), hwConst.getValue()));
+          mapping.map(hwConst.getResult(), c.getResult());
+          continue;
+        }
+
+        // hw.struct_extract → extract component from 4-state pair
+        if (auto extractOp = dyn_cast<hw::StructExtractOp>(&op)) {
+          auto it = fourStateComponents.find(extractOp.getInput());
+          if (it != fourStateComponents.end()) {
+            StringRef fieldName = extractOp.getFieldName();
+            if (fieldName == "value")
+              mapping.map(extractOp.getResult(), it->second.first);
+            else if (fieldName == "unknown")
+              mapping.map(extractOp.getResult(), it->second.second);
+            else {
+              loweringFailed = true;
+              break;
+            }
+          } else {
+            loweringFailed = true;
+            break;
+          }
+          continue;
+        }
+
+        // hw.struct_create → assemble 4-state pair from components
+        if (auto createOp = dyn_cast<hw::StructCreateOp>(&op)) {
+          if (getFourStateValueWidth(createOp.getType())) {
+            Value val = mapping.lookupOrDefault(createOp.getOperand(0));
+            Value xz = mapping.lookupOrDefault(createOp.getOperand(1));
+            fourStateComponents[createOp.getResult()] = {val, xz};
+            mapping.map(createOp.getResult(), val); // dummy
+          } else {
+            loweringFailed = true;
+            break;
+          }
+          continue;
+        }
+
+        // hw.aggregate_constant → decompose into {value, unknown} pair
+        if (auto aggConst = dyn_cast<hw::AggregateConstantOp>(&op)) {
+          if (auto w = getFourStateValueWidth(aggConst.getType())) {
+            auto fields = aggConst.getFields();
+            auto valAttr = cast<IntegerAttr>(fields[0]);
+            auto unkAttr = cast<IntegerAttr>(fields[1]);
+            auto valConst =
+                arith::ConstantOp::create(builder, opLoc, valAttr);
+            auto unkConst =
+                arith::ConstantOp::create(builder, opLoc, unkAttr);
+            fourStateComponents[aggConst.getResult()] = {valConst, unkConst};
+            mapping.map(aggConst.getResult(), valConst.getResult());
+          } else {
+            loweringFailed = true;
+            break;
+          }
+          continue;
+        }
+
+        // === CF terminators: replace back-edges to waitBlock with return ===
+        if (auto brOp = dyn_cast<cf::BranchOp>(&op)) {
+          Block *dest = brOp.getDest();
+          if (dest == waitBlock) {
+            func::ReturnOp::create(builder, opLoc);
+          } else {
+            auto it = blockMap.find(dest);
+            if (it == blockMap.end()) {
+              loweringFailed = true;
+              break;
+            }
+            llvm::SmallVector<Value> args;
+            for (auto arg : brOp.getDestOperands())
+              args.push_back(mapping.lookupOrDefault(arg));
+            cf::BranchOp::create(builder, opLoc, it->second, args);
+          }
+          continue;
+        }
+
+        if (auto condBrOp = dyn_cast<cf::CondBranchOp>(&op)) {
+          Value cond = mapping.lookupOrDefault(condBrOp.getCondition());
+          Block *trueDest = condBrOp.getTrueDest();
+          Block *falseDest = condBrOp.getFalseDest();
+          bool trueIsReturn = (trueDest == waitBlock);
+          bool falseIsReturn = (falseDest == waitBlock);
+
+          if (trueIsReturn && falseIsReturn) {
+            func::ReturnOp::create(builder, opLoc);
+          } else if (trueIsReturn) {
+            Block *retBlock = new Block();
+            funcOp.getBody().push_back(retBlock);
+            OpBuilder(retBlock, retBlock->begin())
+                .create<func::ReturnOp>(opLoc);
+            Block *ft = blockMap.lookup(falseDest);
+            if (!ft) {
+              loweringFailed = true;
+              break;
+            }
+            llvm::SmallVector<Value> falseArgs;
+            for (auto arg : condBrOp.getFalseDestOperands())
+              falseArgs.push_back(mapping.lookupOrDefault(arg));
+            cf::CondBranchOp::create(builder, opLoc, cond, retBlock,
+                                 ValueRange{}, ft, falseArgs);
+          } else if (falseIsReturn) {
+            Block *retBlock = new Block();
+            funcOp.getBody().push_back(retBlock);
+            OpBuilder(retBlock, retBlock->begin())
+                .create<func::ReturnOp>(opLoc);
+            Block *tt = blockMap.lookup(trueDest);
+            if (!tt) {
+              loweringFailed = true;
+              break;
+            }
+            llvm::SmallVector<Value> trueArgs;
+            for (auto arg : condBrOp.getTrueDestOperands())
+              trueArgs.push_back(mapping.lookupOrDefault(arg));
+            cf::CondBranchOp::create(builder, opLoc, cond, tt, trueArgs,
+                                 retBlock, ValueRange{});
+          } else {
+            Block *tt = blockMap.lookup(trueDest);
+            Block *ft = blockMap.lookup(falseDest);
+            if (!tt || !ft) {
+              loweringFailed = true;
+              break;
+            }
+            llvm::SmallVector<Value> trueArgs, falseArgs;
+            for (auto arg : condBrOp.getTrueDestOperands())
+              trueArgs.push_back(mapping.lookupOrDefault(arg));
+            for (auto arg : condBrOp.getFalseDestOperands())
+              falseArgs.push_back(mapping.lookupOrDefault(arg));
+            cf::CondBranchOp::create(builder, opLoc, cond, tt, trueArgs, ft,
+                                 falseArgs);
+          }
+          continue;
+        }
+
+        // Default: clone with mapping.
+        builder.clone(op, mapping);
+      }
+      if (loweringFailed)
+        break;
+    }
+    if (loweringFailed) {
+      funcOp.erase();
+      continue;
+    }
+
+    procNames.push_back(funcName);
+    procKinds.push_back(CIRCT_PROC_CALLBACK);
+    ++compiled;
+  }
+
+  return compiled;
+}
+
+//===----------------------------------------------------------------------===//
 // Descriptor synthesis: emit CirctSimCompiledModule as LLVM IR globals
 //===----------------------------------------------------------------------===//
 
@@ -860,6 +1656,8 @@ static void flattenAggregateFunctionABIs(ModuleOp moduleOp) {
 static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const llvm::SmallVector<std::string> &funcNames,
                                  const llvm::SmallVector<std::string> &trampolineNames,
+                                 const llvm::SmallVector<std::string> &procNames,
+                                 const llvm::SmallVector<uint8_t> &procKinds,
                                  const std::string &buildId) {
   auto &ctx = llvmModule.getContext();
   auto *i32Ty = llvm::Type::getInt32Ty(ctx);
@@ -904,9 +1702,59 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
       llvmModule, entryArrayTy, true, llvm::GlobalValue::PrivateLinkage,
       entryArray, "__circt_sim_func_entry");
 
-  // proc_kind array: all CIRCT_PROC_CALLBACK for now (func.func bodies).
-  // Processes will be added in a later phase.
-  // For now num_procs = 0.
+  // Create process name string constants, kind array, and entry array.
+  unsigned numProcs = procNames.size();
+  llvm::Constant *procNamesGlobal = nullptr;
+  llvm::Constant *procKindGlobal = nullptr;
+  llvm::Constant *procEntryGlobal = nullptr;
+
+  if (numProcs > 0) {
+    // proc_names: string constants.
+    llvm::SmallVector<llvm::Constant *> procNameGlobals;
+    for (unsigned i = 0; i < numProcs; ++i) {
+      auto *strConst =
+          llvm::ConstantDataArray::getString(ctx, procNames[i], true);
+      auto *strGlobal = new llvm::GlobalVariable(
+          llvmModule, strConst->getType(), true,
+          llvm::GlobalValue::PrivateLinkage, strConst,
+          "__circt_sim_pname_" + std::to_string(i));
+      procNameGlobals.push_back(strGlobal);
+    }
+    auto *procNameArrayTy = llvm::ArrayType::get(ptrTy, numProcs);
+    auto *procNameArray = llvm::ConstantArray::get(
+        procNameArrayTy, llvm::ArrayRef<llvm::Constant *>(procNameGlobals));
+    procNamesGlobal = new llvm::GlobalVariable(
+        llvmModule, procNameArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        procNameArray, "__circt_sim_proc_names");
+
+    // proc_kind: uint8_t[].
+    auto *i8LLTy = llvm::Type::getInt8Ty(ctx);
+    llvm::SmallVector<llvm::Constant *> kindConstants;
+    for (auto kind : procKinds)
+      kindConstants.push_back(llvm::ConstantInt::get(i8LLTy, kind));
+    auto *kindArrayTy = llvm::ArrayType::get(i8LLTy, numProcs);
+    auto *kindArray = llvm::ConstantArray::get(
+        kindArrayTy, llvm::ArrayRef<llvm::Constant *>(kindConstants));
+    procKindGlobal = new llvm::GlobalVariable(
+        llvmModule, kindArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        kindArray, "__circt_sim_proc_kind");
+
+    // proc_entry: function pointers.
+    llvm::SmallVector<llvm::Constant *> procEntryPtrs;
+    for (unsigned i = 0; i < numProcs; ++i) {
+      auto *func = llvmModule.getFunction(procNames[i]);
+      if (func)
+        procEntryPtrs.push_back(func);
+      else
+        procEntryPtrs.push_back(llvm::ConstantPointerNull::get(ptrTy));
+    }
+    auto *procEntryArrayTy = llvm::ArrayType::get(ptrTy, numProcs);
+    auto *procEntryArray = llvm::ConstantArray::get(
+        procEntryArrayTy, llvm::ArrayRef<llvm::Constant *>(procEntryPtrs));
+    procEntryGlobal = new llvm::GlobalVariable(
+        llvmModule, procEntryArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        procEntryArray, "__circt_sim_proc_entry");
+  }
 
   // Create trampoline name string constants and array.
   unsigned numTrampolines = trampolineNames.size();
@@ -945,10 +1793,10 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
       descriptorTy,
       {
           llvm::ConstantInt::get(i32Ty, CIRCT_SIM_ABI_VERSION), // abi_version
-          llvm::ConstantInt::get(i32Ty, 0),                     // num_procs
-          nullPtr,                                               // proc_names
-          nullPtr,                                               // proc_kind
-          nullPtr,                                               // proc_entry
+          llvm::ConstantInt::get(i32Ty, numProcs),              // num_procs
+          numProcs > 0 ? procNamesGlobal : nullPtr,             // proc_names
+          numProcs > 0 ? procKindGlobal : nullPtr,              // proc_kind
+          numProcs > 0 ? procEntryGlobal : nullPtr,             // proc_entry
           llvm::ConstantInt::get(i32Ty, numFuncs),              // num_funcs
           funcNamesGlobal,                                       // func_names
           funcEntryGlobal,                                       // func_entry
@@ -1273,6 +2121,21 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
 
+  // Compile process bodies (Phase A: callback processes).
+  llvm::SmallVector<std::string> procNames;
+  llvm::SmallVector<uint8_t> procKinds;
+  unsigned numProcsCompiled =
+      compileProcessBodies(*module, procNames, procKinds);
+  if (numProcsCompiled > 0) {
+    llvm::errs() << "[circt-sim-compile] Compiled " << numProcsCompiled
+                 << " process bodies\n";
+  }
+
+  // Track process function names to exclude from func_* descriptor arrays.
+  llvm::StringSet<> procNameSet;
+  for (const auto &name : procNames)
+    procNameSet.insert(name);
+
   // Collect compilable func.func bodies.
   llvm::SmallVector<func::FuncOp> candidates;
   unsigned totalFuncs = 0, externalFuncs = 0, rejectedFuncs = 0;
@@ -1294,7 +2157,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                << externalFuncs << " external, " << rejectedFuncs
                << " rejected, " << candidates.size() << " compilable\n";
 
-  if (candidates.empty()) {
+  if (candidates.empty() && procNames.empty()) {
     llvm::errs() << "[circt-sim-compile] No compilable functions found\n";
     return failure();
   }
@@ -1309,7 +2172,9 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   funcNames.reserve(candidates.size());
   for (auto funcOp : candidates) {
     builder.clone(*funcOp, mapping);
-    funcNames.push_back(funcOp.getSymName().str());
+    // Process functions go into proc_* arrays, not func_* arrays.
+    if (!procNameSet.contains(funcOp.getSymName()))
+      funcNames.push_back(funcOp.getSymName().str());
   }
 
   cloneReferencedDeclarations(microModule, *module, mapping);
@@ -1336,13 +2201,24 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     llvm::DenseSet<llvm::StringRef> strippedSet;
     for (const auto &name : stripped)
       strippedSet.insert(name);
-    // Remove stripped names from the function list.
+    // Remove stripped names from the function and process lists.
     llvm::SmallVector<std::string> survivingNames;
     for (auto &name : funcNames) {
       if (!strippedSet.contains(name))
         survivingNames.push_back(std::move(name));
     }
     funcNames = std::move(survivingNames);
+    // Also strip from process names/kinds.
+    llvm::SmallVector<std::string> survivingProcs;
+    llvm::SmallVector<uint8_t> survivingKinds;
+    for (unsigned i = 0; i < procNames.size(); ++i) {
+      if (!strippedSet.contains(procNames[i])) {
+        survivingProcs.push_back(std::move(procNames[i]));
+        survivingKinds.push_back(procKinds[i]);
+      }
+    }
+    procNames = std::move(survivingProcs);
+    procKinds = std::move(survivingKinds);
     llvm::errs() << "[circt-sim-compile] Stripped " << stripped.size()
                  << " functions with non-LLVM ops\n";
   }
@@ -1355,9 +2231,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   }
 
   llvm::errs() << "[circt-sim-compile] " << funcNames.size()
-               << " functions ready for codegen\n";
+               << " functions + " << procNames.size()
+               << " processes ready for codegen\n";
 
-  if (funcNames.empty()) {
+  if (funcNames.empty() && procNames.empty()) {
     llvm::errs() << "[circt-sim-compile] No functions survived lowering\n";
     microModule.erase();
     return failure();
@@ -1395,7 +2272,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                         llvm::sys::getDefaultTargetTriple();
 
   // Synthesize descriptor and entrypoints into the LLVM IR module.
-  synthesizeDescriptor(*llvmModule, funcNames, trampolineNames, buildId);
+  synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
+                       procNames, procKinds, buildId);
 
   // Set hidden visibility on everything except entrypoints.
   setDefaultHiddenVisibility(*llvmModule);
@@ -1510,6 +2388,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   auto elapsed = std::chrono::steady_clock::now() - startTime;
   llvm::errs() << "[circt-sim-compile] Wrote " << outPath << " ("
+               << procNames.size() << " processes, "
                << funcNames.size() << " functions, "
                << trampolineNames.size() << " trampolines, "
                << std::chrono::duration<double>(elapsed).count() << "s)\n";

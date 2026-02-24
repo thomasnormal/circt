@@ -173,6 +173,20 @@ void __circt_sim_signal_drive_u64(CirctSimCtx *ctx, uint32_t sig_id,
                                   uint64_t val, uint8_t delay_kind,
                                   uint64_t delay);
 
+/// Read a narrow 4-state signal (logical width <= 64 bits) as a {value, xz}
+/// pair. The physical signal is 2*N bits: value in the high N bits, unknown
+/// in the low N bits. This function splits them into two u64 words.
+///   val_out: receives the value component (zero-extended to u64)
+///   xz_out:  receives the unknown/X/Z component (zero-extended to u64)
+void __circt_sim_signal_read4_u64(CirctSimCtx *ctx, uint32_t sig_id,
+                                  uint64_t *val_out, uint64_t *xz_out);
+
+/// Drive a narrow 4-state signal (logical width <= 64 bits) from a {value, xz}
+/// pair. The runtime packs them back into the 2*N-bit physical representation.
+void __circt_sim_signal_drive4_u64(CirctSimCtx *ctx, uint32_t sig_id,
+                                   uint64_t val, uint64_t xz,
+                                   uint8_t delay_kind, uint64_t delay);
+
 /// Get a pointer to a signal's raw memory (for wide or 4-state signals).
 /// The returned pointer is valid until the next delta step.
 void *__circt_sim_signal_read_ptr(CirctSimCtx *ctx, uint32_t sig_id);
