@@ -55,7 +55,26 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
             return val.getUInt64();
           return 0;
         };
-        auto resolveSignal = [&](Value v) -> SignalId { return getSignalId(v); };
+        auto resolveSignal = [&](Value v) -> SignalId {
+          SignalId sigId = getSignalId(v);
+          if (sigId != 0)
+            return sigId;
+
+          // Module-level stores can source directly from hw.module block args
+          // (e.g., `llvm.store %stream_in_string, %alloca`). Resolve those
+          // through the external port-signal map.
+          auto blockArg = dyn_cast<BlockArgument>(v);
+          if (!blockArg || blockArg.getOwner() != &hwModule.getBody().front())
+            return 0;
+          if (!externalPortSignals)
+            return 0;
+          unsigned argIdx = blockArg.getArgNumber();
+          if (argIdx >= hwModule.getNumPorts())
+            return 0;
+          auto portName = hwModule.getPortList()[argIdx].getName();
+          auto it = externalPortSignals->find(portName);
+          return it != externalPortSignals->end() ? it->second : 0;
+        };
 
         uint64_t srcAddr = 0;
         if (matchFourStateCopyStore(storeOp.getValue(), resolveAddr, srcAddr) &&
@@ -75,6 +94,18 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
                         interfaceSignalCopyPairs.end(),
                         pair) == interfaceSignalCopyPairs.end())
             interfaceSignalCopyPairs.push_back(pair);
+        }
+
+        // Track direct signal -> memory mirrors (including string-typed
+        // block args). These stores need replay on runtime signal changes so
+        // memory-backed always blocks read updated input values.
+        SignalId directSignalId = resolveSignal(storeOp.getValue());
+        if (directSignalId != 0) {
+          auto pair = std::make_pair(directSignalId, dest);
+          if (std::find(signalMemoryMirrorPairs.begin(),
+                        signalMemoryMirrorPairs.end(),
+                        pair) == signalMemoryMirrorPairs.end())
+            signalMemoryMirrorPairs.push_back(pair);
         }
 
         InterfaceTriStateStorePattern triPattern;
