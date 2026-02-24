@@ -3866,6 +3866,7 @@ private:
   struct CISiteEntry {
     uint64_t funcAddr = 0;
     mlir::func::FuncOp funcOp;
+    void *nativeFuncPtr = nullptr; // AOT compiled native function
     bool valid = false;
     bool isIntercepted = false;
     bool hadVtableOverride = false;
@@ -3938,6 +3939,7 @@ private:
 
   /// Counters for native vs interpreted dispatch (for compile report).
   uint64_t nativeFuncCallCount = 0;
+  uint64_t nativeCallIndirectDispatchCount = 0;
   uint64_t interpretedFuncCallCount = 0;
 
   /// AOT invocation counters (for --stats reporting).
