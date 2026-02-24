@@ -5,6 +5,8 @@
 ### What changed
 - Added a red-first regression that reproduces nested consequent leakage:
   - `test/Tools/circt-sim/sva-implication-concat-goto-pre-antecedent-hit-leak-fail-runtime.sv`
+- Added companion regression for nested nonconsecutive repeat:
+  - `test/Tools/circt-sim/sva-implication-concat-nonconsecutive-pre-antecedent-hit-leak-fail-runtime.sv`
 - Updated `circt-sim` implication runtime handling for unbounded-gap consequents:
   - added tail-repeat extraction (including nested `ltl.concat` tails).
   - switched to antecedent-scoped repeat counting using
@@ -22,15 +24,28 @@
 ### Validation snapshot
 - build:
   - `ninja -C build_test circt-sim` -> pass.
-- red-first regression:
-  - before fix: failed (assertion unexpectedly passed).
-  - after fix: `1/1` pass.
+- nested concat leakage regressions:
+  - goto red-first probe:
+    - before fix: failed (assertion unexpectedly passed).
+    - after fix: `1/1` pass.
+  - nonconsecutive companion:
+    - `1/1` pass.
 - focused repeat/implication regressions:
   - `11/11` pass.
 - broader runtime SVA sweep:
-  - `125/125` pass.
-- sv-tests chapter 16 sim sweep:
+  - `126/126` pass.
+- cross-repo SVA lit sweep:
+  - `539/539` pass.
+- sv-tests sim sweeps:
   - `42/42` pass.
+  - `135/135` pass.
+- sv-tests bmc sweeps:
+  - `42/42` pass.
+  - `143/143` pass.
+
+### Gap inventory check
+- `utils/sv-tests-bmc-expect.txt` currently contains only header comments; no
+  active expected BMC failures remain tracked there.
 
 ## 2026-02-24 Session: assume abort_on async coverage closure (SVA)
 
