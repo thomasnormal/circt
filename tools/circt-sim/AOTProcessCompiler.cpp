@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "AOTProcessCompiler.h"
-#include "JITSchedulerRuntime.h"
 #include "circt/Conversion/CombToArith.h"
 #include "circt/Conversion/CombToLLVM.h"
 #include "circt/Conversion/HWToLLVM.h"
@@ -1286,13 +1285,25 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
     bool hasProbes = false;
     processOp.walk([&](llhd::ProbeOp) { hasProbes = true; });
     if (hasProbes) {
+      llvm::DenseSet<SignalId> selfDrivenSigs;
+      processOp.walk([&](llhd::DriveOp driveOp) {
+        auto it = valueToSignal.find(driveOp.getSignal());
+        if (it != valueToSignal.end() && it->second != 0)
+          selfDrivenSigs.insert(it->second);
+      });
+
       // Derive signals from probes — treat as static if all resolvable.
       llvm::DenseSet<SignalId> derivedSigs;
       bool allStatic = true;
       processOp.walk([&](llhd::ProbeOp probeOp) {
         auto it = valueToSignal.find(probeOp.getSignal());
-        if (it != valueToSignal.end() && it->second != 0)
-          derivedSigs.insert(it->second);
+        if (it != valueToSignal.end() && it->second != 0) {
+          // Ignore probes of signals driven by this process. Static
+          // sensitivity on self-driven probes can deadlock real dependencies
+          // (e.g., string always @(*) lowered through module-level mirrors).
+          if (!selfDrivenSigs.count(it->second))
+            derivedSigs.insert(it->second);
+        }
         else
           allStatic = false;
       });

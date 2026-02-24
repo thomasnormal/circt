@@ -396,14 +396,31 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
 // Lowering: strip functions with residual non-LLVM ops
 //===----------------------------------------------------------------------===//
 
+/// Returns true if all parameter and result types of an LLVM function type are
+/// compatible with LLVM IR translation.
+static bool hasAllLLVMCompatibleTypes(LLVM::LLVMFunctionType funcTy) {
+  if (!LLVM::isCompatibleType(funcTy.getReturnType()))
+    return false;
+  for (unsigned i = 0; i < funcTy.getNumParams(); ++i)
+    if (!LLVM::isCompatibleType(funcTy.getParamType(i)))
+      return false;
+  return true;
+}
+
 static llvm::SmallVector<std::string>
 stripNonLLVMFunctions(ModuleOp microModule) {
   llvm::SmallVector<std::string> stripped;
   llvm::SmallVector<LLVM::LLVMFuncOp> toStrip;
 
   microModule.walk([&](LLVM::LLVMFuncOp func) {
-    if (func.isExternal())
+    if (func.isExternal()) {
+      // External declarations with non-LLVM param/result types (e.g.
+      // !hw.struct, !llhd.ref, !hw.inout) cannot be translated to LLVM IR
+      // and must be erased before the translation step.
+      if (!hasAllLLVMCompatibleTypes(func.getFunctionType()))
+        toStrip.push_back(func);
       return;
+    }
     bool hasNonLLVM = false;
     func.walk([&](Operation *op) {
       if (!isa<LLVM::LLVMDialect>(op->getDialect())) {
@@ -424,9 +441,31 @@ stripNonLLVMFunctions(ModuleOp microModule) {
 
   for (auto func : toStrip) {
     stripped.push_back(func.getSymName().str());
-    func.getBody().getBlocks().clear();
-    func.setLinkage(LLVM::Linkage::External);
+    if (func.isExternal()) {
+      // Erase external declarations outright — they have no body to clear and
+      // keeping them would cause LLVM IR translation to fail.
+      func.erase();
+    } else {
+      // For defined functions, demote to an external declaration so that any
+      // remaining call sites see a valid (if unresolved) symbol.
+      func.getBody().getBlocks().clear();
+      func.setLinkage(LLVM::Linkage::External);
+    }
   }
+
+  // Also erase LLVM::GlobalOp entries whose type is not LLVM-compatible.
+  // These can be cloned in by cloneReferencedDeclarations() when the original
+  // global was declared with a non-LLVM type (e.g. a hw.struct global).
+  llvm::SmallVector<LLVM::GlobalOp> globalsToErase;
+  microModule.walk([&](LLVM::GlobalOp global) {
+    if (!LLVM::isCompatibleType(global.getType()))
+      globalsToErase.push_back(global);
+  });
+  for (auto global : globalsToErase) {
+    stripped.push_back(global.getSymName().str());
+    global.erase();
+  }
+
   return stripped;
 }
 

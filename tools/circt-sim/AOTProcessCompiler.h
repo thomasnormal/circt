@@ -22,7 +22,6 @@
 #define CIRCT_TOOLS_CIRCT_SIM_AOTPROCESSCOMPILER_H
 
 #include "UcontextProcess.h"
-#include "ExecutionEngineHandle.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Sim/ProcessScheduler.h"
 #include "llvm/ADT/DenseMap.h"
@@ -33,6 +32,7 @@
 #include <vector>
 
 namespace mlir {
+class ExecutionEngine;
 class MLIRContext;
 class ModuleOp;
 } // namespace mlir
@@ -244,7 +244,7 @@ private:
   ::mlir::MLIRContext &mlirContext;
 
   /// Keep execution engines alive (they own the compiled code).
-  std::vector<ExecutionEngineHandle> engines;
+  std::vector<std::unique_ptr<mlir::ExecutionEngine>> engines;
 };
 
 } // namespace sim
