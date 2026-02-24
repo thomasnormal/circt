@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --parse-only | FileCheck %s
+// RUN: circt-verilog %s --ir-moore | FileCheck %s
 // REQUIRES: slang
 
 // CHECK-LABEL: moore.module @PastEnableImplicit

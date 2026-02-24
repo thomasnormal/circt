@@ -1,5 +1,33 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: SVA sampled-value regression alignment (xprop/case_eq)
+
+### What changed
+- Updated SVA ImportVerilog regression expectations:
+  - `test/Conversion/ImportVerilog/assertion-property-concat-error.sv`
+  - `test/Conversion/ImportVerilog/assertions.sv`
+  - `test/Conversion/ImportVerilog/assertion-value-change-xprop.sv`
+  - `test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+  - `test/Conversion/ImportVerilog/past-enable-implicit.sv`
+- Shifted sampled-value checks to the current `moore.case_eq` lowering form for
+  X-aware `$stable/$changed/$rose/$fell` expansions.
+- Updated `past-enable-implicit` test mode from `--parse-only` to `--ir-moore`
+  because parse-only now returns an empty wrapper module by design.
+
+### Realizations / surprises
+- The failures were test-contract drift, not new lowering bugs: sampled-value
+  lowering intentionally moved from strict two-valued `moore.eq` checks to
+  X-aware `moore.case_eq` patterns.
+- `_gclk` sampled functions now materialize via case-equality edge tests plus
+  `int_to_logic`/`to_builtin_bool`, so old `moore.bool_cast`-specific checks
+  were too strict.
+
+### Validation snapshot
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog --filter='assertion-property-concat-error\\.sv|assertions\\.sv|assertion-value-change-xprop\\.sv|gclk-sampled-functions\\.sv|past-enable-implicit\\.sv'` -> pass (`5/5`).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog --filter='assertion-.*|assertions\\.sv|gclk-sampled-functions\\.sv|past-enable-implicit\\.sv'` -> pass (`8/8`).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-.*'` -> pass (`180/180`).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*'` -> pass (`129/129`).
+
 ## 2026-02-24 Session: ordered real comparisons in SMT-LIB BMC path
 
 ### What changed
