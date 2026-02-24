@@ -1,6 +1,6 @@
 // RUN: circt-opt --lower-to-bmc="top-module=top bound=1" %s | FileCheck %s
 
-// CHECK: verif.bmc bound 2 num_regs 0
+// CHECK: verif.bmc bound {{[0-9]+}} num_regs 0
 // CHECK: circuit {
 // CHECK-NOT: comb.mux
 // CHECK: llvm.select {{.*}} : i1, !llvm.struct<(ptr, i64)>

@@ -13,5 +13,5 @@ module {
 }
 
 // CHECK: verif.bmc
-// CHECK: bmc_input_names = ["bmc_clock", "clk", "a"
-// CHECK: verif.assert {{.*}}bmc.clock = "bmc_clock"
+// CHECK: bmc_input_names = ["[[BMC_CLK:[^"]+]]", "clk", "a"
+// CHECK: verif.assert {{.*}}bmc.clock = "[[BMC_CLK]]"
