@@ -869,6 +869,13 @@ public:
     compiledLoader->setRuntimeContext(reinterpret_cast<void *>(this));
 
     if (llhdInterpreter) {
+      // Apply global patches: copy interpreter's initialized globals into the
+      // .so. This must happen AFTER initialize() (which populates
+      // globalMemoryBlocks) and BEFORE loadCompiledFunctions() (which decides
+      // native dispatch eligibility).
+      compiledLoader->applyGlobalPatches(
+          llhdInterpreter->getGlobalMemoryBlocks());
+
       llhdInterpreter->loadCompiledFunctions(*compiledLoader);
       llhdInterpreter->loadCompiledProcesses(*compiledLoader);
 

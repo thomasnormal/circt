@@ -7,7 +7,9 @@
 //===----------------------------------------------------------------------===//
 
 #include "CompiledModuleLoader.h"
+#include "LLHDProcessInterpreter.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cstring>
 #include <dlfcn.h>
 
 using namespace circt;
@@ -118,4 +120,31 @@ void *CompiledModuleLoader::lookupFunction(llvm::StringRef name) const {
   if (it != funcMap.end())
     return it->second;
   return nullptr;
+}
+
+void CompiledModuleLoader::applyGlobalPatches(
+    const llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const {
+  if (!compiledModule || compiledModule->num_global_patches == 0)
+    return;
+
+  unsigned patched = 0, missed = 0;
+  for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
+    const char *name = compiledModule->global_patch_names[i];
+    void *soAddr = compiledModule->global_patch_addrs[i];
+    uint32_t size = compiledModule->global_patch_sizes[i];
+
+    auto it = globalMemoryBlocks.find(name);
+    if (it == globalMemoryBlocks.end()) {
+      ++missed;
+      continue;
+    }
+
+    const auto &block = it->second;
+    uint32_t copySize = std::min(size, static_cast<uint32_t>(block.size));
+    std::memcpy(soAddr, block.data.data(), copySize);
+    ++patched;
+  }
+
+  llvm::errs() << "[circt-sim] Applied " << patched
+               << " global patches (" << missed << " not found)\n";
 }

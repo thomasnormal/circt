@@ -21,11 +21,15 @@
 #include "circt/Runtime/CirctSimABI.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include <cstring>
 #include <memory>
 #include <string>
 
 namespace circt {
 namespace sim {
+
+// Forward declaration to avoid circular include with LLHDProcessInterpreter.h.
+struct MemoryBlock;
 
 /// Loads and manages a compiled simulation .so module.
 ///
@@ -107,6 +111,12 @@ public:
   /// dereference the context at call time (after setRuntimeContext has run).
   /// Returns nullptr if no context slot was found in the .so.
   void **getRuntimeContextPtr() const { return ctxGlobalPtr; }
+
+  /// Apply global patches: copy interpreter state into the .so's mutable
+  /// globals. Must be called AFTER interpreter initialization
+  /// (executeModuleLevelLLVMOps) and BEFORE loadCompiledFunctions().
+  void applyGlobalPatches(
+      const llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
 
 private:
   CompiledModuleLoader() = default;

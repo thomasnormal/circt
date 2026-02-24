@@ -44,7 +44,7 @@ extern "C" {
 /// Bump this on any breaking change to the ABI (struct layout, function
 /// signature changes, removed functions). Adding new functions is NOT a
 /// breaking change.
-#define CIRCT_SIM_ABI_VERSION 2
+#define CIRCT_SIM_ABI_VERSION 3
 
 //===----------------------------------------------------------------------===//
 // Opaque Types
@@ -132,6 +132,21 @@ typedef struct {
   /// __circt_sim_call_interpreted(). The runtime uses these names to find
   /// the corresponding MLIR function in the interpreter.
   const char *const *trampoline_names;
+
+  /// Number of global variable patches (mutable globals whose .so addresses
+  /// need to be populated from interpreter state at load time).
+  uint32_t num_global_patches;
+
+  /// Global symbol names for matching against the interpreter's
+  /// globalMemoryBlocks. Array of num_global_patches NUL-terminated strings.
+  const char *const *global_patch_names;
+
+  /// Pointers to the globals' addresses in the .so's data/BSS section.
+  /// The runtime writes interpreter state into these addresses.
+  void *const *global_patch_addrs;
+
+  /// Size in bytes of each global (for memcpy).
+  const uint32_t *global_patch_sizes;
 } CirctSimCompiledModule;
 
 //===----------------------------------------------------------------------===//
