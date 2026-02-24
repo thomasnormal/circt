@@ -7825,3 +7825,26 @@
       - result: `1/1` pass.
     - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='sva-' build-test/test/Tools/circt-sim`
       - result: `104/104` pass.
+
+- Iteration update (sv-tests sim parity for elaboration-negative metadata):
+  - realization:
+    - chapter 18/19 sim sweep still reported `compile_fail=8` even though each
+      case carried `:should_fail_because:` and `:type: simulation elaboration`.
+    - current runner logic treated all metadata `should_fail` compile failures
+      as hard compile failures to preserve runtime-negative semantics.
+  - implemented:
+    - `utils/run_sv_tests_circt_sim.sh`
+      - added explicit `expect_compile_fail` classification for metadata
+        `should_fail` tests with `type` containing `elaboration`.
+      - compile failure for `expect_compile_fail` now counts as `PASS`.
+      - compile success for `expect_compile_fail` now counts as `FAIL`
+        (unexpected pass through elaboration).
+    - added regression:
+      - `test/Tools/run-sv-tests-sim-should-fail-elab-compile-pass.test`
+  - validation:
+    - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-sv-tests-sim-should-fail-elab-compile-pass.test build-test/test/Tools/run-sv-tests-sim-should-fail-pass.test`
+      - result: `2/2` pass.
+    - `TAG_REGEX='(^| )(18\\.|19\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch18-ch19-current.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=63 pass=63 fail=0 xfail=0 xpass=0`.
+    - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch16-ch20-after-assume-nonfatal.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=98 pass=98 fail=0 xfail=0 xpass=0`.
