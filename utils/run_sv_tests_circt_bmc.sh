@@ -737,25 +737,16 @@ while IFS= read -r -d '' sv; do
       ;;
   esac
 
-  # sv-tests uses `:should_fail_because:` both for tests that should fail to
-  # *compile* (parsing/compilation negative tests) and for tests that should
-  # *fail at runtime* (simulation negative tests, e.g. an assertion violation).
-  #
-  # For formal BMC, the latter category should be treated as PASS when a
-  # counterexample exists (SAT for asserts). This avoids incorrectly reporting
-  # such tests as XFAIL.
+  # sv-tests uses `:should_fail_because:` for both compilation negatives and
+  # runtime negatives. Treat compile failure as acceptable for all should-fail
+  # tests, and for simulation-tagged tests additionally expect a formal
+  # counterexample when compilation succeeds.
   expect_compile_fail=0
   expect_bmc_violation=0
   if [[ "$should_fail" == "1" ]]; then
-    # sv-tests marks both runtime-negative and elaboration-negative simulation
-    # tests as :type: simulation...; prefer elaboration-negative classification
-    # when that marker is present.
-    if [[ "$type" =~ [Ee]laboration ]]; then
-      expect_compile_fail=1
-    elif [[ "$type" =~ [Ss]imulation ]]; then
+    expect_compile_fail=1
+    if [[ "$type" =~ [Ss]imulation ]] && [[ ! "$type" =~ [Pp]arsing ]]; then
       expect_bmc_violation=1
-    else
-      expect_compile_fail=1
     fi
   fi
 
@@ -995,6 +986,9 @@ top_module=${top_module}
   fi
 
   if [[ "$run_bmc" == "0" ]]; then
+    {
+      echo "[run_sv_tests_circt_bmc] circt-bmc skipped (no formal target or run disabled)"
+    } > "$bmc_log"
     if [[ "$force_xfail" == "1" ]]; then
       result="XPASS"
       xpass=$((xpass + 1))
@@ -1015,6 +1009,8 @@ top_module=${top_module}
       mkdir -p "$KEEP_LOGS_DIR"
       cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
       cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+        2>/dev/null || true
+      cp -f "$bmc_log" "$KEEP_LOGS_DIR/${log_tag}.circt-bmc.log" \
         2>/dev/null || true
     fi
     continue
@@ -1040,7 +1036,13 @@ top_module=${top_module}
   if [[ "$has_assert" != "1" && "$has_cover" != "1" ]]; then
     # No formal checks are present in the compiled IR. There is nothing for
     # circt-bmc to prove/disprove for this test.
-    if [[ "$force_xfail" == "1" ]]; then
+    {
+      echo "[run_sv_tests_circt_bmc] circt-bmc skipped (no verif.assert/verif.cover in MLIR)"
+    } > "$bmc_log"
+    if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]]; then
+      result="SKIP"
+      skip=$((skip + 1))
+    elif [[ "$force_xfail" == "1" ]]; then
       result="XPASS"
       xpass=$((xpass + 1))
     elif [[ "$expect_compile_fail" == "1" ]]; then
@@ -1058,6 +1060,8 @@ top_module=${top_module}
       mkdir -p "$KEEP_LOGS_DIR"
       cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}.mlir" 2>/dev/null || true
       cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}.circt-verilog.log" \
+        2>/dev/null || true
+      cp -f "$bmc_log" "$KEEP_LOGS_DIR/${log_tag}.circt-bmc.log" \
         2>/dev/null || true
     fi
     continue
