@@ -296,7 +296,7 @@ while IFS= read -r -d '' sv; do
   fi
 
   if [[ "$compiled" -eq 0 ]]; then
-    if [[ "$should_fail" == "1" ]] || [[ "$expect" == "xfail" ]]; then
+    if [[ "$expect" == "xfail" ]]; then
       result="XFAIL"
       xfail=$((xfail + 1))
     else
@@ -313,13 +313,9 @@ while IFS= read -r -d '' sv; do
     continue
   fi
 
-  # If expected to fail compilation but it succeeded
-  if [[ "$should_fail" == "1" ]] && [[ "$expect" != "xfail" ]]; then
-    # For simulation-negative tests, should_fail means the simulation should
-    # produce an error (assertion failure, etc.), not that compilation fails.
-    # We'll check the sim result instead.
-    :
-  fi
+  # For simulation-negative tests, should_fail means runtime failure is the
+  # success condition. Compilation failures are still reported as compile
+  # failures above.
 
   # Check if compiled output is empty or has no module
   if [[ ! -s "$mlir" ]]; then
@@ -443,20 +439,28 @@ WRAPPER_EOF
     fi
   elif [[ "$sim_exit" -eq 0 ]]; then
     # Simulation completed successfully
-    if [[ "$should_fail" == "1" ]] || [[ "$expect" == "xfail" ]]; then
-      # Expected to fail but passed
+    if [[ "$expect" == "xfail" ]]; then
+      # Explicit xfail expectation from expect file.
       result="XPASS"
       xpass=$((xpass + 1))
+    elif [[ "$should_fail" == "1" ]]; then
+      # Simulation-negative test: runtime success means we missed the expected
+      # failure condition.
+      result="FAIL"
+      fail=$((fail + 1))
     else
       result="PASS"
       pass=$((pass + 1))
     fi
   else
     # Non-zero exit
-    if [[ "$should_fail" == "1" ]] || [[ "$expect" == "xfail" ]]; then
-      # Expected failure (from test metadata or expect file)
+    if [[ "$expect" == "xfail" ]]; then
       result="XFAIL"
       xfail=$((xfail + 1))
+    elif [[ "$should_fail" == "1" ]]; then
+      # Simulation-negative test behaved as expected.
+      result="PASS"
+      pass=$((pass + 1))
     else
       # Check stderr for known non-fatal issues
       if grep -q "unsupported\|not yet implemented\|unimplemented" "$sim_log" 2>/dev/null; then

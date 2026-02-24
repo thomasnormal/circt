@@ -7781,3 +7781,31 @@
       - result: `101/101` pass.
     - `OUT=/tmp/sv-tests-sim-ch16-results-after-expect.txt TEST_FILTER='^16\\.' VERBOSE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `pass=49 fail=0 xfail=1`.
+
+- Iteration update (sv-tests sim parity for runtime-negative metadata + immediate assume semantics):
+  - realization:
+    - `run_sv_tests_circt_sim.sh` treated metadata `:should_fail_because:` as
+      `XFAIL/XPASS`, unlike BMC semantics where expected runtime violations are
+      counted as `PASS/FAIL`.
+    - chapter 16/20 sim still had three failures:
+      - `16.2--assume`, `16.2--assume0`, `16.2--assume-final`.
+    - root cause for that trio was simulator exit-code policy: procedural
+      `verif.assume` failures incremented the global assumption-failure counter
+      used for fatal exit, while procedural assert failures were non-fatal.
+  - implemented:
+    - `utils/run_sv_tests_circt_sim.sh`
+      - reclassified metadata `should_fail` simulation cases:
+        - non-zero sim exit => `PASS`,
+        - zero sim exit => `FAIL`.
+      - kept expect-file `xfail` semantics unchanged (`XFAIL/XPASS`).
+      - stopped mapping compile failures to `XFAIL` for metadata `should_fail`
+        simulation tests.
+    - added regressions:
+      - `test/Tools/run-sv-tests-sim-should-fail-pass.test`
+      - `test/Tools/circt-sim/sva-immediate-assume-nonfatal-runtime.sv`
+  - validation:
+    - `ninja -C build-test circt-sim`
+    - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-sv-tests-sim-should-fail-pass.test build-test/test/Tools/run-sv-tests-sim-tag-regex-empty-tags.test build-test/test/Tools/circt-sim/sva-immediate-assume-nonfatal-runtime.sv`
+      - result: `3/3` pass.
+    - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch16-ch20-after-assume-nonfatal.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=98 pass=98 fail=0 xfail=0 xpass=0`.
