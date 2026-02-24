@@ -34,6 +34,13 @@ set(libs
   MLIRTransforms
 )
 
+if(MLIR_ENABLE_EXECUTION_ENGINE)
+  list(APPEND libs
+    MLIRExecutionEngine
+    MLIRExecutionEngineUtils
+  )
+endif()
+
 add_circt_tool(circt-sim
   PARTIAL_SOURCES_INTENDED
   AOTProcessCompiler.cpp
@@ -69,6 +76,38 @@ option(CIRCT_SIM_WASM_ENABLE_NODERAWFS
 )
 if(EMSCRIPTEN AND CIRCT_SIM_WASM_ENABLE_NODERAWFS)
   target_link_options(circt-sim PRIVATE "SHELL:-sNODERAWFS=1")
+endif()
+
+if(EMSCRIPTEN)
+  target_link_options(circt-sim PRIVATE
+    "SHELL:--js-library=${CMAKE_CURRENT_SOURCE_DIR}/circt-sim-vpi-wasm.js"
+    "SHELL:-sASYNCIFY=1"
+    "SHELL:-sASYNCIFY_IMPORTS=['circt_vpi_wasm_yield']"
+  )
+
+  set(circt_sim_wasm_vpi_exports
+    vpi_startup_register
+    vpi_register_cb
+    vpi_remove_cb
+    vpi_handle
+    vpi_handle_by_name
+    vpi_handle_by_index
+    vpi_iterate
+    vpi_scan
+    vpi_free_object
+    vpi_get
+    vpi_get_str
+    vpi_get_time
+    vpi_get_value
+    vpi_put_value
+    vpi_chk_error
+    vpi_get_vlog_info
+    vpi_control
+    vpi_release_handle
+  )
+  foreach(sym IN LISTS circt_sim_wasm_vpi_exports)
+    target_link_options(circt-sim PRIVATE "SHELL:-Wl,--export=${sym}")
+  endforeach()
 endif()
 
 llvm_update_compile_flags(circt-sim)

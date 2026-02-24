@@ -3679,6 +3679,7 @@ int32_t vpi_get_value(vpiHandle obj, vpi_value *value);
 int32_t vpi_put_value(vpiHandle obj, vpi_value *value, void *time,
                       int32_t flags);
 void vpi_release_handle(vpiHandle obj);
+void vpi_startup_register(void (*fn)(void));
 
 //===----------------------------------------------------------------------===//
 // UVM Configuration Database

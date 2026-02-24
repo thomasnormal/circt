@@ -93,6 +93,7 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -126,10 +127,17 @@ extern vpiHandle vpi_handle_by_index(vpiHandle, PLI_INT32);
 extern vpiHandle vpi_iterate(PLI_INT32, vpiHandle);
 extern vpiHandle vpi_scan(vpiHandle);
 extern PLI_INT32 vpi_free_object(vpiHandle);
+extern vpiHandle vpi_handle_by_name(const char *, vpiHandle);
+extern int32_t vpi_get(int32_t, vpiHandle);
+extern char *vpi_get_str(int32_t, vpiHandle);
+extern int32_t vpi_get_value(vpiHandle, vpi_value *);
+extern int32_t vpi_put_value(vpiHandle, vpi_value *, void *, int32_t);
+extern void vpi_release_handle(vpiHandle);
 extern void vpi_get_time(vpiHandle, p_vpi_time);
 extern PLI_INT32 vpi_chk_error(p_vpi_error_info);
 extern PLI_INT32 vpi_get_vlog_info(p_vpi_vlog_info);
 extern PLI_INT32 vpi_control(PLI_INT32, ...);
+extern void vpi_startup_register(void (*)());
 }
 // NOLINTBEGIN(cert-dcl50-cpp)
 [[maybe_unused]] static volatile void *vpiSymbolAnchors[] = {
@@ -140,12 +148,45 @@ extern PLI_INT32 vpi_control(PLI_INT32, ...);
     reinterpret_cast<void *>(&vpi_iterate),
     reinterpret_cast<void *>(&vpi_scan),
     reinterpret_cast<void *>(&vpi_free_object),
+    reinterpret_cast<void *>(&vpi_handle_by_name),
+    reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_get)),
+    reinterpret_cast<void *>(&vpi_get_str),
+    reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_get_value)),
+    reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_put_value)),
+    reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_release_handle)),
     reinterpret_cast<void *>(&vpi_get_time),
     reinterpret_cast<void *>(&vpi_chk_error),
     reinterpret_cast<void *>(&vpi_get_vlog_info),
     reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_control)),
+    reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(&vpi_startup_register)),
 };
 // NOLINTEND(cert-dcl50-cpp)
+
+using VPIStartupRoutine = void (*)();
+
+static std::vector<VPIStartupRoutine> &getRegisteredVPIStartupRoutines() {
+  static std::vector<VPIStartupRoutine> routines;
+  return routines;
+}
+
+static bool hasRegisteredVPIStartupRoutines() {
+  return !getRegisteredVPIStartupRoutines().empty();
+}
+
+static void runRegisteredVPIStartupRoutines() {
+  for (auto routine : getRegisteredVPIStartupRoutines()) {
+    if (routine)
+      routine();
+  }
+}
+
+extern "C" void vpi_startup_register(VPIStartupRoutine routine) {
+  if (!routine)
+    return;
+  auto &routines = getRegisteredVPIStartupRoutines();
+  if (std::find(routines.begin(), routines.end(), routine) == routines.end())
+    routines.push_back(routine);
+}
 
 //===----------------------------------------------------------------------===//
 // AOT Trampoline Runtime Support
@@ -818,6 +859,7 @@ private:
   std::atomic<bool> abortHandled{false};
   std::atomic<bool> stopWatchdog{false};
   bool inInitializationPhase = true;  // Track if we're still initializing
+  bool vpiEnabled = false;
   std::mutex abortMutex;
   std::string abortReason;
   std::thread watchdogThread;
@@ -950,7 +992,7 @@ LogicalResult SimulationContext::initialize(
         // simulators don't fire cbValueChange for the initial X→known
         // transition; since VPI returns 0 for X in vpiIntVal format, cocotb
         // would misinterpret X→1 as 0→1 (= spurious rising edge at t=0).
-        if (!vpiLibrary.empty()) {
+        if (vpiEnabled) {
           const SignalValue &prev = scheduler.getSignalPreviousValue(signal);
           if (!prev.isUnknown())
             VPIRuntime::getInstance().fireValueChangeCallbacks(signal);
@@ -1838,9 +1880,12 @@ LogicalResult SimulationContext::run() {
   // Initialize the scheduler
   scheduler.initialize();
 
-  // Initialize VPI runtime if a VPI library was specified.
-  if (!vpiLibrary.empty()) {
-    auto &vpiRuntime = VPIRuntime::getInstance();
+  // Initialize VPI runtime when --vpi is provided or startup routines were
+  // pre-registered (e.g. from wasm/JS via vpi_startup_register).
+  vpiEnabled = !vpiLibrary.empty() || hasRegisteredVPIStartupRoutines();
+  auto &vpiRuntime = VPIRuntime::getInstance();
+  vpiRuntime.setActive(vpiEnabled);
+  if (vpiEnabled) {
     vpiRuntime.setScheduler(&scheduler);
     vpiRuntime.setSimulationControl(&control);
     vpiRuntime.setTopModuleNames(topModuleNames);
@@ -2533,11 +2578,12 @@ LogicalResult SimulationContext::run() {
     }
 
     vpiRuntime.installDispatchTable();
-    if (!vpiRuntime.loadVPILibrary(vpiLibrary)) {
+    if (!vpiLibrary.empty() && !vpiRuntime.loadVPILibrary(vpiLibrary)) {
       llvm::errs() << "[circt-sim] Failed to load VPI library: " << vpiLibrary
                    << "\n";
       return failure();
     }
+    runRegisteredVPIStartupRoutines();
     vpiRuntime.fireStartOfSimulation();
 
     // Set up the post-callback hook to propagate firreg changes to hw.output
@@ -2655,7 +2701,7 @@ LogicalResult SimulationContext::run() {
     // cocotb defers signal writes (vpi_put_value) to the ReadWriteSynch region,
     // so we must fire these callbacks every iteration — not only when
     // deltasExecuted > 0 — to ensure deferred writes are flushed.
-    if (!vpiLibrary.empty()) {
+    if (vpiEnabled) {
       auto &vpi = VPIRuntime::getInstance();
       static bool traceMainVpi =
           std::getenv("CIRCT_SIM_TRACE_VPI_TIMING") != nullptr;
@@ -2829,8 +2875,7 @@ LogicalResult SimulationContext::run() {
 
       // Fire VPI cbNextSimTime callbacks when simulation time advances.
       // cocotb's NextTimeStep trigger registers a cbNextSimTime callback.
-      if (!vpiLibrary.empty() &&
-          scheduler.getCurrentTime().realTime != preAdvTime) {
+      if (vpiEnabled && scheduler.getCurrentTime().realTime != preAdvTime) {
         VPIRuntime::getInstance().fireCallbacks(cbNextSimTime);
       }
 
@@ -2880,7 +2925,7 @@ LogicalResult SimulationContext::run() {
   }
 
   // Fire VPI end-of-simulation callback.
-  if (!vpiLibrary.empty())
+  if (vpiEnabled)
     VPIRuntime::getInstance().fireEndOfSimulation();
 
   // Dump profile summary at exit if requested.
