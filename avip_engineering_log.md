@@ -1,5 +1,36 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: packed-struct lvalue part-select legalization in MooreToCore
+
+### What changed
+- Updated:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- Added:
+  - `test/Conversion/ImportVerilog/packed-struct-slice-output-port.sv`
+
+### Red-first debugging path
+- Reproduced failure first:
+  - `llvm-lit ... packed-struct-slice-output-port.sv`
+  - error: `failed to legalize operation 'moore.extract_ref'`.
+- First fix legalized `moore.extract_ref` but exposed the next blocker:
+  - error moved to `failed to legalize operation 'moore.assign'`.
+- Final fix added assign-side packed four-state reinterpretation + slice update,
+  after which the reproducer went green.
+
+### Realizations / surprises
+- Assign-side rewrites alone were insufficient because dialect conversion can
+  fail on illegal `moore.extract_ref` before `moore.assign` rewrite order makes
+  progress.
+- For packed structs containing four-state members, `hw::getBitWidth` on the
+  converted type does not represent logical packed SV bit width; using the
+  original Moore packed type bit size is required for correct part-select math.
+
+### Validation snapshot
+- `ninja -C build-test circt-verilog` -> pass.
+- `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/packed-struct-slice-output-port.sv` -> pass (`1/1`).
+- `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/packed-struct-element-select.sv build-test/test/Conversion/ImportVerilog/format-uppercase-l-compat.sv build-test/test/Conversion/ImportVerilog/lvalue-streaming.sv build-test/test/Conversion/ImportVerilog/packed-struct-slice-output-port.sv` -> pass (`4/4`).
+- `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/MooreToCore/struct-dynamic-fields.mlir build-test/test/Conversion/MooreToCore/basic.mlir` -> pass (`2/2`).
+
 ## 2026-02-24 Session: packed aggregate bit-select + `%L` format compatibility
 
 ### What changed
@@ -167,6 +198,33 @@
   - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
   - `lib/Conversion/ImportVerilog/Expressions.cpp`
 - Added regressions:
+
+## 2026-02-24 Session: AVIP circt-sim smoke stability (i3c + jtag)
+
+### What changed
+- Updated:
+  - `utils/run_avip_circt_sim.sh`
+  - `utils/run_avip_circt_verilog.sh`
+- Added/updated regressions:
+  - `test/Tools/run-avip-circt-sim-parallel-default.test`
+  - `test/Tools/run-avip-circt-verilog-jtag-rewrites.test`
+  - `test/Tools/Inputs/avip-mini-jtag/sim/JtagCompile.f`
+  - `test/Tools/Inputs/avip-mini-jtag/src/hdlTop/jtagTargetDeviceAgentBfm/JtagTargetDeviceAgentBfm.sv`
+
+### Root causes
+- `i3c`: `circt-sim` parallel simulation can introduce real host thread-level
+  concurrency, which breaks UVM's implicit single-thread assumptions and
+  triggers spurious UVM errors (observed: `UVM/FIELD_OP/*` at time 0). Default
+  AVIP runs to `--parallel=1` to avoid this class of nondeterministic failures.
+- `jtag`: upstream AVIP contains a `bind` in
+  `JtagTargetDeviceAgentBfm.sv` that references `jtagIf.*` even though slang
+  resolves bind expressions in the bound scope; rewrite the bind to use the
+  interface's own ports (`clk`, `Tdo`, `Tms`, `reset`).
+
+### Validation snapshot
+- Unified AVIP smoke lane green:
+  - `./utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^avip_sim_smoke$'`
+    -> exit 0.
   - `test/Conversion/ImportVerilog/sva-local-var-initializer-compound.sv`
   - `test/Tools/circt-sim/sva-local-var-initializer-compound-runtime.sv`
 
