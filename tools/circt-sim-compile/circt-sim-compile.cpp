@@ -55,6 +55,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/MD5.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
@@ -1053,6 +1054,23 @@ static unsigned compileProcessBodies(
     processes.push_back(procOp);
   });
 
+  // Pre-compute canonical names for all processes.
+  // Format: "<hw_module_sym>.process_<local_index>" where local_index is
+  // the 0-based position among all llhd.process ops in that hw.module.
+  // This must match the naming in LLHDProcessInterpreter::registerProcess().
+  DenseMap<Operation *, std::string> canonicalProcNames;
+  for (auto hwMod : module.getOps<hw::HWModuleOp>()) {
+    std::string moduleSym = hwMod.getSymName().str();
+    unsigned localIndex = 0;
+    for (auto &op : hwMod.getBodyBlock()->getOperations()) {
+      if (isa<llhd::ProcessOp>(op)) {
+        canonicalProcNames[&op] =
+            moduleSym + ".process_" + std::to_string(localIndex);
+        localIndex++;
+      }
+    }
+  }
+
   for (auto procOp : processes) {
     if (!isProcessCallbackEligible(procOp, signalIdMap))
       continue;
@@ -1117,7 +1135,12 @@ static unsigned compileProcessBodies(
       continue;
 
     // Create function: void(ptr ctx, ptr frame).
-    std::string funcName = "__circt_sim_proc_" + std::to_string(compiled);
+    // Use canonical module-scoped name so the runtime can match this compiled
+    // function to the corresponding interpreter process by name.
+    auto it = canonicalProcNames.find(procOp.getOperation());
+    std::string funcName = it != canonicalProcNames.end()
+                               ? it->second
+                               : "__circt_sim_proc_" + std::to_string(compiled);
     auto funcType = FunctionType::get(mlirCtx, {ptrTy, ptrTy}, {});
     auto funcOp = func::FuncOp::create(moduleBuilder, loc, funcName, funcType);
     funcOp.setVisibility(SymbolTable::Visibility::Private);
@@ -2106,6 +2129,18 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                  << "'\n";
     return failure();
   }
+  // Hash the input content before moving the buffer into sourceMgr, so we can
+  // include it in the build ID for cache invalidation.
+  std::string contentHash;
+  {
+    llvm::MD5 hasher;
+    hasher.update((*input)->getBuffer());
+    llvm::MD5::MD5Result result;
+    hasher.final(result);
+    llvm::SmallString<32> digest = result.digest();
+    contentHash = std::string(digest);
+  }
+
   sourceMgr.AddNewSourceBuffer(std::move(*input), llvm::SMLoc());
   SourceMgrDiagnosticHandler diagHandler(sourceMgr, &mlirContext);
 
@@ -2266,10 +2301,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     return failure();
   }
 
-  // Compute build ID.
+  // Compute build ID: encode ABI version, target triple, and a content hash of
+  // the input file so that stale cached .so files can be detected at load time.
   std::string buildId = "circt-sim-abi-v" +
                         std::to_string(CIRCT_SIM_ABI_VERSION) + "-" +
-                        llvm::sys::getDefaultTargetTriple();
+                        llvm::sys::getDefaultTargetTriple() + "-" +
+                        contentHash;
 
   // Synthesize descriptor and entrypoints into the LLVM IR module.
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,

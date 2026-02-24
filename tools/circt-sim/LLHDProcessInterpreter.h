@@ -978,6 +978,8 @@ public:
   /// the loader for a compiled version by name.
   void loadCompiledFunctions(const CompiledModuleLoader &loader);
 
+  void loadCompiledProcesses(CompiledModuleLoader &loader);
+
   /// Set a callback to be called when sim.terminate is executed.
   /// The callback receives (success, verbose) parameters.
   void setTerminateCallback(std::function<void(bool, bool)> callback) {
@@ -2685,6 +2687,9 @@ private:
 
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
+
+  /// Map from process name string to ProcessId, for compiled process matching.
+  llvm::StringMap<ProcessId> processNameToId;
 
   /// Operation execution statistics (by op name).
   llvm::StringMap<uint64_t> opStats;
