@@ -6902,3 +6902,24 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - The failing behavior only showed up when simulation continued long enough
   after re-enable; short tests could mask it.
+
+## 2026-02-24: Assume-Side Regression Coverage for Abort/Disable Lifetime
+
+### Gap identified
+- After fixing runtime state reset for assertion/assumption abort/disable
+  behavior, there were still no dedicated bounded-window assumption regressions
+  proving these semantics.
+
+### Added regressions
+- `test/Tools/circt-sim/sva-assume-accept-on-bounded-window-abort-pass-runtime.sv`
+- `test/Tools/circt-sim/sva-assume-disable-iff-bounded-window-abort-pass-runtime.sv`
+
+### Why this matters
+- These tests lock that pending implication obligations are truly cleared for
+  assumption properties, not just assertions, under:
+  - `accept_on(c)` with `##[1:3]` windows.
+  - `disable iff(c)` with `##[1:3]` windows.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-assume-accept-on-bounded-window-abort-pass-runtime.sv build_test/test/Tools/circt-sim/sva-assume-disable-iff-bounded-window-abort-pass-runtime.sv` -> `2/2` PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='assume-.*accept-on|assume-.*reject-on|assume-.*disable-iff|accept-on|reject-on|disable-iff' build_test/test/Tools/circt-sim` -> `17/17` PASS.
