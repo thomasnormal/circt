@@ -2765,35 +2765,55 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Strip bodies of UVM-intercepted functions so they become external
   // declarations → trampolines. This ensures compiled code calls back into
   // the interpreter for these functions, where UVM interceptors can fire.
-  // Without this, compiled stubs return null and cause crashes when the
-  // calling code dereferences the result.
+  // Without this, compiled→compiled direct calls bypass interceptors and
+  // cause crashes (e.g., factory returning null, config_db not firing).
+  //
+  // The pattern matching here must be conservative: any function that MIGHT
+  // have an interpreter interceptor should be demoted. False positives just
+  // mean the function goes through the interpreter (slower but correct).
+  // False negatives cause crashes.
   {
-    static const char *const interceptedPrefixes[] = {
-        "uvm_pkg::uvm_factory::create_component_by_name",
-        "uvm_pkg::uvm_factory::create_component_by_type",
-        "uvm_pkg::uvm_factory::create_object_by_name",
-        "uvm_pkg::uvm_factory::create_object_by_type",
-        "uvm_pkg::uvm_default_factory::create_component_by_name",
-        "uvm_pkg::uvm_default_factory::create_component_by_type",
-        "uvm_pkg::uvm_default_factory::create_object_by_name",
-        "uvm_pkg::uvm_default_factory::create_object_by_type",
-        "uvm_pkg::uvm_factory::set_type_alias",
-        "uvm_pkg::uvm_coreservice_t::get",
-        "uvm_pkg::uvm_default_coreservice_t::get_factory",
-        "uvm_pkg::uvm_config_db_default_implementation_t",
+    auto isInterceptedFunc = [](llvm::StringRef name) -> bool {
+      // All uvm_ functions (factory, config_db, phasing, sequencer, etc.)
+      if (name.contains("uvm_"))
+        return true;
+      // Moore runtime support (__moore_delay, __moore_string_*, etc.)
+      if (name.starts_with("__moore_"))
+        return true;
+      // Standalone intercepted functions (short names without uvm_ prefix)
+      if (name == "get_0" || name == "self" || name == "malloc" ||
+          name == "get_common_domain" || name == "get_global_hopper")
+        return true;
+      // String/class conversion
+      if (name.starts_with("to_string_") || name == "to_class" ||
+          name.starts_with("to_class_"))
+        return true;
+      // Random state management
+      if (name == "srandom" || name.starts_with("srandom_") ||
+          name == "get_randstate" || name.starts_with("get_randstate_") ||
+          name == "set_randstate" || name.starts_with("set_randstate_"))
+        return true;
+      // DB/port patterns (may exist outside uvm_ namespace)
+      if (name.contains("config_db") || name.contains("resource_db") ||
+          name.contains("analysis_port") || name.contains("seq_item_pull") ||
+          name.contains("sqr_if_base"))
+        return true;
+      // BFM protocol interceptors (driver_bfm::, monitor_bfm::, i3c_*_bfm::, etc.)
+      if (name.contains("_bfm::") || name.contains("Bfm::"))
+        return true;
+      // Die interceptor
+      if (name.ends_with("::die"))
+        return true;
+      return false;
     };
+
     unsigned demoted = 0;
     llvm::SmallVector<func::FuncOp> toDemote;
     microModule.walk([&](func::FuncOp funcOp) {
       if (funcOp.isExternal())
         return;
-      llvm::StringRef name = funcOp.getSymName();
-      for (const char *prefix : interceptedPrefixes) {
-        if (name.starts_with(prefix)) {
-          toDemote.push_back(funcOp);
-          return;
-        }
-      }
+      if (isInterceptedFunc(funcOp.getSymName()))
+        toDemote.push_back(funcOp);
     });
     for (auto funcOp : toDemote) {
       llvm::StringRef name = funcOp.getSymName();
