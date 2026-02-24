@@ -1,9 +1,8 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 2 --module=sva_xprop_eventually_sat - | FileCheck %s --check-prefix=EV
+// RUN:   circt-bmc --run-smtlib -b 2 --module=sva_xprop_eventually_sat - | FileCheck %s --check-prefix=EV
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 2 --module=sva_xprop_always_sat - | FileCheck %s --check-prefix=AL
+// RUN:   circt-bmc --run-smtlib -b 2 --module=sva_xprop_always_sat - | FileCheck %s --check-prefix=AL
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_xprop_eventually_sat(input logic clk, input logic in);

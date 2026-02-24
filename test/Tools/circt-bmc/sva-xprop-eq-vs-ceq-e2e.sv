@@ -1,9 +1,8 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_eq_sat - | FileCheck %s --check-prefix=EQ
+// RUN:   circt-bmc --run-smtlib -b 1 --module=sva_xprop_eq_sat - | FileCheck %s --check-prefix=EQ
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_ceq_unsat - | FileCheck %s --check-prefix=CEQ
+// RUN:   circt-bmc --run-smtlib -b 1 --module=sva_xprop_ceq_unsat - | FileCheck %s --check-prefix=CEQ
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_xprop_eq_sat(input logic clk);
