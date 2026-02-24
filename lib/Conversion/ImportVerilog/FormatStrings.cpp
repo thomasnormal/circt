@@ -150,6 +150,12 @@ struct FormatStringParser {
       return emitHierarchicalName(options);
     }
 
+    // Compatibility handling for non-standard %L.
+    // Some large codebases use %L where simulators print a hierarchical path.
+    // Treat it like %m so formatting can proceed.
+    if (specifier == 'L')
+      return emitHierarchicalName(options);
+
     // Special handling for %l - library binding (unsupported).
     if (specifierLower == 'l')
       return mlir::emitError(loc)
