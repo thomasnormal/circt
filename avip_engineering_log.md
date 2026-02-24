@@ -1,5 +1,18 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: sync_abort_on formal coverage closure (BMC)
+
+### What changed
+- Added a dedicated BMC e2e regression:
+  - `test/Tools/circt-bmc/sva-sync-abort-on-e2e.sv`
+- This closes missing formal coverage for:
+  - `sync_accept_on`
+  - `sync_reject_on`
+
+### Validation snapshot
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-bmc/sva-sync-abort-on-e2e.sv build_test/test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+  - result: `2/2` pass.
+
 ## 2026-02-24 Session: sync_abort_on runtime coverage closure (SVA)
 
 ### What changed
