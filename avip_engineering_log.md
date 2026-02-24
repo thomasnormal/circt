@@ -7343,3 +7343,41 @@ Based on these findings, the circt-sim compiled process architecture:
 - Even though simulator runtime already had partial coverage-control handling,
   it was unreachable in normal flow until ImportVerilog stopped folding the
   calls into constants.
+
+## 2026-02-24: fork/join stale read-forwarding fix
+
+### Gap identified
+- `test/Tools/circt-sim/syscall-fork-join.sv` failed with:
+  - `fork_join_any: a=0` (expected `a=10`)
+  - `fork_join_none: c=0` and `after_wait_fork: c=0` (expected `after_wait_fork: c=100`)
+- `test/Tools/circt-sim/fork-struct-field-last-write.sv` also failed in the
+  same focused red cluster.
+
+### Root cause
+- In `ReadOpConversion`, a read-after-write shortcut walked backwards in the
+  current block and forwarded the nearest prior `llhd.drv` with zero delay.
+- The shortcut did not stop at concurrency/time barriers (`fork`, `wait_fork`,
+  waits), so post-fork reads were incorrectly satisfied from stale pre-fork
+  drives instead of probing live signal state.
+
+### Implementation
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - added an explicit read-forward barrier predicate for:
+    - `moore.fork`, `moore.wait_fork`, `moore.disable_fork`,
+      `moore.wait_delay`, `moore.wait_event`
+    - `sim.fork`, `sim.wait_fork`, `sim.disable_fork`
+    - `llhd.wait`
+  - read forwarding now stops at these ops and falls back to `llhd.prb`.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-sim/syscall-fork-join.sv` -> PASS.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-sim/fork-struct-field-last-write.sv` -> PASS.
+- Focused red-cluster rerun:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='event-triggered(-clearing)?|interface-inout-shared-wire-bidirectional|interface-inout-tristate-propagation|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-tristate-suppression-cond-false|fork-struct-field-last-write|syscall-fork-join'`
+  - result: `4 PASS, 5 FAIL` (remaining failures are tri-state/inout interface semantics).
+
+### Realizations / surprises
+- The read fast-path was useful for straight-line blocking-assign semantics,
+  but became semantically wrong once concurrent regions/time barriers were in
+  the same block. A small barrier list restored correctness without removing
+  the optimization entirely.

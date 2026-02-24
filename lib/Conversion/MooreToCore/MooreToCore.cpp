@@ -12897,9 +12897,20 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       // the same process block: if an earlier immediate llhd.drv wrote this
       // signal in the current block, return that value instead of probing the
       // old signal state.
+      //
+      // Stop this forwarding at fork/wait barriers. Reads after
+      // fork/join_any/join_none/wait_fork must observe the concurrent runtime
+      // state, not a stale pre-fork drive from the same block.
+      auto isReadForwardBarrier = [](Operation *prev) -> bool {
+        return isa<ForkOp, WaitForkOp, DisableForkOp, WaitDelayOp, WaitEventOp,
+                   sim::SimForkOp, sim::SimWaitForkOp, sim::SimDisableForkOp,
+                   llhd::WaitOp>(prev);
+      };
       if (isa<llhd::RefType>(input.getType())) {
         for (Operation *prev = op->getPrevNode(); prev;
              prev = prev->getPrevNode()) {
+          if (isReadForwardBarrier(prev))
+            break;
           auto drive = dyn_cast<llhd::DriveOp>(prev);
           if (!drive || drive.getSignal() != input || drive.getEnable())
             continue;
