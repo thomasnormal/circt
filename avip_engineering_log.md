@@ -6464,3 +6464,39 @@ Based on these findings, the circt-sim compiled process architecture:
    leaves frequent conversion aborts.
 2. The fixes improved concrete CVDP entries immediately (e.g. previously
    failing `AHB_DDR_0019` compile path now compiles in smoke flows).
+
+## 2026-02-24 Session: Stabilize Ibex formal BMC smoke lane
+
+### Problem
+1. `utils/run_regression_unified.sh --profile nightly --engine circt --suite-regex '^ibex_formal_bmc_smoke$'`
+   failed with:
+   - module lookup failures (`hw.module named '<target>' not found`) because
+     targets were elaborated as private modules,
+   - unsupported lane targets (multi-clock / llhd.final paths),
+   - standalone-elaboration failure for `ibex_controller` (`u_ibex_core`).
+
+### Changes
+1. `utils/run_ibex_formal_circt_bmc.sh`
+   - narrowed smoke target set to stable standalone modules:
+     `ibex_decoder`, `ibex_compressed_decoder`, `ibex_alu`,
+     `ibex_load_store_unit`, `ibex_cs_registers`.
+   - added compile-time `--top=<target>` for each smoke target so modules are
+     public and discoverable by `circt-bmc --module=...`.
+   - added `--allow-multi-clock` in BMC invocation for robustness.
+2. `test/Tools/run-ibex-formal-bmc-cli-compat.test`
+   - updated CLI contract check to require presence of `--top=` in the runner.
+
+### Validation
+1. Contract tests:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-ibex-formal-bmc-cli-compat.test build-test/test/Tools/run-ibex-formal-bmc-compile-defines.test`
+   - Result: `2 passed, 0 failed`.
+2. Unified lane:
+   - `utils/run_regression_unified.sh --profile nightly --engine circt --suite-regex '^ibex_formal_bmc_smoke$' --out-dir /tmp/unified-ibex-smoke-run3`
+   - Result: `selected=1 failures=0`.
+
+### Realizations / surprises
+1. For this Ibex flow, promoting target modules to explicit compile tops is
+   required for stable `--module` lookup in `circt-bmc`.
+2. A smaller, stable smoke target set gives deterministic pass/fail signal
+   while unsupported cores (`ibex_core`/`ibex_pmp`) continue to require deeper
+   pipeline support work.

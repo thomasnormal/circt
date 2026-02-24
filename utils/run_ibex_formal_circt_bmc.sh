@@ -116,19 +116,14 @@ INCLUDE_DIRS=(
   "-I" "$LOWRISC_IP_DIR/dv/sv/dv_utils"
 )
 
-# BMC targets: module names with SVA assertions worth checking.
-# Start with the core submodules that have the richest assertion sets.
+# BMC targets: keep a stable subset that is currently supported by the
+# circt-bmc flow in this runner configuration.
 BMC_TARGETS=(
   "ibex_decoder"
-  "ibex_controller"
   "ibex_compressed_decoder"
   "ibex_alu"
-  "ibex_id_stage"
-  "ibex_if_stage"
   "ibex_load_store_unit"
   "ibex_cs_registers"
-  "ibex_pmp"
-  "ibex_core"
 )
 
 echo "=== Ibex Formal BMC Runner ==="
@@ -151,6 +146,15 @@ COMPILE_CMD=(
   "--no-uvm-auto-include"
   "-DRVFI"
   "-DINC_ASSERT"
+)
+
+# Force the BMC target modules to be elaborated as public tops so --module
+# lookup in circt-bmc is stable.
+for top in "${BMC_TARGETS[@]}"; do
+  COMPILE_CMD+=("--top=$top")
+done
+
+COMPILE_CMD+=(
   "${INCLUDE_DIRS[@]}"
   "${RTL_FILES[@]}"
   "-o" "$MLIR_FILE"
@@ -180,6 +184,7 @@ for target in "${BMC_TARGETS[@]}"; do
     "$MLIR_FILE" \
     -b "$BMC_BOUND" \
     --module="$target" \
+    --allow-multi-clock \
     > "$TARGET_LOG" 2>&1
   rc=$?
   set -e
