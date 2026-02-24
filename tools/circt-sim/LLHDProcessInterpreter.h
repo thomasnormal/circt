@@ -984,6 +984,13 @@ public:
 
   void loadCompiledProcesses(CompiledModuleLoader &loader);
 
+  /// Dispatch a trampoline call from compiled code back to the interpreter.
+  /// Called by __circt_sim_call_interpreted when a compiled function needs to
+  /// invoke a function that was not compiled (contains non-LLVM ops).
+  void dispatchTrampoline(uint32_t funcId, const char *funcName,
+                          const uint64_t *args, uint32_t numArgs,
+                          uint64_t *rets, uint32_t numRets);
+
   /// Set a callback to be called when sim.terminate is executed.
   /// The callback receives (success, verbose) parameters.
   void setTerminateCallback(std::function<void(bool, bool)> callback) {
@@ -3936,6 +3943,16 @@ private:
   /// Map from func.func Operation* to native function pointer.
   /// Populated by CompiledModuleLoader during init.
   llvm::DenseMap<mlir::Operation *, void *> nativeFuncPtrs;
+
+  /// Trampoline func_id → func::FuncOp mapping for compiled→interpreted
+  /// dispatch. Index i corresponds to trampoline_names[i] in the compiled
+  /// module descriptor. Populated by loadCompiledFunctions().
+  llvm::SmallVector<mlir::func::FuncOp> trampolineFuncOps;
+
+  /// Native fallback pointers for trampolines that map to LLVM functions
+  /// (e.g., malloc, __cg_init_*). These are called directly without
+  /// going through the interpreter. Index matches trampolineFuncOps.
+  llvm::SmallVector<void *> trampolineNativeFallback;
 
   /// Counters for native vs interpreted dispatch (for compile report).
   uint64_t nativeFuncCallCount = 0;

@@ -61,6 +61,7 @@ unsigned g_lastFuncProcId = 0;
 #include <cstdint>
 #include <fstream>
 #include <functional>
+#include <dlfcn.h>
 #include <limits>
 #include <sstream>
 
@@ -138,14 +139,46 @@ static Value getClockedAssertLikeEvalProperty(
   OpBuilder builder(assertLikeOp);
   Location loc = assertLikeOp->getLoc();
   Value trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-  Value antecedent = trueVal;
-  if (anchorSignal && anchorSignal.getType().isInteger(1)) {
-    builder.getContext()->loadDialect<mlir::arith::ArithDialect>();
-    Value notAnchor = arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
-    antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
+  Value antecedent;
+  Value consequent = property;
+  if (auto concatOp = property.getDefiningOp<ltl::ConcatOp>()) {
+    auto inputs = concatOp.getInputs();
+    if (inputs.size() == 2) {
+      if (auto lhsDelay = inputs[0].getDefiningOp<ltl::DelayOp>()) {
+        auto lhsLength = lhsDelay.getLength();
+        if (lhsLength && *lhsLength == 0 && lhsDelay.getDelay() == 0 &&
+            lhsDelay.getInput().getType().isInteger(1)) {
+          antecedent = lhsDelay.getInput();
+          consequent = inputs[1];
+
+          if (auto rhsDelay = inputs[1].getDefiningOp<ltl::DelayOp>()) {
+            auto rhsLength = rhsDelay.getLength();
+            if (rhsLength && *rhsLength == 0 &&
+                rhsDelay.getInput().getType().isInteger(1) &&
+                rhsDelay.getDelay() != std::numeric_limits<uint64_t>::max()) {
+              consequent = ltl::DelayOp::create(builder, loc, rhsDelay.getInput(),
+                                                rhsDelay.getDelay() + 1, 0);
+            }
+          }
+        }
+      } else if (inputs[0].getType().isInteger(1)) {
+        antecedent = inputs[0];
+        consequent = inputs[1];
+      }
+    }
   }
+
+  if (!antecedent) {
+    antecedent = trueVal;
+    if (anchorSignal && anchorSignal.getType().isInteger(1)) {
+      builder.getContext()->loadDialect<mlir::arith::ArithDialect>();
+      Value notAnchor = arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
+      antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
+    }
+  }
+
   Value evalProperty =
-      ltl::ImplicationOp::create(builder, loc, antecedent, property);
+      ltl::ImplicationOp::create(builder, loc, antecedent, consequent);
   cache[assertLikeOp] = evalProperty;
   return evalProperty;
 }
@@ -14986,10 +15019,12 @@ llvm_dispatch:
   if (auto assumeOp = dyn_cast<verif::AssumeOp>(op)) {
     InterpretedValue cond = getValue(procId, assumeOp.getProperty());
     if (!cond.isX() && cond.getAPInt().isZero()) {
-      ++clockedAssumptionFailures;
       std::string label;
       if (auto labelAttr = assumeOp->getAttrOfType<StringAttr>("label"))
         label = labelAttr.getValue().str();
+      // Procedural (immediate/deferred) assumes are traced but do not force a
+      // failing simulation exit code. Clocked assumptions remain fatal and are
+      // tracked separately by dedicated checker processes.
       maybeTraceSvaAssumptionFailed(label, scheduler.getCurrentTime().realTime,
                                     assumeOp.getLoc());
     }
@@ -37177,6 +37212,145 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
 
   llvm::errs() << "[circt-sim] Loaded " << mapped
                << " compiled functions from .so for native dispatch\n";
+
+  // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
+  // dispatch. Each trampoline has a sequential func_id and a name that
+  // corresponds to the MLIR function symbol.
+  uint32_t numTrampolines = loader.getNumTrampolines();
+  trampolineFuncOps.clear();
+  trampolineFuncOps.resize(numTrampolines);
+  trampolineNativeFallback.clear();
+  trampolineNativeFallback.resize(numTrampolines, nullptr);
+  unsigned trampolineMapped = 0;
+  unsigned trampolineNative = 0;
+  for (uint32_t i = 0; i < numTrampolines; ++i) {
+    llvm::StringRef name = loader.getTrampolineName(i);
+    if (name.empty())
+      continue;
+    // Use the pre-populated funcLookupCache for O(1) lookup.
+    auto cacheIt = funcLookupCache.find(name);
+    if (cacheIt != funcLookupCache.end() && cacheIt->second.kind == 1) {
+      // func::FuncOp — dispatch through interpreter.
+      trampolineFuncOps[i] =
+          mlir::cast<mlir::func::FuncOp>(cacheIt->second.op);
+      ++trampolineMapped;
+    } else if (cacheIt != funcLookupCache.end() && cacheIt->second.kind == 0) {
+      // LLVM::LLVMFuncOp — try native dispatch. First check nativeFuncPtrs,
+      // then fall back to dlsym for libc functions like malloc.
+      auto nativeIt = nativeFuncPtrs.find(cacheIt->second.op);
+      if (nativeIt != nativeFuncPtrs.end()) {
+        trampolineNativeFallback[i] = nativeIt->second;
+        ++trampolineNative;
+      } else {
+        // Try dlsym for well-known libc functions.
+        std::string nameStr = name.str();
+        void *sym = dlsym(RTLD_DEFAULT, nameStr.c_str());
+        if (sym) {
+          trampolineNativeFallback[i] = sym;
+          ++trampolineNative;
+        } else {
+          llvm::errs() << "[circt-sim] WARNING: trampoline " << i << " '"
+                       << name << "' is LLVM func but no native fallback\n";
+        }
+      }
+    } else {
+      llvm::errs() << "[circt-sim] WARNING: trampoline " << i << " '" << name
+                   << "' not found in funcLookupCache\n";
+    }
+  }
+  if (numTrampolines > 0)
+    llvm::errs() << "[circt-sim] Mapped " << trampolineMapped << "/"
+                 << numTrampolines
+                 << " trampolines for interpreted dispatch, "
+                 << trampolineNative << " native fallbacks\n";
+}
+
+void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
+                                                 const char *funcName,
+                                                 const uint64_t *args,
+                                                 uint32_t numArgs,
+                                                 uint64_t *rets,
+                                                 uint32_t numRets) {
+  LLVM_DEBUG(llvm::dbgs() << "[trampoline] dispatch funcId=" << funcId
+                         << " name=" << (funcName ? funcName : "<null>")
+                         << " numArgs=" << numArgs << " numRets=" << numRets
+                         << " activeProcessId=" << activeProcessId << "\n");
+
+  // Check for native fallback first (LLVM functions like malloc).
+  if (funcId < trampolineNativeFallback.size() &&
+      trampolineNativeFallback[funcId]) {
+    void *fptr = trampolineNativeFallback[funcId];
+    using F0 = uint64_t (*)();
+    using F1 = uint64_t (*)(uint64_t);
+    using F2 = uint64_t (*)(uint64_t, uint64_t);
+    using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+    using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+    using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+    using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                            uint64_t);
+    using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                            uint64_t, uint64_t);
+    using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t,
+                            uint64_t, uint64_t, uint64_t);
+    uint64_t result = 0;
+    switch (numArgs) {
+    case 0: result = reinterpret_cast<F0>(fptr)(); break;
+    case 1: result = reinterpret_cast<F1>(fptr)(args[0]); break;
+    case 2: result = reinterpret_cast<F2>(fptr)(args[0], args[1]); break;
+    case 3: result = reinterpret_cast<F3>(fptr)(args[0], args[1], args[2]); break;
+    case 4: result = reinterpret_cast<F4>(fptr)(args[0], args[1], args[2], args[3]); break;
+    case 5: result = reinterpret_cast<F5>(fptr)(args[0], args[1], args[2], args[3], args[4]); break;
+    case 6: result = reinterpret_cast<F6>(fptr)(args[0], args[1], args[2], args[3], args[4], args[5]); break;
+    case 7: result = reinterpret_cast<F7>(fptr)(args[0], args[1], args[2], args[3], args[4], args[5], args[6]); break;
+    case 8: result = reinterpret_cast<F8>(fptr)(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); break;
+    default: break;
+    }
+    if (numRets > 0)
+      rets[0] = result;
+    return;
+  }
+
+  // Look up the FuncOp for this trampoline.
+  if (funcId >= trampolineFuncOps.size() || !trampolineFuncOps[funcId]) {
+    llvm::errs() << "[circt-sim] FATAL: trampoline dispatch for func_id="
+                 << funcId;
+    if (funcName)
+      llvm::errs() << " (" << funcName << ")";
+    llvm::errs() << " — FuncOp not found in module\n";
+    abort();
+  }
+
+  mlir::func::FuncOp funcOp = trampolineFuncOps[funcId];
+
+  // Use the currently active process ID. The trampoline is called from
+  // within the interpreter's call chain (interpreter → native func →
+  // trampoline → back to interpreter), so activeProcessId is valid.
+  ProcessId procId = activeProcessId;
+
+  // Convert uint64_t args to InterpretedValue with correct widths from the
+  // function signature.
+  llvm::SmallVector<InterpretedValue, 8> interpArgs;
+  auto argTypes = funcOp.getArgumentTypes();
+  for (uint32_t i = 0; i < numArgs; ++i) {
+    unsigned bits = 64;
+    if (i < argTypes.size()) {
+      if (auto intTy = mlir::dyn_cast<mlir::IntegerType>(argTypes[i]))
+        bits = intTy.getWidth();
+    }
+    interpArgs.push_back(InterpretedValue(args[i], bits));
+  }
+
+  // Call the interpreter.
+  llvm::SmallVector<InterpretedValue, 2> interpResults;
+  auto &callState = processStates[procId];
+  ++callState.callDepth;
+  (void)interpretFuncBody(procId, funcOp, interpArgs, interpResults,
+                          /*callOp=*/nullptr);
+  --callState.callDepth;
+
+  // Convert results back to uint64_t.
+  for (uint32_t i = 0; i < numRets && i < interpResults.size(); ++i)
+    rets[i] = interpResults[i].getUInt64();
 }
 
 void LLHDProcessInterpreter::loadCompiledProcesses(
