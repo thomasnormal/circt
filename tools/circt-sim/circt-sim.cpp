@@ -61,6 +61,7 @@
 #include "circt/Support/Version.h"
 #include "circt/Support/WallClockTimeout.h"
 #include "mlir/Bytecode/BytecodeReader.h"
+#include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
@@ -654,6 +655,11 @@ static llvm::cl::opt<bool>
     skipPasses("skip-passes",
                llvm::cl::desc("Skip preprocessing passes (input already lowered)"),
                llvm::cl::init(false), llvm::cl::cat(mainCategory));
+
+static llvm::cl::opt<std::string> savePreprocessed(
+    "save-preprocessed",
+    llvm::cl::desc("Save post-canonicalization MLIR as bytecode (.mlirbc)"),
+    llvm::cl::init(""), llvm::cl::cat(mainCategory));
 
 // DPI options
 static llvm::cl::list<std::string>
@@ -3421,6 +3427,29 @@ static LogicalResult processInput(MLIRContext &context,
     if (failed(pm.run(*module))) {
       llvm::errs() << "Error: Pass pipeline failed\n";
       return failure();
+    }
+
+    // Save post-canonicalization MLIR as bytecode if requested.
+    // On subsequent runs, pass the .mlirbc file + --skip-passes to avoid
+    // re-parsing text MLIR and re-running canonicalization.
+    if (!savePreprocessed.empty()) {
+      std::error_code ec;
+      llvm::raw_fd_ostream os(savePreprocessed, ec);
+      if (ec) {
+        llvm::errs() << "[circt-sim] Error opening " << savePreprocessed
+                     << ": " << ec.message() << "\n";
+      } else {
+        mlir::BytecodeWriterConfig config;
+        if (mlir::failed(mlir::writeBytecodeToFile(module->getOperation(), os,
+                                                   config))) {
+          llvm::errs() << "[circt-sim] Error writing bytecode to "
+                       << savePreprocessed << "\n";
+        } else {
+          os.flush();
+          llvm::errs() << "[circt-sim] Saved preprocessed MLIR to "
+                       << savePreprocessed << "\n";
+        }
+      }
     }
   }
 

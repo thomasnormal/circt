@@ -29,6 +29,7 @@ set(libs
   MLIRLLVMDialect
   MLIRLLVMIRTransforms
   MLIRMathDialect
+  MLIRBytecodeWriter
   MLIRParser
   MLIRSCFDialect
   MLIRTransforms
