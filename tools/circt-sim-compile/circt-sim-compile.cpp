@@ -429,6 +429,14 @@ stripNonLLVMFunctions(ModuleOp microModule) {
         toStrip.push_back(func);
       return;
     }
+    // Defined functions whose signature contains non-LLVM types (e.g.
+    // !llhd.ref) also fail LLVM IR translation — the entry block arguments
+    // inherit the function param types and are not reachable by the inner-op
+    // walk below, so we must check the function type here first.
+    if (!hasAllLLVMCompatibleTypes(func.getFunctionType())) {
+      toStrip.push_back(func);
+      return;
+    }
     bool hasNonLLVM = false;
     func.walk([&](Operation *op) {
       if (!isa<LLVM::LLVMDialect>(op->getDialect())) {
@@ -449,13 +457,16 @@ stripNonLLVMFunctions(ModuleOp microModule) {
 
   for (auto func : toStrip) {
     stripped.push_back(func.getSymName().str());
-    if (func.isExternal()) {
-      // Erase external declarations outright — they have no body to clear and
-      // keeping them would cause LLVM IR translation to fail.
+    if (func.isExternal() || !hasAllLLVMCompatibleTypes(func.getFunctionType())) {
+      // Erase outright: external declarations have no body to clear, and
+      // defined functions with non-LLVM-typed signatures cannot be demoted to
+      // a valid external declaration (the decl would still carry non-LLVM
+      // param types and fail LLVM IR translation).
       func.erase();
     } else {
-      // For defined functions, demote to an external declaration so that any
-      // remaining call sites see a valid (if unresolved) symbol.
+      // For defined functions whose body contains non-LLVM ops (but whose
+      // signature is LLVM-compatible), demote to an external declaration so
+      // that any remaining call sites see a valid (if unresolved) symbol.
       func.getBody().getBlocks().clear();
       func.setLinkage(LLVM::Linkage::External);
     }
@@ -511,13 +522,22 @@ generateTrampolines(ModuleOp microModule) {
   auto i64Ty = IntegerType::get(mlirCtx, 64);
   auto voidTy = LLVM::LLVMVoidType::get(mlirCtx);
 
-  // Declare the __circt_sim_ctx global (set by runtime before calling
+  // Define the __circt_sim_ctx global (set by runtime before calling
   // compiled code). Single-threaded, so a plain global suffices.
+  // Use an initializer region returning a null pointer so the symbol is a
+  // DEFINITION (not merely an external declaration), allowing dlsym to find it.
   if (!microModule.lookupSymbol<LLVM::GlobalOp>("__circt_sim_ctx")) {
     builder.setInsertionPointToEnd(microModule.getBody());
-    LLVM::GlobalOp::create(builder, loc, ptrTy, /*isConstant=*/false,
-                           LLVM::Linkage::External, "__circt_sim_ctx",
-                           /*value=*/Attribute());
+    auto globalOp =
+        LLVM::GlobalOp::create(builder, loc, ptrTy, /*isConstant=*/false,
+                               LLVM::Linkage::External, "__circt_sim_ctx",
+                               /*value=*/Attribute());
+    // Add initializer body: { return null; }
+    Block *initBlock = builder.createBlock(&globalOp.getInitializerRegion());
+    builder.setInsertionPointToStart(initBlock);
+    auto nullVal = LLVM::ZeroOp::create(builder, loc, ptrTy);
+    LLVM::ReturnOp::create(builder, loc, nullVal.getResult());
+    builder.setInsertionPointToEnd(microModule.getBody());
   }
 
   // Declare __circt_sim_call_interpreted().
@@ -2233,6 +2253,9 @@ static void setDefaultHiddenVisibility(llvm::Module &llvmModule) {
   for (auto &global : llvmModule.globals()) {
     // Local linkage (private/internal) requires DefaultVisibility.
     if (global.hasLocalLinkage())
+      continue;
+    // Keep __circt_sim_ctx visible so dlsym() can find it at runtime.
+    if (global.getName() == "__circt_sim_ctx")
       continue;
     global.setVisibility(llvm::GlobalValue::HiddenVisibility);
   }
