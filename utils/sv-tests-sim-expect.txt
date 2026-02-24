@@ -128,14 +128,13 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 # 6.5--variable_multiple_assignments: now correctly rejected (multiple continuous assigns)
 # 11.9--tagged_union_member_access_inv: now correctly rejected (invalid tagged union access)
 
-# Should-fail tests: require runtime SVA concurrent assertion evaluation (sim-time failure)
-16.10--property-local-var-fail	skip	Should-fail: runtime SVA property assertion failure (needs concurrent SVA eval)
-16.10--sequence-local-var-fail	skip	Should-fail: runtime SVA sequence assertion failure (needs concurrent SVA eval)
+# Should-fail local-var SVA simulation tests now fail correctly via runtime
+# evaluation and are handled as XFAIL by sv-tests metadata. No expect entries.
 
-# Immediate assume tests with undriven top inputs are compile-valid but runtime
-# behavior is environment-dependent (X-valued unconstrained port at time 0/final).
-16.2--assume	compile-only	Immediate assume on undriven top input (runtime env-dependent)
-16.2--assume0	compile-only	Immediate assume #0 on undriven top input (runtime env-dependent)
+# `16.2--assume` and `16.2--assume0` now run through full simulation and pass
+# consistently (no expect entries needed).
+# `16.2--assume-final` remains compile-only because final-time evaluation on an
+# undriven top input is still environment-dependent.
 16.2--assume-final	compile-only	Immediate assume final on undriven top input (runtime env-dependent)
 
 # Ch18: Class-only tests (auto-wrapped by harness with class instantiation + randomize)
