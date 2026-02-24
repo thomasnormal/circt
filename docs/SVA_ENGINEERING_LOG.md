@@ -2,6 +2,42 @@
 
 ## 2026-02-24
 
+- Iteration update (tagged union invalid-member runtime failure):
+  - realization:
+    - remaining sv-tests sim failure `11.9--tagged_union_member_access_inv`
+      was caused by lowering `a.Valid` on tagged unions without checking the
+      active tag, so runtime completed successfully instead of failing.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - added tagged-union read guard:
+        - compare wrapper `tag` with selected member index
+        - lower to `moore.conditional`
+        - mismatch path emits `moore.builtin.severity fatal`.
+      - refactored union-member index lookup into shared helper routines.
+    - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+      - `moore.builtin.severity fatal` now emits
+        `sim.terminate(success=false)`, so fatal diagnostics exit non-zero.
+    - tests:
+      - added `test/Conversion/ImportVerilog/tagged-union-invalid-member-access.sv`
+      - added `test/Tools/circt-sim/tagged-union-invalid-member-runtime.sv`
+      - updated `test/Conversion/ImportVerilog/tagged-union.sv`
+      - updated `test/Tools/circt-sim/syscall-fatal.sv`
+      - updated `utils/sv-tests-sim-expect.txt` note for 11.9.
+  - surprises:
+    - `moore.conditional` regions must be created with `emplaceBlock()` before
+      inserting branch bodies; using `.front()` on empty regions caused an
+      `ilist_iterator` sentinel assertion crash in `circt-verilog`.
+    - making all runtime `__moore_error` diagnostics hard-fail overreached and
+      broke existing `$error` behavior; restricting failure to fatal severity
+      preserved intended semantics.
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Conversion/ImportVerilog/tagged-union-invalid-member-access.sv build-test/test/Conversion/ImportVerilog/tagged-union.sv build-test/test/Tools/circt-sim/tagged-union-invalid-member-runtime.sv build-test/test/Tools/circt-sim/syscall-fatal.sv`
+      - result: `4/4` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Tools/circt-sim/syscall-fatal-error-warning-info.sv`
+      - result: `1/1` pass.
+    - `TEST_FILTER='11.9--tagged_union_member_access_inv' PARALLEL=1 OUT=/tmp/sv-tagged-union-one.txt utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `pass=1 fail=0`.
+
 - Iteration update (ImportVerilog: enforce mixed/multi continuous variable
   driver legality):
   - realization:

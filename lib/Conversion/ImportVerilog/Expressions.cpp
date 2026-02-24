@@ -1081,6 +1081,36 @@ struct ExprVisitor {
     return context.convertRvalueExpression(expr);
   }
 
+  /// Collect members from a packed or unpacked union type.
+  LogicalResult
+  collectUnionMembers(Type unionType,
+                      SmallVectorImpl<moore::StructLikeMember> &members) {
+    if (auto packedUnion = dyn_cast<moore::UnionType>(unionType)) {
+      members.append(packedUnion.getMembers().begin(),
+                     packedUnion.getMembers().end());
+      return success();
+    }
+    if (auto unpackedUnion = dyn_cast<moore::UnpackedUnionType>(unionType)) {
+      members.append(unpackedUnion.getMembers().begin(),
+                     unpackedUnion.getMembers().end());
+      return success();
+    }
+    return failure();
+  }
+
+  /// Return the member index used as the runtime tag value for a tagged union.
+  std::optional<unsigned> getTaggedUnionMemberIndex(Type unionType,
+                                                    StringRef memberName) {
+    SmallVector<moore::StructLikeMember> members;
+    if (failed(collectUnionMembers(unionType, members)))
+      return std::nullopt;
+    for (size_t i = 0; i < members.size(); ++i) {
+      if (members[i].name.getValue() == memberName)
+        return static_cast<unsigned>(i);
+    }
+    return std::nullopt;
+  }
+
   /// Handle virtual interface member access. When slang resolves vif.data,
   /// it creates a NamedValueExpression pointing directly to the interface
   /// member variable. We need to parse the syntax to find the virtual
@@ -1892,18 +1922,23 @@ struct ExprVisitor {
 
         // Get union type from the struct wrapper's data field
         Type unionType;
+        Type tagType;
         if (auto packedStruct = dyn_cast<moore::StructType>(valueConvertedType)) {
-          if (packedStruct.getMembers().size() == 2)
+          if (packedStruct.getMembers().size() == 2) {
+            tagType = packedStruct.getMembers()[0].type;
             unionType = packedStruct.getMembers()[1].type;
+          }
         } else if (auto unpackedStruct =
                        dyn_cast<moore::UnpackedStructType>(valueConvertedType)) {
-          if (unpackedStruct.getMembers().size() == 2)
+          if (unpackedStruct.getMembers().size() == 2) {
+            tagType = unpackedStruct.getMembers()[0].type;
             unionType = unpackedStruct.getMembers()[1].type;
+          }
         }
 
-        if (!unionType) {
+        if (!unionType || !tagType) {
           mlir::emitError(loc)
-              << "tagged union must have struct wrapper with data field";
+              << "tagged union must have struct wrapper with tag/data fields";
           return {};
         }
 
@@ -1918,12 +1953,60 @@ struct ExprVisitor {
           return moore::UnionExtractRefOp::create(builder, loc, resultType,
                                                   memberName, dataRef);
         }
-        // Extract data field, then extract union member
+        auto tagIndex =
+            getTaggedUnionMemberIndex(unionType, expr.member.name);
+        if (!tagIndex) {
+          mlir::emitError(loc) << "tagged union member '" << expr.member.name
+                               << "' not found";
+          return {};
+        }
+        auto tagIntType = dyn_cast<moore::IntType>(tagType);
+        if (!tagIntType) {
+          mlir::emitError(loc) << "tagged union tag must be an integer type";
+          return {};
+        }
+
+        // Extract tag and data, then guard union extraction with a runtime tag
+        // match check. On mismatch, emit an error and still yield the extracted
+        // value to preserve expression typing.
+        auto tagValue = moore::StructExtractOp::create(
+            builder, loc, tagType, builder.getStringAttr("tag"), value);
         auto dataValue = moore::StructExtractOp::create(
             builder, loc, unionType,
             builder.getStringAttr("data"), value);
-        return moore::UnionExtractOp::create(builder, loc, type, memberName,
-                                             dataValue);
+
+        auto expectedTag = moore::ConstantOp::create(
+            builder, loc, tagIntType, static_cast<int64_t>(*tagIndex));
+        auto tagMatches =
+            moore::EqOp::create(builder, loc, tagValue, expectedTag);
+        auto conditional =
+            moore::ConditionalOp::create(builder, loc, type, tagMatches);
+        auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+        auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+
+        {
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(&trueBlock);
+          auto extracted =
+              moore::UnionExtractOp::create(builder, loc, type, memberName,
+                                            dataValue);
+          moore::YieldOp::create(builder, loc, extracted);
+        }
+        {
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(&falseBlock);
+          auto message = moore::FormatLiteralOp::create(
+              builder, loc,
+              std::string("Invalid tagged union member access: ") +
+                  std::string(expr.member.name));
+          moore::SeverityBIOp::create(builder, loc, moore::Severity::Fatal,
+                                      message);
+          auto extracted =
+              moore::UnionExtractOp::create(builder, loc, type, memberName,
+                                            dataValue);
+          moore::YieldOp::create(builder, loc, extracted);
+        }
+        return conditional.getResult();
       }
 
       if (isLvalue) {
@@ -8723,30 +8806,15 @@ struct RvalueExprVisitor : public ExprVisitor {
     // Get the underlying union type from the data member
     Type unionType = dataMember.type;
     SmallVector<moore::StructLikeMember> unionMembers;
-    if (auto packedUnion = dyn_cast<moore::UnionType>(unionType)) {
-      unionMembers.append(packedUnion.getMembers().begin(),
-                          packedUnion.getMembers().end());
-    } else if (auto unpackedUnion =
-                   dyn_cast<moore::UnpackedUnionType>(unionType)) {
-      unionMembers.append(unpackedUnion.getMembers().begin(),
-                          unpackedUnion.getMembers().end());
-    } else {
+    if (failed(collectUnionMembers(unionType, unionMembers))) {
       mlir::emitError(loc) << "tagged union data field must be a union type";
       return {};
     }
 
     // Find the tag index for the member being set
     StringRef memberName(expr.member.name);
-    unsigned tagIndex = 0;
-    bool found = false;
-    for (size_t i = 0; i < unionMembers.size(); ++i) {
-      if (unionMembers[i].name.getValue() == memberName) {
-        tagIndex = i;
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
+    auto tagIndex = getTaggedUnionMemberIndex(unionType, memberName);
+    if (!tagIndex) {
       mlir::emitError(loc) << "tagged union member '" << memberName
                            << "' not found";
       return {};
@@ -8759,7 +8827,7 @@ struct RvalueExprVisitor : public ExprVisitor {
       return {};
     }
     auto tagValue = moore::ConstantOp::create(builder, loc, tagIntType,
-                                              static_cast<int64_t>(tagIndex));
+                                              static_cast<int64_t>(*tagIndex));
 
     // Create the union value
     Value unionValue;

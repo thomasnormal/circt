@@ -19,9 +19,13 @@ module TaggedUnionBasic;
     u = tagged i 42;
 
     // CHECK: [[UREAD0:%.+]] = moore.read %u : <ustruct<{tag: i1, data: uunion<{i: i32, b: l8}>}>>
+    // CHECK: [[TAG0:%.+]] = moore.struct_extract [[UREAD0]], "tag" : ustruct<{tag: i1, data: uunion<{i: i32, b: l8}>}> -> i1
     // CHECK: [[DATA0:%.+]] = moore.struct_extract [[UREAD0]], "data" : ustruct<{tag: i1, data: uunion<{i: i32, b: l8}>}> -> uunion<{i: i32, b: l8}>
-    // CHECK: [[IVAL:%.+]] = moore.union_extract [[DATA0]], "i" : uunion<{i: i32, b: l8}> -> i32
-    // CHECK: moore.blocking_assign %x, [[IVAL]] : i32
+    // CHECK: [[MATCH0:%.+]] = moore.eq [[TAG0]], %{{.+}} : i1 -> i1
+    // CHECK: [[SEL0:%.+]] = moore.conditional [[MATCH0]] : i1 -> i32
+    // CHECK: moore.union_extract [[DATA0]], "i" : uunion<{i: i32, b: l8}> -> i32
+    // CHECK: moore.builtin.severity fatal
+    // CHECK: moore.blocking_assign %x, [[SEL0]] : i32
     x = u.i;
 
     // CHECK: [[UNION1:%.+]] = moore.union_create %{{.+}} {fieldName = "b"} : l8 -> uunion<{i: i32, b: l8}>
@@ -30,9 +34,13 @@ module TaggedUnionBasic;
     u = tagged b 8'hAA;
 
     // CHECK: [[UREAD1:%.+]] = moore.read %u : <ustruct<{tag: i1, data: uunion<{i: i32, b: l8}>}>>
+    // CHECK: [[TAG1:%.+]] = moore.struct_extract [[UREAD1]], "tag" : ustruct<{tag: i1, data: uunion<{i: i32, b: l8}>}> -> i1
     // CHECK: [[DATA1:%.+]] = moore.struct_extract [[UREAD1]], "data" : ustruct<{tag: i1, data: uunion<{i: i32, b: l8}>}> -> uunion<{i: i32, b: l8}>
-    // CHECK: [[BVAL:%.+]] = moore.union_extract [[DATA1]], "b" : uunion<{i: i32, b: l8}> -> l8
-    // CHECK: moore.blocking_assign %y, [[BVAL]] : l8
+    // CHECK: [[MATCH1:%.+]] = moore.eq [[TAG1]], %{{.+}} : i1 -> i1
+    // CHECK: [[SEL1:%.+]] = moore.conditional [[MATCH1]] : i1 -> l8
+    // CHECK: moore.union_extract [[DATA1]], "b" : uunion<{i: i32, b: l8}> -> l8
+    // CHECK: moore.builtin.severity fatal
+    // CHECK: moore.blocking_assign %y, [[SEL1]] : l8
     y = u.b;
   end
 endmodule
