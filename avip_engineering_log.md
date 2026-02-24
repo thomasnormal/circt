@@ -7643,3 +7643,42 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - This failure was not an SVA front-end semantic issue; it was a lowering
   storage-cast mismatch between Moore real types and HW bitwidth utilities.
+
+## 2026-02-24: BMC SMT-LIB support for real sampled equality paths
+
+### Gap identified (red-first)
+- Added:
+  - `test/Tools/circt-bmc/sva-past-real-eq-unsat-e2e.sv`
+- Pre-fix run failed:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-bmc/sva-past-real-eq-unsat-e2e.sv`
+  - failure: `solver must not contain any non-SMT operations`
+
+### Root cause
+- In `forSMTLIBExport` mode, real-valued assertion compare paths left
+  `arith.cmpf`/`arith.bitcast`/bridge-cast chains live inside `smt.solver`.
+- SMT-LIB exporter requires solver bodies to contain SMT dialect ops only.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - added `FloatCmpCastOpRewrite` (post-pattern phase) to lower selected float
+    compare cast chains into pure SMT bool/bv logic.
+  - supports `arith.cmpf` predicates used by equality paths:
+    - `OEQ`, `ONE`, `UEQ`, `UNE`
+  - materializes compare operands as SMT bitvectors through existing bitcast /
+    unrealized-cast bridges and float constants.
+  - models IEEE-sensitive equality corner cases in bitvector form:
+    - signed-zero equivalence (`+0.0 == -0.0`)
+    - NaN ordered/unordered behavior for the supported predicates.
+
+### Validation (green)
+- New regression:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-bmc/sva-past-real-eq-unsat-e2e.sv`
+  - result: `1/1 PASS`
+- Focused non-regression slice:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-.*|bmc-run-smtlib-seq-initial-assert|clocked-assert-constant-false-clock-unsat|sva-past-real-eq-unsat-e2e'`
+  - result: `181/181 PASS`
+
+### Realizations / surprises
+- The failure was not in front-end SVA lowering; it was an export-contract gap:
+  solver-region purity for SMT-LIB required bridging float compare chains to
+  SMT bitvector predicates before emission.

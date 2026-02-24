@@ -2257,6 +2257,174 @@ struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
   }
 };
 
+/// Lower select float compare casts used in BMC solver regions into pure SMT
+/// bitvector predicates so SMT-LIB export remains legal.
+struct FloatCmpCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
+  using OpRewritePattern<UnrealizedConversionCastOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(UnrealizedConversionCastOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.getInputs().size() != 1 || op.getOutputs().size() != 1)
+      return failure();
+
+    Type dstTy = op.getOutputs()[0].getType();
+    bool wantBool = isa<smt::BoolType>(dstTy);
+    bool wantBV1 = false;
+    if (auto bvTy = dyn_cast<smt::BitVectorType>(dstTy))
+      wantBV1 = bvTy.getWidth() == 1;
+    if (!wantBool && !wantBV1)
+      return failure();
+
+    auto cmpf = op.getInputs()[0].getDefiningOp<arith::CmpFOp>();
+    if (!cmpf)
+      return failure();
+
+    auto getFPShape = [](unsigned width) -> std::optional<std::pair<unsigned, unsigned>> {
+      switch (width) {
+      case 32:
+        return std::make_pair(8u, 23u);
+      case 64:
+        return std::make_pair(11u, 52u);
+      default:
+        return std::nullopt;
+      }
+    };
+
+    auto materializeIntAsSMTBV =
+        [&](Value value, unsigned expectedWidth) -> Value {
+      if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
+        if (bvTy.getWidth() == expectedWidth)
+          return value;
+        return {};
+      }
+
+      auto intTy = dyn_cast<IntegerType>(value.getType());
+      if (!intTy || intTy.getWidth() != expectedWidth)
+        return {};
+
+      if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast.getInputs().size() == 1 && cast.getOutputs().size() == 1)
+          if (auto bvTy =
+                  dyn_cast<smt::BitVectorType>(cast.getInputs()[0].getType()))
+            if (bvTy.getWidth() == expectedWidth)
+              return cast.getInputs()[0];
+      }
+
+      if (auto cst = value.getDefiningOp<arith::ConstantOp>())
+        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue()))
+          return smt::BVConstantOp::create(
+              rewriter, cst.getLoc(),
+              intAttr.getValue().zextOrTrunc(expectedWidth));
+
+      return {};
+    };
+
+    auto materializeFloatAsSMTBV = [&](Value value,
+                                       unsigned &bitWidth) -> Value {
+      auto floatTy = dyn_cast<FloatType>(value.getType());
+      if (!floatTy)
+        return {};
+      bitWidth = floatTy.getWidth();
+
+      if (auto shape = getFPShape(bitWidth); !shape)
+        return {};
+
+      if (auto cst = value.getDefiningOp<arith::ConstantOp>())
+        if (auto floatAttr = dyn_cast<FloatAttr>(cst.getValue()))
+          return smt::BVConstantOp::create(
+              rewriter, cst.getLoc(), floatAttr.getValue().bitcastToAPInt());
+
+      if (auto bitcast = value.getDefiningOp<arith::BitcastOp>())
+        return materializeIntAsSMTBV(bitcast.getIn(), bitWidth);
+
+      if (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast.getInputs().size() == 1 && cast.getOutputs().size() == 1)
+          if (auto bvTy =
+                  dyn_cast<smt::BitVectorType>(cast.getInputs()[0].getType()))
+            if (bvTy.getWidth() == bitWidth)
+              return cast.getInputs()[0];
+      }
+
+      return {};
+    };
+
+    auto buildIsNaN = [&](Value bits, unsigned width) -> Value {
+      auto [expWidth, fracWidth] = *getFPShape(width);
+      Location loc = bits.getLoc();
+      auto expTy = smt::BitVectorType::get(rewriter.getContext(), expWidth);
+      auto fracTy = smt::BitVectorType::get(rewriter.getContext(), fracWidth);
+      Value expBits = smt::ExtractOp::create(rewriter, loc, expTy, fracWidth, bits);
+      Value fracBits = smt::ExtractOp::create(rewriter, loc, fracTy, 0, bits);
+      Value expAllOnes = smt::BVConstantOp::create(
+          rewriter, loc, APInt::getAllOnes(expWidth));
+      Value fracZero = smt::BVConstantOp::create(rewriter, loc, APInt(fracWidth, 0));
+      Value expIsAllOnes = smt::EqOp::create(rewriter, loc, expBits, expAllOnes);
+      Value fracIsZero = smt::EqOp::create(rewriter, loc, fracBits, fracZero);
+      Value fracNonZero = smt::NotOp::create(rewriter, loc, fracIsZero);
+      return createSMTAndFolded(rewriter, loc, expIsAllOnes, fracNonZero);
+    };
+
+    auto buildIsZeroIgnoringSign = [&](Value bits, unsigned width) -> Value {
+      Location loc = bits.getLoc();
+      auto magTy = smt::BitVectorType::get(rewriter.getContext(), width - 1);
+      Value magBits = smt::ExtractOp::create(rewriter, loc, magTy, 0, bits);
+      Value magZero = smt::BVConstantOp::create(rewriter, loc, APInt(width - 1, 0));
+      return smt::EqOp::create(rewriter, loc, magBits, magZero);
+    };
+
+    unsigned lhsWidth = 0;
+    unsigned rhsWidth = 0;
+    Value lhsBits = materializeFloatAsSMTBV(cmpf.getLhs(), lhsWidth);
+    Value rhsBits = materializeFloatAsSMTBV(cmpf.getRhs(), rhsWidth);
+    if (!lhsBits || !rhsBits || lhsWidth != rhsWidth)
+      return failure();
+    if (!getFPShape(lhsWidth))
+      return failure();
+
+    Location loc = op.getLoc();
+    Value bitEq = smt::EqOp::create(rewriter, loc, lhsBits, rhsBits);
+    Value lhsZero = buildIsZeroIgnoringSign(lhsBits, lhsWidth);
+    Value rhsZero = buildIsZeroIgnoringSign(rhsBits, rhsWidth);
+    Value bothZero = createSMTAndFolded(rewriter, loc, lhsZero, rhsZero);
+    Value eqOrBothZero = createSMTOrFolded(rewriter, loc, bitEq, bothZero);
+
+    Value lhsNaN = buildIsNaN(lhsBits, lhsWidth);
+    Value rhsNaN = buildIsNaN(rhsBits, rhsWidth);
+    Value anyNaN = createSMTOrFolded(rewriter, loc, lhsNaN, rhsNaN);
+    Value notAnyNaN = smt::NotOp::create(rewriter, loc, anyNaN);
+    Value notEqOrBothZero = smt::NotOp::create(rewriter, loc, eqOrBothZero);
+
+    Value pred;
+    switch (cmpf.getPredicate()) {
+    case arith::CmpFPredicate::OEQ:
+      pred = createSMTAndFolded(rewriter, loc, notAnyNaN, eqOrBothZero);
+      break;
+    case arith::CmpFPredicate::ONE:
+      pred = createSMTAndFolded(rewriter, loc, notAnyNaN, notEqOrBothZero);
+      break;
+    case arith::CmpFPredicate::UEQ:
+      pred = createSMTOrFolded(rewriter, loc, anyNaN, eqOrBothZero);
+      break;
+    case arith::CmpFPredicate::UNE:
+      pred = createSMTOrFolded(rewriter, loc, anyNaN, notEqOrBothZero);
+      break;
+    default:
+      return failure();
+    }
+
+    if (wantBool) {
+      rewriter.replaceOp(op, pred);
+      return success();
+    }
+
+    Value one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+    Value zero = smt::BVConstantOp::create(rewriter, loc, 0, 1);
+    Value asBV = smt::IteOp::create(rewriter, loc, pred, one, zero);
+    rewriter.replaceOp(op, asBV);
+    return success();
+  }
+};
+
 /// Move unrealized casts into the region that defines their input if the cast
 /// is used exclusively there. This avoids cross-region value uses.
 struct RelocateCastIntoInputRegion
@@ -9639,7 +9807,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
     return signalPassFailure();
 
   RewritePatternSet postPatterns(&getContext());
-  postPatterns.add<BoolBVCastOpRewrite>(&getContext());
+  postPatterns.add<FloatCmpCastOpRewrite, BoolBVCastOpRewrite>(&getContext());
   if (failed(applyPatternsGreedily(getOperation(), std::move(postPatterns))))
     return signalPassFailure();
 
