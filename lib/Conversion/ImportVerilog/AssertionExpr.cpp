@@ -34,6 +34,8 @@ using namespace ImportVerilog;
 namespace {
 constexpr const char kDisableIffAttr[] = "sva.disable_iff";
 constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
+constexpr const char kAbortOnActionAttr[] = "sva.abort_on.action";
+constexpr const char kAbortOnSyncAttr[] = "sva.abort_on.sync";
 constexpr const char kExplicitClockingAttr[] = "sva.explicit_clocking";
 
 static Value createUnknownOrZeroConstant(Context &context, Location loc,
@@ -3441,15 +3443,23 @@ struct AssertionExprVisitor {
     if (expr.action == slang::ast::AbortAssertionExpr::Accept) {
       // Approximate accept_on as vacuous success when the abort condition is
       // true; for sync_accept_on, condition is sampled on the property clock.
-      return ltl::OrOp::create(builder, loc,
-                               SmallVector<Value, 2>{condition, assertionExpr});
+      auto orOp = ltl::OrOp::create(builder, loc,
+                                    SmallVector<Value, 2>{condition, assertionExpr});
+      orOp->setAttr(kAbortOnActionAttr, builder.getStringAttr("accept"));
+      if (expr.isSync)
+        orOp->setAttr(kAbortOnSyncAttr, builder.getUnitAttr());
+      return orOp;
     }
 
     // Approximate reject_on as forcing failure when the abort condition is
     // true; for sync_reject_on, condition is sampled on the property clock.
     auto notCondition = ltl::NotOp::create(builder, loc, condition);
-    return ltl::AndOp::create(builder, loc,
-                              SmallVector<Value, 2>{notCondition, assertionExpr});
+    auto andOp = ltl::AndOp::create(builder, loc,
+                                    SmallVector<Value, 2>{notCondition, assertionExpr});
+    andOp->setAttr(kAbortOnActionAttr, builder.getStringAttr("reject"));
+    if (expr.isSync)
+      andOp->setAttr(kAbortOnSyncAttr, builder.getUnitAttr());
+    return andOp;
   }
 
   /// Emit an error for all other expressions.

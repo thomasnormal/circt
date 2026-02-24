@@ -1,5 +1,90 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: Async abort_on pulse semantics (SVA runtime parity)
+
+### What was fixed
+1. Added explicit abort-on lowering markers in ImportVerilog:
+   - `sva.abort_on.action` (`accept` / `reject`)
+   - `sva.abort_on.sync` (for sync variants)
+2. Added async abort pulse handling in `circt-sim`:
+   - extract async abort condition from marked LTL tree for clocked
+     assert/assume.
+   - register a condition-sensitive monitor process that latches abort pulses.
+   - inject latched pulse at next sampled edge via per-sample truth override.
+3. Added regressions:
+   - `test/Tools/circt-sim/sva-accept-on-async-pulse-runtime.sv`
+   - `test/Tools/circt-sim/sva-reject-on-async-pulse-runtime.sv`
+
+### Realizations / surprises
+- Existing `accept_on` runtime coverage only exercised sampled-high cases; it
+  did not cover between-edge pulses.
+- Without pulse latching, async `accept_on/reject_on` behaved like sampled
+  semantics and missed real async abort events.
+
+### Validation snapshot
+- red-first:
+  - new tests failed (`2/2`) before runtime patch.
+- after fix:
+  - new tests pass (`2/2`).
+  - focused abort-on runtime/import sweep:
+    - `circt-sim` filter `accept-on|reject-on|abort-on`: pass (`4/4`)
+    - ImportVerilog `sva-abort-on.sv`: pass (`1/1`)
+  - broader `circt-sim` SVA filter:
+    - pass (`106/106`)
+
+## 2026-02-24 Session: SVA/BMC Robustness Sweep (non-AVIP parity blocker removal)
+
+### What was fixed
+1. `LowerToBMC` LLHD time robustness:
+   - removed unsafe rewrite of `llhd.constant_time` to `i1`.
+   - now only erases dead `llhd.constant_time` ops after LLHD drive stripping.
+   - resolved crash class: `cast<llhd::TimeType>` assertion when `llhd.time_to_int`
+     is still present in the lowered circuit.
+
+2. `VerifToSMT` nested-check handling:
+   - nested procedural checks (`verif.assert/assume/cover` not directly in the
+     circuit block) are now erased before SMT export.
+   - prevents cross-region SSA dominance failures in system-task/propertyless
+     flows after `strip-sim`.
+
+### Realizations / surprises
+- Several previously-reported SVA regressions were stale snapshots from older
+  binaries or logs; after rebuilding and rerunning focused suites, those cases
+  were green.
+- A key failure mode came from procedural scaffolding (`sim.pause`,
+  `sim.terminate`) producing nested check IR that is structurally different from
+  standard top-level concurrent assertion lowering.
+
+### Validation snapshot
+- new lit regressions passed:
+  - `test/Tools/circt-bmc/bmc-run-smtlib-seq-initial-assert.mlir`
+  - `test/Tools/circt-bmc/lower-to-bmc-llhd-time-to-int.mlir`
+- sv-tests chapter-20 recheck passed:
+  - `20.2--stop`, `20.4--timeformat`, `20.10--fatal` (`3/3`)
+- focused SVA/constraint/cross/fork/i3c lit sweeps passed:
+  - `circt-bmc`: `177/177`
+  - `circt-sim`: `142/142`
+
+## 2026-02-24 Session: SVA UVM Runtime Promotion (sv-tests chapter 16)
+
+### What changed
+- Revalidated all chapter-16 SVA UVM cases that were marked compile-only in
+  `utils/sv-tests-sim-expect.txt`.
+- Promoted 22 tests from `compile-only` to default runtime execution by removing
+  their expect overrides.
+- Kept `16.15--property-iff-uvm-fail` as `skip` (intentional should-fail path).
+
+### Validation snapshot
+- Probe without expectations:
+  - `EXPECT_FILE=/dev/null ... TEST_FILTER='<22 SVA UVM names>'`
+  - outcome: `22/22` pass, `compile_fail=0`, `timeout=0`, `error=0`.
+- Re-run with default expectations after promotion:
+  - outcome: `22/22` pass, no behavior regressions.
+
+### Realization
+- The old compile-only rationale ("MLIR init >5min per test") is stale for this
+  SVA UVM slice in the current toolchain; these now run as normal sim tests.
+
 ## Goal
 Bring all 7 AVIPs (APB, AHB, AXI4, I2S, I3C, JTAG, SPI) to full parity with Xcelium using circt-sim.
 
@@ -6641,3 +6726,47 @@ Based on these findings, the circt-sim compiled process architecture:
    issues, not simulator crashes.
 2. Separating functional mismatch buckets from infra buckets gives a much
    clearer signal for CVDP progress tracking.
+
+## 2026-02-24: CVDP "No SV" Harnesses Still Useful (Stub SV)
+
+### Problem
+- CVDP v1.0.2 public JSONL rows frequently include a cocotb harness + `.env`
+  that references SV files (e.g. `/code/rtl/foo.sv`), but the actual SV file
+  contents are redacted (empty string in `output.context`, and no SV in
+  `harness.files` / `input.context`).
+- The original CIRCT-side wrapper treated this as `NO_SV` and skipped running
+  cocotb entirely, which made the infra metric less representative (we weren't
+  exercising the VPI + cocotb runtime on those harnesses at all).
+
+### Change
+- Updated `utils/run_cvdp_cocotb_runner.py` to synthesize a stub SV module when
+  a datapoint has no SV text:
+  - Writes `problem_dir/_cvdp_stub.sv` named after `TOPLEVEL` from `.env`.
+  - Provides common `clk`/`rst`/`reset` signals to reduce immediate handle
+    failures and allow basic scheduling progress.
+  - Bounds stub runs via `CVDP_STUB_MAX_TIME_FS` (default `2_000_000_000` fs).
+  - Tracks stubbed cases in `results["stub_sv"]` while still recording that the
+    datapoint had missing SV via `results["no_sv"]`.
+- Tweaked result classification so harness Python syntax/indentation errors
+  are treated as `COCOTB_FAIL` (functional mismatch) rather than `SIM_FAIL`
+  (infra failure).
+
+### Regression test
+- Added `utils/cvdp_cocotb_stub_sv_behavior_check.sh` +
+  `test/Tools/run-cvdp-cocotb-stub-sv-behavior.test` to prove the wrapper:
+  - takes the `NO_SV` path,
+  - generates stub SV,
+  - calls compile + sim (with bounded `max_time_fs`),
+  - and records `stub_sv` in results JSON.
+
+### Validation
+- Single redacted-SV datapoint now runs (fast) instead of being skipped:
+  - `CVDP_STUB_MAX_TIME_FS=2000000000 python3 utils/run_cvdp_cocotb_runner.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -i cvdp_copilot_16qam_mapper_0001 -o /tmp/cvdp-one-16qam`
+  - Observed outcome: `STUB_SV` then `COCOTB_FAIL`, with `SIM_FAIL=0`,
+    `SIM_TIMEOUT=0`, runtime completes in <1s.
+
+### Expected metric impact
+- `NO_SV` should no longer mean "skipped"; it now means "SV missing/redacted".
+- `compile_pass` will increase (stub compiles), and many of those cases will
+  move into the `COCOTB_FAIL` (functional mismatch) bucket, which is cleaner
+  for infra tracking.

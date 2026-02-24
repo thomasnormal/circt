@@ -2527,6 +2527,13 @@ private:
     uint64_t sampleOrdinal = 0;
     /// Optional rewritten property value used for runtime evaluation.
     mlir::Value evaluationProperty;
+    /// Async abort condition (accept_on/reject_on) extracted from the
+    /// assertion property. When set, pulses between sampled clock edges are
+    /// latched in `asyncAbortSticky` and injected at the next sampled edge.
+    mlir::Value asyncAbortCondition;
+    bool asyncAbortSticky = false;
+    /// Per-sample truth overrides for selected values.
+    llvm::DenseMap<mlir::Value, LTLTruth> sampledTruthOverrides;
     /// Per-operation history buffers for temporal runtime evaluation.
     /// Keys are temporal ops that need sampled history (e.g. implication,
     /// delay); values are oldest-to-newest truth samples.

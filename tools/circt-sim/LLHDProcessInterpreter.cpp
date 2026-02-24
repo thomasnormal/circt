@@ -109,6 +109,61 @@ static std::string sanitizeSvaTraceName(llvm::StringRef name) {
   return out;
 }
 
+constexpr const char kAbortOnActionAttr[] = "sva.abort_on.action";
+constexpr const char kAbortOnSyncAttr[] = "sva.abort_on.sync";
+
+static bool extractAsyncAbortCondition(Value property, Value &condition) {
+  condition = Value{};
+  if (!property)
+    return false;
+
+  Value cur = property;
+  while (auto clockOp = cur.getDefiningOp<ltl::ClockOp>())
+    cur = clockOp.getInput();
+
+  auto pickBooleanInput = [](Value root) -> Value {
+    if (!root)
+      return Value{};
+    if (!isa<ltl::PropertyType, ltl::SequenceType>(root.getType()))
+      return root;
+    return Value{};
+  };
+
+  if (auto orOp = cur.getDefiningOp<ltl::OrOp>()) {
+    auto action = orOp->getAttrOfType<StringAttr>(kAbortOnActionAttr);
+    if (!action || action.getValue() != "accept" || orOp->hasAttr(kAbortOnSyncAttr))
+      return false;
+    for (Value input : orOp.getInputs()) {
+      condition = pickBooleanInput(input);
+      if (condition)
+        return true;
+    }
+    return false;
+  }
+
+  if (auto andOp = cur.getDefiningOp<ltl::AndOp>()) {
+    auto action = andOp->getAttrOfType<StringAttr>(kAbortOnActionAttr);
+    if (!action || action.getValue() != "reject" ||
+        andOp->hasAttr(kAbortOnSyncAttr))
+      return false;
+    for (Value input : andOp.getInputs()) {
+      if (auto notOp = input.getDefiningOp<ltl::NotOp>()) {
+        condition = pickBooleanInput(notOp.getInput());
+        if (condition)
+          return true;
+      }
+    }
+    for (Value input : andOp.getInputs()) {
+      condition = pickBooleanInput(input);
+      if (condition)
+        return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
 static bool computeMemoryBackedArrayBitOffset(hw::ArrayType arrayType,
                                               uint64_t hwIndex,
                                               unsigned &bitOffset) {
@@ -6234,6 +6289,12 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     state.evaluationProperty = getClockedAssertLikeEvalProperty(
         assertOp.getOperation(), assertOp.getProperty(), assertOp.getClock(),
         clockedAssertLikeEvalPropertyCache);
+    Value asyncAbortCondition;
+    if (extractAsyncAbortCondition(
+            state.evaluationProperty ? state.evaluationProperty
+                                     : assertOp.getProperty(),
+            asyncAbortCondition))
+      state.asyncAbortCondition = asyncAbortCondition;
     std::string traceName;
     if (!label.empty())
       traceName = "__sva__" + sanitizeSvaTraceName(label);
@@ -6248,7 +6309,8 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     signalIdToName[state.assertionSignalId] = traceName;
     signalIdToType[state.assertionSignalId] =
         IntegerType::get(assertOp.getContext(), 1);
-    clockedAssertionStates[{assertOp.getOperation(), instanceId}] = state;
+    auto key = std::make_pair(assertOp.getOperation(), instanceId);
+    clockedAssertionStates[key] = state;
 
     std::string procName =
         "clocked_assert_" + (label.empty() ? std::to_string(assertionOrdinal)
@@ -6273,6 +6335,34 @@ void LLHDProcessInterpreter::registerClockedAssertions(
     }
 
     scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+
+    if (state.asyncAbortCondition) {
+      llvm::SmallVector<SignalId, 8> abortSignals;
+      collectSignalIds(state.asyncAbortCondition, abortSignals);
+      if (!abortSignals.empty()) {
+        std::string abortProcName = procName + "_async_abort";
+        ProcessId abortProcId =
+            scheduler.registerProcess(abortProcName, [this, key]() {
+              auto it = clockedAssertionStates.find(key);
+              if (it == clockedAssertionStates.end())
+                return;
+              ClockedAssertionState &state = it->second;
+              if (!state.asyncAbortCondition)
+                return;
+              ScopedInstanceContext instScope(*this, state.instanceId);
+              ScopedInputValueMap inputScope(*this, state.inputMap);
+              InterpretedValue condVal =
+                  evaluateContinuousValue(state.asyncAbortCondition);
+              if (!condVal.isX() && !condVal.getAPInt().isZero())
+                state.asyncAbortSticky = true;
+            });
+        if (auto *process = scheduler.getProcess(abortProcId))
+          process->setPreferredRegion(SchedulingRegion::Observed);
+        for (SignalId sig : abortSignals)
+          scheduler.addSensitivity(abortProcId, sig, EdgeType::AnyEdge);
+        scheduler.scheduleProcess(abortProcId, SchedulingRegion::Active);
+      }
+    }
   }
 }
 
@@ -6337,6 +6427,12 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   }
 
   ++state.sampleOrdinal;
+  if (state.asyncAbortCondition) {
+    if (state.asyncAbortSticky)
+      state.sampledTruthOverrides[state.asyncAbortCondition] =
+          ClockedAssertionState::LTLTruth::True;
+    state.asyncAbortSticky = false;
+  }
 
   // Evaluate the property using LTL-aware evaluation.
   // Unknown-pending temporal states are treated as non-failing.
@@ -6345,6 +6441,8 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   auto restoreSampleMode = llvm::make_scope_exit([&]() {
     sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
   });
+  auto clearOverrides =
+      llvm::make_scope_exit([&]() { state.sampledTruthOverrides.clear(); });
   Value evalProperty =
       state.evaluationProperty ? state.evaluationProperty : assertOp.getProperty();
   auto propTruth = evaluateLTLProperty(evalProperty, state);
@@ -6388,6 +6486,12 @@ void LLHDProcessInterpreter::registerClockedAssumptions(
     state.evaluationProperty = getClockedAssertLikeEvalProperty(
         assumeOp.getOperation(), assumeOp.getProperty(), assumeOp.getClock(),
         clockedAssertLikeEvalPropertyCache);
+    Value asyncAbortCondition;
+    if (extractAsyncAbortCondition(
+            state.evaluationProperty ? state.evaluationProperty
+                                     : assumeOp.getProperty(),
+            asyncAbortCondition))
+      state.asyncAbortCondition = asyncAbortCondition;
     std::string traceName;
     if (!label.empty())
       traceName = "__sva__assume_" + sanitizeSvaTraceName(label);
@@ -6402,7 +6506,8 @@ void LLHDProcessInterpreter::registerClockedAssumptions(
     signalIdToName[state.assertionSignalId] = traceName;
     signalIdToType[state.assertionSignalId] =
         IntegerType::get(assumeOp.getContext(), 1);
-    clockedAssumptionStates[{assumeOp.getOperation(), instanceId}] = state;
+    auto key = std::make_pair(assumeOp.getOperation(), instanceId);
+    clockedAssumptionStates[key] = state;
 
     std::string procName =
         "clocked_assume_" + (label.empty() ? std::to_string(assumeOrdinal)
@@ -6424,6 +6529,34 @@ void LLHDProcessInterpreter::registerClockedAssumptions(
       scheduler.addSensitivity(procId, sig, EdgeType::AnyEdge);
 
     scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+
+    if (state.asyncAbortCondition) {
+      llvm::SmallVector<SignalId, 8> abortSignals;
+      collectSignalIds(state.asyncAbortCondition, abortSignals);
+      if (!abortSignals.empty()) {
+        std::string abortProcName = procName + "_async_abort";
+        ProcessId abortProcId =
+            scheduler.registerProcess(abortProcName, [this, key]() {
+              auto it = clockedAssumptionStates.find(key);
+              if (it == clockedAssumptionStates.end())
+                return;
+              ClockedAssertionState &state = it->second;
+              if (!state.asyncAbortCondition)
+                return;
+              ScopedInstanceContext instScope(*this, state.instanceId);
+              ScopedInputValueMap inputScope(*this, state.inputMap);
+              InterpretedValue condVal =
+                  evaluateContinuousValue(state.asyncAbortCondition);
+              if (!condVal.isX() && !condVal.getAPInt().isZero())
+                state.asyncAbortSticky = true;
+            });
+        if (auto *process = scheduler.getProcess(abortProcId))
+          process->setPreferredRegion(SchedulingRegion::Observed);
+        for (SignalId sig : abortSignals)
+          scheduler.addSensitivity(abortProcId, sig, EdgeType::AnyEdge);
+        scheduler.scheduleProcess(abortProcId, SchedulingRegion::Active);
+      }
+    }
   }
 }
 
@@ -6482,11 +6615,19 @@ void LLHDProcessInterpreter::executeClockedAssumption(
   }
 
   ++state.sampleOrdinal;
+  if (state.asyncAbortCondition) {
+    if (state.asyncAbortSticky)
+      state.sampledTruthOverrides[state.asyncAbortCondition] =
+          ClockedAssertionState::LTLTruth::True;
+    state.asyncAbortSticky = false;
+  }
   bool savedSampleMode = sampleClockedPropertyFromPreUpdateValues;
   sampleClockedPropertyFromPreUpdateValues = true;
   auto restoreSampleMode = llvm::make_scope_exit([&]() {
     sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
   });
+  auto clearOverrides =
+      llvm::make_scope_exit([&]() { state.sampledTruthOverrides.clear(); });
   Value evalProperty =
       state.evaluationProperty ? state.evaluationProperty : assumeOp.getProperty();
   auto propTruth = evaluateLTLProperty(evalProperty, state);
@@ -7637,6 +7778,9 @@ LLHDProcessInterpreter::evaluateLTLProperty(
   };
 
   auto *op = val.getDefiningOp();
+  if (auto it = state.sampledTruthOverrides.find(val);
+      it != state.sampledTruthOverrides.end())
+    return it->second;
   if (!op) {
     // Block argument or similar — evaluate as combinational truth value.
     InterpretedValue v = evaluateContinuousValue(val);
