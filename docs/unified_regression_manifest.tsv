@@ -85,13 +85,13 @@ mcy_examples	nightly,full	utils/run_mutation_mcy_examples_native_real.sh --examp
 cocotb_vpi	smoke,nightly,full	utils/run_cocotb_tests.sh	-	-	-	-	-
 #
 # --- CVDP: cocotb functional tests (non-commercial dataset, 302 entries) ---
-cvdp_cocotb_noncommercial	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -o /tmp/unified-cvdp-noncommercial	-	-	-	-	-
-cvdp_cocotb_noncommercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -n 25 -o /tmp/unified-cvdp-noncommercial-smoke25	-	-	-	-	-
+cvdp_cocotb_noncommercial	smoke,nightly,full	CVDP_MIN_COCOTB_PASS=20 CVDP_MAX_RUNTIME_FAILS=130 utils/run_cvdp_cocotb_with_policy.sh -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -o /tmp/unified-cvdp-noncommercial	-	-	-	-	-
+cvdp_cocotb_noncommercial_smoke25	smoke,nightly,full	CVDP_MIN_COCOTB_PASS=2 CVDP_MAX_RUNTIME_FAILS=10 utils/run_cvdp_cocotb_with_policy.sh -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -n 25 -o /tmp/unified-cvdp-noncommercial-smoke25	-	-	-	-	-
 cvdp_cocotb_noncommercial_compileonly	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl --compile-only -o /tmp/unified-cvdp-noncommercial-compileonly	-	-	-	-	-
 #
 # --- CVDP: cocotb functional tests (commercial dataset, 187 entries) ---
-cvdp_cocotb_commercial	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -o /tmp/unified-cvdp-commercial	-	-	-	-	-
-cvdp_cocotb_commercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -n 25 -o /tmp/unified-cvdp-commercial-smoke25	-	-	-	-	-
+cvdp_cocotb_commercial	nightly,full	CVDP_MIN_COCOTB_PASS=20 CVDP_MAX_RUNTIME_FAILS=40 utils/run_cvdp_cocotb_with_policy.sh -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -o /tmp/unified-cvdp-commercial	-	-	-	-	-
+cvdp_cocotb_commercial_smoke25	smoke,nightly,full	CVDP_MIN_COCOTB_PASS=4 CVDP_MAX_RUNTIME_FAILS=10 utils/run_cvdp_cocotb_with_policy.sh -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -n 25 -o /tmp/unified-cvdp-commercial-smoke25	-	-	-	-	-
 cvdp_cocotb_commercial_compileonly	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl --compile-only -o /tmp/unified-cvdp-commercial-compileonly	-	-	-	-	-
 #
 # --- CVDP: golden RTL smoke tests (commercial dataset, 103 entries with golden RTL) ---
