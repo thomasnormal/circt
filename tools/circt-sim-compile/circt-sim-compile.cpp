@@ -105,15 +105,21 @@ static llvm::cl::opt<bool>
 /// LLVM dialect. Only arith/cf/func/LLVM ops are accepted. Aggregate types
 /// in signatures are allowed — they will be flattened by
 /// flattenAggregateFunctionABIs() after lowering to LLVM dialect.
-static bool isFuncBodyCompilable(func::FuncOp funcOp) {
-  if (funcOp.isExternal())
+static bool isFuncBodyCompilable(func::FuncOp funcOp,
+                                  std::string *rejectionReason = nullptr) {
+  if (funcOp.isExternal()) {
+    if (rejectionReason)
+      *rejectionReason = "external_declaration";
     return false;
+  }
 
   bool compilable = true;
   funcOp.walk([&](Operation *op) {
     if (isa<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect,
             func::FuncDialect>(op->getDialect()))
       return WalkResult::advance();
+    if (rejectionReason)
+      *rejectionReason = op->getName().getStringRef().str();
     compilable = false;
     return WalkResult::interrupt();
   });
@@ -873,7 +879,8 @@ static void flattenAggregateFunctionABIs(ModuleOp moduleOp) {
 ///   - Only supported ops (llhd, arith, cf, func, LLVM, comb, hw.constant)
 static bool isProcessCallbackEligible(
     llhd::ProcessOp procOp,
-    const DenseMap<Value, uint32_t> &signalIdMap) {
+    const DenseMap<Value, uint32_t> &signalIdMap,
+    std::string *rejectionReason = nullptr) {
   unsigned waitCount = 0;
   bool eligible = true;
 
@@ -881,11 +888,15 @@ static bool isProcessCallbackEligible(
     if (auto waitOp = dyn_cast<llhd::WaitOp>(op)) {
       ++waitCount;
       if (waitCount > 1) {
+        if (rejectionReason)
+          *rejectionReason = "multiple_waits";
         eligible = false;
         return WalkResult::interrupt();
       }
       if (!waitOp.getYieldOperands().empty() ||
           !waitOp.getDestOperands().empty()) {
+        if (rejectionReason)
+          *rejectionReason = "wait_with_operands";
         eligible = false;
         return WalkResult::interrupt();
       }
@@ -899,10 +910,14 @@ static bool isProcessCallbackEligible(
       else if (auto w = getFourStateValueWidth(resultTy))
         ok = *w <= 64;
       if (!ok) {
+        if (rejectionReason)
+          *rejectionReason = "probe_wide_signal";
         eligible = false;
         return WalkResult::interrupt();
       }
       if (!signalIdMap.count(prbOp.getSignal())) {
+        if (rejectionReason)
+          *rejectionReason = "probe_unknown_signal";
         eligible = false;
         return WalkResult::interrupt();
       }
@@ -916,10 +931,14 @@ static bool isProcessCallbackEligible(
       else if (auto w = getFourStateValueWidth(valTy))
         ok = *w <= 64;
       if (!ok) {
+        if (rejectionReason)
+          *rejectionReason = "drive_wide_signal";
         eligible = false;
         return WalkResult::interrupt();
       }
       if (!signalIdMap.count(drvOp.getSignal())) {
+        if (rejectionReason)
+          *rejectionReason = "drive_unknown_signal";
         eligible = false;
         return WalkResult::interrupt();
       }
@@ -933,14 +952,25 @@ static bool isProcessCallbackEligible(
       return WalkResult::advance();
     if (isa<comb::CombDialect>(op->getDialect())) {
       if (isa<comb::XorOp, comb::AndOp, comb::OrOp, comb::AddOp,
-              comb::SubOp, comb::MulOp, comb::ICmpOp, comb::MuxOp>(op))
+              comb::SubOp, comb::MulOp, comb::ICmpOp, comb::MuxOp,
+              // Phase K: shifts, extract, concat, replicate, div/mod, parity
+              comb::ExtractOp, comb::ConcatOp, comb::ReplicateOp,
+              comb::ShlOp, comb::ShrUOp, comb::ShrSOp,
+              comb::DivUOp, comb::DivSOp, comb::ModUOp, comb::ModSOp,
+              comb::ParityOp>(op))
         return WalkResult::advance();
+      if (rejectionReason)
+        *rejectionReason = op->getName().getStringRef().str();
       eligible = false;
       return WalkResult::interrupt();
     }
     if (isa<hw::ConstantOp, hw::StructExtractOp, hw::StructCreateOp,
-            hw::AggregateConstantOp>(op))
+            hw::AggregateConstantOp,
+            // Phase K: array and bitcast ops
+            hw::ArrayGetOp, hw::ArrayCreateOp, hw::BitcastOp>(op))
       return WalkResult::advance();
+    if (rejectionReason)
+      *rejectionReason = op->getName().getStringRef().str();
     eligible = false;
     return WalkResult::interrupt();
   });
@@ -1002,7 +1032,9 @@ convertCombPredicate(comb::ICmpPredicate pred) {
 static unsigned compileProcessBodies(
     ModuleOp module,
     llvm::SmallVectorImpl<std::string> &procNames,
-    llvm::SmallVectorImpl<uint8_t> &procKinds) {
+    llvm::SmallVectorImpl<uint8_t> &procKinds,
+    unsigned *totalProcessCount = nullptr,
+    llvm::StringMap<unsigned> *procRejectionReasons = nullptr) {
   auto *mlirCtx = module.getContext();
   auto loc = module.getLoc();
   auto ptrTy = LLVM::LLVMPointerType::get(mlirCtx);
@@ -1046,6 +1078,17 @@ static unsigned compileProcessBodies(
                                      {ptrTy, i32Ty, i64Ty, i64Ty, i8Ty,
                                       i64Ty},
                                      {}));
+  // Direct signal memory access: get hot data pointer.
+  getOrDeclareFunc("__circt_sim_get_hot",
+                   FunctionType::get(mlirCtx, {ptrTy}, {ptrTy}));
+  // Specialized drive entry points (avoid delay_kind branching).
+  getOrDeclareFunc("__circt_sim_drive_delta",
+                   FunctionType::get(mlirCtx, {ptrTy, i32Ty, i64Ty}, {}));
+  getOrDeclareFunc("__circt_sim_drive_nba",
+                   FunctionType::get(mlirCtx, {ptrTy, i32Ty, i64Ty}, {}));
+  getOrDeclareFunc("__circt_sim_drive_time",
+                   FunctionType::get(mlirCtx, {ptrTy, i32Ty, i64Ty, i64Ty},
+                                     {}));
 
   // Step 3: Walk processes and extract eligible ones.
   unsigned compiled = 0;
@@ -1053,6 +1096,9 @@ static unsigned compileProcessBodies(
   module.walk([&](llhd::ProcessOp procOp) {
     processes.push_back(procOp);
   });
+
+  if (totalProcessCount)
+    *totalProcessCount = processes.size();
 
   // Pre-compute canonical names for all processes.
   // Format: "<hw_module_sym>.process_<local_index>" where local_index is
@@ -1072,8 +1118,13 @@ static unsigned compileProcessBodies(
   }
 
   for (auto procOp : processes) {
-    if (!isProcessCallbackEligible(procOp, signalIdMap))
+    std::string reason;
+    if (!isProcessCallbackEligible(procOp, signalIdMap,
+                                   procRejectionReasons ? &reason : nullptr)) {
+      if (procRejectionReasons && !reason.empty())
+        ++(*procRejectionReasons)[reason];
       continue;
+    }
 
     // Find the wait op (if any).
     llhd::WaitOp waitOp = nullptr;
@@ -1162,8 +1213,19 @@ static unsigned compileProcessBodies(
         mapping.map(arg, newBlock->addArgument(arg.getType(), arg.getLoc()));
     }
 
-    // Entry: branch to first body block.
+    // Entry: get hot data pointer for direct signal memory access,
+    // then branch to first body block.
     OpBuilder builder(entry, entry->begin());
+
+    // %hot = call @__circt_sim_get_hot(%ctx) → CirctSimHot*
+    auto hotCall = func::CallOp::create(
+        builder, loc, "__circt_sim_get_hot", TypeRange{ptrTy},
+        ValueRange{ctxArg});
+    Value hotPtr = hotCall.getResult(0);
+    // sig2_base is the first field of CirctSimHot (offset 0).
+    // load ptr from hotPtr gives us the uint64_t* signal memory base.
+    Value sig2Base = LLVM::LoadOp::create(builder, loc, ptrTy, hotPtr);
+
     cf::BranchOp::create(builder, loc, blockMap[bodyBlocks[0]]);
 
     // Pre-scan: clone external constants into entry block.
@@ -1249,11 +1311,15 @@ static unsigned compileProcessBodies(
             // 4-state narrow fast lane: physical width is 2*N.
             unsigned logW = *w;
             if (2 * logW <= 64) {
-              // Fits in one u64 read (physical ≤ 64 bits).
-              auto readCall = func::CallOp::create(
-                  builder, opLoc, "__circt_sim_signal_read_u64",
-                  TypeRange{i64Ty}, ValueRange{ctxArg, sigIdVal});
-              Value raw = readCall.getResult(0);
+              // Fits in one u64: direct memory load from sig2_base.
+              auto fourStateSigI64 = LLVM::ConstantOp::create(
+                  builder, opLoc, i64Ty,
+                  builder.getI64IntegerAttr(sigId));
+              auto fourStateElemPtr = LLVM::GEPOp::create(
+                  builder, opLoc, ptrTy, i64Ty, sig2Base,
+                  ValueRange{fourStateSigI64});
+              Value raw = LLVM::LoadOp::create(builder, opLoc, i64Ty,
+                                               fourStateElemPtr);
               // HW struct bit order: value=high N bits, unknown=low N bits.
               auto intLogTy = IntegerType::get(mlirCtx, logW);
               Value xz = raw;
@@ -1298,11 +1364,17 @@ static unsigned compileProcessBodies(
               mapping.map(prbOp.getResult(), val); // dummy
             }
           } else {
-            // 2-state integer signal.
-            auto readCall = func::CallOp::create(
-                builder, opLoc, "__circt_sim_signal_read_u64",
-                TypeRange{i64Ty}, ValueRange{ctxArg, sigIdVal});
-            Value result = readCall.getResult(0);
+            // 2-state integer signal: direct memory load from sig2_base.
+            // %ptr = gep i64, sig2_base, sigId
+            // %raw = load i64, %ptr
+            auto sigIdI64 = LLVM::ConstantOp::create(
+                builder, opLoc, i64Ty,
+                builder.getI64IntegerAttr(sigId));
+            auto elemPtr = LLVM::GEPOp::create(
+                builder, opLoc, ptrTy, i64Ty, sig2Base,
+                ValueRange{sigIdI64});
+            Value result = LLVM::LoadOp::create(builder, opLoc, i64Ty,
+                                                elemPtr);
             if (auto intTy = dyn_cast<IntegerType>(resultTy)) {
               if (intTy.getWidth() < 64)
                 result =
@@ -1317,10 +1389,6 @@ static unsigned compileProcessBodies(
           uint32_t sigId = signalIdMap.lookup(drvOp.getSignal());
           auto sigIdVal = arith::ConstantOp::create(
               builder, opLoc, builder.getI32IntegerAttr(sigId));
-          auto delayKind = arith::ConstantOp::create(
-              builder, opLoc, builder.getI8IntegerAttr(0));
-          auto delayVal = arith::ConstantOp::create(
-              builder, opLoc, builder.getI64IntegerAttr(0));
           auto valTy = drvOp.getValue().getType();
 
           if (auto w = getFourStateValueWidth(valTy)) {
@@ -1351,11 +1419,16 @@ static unsigned compileProcessBodies(
                       builder.getI64IntegerAttr(logW)));
               Value packed =
                   arith::OrIOp::create(builder, opLoc, shifted, xzExt);
+              // Specialized delta drive: zero-delay, no delay_kind branching.
               func::CallOp::create(
-                  builder, opLoc, "__circt_sim_signal_drive_u64", TypeRange{},
-                  ValueRange{ctxArg, sigIdVal, packed, delayKind, delayVal});
+                  builder, opLoc, "__circt_sim_drive_delta", TypeRange{},
+                  ValueRange{ctxArg, sigIdVal, packed});
             } else {
-              // Use drive4_u64 for wider 4-state signals.
+              // Use drive4_u64 for wider 4-state signals (separate val/xz).
+              auto delayKind = arith::ConstantOp::create(
+                  builder, opLoc, builder.getI8IntegerAttr(0));
+              auto delayVal = arith::ConstantOp::create(
+                  builder, opLoc, builder.getI64IntegerAttr(0));
               Value valExt = (logW < 64)
                                  ? (Value)arith::ExtUIOp::create(
                                        builder, opLoc, i64Ty, valComp)
@@ -1370,15 +1443,15 @@ static unsigned compileProcessBodies(
                              delayVal});
             }
           } else {
-            // 2-state integer drive.
+            // 2-state integer drive: specialized delta drive.
             Value val = mapping.lookupOrDefault(drvOp.getValue());
             if (auto intTy = dyn_cast<IntegerType>(val.getType())) {
               if (intTy.getWidth() < 64)
                 val = arith::ExtUIOp::create(builder, opLoc, i64Ty, val);
             }
             func::CallOp::create(
-                builder, opLoc, "__circt_sim_signal_drive_u64", TypeRange{},
-                ValueRange{ctxArg, sigIdVal, val, delayKind, delayVal});
+                builder, opLoc, "__circt_sim_drive_delta", TypeRange{},
+                ValueRange{ctxArg, sigIdVal, val});
           }
           continue;
         }
@@ -1504,6 +1577,288 @@ static unsigned compileProcessBodies(
             auto fv = mapping.lookupOrDefault(muxOp.getFalseValue());
             auto r = arith::SelectOp::create(builder, opLoc, cond, tv, fv);
             mapping.map(muxOp.getResult(), r);
+          }
+          continue;
+        }
+
+        // === Phase K: additional comb ops ===
+
+        // comb.extract → arith.shrui + arith.trunci
+        if (auto extractOp = dyn_cast<comb::ExtractOp>(&op)) {
+          auto input = mapping.lookupOrDefault(extractOp.getInput());
+          unsigned lowBit = extractOp.getLowBit();
+          unsigned resultWidth =
+              cast<IntegerType>(extractOp.getType()).getWidth();
+          Value result = input;
+          if (lowBit > 0) {
+            auto shamt = arith::ConstantOp::create(
+                builder, opLoc,
+                builder.getIntegerAttr(input.getType(), lowBit));
+            result = arith::ShRUIOp::create(builder, opLoc, result, shamt);
+          }
+          if (resultWidth <
+              cast<IntegerType>(input.getType()).getWidth()) {
+            auto resTy = builder.getIntegerType(resultWidth);
+            result = arith::TruncIOp::create(builder, opLoc, resTy, result);
+          }
+          mapping.map(extractOp.getResult(), result);
+          continue;
+        }
+
+        // comb.concat → chain of arith.extui + arith.shli + arith.ori
+        // Concat semantics: concat(a, b, c) = (a << (bw+cw)) | (b << cw) | c
+        // i.e., first operand is MSB, last is LSB.
+        if (auto concatOp = dyn_cast<comb::ConcatOp>(&op)) {
+          auto inputs = concatOp.getInputs();
+          unsigned resultWidth =
+              cast<IntegerType>(concatOp.getType()).getWidth();
+          auto resTy = builder.getIntegerType(resultWidth);
+          if (inputs.empty()) {
+            loweringFailed = true;
+            break;
+          }
+          // Start from LSB (last operand) and shift+or each higher operand.
+          Value result = mapping.lookupOrDefault(inputs.back());
+          if (cast<IntegerType>(result.getType()).getWidth() < resultWidth)
+            result = arith::ExtUIOp::create(builder, opLoc, resTy, result);
+          unsigned accWidth =
+              cast<IntegerType>(inputs.back().getType()).getWidth();
+          for (int i = (int)inputs.size() - 2; i >= 0; --i) {
+            Value operand = mapping.lookupOrDefault(inputs[i]);
+            unsigned opWidth =
+                cast<IntegerType>(inputs[i].getType()).getWidth();
+            Value extended = operand;
+            if (opWidth < resultWidth)
+              extended =
+                  arith::ExtUIOp::create(builder, opLoc, resTy, extended);
+            auto shamt = arith::ConstantOp::create(
+                builder, opLoc,
+                builder.getIntegerAttr(resTy, accWidth));
+            Value shifted =
+                arith::ShLIOp::create(builder, opLoc, extended, shamt);
+            result = arith::OrIOp::create(builder, opLoc, result, shifted);
+            accWidth += opWidth;
+          }
+          mapping.map(concatOp.getResult(), result);
+          continue;
+        }
+
+        // comb.replicate → repeated concat pattern
+        if (auto repOp = dyn_cast<comb::ReplicateOp>(&op)) {
+          auto input = mapping.lookupOrDefault(repOp.getInput());
+          unsigned inputWidth =
+              cast<IntegerType>(repOp.getInput().getType()).getWidth();
+          unsigned resultWidth =
+              cast<IntegerType>(repOp.getType()).getWidth();
+          unsigned multiple = resultWidth / inputWidth;
+          auto resTy = builder.getIntegerType(resultWidth);
+          Value result = input;
+          if (inputWidth < resultWidth)
+            result = arith::ExtUIOp::create(builder, opLoc, resTy, result);
+          Value acc = result;
+          for (unsigned i = 1; i < multiple; ++i) {
+            auto shamt = arith::ConstantOp::create(
+                builder, opLoc,
+                builder.getIntegerAttr(resTy, i * inputWidth));
+            Value shifted =
+                arith::ShLIOp::create(builder, opLoc, result, shamt);
+            acc = arith::OrIOp::create(builder, opLoc, acc, shifted);
+          }
+          mapping.map(repOp.getResult(), acc);
+          continue;
+        }
+
+        // comb.shl → arith.shli
+        if (auto shlOp = dyn_cast<comb::ShlOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(shlOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(shlOp.getRhs());
+          auto r = arith::ShLIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(shlOp.getResult(), r);
+          continue;
+        }
+
+        // comb.shru → arith.shrui
+        if (auto shruOp = dyn_cast<comb::ShrUOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(shruOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(shruOp.getRhs());
+          auto r = arith::ShRUIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(shruOp.getResult(), r);
+          continue;
+        }
+
+        // comb.shrs → arith.shrsi
+        if (auto shrsOp = dyn_cast<comb::ShrSOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(shrsOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(shrsOp.getRhs());
+          auto r = arith::ShRSIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(shrsOp.getResult(), r);
+          continue;
+        }
+
+        // comb.divu → arith.divui
+        if (auto divuOp = dyn_cast<comb::DivUOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(divuOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(divuOp.getRhs());
+          auto r = arith::DivUIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(divuOp.getResult(), r);
+          continue;
+        }
+
+        // comb.divs → arith.divsi
+        if (auto divsOp = dyn_cast<comb::DivSOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(divsOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(divsOp.getRhs());
+          auto r = arith::DivSIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(divsOp.getResult(), r);
+          continue;
+        }
+
+        // comb.modu → arith.remui
+        if (auto moduOp = dyn_cast<comb::ModUOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(moduOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(moduOp.getRhs());
+          auto r = arith::RemUIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(moduOp.getResult(), r);
+          continue;
+        }
+
+        // comb.mods → arith.remsi
+        if (auto modsOp = dyn_cast<comb::ModSOp>(&op)) {
+          auto lhs = mapping.lookupOrDefault(modsOp.getLhs());
+          auto rhs = mapping.lookupOrDefault(modsOp.getRhs());
+          auto r = arith::RemSIOp::create(builder, opLoc, lhs, rhs);
+          mapping.map(modsOp.getResult(), r);
+          continue;
+        }
+
+        // comb.parity → XOR reduction (fold-in-half)
+        if (auto parityOp = dyn_cast<comb::ParityOp>(&op)) {
+          auto input = mapping.lookupOrDefault(parityOp.getInput());
+          unsigned width =
+              cast<IntegerType>(parityOp.getInput().getType()).getWidth();
+          auto i1Ty = builder.getI1Type();
+          // XOR-reduce by folding in half repeatedly.
+          Value val = input;
+          for (unsigned half = width / 2; half > 0; half /= 2) {
+            auto shamt = arith::ConstantOp::create(
+                builder, opLoc,
+                builder.getIntegerAttr(val.getType(), half));
+            Value shifted =
+                arith::ShRUIOp::create(builder, opLoc, val, shamt);
+            val = arith::XOrIOp::create(builder, opLoc, val, shifted);
+          }
+          // Truncate to i1.
+          if (width > 1)
+            val = arith::TruncIOp::create(builder, opLoc, i1Ty, val);
+          mapping.map(parityOp.getResult(), val);
+          continue;
+        }
+
+        // === Phase K: additional hw ops ===
+
+        // hw.bitcast → identity for same-width integers
+        if (auto bitcastOp = dyn_cast<hw::BitcastOp>(&op)) {
+          auto input = mapping.lookupOrDefault(bitcastOp.getInput());
+          auto resultTy = bitcastOp.getResult().getType();
+          if (auto intResultTy = dyn_cast<IntegerType>(resultTy)) {
+            auto inputIntTy = dyn_cast<IntegerType>(input.getType());
+            if (inputIntTy &&
+                inputIntTy.getWidth() == intResultTy.getWidth()) {
+              mapping.map(bitcastOp.getResult(), input);
+            } else if (inputIntTy &&
+                       inputIntTy.getWidth() > intResultTy.getWidth()) {
+              auto r = arith::TruncIOp::create(builder, opLoc, intResultTy,
+                                               input);
+              mapping.map(bitcastOp.getResult(), r);
+            } else if (inputIntTy) {
+              auto r = arith::ExtUIOp::create(builder, opLoc, intResultTy,
+                                              input);
+              mapping.map(bitcastOp.getResult(), r);
+            } else {
+              loweringFailed = true;
+              break;
+            }
+          } else {
+            loweringFailed = true;
+            break;
+          }
+          continue;
+        }
+
+        // hw.array_get → shift + trunc (integer-element arrays)
+        // Array packed as bitvector: element[0] at LSB.
+        if (auto arrayGetOp = dyn_cast<hw::ArrayGetOp>(&op)) {
+          auto input = mapping.lookupOrDefault(arrayGetOp.getInput());
+          auto index = mapping.lookupOrDefault(arrayGetOp.getIndex());
+          auto elemTy = arrayGetOp.getResult().getType();
+          if (auto intElemTy = dyn_cast<IntegerType>(elemTy)) {
+            unsigned elemWidth = intElemTy.getWidth();
+            auto inputIntTy = dyn_cast<IntegerType>(input.getType());
+            if (!inputIntTy) {
+              loweringFailed = true;
+              break;
+            }
+            // shamt = index * elemWidth
+            auto elemWidthConst = arith::ConstantOp::create(
+                builder, opLoc,
+                builder.getIntegerAttr(inputIntTy, elemWidth));
+            Value idx = index;
+            if (cast<IntegerType>(idx.getType()).getWidth() <
+                inputIntTy.getWidth())
+              idx = arith::ExtUIOp::create(builder, opLoc, inputIntTy, idx);
+            Value shamt =
+                arith::MulIOp::create(builder, opLoc, idx, elemWidthConst);
+            Value shifted =
+                arith::ShRUIOp::create(builder, opLoc, input, shamt);
+            Value result = shifted;
+            if (inputIntTy.getWidth() > elemWidth)
+              result = arith::TruncIOp::create(builder, opLoc, intElemTy,
+                                               shifted);
+            mapping.map(arrayGetOp.getResult(), result);
+          } else {
+            loweringFailed = true;
+            break;
+          }
+          continue;
+        }
+
+        // hw.array_create → pack elements into bitvector via shift+or
+        // Operands: [N-1] ... [0] (MSB first), element[0] at LSB.
+        if (auto arrayCreateOp = dyn_cast<hw::ArrayCreateOp>(&op)) {
+          auto inputs = arrayCreateOp.getInputs();
+          auto arrayTy = cast<hw::ArrayType>(arrayCreateOp.getType());
+          auto elemTy = arrayTy.getElementType();
+          if (auto intElemTy = dyn_cast<IntegerType>(elemTy)) {
+            unsigned elemWidth = intElemTy.getWidth();
+            unsigned totalWidth = elemWidth * arrayTy.getNumElements();
+            auto packedTy = builder.getIntegerType(totalWidth);
+            if (inputs.empty()) {
+              loweringFailed = true;
+              break;
+            }
+            // Last operand = element[0] (LSB).
+            Value result = mapping.lookupOrDefault(inputs.back());
+            if (elemWidth < totalWidth)
+              result =
+                  arith::ExtUIOp::create(builder, opLoc, packedTy, result);
+            for (int i = (int)inputs.size() - 2; i >= 0; --i) {
+              Value elem = mapping.lookupOrDefault(inputs[i]);
+              if (elemWidth < totalWidth)
+                elem =
+                    arith::ExtUIOp::create(builder, opLoc, packedTy, elem);
+              unsigned shift =
+                  ((unsigned)inputs.size() - 1 - (unsigned)i) * elemWidth;
+              auto shamt = arith::ConstantOp::create(
+                  builder, opLoc,
+                  builder.getIntegerAttr(packedTy, shift));
+              Value shifted =
+                  arith::ShLIOp::create(builder, opLoc, elem, shamt);
+              result = arith::OrIOp::create(builder, opLoc, result, shifted);
+            }
+            mapping.map(arrayCreateOp.getResult(), result);
+          } else {
+            loweringFailed = true;
+            break;
           }
           continue;
         }
@@ -2159,11 +2514,32 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Compile process bodies (Phase A: callback processes).
   llvm::SmallVector<std::string> procNames;
   llvm::SmallVector<uint8_t> procKinds;
+  unsigned totalProcesses = 0;
+  llvm::StringMap<unsigned> procRejectionReasons;
   unsigned numProcsCompiled =
-      compileProcessBodies(*module, procNames, procKinds);
+      compileProcessBodies(*module, procNames, procKinds,
+                           &totalProcesses, &procRejectionReasons);
   if (numProcsCompiled > 0) {
     llvm::errs() << "[circt-sim-compile] Compiled " << numProcsCompiled
                  << " process bodies\n";
+  }
+
+  unsigned rejectedProcesses = totalProcesses - numProcsCompiled;
+  llvm::errs() << "[circt-sim-compile] Processes: " << totalProcesses
+               << " total, " << numProcsCompiled << " callback-eligible, "
+               << rejectedProcesses << " rejected\n";
+
+  if (verbose && !procRejectionReasons.empty()) {
+    llvm::SmallVector<std::pair<llvm::StringRef, unsigned>> sorted;
+    for (auto &kv : procRejectionReasons)
+      sorted.push_back({kv.first(), kv.second});
+    llvm::sort(sorted, [](const auto &a, const auto &b) {
+      return a.second > b.second;
+    });
+    llvm::errs() << "[circt-sim-compile] Top process rejection reasons:\n";
+    for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
+      llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
+                   << "\n";
   }
 
   // Track process function names to exclude from func_* descriptor arrays.
@@ -2174,6 +2550,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Collect compilable func.func bodies.
   llvm::SmallVector<func::FuncOp> candidates;
   unsigned totalFuncs = 0, externalFuncs = 0, rejectedFuncs = 0;
+  llvm::StringMap<unsigned> funcRejectionReasons;
 
   module->walk([&](func::FuncOp funcOp) {
     ++totalFuncs;
@@ -2181,8 +2558,11 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       ++externalFuncs;
       return;
     }
-    if (!isFuncBodyCompilable(funcOp)) {
+    std::string reason;
+    if (!isFuncBodyCompilable(funcOp, &reason)) {
       ++rejectedFuncs;
+      if (!reason.empty())
+        ++funcRejectionReasons[reason];
       return;
     }
     candidates.push_back(funcOp);
@@ -2191,6 +2571,19 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   llvm::errs() << "[circt-sim-compile] Functions: " << totalFuncs << " total, "
                << externalFuncs << " external, " << rejectedFuncs
                << " rejected, " << candidates.size() << " compilable\n";
+
+  if (verbose && !funcRejectionReasons.empty()) {
+    llvm::SmallVector<std::pair<llvm::StringRef, unsigned>> sorted;
+    for (auto &kv : funcRejectionReasons)
+      sorted.push_back({kv.first(), kv.second});
+    llvm::sort(sorted, [](const auto &a, const auto &b) {
+      return a.second > b.second;
+    });
+    llvm::errs() << "[circt-sim-compile] Top function rejection reasons:\n";
+    for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
+      llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
+                   << "\n";
+  }
 
   if (candidates.empty() && procNames.empty()) {
     llvm::errs() << "[circt-sim-compile] No compilable functions found\n";
@@ -2422,6 +2815,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   // Clean up temporary .o.
   llvm::sys::fs::remove(objPath);
+
+  // Report output file size.
+  uint64_t fileSize = 0;
+  if (!llvm::sys::fs::file_size(outPath, fileSize))
+    llvm::errs() << "[circt-sim-compile] Output size: " << (fileSize / 1024)
+                 << " KB\n";
 
   auto elapsed = std::chrono::steady_clock::now() - startTime;
   llvm::errs() << "[circt-sim-compile] Wrote " << outPath << " ("

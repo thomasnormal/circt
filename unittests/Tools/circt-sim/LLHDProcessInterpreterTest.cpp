@@ -7,7 +7,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
-#include "JITCompileManager.h"
 #include "circt/Dialect/Comb/CombDialect.h"
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/LLHD/IR/LLHDDialect.h"

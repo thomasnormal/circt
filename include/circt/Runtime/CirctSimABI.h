@@ -199,6 +199,53 @@ void __circt_sim_signal_drive_ptr(CirctSimCtx *ctx, uint32_t sig_id,
                                   uint8_t delay_kind, uint64_t delay);
 
 //===----------------------------------------------------------------------===//
+// Runtime API — Direct Signal Memory Access (Hot Path)
+//===----------------------------------------------------------------------===//
+//
+// For compiled callback processes, signal reads can bypass the function-call
+// ABI entirely by loading directly from the signal memory array. The
+// CirctSimHot struct provides the base pointers needed for this.
+
+/// Hot data pointers for direct signal memory access.
+/// Fetched once per process activation via __circt_sim_get_hot().
+/// All pointers remain valid for the duration of the callback.
+typedef struct {
+  /// Base pointer for 2-state signal values (width <= 64 bits each).
+  /// Read: value = sig2_base[sig_id]
+  /// Indexed by SignalId. Only valid for signals where isSignalDirect() is
+  /// true (width <= 64 bits). For wider signals, use __circt_sim_signal_read_ptr.
+  uint64_t *sig2_base;
+
+  /// Number of signals (for bounds checking in debug builds).
+  uint32_t num_signals;
+} CirctSimHot;
+
+/// Get hot data pointers for direct memory access.
+/// Called once at the start of each process activation.
+/// The returned pointer is valid for the duration of the callback.
+const CirctSimHot *__circt_sim_get_hot(CirctSimCtx *ctx);
+
+//===----------------------------------------------------------------------===//
+// Runtime API — Specialized Drive Entry Points
+//===----------------------------------------------------------------------===//
+//
+// These replace __circt_sim_signal_drive_u64 for the common cases, avoiding
+// the delay_kind branch at each call site.
+
+/// Drive with zero delay (combinational, immediate delta-step update).
+/// Equivalent to __circt_sim_signal_drive_u64(ctx, sig_id, val, 0, 0).
+void __circt_sim_drive_delta(CirctSimCtx *ctx, uint32_t sig_id, uint64_t val);
+
+/// Drive with NBA semantics (non-blocking assignment, deferred to NBA phase).
+/// Equivalent to __circt_sim_signal_drive_u64(ctx, sig_id, val, 2, 0).
+void __circt_sim_drive_nba(CirctSimCtx *ctx, uint32_t sig_id, uint64_t val);
+
+/// Drive with time delay (schedule event at current_time + delay).
+/// Equivalent to __circt_sim_signal_drive_u64(ctx, sig_id, val, 0, delay).
+void __circt_sim_drive_time(CirctSimCtx *ctx, uint32_t sig_id, uint64_t val,
+                            uint64_t delay);
+
+//===----------------------------------------------------------------------===//
 // Runtime API — Coroutine Yields
 //===----------------------------------------------------------------------===//
 //

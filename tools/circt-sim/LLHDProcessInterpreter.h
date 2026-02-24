@@ -1086,6 +1086,18 @@ public:
   /// Controlled by the CIRCT_SIM_COMPILE_REPORT environment variable.
   void printCompileReport() const;
 
+  /// AOT statistics accessors (used by --stats CLI flag).
+  uint64_t getCompiledCallbackInvocations() const {
+    return compiledCallbackInvocations;
+  }
+  uint64_t getInterpreterProcessInvocations() const {
+    return interpreterProcessInvocations;
+  }
+  uint64_t getNativeFuncCallCount() const { return nativeFuncCallCount; }
+  uint64_t getInterpretedFuncCallCount() const {
+    return interpretedFuncCallCount;
+  }
+
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
   static unsigned getTypeWidth(mlir::Type type);
@@ -3883,6 +3895,10 @@ private:
   /// Counters for native vs interpreted dispatch (for compile report).
   uint64_t nativeFuncCallCount = 0;
   uint64_t interpretedFuncCallCount = 0;
+
+  /// AOT invocation counters (for --stats reporting).
+  uint64_t compiledCallbackInvocations = 0;
+  uint64_t interpreterProcessInvocations = 0;
 };
 
 } // namespace sim

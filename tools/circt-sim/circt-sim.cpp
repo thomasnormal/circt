@@ -20,6 +20,7 @@
 
 #include "CompiledModuleLoader.h"
 #include "LLHDProcessInterpreter.h"
+#include "circt/Runtime/CirctSimABI.h"
 #include "circt/Runtime/MooreRuntime.h"
 #include "circt/Conversion/ArcToLLVM.h"
 #include "circt/Conversion/CombToArith.h"
@@ -210,11 +211,16 @@ static void *g_trampolineUserData = nullptr;
 /// Trampoline name table. Set from CompiledModuleLoader after loading .so.
 static const CirctSimCompiledModule *g_compiledModule = nullptr;
 
+/// Counter for trampoline calls (compiled → interpreter boundary crossings).
+/// Incremented by __circt_sim_call_interpreted; reported by --stats.
+static uint64_t g_trampolineCalls = 0;
+
 extern "C" void __circt_sim_call_interpreted(CirctSimCtx * /*ctx*/,
                                              uint32_t funcId,
                                              const uint64_t *args,
                                              uint32_t numArgs, uint64_t *rets,
                                              uint32_t numRets) {
+  ++g_trampolineCalls;
   // Look up the function name from the trampoline table.
   const char *funcName = nullptr;
   if (g_compiledModule && funcId < g_compiledModule->num_trampolines &&
@@ -235,6 +241,87 @@ extern "C" void __circt_sim_call_interpreted(CirctSimCtx * /*ctx*/,
     llvm::errs() << " (" << funcName << ")";
   llvm::errs() << " but interpreter fallback dispatch is not wired up.\n";
   abort();
+}
+
+//===----------------------------------------------------------------------===//
+// AOT Signal Access Runtime Support
+//===----------------------------------------------------------------------===//
+
+/// Global pointer to the ProcessScheduler. Set during SimulationContext
+/// initialization so that extern "C" ABI functions can access signal memory
+/// without going through the opaque CirctSimCtx pointer.
+static ProcessScheduler *g_aotScheduler = nullptr;
+
+/// Static hot data struct returned by __circt_sim_get_hot().
+/// Filled once when the pointer is first requested; refreshed if the
+/// scheduler's signal memory is reallocated (which shouldn't happen after
+/// initialization, but we guard against it).
+static CirctSimHot g_hotData = {};
+
+extern "C" const CirctSimHot *__circt_sim_get_hot(CirctSimCtx * /*ctx*/) {
+  if (g_aotScheduler) {
+    g_hotData.sig2_base = g_aotScheduler->getSignalMemoryBase();
+    g_hotData.num_signals =
+        static_cast<uint32_t>(g_aotScheduler->getNumSignals());
+  }
+  return &g_hotData;
+}
+
+extern "C" uint64_t __circt_sim_signal_read_u64(CirctSimCtx * /*ctx*/,
+                                                uint32_t sigId) {
+  if (!g_aotScheduler)
+    return 0;
+  uint64_t *base = g_aotScheduler->getSignalMemoryBase();
+  return base[sigId];
+}
+
+extern "C" void __circt_sim_signal_drive_u64(CirctSimCtx * /*ctx*/,
+                                             uint32_t sigId, uint64_t val,
+                                             uint8_t delayKind,
+                                             uint64_t delay) {
+  if (!g_aotScheduler)
+    return;
+  if (delayKind == 2) {
+    // NBA: queue for deferred commit in NBA phase.
+    g_aotScheduler->queueSignalUpdateFast(sigId, val, /*width=*/0);
+  } else if (delay == 0) {
+    // Zero-delay transport: immediate delta-step update.
+    g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
+  } else {
+    // Time-delayed drive: schedule event.
+    auto currentTime = g_aotScheduler->getCurrentTime();
+    SimTime resumeTime(currentTime.realTime + delay, 0);
+    g_aotScheduler->getEventScheduler().schedule(
+        resumeTime, SchedulingRegion::Active,
+        Event([sigId, val]() {
+          g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
+        }));
+  }
+}
+
+extern "C" void __circt_sim_drive_delta(CirctSimCtx * /*ctx*/, uint32_t sigId,
+                                        uint64_t val) {
+  if (g_aotScheduler)
+    g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
+}
+
+extern "C" void __circt_sim_drive_nba(CirctSimCtx * /*ctx*/, uint32_t sigId,
+                                      uint64_t val) {
+  if (g_aotScheduler)
+    g_aotScheduler->queueSignalUpdateFast(sigId, val, /*width=*/0);
+}
+
+extern "C" void __circt_sim_drive_time(CirctSimCtx * /*ctx*/, uint32_t sigId,
+                                       uint64_t val, uint64_t delay) {
+  if (!g_aotScheduler)
+    return;
+  auto currentTime = g_aotScheduler->getCurrentTime();
+  SimTime resumeTime(currentTime.realTime + delay, 0);
+  g_aotScheduler->getEventScheduler().schedule(
+      resumeTime, SchedulingRegion::Active,
+      Event([sigId, val]() {
+        g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
+      }));
 }
 
 //===----------------------------------------------------------------------===//
@@ -553,6 +640,10 @@ static llvm::cl::opt<bool>
         "process-op-counts-breakdown-extracts",
         llvm::cl::desc("Print comb.extract width/offset breakdowns"),
         llvm::cl::init(false), llvm::cl::cat(debugCategory));
+
+static llvm::cl::opt<bool>
+    aotStats("aot-stats", llvm::cl::desc("Print AOT compilation statistics at exit"),
+             llvm::cl::init(false), llvm::cl::cat(debugCategory));
 
 static llvm::cl::opt<bool>
     verifyPasses("verify-each",
@@ -921,6 +1012,10 @@ LogicalResult SimulationContext::initialize(
       requestAbort("Interrupt signal received");
     return abortRequested.load();
   });
+
+  // Wire up the global scheduler pointer for AOT runtime functions.
+  g_aotScheduler = &scheduler;
+
   // Note: signal change callback is set up AFTER buildSimulationModel()
   // below, because the interpreter's initialize() also sets a callback
   // which would overwrite one set here.
@@ -3369,6 +3464,20 @@ static LogicalResult processInput(MLIRContext &context,
   // Print statistics if requested
   if (printStats) {
     simContext.printStatistics(llvm::outs());
+  }
+  if (aotStats) {
+    auto &interp = *simContext.getInterpreter();
+    llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
+    llvm::errs() << "[circt-sim] Compiled callback invocations:   "
+                 << interp.getCompiledCallbackInvocations() << "\n";
+    llvm::errs() << "[circt-sim] Interpreter process invocations:  "
+                 << interp.getInterpreterProcessInvocations() << "\n";
+    llvm::errs() << "[circt-sim] Compiled function calls:          "
+                 << interp.getNativeFuncCallCount() << "\n";
+    llvm::errs() << "[circt-sim] Trampoline calls:                 "
+                 << g_trampolineCalls << "\n";
+    llvm::errs() << "[circt-sim] Interpreted function calls:       "
+                 << interp.getInterpretedFuncCallCount() << "\n";
   }
   // Use std::_Exit() here, before returning, to skip the expensive
   // SimulationContext destructor.  For UVM designs with millions of
