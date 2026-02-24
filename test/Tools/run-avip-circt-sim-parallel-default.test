@@ -3,7 +3,7 @@
 // RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > "${OUT:?OUT is required}"\n' > %t/fake-run-avip.sh
 // RUN: chmod +x %t/fake-run-avip.sh
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsaw_parallel=0\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == --parallel=1 ]]; then\n    saw_parallel=1\n  fi\ndone\nif [[ $saw_parallel -ne 1 ]]; then\n  echo \"missing_parallel\" >&2\n  printf \"args=%q\\n\" \"$@\" >&2\n  exit 99\nfi\necho \"Simulation completed at time 10 fs\"\necho \"UVM_FATAL : 0\"\necho \"UVM_ERROR : 0\"\necho \"Overall coverage: 100.00%\"\n' > %t/fake-circt-sim
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nsaw_parallel=0\nsaw_mlir=0\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == --parallel=1 ]]; then\n    saw_parallel=1\n  fi\n  if [[ \"$arg\" == --mlir-disable-threading ]]; then\n    saw_mlir=1\n  fi\ndone\nif [[ $saw_parallel -ne 1 || $saw_mlir -ne 1 ]]; then\n  echo \"missing_default_args\" >&2\n  printf \"args=%q\\n\" \"$@\" >&2\n  exit 99\nfi\necho \"Simulation completed at time 10 fs\"\necho \"UVM_FATAL : 0\"\necho \"UVM_ERROR : 0\"\necho \"Overall coverage: 100.00%\"\n' > %t/fake-circt-sim
 // RUN: chmod +x %t/fake-circt-sim
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-circt-verilog
 // RUN: chmod +x %t/fake-circt-verilog
@@ -11,4 +11,3 @@
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
 // LOG: sim_status=OK
-
