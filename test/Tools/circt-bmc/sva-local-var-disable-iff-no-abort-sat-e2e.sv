@@ -1,11 +1,10 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
-// RUN:   circt-bmc -b 6 --ignore-asserts-until=0 --module=sva_local_var_disable_iff_no_abort_sat - | \
+// RUN:   circt-bmc --run-smtlib -b 6 --ignore-asserts-until=0 --module=sva_local_var_disable_iff_no_abort_sat - | \
 // RUN:   FileCheck %s --check-prefix=JIT
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
 // RUN:   circt-bmc --run-smtlib -b 6 --ignore-asserts-until=0 --module=sva_local_var_disable_iff_no_abort_sat - | \
 // RUN:   FileCheck %s --check-prefix=SMTLIB
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_local_var_disable_iff_no_abort_sat(input logic clk);

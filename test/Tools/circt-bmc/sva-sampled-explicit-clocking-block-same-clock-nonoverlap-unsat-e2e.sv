@@ -1,9 +1,8 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 10 --ignore-asserts-until=2 --module=sva_rose_explicit_clocking_block_same_clock_nonoverlap_unsat - | FileCheck %s --check-prefix=ROSE
+// RUN:   circt-bmc --run-smtlib -b 10 --ignore-asserts-until=2 --module=sva_rose_explicit_clocking_block_same_clock_nonoverlap_unsat - | FileCheck %s --check-prefix=ROSE
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 10 --ignore-asserts-until=2 --module=sva_past_explicit_clocking_block_same_clock_nonoverlap_unsat - | FileCheck %s --check-prefix=PAST
+// RUN:   circt-bmc --run-smtlib -b 10 --ignore-asserts-until=2 --module=sva_past_explicit_clocking_block_same_clock_nonoverlap_unsat - | FileCheck %s --check-prefix=PAST
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_rose_explicit_clocking_block_same_clock_nonoverlap_unsat(

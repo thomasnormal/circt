@@ -1,7 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 12 --allow-multi-clock --assume-known-inputs --module=sva_sequence_event_list_multiclock_sat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 12 --allow-multi-clock --assume-known-inputs --module=sva_sequence_event_list_multiclock_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_sequence_event_list_multiclock_sat(

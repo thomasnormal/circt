@@ -1,8 +1,7 @@
 // RUN: circt-verilog --ir-llhd --no-uvm-auto-include %s | \
-// RUN:   circt-bmc -b 4 --assume-known-inputs --ignore-asserts-until=1 \
+// RUN:   circt-bmc --run-smtlib -b 4 --assume-known-inputs --ignore-asserts-until=1 \
 // RUN:   --module=sva_llhd_overlap_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_llhd_overlap_sat(input logic clk, input logic a);

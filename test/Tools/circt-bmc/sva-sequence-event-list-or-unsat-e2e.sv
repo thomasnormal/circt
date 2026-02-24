@@ -1,7 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 12 --ignore-asserts-until=2 --module=sva_sequence_event_list_or_unsat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 12 --ignore-asserts-until=2 --module=sva_sequence_event_list_or_unsat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_sequence_event_list_or_unsat(input logic clk);
