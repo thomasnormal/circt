@@ -7096,3 +7096,38 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Validation
 - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-goto-repeat-pre-antecedent-hit-leak-fail-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-repeat-pre-antecedent-hit-leak-fail-runtime.sv` -> `2/2` PASS.
 - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='goto-repeat|nonconsecutive-repeat|repeat-pre-antecedent-hit-leak|sva-goto|sva-nonconsecutive' build_test/test/Tools/circt-sim` -> `10/10` PASS.
+
+## 2026-02-24: Yosys SVA LEC parity follow-up (VHDL stubs + Z3 path)
+
+### Gap identified
+- `utils/run_yosys_sva_circt_lec.sh` still hard-skipped `.vhd`-backed Yosys SVA cases under `SKIP_VHDL=1`, even after BMC gained `.sv` stub fallback.
+- Real-run validation also exposed a separate runner issue: default z3 discovery passed `--z3-path=z3` instead of an absolute binary path, which can fail at runtime when tool lookup is not PATH-based.
+
+### Test-first lock
+- Added failing regression before implementation:
+  - `test/Tools/run-yosys-sva-circt-lec-vhdl-stub-fallback.test`
+  - initial behavior: `SKIP(vhdl): vhdl_case` (expected failure of new test).
+- Added failing regression for z3-path behavior:
+  - `test/Tools/run-yosys-sva-circt-lec-z3-path-resolution.test`
+  - initial behavior: LEC invocation failed because fake tool rejected non-absolute `--z3-path`.
+
+### Implementation
+- `utils/run_yosys_sva_circt_lec.sh`
+  - introduced:
+    - `YOSYS_SVA_USE_VHDL_STUBS` (default `1`)
+    - `YOSYS_SVA_VHDL_STUB_DIR` (default `utils/yosys-sva-vhdl-stubs`)
+  - VHDL handling now:
+    - if `.vhd` exists and stubs enabled + present, feed stub `.sv` alongside main `.sv` into `circt-verilog`.
+    - otherwise keep existing `SKIP(vhdl)` behavior.
+  - cache key now includes optional stub path/hash to keep cache correctness.
+  - z3 discovery now stores `Z3_BIN="$(command -v z3)"` when available, aligning with BMC script behavior.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/run-yosys-sva-circt-lec-vhdl-stub-fallback.test build_test/test/Tools/run-yosys-sva-circt-lec-z3-path-resolution.test build_test/test/Tools/run-yosys-sva-circt-lec-not-run-vhdl-reason.test build_test/test/Tools/run-yosys-sva-circt-lec-mlir-cache.test` -> `4/4 PASS`.
+- Real check:
+  - `OUT=/tmp/yosys-sva-lec-basic04-05-after-fixes.txt TEST_FILTER='basic0[45]' utils/run_yosys_sva_circt_lec.sh /home/thomas-ahle/yosys/tests/sva`
+  - result: `PASS: basic04`, `PASS: basic05`, `skip=0`.
+
+### Realizations / surprises
+- The LEC VHDL skip gap was straightforward; the z3 absolute-path issue was the hidden blocker behind initial post-fallback `ERROR` results.
+- Matching runner conventions across BMC and LEC (tool discovery + feature knobs) removes avoidable divergence and simplifies future maintenance.

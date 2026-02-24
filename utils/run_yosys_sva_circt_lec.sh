@@ -30,6 +30,8 @@ CIRCT_LEC_ARGS="${CIRCT_LEC_ARGS:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 TEST_FILTER="${TEST_FILTER:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
+YOSYS_SVA_USE_VHDL_STUBS="${YOSYS_SVA_USE_VHDL_STUBS:-1}"
+YOSYS_SVA_VHDL_STUB_DIR="${YOSYS_SVA_VHDL_STUB_DIR:-$SCRIPT_DIR/yosys-sva-vhdl-stubs}"
 LEC_SMOKE_ONLY="${LEC_SMOKE_ONLY:-0}"
 LEC_FAIL_ON_INEQ="${LEC_FAIL_ON_INEQ:-1}"
 Z3_BIN="${Z3_BIN:-}"
@@ -59,7 +61,7 @@ fi
 
 if [[ -z "$Z3_BIN" ]]; then
   if command -v z3 >/dev/null 2>&1; then
-    Z3_BIN="z3"
+    Z3_BIN="$(command -v z3)"
   elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
     Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
   elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
@@ -417,13 +419,19 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
     log_tag="${rel_path%.sv}"
   fi
   log_tag="${log_tag//\//__}"
+  extra_sv=""
   if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
-    echo "SKIP(vhdl): $base"
-    total=$((total + 1))
-    skip=$((skip + 1))
-    append_lec_resolved_contract "$base" "$sv" "not_run_vhdl"
-    printf "SKIP\t%s\t%s\tyosys/tests/sva\tLEC\tLEC_NOT_RUN\tvhdl\n" "$base" "$sv" >> "$results_tmp"
-    continue
+    stub_sv="$YOSYS_SVA_VHDL_STUB_DIR/$base.sv"
+    if [[ "$YOSYS_SVA_USE_VHDL_STUBS" == "1" && -f "$stub_sv" ]]; then
+      extra_sv="$stub_sv"
+    else
+      echo "SKIP(vhdl): $base"
+      total=$((total + 1))
+      skip=$((skip + 1))
+      append_lec_resolved_contract "$base" "$sv" "not_run_vhdl"
+      printf "SKIP\t%s\t%s\tyosys/tests/sva\tLEC\tLEC_NOT_RUN\tvhdl\n" "$base" "$sv" >> "$results_tmp"
+      continue
+    fi
   fi
 
   total=$((total + 1))
@@ -452,7 +460,12 @@ circt_verilog=${CIRCT_VERILOG}
 circt_verilog_args=${CIRCT_VERILOG_ARGS}
 disable_uvm_auto_include=${DISABLE_UVM_AUTO_INCLUDE}
 file=${sv} hash=$(hash_file "$sv")
+extra_file=${extra_sv}
 "
+    if [[ -n "$extra_sv" ]]; then
+      cache_payload+="extra_hash=$(hash_file "$extra_sv")
+"
+    fi
     cache_key="$(hash_key "$cache_payload")"
     cache_file="$LEC_MLIR_CACHE_DIR/${cache_key}.mlir"
     if [[ -s "$cache_file" ]]; then
@@ -468,7 +481,11 @@ file=${sv} hash=$(hash_file "$sv")
 
   if [[ "$cache_hit" != "1" ]]; then
     verilog_bin="$CIRCT_VERILOG"
-    if run_limited "$verilog_bin" --ir-hw "${verilog_args[@]}" "$sv" \
+    verilog_cmd=("$verilog_bin" --ir-hw "${verilog_args[@]}" "$sv")
+    if [[ -n "$extra_sv" ]]; then
+      verilog_cmd+=("$extra_sv")
+    fi
+    if run_limited "${verilog_cmd[@]}" \
         > "$mlir" 2> "$verilog_log"; then
       :
     else
@@ -488,7 +505,11 @@ file=${sv} hash=$(hash_file "$sv")
             "FALLBACK" "$base" "$sv" "frontend" "$original_verilog_tool" \
             "${launch_reason}_retry_exhausted" "" "" "$verilog_status" "$fallback_verilog"
         fi
-        if run_limited "$verilog_bin" --ir-hw "${verilog_args[@]}" "$sv" \
+        verilog_cmd=("$verilog_bin" --ir-hw "${verilog_args[@]}" "$sv")
+        if [[ -n "$extra_sv" ]]; then
+          verilog_cmd+=("$extra_sv")
+        fi
+        if run_limited "${verilog_cmd[@]}" \
             > "$mlir" 2> "$verilog_log"; then
           verilog_status=0
         else
