@@ -865,6 +865,18 @@ public:
     if (llhdInterpreter) {
       llhdInterpreter->loadCompiledFunctions(*compiledLoader);
       llhdInterpreter->loadCompiledProcesses(*compiledLoader);
+
+      // Wire up the trampoline dispatch callback so compiled trampolines
+      // can call back into the interpreter for non-compiled functions.
+      g_trampolineDispatch = [](uint32_t funcId, const char *funcName,
+                                const uint64_t *args, uint32_t numArgs,
+                                uint64_t *rets, uint32_t numRets,
+                                void *userData) {
+        static_cast<LLHDProcessInterpreter *>(userData)
+            ->dispatchTrampoline(funcId, funcName, args, numArgs, rets,
+                                 numRets);
+      };
+      g_trampolineUserData = llhdInterpreter.get();
     }
   }
 
@@ -3497,10 +3509,15 @@ static LogicalResult processInput(MLIRContext &context,
       (wallClockTimeoutTriggered.load() || wallClockGuardFired))
     exitCode = 1;
   // Check for SVA clocked assertion/assumption failures.
-  if (exitCode == 0 && !simContext.stoppedByMaxTimeLimit()) {
+  if (exitCode == 0) {
     if (auto *interp = simContext.getInterpreter()) {
-      interp->finalizeClockedAssertionsAtEnd();
-      interp->finalizeClockedAssumptionsAtEnd();
+      // On max-time exits we intentionally skip end-of-trace finalization
+      // (which can turn pending temporal obligations into failures), but still
+      // report and enforce failures already observed during runtime.
+      if (!simContext.stoppedByMaxTimeLimit()) {
+        interp->finalizeClockedAssertionsAtEnd();
+        interp->finalizeClockedAssumptionsAtEnd();
+      }
       size_t assertionFailures = interp->getClockedAssertionFailures();
       size_t assumptionFailures = interp->getClockedAssumptionFailures();
       if (assertionFailures > 0) {
