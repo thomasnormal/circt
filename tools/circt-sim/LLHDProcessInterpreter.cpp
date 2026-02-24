@@ -6758,16 +6758,6 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
              trackerIt->second.hasUnboundedWindow)) {
           const auto &tracker = trackerIt->second;
           for (const auto &pending : tracker.pendingAntecedents) {
-            uint64_t age = state.sampleOrdinal >= pending.triggerSampleOrdinal
-                               ? state.sampleOrdinal - pending.triggerSampleOrdinal
-                               : 0;
-            bool windowMatured = true;
-            if (tracker.hasBoundedWindow)
-              windowMatured = age >= tracker.boundedMaxShift;
-            else if (tracker.hasUnboundedWindow)
-              windowMatured = age >= tracker.unboundedMinShift;
-            if (!windowMatured)
-              continue;
             if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
               unresolvedStrongEventually = true;
               break;
@@ -6986,16 +6976,6 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
              trackerIt->second.hasUnboundedWindow)) {
           const auto &tracker = trackerIt->second;
           for (const auto &pending : tracker.pendingAntecedents) {
-            uint64_t age = state.sampleOrdinal >= pending.triggerSampleOrdinal
-                               ? state.sampleOrdinal - pending.triggerSampleOrdinal
-                               : 0;
-            bool windowMatured = true;
-            if (tracker.hasBoundedWindow)
-              windowMatured = age >= tracker.boundedMaxShift;
-            else if (tracker.hasUnboundedWindow)
-              windowMatured = age >= tracker.unboundedMinShift;
-            if (!windowMatured)
-              continue;
             if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
               unresolvedStrongEventually = true;
               break;

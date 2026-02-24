@@ -2,6 +2,35 @@
 
 ## 2026-02-24
 
+- Iteration update (sequence-local-var + implication finalization parity):
+  - realizations:
+    - `sva-sequence-local-var-runtime.sv` was still emitted as
+      `verif.clocked_assert` over raw `!ltl.sequence` in module-level
+      `ltl.clock` cases, bypassing assert-like sequence materialization.
+    - end-of-trace implication obligations needed two distinct modes:
+      - explicit simulation end (`$finish` / `sim.terminate`) should enforce
+        strong pending obligations.
+      - artificial `--max-time` truncation should not force end-of-trace
+        failures for still-pending obligations.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/Statements.cpp`
+      - added direct module-level `ltl.clock` lowering to clocked verif ops.
+      - constrained assert-like sequence materialization to top-level
+        `ltl.concat` shapes.
+      - antecedent uses sampled clock signal (`posedge`) / inverted sampled
+        clock (`negedge`) instead of tautological i1.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - finalization now fails unresolved pending implication obligations
+        (assertions + assumptions) at true end-of-trace.
+    - `tools/circt-sim/circt-sim.cpp`
+      - tracks `stoppedByMaxTime` and skips end-of-trace implication
+        finalization only for max-time exits.
+  - validation:
+    - focused 7-test slice (delay-range + local-var): `7/7` pass.
+    - targeted regression bucket (firstmatch/intersect/nexttime/throughout/
+      unbounded-delay-final): `6/6` pass.
+    - `--filter='sva-.*runtime'` on `test/Tools/circt-sim`: `88/88` pass.
+
 - Iteration update (time-slot sampled assertion reads in `circt-sim`):
   - realization:
     - delta-local sampled reads (`didSignalChangeThisDelta` +

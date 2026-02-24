@@ -909,6 +909,9 @@ public:
     return llhdInterpreter.get();
   }
 
+  /// Return true if the last run exited due to --max-time limit.
+  bool stoppedByMaxTimeLimit() const { return stoppedByMaxTime; }
+
 private:
   /// Set up waveform tracing.
   LogicalResult setupWaveformTracing();
@@ -991,6 +994,7 @@ private:
   std::atomic<bool> stopWatchdog{false};
   bool inInitializationPhase = true;  // Track if we're still initializing
   bool vpiEnabled = false;
+  bool stoppedByMaxTime = false;
   std::mutex abortMutex;
   std::string abortReason;
   std::thread watchdogThread;
@@ -1972,6 +1976,7 @@ void SimulationContext::recordValueChange(SignalId signal,
 LogicalResult SimulationContext::run() {
   startWatchdogThread();
   simulationStarted.store(true);
+  stoppedByMaxTime = false;
 
   // Write VCD header
   if (vcdWriter) {
@@ -2785,6 +2790,7 @@ LogicalResult SimulationContext::run() {
     // Check simulation time limit
     const auto &currentTime = scheduler.getCurrentTime();
     if (maxTime > 0 && currentTime.realTime >= maxTime) {
+      stoppedByMaxTime = true;
       llvm::errs() << "[circt-sim] Main loop exit: maxTime reached ("
                    << currentTime.realTime << " >= " << maxTime
                    << " fs), iter=" << loopIterations << "\n";
@@ -3491,7 +3497,7 @@ static LogicalResult processInput(MLIRContext &context,
       (wallClockTimeoutTriggered.load() || wallClockGuardFired))
     exitCode = 1;
   // Check for SVA clocked assertion/assumption failures.
-  if (exitCode == 0) {
+  if (exitCode == 0 && !simContext.stoppedByMaxTimeLimit()) {
     if (auto *interp = simContext.getInterpreter()) {
       interp->finalizeClockedAssertionsAtEnd();
       interp->finalizeClockedAssumptionsAtEnd();
