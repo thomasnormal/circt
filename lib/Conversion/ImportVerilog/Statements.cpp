@@ -802,8 +802,15 @@ struct StmtVisitor {
       // (`label: assert property ...`), but must not introduce CFG blocks.
       // Keep these linear and rely on statement lowering to emit the assertion.
       if (builder.getInsertionBlock() &&
-          isa<moore::SVModuleOp>(builder.getInsertionBlock()->getParentOp()))
+          isa<moore::SVModuleOp>(builder.getInsertionBlock()->getParentOp())) {
+        auto savedLabel = context.currentConcurrentAssertionLabel;
+        context.currentConcurrentAssertionLabel =
+            builder.getStringAttr(blockSym->name);
+        auto restoreLabel = llvm::make_scope_exit([&] {
+          context.currentConcurrentAssertionLabel = savedLabel;
+        });
         return context.convertStatement(stmt.body);
+      }
 
       auto &exitBlock = createBlock();
       context.disableStack.push_back({blockSym, &exitBlock});
@@ -2523,8 +2530,21 @@ struct StmtVisitor {
 
     // Generate the true branch.
     builder.setInsertionPointToEnd(&trueBlock);
-    if (stmt.ifTrue && failed(context.convertStatement(*stmt.ifTrue)))
-      return failure();
+    if (stmt.ifTrue) {
+      // Gate with assertionPassMessagesEnabled: if $assertpassoff was called,
+      // skip the pass action (true clause) entirely.
+      auto passMsgsEnabled = readAssertionPassMessagesEnabled();
+      if (passMsgsEnabled) {
+        auto passMsgsLogic =
+            moore::ToBuiltinBoolOp::create(builder, loc, passMsgsEnabled);
+        Block &passBodyBlock = createBlock();
+        cf::CondBranchOp::create(builder, loc, passMsgsLogic, &passBodyBlock,
+                                 &exitBlock);
+        builder.setInsertionPointToEnd(&passBodyBlock);
+      }
+      if (failed(context.convertStatement(*stmt.ifTrue)))
+        return failure();
+    }
     if (!isTerminated())
       cf::BranchOp::create(builder, loc, &exitBlock);
 
@@ -2686,17 +2706,24 @@ struct StmtVisitor {
       return builder.getStringAttr(taskName);
     };
 
-    // Check for a `disable iff` expression:
-    // The DisableIff construct can only occur at the top level of an assertion
-    // and cannot be nested within properties.
-    // Hence we only need to detect if the top level assertion expression
-    // has type DisableIff, negate the `disable` expression, then pass it to
-    // the `enable` parameter of AssertOp/AssumeOp.
+    // Check for a top-level `disable iff` expression.
+    // In Slang AST this can be wrapped by top-level clocking syntax:
+    //   @(...) disable iff (...) <property>
+    // We peel leading clocking wrappers, detect top-level disable iff, then
+    // lower disable iff via assertion enables instead of as part of property
+    // semantics.
     Value disableIffEnable;
     const slang::ast::AssertionExpr *innerPropertySpec = &stmt.propertySpec;
     const slang::ast::Expression *topLevelDisableIffExpr = nullptr;
+    SmallVector<const slang::ast::ClockingAssertionExpr *, 2> outerClockings;
+    const slang::ast::AssertionExpr *candidateProperty = &stmt.propertySpec;
+    while (auto *clockingExpr =
+               candidateProperty->as_if<slang::ast::ClockingAssertionExpr>()) {
+      outerClockings.push_back(clockingExpr);
+      candidateProperty = &clockingExpr->expr;
+    }
     if (auto *disableIff =
-            stmt.propertySpec.as_if<slang::ast::DisableIffAssertionExpr>()) {
+            candidateProperty->as_if<slang::ast::DisableIffAssertionExpr>()) {
       auto disableCond = context.convertRvalueExpression(disableIff->condition);
       disableCond = context.convertToBool(disableCond);
       if (!disableCond)
@@ -2714,7 +2741,18 @@ struct StmtVisitor {
       context.pushAssertionDisableExpr(topLevelDisableIffExpr);
       auto popDisable = llvm::make_scope_exit(
           [&] { context.popAssertionDisableExpr(); });
-      return context.convertAssertionExpression(*innerPropertySpec, loc);
+      auto property = context.convertAssertionExpression(*innerPropertySpec, loc);
+      if (!property)
+        return {};
+      // Reapply any top-level clocking wrappers peeled while extracting
+      // disable iff.
+      for (auto it = outerClockings.rbegin(); it != outerClockings.rend();
+           ++it) {
+        property = context.convertLTLTimingControl((*it)->clocking, property);
+        if (!property)
+          return {};
+      }
+      return property;
     };
 
     StringAttr actionLabel;
@@ -2732,6 +2770,52 @@ struct StmtVisitor {
       mlir::emitWarning(loc)
           << "ignoring concurrent assertion action blocks during import";
     }
+    StringAttr assertLabel = actionLabel;
+    if (!assertLabel)
+      assertLabel = context.currentConcurrentAssertionLabel;
+    if (!assertLabel) {
+      // Concurrent assertion statement labels (`label: assert property (...)`)
+      // may appear directly on the statement syntax without introducing an
+      // explicit named block in the imported AST context.
+      if (auto *syntax = stmt.syntax) {
+        if (auto *namedLabel = syntax->label) {
+          auto labelText = namedLabel->name.valueText();
+          if (!labelText.empty())
+            assertLabel = builder.getStringAttr(labelText);
+        }
+      }
+    }
+
+    auto appendAssertionControlEnable =
+        [&](Value existingEnable) -> FailureOr<Value> {
+      // Only gate concurrent assertions when assertion-control state is
+      // materialized in this design.
+      if (!context.proceduralAssertionsEnabledGlobal)
+        return existingEnable;
+      auto assertionsEnabled = readProceduralAssertionsEnabled();
+      if (!assertionsEnabled)
+        return failure();
+      assertionsEnabled = context.convertToBool(assertionsEnabled);
+      assertionsEnabled = context.convertToI1(assertionsEnabled);
+      if (!assertionsEnabled)
+        return failure();
+      if (!existingEnable)
+        return assertionsEnabled;
+      if (!existingEnable.getType().isInteger(1)) {
+        existingEnable = context.convertToI1(existingEnable);
+        if (!existingEnable)
+          return failure();
+      }
+      return arith::AndIOp::create(builder, loc, existingEnable,
+                                   assertionsEnabled)
+          .getResult();
+    };
+    auto materializeAssertLikeProperty = [&](Value property) -> Value {
+      if (!isa<ltl::SequenceType>(property.getType()))
+        return property;
+      auto trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+      return ltl::ImplicationOp::create(builder, loc, trueVal, property);
+    };
 
     if (context.currentAssertionClock && enclosingProc) {
       OpBuilder::InsertionGuard guard(builder);
@@ -2806,31 +2890,47 @@ struct StmtVisitor {
         if (!enable)
           return failure();
       }
+      auto gatedEnable = appendAssertionControlEnable(enable);
+      if (failed(gatedEnable))
+        return failure();
+      enable = *gatedEnable;
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
-        verif::ClockedAssertOp::create(builder, loc, emittedProperty, edge,
-                                       clockVal, enable, actionLabel);
+        verif::ClockedAssertOp::create(builder, loc,
+                                       materializeAssertLikeProperty(
+                                           emittedProperty),
+                                       edge,
+                                       clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::Assume:
-        verif::ClockedAssumeOp::create(builder, loc, emittedProperty, edge,
-                                       clockVal, enable, actionLabel);
+        verif::ClockedAssumeOp::create(builder, loc,
+                                       materializeAssertLikeProperty(
+                                           emittedProperty),
+                                       edge,
+                                       clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::Restrict:
         // Restrict constraints are treated as assumptions in lowering.
-        verif::ClockedAssumeOp::create(builder, loc, emittedProperty, edge,
-                                       clockVal, enable, actionLabel);
+        verif::ClockedAssumeOp::create(builder, loc,
+                                       materializeAssertLikeProperty(
+                                           emittedProperty),
+                                       edge,
+                                       clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::CoverProperty:
         verif::ClockedCoverOp::create(builder, loc, emittedProperty, edge,
-                                      clockVal, enable, actionLabel);
+                                      clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::CoverSequence:
         verif::ClockedCoverOp::create(builder, loc, emittedProperty, edge,
-                                      clockVal, enable, actionLabel);
+                                      clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::Expect:
-        verif::ClockedAssertOp::create(builder, loc, emittedProperty, edge,
-                                       clockVal, enable, actionLabel);
+        verif::ClockedAssertOp::create(builder, loc,
+                                       materializeAssertLikeProperty(
+                                           emittedProperty),
+                                       edge,
+                                       clockVal, enable, assertLabel);
         return success();
       default:
         break;
@@ -2914,32 +3014,48 @@ struct StmtVisitor {
               if (!enable)
                 return failure();
             }
+            auto gatedEnable = appendAssertionControlEnable(enable);
+            if (failed(gatedEnable))
+              return failure();
+            enable = *gatedEnable;
 
             switch (stmt.assertionKind) {
             case slang::ast::AssertionKind::Assert:
-              verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, actionLabel);
+              verif::ClockedAssertOp::create(builder, loc,
+                                             materializeAssertLikeProperty(
+                                                 innerProperty),
+                                             edge,
+                                             clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::Assume:
-              verif::ClockedAssumeOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, actionLabel);
+              verif::ClockedAssumeOp::create(builder, loc,
+                                             materializeAssertLikeProperty(
+                                                 innerProperty),
+                                             edge,
+                                             clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::Restrict:
               // Restrict constraints are treated as assumptions in lowering.
-              verif::ClockedAssumeOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, actionLabel);
+              verif::ClockedAssumeOp::create(builder, loc,
+                                             materializeAssertLikeProperty(
+                                                 innerProperty),
+                                             edge,
+                                             clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::CoverProperty:
               verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
-                                            clockVal, enable, actionLabel);
+                                            clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::CoverSequence:
               verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
-                                            clockVal, enable, actionLabel);
+                                            clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::Expect:
-              verif::ClockedAssertOp::create(builder, loc, innerProperty, edge,
-                                             clockVal, enable, actionLabel);
+              verif::ClockedAssertOp::create(builder, loc,
+                                             materializeAssertLikeProperty(
+                                                 innerProperty),
+                                             edge,
+                                             clockVal, enable, assertLabel);
               return success();
             default:
               break;
@@ -2949,31 +3065,36 @@ struct StmtVisitor {
       }
     }
 
+    auto gatedEnable = appendAssertionControlEnable(disableIffEnable);
+    if (failed(gatedEnable))
+      return failure();
+    auto assertionEnable = *gatedEnable;
+
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:
-      verif::AssertOp::create(builder, loc, property, disableIffEnable,
-                              actionLabel);
+      verif::AssertOp::create(builder, loc, property, assertionEnable,
+                              assertLabel);
       return success();
     case slang::ast::AssertionKind::Assume:
-      verif::AssumeOp::create(builder, loc, property, disableIffEnable,
-                              actionLabel);
+      verif::AssumeOp::create(builder, loc, property, assertionEnable,
+                              assertLabel);
       return success();
     case slang::ast::AssertionKind::Restrict:
       // Restrict constraints are treated as assumptions in lowering.
-      verif::AssumeOp::create(builder, loc, property, disableIffEnable,
-                              actionLabel);
+      verif::AssumeOp::create(builder, loc, property, assertionEnable,
+                              assertLabel);
       return success();
     case slang::ast::AssertionKind::CoverProperty:
-      verif::CoverOp::create(builder, loc, property, disableIffEnable,
-                              actionLabel);
+      verif::CoverOp::create(builder, loc, property, assertionEnable,
+                              assertLabel);
       return success();
     case slang::ast::AssertionKind::CoverSequence:
-      verif::CoverOp::create(builder, loc, property, disableIffEnable,
-                             actionLabel);
+      verif::CoverOp::create(builder, loc, property, assertionEnable,
+                             assertLabel);
       return success();
     case slang::ast::AssertionKind::Expect:
-      verif::AssertOp::create(builder, loc, property, disableIffEnable,
-                              actionLabel);
+      verif::AssertOp::create(builder, loc, property, assertionEnable,
+                              assertLabel);
       return success();
     default:
       break;
