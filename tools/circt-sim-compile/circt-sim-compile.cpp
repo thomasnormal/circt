@@ -485,6 +485,50 @@ stripNonLLVMFunctions(ModuleOp microModule) {
     global.erase();
   }
 
+  // Fix globals whose initializer value attribute is type-mismatched.
+  // For example, a covergroup handle global may have type !llvm.ptr but an
+  // IntegerAttr(i64, 0) initializer. When LLVM IR translation calls
+  // getLLVMConstant(), it tries llvmType->getIntegerBitWidth() on a pointer
+  // type, which asserts. Replace such mismatched initializers with ZeroAttr.
+  microModule.walk([&](LLVM::GlobalOp global) {
+    auto valueAttr = global.getValueOrNull();
+    if (!valueAttr)
+      return; // No value attribute — OK (uses initializer region or undef).
+    // ZeroAttr and UndefAttr are universally safe.
+    if (isa<LLVM::ZeroAttr>(valueAttr) || isa<LLVM::UndefAttr>(valueAttr))
+      return;
+    // StringAttr on array types is handled by LLVM translation.
+    if (isa<StringAttr>(valueAttr))
+      return;
+    // IntegerAttr is only valid when the global type is also integer.
+    if (isa<IntegerAttr>(valueAttr) && !isa<IntegerType>(global.getType())) {
+      global.setValueAttr(LLVM::ZeroAttr::get(global.getContext()));
+      return;
+    }
+  });
+
+  // Check globals with initializer regions for non-LLVM ops. If the region
+  // contains ops from non-LLVM dialects, the convertOperation() call in
+  // convertGlobalsAndAliases() will fail. Replace such regions with ZeroAttr.
+  microModule.walk([&](LLVM::GlobalOp global) {
+    Region &initRegion = global.getInitializerRegion();
+    if (initRegion.empty())
+      return; // No initializer region — OK.
+    bool hasNonLLVM = false;
+    initRegion.walk([&](Operation *op) {
+      if (!isa<LLVM::LLVMDialect>(op->getDialect())) {
+        hasNonLLVM = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (hasNonLLVM) {
+      // Clear the initializer region and set a zero value instead.
+      initRegion.getBlocks().clear();
+      global.setValueAttr(LLVM::ZeroAttr::get(global.getContext()));
+    }
+  });
+
   // Erase any remaining func::FuncOp operations. These should have been
   // lowered to llvm.func by the lowering pipeline; any that remain have
   // non-LLVM types and cannot be translated to LLVM IR.
