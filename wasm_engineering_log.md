@@ -1822,3 +1822,22 @@
   - wasm regression gate now clean:
     - `utils/run_wasm_regressions.sh`
       reports `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`.
+
+## 2026-02-24 (follow-up: wasm regression runner lock contention hardening)
+- Gap identified (regression-first):
+  - concurrent wasm regression invocations can race on shared lit artifacts.
+  - added a behavior test first in
+    `utils/wasm_regressions_behavior_check.sh` (`lock-contention-fails-cleanly`)
+    and confirmed it failed before implementation.
+- Fixes:
+  - added explicit lock acquisition in `utils/run_wasm_regressions.sh`:
+    - `WASM_REGRESSIONS_LOCK_FILE` (default: `/tmp/circt-wasm-regressions.lock`)
+    - `WASM_REGRESSIONS_LOCK_WAIT_SECS` (default: `0`)
+    - emits deterministic diagnostic on contention:
+      - `[wasm-regressions] lock busy: ...`
+- Validation:
+  - `utils/wasm_regressions_behavior_check.sh` passes all cases, including
+    lock-contention behavior.
+  - `utils/run_wasm_regressions.sh` remains clean:
+    - `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`
+    - `[wasm-regressions] PASS`.
