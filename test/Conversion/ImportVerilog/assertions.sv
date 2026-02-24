@@ -42,7 +42,7 @@ module Assertions(input logic clk, rst, a, b);
   endproperty
   // $changed uses moore.past to get the previous value and compare
   // CHECK: moore.past %{{.+}} delay 1
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: moore.not
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (changed_test);
@@ -100,7 +100,7 @@ module Assertions(input logic clk, rst, a, b);
     @(posedge clk) a |-> $stable(b);
   endproperty
   // CHECK: moore.past %{{.+}} delay 1
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: verif.{{(clocked_)?}}assert
   assert property (stable_test);
 
