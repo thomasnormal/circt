@@ -54,6 +54,25 @@ CIRCT_VERILOG_IR="${CIRCT_VERILOG_IR:-moore}"
 FILELISTS_STR="$(printf "%s\n" "${FILELISTS_ARRAY[@]}")"
 export FILELISTS_STR
 
+if [[ ! -f "$CIRCT_VERILOG" ]]; then
+  echo "circt-verilog not found: $CIRCT_VERILOG" >&2
+  exit 1
+fi
+
+OUT_DIR="$(dirname "$OUT")"
+TOOL_SNAPSHOT_DIR="$OUT_DIR/.tool-snapshot"
+mkdir -p "$TOOL_SNAPSHOT_DIR"
+SNAPSHOT_CIRCT_VERILOG="$TOOL_SNAPSHOT_DIR/circt-verilog"
+if ! cp -f "$CIRCT_VERILOG" "$SNAPSHOT_CIRCT_VERILOG"; then
+  echo "failed to snapshot circt-verilog: $CIRCT_VERILOG -> $SNAPSHOT_CIRCT_VERILOG" >&2
+  exit 1
+fi
+if ! chmod +x "$SNAPSHOT_CIRCT_VERILOG"; then
+  echo "failed to make snapshot executable: $SNAPSHOT_CIRCT_VERILOG" >&2
+  exit 1
+fi
+CIRCT_VERILOG="$SNAPSHOT_CIRCT_VERILOG"
+
 python3 - <<'PY' \
   "$FILELIST_BASE" "$CIRCT_VERILOG" "$UVM_DIR" "$OUT" \
   "$DISABLE_UVM_AUTO_INCLUDE" "$TIMESCALE" "$CIRCT_VERILOG_ARGS" \
@@ -209,6 +228,20 @@ def is_uart_avip(avip_root: pathlib.Path, filelists):
         except OSError:
             continue
         if "uart" in text.lower():
+            return True
+    return False
+
+def is_jtag_avip(avip_root: pathlib.Path, filelists):
+    if avip_root and "jtag" in avip_root.name.lower():
+        return True
+    for fl in filelists:
+        if "jtag" in fl.name.lower():
+            return True
+        try:
+            text = fl.read_text()
+        except OSError:
+            continue
+        if "jtag" in text.lower():
             return True
     return False
 
@@ -408,6 +441,35 @@ def rewrite_uart_text(path: pathlib.Path, text: str):
         if new_text != text:
             text = new_text
             changed = True
+    return text, changed
+
+def rewrite_jtag_text(path: pathlib.Path, text: str):
+    changed = False
+
+    if path.name in ("JtagControllerDeviceAgentBfm.sv", "JtagTargetDeviceAgentBfm.sv"):
+        new_lines = []
+        for line in text.splitlines():
+            if line.strip().startswith("bind "):
+                changed = True
+                continue
+            new_lines.append(line)
+        new_text = "\n".join(new_lines)
+        if text.endswith("\n"):
+            new_text += "\n"
+        if new_text != text:
+            text = new_text
+            changed = True
+
+    if path.name == "JtagTargetDeviceDriverBfm.sv":
+        new_text = re.sub(
+            r"registerBank\[\s*instructionRegister\s*\]",
+            "registerBank[JtagInstructionOpcodeEnum'(instructionRegister)]",
+            text,
+        )
+        if new_text != text:
+            text = new_text
+            changed = True
+
     return text, changed
 
 def resolve_filelist_path(raw: str, base: pathlib.Path) -> pathlib.Path:
@@ -747,6 +809,58 @@ if needs_uart:
                 except OSError:
                     continue
                 new_text, changed = rewrite_uart_text(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                include_only_patched = True
+                break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
+needs_jtag = is_jtag_avip(avip_dir, filelists)
+if needs_jtag:
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    jtag_patch_names = {
+        "JtagControllerDeviceAgentBfm.sv",
+        "JtagTargetDeviceDriverBfm.sv",
+        "JtagTargetDeviceAgentBfm.sv",
+    }
+    file_idx_by_name = {}
+    for idx, path_str in enumerate(files):
+        name = pathlib.Path(path_str).name
+        if name in jtag_patch_names and name not in file_idx_by_name:
+            file_idx_by_name[name] = idx
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in jtag_patch_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_jtag_text(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch include-only JTAG sources and prepend tmp dir in include search path.
+    if avip_root and avip_root.exists():
+        include_only_patched = False
+        for name in jtag_patch_names:
+            if name in file_idx_by_name:
+                continue
+            for path in avip_root.rglob(name):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_jtag_text(path, text)
                 if not changed:
                     continue
                 tmp_path = tmp_dir / path.name

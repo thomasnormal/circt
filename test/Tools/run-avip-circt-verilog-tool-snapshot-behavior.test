@@ -1,0 +1,1 @@
+// RUN: %S/../../utils/avip_circt_verilog_tool_snapshot_behavior_check.sh
