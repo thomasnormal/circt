@@ -6429,3 +6429,38 @@ Based on these findings, the circt-sim compiled process architecture:
    shape (`implication(true, seq)`) for clocked verif ops.
 2. With `max-time` exactly equal to the `#1000` checkpoint, `SVA_PASS` may not
    be emitted before cutoff; using `1100000000` makes these tests deterministic.
+
+## 2026-02-24 Session: ImportVerilog robustness for unknown-module flows used by CVDP
+
+### Problem
+1. CVDP cocotb/golden smoke flows exercise `circt-verilog --ignore-unknown-modules`.
+2. Two importer hard-fail classes were still present under that mode:
+   - module members lowered as `UninstantiatedDef` (`unsupported module member`),
+   - statements lowered as `Invalid` (`unsupported statement: Invalid`) when they
+     referenced members of intentionally unknown instances.
+
+### Changes
+1. `lib/Conversion/ImportVerilog/Structure.cpp`
+   - in `ModuleVisitor` fallback, treat `SymbolKind::UninstantiatedDef` as
+     ignorable when `options.ignoreUnknownModules` is enabled.
+2. `lib/Conversion/ImportVerilog/Statements.cpp`
+   - in `StmtVisitor` fallback, treat `StatementKind::Invalid` as ignorable
+     when `options.ignoreUnknownModules` is enabled.
+3. Added regressions (test-first):
+   - `test/Conversion/ImportVerilog/ignore-unknown-modules-uninstantiated-def.sv`
+   - `test/Conversion/ImportVerilog/ignore-unknown-modules-invalid-statement.sv`
+
+### Validation
+1. Targeted lit regressions:
+   - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/ignore-unknown-modules-uninstantiated-def.sv build-test/test/Conversion/ImportVerilog/ignore-unknown-modules-invalid-statement.sv`
+   - Result: `2 passed, 0 failed`.
+2. Unified CVDP smoke lanes:
+   - `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^cvdp_' --out-dir /tmp/unified-cvdp-smoke-all-run1`
+   - Result: `selected=4 failures=0`.
+
+### Realizations / surprises
+1. `--ignore-unknown-modules` in real benchmark harnesses needs both member-
+   level and statement-level graceful handling; handling only one class still
+   leaves frequent conversion aborts.
+2. The fixes improved concrete CVDP entries immediately (e.g. previously
+   failing `AHB_DDR_0019` compile path now compiles in smoke flows).

@@ -2222,6 +2222,12 @@ struct ModuleVisitor : public BaseVisitor {
   /// Emit an error for all other members.
   template <typename T>
   LogicalResult visit(T &&node) {
+    // With --ignore-unknown-modules, Slang materializes unknown instantiations
+    // as UninstantiatedDef members. Treat these as intentionally dropped.
+    if (context.options.ignoreUnknownModules &&
+        node.kind == slang::ast::SymbolKind::UninstantiatedDef)
+      return success();
+
     mlir::emitError(loc, "unsupported module member: ")
         << slang::ast::toString(node.kind);
     return failure();
