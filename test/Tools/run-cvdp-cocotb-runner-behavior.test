@@ -1,0 +1,3 @@
+// RUN: %S/../../utils/cvdp_cocotb_runner_behavior_check.sh | FileCheck %s
+
+// CHECK: [cvdp-cocotb-runner-check] PASS
