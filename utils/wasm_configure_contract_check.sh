@@ -20,6 +20,8 @@ required_cmd_tokens=(
   "-DCIRCT_SLANG_FRONTEND_ENABLED=ON"
   "-DCIRCT_SIM_WASM_ENABLE_NODERAWFS="
   "-DCIRCT_VERILOG_WASM_ENABLE_NODERAWFS="
+  "-DCIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH="
+  "-DCIRCT_VERILOG_WASM_STACK_SIZE="
 )
 
 for token in "${required_cmd_tokens[@]}"; do
@@ -37,6 +39,8 @@ required_source_tokens=(
   'validate_on_off_env "BUILD_SHARED_LIBS" "$BUILD_SHARED_LIBS"'
   'validate_on_off_env "CIRCT_SIM_WASM_ENABLE_NODERAWFS" "$CIRCT_SIM_WASM_ENABLE_NODERAWFS"'
   'validate_on_off_env "CIRCT_VERILOG_WASM_ENABLE_NODERAWFS" "$CIRCT_VERILOG_WASM_ENABLE_NODERAWFS"'
+  'validate_on_off_env "CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH" "$CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH"'
+  'CIRCT_VERILOG_WASM_STACK_SIZE must be a numeric integer'
   "must be ON or OFF"
 )
 
@@ -64,6 +68,33 @@ if CIRCT_VERILOG_WASM_ENABLE_NODERAWFS=maybe "$SCRIPT" --print-cmake-command > /
 fi
 if ! grep -Fq -- "CIRCT_VERILOG_WASM_ENABLE_NODERAWFS must be ON or OFF" "$tmp_err"; then
   echo "[wasm-config-contract] missing explicit ON/OFF diagnostic for CIRCT_VERILOG_WASM_ENABLE_NODERAWFS" >&2
+  exit 1
+fi
+
+if CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH=maybe "$SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-config-contract] configure script accepted invalid CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH must be ON or OFF" "$tmp_err"; then
+  echo "[wasm-config-contract] missing explicit ON/OFF diagnostic for CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH" >&2
+  exit 1
+fi
+
+if CIRCT_VERILOG_WASM_STACK_SIZE=maybe "$SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-config-contract] configure script accepted non-numeric CIRCT_VERILOG_WASM_STACK_SIZE override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "CIRCT_VERILOG_WASM_STACK_SIZE must be a numeric integer" "$tmp_err"; then
+  echo "[wasm-config-contract] missing numeric diagnostic for CIRCT_VERILOG_WASM_STACK_SIZE" >&2
+  exit 1
+fi
+
+if CIRCT_VERILOG_WASM_STACK_SIZE=0 "$SCRIPT" --print-cmake-command > /dev/null 2>"$tmp_err"; then
+  echo "[wasm-config-contract] configure script accepted zero CIRCT_VERILOG_WASM_STACK_SIZE override" >&2
+  exit 1
+fi
+if ! grep -Fq -- "CIRCT_VERILOG_WASM_STACK_SIZE must be >= 1" "$tmp_err"; then
+  echo "[wasm-config-contract] missing >=1 diagnostic for CIRCT_VERILOG_WASM_STACK_SIZE" >&2
   exit 1
 fi
 
