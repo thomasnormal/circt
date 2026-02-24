@@ -22,12 +22,18 @@ if [[ ! -f "$UVM_CORE_PATH/src/uvm_pkg.sv" ]]; then
 fi
 
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
-log="$tmpdir/uvm-pkg-memfs-reentry.log"
+cleanup() {
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
+log="$tmpdir/uvm-pkg-reentry.log"
 
+set +e
 VERILOG_JS="$VERILOG_JS" UVM_CORE_PATH="$UVM_CORE_PATH" "$NODE_BIN" - <<'EOF' >"$log" 2>&1
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const util = require("node:util");
 const vm = require("node:vm");
 
 function fail(message) {
@@ -54,36 +60,7 @@ function waitUntilReady(ctx, timeoutMs = 30000) {
   });
 }
 
-function mkdirpInWasm(ctx, wasmPath) {
-  const parts = wasmPath.split("/").filter(Boolean);
-  let cur = "";
-  for (const part of parts) {
-    cur += `/${part}`;
-    try {
-      ctx.FS.mkdir(cur);
-    } catch (_) {
-      // already exists
-    }
-  }
-}
-
-function copyTreeToWasm(ctx, hostRoot, wasmRoot) {
-  mkdirpInWasm(ctx, wasmRoot);
-  for (const ent of fs.readdirSync(hostRoot, {withFileTypes: true})) {
-    const hostPath = path.join(hostRoot, ent.name);
-    const wasmPath = `${wasmRoot}/${ent.name}`;
-    if (ent.isDirectory()) {
-      copyTreeToWasm(ctx, hostPath, wasmPath);
-      continue;
-    }
-    if (!ent.isFile())
-      continue;
-    const data = fs.readFileSync(hostPath);
-    ctx.FS_createDataFile(wasmRoot, ent.name, data, true, true, true);
-  }
-}
-
-function writeInlineSources(ctx) {
+function writeHostSources(workDir) {
   const tbTop = [
     "import uvm_pkg::*;",
     "`include \"uvm_macros.svh\"",
@@ -110,38 +87,28 @@ function writeInlineSources(ctx) {
     ""
   ].join("\n");
 
-  mkdirpInWasm(ctx, "/workspace/src");
-  mkdirpInWasm(ctx, "/workspace/out");
-  ctx.FS_createDataFile("/workspace/src", "tb_top.sv", Buffer.from(tbTop), true, true, true);
-  ctx.FS_createDataFile("/workspace/src", "my_test.sv", Buffer.from(myTest), true, true, true);
+  const tbTopPath = path.join(workDir, "tb_top.sv");
+  const myTestPath = path.join(workDir, "my_test.sv");
+  fs.writeFileSync(tbTopPath, tbTop, "utf8");
+  fs.writeFileSync(myTestPath, myTest, "utf8");
+  return {tbTopPath, myTestPath};
 }
 
-function runCompile(ctx, label, outPath) {
-  const args = [
-    "--resource-guard=false",
-    "--ir-llhd",
-    "--timescale", "1ns/1ns",
-    "--uvm-path", "/circt/uvm-core",
-    "-I", "/circt/uvm-core/src",
-    "--top", "tb_top",
-    "-o", outPath,
-    "/workspace/src/tb_top.sv",
-  ];
-
+function runCompile(ctx, label, args, outPath) {
   let rc;
   try {
     rc = ctx.callMain(args);
   } catch (err) {
-    fail(`${label} threw: ${err}`);
+    fail(`${label} threw: ${util.inspect(err, {depth: 6})}`);
   }
   if (rc !== 0)
     fail(`${label} returned non-zero exit code: ${rc}`);
 
   let irText;
   try {
-    irText = ctx.FS.readFile(outPath, {encoding: "utf8"});
+    irText = fs.readFileSync(outPath, "utf8");
   } catch (err) {
-    fail(`${label} did not produce output file '${outPath}': ${err}`);
+    fail(`${label} did not produce output file '${outPath}': ${util.inspect(err, {depth: 6})}`);
   }
   if (!irText.includes("llhd.process"))
     fail(`${label} output missing expected llhd.process content`);
@@ -181,18 +148,40 @@ async function main() {
   vm.runInNewContext(source, ctx, {filename: toolJs});
   await waitUntilReady(ctx);
 
-  copyTreeToWasm(ctx, uvmRoot, "/circt/uvm-core");
-  writeInlineSources(ctx);
+  const hostWork = fs.mkdtempSync(path.join(os.tmpdir(), "circt-uvm-reentry-"));
+  const {tbTopPath} = writeHostSources(hostWork);
+  const includeDir = path.join(uvmRoot, "src");
 
-  runCompile(ctx, "RUN1", "/workspace/out/run1.llhd.mlir");
-  runCompile(ctx, "RUN2", "/workspace/out/run2.llhd.mlir");
+  const commonArgs = [
+    "--resource-guard=false",
+    "--ir-llhd",
+    "--timescale", "1ns/1ns",
+    "--uvm-path", uvmRoot,
+    "-I", includeDir,
+    "--top", "tb_top",
+  ];
+
+  const run1Out = path.join(hostWork, "run1.llhd.mlir");
+  const run2Out = path.join(hostWork, "run2.llhd.mlir");
+
+  runCompile(ctx, "RUN1", [...commonArgs, "-o", run1Out, tbTopPath], run1Out);
+  runCompile(ctx, "RUN2", [...commonArgs, "-o", run2Out, tbTopPath], run2Out);
 }
 
 main().catch(err => {
-  console.error(err.stack || String(err));
+  console.error(util.inspect(err, {depth: 8, breakLength: 120}));
+  if (err && err.stack)
+    console.error(err.stack);
   process.exit(1);
 });
 EOF
+node_rc=$?
+set -e
+if [[ "$node_rc" -ne 0 ]]; then
+  echo "[wasm-uvm-pkg-memfs] node harness failed with rc=$node_rc" >&2
+  cat "$log" >&2
+  exit 1
+fi
 
 if ! grep -q '^RUN1 rc=0 out_bytes=' "$log"; then
   echo "[wasm-uvm-pkg-memfs] run1 did not complete successfully" >&2
