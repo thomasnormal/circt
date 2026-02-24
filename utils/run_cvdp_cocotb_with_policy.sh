@@ -7,6 +7,7 @@ RUNNER="${CVDP_POLICY_RUNNER:-python3 ~/cvdp_benchmark/run_circt_cocotb.py}"
 MIN_COCOTB_PASS="${CVDP_MIN_COCOTB_PASS:-20}"
 MAX_RUNTIME_FAILS="${CVDP_MAX_RUNTIME_FAILS:-40}"
 STRICT_RC="${CVDP_POLICY_STRICT_RC:-0}"
+RUNNER_TIMEOUT_SEC="${CVDP_POLICY_TIMEOUT_SEC:-0}"
 
 if ! [[ "$MIN_COCOTB_PASS" =~ ^[0-9]+$ ]]; then
   echo "[cvdp-cocotb-policy] invalid CVDP_MIN_COCOTB_PASS: $MIN_COCOTB_PASS" >&2
@@ -18,6 +19,10 @@ if ! [[ "$MAX_RUNTIME_FAILS" =~ ^[0-9]+$ ]]; then
 fi
 if [[ "$STRICT_RC" != "0" && "$STRICT_RC" != "1" ]]; then
   echo "[cvdp-cocotb-policy] invalid CVDP_POLICY_STRICT_RC: $STRICT_RC" >&2
+  exit 2
+fi
+if ! [[ "$RUNNER_TIMEOUT_SEC" =~ ^[0-9]+$ ]]; then
+  echo "[cvdp-cocotb-policy] invalid CVDP_POLICY_TIMEOUT_SEC: $RUNNER_TIMEOUT_SEC" >&2
   exit 2
 fi
 
@@ -43,9 +48,18 @@ cmd="$RUNNER"
 for arg in "${args[@]}"; do
   cmd+=" $(printf '%q' "$arg")"
 done
-bash -lc "$cmd" 2>&1
+if [[ "$RUNNER_TIMEOUT_SEC" -gt 0 ]]; then
+  timeout --signal=TERM --kill-after=5 "${RUNNER_TIMEOUT_SEC}s" bash -lc "$cmd" 2>&1
+else
+  bash -lc "$cmd" 2>&1
+fi
 runner_rc=$?
 set -e
+
+if [[ "$runner_rc" -eq 124 ]]; then
+  echo "[cvdp-cocotb-policy] FAIL: runner timed out after ${RUNNER_TIMEOUT_SEC}s" >&2
+  exit 1
+fi
 
 if [[ ! -f "$results_json" ]]; then
   echo "[cvdp-cocotb-policy] missing results json: $results_json (runner_rc=$runner_rc)" >&2
