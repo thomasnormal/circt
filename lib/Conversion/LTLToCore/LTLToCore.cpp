@@ -106,21 +106,58 @@ struct PropertyResult {
 };
 
 constexpr const char kDisableIffAttr[] = "sva.disable_iff";
+constexpr const char kAbortOnActionAttr[] = "sva.abort_on.action";
 
 struct LTLPropertyLowerer {
   OpBuilder &builder;
   Location loc;
   Value disable;
+  DenseSet<Value> disableIffRoots;
   DenseMap<Value, Value> posedgeTicks;
   DenseMap<Value, Value> negedgeTicks;
   DenseMap<Value, Value> bothedgeTicks;
+  Value samplingEnable;
   // For assumes, we skip the warmup period since constraints should apply from
   // cycle 0. Assertions need warmup to avoid false failures during sequence
   // startup. This matches Yosys behavior with `-early -assume`.
   bool skipWarmup;
 
   LTLPropertyLowerer(OpBuilder &builder, Location loc, bool skipWarmup = false)
-      : builder(builder), loc(loc), disable(), skipWarmup(skipWarmup) {}
+      : builder(builder), loc(loc), disable(), samplingEnable(),
+        skipWarmup(skipWarmup) {}
+
+  void setSamplingEnable(Value enable) { samplingEnable = enable; }
+
+  void collectDisableIffRoots(Value root) {
+    if (!root)
+      return;
+    SmallVector<Value> worklist{root};
+    DenseSet<Value> visited;
+    while (!worklist.empty()) {
+      Value current = worklist.pop_back_val();
+      if (!current || !visited.insert(current).second)
+        continue;
+      if (isa<BlockArgument>(current)) {
+        disableIffRoots.insert(current);
+        continue;
+      }
+      if (Operation *def = current.getDefiningOp())
+        worklist.append(def->operand_begin(), def->operand_end());
+    }
+  }
+
+  SmallVector<unsigned> getDisableIffInputArgIndices(Block *moduleBlock) const {
+    SmallVector<unsigned> indices;
+    for (Value root : disableIffRoots) {
+      auto arg = dyn_cast<BlockArgument>(root);
+      if (!arg || arg.getOwner() != moduleBlock)
+        continue;
+      indices.push_back(arg.getArgNumber());
+    }
+    llvm::sort(indices);
+    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+    return indices;
+  }
 
   Value getClockTick(Value clockSignal, ltl::ClockEdge edge, Value outerClock) {
     if (!outerClock)
@@ -586,6 +623,7 @@ struct LTLPropertyLowerer {
       orOp.emitError("disable iff expects i1 and property inputs");
       return {Value(), {}};
     }
+    collectDisableIffRoots(disableInput);
 
     Value savedDisable = disable;
     if (auto disableConst = getI1Constant(disableInput)) {
@@ -612,6 +650,137 @@ struct LTLPropertyLowerer {
         true);
     auto finalCheck = comb::OrOp::create(
         builder, loc, SmallVector<Value, 2>{disableInput, result.finalCheck},
+        true);
+    return {safety, finalCheck};
+  }
+
+  PropertyResult lowerAcceptOn(ltl::OrOp orOp, Value clock,
+                               ltl::ClockEdge edge) {
+    auto inputs = orOp.getInputs();
+    if (inputs.size() != 2) {
+      orOp.emitError("accept_on expects two inputs");
+      return {Value(), {}};
+    }
+
+    Value acceptInput;
+    Value propertyInput;
+    auto type0 = inputs[0].getType();
+    auto type1 = inputs[1].getType();
+    bool input0IsGuard = type0.isInteger(1) || isa<ltl::SequenceType>(type0);
+    bool input1IsGuard = type1.isInteger(1) || isa<ltl::SequenceType>(type1);
+    bool input0IsProp = isa<ltl::PropertyType, ltl::SequenceType>(type0);
+    bool input1IsProp = isa<ltl::PropertyType, ltl::SequenceType>(type1);
+    if (input0IsGuard && input1IsProp) {
+      acceptInput = inputs[0];
+      propertyInput = inputs[1];
+    } else if (input1IsGuard && input0IsProp) {
+      acceptInput = inputs[1];
+      propertyInput = inputs[0];
+    } else {
+      orOp.emitError("accept_on expects guard and property inputs");
+      return {Value(), {}};
+    }
+
+    Value savedDisable = disable;
+    auto acceptCond = lowerProperty(acceptInput, clock, edge);
+    if (!acceptCond.safety || !acceptCond.finalCheck) {
+      orOp.emitError("invalid accept_on guard lowering");
+      return {Value(), {}};
+    }
+    if (auto acceptConst = getI1Constant(acceptCond.safety)) {
+      auto trueVal =
+          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+      if (*acceptConst)
+        return {trueVal, trueVal};
+    }
+    Value combinedDisable = acceptCond.safety;
+    if (disable) {
+      combinedDisable = comb::OrOp::create(
+          builder, loc, SmallVector<Value, 2>{disable, acceptCond.safety}, true);
+    }
+    disable = combinedDisable;
+    auto result = lowerProperty(propertyInput, clock, edge);
+    disable = savedDisable;
+    if (!result.safety || !result.finalCheck) {
+      orOp.emitError("invalid accept_on property lowering");
+      return {Value(), {}};
+    }
+
+    auto safety = comb::OrOp::create(
+        builder, loc, SmallVector<Value, 2>{acceptCond.safety, result.safety},
+        true);
+    auto finalCheck = comb::OrOp::create(
+        builder, loc,
+        SmallVector<Value, 2>{acceptCond.safety, result.finalCheck}, true);
+    return {safety, finalCheck};
+  }
+
+  PropertyResult lowerRejectOn(ltl::AndOp andOp, Value clock,
+                               ltl::ClockEdge edge) {
+    auto inputs = andOp.getInputs();
+    if (inputs.size() != 2) {
+      andOp.emitError("reject_on expects two inputs");
+      return {Value(), {}};
+    }
+
+    Value guardInput;
+    Value propertyInput;
+    auto type0 = inputs[0].getType();
+    auto type1 = inputs[1].getType();
+    bool input0IsProp = isa<ltl::PropertyType, ltl::SequenceType>(type0);
+    bool input1IsProp = isa<ltl::PropertyType, ltl::SequenceType>(type1);
+    auto not0 = inputs[0].getDefiningOp<ltl::NotOp>();
+    auto not1 = inputs[1].getDefiningOp<ltl::NotOp>();
+    if (not0 && input1IsProp) {
+      guardInput = inputs[0];
+      propertyInput = inputs[1];
+    } else if (not1 && input0IsProp) {
+      guardInput = inputs[1];
+      propertyInput = inputs[0];
+    } else {
+      andOp.emitError("reject_on expects a negated guard and property inputs");
+      return {Value(), {}};
+    }
+
+    auto notOp = guardInput.getDefiningOp<ltl::NotOp>();
+    if (!notOp) {
+      andOp.emitError("reject_on expects a negated abort condition");
+      return {Value(), {}};
+    }
+    Value rejectInput = notOp.getInput();
+    auto rejectCond = lowerProperty(rejectInput, clock, edge);
+    if (!rejectCond.safety || !rejectCond.finalCheck) {
+      andOp.emitError("invalid reject_on guard lowering");
+      return {Value(), {}};
+    }
+    auto trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+    auto guardCond =
+        comb::XorOp::create(builder, loc, rejectCond.safety, trueVal);
+
+    Value savedDisable = disable;
+    if (auto rejectConst = getI1Constant(rejectCond.safety)) {
+      auto falseVal =
+          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
+      if (*rejectConst)
+        return {falseVal, falseVal};
+    }
+    Value combinedDisable = rejectCond.safety;
+    if (disable) {
+      combinedDisable = comb::OrOp::create(
+          builder, loc, SmallVector<Value, 2>{disable, rejectCond.safety}, true);
+    }
+    disable = combinedDisable;
+    auto result = lowerProperty(propertyInput, clock, edge);
+    disable = savedDisable;
+    if (!result.safety || !result.finalCheck) {
+      andOp.emitError("invalid reject_on property lowering");
+      return {Value(), {}};
+    }
+
+    auto safety = comb::AndOp::create(
+        builder, loc, SmallVector<Value, 2>{guardCond, result.safety}, true);
+    auto finalCheck = comb::AndOp::create(
+        builder, loc, SmallVector<Value, 2>{guardCond, result.finalCheck},
         true);
     return {safety, finalCheck};
   }
@@ -870,15 +1039,6 @@ struct LTLPropertyLowerer {
           lowerProperty(clockOp.getInput(), normalizedClock, clockOp.getEdge());
       if (!result.safety || !result.finalCheck)
         return {Value(), {}};
-      // Apply sampled-value semantics at the top-level clock boundary for
-      // properties. Sequences already model their own cycle alignment.
-      if (!clock && normalizedClock &&
-          isa<ltl::PropertyType>(clockOp.getInput().getType())) {
-        if (!getI1Constant(result.safety).value_or(false))
-          result.safety = shiftValue(result.safety, 1, normalizedClock);
-        if (!getI1Constant(result.finalCheck).value_or(false))
-          result.finalCheck = shiftValue(result.finalCheck, 1, normalizedClock);
-      }
       return result;
     }
 
@@ -935,6 +1095,12 @@ struct LTLPropertyLowerer {
       return {neg, finalCheck};
     }
     if (auto andOp = prop.getDefiningOp<ltl::AndOp>()) {
+      if (auto actionAttr = andOp->getAttrOfType<StringAttr>(kAbortOnActionAttr)) {
+        if (actionAttr.getValue() == "reject")
+          return lowerRejectOn(andOp, clock, edge);
+        andOp.emitError("unsupported abort_on action on and");
+        return {Value(), {}};
+      }
       SmallVector<Value, 4> safeties;
       SmallVector<PropertyResult, 4> results;
       for (auto input : andOp.getInputs()) {
@@ -960,6 +1126,12 @@ struct LTLPropertyLowerer {
     if (auto orOp = prop.getDefiningOp<ltl::OrOp>()) {
       if (orOp->hasAttr(kDisableIffAttr))
         return lowerDisableIff(orOp, clock, edge);
+      if (auto actionAttr = orOp->getAttrOfType<StringAttr>(kAbortOnActionAttr)) {
+        if (actionAttr.getValue() == "accept")
+          return lowerAcceptOn(orOp, clock, edge);
+        orOp.emitError("unsupported abort_on action on or");
+        return {Value(), {}};
+      }
       SmallVector<Value, 4> safeties;
       SmallVector<PropertyResult, 4> results;
       Value finalCheck = nullptr;
@@ -1027,8 +1199,8 @@ struct LTLPropertyLowerer {
         implOp.emitError("implication requires a clocked property");
         return {Value(), {}};
       }
-      auto antecedentSeen = createStateRegister(
-          antecedent, clock, "ltl_implication_seen");
+      auto antecedentSeen =
+          createStateRegister(antecedent, clock, "ltl_implication_seen");
       auto notSeen = comb::XorOp::create(
           builder, loc, antecedentSeen,
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
@@ -1279,6 +1451,9 @@ struct LTLPropertyLowerer {
 
   Value createStateRegister(Value input, Value clock, StringRef name) {
     auto next = input;
+    if (samplingEnable)
+      next = comb::AndOp::create(
+          builder, loc, SmallVector<Value, 2>{next, samplingEnable}, true);
     auto initVal =
         hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
     auto powerOn = seq::createConstantInitialValue(
@@ -1291,12 +1466,16 @@ struct LTLPropertyLowerer {
   Value shiftValue(Value input, uint64_t delay, Value clock) {
     Value current = input;
     for (uint64_t i = 0; i < delay; ++i) {
+      Value next = current;
+      if (samplingEnable)
+        next = comb::AndOp::create(
+            builder, loc, SmallVector<Value, 2>{next, samplingEnable}, true);
       auto initVal =
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 0);
       auto powerOn = seq::createConstantInitialValue(
           builder, initVal.getOperation());
       auto [reset, resetVal] = getResetPair(initVal);
-      current = seq::CompRegOp::create(builder, loc, current, clock, reset,
+      current = seq::CompRegOp::create(builder, loc, next, clock, reset,
                                        resetVal,
                                        builder.getStringAttr("ltl_past"),
                                        powerOn);
@@ -1523,53 +1702,108 @@ void LowerLTLToCorePass::runOnOperation() {
   getOperation().walk([&](verif::AssumeOp op) { assumes.push_back(op); });
   getOperation().walk([&](verif::CoverOp op) { covers.push_back(op); });
 
+  auto setDisableIffInputMetadata = [&](Operation *checkOp,
+                                        const LTLPropertyLowerer &lowerer) {
+    auto indices = lowerer.getDisableIffInputArgIndices(hwModule.getBodyBlock());
+    if (indices.empty())
+      return;
+    auto inputNames = hwModule.getInputNames();
+    SmallVector<Attribute> names;
+    names.reserve(indices.size());
+    for (unsigned idx : indices) {
+      if (idx >= inputNames.size())
+        continue;
+      auto nameAttr = dyn_cast_or_null<StringAttr>(inputNames[idx]);
+      if (!nameAttr || nameAttr.getValue().empty())
+        continue;
+      names.push_back(nameAttr);
+    }
+    if (names.empty())
+      return;
+    checkOp->setAttr("bmc.disable_iff_inputs",
+                     ArrayAttr::get(checkOp->getContext(), names));
+  };
+
+  auto setClockMetadata = [&](Operation *checkOp, ltl::ClockOp clockOp) {
+    if (!checkOp || !clockOp)
+      return;
+    if (auto clockName = resolveClockInputName(clockOp.getClock()))
+      checkOp->setAttr("bmc.clock", clockName);
+    auto edgeAttr =
+        ltl::ClockEdgeAttr::get(checkOp->getContext(), clockOp.getEdge());
+    checkOp->setAttr("bmc.clock_edge", edgeAttr);
+  };
+
   for (auto op : asserts) {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
+    auto topClockOp = op.getProperty().getDefiningOp<ltl::ClockOp>();
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    lowerer.setSamplingEnable(op.getEnable());
     auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
     op.getPropertyMutable().assign(result.safety);
+    setClockMetadata(op.getOperation(), topClockOp);
+    setDisableIffInputMetadata(op.getOperation(), lowerer);
     auto finalAssert = verif::AssertOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(),
         StringAttr{});
+    setClockMetadata(finalAssert.getOperation(), topClockOp);
     finalAssert->setAttr("bmc.final", builder.getUnitAttr());
+    setDisableIffInputMetadata(finalAssert.getOperation(), lowerer);
   }
 
   for (auto op : assumes) {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
+    auto topClockOp = op.getProperty().getDefiningOp<ltl::ClockOp>();
     // skipWarmup=true: Assumes should constrain from cycle 0, not wait for
     // sequence warmup. This matches Yosys behavior with `-early -assume`.
     LTLPropertyLowerer lowerer{builder, op.getLoc(), /*skipWarmup=*/true};
+    lowerer.setSamplingEnable(op.getEnable());
     auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
     op.getPropertyMutable().assign(result.safety);
+    setClockMetadata(op.getOperation(), topClockOp);
+    setDisableIffInputMetadata(op.getOperation(), lowerer);
     auto finalAssume = verif::AssumeOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(),
         StringAttr{});
+    setClockMetadata(finalAssume.getOperation(), topClockOp);
     finalAssume->setAttr("bmc.final", builder.getUnitAttr());
+    setDisableIffInputMetadata(finalAssume.getOperation(), lowerer);
   }
 
   for (auto op : covers) {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
     OpBuilder builder(op);
+    auto topClockOp = op.getProperty().getDefiningOp<ltl::ClockOp>();
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    lowerer.setSamplingEnable(op.getEnable());
     auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
     op.getPropertyMutable().assign(result.safety);
-    auto finalCover = verif::CoverOp::create(
-        builder, op.getLoc(), result.finalCheck, op.getEnable(), StringAttr{});
-    finalCover->setAttr("bmc.final", builder.getUnitAttr());
+    setClockMetadata(op.getOperation(), topClockOp);
+    setDisableIffInputMetadata(op.getOperation(), lowerer);
+    // Avoid creating vacuous final covers for pure safety checks; a constant
+    // true final-check would otherwise make every cover query trivially SAT.
+    if (!lowerer.getI1Constant(result.finalCheck).value_or(false)) {
+      auto finalCover = verif::CoverOp::create(
+          builder, op.getLoc(), result.finalCheck, op.getEnable(),
+          StringAttr{});
+      setClockMetadata(finalCover.getOperation(), topClockOp);
+      finalCover->setAttr("bmc.final", builder.getUnitAttr());
+      setDisableIffInputMetadata(finalCover.getOperation(), lowerer);
+    }
   }
 
   // Handle clocked assertions
@@ -1589,6 +1823,7 @@ void LowerLTLToCorePass::runOnOperation() {
     OpBuilder builder(op);
     auto clockName = resolveClockInputName(op.getClock());
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    lowerer.setSamplingEnable(op.getEnable());
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
     auto normalizedClock = lowerer.normalizeClock(op.getClock(), ltlEdge);
@@ -1598,8 +1833,8 @@ void LowerLTLToCorePass::runOnOperation() {
       op.emitError("failed to lower clocked assertion");
       return signalPassFailure();
     }
-    // Replace clocked assert with a regular assert
     auto enable = op.getEnable();
+    // Replace clocked assert with a regular assert
     Value property = result.safety;
     if (enable)
       property = comb::OrOp::create(builder, op.getLoc(),
@@ -1617,6 +1852,7 @@ void LowerLTLToCorePass::runOnOperation() {
     if (clockName)
       assertOp->setAttr("bmc.clock", clockName);
     assertOp->setAttr("bmc.clock_edge", edgeAttr);
+    setDisableIffInputMetadata(assertOp.getOperation(), lowerer);
     auto finalAssert = verif::AssertOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(),
         StringAttr{});
@@ -1624,6 +1860,7 @@ void LowerLTLToCorePass::runOnOperation() {
       finalAssert->setAttr("bmc.clock", clockName);
     finalAssert->setAttr("bmc.clock_edge", edgeAttr);
     finalAssert->setAttr("bmc.final", builder.getUnitAttr());
+    setDisableIffInputMetadata(finalAssert.getOperation(), lowerer);
     op.erase();
   }
 
@@ -1635,6 +1872,7 @@ void LowerLTLToCorePass::runOnOperation() {
     // skipWarmup=true: Assumes should constrain from cycle 0, not wait for
     // sequence warmup. This matches Yosys behavior with `-early -assume`.
     LTLPropertyLowerer lowerer{builder, op.getLoc(), /*skipWarmup=*/true};
+    lowerer.setSamplingEnable(op.getEnable());
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
     auto normalizedClock = lowerer.normalizeClock(op.getClock(), ltlEdge);
@@ -1662,6 +1900,7 @@ void LowerLTLToCorePass::runOnOperation() {
     if (clockName)
       assumeOp->setAttr("bmc.clock", clockName);
     assumeOp->setAttr("bmc.clock_edge", edgeAttr);
+    setDisableIffInputMetadata(assumeOp.getOperation(), lowerer);
     auto finalAssume = verif::AssumeOp::create(
         builder, op.getLoc(), result.finalCheck, op.getEnable(),
         StringAttr{});
@@ -1669,6 +1908,7 @@ void LowerLTLToCorePass::runOnOperation() {
       finalAssume->setAttr("bmc.clock", clockName);
     finalAssume->setAttr("bmc.clock_edge", edgeAttr);
     finalAssume->setAttr("bmc.final", builder.getUnitAttr());
+    setDisableIffInputMetadata(finalAssume.getOperation(), lowerer);
     op.erase();
   }
 
@@ -1678,6 +1918,7 @@ void LowerLTLToCorePass::runOnOperation() {
     OpBuilder builder(op);
     auto clockName = resolveClockInputName(op.getClock());
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
+    lowerer.setSamplingEnable(op.getEnable());
     auto ltlEdge = static_cast<ltl::ClockEdge>(
         static_cast<uint32_t>(op.getEdge()));
     auto normalizedClock = lowerer.normalizeClock(op.getClock(), ltlEdge);
@@ -1700,12 +1941,17 @@ void LowerLTLToCorePass::runOnOperation() {
     if (clockName)
       coverOp->setAttr("bmc.clock", clockName);
     coverOp->setAttr("bmc.clock_edge", edgeAttr);
-    auto finalCover = verif::CoverOp::create(
-        builder, op.getLoc(), result.finalCheck, op.getEnable(), StringAttr{});
-    if (clockName)
-      finalCover->setAttr("bmc.clock", clockName);
-    finalCover->setAttr("bmc.clock_edge", edgeAttr);
-    finalCover->setAttr("bmc.final", builder.getUnitAttr());
+    setDisableIffInputMetadata(coverOp.getOperation(), lowerer);
+    if (!lowerer.getI1Constant(result.finalCheck).value_or(false)) {
+      auto finalCover = verif::CoverOp::create(
+          builder, op.getLoc(), result.finalCheck, op.getEnable(),
+          StringAttr{});
+      if (clockName)
+        finalCover->setAttr("bmc.clock", clockName);
+      finalCover->setAttr("bmc.clock_edge", edgeAttr);
+      finalCover->setAttr("bmc.final", builder.getUnitAttr());
+      setDisableIffInputMetadata(finalCover.getOperation(), lowerer);
+    }
     op.erase();
   }
 }

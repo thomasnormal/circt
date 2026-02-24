@@ -7439,3 +7439,49 @@ Based on these findings, the circt-sim compiled process architecture:
 - The semantically safe fix was not “propagate Z more aggressively”, but
   adding a resolved-net bridge for mirror fields while keeping tri-state
   destination fields isolated from resolved feedback.
+
+## 2026-02-24: abort_on / sync_abort_on LTL lowering shape fix
+
+### Gap identified (red-first)
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-.*|constraint-.*|cross-var-.*|fork-disable-.*|i3c-.*'`
+  failed on:
+  - `test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+  - `test/Tools/circt-bmc/sva-sync-abort-on-e2e.sv`
+- Errors:
+  - `accept_on expects i1 and property inputs`
+  - `reject_on expects i1 and property inputs`
+
+### Root cause
+- `LowerClockedAssertLike` emits abort guard operands in richer forms than raw
+  `i1`:
+  - `sync_accept_on(c)` guard arrived as `!ltl.sequence` (`ltl.clock` result).
+  - `reject_on` guard arrived as `ltl.not` result typed as property.
+- `LTLToCore` expected strict `(i1, property)` and rejected these legal forms.
+
+### Implementation
+- `lib/Conversion/LTLToCore/LTLToCore.cpp`
+  - `lowerAcceptOn`:
+    - accepts `i1` or `!ltl.sequence` guards.
+    - lowers guard via `lowerProperty` and uses guard safety bit for
+      disable/safety/final composition.
+  - `lowerRejectOn`:
+    - identifies guard by `ltl.not` form (negated abort condition).
+    - lowers underlying reject condition via `lowerProperty`.
+    - builds boolean guard (`!reject`) for composed safety/final checks.
+
+### Validation (green)
+- Targeted repro:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 2 build-test/test/Tools/circt-bmc/sva-abort-on-e2e.sv build-test/test/Tools/circt-bmc/sva-sync-abort-on-e2e.sv`
+  - result: `2/2 PASS`
+- Focus subset:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-.*|constraint-.*|cross-var-.*|fork-disable-.*|i3c-.*'`
+  - result: `178/178 PASS`
+- Full tool suite guard:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc`
+  - result: `325/325 PASS`
+
+### Realizations / surprises
+- The source of the type-shape mismatch is the combination of
+  `LowerClockedAssertLike` canonical forms and strict abort guard assumptions
+  in `LTLToCore`; widening the accepted guard forms resolved both sync and
+  non-sync abort variants cleanly.
