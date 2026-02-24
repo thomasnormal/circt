@@ -1676,3 +1676,32 @@
   - `utils/run_wasm_regressions.sh` passes end-to-end with smoke enabled:
     - `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`
     - `[wasm-regressions] PASS`.
+
+## 2026-02-24 (follow-up: restore FILTER override compatibility in wasm regression gate)
+- Gap identified (regression-first):
+  - `utils/wasm_regressions_behavior_check.sh` failed in its
+    empty-filter case because it still sets `FILTER=...`, while
+    `utils/run_wasm_regressions.sh` had been switched to `FILTER_BASE`.
+  - Result: no-match case unexpectedly passed by running the default filter.
+- Fixes:
+  - restored backward-compatible `FILTER` override in
+    `utils/run_wasm_regressions.sh`:
+    - if `FILTER` is set, use it directly;
+    - else keep `FILTER_BASE` and optional `RUN_NATIVE_SV_LIT` composition.
+- Validation:
+  - `utils/wasm_regressions_behavior_check.sh` passes again.
+  - `RUN_SMOKE=0 utils/run_wasm_regressions.sh` reports:
+    - `[wasm-regressions] summary: failures=0 xfails=0 xpasses=0 smoke_failures=0`
+    - `[wasm-regressions] PASS`.
+
+## 2026-02-24 (follow-up: keep unified regressions entrypoint canonical)
+- Realization:
+  - adding a parallel "general regressions" wrapper script duplicates
+    `utils/run_regression_unified.sh` and adds avoidable workflow divergence.
+- Action:
+  - dropped the new wrapper path and kept
+    `utils/run_regression_unified.sh` as the default general entrypoint.
+  - continued using `utils/run_wasm_regressions.sh` as a focused wasm gate.
+- Validation:
+  - `utils/run_regression_unified.sh --dry-run --profile smoke --engine circt --out-dir /tmp/unified-dryrun` exits 0.
+  - `utils/wasm_regressions_behavior_check.sh` passes.
