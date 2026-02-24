@@ -1,5 +1,27 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: ordered real comparisons in SMT-LIB BMC path
+
+### What changed
+- Updated:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Extended `FloatCmpCastOpRewrite` coverage from equality-only predicates to
+  ordered/unordered relational predicates (`OGT/OGE/OLT/OLE`,
+  `UGT/UGE/ULT/ULE`) plus `ORD/UNO` and `AlwaysTrue/AlwaysFalse`.
+- Added conservative integer<->bitvector bridge cleanup rewrite
+  (`IntBVCastOpRewrite`) to remove leftover cast chains after solver lowering.
+
+### Realizations / surprises
+- The failure mode was not in parser/import lowering; it surfaced late in BMC
+  SMT-LIB export when relational real comparisons remained wrapped in
+  unrealized conversion casts.
+- Signed-zero compatibility needs to be preserved for ordered `<`/`>` forms to
+  avoid regressing IEEE comparison semantics (`+0.0` vs `-0.0`).
+
+### Validation snapshot
+- `ninja -C build-test circt-bmc` -> pass.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-bmc --filter='sva-past-real-(eq|gt)-unsat-e2e|sva-.*|bmc-run-smtlib-seq-initial-assert|clocked-assert-constant-false-clock-unsat'` -> pass (`182/182`).
+
 ## 2026-02-24 Session: local-var initializer coverage expansion (rvalue + unary)
 
 ### What changed
