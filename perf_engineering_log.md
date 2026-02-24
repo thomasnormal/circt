@@ -2479,3 +2479,25 @@ Compiled singleton getter `get_1926()` uses `llvm.mlir.addressof` which resolves
 | moduleLevelOps | 0ms | 0ms |
 | Total tracked | ~37ms | ~5ms |
 | Untracked (finalizeInit) | ~541ms | — |
+
+## Phase: Bytecode Caching Benchmark (Feb 24, 2026 — Session 2)
+
+### Setup
+- `--save-preprocessed=/tmp/ahb.mlirbc` saves post-canonicalization MLIR as bytecode (already implemented)
+- Subsequent runs: load `.mlirbc` + `--skip-passes` to avoid parse + canonicalization overhead
+- File sizes: text MLIR 35MB → bytecode 11MB (3.2x smaller)
+
+### Timing (AHB AVIP, AhbSingleWriteTest, 100ns max-time)
+
+| Configuration | Parse | Passes | Init+Run | Total | Speedup |
+|---------------|-------|--------|----------|-------|---------|
+| Baseline (text, full passes) | 1,790ms | 4,124ms | 573ms | 6,488ms | 1.0x |
+| Bytecode + skip-passes | 680ms | 0ms | 495ms | 1,176ms | **5.5x** |
+| Bytecode + skip-passes + AOT | 680ms | 0ms | 0ms (+520ms load) | 1,201ms | **5.4x** |
+
+### Analysis
+- Parse: 1,790ms → 680ms (2.6x faster with bytecode)
+- Passes: 4,124ms → 0ms (eliminated by --skip-passes)
+- Combined: **5.3s saved per run** on repeated executions
+- New bottleneck: 680ms bytecode deserialize (11MB file)
+- AOT .so load (520ms) offsets run-phase savings for short sims
