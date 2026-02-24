@@ -1,0 +1,3 @@
+// RUN: rg -- '-DINC_ASSERT' %S/../../utils/run_ibex_formal_circt_bmc.sh | FileCheck %s
+
+// CHECK: -DINC_ASSERT

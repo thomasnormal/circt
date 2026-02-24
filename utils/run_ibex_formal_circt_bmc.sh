@@ -150,6 +150,7 @@ COMPILE_CMD=(
   "--timescale=1ns/1ps"
   "--no-uvm-auto-include"
   "-DRVFI"
+  "-DINC_ASSERT"
   "${INCLUDE_DIRS[@]}"
   "${RTL_FILES[@]}"
   "-o" "$MLIR_FILE"
@@ -177,8 +178,8 @@ for target in "${BMC_TARGETS[@]}"; do
   set +e
   timeout "$TIMEOUT" "$CIRCT_BMC" \
     "$MLIR_FILE" \
-    --bound="$BMC_BOUND" \
-    --top="$target" \
+    -b "$BMC_BOUND" \
+    --module="$target" \
     > "$TARGET_LOG" 2>&1
   rc=$?
   set -e
