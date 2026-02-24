@@ -1,0 +1,25 @@
+// RUN: rg '^sv_tests_bmc\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=SV-BMC
+// RUN: rg '^sv_tests_lec\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=SV-LEC
+// RUN: rg '^sv_tests_sim\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=SV-SIM
+// RUN: rg '^verilator_bmc\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=VERI-BMC
+// RUN: rg '^verilator_lec\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=VERI-LEC
+
+// SV-BMC: sv_tests_bmc
+// SV-BMC-SAME: TEST_FILTER='.'
+// SV-BMC-SAME: utils/run_sv_tests_circt_bmc.sh
+
+// SV-LEC: sv_tests_lec
+// SV-LEC-SAME: TEST_FILTER='.'
+// SV-LEC-SAME: utils/run_sv_tests_circt_lec.sh
+
+// SV-SIM: sv_tests_sim
+// SV-SIM-SAME: TEST_FILTER='.'
+// SV-SIM-SAME: utils/run_sv_tests_circt_sim.sh
+
+// VERI-BMC: verilator_bmc
+// VERI-BMC-SAME: TEST_FILTER='.'
+// VERI-BMC-SAME: utils/run_verilator_verification_circt_bmc.sh
+
+// VERI-LEC: verilator_lec
+// VERI-LEC-SAME: TEST_FILTER='.'
+// VERI-LEC-SAME: utils/run_verilator_verification_circt_lec.sh
