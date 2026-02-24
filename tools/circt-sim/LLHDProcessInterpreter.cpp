@@ -7615,6 +7615,60 @@ LLHDProcessInterpreter::evaluateLTLProperty(
           return true;
     return false;
   };
+  struct TailUnboundedRepeatInfo {
+    enum class Kind { GoTo, NonConsecutive };
+    Kind kind;
+    mlir::Operation *op = nullptr;
+    mlir::Value value;
+    uint64_t base = 0;
+    uint64_t startOffset = 0;
+  };
+  std::function<std::optional<TailUnboundedRepeatInfo>(Value, uint64_t)>
+      getTailUnboundedRepeatInfo =
+          [&](Value seq,
+              uint64_t prefixOffset) -> std::optional<TailUnboundedRepeatInfo> {
+    if (!seq)
+      return std::nullopt;
+    auto *seqOp = seq.getDefiningOp();
+    if (!seqOp)
+      return std::nullopt;
+
+    if (auto clockOp = dyn_cast<ltl::ClockOp>(seqOp))
+      return getTailUnboundedRepeatInfo(clockOp.getInput(), prefixOffset);
+    if (auto firstMatchOp = dyn_cast<ltl::FirstMatchOp>(seqOp))
+      return getTailUnboundedRepeatInfo(firstMatchOp.getInput(), prefixOffset);
+
+    if (auto gotoOp = dyn_cast<ltl::GoToRepeatOp>(seqOp))
+      return TailUnboundedRepeatInfo{
+          TailUnboundedRepeatInfo::Kind::GoTo, seqOp, seq, gotoOp.getBase(),
+          prefixOffset};
+
+    if (auto nonConsecutiveOp = dyn_cast<ltl::NonConsecutiveRepeatOp>(seqOp))
+      return TailUnboundedRepeatInfo{TailUnboundedRepeatInfo::Kind::NonConsecutive,
+                                     seqOp, seq, nonConsecutiveOp.getBase(),
+                                     prefixOffset};
+
+    if (auto concatOp = dyn_cast<ltl::ConcatOp>(seqOp)) {
+      auto inputs = concatOp.getInputs();
+      if (inputs.empty())
+        return std::nullopt;
+
+      uint64_t extraPrefix = 0;
+      for (Value input : inputs.drop_back()) {
+        auto len = getExactSequenceLength(input);
+        if (!len)
+          return std::nullopt;
+        if (*len > std::numeric_limits<uint64_t>::max() - extraPrefix)
+          return std::nullopt;
+        extraPrefix += *len;
+      }
+      if (extraPrefix > std::numeric_limits<uint64_t>::max() - prefixOffset)
+        return std::nullopt;
+      return getTailUnboundedRepeatInfo(inputs.back(), prefixOffset + extraPrefix);
+    }
+
+    return std::nullopt;
+  };
   std::function<bool(Value)> sequenceContainsFirstMatch =
       [&](Value seq) -> bool {
     if (!seq)
@@ -8682,107 +8736,6 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         return it != samples.end();
       };
 
-      if (auto gotoRepeatOp =
-              trackedConsequentValue.getDefiningOp<ltl::GoToRepeatOp>()) {
-        // Update the repetition tracker for the current sample and then resolve
-        // implication obligations against per-attempt hit counts.
-        (void)evaluateLTLProperty(trackedConsequentValue, state);
-        auto &repTracker =
-            state.repetitionHitTrackers[gotoRepeatOp.getOperation()];
-        bool hitNow = !repTracker.trueHitSampleOrdinals.empty() &&
-                      repTracker.trueHitSampleOrdinals.back() ==
-                          state.sampleOrdinal;
-
-        auto &tracker = state.implicationTrackers[op];
-        tracker.hasUnboundedWindow = true;
-        tracker.unboundedMinShift = minShift;
-
-        if (ante == LTLTruth::True) {
-          ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
-          pending.triggerSampleOrdinal = state.sampleOrdinal;
-          tracker.pendingAntecedents.push_back(pending);
-        }
-
-        for (auto pendingIt = tracker.pendingAntecedents.begin();
-             pendingIt != tracker.pendingAntecedents.end();) {
-          uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
-          if (age >= minShift) {
-            uint64_t hitsSince = countSamplesSince(
-                repTracker.trueHitSampleOrdinals,
-                pendingIt->triggerSampleOrdinal);
-            bool unknownSince = hasSampleSince(repTracker.unknownSampleOrdinals,
-                                               pendingIt->triggerSampleOrdinal);
-            if (hitNow && hitsSince >= gotoRepeatOp.getBase())
-              pendingIt->sawConsequentTrue = true;
-            else if (unknownSince)
-              pendingIt->sawConsequentUnknown = true;
-          }
-
-          if (pendingIt->sawConsequentTrue) {
-            pendingIt = tracker.pendingAntecedents.erase(pendingIt);
-            continue;
-          }
-          ++pendingIt;
-        }
-
-        if (!tracker.pendingAntecedents.empty())
-          return LTLTruth::Unknown;
-        if (ante == LTLTruth::Unknown)
-          return LTLTruth::Unknown;
-        return LTLTruth::True;
-      }
-
-      if (auto nonConsecutiveOp =
-              trackedConsequentValue
-                  .getDefiningOp<ltl::NonConsecutiveRepeatOp>()) {
-        (void)evaluateLTLProperty(trackedConsequentValue, state);
-        auto &repTracker =
-            state.repetitionHitTrackers[nonConsecutiveOp.getOperation()];
-
-        auto &tracker = state.implicationTrackers[op];
-        tracker.hasUnboundedWindow = true;
-        tracker.unboundedMinShift = minShift;
-
-        if (ante == LTLTruth::True) {
-          ClockedAssertionState::ImplicationTracker::PendingAntecedent pending;
-          pending.triggerSampleOrdinal = state.sampleOrdinal;
-          tracker.pendingAntecedents.push_back(pending);
-        }
-
-        for (auto pendingIt = tracker.pendingAntecedents.begin();
-             pendingIt != tracker.pendingAntecedents.end();) {
-          uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
-          if (age >= minShift) {
-            uint64_t hitsSince = countSamplesSince(
-                repTracker.trueHitSampleOrdinals,
-                pendingIt->triggerSampleOrdinal);
-            bool unknownSince = hasSampleSince(repTracker.unknownSampleOrdinals,
-                                               pendingIt->triggerSampleOrdinal);
-            if (hitsSince >= nonConsecutiveOp.getBase()) {
-              if (unknownSince)
-                pendingIt->sawConsequentUnknown = true;
-              else
-                pendingIt->sawConsequentTrue = true;
-            } else if (unknownSince) {
-              pendingIt->sawConsequentUnknown = true;
-            }
-          }
-
-          if (pendingIt->sawConsequentTrue) {
-            pendingIt = tracker.pendingAntecedents.erase(pendingIt);
-            continue;
-          }
-          ++pendingIt;
-        }
-
-        if (!tracker.pendingAntecedents.empty())
-          return LTLTruth::Unknown;
-        if (ante == LTLTruth::Unknown)
-          return LTLTruth::Unknown;
-        return LTLTruth::True;
-      }
-
-      LTLTruth consequentNow = evaluateLTLProperty(trackedConsequentValue, state);
       auto &tracker = state.implicationTrackers[op];
       tracker.hasUnboundedWindow = true;
       tracker.unboundedMinShift = minShift;
@@ -8793,14 +8746,47 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         tracker.pendingAntecedents.push_back(pending);
       }
 
+      auto tailRepeat =
+          getTailUnboundedRepeatInfo(trackedConsequentValue, /*prefixOffset=*/0);
+      if (tailRepeat)
+        (void)evaluateLTLProperty(tailRepeat->value, state);
+      LTLTruth consequentNow = evaluateLTLProperty(trackedConsequentValue, state);
+
       for (auto pendingIt = tracker.pendingAntecedents.begin();
            pendingIt != tracker.pendingAntecedents.end();) {
         uint64_t age = state.sampleOrdinal - pendingIt->triggerSampleOrdinal;
         if (age >= minShift) {
-          if (consequentNow == LTLTruth::True)
-            pendingIt->sawConsequentTrue = true;
-          else if (consequentNow == LTLTruth::Unknown)
-            pendingIt->sawConsequentUnknown = true;
+          bool repeatCountSatisfied = false;
+          bool repeatSawUnknown = false;
+          if (tailRepeat) {
+            uint64_t repeatStartSample = pendingIt->triggerSampleOrdinal;
+            if (tailRepeat->startOffset <=
+                std::numeric_limits<uint64_t>::max() - repeatStartSample) {
+              repeatStartSample += tailRepeat->startOffset;
+              auto &repTracker = state.repetitionHitTrackers[tailRepeat->op];
+              uint64_t hitsSince = countSamplesSince(
+                  repTracker.trueHitSampleOrdinals, repeatStartSample);
+              repeatSawUnknown =
+                  hasSampleSince(repTracker.unknownSampleOrdinals,
+                                 repeatStartSample);
+              if (tailRepeat->kind == TailUnboundedRepeatInfo::Kind::GoTo) {
+                bool hitNow = !repTracker.trueHitSampleOrdinals.empty() &&
+                              repTracker.trueHitSampleOrdinals.back() ==
+                                  state.sampleOrdinal;
+                repeatCountSatisfied = hitNow && hitsSince >= tailRepeat->base;
+              } else {
+                repeatCountSatisfied = hitsSince >= tailRepeat->base;
+              }
+            }
+          }
+
+          if (consequentNow == LTLTruth::True) {
+            if (!tailRepeat || repeatCountSatisfied)
+              pendingIt->sawConsequentTrue = true;
+          } else if (consequentNow == LTLTruth::Unknown) {
+            if (!tailRepeat || repeatCountSatisfied || repeatSawUnknown)
+              pendingIt->sawConsequentUnknown = true;
+          }
         }
 
         if (pendingIt->sawConsequentTrue) {
