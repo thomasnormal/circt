@@ -14095,6 +14095,14 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
                   ConversionPatternRewriter &rewriter) const override {
     Location loc = op.getLoc();
     Value input = adaptor.getInput();
+    if (Type convertedType = typeConverter->convertType(input.getType());
+        convertedType && convertedType != input.getType()) {
+      Value convertedInput = typeConverter->materializeTargetConversion(
+          rewriter, loc, convertedType, input);
+      if (!convertedInput)
+        return failure();
+      input = convertedInput;
+    }
     int64_t delay = op.getDelay();
 
     if (delay == 0) {
@@ -14121,17 +14129,24 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
       Type inputType = input.getType();
       Value regInput = input;
       Type regType = inputType;
-      bool castBack = false;
+      enum class CastKind { None, HWBitcast, ArithBitcast };
+      CastKind castBackKind = CastKind::None;
       if (!isa<IntegerType>(inputType)) {
-        int64_t width = hw::getBitWidth(inputType);
-        if (width < 0) {
-          op.emitError(
-              "cannot lower moore.past for type without known bitwidth");
-          return failure();
+        if (auto floatType = dyn_cast<FloatType>(inputType)) {
+          regType = rewriter.getIntegerType(floatType.getIntOrFloatBitWidth());
+          regInput = arith::BitcastOp::create(rewriter, loc, regType, input);
+          castBackKind = CastKind::ArithBitcast;
+        } else {
+          int64_t width = hw::getBitWidth(inputType);
+          if (width < 0) {
+            op.emitError(
+                "cannot lower moore.past for type without known bitwidth");
+            return failure();
+          }
+          regType = rewriter.getIntegerType(width);
+          regInput = hw::BitcastOp::create(rewriter, loc, regType, input);
+          castBackKind = CastKind::HWBitcast;
         }
-        regType = rewriter.getIntegerType(width);
-        regInput = hw::BitcastOp::create(rewriter, loc, regType, input);
-        castBack = true;
       }
 
       auto regIntType = dyn_cast<IntegerType>(regType);
@@ -14182,8 +14197,10 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
             rewriter, loc, current, clockSignal, reset, resetValue,
             initialValue);
       }
-      if (castBack)
+      if (castBackKind == CastKind::HWBitcast)
         current = hw::BitcastOp::create(rewriter, loc, inputType, current);
+      else if (castBackKind == CastKind::ArithBitcast)
+        current = arith::BitcastOp::create(rewriter, loc, inputType, current);
       rewriter.replaceOp(op, current);
       return success();
     }

@@ -7608,3 +7608,38 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - The safest behavior for opaque property operands in this pass is explicit
   non-lowering (preserve LTL form) rather than forcing conversion or erroring.
+
+## 2026-02-24: SVA `real` local-var delayed-step support through `moore.past`
+
+### Gap identified (red-first)
+- Added:
+  - `test/Tools/circt-sim/sva-sequence-match-item-real-incdec-runtime.sv`
+- Pre-fix run failed:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-sim/sva-sequence-match-item-real-incdec-runtime.sv`
+  - error: `cannot lower moore.past for type without known bitwidth`
+
+### Root cause
+- `PastOpConversion` in `MooreToCore` converted all non-integer sampled values
+  through `hw::getBitWidth` and `hw::Bitcast`.
+- `hw::getBitWidth` has no float handling, so `f64` sampled values from
+  assertion local-vars (`x++/x--` across `##1`) could not be lowered.
+
+### Implementation
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - materialize converted operand type first (so `!moore.f64` can become `f64`
+    before sampled-state lowering).
+  - use `arith::BitcastOp` for float sampled values when storing/restoring
+    through integer `seq.compreg` state.
+  - retain `hw::BitcastOp` path for non-float types with HW bitwidth.
+
+### Validation (green)
+- New repro test:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-sim/sva-sequence-match-item-real-incdec-runtime.sv`
+  - result: `1/1 PASS`
+- Focused nearby regressions:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 5 build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-real-incdec.sv build-test/test/Conversion/ImportVerilog/sva-sequence-match-item-time-incdec.sv build-test/test/Conversion/ImportVerilog/sva-sampled-real-explicit-and-implicit-clock.sv build-test/test/Tools/circt-sim/sva-local-var-initializer-unary-runtime.sv build-test/test/Tools/circt-sim/sva-local-var-initializer-compound-runtime.sv`
+  - result: `5/5 PASS`
+
+### Realizations / surprises
+- This failure was not an SVA front-end semantic issue; it was a lowering
+  storage-cast mismatch between Moore real types and HW bitwidth utilities.
