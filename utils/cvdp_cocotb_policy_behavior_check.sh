@@ -69,6 +69,21 @@ elif mode == "toomanyfails":
             "cocotb_fail": ["f1", "f2", "f3"],
         }
     }
+elif mode == "hang":
+    import time
+    time.sleep(2.5)
+    results = {
+        "results": {
+            "compile_pass": ["a", "b"],
+            "compile_fail": [],
+            "no_sv": [],
+            "sim_pass": [],
+            "sim_fail": [],
+            "sim_timeout": [],
+            "cocotb_pass": ["p1", "p2", "p3", "p4"],
+            "cocotb_fail": [],
+        }
+    }
 else:
     raise RuntimeError(f"unknown mode: {mode}")
 
@@ -116,6 +131,27 @@ set -e
 if [[ "$rc" -eq 0 ]]; then
   echo "[cvdp-cocotb-policy-check] too-many-fails case unexpectedly passed" >&2
   cat "$tmpdir/toomany.out" >&2
+  exit 1
+fi
+
+echo "[cvdp-cocotb-policy-check] case: timeout-must-fail-fast"
+set +e
+CVDP_POLICY_RUNNER="$mock_runner" \
+CVDP_POLICY_TEST_MODE=hang \
+CVDP_POLICY_TIMEOUT_SEC=1 \
+CVDP_MIN_COCOTB_PASS=3 \
+CVDP_MAX_RUNTIME_FAILS=2 \
+  "$WRAPPER" -f /dev/null -o "$tmpdir/hang" >"$tmpdir/hang.out" 2>&1
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  echo "[cvdp-cocotb-policy-check] timeout case unexpectedly passed" >&2
+  cat "$tmpdir/hang.out" >&2
+  exit 1
+fi
+if ! grep -q 'runner timed out' "$tmpdir/hang.out"; then
+  echo "[cvdp-cocotb-policy-check] timeout case missing timeout marker" >&2
+  cat "$tmpdir/hang.out" >&2
   exit 1
 fi
 
