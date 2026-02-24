@@ -1063,13 +1063,15 @@ static unsigned compileProcessBodies(
   auto i8Ty = IntegerType::get(mlirCtx, 8);
 
   // Step 1: Assign signal IDs. Walk all llhd.sig ops in module order.
+  // Runtime (ProcessScheduler) uses 1-based signal IDs (ID 0 is sentinel),
+  // so we must start at 1 to match.
   DenseMap<Value, uint32_t> signalIdMap;
-  uint32_t nextSigId = 0;
+  uint32_t nextSigId = 1;
   module.walk([&](llhd::SignalOp sigOp) {
     signalIdMap[sigOp.getResult()] = nextSigId++;
   });
 
-  if (nextSigId == 0)
+  if (nextSigId == 1)
     return 0;
 
   // Step 2: Declare runtime functions in the parent module.
