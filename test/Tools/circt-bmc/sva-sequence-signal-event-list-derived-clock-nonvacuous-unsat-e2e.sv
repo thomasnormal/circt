@@ -1,7 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 24 --allow-multi-clock --ignore-asserts-until=3 --module=sva_sequence_signal_event_list_derived_clock_nonvacuous_unsat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 24 --allow-multi-clock --ignore-asserts-until=3 --module=sva_sequence_signal_event_list_derived_clock_nonvacuous_unsat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_sequence_signal_event_list_derived_clock_nonvacuous_unsat(

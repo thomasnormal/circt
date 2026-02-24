@@ -1,7 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 16 --ignore-asserts-until=2 --module=sva_sequence_signal_event_list_noedge_sat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 16 --ignore-asserts-until=2 --module=sva_sequence_signal_event_list_noedge_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_sequence_signal_event_list_noedge_sat(input logic clk);

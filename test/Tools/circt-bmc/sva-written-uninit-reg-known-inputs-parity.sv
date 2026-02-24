@@ -1,8 +1,7 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
-// RUN:   circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only - | \
+// RUN:   circt-bmc --run-smtlib -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only - | \
 // RUN:   FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 // In known-input mode, written state should not spuriously start as 4-state X

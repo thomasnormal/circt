@@ -1,7 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 12 --ignore-asserts-until=4 --module=sva_sequence_triggered_posedge_sat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 12 --ignore-asserts-until=4 --module=sva_sequence_triggered_posedge_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_sequence_triggered_posedge_sat(input logic clk);

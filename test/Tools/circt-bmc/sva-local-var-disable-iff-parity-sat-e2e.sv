@@ -1,11 +1,10 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 5 --ignore-asserts-until=0 --module=sva_local_var_disable_iff_parity - | \
+// RUN:   circt-bmc --run-smtlib -b 5 --ignore-asserts-until=0 --module=sva_local_var_disable_iff_parity - | \
 // RUN:   FileCheck %s --check-prefix=JIT
 // RUN: circt-verilog --ir-hw %s | \
 // RUN:   circt-bmc --run-smtlib -b 5 --ignore-asserts-until=0 --module=sva_local_var_disable_iff_parity - | \
 // RUN:   FileCheck %s --check-prefix=SMTLIB
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_local_var_disable_iff_parity(

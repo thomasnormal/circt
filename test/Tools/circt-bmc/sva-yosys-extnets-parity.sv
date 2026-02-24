@@ -1,11 +1,10 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
-// RUN:   circt-bmc -b 10 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only - | \
+// RUN:   circt-bmc --run-smtlib -b 10 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only - | \
 // RUN:   FileCheck %s --check-prefix=PASS
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw -DFAIL %s | \
-// RUN:   circt-bmc -b 10 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only - | \
+// RUN:   circt-bmc --run-smtlib -b 10 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only - | \
 // RUN:   FileCheck %s --check-prefix=FAIL
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 // This is a parity lock for the Yosys SVA `extnets.sv` case.

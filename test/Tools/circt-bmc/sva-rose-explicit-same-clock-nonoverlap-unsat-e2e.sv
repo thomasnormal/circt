@@ -1,7 +1,6 @@
 // RUN: circt-verilog --ir-llhd --timescale=1ns/1ns --single-unit %s | \
-// RUN:   circt-bmc -b 10 --ignore-asserts-until=1 --module=top - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 10 --ignore-asserts-until=1 --module=top - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module top(input logic clk);

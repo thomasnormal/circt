@@ -1,14 +1,13 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
-// RUN:   circt-bmc -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat - | \
+// RUN:   circt-bmc --run-smtlib -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat - | \
 // RUN:   FileCheck %s --check-prefix=JIT
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
-// RUN:   circt-bmc -b 8 --ignore-asserts-until=0 --print-counterexample --module=sva_stateful_probe_order_unsat - | \
+// RUN:   circt-bmc --run-smtlib -b 8 --ignore-asserts-until=0 --print-counterexample --module=sva_stateful_probe_order_unsat - | \
 // RUN:   FileCheck %s --check-prefix=PRINTCE
 // RUN: circt-verilog --no-uvm-auto-include --ir-hw %s | \
 // RUN:   circt-bmc --run-smtlib -b 8 --ignore-asserts-until=0 --module=sva_stateful_probe_order_unsat - | \
 // RUN:   FileCheck %s --check-prefix=SMTLIB
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 // Regression for stateful LLHD probe ordering:
