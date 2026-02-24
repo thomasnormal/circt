@@ -2,6 +2,24 @@
 
 ## 2026-02-24
 
+- Iteration update (randomize inline post-randomize signature regression lock):
+  - realization:
+    - `test/Conversion/ImportVerilog/randomize.sv` still expected
+      one-argument `moore.call_post_randomize`, but lowering now emits both:
+      - randomized object
+      - randomize success flag (`i1`)
+    - this kept the focused randomization/constraint sweep red.
+  - implemented:
+    - updated check in:
+      - `test/Conversion/ImportVerilog/randomize.sv`
+    - expectation now matches:
+      - `moore.call_post_randomize %obj, %rand_result : <@InlineConstraintTx>`
+  - validation:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Conversion/ImportVerilog/randomize.sv`
+      - result: `1/1` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv build-test/test/Conversion/ImportVerilog/class-randomization-constraints.sv build-test/test/Conversion/ImportVerilog/runtime-randomization.sv build-test/test/Conversion/ImportVerilog/randomize.sv build-test/test/Conversion/ImportVerilog/constraint-solve.sv build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv`
+      - result: `8/8` pass.
+
 - Iteration update (sv-tests sim tag filter correctness):
   - realization:
     - `utils/run_sv_tests_circt_sim.sh` applied `TAG_REGEX` only when tags were
