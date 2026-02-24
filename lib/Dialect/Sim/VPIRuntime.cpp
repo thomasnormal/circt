@@ -2650,7 +2650,11 @@ extern "C" {
 
 vpiHandle vpi_register_cb(p_cb_data cb_data_p) {
   auto &vpi = VPIRuntime::getInstance();
-  if (!vpi.isActive())
+  // Allow cbStartOfSimulation to be pre-registered before simulation starts.
+  // This is needed for wasm/JS hosts that register startup callbacks before
+  // callMain, while all other callback reasons still require active runtime.
+  if (!vpi.isActive() &&
+      (!cb_data_p || cb_data_p->reason != cbStartOfSimulation))
     return nullptr;
   uint32_t id = vpi.registerCb(cb_data_p);
   return id ? VPIRuntime::makeHandle(id) : nullptr;

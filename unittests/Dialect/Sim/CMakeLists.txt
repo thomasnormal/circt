@@ -12,6 +12,7 @@ add_circt_unittest(CIRCTSimTests
   SimulationControlTest.cpp
   SyncPrimitivesTest.cpp
   TLMPortsTest.cpp
+  VPIRuntimeTest.cpp
   UVMFactoryTest.cpp
   UVMPhaseManagerTest.cpp
   WaveformDumperTest.cpp
