@@ -5015,6 +5015,12 @@ struct StmtVisitor {
   /// Emit an error for all other statements.
   template <typename T>
   LogicalResult visit(T &&stmt) {
+    // With --ignore-unknown-modules, Slang can surface statements as Invalid
+    // when they reference members of intentionally-unknown instances.
+    if (context.options.ignoreUnknownModules &&
+        stmt.kind == slang::ast::StatementKind::Invalid)
+      return success();
+
     mlir::emitError(loc, "unsupported statement: ")
         << slang::ast::toString(stmt.kind);
     return mlir::failure();
