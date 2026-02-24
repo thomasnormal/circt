@@ -95,7 +95,10 @@ cmake_args=(
 )
 
 if [[ "$print_only" -eq 1 ]]; then
-  printf "%q " "$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}" "${extra_cmake_args[@]}"
+  printf "%q " "$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}"
+  if ((${#extra_cmake_args[@]})); then
+    printf "%q " "${extra_cmake_args[@]}"
+  fi
   printf "\n"
   exit 0
 fi
@@ -116,4 +119,8 @@ if [[ ! -d "$LLVM_SRC_DIR" ]]; then
   exit 1
 fi
 
-"$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}" "${extra_cmake_args[@]}"
+if ((${#extra_cmake_args[@]})); then
+  "$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}" "${extra_cmake_args[@]}"
+else
+  "$EMCMAKE_BIN" "$CMAKE_BIN" "${cmake_args[@]}"
+fi
