@@ -2345,7 +2345,8 @@ void LowerToBMCPass::runOnOperation() {
     timeToIntOps.push_back(op);
   });
   for (auto op : timeToIntOps) {
-    auto currentTime = op.getInput().getDefiningOp<llhd::CurrentTimeOp>();
+    Value input = op->getOperand(0);
+    auto currentTime = input.getDefiningOp<llhd::CurrentTimeOp>();
     if (!currentTime)
       continue;
     OpBuilder builder(op);

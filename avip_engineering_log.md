@@ -7203,3 +7203,33 @@ Based on these findings, the circt-sim compiled process architecture:
 - The blanket unlisted-UVM fast-skip made expectation-file promotions inert.
 - Regex-driven promotion keeps performance guardrails while enabling concrete
   parity progress in targeted UVM/SVA lanes.
+
+## 2026-02-24: `lower-to-bmc` crash fix for `llhd.time_to_int`
+
+### Gap identified
+- `test/Tools/circt-bmc/lower-to-bmc-llhd-time-to-int.mlir` crashed in
+  `LowerToBMC` with:
+  - `cast<TypedValue<llhd::TimeType>> argument of incompatible type`.
+
+### Reproduction
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-time-to-int.mlir`
+  - result before fix: `FAIL` (abort in `circt-opt --lower-to-bmc`).
+
+### Implementation
+- `lib/Tools/circt-bmc/LowerToBMC.cpp`
+  - in the `llhd.time_to_int` cleanup path, replaced:
+    - typed accessor `op.getInput()` (hard-casts to `llhd.time`)
+  - with:
+    - raw operand read `op->getOperand(0)` plus explicit
+      `getDefiningOp<llhd::CurrentTimeOp>()` check.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-time-to-int.mlir`
+  - result after fix: `1/1 PASS`.
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 4 build-test/test/Tools/circt-bmc`
+  - result: `325/325 PASS`.
+
+### Realizations / surprises
+- The failure mode was an assertion abort, not a normal diagnostic, so a small
+  type-safe accessor change removed a hard crash without affecting expected IR
+  lowering behavior.
