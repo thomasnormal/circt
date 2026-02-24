@@ -588,6 +588,11 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     pendingFirRegUpdates.clear();
     processConditionalDriveValues.clear();
   });
+  this->scheduler.setPostRegionCallback(SchedulingRegion::Postponed, [this]() {
+    for (auto &[sigId, val] : pendingFirRegUpdates)
+      this->scheduler.updateSignal(sigId, val);
+    pendingFirRegUpdates.clear();
+  });
   deferFirRegUpdates = true;
 }
 
@@ -1758,8 +1763,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     return failure();
   reportInitStage("registerSignals");
 
-  // Register seq.firreg operations before processes (using pre-discovered ops).
+  // Register seq.firreg/seq.compreg operations before processes.
   registerFirRegs(discoveredOps, 0, InstanceInputMapping{});
+  registerCompRegs(discoveredOps, 0, InstanceInputMapping{});
 
   // Register clocked assertion checkers (verif.clocked_assert at module level).
   registerClockedAssertions(discoveredOps, 0, InstanceInputMapping{});
@@ -2688,8 +2694,9 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
     deferredChildModuleOps.push_back(
         {childModule, instanceId, instanceInputMap, childOps, instOp});
 
-    // Register seq.firreg operations for the child module (per instance).
+    // Register seq.firreg/seq.compreg operations for the child module.
     registerFirRegs(childOps, instanceId, instanceInputMap);
+    registerCompRegs(childOps, instanceId, instanceInputMap);
 
     // Register clocked assertions for the child module (per instance).
     registerClockedAssertions(childOps, instanceId, instanceInputMap);
@@ -3138,6 +3145,8 @@ void LLHDProcessInterpreter::discoverOpsIteratively(hw::HWModuleOp hwModule,
           }
         } else if (auto firRegOp = dyn_cast<seq::FirRegOp>(&op)) {
           ops.firRegs.push_back(firRegOp);
+        } else if (auto compRegOp = dyn_cast<seq::CompRegOp>(&op)) {
+          ops.compRegs.push_back(compRegOp);
         } else if (auto clockedAssertOp =
                        dyn_cast<verif::ClockedAssertOp>(&op)) {
           ops.clockedAsserts.push_back(clockedAssertOp);
@@ -5919,6 +5928,8 @@ void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
       clockPosedge = (prev == 0 && curr != 0);
       state.prevClock = clkVal;
     } else {
+      // Treat X->1 as the first observable posedge after unknown startup.
+      clockPosedge = clkVal.getUInt64() != 0;
       state.prevClock = clkVal;
     }
   }
@@ -5970,6 +5981,168 @@ void LLHDProcessInterpreter::executeFirReg(seq::FirRegOp regOp,
   } else {
     scheduler.updateSignal(state.signalId, newVal.toSignalValue());
   }
+}
+
+void LLHDProcessInterpreter::registerCompRegs(const DiscoveredOps &ops,
+                                              InstanceId instanceId,
+                                              const InstanceInputMapping &inputMap) {
+  ScopedInstanceContext instScope(*this, instanceId);
+  ScopedInputValueMap inputScope(*this, inputMap);
+  auto &compRegMap =
+      (instanceId == 0) ? compRegStates : instanceCompRegStates[instanceId];
+  auto &signalMap =
+      (instanceId == 0) ? valueToSignal : instanceValueToSignal[instanceId];
+
+  for (seq::CompRegOp regOp : ops.compRegs) {
+    if (compRegMap.contains(regOp.getOperation()))
+      continue;
+
+    std::string baseName;
+    if (auto nameAttr = regOp.getNameAttr();
+        nameAttr && !nameAttr.getValue().empty())
+      baseName = nameAttr.getValue().str();
+    else
+      baseName = "compreg_" + std::to_string(compRegMap.size());
+    std::string name = baseName;
+    if (instanceId != 0)
+      name = "inst" + std::to_string(instanceId) + "." + baseName;
+
+    unsigned width = getTypeWidth(regOp.getType());
+    SignalId sigId = scheduler.findSignalByName(name);
+    if (sigId == 0)
+      sigId =
+          scheduler.registerSignal(name, width, getSignalEncoding(regOp.getType()));
+    signalMap[regOp.getResult()] = sigId;
+    signalIdToName[sigId] = name;
+    signalIdToType[sigId] = unwrapSignalType(regOp.getType());
+
+    bool initSet = false;
+    if (regOp.getReset()) {
+      InterpretedValue resetVal = evaluateContinuousValue(regOp.getReset());
+      if (!resetVal.isX() && resetVal.getUInt64() != 0) {
+        InterpretedValue resetValue =
+            evaluateContinuousValue(regOp.getResetValue());
+        scheduler.updateSignal(sigId, resetValue.toSignalValue());
+        initSet = true;
+      }
+    }
+
+    if (!initSet && regOp.getInitialValue()) {
+      InterpretedValue initValue = evaluateContinuousValue(regOp.getInitialValue());
+      if (initValue.isX()) {
+        if (auto initialOp = regOp.getInitialValue().getDefiningOp<seq::InitialOp>()) {
+          if (auto yieldOp =
+                  dyn_cast_or_null<seq::YieldOp>(initialOp.getBodyBlock()->getTerminator())) {
+            if (yieldOp.getNumOperands() == 1)
+              initValue = evaluateContinuousValue(yieldOp.getOperand(0));
+          }
+        }
+      }
+      if (!initValue.isX()) {
+        scheduler.updateSignal(sigId, initValue.toSignalValue());
+        initSet = true;
+      }
+    }
+
+    if (!initSet)
+      scheduler.updateSignal(sigId, SignalValue::makeX(width));
+
+    CompRegState state;
+    state.signalId = sigId;
+    state.instanceId = instanceId;
+    state.inputMap = inputMap;
+    compRegMap[regOp.getOperation()] = state;
+
+    std::string procName = "compreg_" + name;
+    ProcessId procId = scheduler.registerProcess(
+        procName, [this, regOp, instanceId, inputMap]() {
+          ScopedInstanceContext scope(*this, instanceId);
+          ScopedInputValueMap inputScope(*this, inputMap);
+          executeCompReg(regOp, instanceId);
+        });
+    if (auto *process = scheduler.getProcess(procId)) {
+      if (regOp->hasAttr("circt.sva.sampled_past")) {
+        // Sampled-value history must not be visible to Observed-region SVA
+        // evaluation in the same time slot. Commit these updates after
+        // assertion sampling.
+        process->setPreferredRegion(SchedulingRegion::Postponed);
+      } else {
+        process->setPreferredRegion(SchedulingRegion::NBA);
+      }
+    }
+
+    llvm::SmallVector<SignalId, 4> clkSignals;
+    collectSignalIds(regOp.getClk(), clkSignals);
+    for (SignalId sig : clkSignals)
+      scheduler.addSensitivity(procId, sig, EdgeType::AnyEdge);
+
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+}
+
+void LLHDProcessInterpreter::executeCompReg(seq::CompRegOp regOp,
+                                            InstanceId instanceId) {
+  auto &compRegMap =
+      (instanceId == 0) ? compRegStates : instanceCompRegStates[instanceId];
+  auto it = compRegMap.find(regOp.getOperation());
+  if (it == compRegMap.end())
+    return;
+
+  CompRegState &state = it->second;
+  ScopedInstanceContext instScope(*this, state.instanceId);
+  ScopedInputValueMap inputScope(*this, state.inputMap);
+
+  InterpretedValue clkVal = evaluateContinuousValue(regOp.getClk());
+
+  bool clockPosedge = false;
+  if (!clkVal.isX()) {
+    if (!state.hasPrevClock) {
+      state.prevClock = clkVal;
+      state.hasPrevClock = true;
+    } else if (!state.prevClock.isX()) {
+      uint64_t prev = state.prevClock.getUInt64();
+      uint64_t curr = clkVal.getUInt64();
+      clockPosedge = (prev == 0 && curr != 0);
+      state.prevClock = clkVal;
+    } else {
+      // Treat X->1 as the first observable posedge after unknown startup.
+      clockPosedge = clkVal.getUInt64() != 0;
+      state.prevClock = clkVal;
+    }
+  }
+
+  if (!clockPosedge)
+    return;
+
+  auto evalInput = [&](Value value) -> InterpretedValue {
+    if (!regOp->hasAttr("circt.sva.sampled_past"))
+      return evaluateContinuousValue(value);
+    bool savedSampleMode = sampleClockedPropertyFromPreUpdateValues;
+    sampleClockedPropertyFromPreUpdateValues = true;
+    auto restoreSampleMode = llvm::make_scope_exit([&]() {
+      sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
+    });
+    return evaluateContinuousValue(value);
+  };
+
+  InterpretedValue newVal;
+  if (regOp.getReset()) {
+    InterpretedValue resetVal = evaluateContinuousValue(regOp.getReset());
+    if (resetVal.isX()) {
+      newVal = InterpretedValue::makeX(getTypeWidth(regOp.getType()));
+    } else if (resetVal.getUInt64() != 0) {
+      newVal = evaluateContinuousValue(regOp.getResetValue());
+    } else {
+      newVal = evalInput(regOp.getInput());
+    }
+  } else {
+    newVal = evalInput(regOp.getInput());
+  }
+
+  if (deferFirRegUpdates)
+    pendingFirRegUpdates.emplace_back(state.signalId, newVal.toSignalValue());
+  else
+    scheduler.updateSignal(state.signalId, newVal.toSignalValue());
 }
 
 void LLHDProcessInterpreter::registerClockedAssertions(
@@ -6101,6 +6274,11 @@ void LLHDProcessInterpreter::executeClockedAssertion(
 
   // Evaluate the property using LTL-aware evaluation.
   // Unknown-pending temporal states are treated as non-failing.
+  bool savedSampleMode = sampleClockedPropertyFromPreUpdateValues;
+  sampleClockedPropertyFromPreUpdateValues = true;
+  auto restoreSampleMode = llvm::make_scope_exit([&]() {
+    sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
+  });
   auto propTruth = evaluateLTLProperty(assertOp.getProperty(), state);
   bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssertionSignal(propHolds);
@@ -6233,6 +6411,11 @@ void LLHDProcessInterpreter::executeClockedAssumption(
   }
 
   ++state.sampleOrdinal;
+  bool savedSampleMode = sampleClockedPropertyFromPreUpdateValues;
+  sampleClockedPropertyFromPreUpdateValues = true;
+  auto restoreSampleMode = llvm::make_scope_exit([&]() {
+    sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
+  });
   auto propTruth = evaluateLTLProperty(assumeOp.getProperty(), state);
   bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssumptionSignal(propHolds);
@@ -6357,6 +6540,11 @@ void LLHDProcessInterpreter::executeClockedCover(verif::ClockedCoverOp coverOp,
   }
 
   ++state.sampleOrdinal;
+  bool savedSampleMode = sampleClockedPropertyFromPreUpdateValues;
+  sampleClockedPropertyFromPreUpdateValues = true;
+  auto restoreSampleMode = llvm::make_scope_exit([&]() {
+    sampleClockedPropertyFromPreUpdateValues = savedSampleMode;
+  });
   auto propTruth = evaluateLTLProperty(coverOp.getProperty(), state);
   if (propTruth == ClockedAssertionState::LTLTruth::True) {
     ++clockedCoverHits;
@@ -6568,7 +6756,18 @@ size_t LLHDProcessInterpreter::finalizeClockedAssertionsAtEnd() {
         if (trackerIt != state.implicationTrackers.end() &&
             (trackerIt->second.hasBoundedWindow ||
              trackerIt->second.hasUnboundedWindow)) {
-          for (const auto &pending : trackerIt->second.pendingAntecedents) {
+          const auto &tracker = trackerIt->second;
+          for (const auto &pending : tracker.pendingAntecedents) {
+            uint64_t age = state.sampleOrdinal >= pending.triggerSampleOrdinal
+                               ? state.sampleOrdinal - pending.triggerSampleOrdinal
+                               : 0;
+            bool windowMatured = true;
+            if (tracker.hasBoundedWindow)
+              windowMatured = age >= tracker.boundedMaxShift;
+            else if (tracker.hasUnboundedWindow)
+              windowMatured = age >= tracker.unboundedMinShift;
+            if (!windowMatured)
+              continue;
             if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
               unresolvedStrongEventually = true;
               break;
@@ -6785,7 +6984,18 @@ size_t LLHDProcessInterpreter::finalizeClockedAssumptionsAtEnd() {
         if (trackerIt != state.implicationTrackers.end() &&
             (trackerIt->second.hasBoundedWindow ||
              trackerIt->second.hasUnboundedWindow)) {
-          for (const auto &pending : trackerIt->second.pendingAntecedents) {
+          const auto &tracker = trackerIt->second;
+          for (const auto &pending : tracker.pendingAntecedents) {
+            uint64_t age = state.sampleOrdinal >= pending.triggerSampleOrdinal
+                               ? state.sampleOrdinal - pending.triggerSampleOrdinal
+                               : 0;
+            bool windowMatured = true;
+            if (tracker.hasBoundedWindow)
+              windowMatured = age >= tracker.boundedMaxShift;
+            else if (tracker.hasUnboundedWindow)
+              windowMatured = age >= tracker.unboundedMinShift;
+            if (!windowMatured)
+              continue;
             if (!pending.sawConsequentTrue && !pending.sawConsequentUnknown) {
               unresolvedStrongEventually = true;
               break;
@@ -8276,7 +8486,9 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         return history[history.size() - 1 - offset];
       };
       constexpr uint64_t kMaxConcatOffsetScan = 4096;
-      if (leftDelay && rightDelay) {
+      if (leftDelay && rightDelay &&
+          *leftDelay->delay.getLength() != 0 &&
+          *rightDelay->delay.getLength() != 0) {
         (void)evaluateLTLProperty(inputs[0], state);
         (void)evaluateLTLProperty(inputs[1], state);
 
@@ -8479,12 +8691,15 @@ LLHDProcessInterpreter::evaluateLTLProperty(
 
     uint64_t suffix = 0;
     LTLTruth result = LTLTruth::True;
+    bool hasInsufficientHistory = false;
     for (size_t idx = inputs.size(); idx > 0; --idx) {
       size_t i = idx - 1;
       auto &history = tracker.inputHistories[i];
-      LTLTruth sample = LTLTruth::Unknown;
-      if (history.size() > suffix)
-        sample = history[history.size() - 1 - suffix];
+      if (history.size() <= suffix) {
+        hasInsufficientHistory = true;
+        break;
+      }
+      LTLTruth sample = history[history.size() - 1 - suffix];
       result = truthAnd(result, sample);
       if (result == LTLTruth::False)
         return result;
@@ -8492,6 +8707,8 @@ LLHDProcessInterpreter::evaluateLTLProperty(
         return LTLTruth::Unknown;
       suffix += *inputLengths[i];
     }
+    if (hasInsufficientHistory)
+      return LTLTruth::Unknown;
     return result;
   }
 
@@ -8608,6 +8825,14 @@ bool LLHDProcessInterpreter::evaluateCombinationalOp(
   }
 
   return true;
+}
+
+const SignalValue &
+LLHDProcessInterpreter::getSignalValueForContinuousEval(SignalId sigId) const {
+  if (sampleClockedPropertyFromPreUpdateValues &&
+      scheduler.didSignalChangeThisDelta(sigId))
+    return scheduler.getSignalPreviousValue(sigId);
+  return scheduler.getSignalValue(sigId);
 }
 
 /// Evaluate a value for continuous assignments by reading from current signal
@@ -8908,7 +9133,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         }
         SignalId sigId = getSignalId(arg);
         if (sigId != 0) {
-          const SignalValue &sv = scheduler.getSignalValue(sigId);
+          const SignalValue &sv = getSignalValueForContinuousEval(sigId);
           if (sv.isUnknown()) {
             if (auto encoded = getEncodedUnknownForType(arg.getType()))
               finish(InterpretedValue(*encoded));
@@ -8924,7 +9149,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       if (auto regOp = current.getDefiningOp<seq::FirRegOp>()) {
         SignalId sigId = getSignalId(regOp.getResult());
         if (sigId != 0) {
-          const SignalValue &sv = scheduler.getSignalValue(sigId);
+          const SignalValue &sv = getSignalValueForContinuousEval(sigId);
           auto result = InterpretedValue::fromSignalValue(sv);
           finish(result);
         } else {
@@ -8995,7 +9220,7 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
             continue;
           }
 
-          const SignalValue &sv = scheduler.getSignalValue(sigId);
+          const SignalValue &sv = getSignalValueForContinuousEval(sigId);
           finish(InterpretedValue::fromSignalValue(sv));
         } else {
           finish(makeUnknown(current));
@@ -15833,6 +16058,19 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       break;
     }
   };
+  auto isImmediateBlockingDelay = [&](SimTime delay) -> bool {
+    if (delay.realTime != 0)
+      return false;
+    if (delay.deltaStep == 0)
+      return true;
+    if (auto constTimeOp = driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>()) {
+      auto timeAttr = constTimeOp.getValueAttr();
+      // Keep NBA (delta) semantics distinct from blocking (epsilon) semantics.
+      // Moore lowering uses <0ns,0d,1e> for blocking assignments.
+      return timeAttr.getDelta() == 0 && timeAttr.getEpsilon() > 0;
+    }
+    return false;
+  };
 
   // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
   // by evaluating the condition and selecting the appropriate ref.
@@ -16100,8 +16338,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             }));
 
         // Keep a pending shadow for immediate probes and additional bit updates
-        // in the same process at epsilon/zero delay.
-        if (delay.realTime == 0 && delay.deltaStep <= 1)
+        // in the same process at zero delay (blocking-assignment behavior).
+        // Do not expose NBA (delta>0) updates to same-process probes.
+        if (isImmediateBlockingDelay(delay))
           pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
 
         return success();
@@ -16906,11 +17145,11 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                DriveStrength::Strong);
           }));
 
-      // For epsilon/zero delays, store in pending drives for immediate reads.
+      // For zero-delay drives, store in pending drives for immediate reads.
       // This preserves blocking assignment semantics within the driving process
-      // (e.g. s.a=1; s.b=2; $display(s)) without publishing partial aggregate
-      // updates to other processes before the scheduled NBA commit.
-      if (delay.realTime == 0 && delay.deltaStep <= 1) {
+      // (e.g. s.a=1; s.b=2; $display(s)). Do not expose NBA (delta>0) updates
+      // before their scheduled commit.
+      if (isImmediateBlockingDelay(delay)) {
         pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
       }
 
@@ -17323,10 +17562,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                                DriveStrength::Strong);
           }));
 
-      // For epsilon/zero delays, store in pending drives for immediate reads.
+      // For zero-delay drives, store in pending drives for immediate reads.
       // This enables blocking assignment semantics for array element writes:
       // b[0]=0; b[1]=1; b[2]=2; $display(b) should see {0,1,2} not {0,0,0}.
-      if (delay.realTime == 0 && delay.deltaStep <= 1) {
+      if (isImmediateBlockingDelay(delay)) {
         pendingEpsilonDrives[parentSigId] = InterpretedValue(result);
       }
 
@@ -17524,10 +17763,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     return success();
   }
 
-  // For epsilon/zero delays, also store in pending drives for immediate reads.
+  // For zero-delay drives, also store in pending drives for immediate reads.
   // This enables blocking assignment semantics where a subsequent probe in the
   // same process sees the value immediately rather than waiting for the event.
-  if (delay.realTime == 0 && delay.deltaStep <= 1) {
+  if (isImmediateBlockingDelay(delay)) {
     pendingEpsilonDrives[sigId] = driveVal;
   }
 
@@ -17653,6 +17892,16 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
         }
       }
 
+      // Install deferred compiled callback now that the entry block has run.
+      {
+        auto pendingIt = pendingCompiledCallbacks.find(procId);
+        if (pendingIt != pendingCompiledCallbacks.end()) {
+          scheduler.getProcess(procId)->setCallback(
+              std::move(pendingIt->second));
+          pendingCompiledCallbacks.erase(pendingIt);
+        }
+      }
+
       LLVM_DEBUG(llvm::dbgs()
                  << "  [callback] fast-resuspend proc=" << procId << "\n");
       return success();
@@ -17666,6 +17915,16 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     if (frameIt != callbackFrames.end()) {
       frameIt->second.slots.assign(state.destOperands.begin(), state.destOperands.end());
       frameIt->second.initialized = true;
+    }
+  }
+
+  // Install deferred compiled callback now that the entry block has run.
+  {
+    auto pendingIt = pendingCompiledCallbacks.find(procId);
+    if (pendingIt != pendingCompiledCallbacks.end()) {
+      scheduler.getProcess(procId)->setCallback(
+          std::move(pendingIt->second));
+      pendingCompiledCallbacks.erase(pendingIt);
     }
   }
 
@@ -36815,13 +37074,15 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     void *entry = const_cast<void *>(mod->proc_entry[i]);
 
     if (kind == CIRCT_PROC_CALLBACK || kind == CIRCT_PROC_MINNOW) {
-      // Replace interpreter callback with native dispatch.
-      // Signal IDs are compile-time constants baked into the compiled body.
+      // Defer callback installation: the process's entry block must run
+      // interpreted first (to execute the initial llhd.wait and schedule
+      // the correct delay). The compiled callback is installed after the
+      // first wait sets callbackFrames[procId].initialized = true.
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-      scheduler.getProcess(procId)->setCallback([this, fptr, ctxPtr]() {
+      pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr]() {
         ++compiledCallbackInvocations;
-        fptr(*ctxPtr, nullptr); // frame=nullptr; signal IDs are compile-time constants
-      });
+        fptr(*ctxPtr, nullptr);
+      };
       matched++;
     }
     // COROUTINE kind: skip for now (stay interpreted)
