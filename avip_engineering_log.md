@@ -7262,3 +7262,36 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realizations / surprises
 - This keeps xprop runs informative while avoiding false “parity break”
   signals from unconstrained input-X traces in PASS-mode expectations.
+
+- Iteration update (event `.triggered` correctness with lowered temp pointers):
+  - realization:
+    - `circt-sim` full lit sweep showed 9 failures; two were:
+      - `test/Tools/circt-sim/event-triggered.sv`
+      - `test/Tools/circt-sim/event-triggered-clearing.sv`
+    - frontend lowering can query `__moore_event_triggered` with an
+      alloca-backed temporary pointer (not always the canonical event pointer).
+    - runtime previously keyed only on canonical pointer identity, so first and
+      repeated trigger observations could report false negatives.
+  - implemented:
+    - `tools/circt-sim/LLHDProcessInterpreter.h`
+      - added `lastTriggeredEventByProcess` map.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - in `__moore_event_trigger`, record `{eventAddr, realTime}` per process.
+      - in `__moore_event_triggered`, when pointer is non-canonical and no
+        direct `eventTriggerTime` hit exists, correlate with same-process
+        same-time-slot trigger before legacy payload fallback.
+  - validation:
+    - `ninja -C build-test circt-sim`
+      - result: build success.
+    - red-first/green:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/circt-sim/event-triggered.sv build-test/test/Tools/circt-sim/event-triggered-clearing.sv`
+      - after fix: `2/2 PASS`.
+    - SVA guard:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*'`
+      - result: `126/126 PASS`.
+    - focused previously-red cluster:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='event-triggered(-clearing)?|interface-inout-shared-wire-bidirectional|interface-inout-tristate-propagation|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-tristate-suppression-cond-false|fork-struct-field-last-write|syscall-fork-join'`
+      - result: `2 PASS, 7 FAIL` (event regressions fixed; non-event gaps remain).
+  - surprises:
+    - second trigger in same process/time slot can toggle event representation
+      bit back to `0`; boolean payload alone is insufficient for `.triggered`.

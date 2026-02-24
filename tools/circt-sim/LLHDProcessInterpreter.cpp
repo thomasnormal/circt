@@ -28530,12 +28530,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           // Record the time slot when this event was triggered.
           // Per IEEE 1800-2017 §15.5.3, .triggered is only valid within the
           // same time slot. This map is the authoritative source.
-          eventTriggerTime[eventAddr] = scheduler.getCurrentTime().realTime;
+          uint64_t currentRealTime = scheduler.getCurrentTime().realTime;
+          eventTriggerTime[eventAddr] = currentRealTime;
+          lastTriggeredEventByProcess[procId] = {eventAddr, currentRealTime};
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_trigger() - "
                                   << "event 0x"
                                   << llvm::format_hex(eventAddr, 16)
                                   << " triggered at time "
-                                  << scheduler.getCurrentTime().realTime
+                                  << currentRealTime
                                   << " fs\n");
 
           // Also set the memory byte if this is a memory-backed event.
@@ -28577,6 +28579,30 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (it != eventTriggerTime.end() &&
               it->second == currentRealTime) {
             triggered = true;
+          } else if (it == eventTriggerTime.end()) {
+            if (auto pit = lastTriggeredEventByProcess.find(procId);
+                pit != lastTriggeredEventByProcess.end() &&
+                pit->second.second == currentRealTime) {
+              auto canonicalIt = eventTriggerTime.find(pit->second.first);
+              if (canonicalIt != eventTriggerTime.end() &&
+                  canonicalIt->second == currentRealTime)
+                triggered = true;
+            }
+
+            // Some lowered forms pass an alloca-backed temporary pointer to
+            // __moore_event_triggered instead of the canonical event pointer.
+            // Recover the canonical event identity from:
+            //   store (xor (prb %event), true) -> %tmp
+            //   call @__moore_event_triggered(%tmp)
+            if (!triggered) {
+              // Fallback for legacy lowered forms: interpret pointer payload
+              // as i1 sampled state.
+              uint64_t offset = 0;
+              if (MemoryBlock *block =
+                      findMemoryBlockByAddress(eventAddr, procId, &offset);
+                  block && block->initialized && offset < block->size)
+                triggered = (block->data[offset] & 0x1) != 0;
+            }
           }
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_triggered() - "
                                   << "event at address 0x"

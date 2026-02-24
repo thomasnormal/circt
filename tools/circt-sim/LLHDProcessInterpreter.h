@@ -2884,6 +2884,12 @@ private:
   /// realTime advances.
   llvm::DenseMap<uint64_t, uint64_t> eventTriggerTime;
 
+  /// Last event trigger observed per process: {eventAddr, triggerRealTime}.
+  /// Used to correlate lowered temporary-pointer `.triggered` queries with the
+  /// canonical event identity in the same time slot.
+  llvm::DenseMap<ProcessId, std::pair<uint64_t, uint64_t>>
+      lastTriggeredEventByProcess;
+
   /// Registered seq.firreg state keyed by op.
   llvm::DenseMap<mlir::Operation *, FirRegState> firRegStates;
 
