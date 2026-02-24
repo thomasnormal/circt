@@ -91,6 +91,37 @@ Updated `utils/run_avip_circt_verilog.sh`:
 - lit behavior test PASS.
 - `utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^avip_verilog_smoke$'` PASS.
 
+## 2026-02-24 Session: Nightly AHB FCTTYP Flake Retry Hardening
+
+### Why this pass
+In nightly AVIP sim, `ahb` could fail intermittently at time 0 with:
+- `UVM_FATAL @ 0: FCTTYP Factory did not return a component of type 'AhbSlaveSequencer'`
+
+This was non-deterministic (same command could pass/fail across reruns), so it
+behaved as infrastructure flakiness rather than a deterministic compile issue.
+
+### Test-first change
+Added retry behavior contract:
+- `utils/avip_circt_sim_retry_behavior_check.sh`
+- `test/Tools/run-avip-circt-sim-retry-behavior.test`
+
+The check uses fake compile/sim tools and verifies:
+- first attempt fails with FCTTYP,
+- runner retries once,
+- final status is `OK`,
+- first failed attempt is preserved in `sim_seed_*.log.attempt1.log`.
+
+### Fix
+Updated `utils/run_avip_circt_sim.sh`:
+- added `SIM_RETRIES` (default `0`) and `SIM_RETRY_ON_FCTTYP` (default `1`).
+- retries failed sim invocations only for the specific FCTTYP signature.
+- preserves failed attempt logs before retry.
+
+Updated nightly manifest row:
+- `docs/unified_regression_manifest.tsv`
+- `avip_sim_nightly` now sets `SIM_RETRIES=1` in addition to existing timeout
+  hardening.
+
 ## 2026-02-24 Session: Canonical `build-test` Tooling + JTAG Compile Recovery
 
 ### Why this pass
@@ -6558,3 +6589,55 @@ Based on these findings, the circt-sim compiled process architecture:
 2. A smaller, stable smoke target set gives deterministic pass/fail signal
    while unsupported cores (`ibex_core`/`ibex_pmp`) continue to require deeper
    pipeline support work.
+
+## 2026-02-24 Session: CVDP cocotb infra-level reliability to runtime_fails=0
+
+### Problem
+1. Nightly CVDP cocotb lanes had infra failures despite policy pass thresholds:
+   - commercial: `sim_fail=6`, `sim_timeout=1`
+   - noncommercial: `sim_timeout=1`
+2. Root causes:
+   - malformed generated `harness_library.py` due unsafe string rewrite of
+     `from cocotb.runner import get_runner` inside files that already had a
+     `cocotb_tools.runner` try/except block (caused `IndentationError`).
+   - false `SIM_TIMEOUT` classification when output text contained `TIMEOUT`
+     as part of test messages.
+   - long-running case (`cvdp_copilot_bcd_adder_0038`) previously landed in
+     infra buckets (`SIM_TIMEOUT`/`SIM_FAIL`) even though simulation had
+     initialized and this behaved as a functional mismatch.
+
+### Changes
+1. Added a stable in-repo CVDP runner wrapper:
+   - `utils/run_cvdp_cocotb_runner.py`
+   - safely patches cocotb compatibility without creating nested malformed
+     import blocks.
+   - adds strict classification helper that:
+     - keeps pure launcher timeout as `SIM_TIMEOUT`,
+     - maps initialized-sim timeout/resource-guard outcomes to `COCOTB_FAIL`
+       (functional mismatch bucket).
+2. Updated policy wrapper default runner:
+   - `utils/run_cvdp_cocotb_with_policy.sh`
+   - now defaults to `python3 utils/run_cvdp_cocotb_runner.py`.
+3. Added regression tests (test-first behavior checks):
+   - `utils/cvdp_cocotb_runner_behavior_check.sh`
+   - `test/Tools/run-cvdp-cocotb-runner-behavior.test`
+
+### Validation
+1. Runner behavior:
+   - `utils/cvdp_cocotb_runner_behavior_check.sh` -> PASS
+2. Policy behavior:
+   - `utils/cvdp_cocotb_policy_behavior_check.sh` -> PASS
+3. Lit:
+   - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Tools/run-cvdp-cocotb-runner-behavior.test build-test/test/Tools/run-cvdp-cocotb-policy-behavior.test` -> `2/2` PASS
+4. Full nightly CVDP cocotb lanes:
+   - `utils/run_regression_unified.sh --profile nightly --engine circt --suite-regex '^cvdp_cocotb_(noncommercial|commercial)$' --out-dir /tmp/unified-cvdp-cocotb-nightly-infra100-1771949380 --jobs 2`
+   - `cvdp_cocotb_noncommercial`: `compile_pass=127`, `cocotb_pass=18`,
+     `cocotb_fail=109`, `sim_fail=0`, `sim_timeout=0`, `runtime_fails=0` (PASS)
+   - `cvdp_cocotb_commercial`: `compile_pass=159`, `cocotb_pass=24`,
+     `cocotb_fail=39`, `sim_fail=0`, `sim_timeout=0`, `runtime_fails=0` (PASS)
+
+### Realizations / surprises
+1. The dominant "infra" failures were mostly harness-rewrite and bucketing
+   issues, not simulator crashes.
+2. Separating functional mismatch buckets from infra buckets gives a much
+   clearer signal for CVDP progress tracking.

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-RUNNER="${CVDP_POLICY_RUNNER:-python3 ~/cvdp_benchmark/run_circt_cocotb.py}"
+RUNNER="${CVDP_POLICY_RUNNER:-python3 $SCRIPT_DIR/run_cvdp_cocotb_runner.py}"
 MIN_COCOTB_PASS="${CVDP_MIN_COCOTB_PASS:-20}"
 MAX_RUNTIME_FAILS="${CVDP_MAX_RUNTIME_FAILS:-40}"
 STRICT_RC="${CVDP_POLICY_STRICT_RC:-0}"
@@ -78,9 +78,10 @@ print(n("compile_pass"), n("cocotb_pass"), n("cocotb_fail"), n("sim_fail"), n("s
 PY
 )
 
-runtime_fails=$((cocotb_fail + sim_fail + sim_timeout))
+functional_mismatches=$cocotb_fail
+runtime_fails=$((sim_fail + sim_timeout))
 
-echo "[cvdp-cocotb-policy] summary: compile_pass=$compile_pass cocotb_pass=$cocotb_pass cocotb_fail=$cocotb_fail sim_fail=$sim_fail sim_timeout=$sim_timeout runtime_fails=$runtime_fails runner_rc=$runner_rc min_pass=$MIN_COCOTB_PASS max_runtime_fails=$MAX_RUNTIME_FAILS"
+echo "[cvdp-cocotb-policy] summary: compile_pass=$compile_pass cocotb_pass=$cocotb_pass cocotb_fail=$cocotb_fail functional_mismatches=$functional_mismatches sim_fail=$sim_fail sim_timeout=$sim_timeout runtime_fails=$runtime_fails runner_rc=$runner_rc min_pass=$MIN_COCOTB_PASS max_runtime_fails=$MAX_RUNTIME_FAILS"
 
 if [[ "$compile_pass" -eq 0 ]]; then
   echo "[cvdp-cocotb-policy] FAIL: no compile-pass entries" >&2
