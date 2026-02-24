@@ -12843,6 +12843,28 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       }
       rewriter.replaceOp(op, loaded);
     } else {
+      // Preserve read-after-write semantics for blocking assignments within
+      // the same process block: if an earlier immediate llhd.drv wrote this
+      // signal in the current block, return that value instead of probing the
+      // old signal state.
+      if (isa<llhd::RefType>(input.getType())) {
+        for (Operation *prev = op->getPrevNode(); prev;
+             prev = prev->getPrevNode()) {
+          auto drive = dyn_cast<llhd::DriveOp>(prev);
+          if (!drive || drive.getSignal() != input || drive.getEnable())
+            continue;
+          auto timeOp = drive.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+          if (!timeOp)
+            continue;
+          auto time = timeOp.getValue();
+          if (time.getTime() != 0 || time.getDelta() != 0 ||
+              time.getEpsilon() > 1)
+            continue;
+          rewriter.replaceOp(op, drive.getValue());
+          return success();
+        }
+      }
+
       // For llhd.ref types (signal references), always use llhd.prb to probe
       // the signal value. The simulator tracks signal references through
       // function call boundaries after inlining.

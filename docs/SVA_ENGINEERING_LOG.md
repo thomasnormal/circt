@@ -8181,3 +8181,32 @@
       - result: `7 passed, 1 failed`.
       - note: the `randomize.sv` failure is an existing dirty-tree expectation
         mismatch and not caused by this change set.
+
+- Iteration update (tagged union valid-member read-after-assign in sim path):
+  - realization:
+    - remaining sv-tests runtime fails were:
+      - `11.9--tagged_union_member_access`
+      - `11.9--tagged_union_member_access-sim`
+    - emitted IR showed `tag` check logic was correct, but the read happened
+      after a same-block blocking assignment and still observed pre-drive state
+      via `llhd.prb`, triggering false invalid-member fatal paths.
+  - implemented:
+    - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+      - `ReadOpConversion` now scans same-block prior `llhd.drv` ops and
+        forwards the most recent immediate drive value (`time=0`, `delta=0`,
+        `epsilon<=1`) for the same signal before falling back to `llhd.prb`.
+    - `test/Tools/circt-sim/tagged-union-valid-member-runtime.sv`
+      - new regression covering:
+        - `a = tagged Valid(42);`
+        - `b = a.Valid;`
+        - no invalid-member fatal on valid access.
+  - validation:
+    - manual FileCheck runs with local sim binary:
+      - `build-test/bin/circt-verilog ... tagged-union-valid-member-runtime.sv --ir-llhd -o /tmp/tag-valid-check.mlir`
+      - `build_test/bin/circt-sim /tmp/tag-valid-check.mlir --top top --max-time=1000000 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/tagged-union-valid-member-runtime.sv`
+      - `build-test/bin/circt-verilog ... tagged-union-invalid-member-runtime.sv --ir-llhd -o /tmp/tag-invalid-check.mlir`
+      - `(build_test/bin/circt-sim /tmp/tag-invalid-check.mlir --top top --max-time=1000000 2>&1 || true) | llvm/build/bin/FileCheck test/Tools/circt-sim/tagged-union-invalid-member-runtime.sv`
+      - result: both pass.
+    - sv-tests targeted filter:
+      - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build_test/bin/circt-sim TEST_FILTER='11.9--tagged_union_member_access(-sim)?' EXPECT_FILE=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - result: `total=3 pass=3 fail=0`.
