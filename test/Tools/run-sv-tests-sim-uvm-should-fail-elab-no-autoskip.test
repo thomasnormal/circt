@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-18
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-18/18.6.3--uvm-elab-neg.sv <<\"EOF\"\n/*\n:name: uvm_elab_neg\n:description: uvm elaboration-negative simulation case\n:type: simulation elaboration\n:tags: 18.6.3 uvm\n:should_fail_because: randomize override must fail at elaboration\n*/\nmodule top;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"$*\" >> %t/verilog.calls\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    *18.6.3--uvm-elab-neg*)\n      echo \"forced elaboration failure\" >&2\n      exit 1\n      ;;\n  esac\ndone\ncat <<\"MLIR\"\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-sim.sh <<\"EOF\"\n#!/usr/bin/env bash\nexit 0\nEOF\nchmod +x %t/fake-sim.sh\n'
+// RUN: env OUT=%t/results.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_SIM=%t/fake-sim.sh DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )18\\.6\\.3( |$)" %S/../../utils/run_sv_tests_circt_sim.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/results.tsv | FileCheck %s --check-prefix=OUT
+// RUN: cat %t/verilog.calls | FileCheck %s --check-prefix=CALLS
+
+// CHECK: === sv-tests Simulation Summary ===
+// CHECK: total=1 pass=1 fail=0 xfail=0 xpass=0
+// CHECK: compile_fail=0 timeout=0 error=0 skip=0
+// OUT: PASS{{[[:space:]]+}}18.6.3--uvm-elab-neg{{[[:space:]]+}}
+// CALLS: 18.6.3--uvm-elab-neg.sv

@@ -2453,6 +2453,9 @@ struct RvalueExprVisitor : public ExprVisitor {
 
   // Handle blocking and non-blocking assignments.
   Value visit(const slang::ast::AssignmentExpression &expr) {
+    if (failed(context.noteProceduralVariableAssignment(expr.left(), loc)))
+      return {};
+
     // Handle streaming concatenation lvalue with dynamic arrays/queues.
     // These require runtime streaming using StreamUnpackOp since the size
     // is not known at compile time.

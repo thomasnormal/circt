@@ -123,10 +123,12 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 # Ch9: Infinite loop tests (no $finish, run forever by design)
 9.2.2.1--always	skip	Infinite loop: always #5 a = ~a with no $finish
 
-# Should-fail tests now detected via slang analysis phase integration:
-# 6.5--variable_mixed_assignments: now correctly rejected (mixed procedural/continuous)
-# 6.5--variable_multiple_assignments: now correctly rejected (multiple continuous assigns)
-# 11.9--tagged_union_member_access_inv: now correctly rejected (invalid tagged union access)
+# Should-fail tests detected via frontend analysis:
+# 6.5--variable_mixed_assignments: correctly rejected (mixed procedural/continuous)
+# 6.5--variable_multiple_assignments: correctly rejected (multiple continuous assigns)
+# Remaining gap:
+# 11.9--tagged_union_member_access_inv still needs runtime invalid-member failure
+# semantics for tagged unions.
 
 # Should-fail local-var SVA simulation tests now fail correctly via runtime
 # evaluation and are handled as XFAIL by sv-tests metadata. No expect entries.
@@ -143,10 +145,6 @@ uvm_test_run_test	compile-only	UVM run_test (slow init)
 
 # Ch18: Virtual-only class tests (no instantiable class for auto-wrapper)
 18.5.2--pure-constraint_3	skip	Virtual class only: no instantiable class for auto-wrapper
-
-# Ch18: Should-fail class-only tests (circt-verilog doesn't detect these errors)
-18.6.3--behavior-of-randomization-methods_4	skip	Should-fail: randomize() override detection
-18.6.3--behavior-of-randomization-methods_5	skip	Should-fail: randomize() override detection
 
 # Ch18: Should-fail tests that properly XFAIL (compilation correctly rejects them)
 # No entries needed — they naturally become XFAIL via :should_fail_because: metadata
