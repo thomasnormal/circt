@@ -2,6 +2,33 @@
 
 ## 2026-02-24
 
+- Iteration update (sv-tests sim: promote `16.2--assume` and
+  `16.2--assume0` from compile-only):
+  - realization:
+    - `utils/sv-tests-sim-expect.txt` still forced
+      `16.2--assume` and `16.2--assume0` to compile-only mode.
+    - repeated full-sim probes with `EXPECT_FILE=/dev/null` showed stable pass
+      outcomes for both tests.
+    - `16.2--assume-final` had an observed PASS/FAIL split in repeated probes,
+      so it remains compile-only.
+  - implemented:
+    - removed compile-only overrides for:
+      - `16.2--assume`
+      - `16.2--assume0`
+    - kept compile-only override for:
+      - `16.2--assume-final`
+  - validation:
+    - repeated no-expect probes:
+      - `16.2--assume`: `10/10 PASS`.
+      - `16.2--assume0`: `10/10 PASS`.
+    - default expect-file runs with log retention:
+      - `TEST_FILTER='^16.2--assume$'` produced
+        `chapter-16__16.2--assume.circt-sim.log` and passed.
+      - `TEST_FILTER='^16.2--assume0$'` produced
+        `chapter-16__16.2--assume0.circt-sim.log` and passed.
+      - `TEST_FILTER='^16.2--assume-final$'` remained compile-only
+        (no sim log copied).
+
 - Iteration update (sv-tests sim: remove stale compile-only for ch9 event sequence controls):
   - realization:
     - `utils/sv-tests-sim-expect.txt` still marked
