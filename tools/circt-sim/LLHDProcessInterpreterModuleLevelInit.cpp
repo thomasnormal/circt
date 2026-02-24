@@ -35,6 +35,30 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
 
   // Walk the module body (but not inside processes) and execute LLVM ops.
   for (Operation &op : hwModule.getBody().front()) {
+    if (auto driveOp = dyn_cast<llhd::DriveOp>(&op)) {
+      auto resolveAddr = [&](Value v) -> uint64_t {
+        InterpretedValue val = getValue(tempProcId, v);
+        if (!val.isX() && val.getUInt64() != 0)
+          return val.getUInt64();
+        auto initIt = moduleInitValueMap.find(v);
+        if (initIt != moduleInitValueMap.end() && !initIt->second.isX() &&
+            initIt->second.getUInt64() != 0)
+          return initIt->second.getUInt64();
+        return 0;
+      };
+      uint64_t srcAddr = 0;
+      SignalId drivenSigId = getSignalId(driveOp.getSignal());
+      if (drivenSigId != 0 &&
+          matchFourStateStructCreateLoad(driveOp.getValue(), resolveAddr,
+                                         srcAddr) &&
+          srcAddr != 0) {
+        auto &drivenSignals = interfaceFieldDrivenSignals[srcAddr];
+        if (std::find(drivenSignals.begin(), drivenSignals.end(), drivenSigId) ==
+            drivenSignals.end())
+          drivenSignals.push_back(drivenSigId);
+      }
+    }
+
     if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp,
             llhd::SignalOp, hw::InstanceOp, hw::OutputOp, llhd::DriveOp>(&op))
       continue;

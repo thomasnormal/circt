@@ -7381,3 +7381,61 @@ Based on these findings, the circt-sim compiled process architecture:
   but became semantically wrong once concurrent regions/time barriers were in
   the same block. A small barrier list restored correctness without removing
   the optimization entirely.
+
+## 2026-02-24: tri-state mirror refresh via resolved-net bridge
+
+### Gap identified (red-first)
+- Focused cluster still had 5 failing interface tri-state tests:
+  - `interface-inout-shared-wire-bidirectional.sv`
+  - `interface-inout-tristate-propagation.sv`
+  - `interface-tristate-passive-observe-vif.sv`
+  - `interface-tristate-signalcopy-redirect.sv`
+  - `interface-tristate-suppression-cond-false.sv`
+- Symptom pattern:
+  - low-drive visibility was asymmetric or stale,
+  - release-to-high (`pullup`) observations failed.
+
+### Root cause
+- Runtime avoided forwarding explicit high-Z tri-state values to mirror fields
+  (to prevent writeback/latching), and expected mirror refresh through
+  probe-copy signal links.
+- In failing lowerings, `assign s_i = S` appeared as field copies
+  (`field_0 -> field_1`) instead of probe-copy stores, so those signal links
+  were missing.
+
+### Implementation
+- Added `interfaceFieldDrivenSignals` bookkeeping:
+  - capture `fieldAddr -> drivenSignalId` when module/child-level `llhd.drv`
+    value is a four-state struct created from loading that field address.
+  - files:
+    - `tools/circt-sim/LLHDProcessInterpreter.h`
+    - `tools/circt-sim/LLHDProcessInterpreterModuleLevelInit.cpp`
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp` (child module init path)
+- Added bridge synthesis during interface propagation setup:
+  - for child copy pairs where `srcAddr` is a tri-state destination field and
+    `destAddr` is a non-tri-state mirror field, add
+    `(drivenSignalId, destAddr)` into `interfaceSignalCopyPairs`.
+  - this drives mirrors from the resolved net signal (via signal-change
+    callback) without writing resolved values into tri-state destination fields.
+  - file:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- Updated one regression expectation to avoid stale internal trace coupling:
+  - `test/Tools/circt-sim/interface-tristate-passive-observe-vif.sv`
+
+### Validation (green)
+- Build:
+  - `ninja -C build-test circt-sim` -> PASS
+- Focused 5 previously failing tests:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 4 build-test/test/Tools/circt-sim --filter='interface-inout-shared-wire-bidirectional|interface-inout-tristate-propagation|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-tristate-suppression-cond-false'`
+  - result: `5/5 PASS`
+- Broader interface guard:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='interface-.*'`
+  - result: `10/10 PASS`
+- SVA non-regression:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Tools/circt-sim --filter='sva-.*'`
+  - result: `126/126 PASS`
+
+### Realizations / surprises
+- The semantically safe fix was not “propagate Z more aggressively”, but
+  adding a resolved-net bridge for mirror fields while keeping tri-state
+  destination fields isolated from resolved feedback.
