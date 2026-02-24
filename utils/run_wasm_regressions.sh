@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIT_PY="${LIT_PY:-$REPO_ROOT/llvm/llvm/utils/lit/lit.py}"
 BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build-test}"
 SUITE_DIR="${SUITE_DIR:-$BUILD_DIR/test/Tools/circt-sim}"
-FILTER="${FILTER:-(timeout-no-spurious-vtable-warning|wasm-uvm-stub-vcd|wasm-plusargs-reentry|vpi-string-put-value-test|uvm-phase-add-duplicate-fast-path)}"
+FILTER="${FILTER:-(timeout-no-spurious-vtable-warning|wasm-uvm-stub-vcd|wasm-plusargs-reentry|vpi-string-put-value-test|vpi-string-put-value-delayed-test|uvm-phase-add-duplicate-fast-path)}"
 
 if [[ ! -f "$LIT_PY" ]]; then
   echo "[wasm-regressions] missing lit runner: $LIT_PY" >&2
