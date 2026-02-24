@@ -8815,11 +8815,11 @@ for sv in "$YOSYS_SVA_DIR"/*.sv; do
   fi
   base="$(basename "$sv" .sv)"
   extra_sv=""
-  if [[ "$SKIP_VHDL" == "1" && -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
+  if [[ -f "$YOSYS_SVA_DIR/$base.vhd" ]]; then
     stub_sv="$YOSYS_SVA_VHDL_STUB_DIR/$base.sv"
     if [[ "$YOSYS_SVA_USE_VHDL_STUBS" == "1" && -f "$stub_sv" ]]; then
       extra_sv="$stub_sv"
-    else
+    elif [[ "$SKIP_VHDL" == "1" ]]; then
       profile="$(case_profile)"
       report_skipped_case "$base" pass "$profile" "vhdl" 1 "$sv"
       report_skipped_case "$base" fail "$profile" "vhdl" 0 "$sv"

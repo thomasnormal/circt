@@ -1,5 +1,31 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: yosys-SVA VHDL-stub fallback robustness (`SKIP_VHDL=0`)
+
+### What changed
+- Updated:
+  - `utils/run_yosys_sva_circt_bmc.sh`
+- Added:
+  - `test/Tools/run-yosys-sva-bmc-vhdl-stub-fallback-skip-vhdl-off.test`
+- Behavior change:
+  - when a yosys SVA case has a companion `.vhd` file and a matching SV stub,
+    the runner now includes the stub regardless of `SKIP_VHDL`.
+  - `SKIP_VHDL=1` still skips only when no stub is available.
+
+### Realizations / surprises
+- The prior logic only considered stubs in `SKIP_VHDL=1` mode, so `SKIP_VHDL=0`
+  could produce false `unknown module` frontend failures on VHDL-backed cases
+  even though a valid stub was present.
+- This looked like a semantics gap during triage, but root cause was harness
+  gating logic, not ImportVerilog/SVA lowering.
+
+### Validation snapshot
+- `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-yosys-sva-bmc-vhdl-stub-fallback.test build-test/test/Tools/run-yosys-sva-bmc-vhdl-stub-fallback-skip-vhdl-off.test build-test/test/Tools/circt-bmc/sva-rose-fell-vector-lsb-unsat-e2e.sv` -> pass (`3/3`).
+- `OUT=/tmp/yosys_basic045_after.tsv TEST_FILTER='^basic0[45]$' CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc SKIP_VHDL=0 YOSYS_SVA_USE_VHDL_STUBS=1 /usr/bin/bash utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva` -> pass (`4/4` modes).
+- `OUT=/tmp/svtests_ch16_bmc.tsv TAG_REGEX='(^| )16\\.' CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc EXPECT_FILE=utils/sv-tests-bmc-expect.txt /usr/bin/bash utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> pass (`42/42`).
+- `OUT=/tmp/svtests_ch18_bmc.tsv TAG_REGEX='(^| )18\\.' CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc EXPECT_FILE=utils/sv-tests-bmc-expect.txt /usr/bin/bash utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> pass (`68/68`).
+- `OUT=/tmp/svtests_ch20_bmc.tsv TAG_REGEX='(^| )20\\.' CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc EXPECT_FILE=utils/sv-tests-bmc-expect.txt /usr/bin/bash utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests` -> pass (`75/75`).
+
 ## 2026-02-24 Session: `$rose/$fell` packed-vector bit0 semantics
 
 ### What changed
