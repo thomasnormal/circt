@@ -9,7 +9,7 @@
 //
 // SIM: out=200
 //
-// COMPILED: Loaded 1 compiled functions: 1 native-eligible, 0 intercepted, 0 skipped (use globals)
+// COMPILED: Loaded 1 compiled functions: 1 native-eligible, 0 intercepted, 0 skipped (mutable globals/call_indirect)
 // COMPILED: out=200
 
 // A pure arithmetic function — compilable by circt-sim-compile.
