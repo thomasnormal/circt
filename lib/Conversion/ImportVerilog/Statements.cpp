@@ -2814,28 +2814,14 @@ struct StmtVisitor {
                                              Value anchorSignal) -> Value {
       if (!isa<ltl::SequenceType>(property.getType()))
         return property;
-      if (!property.getDefiningOp<ltl::ConcatOp>())
-        return property;
       auto trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
       Value antecedent = trueVal;
-      if (anchorSignal && anchorSignal.getType().isInteger(1))
-        antecedent = anchorSignal;
-      return ltl::ImplicationOp::create(builder, loc, antecedent, property);
-    };
-    auto getAssertLikeClockAntecedent = [&](Value clockSignal,
-                                            verif::ClockEdge edge) -> Value {
-      if (!clockSignal || !clockSignal.getType().isInteger(1))
-        return Value{};
-      auto trueI1 = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-      switch (edge) {
-      case verif::ClockEdge::Pos:
-        return clockSignal;
-      case verif::ClockEdge::Neg:
-        return arith::XOrIOp::create(builder, loc, clockSignal, trueI1);
-      case verif::ClockEdge::Both:
-        return Value{};
+      if (anchorSignal && anchorSignal.getType().isInteger(1)) {
+        auto notAnchor =
+            arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
+        antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
       }
-      return Value{};
+      return ltl::ImplicationOp::create(builder, loc, antecedent, property);
     };
 
     if (context.currentAssertionClock && enclosingProc) {
@@ -2915,23 +2901,18 @@ struct StmtVisitor {
       if (failed(gatedEnable))
         return failure();
       enable = *gatedEnable;
-      Value assertLikeClockAntecedent =
-          getAssertLikeClockAntecedent(clockVal, edge);
-
       switch (stmt.assertionKind) {
       case slang::ast::AssertionKind::Assert:
         verif::ClockedAssertOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty,
-                                           assertLikeClockAntecedent),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
       case slang::ast::AssertionKind::Assume:
         verif::ClockedAssumeOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty,
-                                           assertLikeClockAntecedent),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
@@ -2939,8 +2920,7 @@ struct StmtVisitor {
         // Restrict constraints are treated as assumptions in lowering.
         verif::ClockedAssumeOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty,
-                                           assertLikeClockAntecedent),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
@@ -2955,8 +2935,7 @@ struct StmtVisitor {
       case slang::ast::AssertionKind::Expect:
         verif::ClockedAssertOp::create(builder, loc,
                                        materializeAssertLikeProperty(
-                                           emittedProperty,
-                                           assertLikeClockAntecedent),
+                                           emittedProperty, clockVal),
                                        edge,
                                        clockVal, enable, assertLabel);
         return success();
@@ -3047,23 +3026,18 @@ struct StmtVisitor {
               return failure();
             enable = *gatedEnable;
 
-            Value assertLikeClockAntecedent =
-                getAssertLikeClockAntecedent(clockVal, edge);
-
             switch (stmt.assertionKind) {
             case slang::ast::AssertionKind::Assert:
               verif::ClockedAssertOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty,
-                                                 assertLikeClockAntecedent),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
             case slang::ast::AssertionKind::Assume:
               verif::ClockedAssumeOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty,
-                                                 assertLikeClockAntecedent),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
@@ -3071,8 +3045,7 @@ struct StmtVisitor {
               // Restrict constraints are treated as assumptions in lowering.
               verif::ClockedAssumeOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty,
-                                                 assertLikeClockAntecedent),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
@@ -3087,8 +3060,7 @@ struct StmtVisitor {
             case slang::ast::AssertionKind::Expect:
               verif::ClockedAssertOp::create(builder, loc,
                                              materializeAssertLikeProperty(
-                                                 innerProperty,
-                                                 assertLikeClockAntecedent),
+                                                 innerProperty, clockVal),
                                              edge,
                                              clockVal, enable, assertLabel);
               return success();
@@ -3097,69 +3069,6 @@ struct StmtVisitor {
             }
           }
         }
-      }
-    }
-
-    if (auto clockOp = property.getDefiningOp<ltl::ClockOp>()) {
-      // Lower module-level clocked assertions directly to clocked verif ops.
-      // This preserves assert-like sequence materialization before generic
-      // verif canonicalization rewrites `verif.assert` + `ltl.clock`.
-      auto edge =
-          static_cast<verif::ClockEdge>(static_cast<int>(clockOp.getEdge()));
-      auto clockVal = clockOp.getClock();
-      auto innerProperty = clockOp.getInput();
-      auto gatedEnable = appendAssertionControlEnable(disableIffEnable);
-      if (failed(gatedEnable))
-        return failure();
-      auto enable = *gatedEnable;
-      if (enable && !enable.getType().isInteger(1)) {
-        enable = context.convertToI1(enable);
-        if (!enable)
-          return failure();
-      }
-      Value assertLikeClockAntecedent =
-          getAssertLikeClockAntecedent(clockVal, edge);
-      switch (stmt.assertionKind) {
-      case slang::ast::AssertionKind::Assert:
-        verif::ClockedAssertOp::create(builder, loc,
-                                       materializeAssertLikeProperty(
-                                           innerProperty,
-                                           assertLikeClockAntecedent),
-                                       edge,
-                                       clockVal, enable, assertLabel);
-        return success();
-      case slang::ast::AssertionKind::Assume:
-        verif::ClockedAssumeOp::create(builder, loc,
-                                       materializeAssertLikeProperty(
-                                           innerProperty,
-                                           assertLikeClockAntecedent),
-                                       edge,
-                                       clockVal, enable, assertLabel);
-        return success();
-      case slang::ast::AssertionKind::Restrict:
-        // Restrict constraints are treated as assumptions in lowering.
-        verif::ClockedAssumeOp::create(builder, loc,
-                                       materializeAssertLikeProperty(
-                                           innerProperty,
-                                           assertLikeClockAntecedent),
-                                       edge,
-                                       clockVal, enable, assertLabel);
-        return success();
-      case slang::ast::AssertionKind::CoverProperty:
-      case slang::ast::AssertionKind::CoverSequence:
-        verif::ClockedCoverOp::create(builder, loc, innerProperty, edge,
-                                      clockVal, enable, assertLabel);
-        return success();
-      case slang::ast::AssertionKind::Expect:
-        verif::ClockedAssertOp::create(builder, loc,
-                                       materializeAssertLikeProperty(
-                                           innerProperty,
-                                           assertLikeClockAntecedent),
-                                       edge,
-                                       clockVal, enable, assertLabel);
-        return success();
-      default:
-        break;
       }
     }
 

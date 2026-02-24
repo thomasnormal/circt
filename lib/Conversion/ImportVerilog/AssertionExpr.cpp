@@ -87,12 +87,18 @@ static Value buildSampledEdgeFromFourStateBit(Context &context, Location loc,
   Value prevIsZero = moore::CaseEqOp::create(builder, loc, prev, c0);
   Value prevIsOne = moore::CaseEqOp::create(builder, loc, prev, c1);
 
+  Value knownResult;
   if (rising) {
     Value notPrevOne = moore::NotOp::create(builder, loc, prevIsOne);
-    return moore::AndOp::create(builder, loc, curIsOne, notPrevOne);
+    knownResult = moore::AndOp::create(builder, loc, curIsOne, notPrevOne);
+  } else {
+    Value notPrevZero = moore::NotOp::create(builder, loc, prevIsZero);
+    knownResult = moore::AndOp::create(builder, loc, curIsZero, notPrevZero);
   }
-  Value notPrevZero = moore::NotOp::create(builder, loc, prevIsZero);
-  return moore::AndOp::create(builder, loc, curIsZero, notPrevZero);
+  if (knownResult.getType() != bitTy)
+    knownResult =
+        context.materializeConversion(bitTy, knownResult, /*isSigned=*/false, loc);
+  return knownResult;
 }
 
 static Value buildSampledStableComparison(Context &context, Location loc,
@@ -962,6 +968,14 @@ static Value lowerSampledValueFunctionWithSamplingControl(
                      ? moore::IntType::get(builder.getContext(), 1,
                                            intType.getDomain())
                      : intType;
+    // Preserve unknown first-sample history for $stable/$changed even when
+    // the sampled expression is 2-state. This matches expected SVA behavior
+    // where the first sampled comparison is against an unknown prior sample.
+    if ((isStable || isChanged) &&
+        sampleType.getDomain() == moore::Domain::TwoValued)
+      sampleType = moore::IntType::get(builder.getContext(),
+                                       sampleType.getWidth(),
+                                       moore::Domain::FourValued);
     sampledStorageType = sampleType;
     resultType =
         moore::IntType::get(builder.getContext(), 1, sampleType.getDomain());
@@ -2717,11 +2731,13 @@ struct AssertionExprVisitor {
     assert(!expr.elements.empty());
 
     SmallVector<Value> sequenceElements;
+    SmallVector<bool> exactZeroInterDelays;
     uint64_t savedOffset = context.getAssertionSequenceOffset();
     uint64_t currentOffset = savedOffset;
 
-    for (auto it = expr.elements.begin(); it != expr.elements.end(); ++it) {
-      const auto &concatElement = *it;
+    for (size_t index = 0, e = expr.elements.size(); index < e; ++index) {
+      const auto &concatElement = expr.elements[index];
+      bool isFirstElement = index == 0;
 
       // Adjust inter-element delays to account for concat's cycle alignment.
       // For ##N between elements, concat already advances one cycle, so
@@ -2731,17 +2747,14 @@ struct AssertionExprVisitor {
       std::optional<uint32_t> maxDelay = concatElement.delay.max;
       uint32_t ltlMinDelay = minDelay;
       std::optional<uint32_t> ltlMaxDelay = maxDelay;
-      if (it != expr.elements.begin() && ltlMinDelay > 0) {
+      if (!isFirstElement && ltlMinDelay > 0) {
         --ltlMinDelay;
         if (ltlMaxDelay.has_value() && ltlMaxDelay.value() > 0)
           --ltlMaxDelay.value();
       }
-      // Sequence offsets track the effective cycle position of each element.
-      // Concat always advances one cycle between elements, so ##0 still moves
-      // by one in the lowered LTL; reflect that when computing local-var pasts.
+      // Sequence offsets track cycle position in source SVA timing. For ##0
+      // boundaries this remains in the same cycle.
       uint32_t offsetDelay = minDelay;
-      if (it != expr.elements.begin() && offsetDelay == 0)
-        offsetDelay = 1;
       currentOffset += offsetDelay;
       context.setAssertionSequenceOffset(currentOffset);
 
@@ -2767,10 +2780,45 @@ struct AssertionExprVisitor {
       auto delayedSequence = ltl::DelayOp::create(builder, loc, sequenceValue,
                                                   delayMin, delayRange);
       sequenceElements.push_back(delayedSequence);
+      exactZeroInterDelays.push_back(
+          !isFirstElement && concatElement.delay.min == 0 &&
+          (!concatElement.delay.max.has_value() ||
+           concatElement.delay.max.value() == 0));
     }
 
     context.setAssertionSequenceOffset(savedOffset);
-    return builder.createOrFold<ltl::ConcatOp>(loc, sequenceElements);
+
+    auto isSingleCycleSequence = [&](Value seq) {
+      auto bounds = getSequenceLengthBounds(seq);
+      return bounds && bounds->min == 1 && bounds->max && *bounds->max == 1;
+    };
+
+    // Preserve `##0` overlap semantics in single-cycle sequence chains.
+    // For inter-element `##0`, SVA keeps both sides at the same endpoint cycle;
+    // represent that by folding adjacent elements into `ltl.and` before concat.
+    SmallVector<Value> groupedElements;
+    groupedElements.reserve(sequenceElements.size());
+    Value currentGroup = sequenceElements.front();
+    bool currentGroupIsSingleCycle = isSingleCycleSequence(currentGroup);
+    for (size_t index = 1, e = sequenceElements.size(); index < e; ++index) {
+      bool foldAsOverlap =
+          exactZeroInterDelays[index] && currentGroupIsSingleCycle &&
+          isSingleCycleSequence(sequenceElements[index]);
+      if (foldAsOverlap) {
+        currentGroup = ltl::AndOp::create(
+            builder, loc, SmallVector<Value, 2>{currentGroup, sequenceElements[index]});
+        currentGroupIsSingleCycle = true;
+      } else {
+        groupedElements.push_back(currentGroup);
+        currentGroup = sequenceElements[index];
+        currentGroupIsSingleCycle = isSingleCycleSequence(currentGroup);
+      }
+    }
+    groupedElements.push_back(currentGroup);
+
+    if (groupedElements.size() == 1)
+      return groupedElements.front();
+    return builder.createOrFold<ltl::ConcatOp>(loc, groupedElements);
   }
 
   Value visit(const slang::ast::FirstMatchAssertionExpr &expr) {
@@ -2862,10 +2910,8 @@ struct AssertionExprVisitor {
         if (isa<ltl::PropertyType>(value.getType())) {
           auto minDelay = expr.range.value().min;
           if (!expr.range.value().max.has_value()) {
-            mlir::emitError(loc)
-                << "unbounded eventually range on property expressions is not "
-                   "yet supported";
-            return {};
+            auto shifted = shiftPropertyBy(value, minDelay);
+            return makeEventually(shifted, /*isWeak=*/true);
           }
           auto maxDelay = expr.range.value().max.value();
           SmallVector<Value, 4> shifted;
@@ -2891,33 +2937,23 @@ struct AssertionExprVisitor {
       return eventually;
     }
     case UnaryAssertionOperator::Always: {
-      if (isa<ltl::PropertyType>(value.getType())) {
-        if (expr.range.has_value()) {
-          auto minDelay = expr.range.value().min;
-          if (!expr.range.value().max.has_value()) {
-            auto shifted = shiftPropertyBy(value, minDelay);
-            return lowerAlwaysProperty(shifted, /*isStrongAlways=*/false);
-          }
-          auto maxDelay = expr.range.value().max.value();
-          SmallVector<Value, 4> shifted;
-          shifted.reserve(maxDelay - minDelay + 1);
-          for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
-               ++delayCycles)
-            shifted.push_back(shiftPropertyBy(value, delayCycles));
-          if (shifted.size() == 1)
-            return shifted.front();
-          return ltl::AndOp::create(builder, loc, shifted);
-        }
-        return lowerAlwaysProperty(value, /*isStrongAlways=*/false);
-      }
-      std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
-          builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
       if (expr.range.has_value()) {
-        attr =
-            convertRangeToAttrs(expr.range.value().min, expr.range.value().max);
+        auto minDelay = expr.range.value().min;
+        if (!expr.range.value().max.has_value()) {
+          auto shifted = shiftPropertyBy(value, minDelay);
+          return lowerAlwaysProperty(shifted, /*isStrongAlways=*/false);
+        }
+        auto maxDelay = expr.range.value().max.value();
+        SmallVector<Value, 4> shifted;
+        shifted.reserve(maxDelay - minDelay + 1);
+        for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+             ++delayCycles)
+          shifted.push_back(shiftPropertyBy(value, delayCycles));
+        if (shifted.size() == 1)
+          return shifted.front();
+        return ltl::AndOp::create(builder, loc, shifted);
       }
-      return ltl::RepeatOp::create(builder, loc, value, attr.first,
-                                   attr.second);
+      return lowerAlwaysProperty(value, /*isStrongAlways=*/false);
     }
     case UnaryAssertionOperator::NextTime: {
       if (isa<ltl::PropertyType>(value.getType())) {
@@ -2925,6 +2961,10 @@ struct AssertionExprVisitor {
         uint64_t maxDelay = 1;
         if (expr.range.has_value()) {
           minDelay = expr.range.value().min;
+          if (!expr.range.value().max.has_value()) {
+            auto shifted = shiftPropertyBy(value, minDelay);
+            return makeEventually(shifted, /*isWeak=*/true);
+          }
           maxDelay = expr.range.value().max.value_or(minDelay);
         }
         SmallVector<Value, 4> shifted;
@@ -2955,6 +2995,11 @@ struct AssertionExprVisitor {
         uint64_t maxDelay = 1;
         if (expr.range.has_value()) {
           minDelay = expr.range.value().min;
+          if (!expr.range.value().max.has_value()) {
+            auto shifted = shiftPropertyBy(
+                value, minDelay, /*requireFiniteProgress=*/true);
+            return makeEventually(shifted, /*isWeak=*/false);
+          }
           maxDelay = expr.range.value().max.value_or(minDelay);
         }
         SmallVector<Value, 4> shifted;
@@ -2982,37 +3027,25 @@ struct AssertionExprVisitor {
       return requireStrongFiniteProgress(shifted);
     }
     case UnaryAssertionOperator::SAlways: {
-      if (isa<ltl::PropertyType>(value.getType())) {
-        if (expr.range.has_value()) {
-          if (!expr.range.value().max.has_value()) {
-            mlir::emitError(loc)
-                << "unbounded s_always range on property expressions is not "
-                   "yet supported";
-            return {};
-          }
-          auto minDelay = expr.range.value().min;
-          auto maxDelay = expr.range.value().max.value();
-          SmallVector<Value, 4> shifted;
-          shifted.reserve(maxDelay - minDelay + 1);
-          for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
-               ++delayCycles)
-            shifted.push_back(shiftPropertyBy(value, delayCycles,
-                                              /*requireFiniteProgress=*/true));
-          if (shifted.size() == 1)
-            return shifted.front();
-          return ltl::AndOp::create(builder, loc, shifted);
-        }
-        return lowerAlwaysProperty(value, /*isStrongAlways=*/true);
-      }
-      std::pair<mlir::IntegerAttr, mlir::IntegerAttr> attr = {
-          builder.getI64IntegerAttr(0), mlir::IntegerAttr{}};
       if (expr.range.has_value()) {
-        attr =
-            convertRangeToAttrs(expr.range.value().min, expr.range.value().max);
+        auto minDelay = expr.range.value().min;
+        if (!expr.range.value().max.has_value()) {
+          auto shifted = shiftPropertyBy(
+              value, minDelay, /*requireFiniteProgress=*/true);
+          return lowerAlwaysProperty(shifted, /*isStrongAlways=*/true);
+        }
+        auto maxDelay = expr.range.value().max.value();
+        SmallVector<Value, 4> shifted;
+        shifted.reserve(maxDelay - minDelay + 1);
+        for (uint64_t delayCycles = minDelay; delayCycles <= maxDelay;
+             ++delayCycles)
+          shifted.push_back(shiftPropertyBy(value, delayCycles,
+                                            /*requireFiniteProgress=*/true));
+        if (shifted.size() == 1)
+          return shifted.front();
+        return ltl::AndOp::create(builder, loc, shifted);
       }
-      auto repeated =
-          ltl::RepeatOp::create(builder, loc, value, attr.first, attr.second);
-      return requireStrongFiniteProgress(repeated);
+      return lowerAlwaysProperty(value, /*isStrongAlways=*/true);
     }
     }
     llvm_unreachable("All enum values handled in switch");
@@ -3074,11 +3107,9 @@ struct AssertionExprVisitor {
     case BinaryAssertionOperator::Until:
       return ltl::UntilOp::create(builder, loc, operands);
     case BinaryAssertionOperator::UntilWith: {
-      auto untilOp = ltl::UntilOp::create(builder, loc, operands);
       auto andOp = ltl::AndOp::create(builder, loc, operands);
-      auto notUntil = ltl::NotOp::create(builder, loc, untilOp);
-      return ltl::OrOp::create(builder, loc,
-                               SmallVector<Value, 2>{notUntil, andOp});
+      return ltl::UntilOp::create(builder, loc,
+                                  SmallVector<Value, 2>{lhs, andOp});
     }
     case BinaryAssertionOperator::Implies: {
       auto notLhs = ltl::NotOp::create(builder, loc, lhs);
@@ -3762,6 +3793,7 @@ Value Context::convertAssertionCallExpression(
       Value resultVal = stable;
       if (funcName == "$changed")
         resultVal = moore::NotOp::create(builder, loc, stable).getResult();
+
       return resultVal;
     }
 

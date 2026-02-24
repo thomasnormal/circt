@@ -27,21 +27,22 @@ avip_verilog_smoke	smoke	AVIP_SET=core8 utils/run_avip_circt_verilog.sh ~/mbit/a
 avip_verilog_nightly	nightly,full	AVIP_SET=all9 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
 #
 # --- sv-tests (explicit commands; $1=suite_root) ---
-sv_tests_bmc	nightly,full	utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
-sv_tests_lec	nightly,full	utils/run_sv_tests_circt_lec.sh ~/sv-tests	-	-	-	-	-
-sv_tests_sim	smoke,nightly,full	utils/run_sv_tests_circt_sim.sh ~/sv-tests	-	-	-	-	-
-sv_tests_bmc_smoke	smoke	BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
-sv_tests_lec_smoke	smoke	LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh ~/sv-tests	-	-	-	-	-
+sv_tests_bmc	nightly,full	TEST_FILTER='.' utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
+sv_tests_lec	nightly,full	TEST_FILTER='.' utils/run_sv_tests_circt_lec.sh ~/sv-tests	-	-	-	-	-
+sv_tests_sim_smoke	smoke	TEST_FILTER='^(10\.3\.1--net-decl-assignment|10\.3\.2--cont-assignment|10\.4\.1--blocking-assignment)$' utils/run_sv_tests_circt_sim.sh ~/sv-tests	-	-	-	-	-
+sv_tests_sim	nightly,full	TEST_FILTER='.' utils/run_sv_tests_circt_sim.sh ~/sv-tests	-	-	-	-	-
+sv_tests_bmc_smoke	smoke	TEST_FILTER='^(16\.2--assert|16\.2--assume|16\.2--cover)$' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
+sv_tests_lec_smoke	smoke	TEST_FILTER='^(16\.2--assert|16\.2--assume|16\.2--cover)$' LEC_SMOKE_ONLY=1 utils/run_sv_tests_circt_lec.sh ~/sv-tests	-	-	-	-	-
 #
 # --- verilator-verification (explicit commands; $1=suite_root) ---
-verilator_bmc	nightly,full	utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification	-	-	-	-	-
-verilator_lec	nightly,full	utils/run_verilator_verification_circt_lec.sh ~/verilator-verification	-	-	-	-	-
+verilator_bmc	nightly,full	TEST_FILTER='.' utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification	-	-	-	-	-
+verilator_lec	nightly,full	TEST_FILTER='.' utils/run_verilator_verification_circt_lec.sh ~/verilator-verification	-	-	-	-	-
 verilator_bmc_smoke	smoke	BMC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_bmc.sh ~/verilator-verification	-	-	-	-	-
 verilator_lec_smoke	smoke	LEC_SMOKE_ONLY=1 utils/run_verilator_verification_circt_lec.sh ~/verilator-verification	-	-	-	-	-
 #
 # --- yosys SVA (explicit commands; $1=suite_root) ---
-yosys_bmc	nightly,full	utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva	-	-	-	-	-
-yosys_lec	nightly,full	utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva	-	-	-	-	-
+yosys_bmc	nightly,full	TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva	-	-	-	-	-
+yosys_lec	nightly,full	TEST_FILTER='.' utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva	-	-	-	-	-
 yosys_bmc_smoke	smoke	BMC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_bmc.sh ~/yosys/tests/sva	-	-	-	-	-
 yosys_lec_smoke	smoke	LEC_SMOKE_ONLY=1 utils/run_yosys_sva_circt_lec.sh ~/yosys/tests/sva	-	-	-	-	-
 #
@@ -59,7 +60,7 @@ opentitan_connectivity_bmc	nightly,full	utils/run_formal_all.sh --opentitan ~/op
 opentitan_connectivity_lec	nightly,full	utils/run_formal_all.sh --opentitan ~/opentitan --out-dir /tmp/unified-opentitan-connectivity-lec --with-opentitan-connectivity-lec --opentitan-connectivity-cfg ~/opentitan/hw/top_earlgrey/formal/chip_conn_cfg.hjson	-	-	-	-	-
 #
 # --- OpenTitan e2e: compile + sim + LEC (uses run_opentitan_formal_e2e.sh) ---
-opentitan_e2e_smoke	smoke	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-e2e-smoke --sim-targets gpio,uart --verilog-targets gpio,uart,spi_device	-	-	-	-	-
+opentitan_e2e_smoke	nightly,full	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-e2e-smoke --sim-targets gpio,uart --verilog-targets gpio,uart,spi_device	-	-	-	-	-
 opentitan_e2e_nightly	nightly,full	utils/run_opentitan_formal_e2e.sh --opentitan-root ~/opentitan --out-dir /tmp/unified-opentitan-e2e-nightly --sim-targets gpio,uart,usbdev,i2c --verilog-targets gpio,uart,spi_device,usbdev,i2c,dma,keymgr_dpe	-	-	-	-	-
 #
 # --- OpenTitan sim: individual targets via circt-sim ---
@@ -72,11 +73,11 @@ opentitan_verilog_nightly	nightly,full	utils/run_opentitan_formal_e2e.sh --opent
 #
 # --- Ibex formal: BMC against RTL assertions ---
 ibex_formal_bmc	nightly,full	utils/run_ibex_formal_circt_bmc.sh /tmp/unified-ibex-formal-bmc	-	-	-	-	-
-ibex_formal_bmc_smoke	smoke	BMC_BOUND=5 TIMEOUT=60 utils/run_ibex_formal_circt_bmc.sh /tmp/unified-ibex-formal-bmc-smoke	-	-	-	-	-
+ibex_formal_bmc_smoke	nightly,full	BMC_BOUND=5 TIMEOUT=60 utils/run_ibex_formal_circt_bmc.sh /tmp/unified-ibex-formal-bmc-smoke	-	-	-	-	-
 #
 # --- Ibex UVM: full testbench simulation via circt-sim ---
 ibex_uvm_sim	nightly,full	utils/run_ibex_uvm_circt_sim.sh /tmp/unified-ibex-uvm-sim	-	-	-	-	-
-ibex_uvm_compile	smoke,nightly,full	COMPILE_ONLY=1 utils/run_ibex_uvm_circt_sim.sh /tmp/unified-ibex-uvm-compile	-	-	-	-	-
+ibex_uvm_compile	nightly,full	COMPILE_ONLY=1 utils/run_ibex_uvm_circt_sim.sh /tmp/unified-ibex-uvm-compile	-	-	-	-	-
 #
 # --- MCY mutation examples ---
 mcy_examples	nightly,full	utils/run_mutation_mcy_examples_native_real.sh --examples-root ~/mcy/examples --out-dir /tmp/unified-mcy-examples	-	-	-	-	-
