@@ -21,6 +21,7 @@ required_tokens=(
   "utils/wasm_runtime_helpers_behavior_contract_check.sh"
   "utils/wasm_runtime_helpers_contract_check.sh"
   "utils/wasm_smoke_contract_check.sh"
+  "utils/repro_wasm_uvm_browser_assert.mjs --expect-pass"
   "utils/run_wasm_smoke.sh"
   "WASM_REQUIRE_VERILOG=1"
   "WASM_SKIP_BUILD=1"
