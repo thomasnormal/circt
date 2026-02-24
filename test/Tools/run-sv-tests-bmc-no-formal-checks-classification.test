@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-20
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-20/20.2--no-formal.sv <<\"EOF\"\n/*\n:name: no_formal\n:description: no formal checks present\n:type: simulation\n:tags: 20.2\n*/\nmodule top;\n  initial $stop;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-20/20.2--no-formal-simneg.sv <<\"EOF\"\n/*\n:name: no_formal_simneg\n:description: expected runtime violation but no formal checks present\n:type: simulation\n:tags: 20.2\n:should_fail_because: violation expected\n*/\nmodule top;\n  initial $stop;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nmodule {\n  hw.module @top() {\n    seq.initial() {\n      sim.pause quiet\n    } : () -> ()\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-bmc.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"circt-bmc should not have been invoked\" >&2\nexit 77\nEOF\nchmod +x %t/fake-bmc.sh\n'
+// RUN: env OUT=%t/results.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )20\\.2( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/results.tsv | FileCheck %s --check-prefix=OUT
+
+// CHECK: sv-tests SVA summary: total=2 pass=1 fail=1 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// OUT-DAG: PASS{{[[:space:]]+}}20.2--no-formal{{[[:space:]]+}}
+// OUT-DAG: FAIL{{[[:space:]]+}}20.2--no-formal-simneg{{[[:space:]]+}}
