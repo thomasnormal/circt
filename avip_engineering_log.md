@@ -1,5 +1,38 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: dynamic packed-struct bit-select legalization (`dyn_extract` / `dyn_extract_ref`)
+
+### What changed
+- Updated:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+- Added:
+  - `test/Conversion/ImportVerilog/packed-struct-dyn-element-select.sv`
+
+### Red-first debugging path
+- Reproduced BlackParrot blocker after previous packed-slice fix:
+  - `failed to legalize operation 'moore.dyn_extract'` (e.g. `dirty_stat_r[way_cnt]`)
+  - `failed to legalize operation 'moore.dyn_extract_ref'`.
+- Added a focused regression that triggers both dynamic read and dynamic write
+  on packed-struct bits.
+- First implementation exposed a runtime assert in assign lowering
+  (`getIntOrFloatBitWidth`), caused by passing a 4-state dynamic index into
+  integer-width adjustment.
+- Fixed by explicitly normalizing dynamic indices to their value component
+  before four-state packed-slice assignment rewrite.
+
+### Realizations / surprises
+- Dynamic packed extract legalization and dynamic packed assign legalization are
+  coupled: legalizing only `dyn_extract(_ref)` still crashed in
+  `AssignOpConversion` unless index normalization was consistent.
+- After this fix, BlackParrot front-end moved to a new later-stage blocker:
+  packed/union bitcast width mismatches (`hw.bitcast` / `comb.extract` with
+  `i0`) instead of dyn extract legalization.
+
+### Validation snapshot
+- `ninja -C build-test circt-verilog` -> pass.
+- `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/packed-struct-dyn-element-select.sv build-test/test/Conversion/ImportVerilog/packed-struct-slice-output-port.sv build-test/test/Conversion/ImportVerilog/packed-struct-element-select.sv build-test/test/Conversion/ImportVerilog/lvalue-streaming.sv` -> pass (`4/4`).
+- `OUT=/tmp/svtests_bp_sim_after_dynpack.tsv KEEP_LOGS_DIR=/tmp/svtests_bp_logs_after8 TEST_FILTER='^bp_' CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim /usr/bin/bash utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> dyn-extract failures cleared; next failures are bitcast-width related.
+
 ## 2026-02-24 Session: packed-struct lvalue part-select legalization in MooreToCore
 
 ### What changed
