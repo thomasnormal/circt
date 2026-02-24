@@ -10277,6 +10277,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   }
 
   ProcessExecutionState &state = it->second;
+  ++interpreterProcessInvocations;
 
   // Honor global termination/abort requests before dispatching any fast path.
   // The per-op interval check inside the execution loop can miss short
@@ -36817,7 +36818,8 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       // Replace interpreter callback with native dispatch.
       // Signal IDs are compile-time constants baked into the compiled body.
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-      scheduler.getProcess(procId)->setCallback([fptr, ctxPtr]() {
+      scheduler.getProcess(procId)->setCallback([this, fptr, ctxPtr]() {
+        ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr); // frame=nullptr; signal IDs are compile-time constants
       });
       matched++;

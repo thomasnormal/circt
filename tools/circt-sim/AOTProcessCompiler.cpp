@@ -36,11 +36,11 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/raw_ostream.h"
+#include "mlir/ExecutionEngine/ExecutionEngine.h"
+#include "mlir/ExecutionEngine/OptUtils.h"
 #include <chrono>
 
 #ifdef CIRCT_SIM_JIT_ENABLED
-#include "mlir/ExecutionEngine/ExecutionEngine.h"
-#include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #endif
@@ -72,6 +72,20 @@ static void addProcessTypeConversions(LLVMTypeConverter &converter) {
 //===----------------------------------------------------------------------===//
 
 namespace {
+
+// Pack llhd.time into the 64-bit runtime delay encoding expected by
+// __circt_sim_yield / scheduler bridge:
+//   bits [63:32] real-time femtoseconds
+//   bits [31:16] delta
+//   bits [15:0]  epsilon
+static int64_t encodeJITDelay(uint64_t realTimeFs, uint32_t delta,
+                              uint32_t epsilon) {
+  uint64_t packedRealTime = std::min<uint64_t>(realTimeFs, 0xFFFFFFFFULL);
+  uint64_t packedDelta = std::min<uint32_t>(delta, 0xFFFFU);
+  uint64_t packedEpsilon = std::min<uint32_t>(epsilon, 0xFFFFU);
+  uint64_t bits = (packedRealTime << 32) | (packedDelta << 16) | packedEpsilon;
+  return static_cast<int64_t>(bits);
+}
 
 /// Lower llhd.prb to signal read.
 struct ProcessProbeOpLowering : public OpConversionPattern<llhd::ProbeOp> {

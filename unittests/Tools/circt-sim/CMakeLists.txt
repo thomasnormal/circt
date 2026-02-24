@@ -56,8 +56,6 @@ add_circt_unittest(CIRCTSimToolTests
   LLHDProcessInterpreterTest.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreter.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterBytecode.cpp
-  ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITSchedulerRuntime.cpp
-  ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITBlockCompiler.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterDrive.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterGlobals.cpp
@@ -69,7 +67,6 @@ add_circt_unittest(CIRCTSimToolTests
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterUvm.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/AOTProcessCompiler.cpp
-  ${CIRCT_SOURCE_DIR}/tools/circt-sim/JITCompileManager.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/UcontextProcess.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/UVMFastPaths.cpp
 )
