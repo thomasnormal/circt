@@ -7168,3 +7168,38 @@ Based on these findings, the circt-sim compiled process architecture:
 - The stale entry targeted a synthetic `-fail` suffix that no current runner or
   source test emits; the drift was pure metadata debt, not a live semantic gap.
 - A tiny lint utility gives cheap guardrails against future expectation drift.
+
+## 2026-02-24: Promote chapter-18 UVM cases from implicit fast-skip to default run
+
+### Gap identified
+- Removing `18.*` `compile-only` entries from `utils/sv-tests-sim-expect.txt`
+  was not sufficient by itself: `utils/run_sv_tests_circt_sim.sh` had a
+  blanket "unlisted UVM => PASS (fast-skip)" path.
+- This meant promoted chapter-18 UVM randomization/constraint tests still were
+  not actually compiled/simulated by default.
+
+### Implementation
+- `utils/sv-tests-sim-expect.txt`
+  - removed chapter-18 `compile-only` overrides for promoted UVM
+    constraint/randomization tests.
+- `utils/run_sv_tests_circt_sim.sh`
+  - added knobs:
+    - `UVM_AUTO_SKIP_UNLISTED` (default `1`)
+    - `UVM_AUTO_RUN_REGEX` (default `(^18\\.)|(^16\\.15--property-iff-uvm$)`)
+  - unlisted UVM tests are still fast-skipped by default, but promoted
+    basenames matching `UVM_AUTO_RUN_REGEX` now run through compile+simulate.
+- new regression:
+  - `test/Tools/run-sv-tests-sim-uvm-auto-run-regex.test`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/run-sv-tests-sim-uvm-auto-run-regex.test` -> `1/1 PASS`.
+- `OUT=/tmp/sv-tests-sim-ch18-ch19-after-uvm-autorun.txt TAG_REGEX='(^| )(18\\.|19\\.)' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `total=63 pass=63 fail=0 xfail=0 xpass=0`.
+- `OUT=/tmp/sv-tests-sim-ch16-after-uvm-autorun.txt TAG_REGEX='(^| )16\\.' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `total=42 pass=42 fail=0 xfail=0 xpass=0`.
+- promotion proof with forced frontend failure:
+  - `CIRCT_VERILOG=/bin/false TEST_FILTER='^18.5.2--constraint-inheritance_1$' ...`
+  - observed `COMPILE_FAIL` (confirms promoted case no longer fast-skips).
+
+### Realizations / surprises
+- The blanket unlisted-UVM fast-skip made expectation-file promotions inert.
+- Regex-driven promotion keeps performance guardrails while enabling concrete
+  parity progress in targeted UVM/SVA lanes.

@@ -62,6 +62,8 @@ UVM_PATH="${UVM_PATH:-$SCRIPT_DIR/../lib/Runtime/uvm}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
 PARALLEL="${PARALLEL:-1}"
 VERBOSE="${VERBOSE:-0}"
+UVM_AUTO_SKIP_UNLISTED="${UVM_AUTO_SKIP_UNLISTED:-1}"
+UVM_AUTO_RUN_REGEX="${UVM_AUTO_RUN_REGEX:-(^18\\.)|(^16\\.15--property-iff-uvm$)}"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2
@@ -241,13 +243,17 @@ while IFS= read -r -d '' sv; do
   elif grep -q 'uvm_pkg\|`include.*uvm' "${files[0]}" 2>/dev/null; then
     needs_uvm=1
   fi
-  # Auto-fast-skip UVM tests not in expect file (each takes ~3-10min to simulate)
+  # Auto-fast-skip unlisted UVM tests unless explicitly promoted.
+  # Use expect-file compile-only entries for known-heavy UVM benches.
   if [[ "$needs_uvm" -eq 1 ]] && [[ -z "$expect" ]] &&
      [[ "${VERIFY_UVM_COMPILE:-0}" != "1" ]] &&
-     [[ "$expect_compile_fail" != "1" ]]; then
-    pass=$((pass + 1))
-    printf "%s\t%s\t%s\n" "PASS" "$base" "$sv" >> "$results_tmp"
-    continue
+     [[ "$expect_compile_fail" != "1" ]] &&
+     [[ "$UVM_AUTO_SKIP_UNLISTED" == "1" ]]; then
+    if [[ -z "$UVM_AUTO_RUN_REGEX" ]] || ! [[ "$base" =~ $UVM_AUTO_RUN_REGEX ]]; then
+      pass=$((pass + 1))
+      printf "%s\t%s\t%s\n" "PASS" "$base" "$sv" >> "$results_tmp"
+      continue
+    fi
   fi
   if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]] && [[ "$needs_uvm" -eq 0 ]]; then
     cmd+=("--no-uvm-auto-include")
