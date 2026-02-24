@@ -6870,3 +6870,35 @@ Based on these findings, the circt-sim compiled process architecture:
 - `circt-sim` evaluates LTL directly in `LLHDProcessInterpreter`; `LTLToCore`
   changes alone do not fix this runtime path.
 - The bug was not in truth-table OR/AND itself, but in temporal state lifetime.
+
+## 2026-02-24: SVA `disable iff` Must Clear (Not Pause) Pending Obligations
+
+### Problem
+- Repro case:
+  - `assert property (@(posedge clk) disable iff (c) (a |-> ##[1:3] b));`
+  - if `c` was high for one sampled edge while an implication window was
+    pending, runtime returned vacuous pass that cycle but stale pending state
+    remained and failed later after re-enable.
+- Root cause:
+  - `executeClockedAssertion` / `executeClockedAssumption` returned early when
+    enable was false, without clearing temporal trackers.
+  - this effectively paused sample counting instead of aborting active attempts.
+
+### Change
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - precomputes eval property before enable check.
+  - when disabled: calls `resetTemporalStateForValue(evalProperty, state)`,
+    clears async abort sticky/overrides, reports pass, and returns.
+
+### New regression
+- `test/Tools/circt-sim/sva-disable-iff-bounded-window-abort-pass-runtime.sv`
+  - intentionally runs long after disable interval to catch stale-window leaks.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Tools/circt-sim/sva-disable-iff-bounded-window-abort-pass-runtime.sv` -> PASS (previously FAIL).
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='accept-on|reject-on|sync-accept-on|sync-reject-on|abort-on|disable-iff' build_test/test/Tools/circt-sim` -> `15/15` PASS.
+- `OUT=/tmp/sv-tests-sim-ch16-after-disable-fix.txt DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX='(^| )16\\.' utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests` -> `42/42` PASS.
+
+### Realizations / surprises
+- The failing behavior only showed up when simulation continued long enough
+  after re-enable; short tests could mask it.

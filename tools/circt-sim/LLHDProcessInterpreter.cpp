@@ -6446,12 +6446,18 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   if (!edgeDetected)
     return;
 
+  Value evalProperty =
+      state.evaluationProperty ? state.evaluationProperty : assertOp.getProperty();
+
   // Check enable condition (disable iff).
   if (assertOp.getEnable()) {
     InterpretedValue enableVal =
         evaluateContinuousValue(assertOp.getEnable());
     if (enableVal.isX() || enableVal.getAPInt().isZero()) {
-      // Assertion is disabled.
+      // disable iff aborts all active attempts; clear pending temporal state.
+      resetTemporalStateForValue(evalProperty, state);
+      state.asyncAbortSticky = false;
+      state.sampledTruthOverrides.clear();
       updateAssertionSignal(true);
       return;
     }
@@ -6474,8 +6480,6 @@ void LLHDProcessInterpreter::executeClockedAssertion(
   });
   auto clearOverrides =
       llvm::make_scope_exit([&]() { state.sampledTruthOverrides.clear(); });
-  Value evalProperty =
-      state.evaluationProperty ? state.evaluationProperty : assertOp.getProperty();
   auto propTruth = evaluateLTLProperty(evalProperty, state);
   bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssertionSignal(propHolds);
@@ -6637,9 +6641,16 @@ void LLHDProcessInterpreter::executeClockedAssumption(
   if (!edgeDetected)
     return;
 
+  Value evalProperty =
+      state.evaluationProperty ? state.evaluationProperty : assumeOp.getProperty();
+
   if (assumeOp.getEnable()) {
     InterpretedValue enableVal = evaluateContinuousValue(assumeOp.getEnable());
     if (enableVal.isX() || enableVal.getAPInt().isZero()) {
+      // disable iff aborts all active attempts; clear pending temporal state.
+      resetTemporalStateForValue(evalProperty, state);
+      state.asyncAbortSticky = false;
+      state.sampledTruthOverrides.clear();
       updateAssumptionSignal(true);
       return;
     }
@@ -6659,8 +6670,6 @@ void LLHDProcessInterpreter::executeClockedAssumption(
   });
   auto clearOverrides =
       llvm::make_scope_exit([&]() { state.sampledTruthOverrides.clear(); });
-  Value evalProperty =
-      state.evaluationProperty ? state.evaluationProperty : assumeOp.getProperty();
   auto propTruth = evaluateLTLProperty(evalProperty, state);
   bool propHolds = propTruth != ClockedAssertionState::LTLTruth::False;
   updateAssumptionSignal(propHolds);
@@ -37514,7 +37523,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   };
 
   unsigned compiled = 0, nativeEligible = 0, intercepted = 0,
-           skippedMutableGlobals = 0;
+           skippedCallIndirect = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
     if (funcOp.isExternal())
       return;
@@ -37527,43 +37536,23 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         ++intercepted;
         // Skip: let this function route through interpreter for interceptors.
       } else {
-        // Check if the function accesses MUTABLE MLIR globals via
-        // llvm.mlir.addressof. Native code has its own copy of globals (in the
-        // .so's BSS/data), which is separate from the interpreter's
-        // globalMemoryBlocks. Dispatching such functions natively causes them
-        // to read stale/zero global state, breaking singletons like UVM
-        // factory registries.
-        //
-        // However, CONSTANT globals (string literals, type info, read-only
-        // data) are safe — their values are baked into the .so at compile time
-        // and never change, so the native copy is always correct.
-        //
-        // Also check for func.call_indirect — vtable slots contain synthetic
+        // Check for func.call_indirect — vtable slots contain synthetic
         // addresses (0xF0000000+N) that only the interpreter can resolve.
         // Native code calling these addresses would produce undefined behavior.
+        // Mutable globals are now handled via the patch table (applied before
+        // this function runs via applyGlobalPatches), so they are safe for
+        // native dispatch.
         bool unsafeForNative = false;
-        auto parentModule = funcOp->getParentOfType<mlir::ModuleOp>();
         funcOp.walk([&](mlir::Operation *op) {
           if (isa<mlir::func::CallIndirectOp>(op)) {
             unsafeForNative = true;
             return mlir::WalkResult::interrupt();
           }
-          if (auto addrOfOp = dyn_cast<mlir::LLVM::AddressOfOp>(op)) {
-            // Look up the referenced global. If it's constant, it's safe.
-            auto globalOp = parentModule.lookupSymbol<mlir::LLVM::GlobalOp>(
-                addrOfOp.getGlobalName());
-            if (!globalOp || !globalOp.getConstant()) {
-              unsafeForNative = true;
-              return mlir::WalkResult::interrupt();
-            }
-            // Constant global — safe in native code.
-            return mlir::WalkResult::advance();
-          }
           return mlir::WalkResult::advance();
         });
         if (unsafeForNative) {
-          ++skippedMutableGlobals;
-          // Keep in interpreter — uses mutable globals or call_indirect.
+          ++skippedCallIndirect;
+          // Keep in interpreter — has call_indirect with synthetic vtable addrs.
         } else {
           nativeFuncPtrs[funcOp.getOperation()] = ptr;
           ++nativeEligible;
@@ -37579,8 +37568,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions: " << nativeEligible
                  << " native-eligible, " << intercepted
-                 << " intercepted, " << skippedMutableGlobals
-                 << " skipped (mutable globals/call_indirect)\n";
+                 << " intercepted, " << skippedCallIndirect
+                 << " skipped (has call_indirect)\n";
   }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
