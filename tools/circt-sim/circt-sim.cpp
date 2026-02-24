@@ -3798,7 +3798,73 @@ int main(int argc, char **argv) {
   context.appendDialectRegistry(registry);
 
   llvm::StringRef inputNameRef = inputFilename;
-  if (inputFilename != "-" &&
+
+  // Snapshot directory detection: if the input is a directory or ends in
+  // .csnap, treat it as a snapshot bundle (design.mlirbc + native.so +
+  // meta.json) produced by circt-sim-compile --emit-snapshot.
+  bool isSnapshot = false;
+  if (inputFilename != "-") {
+    bool isDir = false;
+    llvm::sys::fs::is_directory(inputFilename, isDir);
+    if (isDir || inputNameRef.ends_with(".csnap")) {
+      // Validate the snapshot directory.
+      llvm::SmallString<256> metaPath(inputFilename);
+      llvm::sys::path::append(metaPath, "meta.json");
+      llvm::SmallString<256> bcPath(inputFilename);
+      llvm::sys::path::append(bcPath, "design.mlirbc");
+
+      if (!llvm::sys::fs::exists(bcPath)) {
+        llvm::errs() << "error: snapshot directory " << inputFilename
+                     << " missing design.mlirbc\n";
+        return 1;
+      }
+
+      // Read and validate meta.json if it exists.
+      if (llvm::sys::fs::exists(metaPath)) {
+        auto metaBuf = llvm::MemoryBuffer::getFile(metaPath);
+        if (metaBuf) {
+          auto parsed = llvm::json::parse((*metaBuf)->getBuffer());
+          if (parsed) {
+            if (auto *obj = parsed->getAsObject()) {
+              if (auto abi = obj->getInteger("abi_version")) {
+                if (*abi != CIRCT_SIM_ABI_VERSION) {
+                  llvm::errs()
+                      << "error: snapshot ABI version " << *abi
+                      << " != expected " << CIRCT_SIM_ABI_VERSION << "\n";
+                  return 1;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Save the original snapshot directory path before modifying
+      // inputFilename (inputNameRef is a StringRef into inputFilename).
+      std::string snapDir(inputFilename);
+
+      // Redirect input to the bytecode file inside the snapshot.
+      inputFilename = std::string(bcPath);
+
+      // Auto-enable --skip-passes (bytecode is post-canonicalization).
+      skipPasses = true;
+
+      // Auto-load the native .so if present.
+      llvm::SmallString<256> soPath(snapDir);
+      llvm::sys::path::append(soPath, "native.so");
+      if (llvm::sys::fs::exists(soPath) && compiledModulePath.empty())
+        compiledModulePath = std::string(soPath);
+
+      isSnapshot = true;
+      if (verbosity >= 1)
+        llvm::errs() << "[circt-sim] Loading snapshot from " << snapDir
+                     << "\n";
+    }
+  }
+
+  // Refresh inputNameRef in case it was invalidated by snapshot redirect.
+  inputNameRef = inputFilename;
+  if (!isSnapshot && inputFilename != "-" &&
       (inputNameRef.ends_with(".sv") || inputNameRef.ends_with(".v") ||
        inputNameRef.ends_with(".svh"))) {
     llvm::errs() << "error: circt-sim expects MLIR input; for SystemVerilog "

@@ -30,6 +30,7 @@ target_link_libraries(circt-sim-compile
   MLIRLLVMDialect
   MLIRLLVMIRTransforms
   MLIRLLVMToLLVMIRTranslation
+  MLIRBytecodeWriter
   MLIRParser
   MLIRSCFDialect
   MLIRTargetLLVMIRExport
