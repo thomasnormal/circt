@@ -5,7 +5,7 @@
 // RUN: printf '#!/usr/bin/env bash\necho should_not_run_bmc >&2\nexit 9\n' > %t/fake-bmc.sh
 // RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
 // RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
-// RUN:   Z3_LIB=/dev/null SKIP_VHDL=0 DISABLE_UVM_AUTO_INCLUDE=1 \
+// RUN:   CIRCT_SIM=%t/missing-sim Z3_LIB=/dev/null SKIP_VHDL=0 DISABLE_UVM_AUTO_INCLUDE=1 \
 // RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t \
 // RUN:   | FileCheck %s
 

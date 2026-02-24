@@ -93,6 +93,7 @@ append_bmc_launch_event() {
 CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
 CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
 CIRCT_BMC="${CIRCT_BMC:-$(resolve_default_circt_tool "circt-bmc" "$CIRCT_TOOL_DIR_DEFAULT")}"
+CIRCT_SIM="${CIRCT_SIM:-$(resolve_default_circt_tool "circt-sim" "$CIRCT_TOOL_DIR_DEFAULT")}"
 CIRCT_BMC_ARGS="${CIRCT_BMC_ARGS:-}"
 BMC_LAUNCH_RETRY_ATTEMPTS="${BMC_LAUNCH_RETRY_ATTEMPTS:-4}"
 BMC_LAUNCH_RETRY_BACKOFF_SECS="${BMC_LAUNCH_RETRY_BACKOFF_SECS:-0.2}"
@@ -115,6 +116,8 @@ Z3_BIN="${Z3_BIN:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
 SKIP_FAIL_WITHOUT_MACRO="${SKIP_FAIL_WITHOUT_MACRO:-1}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
+SIM_ONLY_TOGGLE_STEPS="${SIM_ONLY_TOGGLE_STEPS:-20}"
+SIM_ONLY_MAX_TIME_FS="${SIM_ONLY_MAX_TIME_FS:-1000000000}"
 BMC_ABSTRACTION_PROVENANCE_OUT="${BMC_ABSTRACTION_PROVENANCE_OUT:-}"
 BMC_CHECK_ATTRIBUTION_OUT="${BMC_CHECK_ATTRIBUTION_OUT:-}"
 BMC_DROP_REMARK_CASES_OUT="${BMC_DROP_REMARK_CASES_OUT:-}"
@@ -8451,15 +8454,103 @@ run_case() {
   local mode="$2"
   local base
   base="$(basename "$sv" .sv)"
-  # Some Yosys SVA tests are simulation-only (.ys flow) and do not provide
-  # formal harnesses for one or both modes. Treat missing mode harnesses as
-  # skipped instead of false failures.
-  if [[ -f "$YOSYS_SVA_DIR/${base}.ys" ]]; then
+  local ys_file="$YOSYS_SVA_DIR/${base}.ys"
+  local run_sim_only_case=0
+
+  if [[ -f "$ys_file" ]]; then
     local mode_harness="$YOSYS_SVA_DIR/${base}_${mode}.sby"
     if [[ ! -f "$mode_harness" ]]; then
+      if [[ "$mode" == "pass" ]]; then
+        run_sim_only_case=1
+      else
+        report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
+        return
+      fi
+    fi
+  fi
+
+  if [[ "$run_sim_only_case" == "1" ]]; then
+    local clock_name=""
+    clock_name="$(awk '
+      /^[[:space:]]*sim([[:space:]]|$)/ {
+        for (i = 1; i <= NF; ++i) {
+          if ($i == "-clock" && i < NF) {
+            print $(i + 1)
+            exit
+          }
+        }
+      }
+    ' "$ys_file")"
+    if [[ -z "$clock_name" || ! "$clock_name" =~ ^[a-zA-Z_][a-zA-Z0-9_$]*$ ]]; then
       report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
       return
     fi
+    if [[ -z "$CIRCT_SIM" || ! -x "$CIRCT_SIM" ]]; then
+      report_skipped_case "$base" "$mode" "$(case_profile)" "sim-only" 1 "$sv"
+      return
+    fi
+
+    local log_tag="$base"
+    local rel_path="${sv#"$YOSYS_SVA_DIR/"}"
+    if [[ "$rel_path" != "$sv" ]]; then
+      log_tag="${rel_path%.sv}"
+    fi
+    log_tag="${log_tag//\//__}"
+    local mlir="$tmpdir/${base}_${mode}.mlir"
+    local verilog_log="$tmpdir/${base}_${mode}.circt-verilog.log"
+    local sim_log="$tmpdir/${base}_${mode}.circt-sim.log"
+    local wrapper="$tmpdir/${base}_${mode}.sim-only-wrapper.sv"
+
+    cat > "$wrapper" <<EOF
+module __circt_yosys_sim_tb;
+  logic $clock_name;
+  top dut(.$clock_name($clock_name));
+  initial begin
+    $clock_name = 1'b0;
+    repeat ($SIM_ONLY_TOGGLE_STEPS) begin
+      #1 $clock_name = ~$clock_name;
+    end
+    \$finish;
+  end
+endmodule
+EOF
+
+    local verilog_args=()
+    if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
+      verilog_args+=("--no-uvm-auto-include")
+    fi
+    if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
+      read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
+      verilog_args+=("${extra_args[@]}")
+    fi
+    : > "$verilog_log"
+    if ! run_limited "$CIRCT_VERILOG" --ir-llhd "${verilog_args[@]}" "$sv" "$wrapper" \
+      > "$mlir" 2>> "$verilog_log"; then
+      report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
+      if [[ -n "$KEEP_LOGS_DIR" ]]; then
+        mkdir -p "$KEEP_LOGS_DIR"
+        cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}_${mode}.mlir" 2>/dev/null || true
+        cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-verilog.log" 2>/dev/null || true
+        cp -f "$wrapper" "$KEEP_LOGS_DIR/${log_tag}_${mode}.sim-only-wrapper.sv" 2>/dev/null || true
+      fi
+      return
+    fi
+
+    : > "$sim_log"
+    if run_limited "$CIRCT_SIM" "$mlir" --top __circt_yosys_sim_tb \
+        --max-time="$SIM_ONLY_MAX_TIME_FS" >> "$sim_log" 2>&1; then
+      report_case_outcome "$base" "$mode" 1 "$(case_profile)" "$sv"
+    else
+      report_case_outcome "$base" "$mode" 0 "$(case_profile)" "$sv"
+    fi
+    if [[ -n "$KEEP_LOGS_DIR" ]]; then
+      mkdir -p "$KEEP_LOGS_DIR"
+      cp -f "$mlir" "$KEEP_LOGS_DIR/${log_tag}_${mode}.mlir" 2>/dev/null || true
+      cp -f "$verilog_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-verilog.log" 2>/dev/null || true
+      cp -f "$sim_log" "$KEEP_LOGS_DIR/${log_tag}_${mode}.circt-sim.log" 2>/dev/null || true
+      cp -f "$wrapper" "$KEEP_LOGS_DIR/${log_tag}_${mode}.sim-only-wrapper.sv" 2>/dev/null || true
+    fi
+    return
   fi
   if [[ "$mode" == "fail" && "$SKIP_FAIL_WITHOUT_MACRO" == "1" ]]; then
     if ! grep -qE '^\s*`(ifn?def|if)\s+FAIL\b' "$sv"; then
