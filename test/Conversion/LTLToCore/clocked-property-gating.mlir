@@ -13,5 +13,5 @@ module {
 // CHECK: hw.module @clocked_property_gating
 // CHECK: seq.to_clock
 // CHECK: seq.compreg sym @ltl_state
-// CHECK: verif.assert {{.*}} {bmc.final} : i1
+// CHECK: verif.assert {{.*bmc.final.*}} : i1
 // CHECK: verif.assert

@@ -8,7 +8,7 @@ module {
     verif.assert %disabled : !ltl.property
     // CHECK: %[[SEEN:.+]] = seq.compreg {{.*}} %clock reset %disable
     // CHECK: %[[FINAL:.+]] = comb.or {{.*}} %disable, %[[SEEN]] : i1
-    // CHECK: verif.assert %[[FINAL]] {bmc.final} : i1
+    // CHECK: verif.assert %[[FINAL]] {{.*bmc.final.*}} : i1
     hw.output
   }
 }

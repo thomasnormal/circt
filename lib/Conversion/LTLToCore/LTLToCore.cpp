@@ -1190,14 +1190,23 @@ struct LTLPropertyLowerer {
         implOp.emitError("invalid property lowering");
         return {Value(), {}};
       }
+      if (!antecedent || !antecedent.getType().isInteger(1) ||
+          !consequent.safety || !consequent.safety.getType().isInteger(1)) {
+        // Keep non-boolean implication forms in LTL when the consequent cannot
+        // be lowered to a plain i1 safety check.
+        auto trueVal =
+            hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+        return {prop, trueVal};
+      }
       auto notAntecedent = comb::XorOp::create(
           builder, loc, antecedent,
           hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1));
       auto safety = builder.createOrFold<comb::OrOp>(
           loc, SmallVector<Value, 2>{notAntecedent, consequent.safety}, true);
       if (!clock) {
-        implOp.emitError("implication requires a clocked property");
-        return {Value(), {}};
+        // Unclocked implications are pure safety checks; final obligations are
+        // inherited directly from the lowered consequent.
+        return {safety, consequent.finalCheck};
       }
       auto antecedentSeen =
           createStateRegister(antecedent, clock, "ltl_implication_seen");
@@ -1246,6 +1255,12 @@ struct LTLPropertyLowerer {
       return {trueVal, seen};
     }
 
+    if (!prop.getDefiningOp()) {
+      // Preserve opaque property block arguments and defer lowering.
+      auto trueVal =
+          hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+      return {prop, trueVal};
+    }
     prop.getDefiningOp()->emitError("unsupported property lowering");
     return {Value(), {}};
   }
@@ -1734,6 +1749,14 @@ void LowerLTLToCorePass::runOnOperation() {
     checkOp->setAttr("bmc.clock_edge", edgeAttr);
   };
 
+  auto isUnloweredPropertyResult =
+      [](Value originalProperty,
+         const PropertyResult &result) {
+        return result.safety == originalProperty &&
+               isa<ltl::PropertyType, ltl::SequenceType>(
+                   result.safety.getType());
+      };
+
   for (auto op : asserts) {
     if (!isa<ltl::PropertyType, ltl::SequenceType>(op.getProperty().getType()))
       continue;
@@ -1745,6 +1768,8 @@ void LowerLTLToCorePass::runOnOperation() {
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
+    if (isUnloweredPropertyResult(op.getProperty(), result))
+      continue;
     op.getPropertyMutable().assign(result.safety);
     setClockMetadata(op.getOperation(), topClockOp);
     setDisableIffInputMetadata(op.getOperation(), lowerer);
@@ -1769,6 +1794,8 @@ void LowerLTLToCorePass::runOnOperation() {
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
+    if (isUnloweredPropertyResult(op.getProperty(), result))
+      continue;
     op.getPropertyMutable().assign(result.safety);
     setClockMetadata(op.getOperation(), topClockOp);
     setDisableIffInputMetadata(op.getOperation(), lowerer);
@@ -1791,6 +1818,8 @@ void LowerLTLToCorePass::runOnOperation() {
                                         ltl::ClockEdge::Pos);
     if (!result.safety || !result.finalCheck)
       return signalPassFailure();
+    if (isUnloweredPropertyResult(op.getProperty(), result))
+      continue;
     op.getPropertyMutable().assign(result.safety);
     setClockMetadata(op.getOperation(), topClockOp);
     setDisableIffInputMetadata(op.getOperation(), lowerer);
@@ -1833,6 +1862,8 @@ void LowerLTLToCorePass::runOnOperation() {
       op.emitError("failed to lower clocked assertion");
       return signalPassFailure();
     }
+    if (isUnloweredPropertyResult(op.getProperty(), result))
+      continue;
     auto enable = op.getEnable();
     // Replace clocked assert with a regular assert
     Value property = result.safety;
@@ -1882,6 +1913,8 @@ void LowerLTLToCorePass::runOnOperation() {
       op.emitError("failed to lower clocked assumption");
       return signalPassFailure();
     }
+    if (isUnloweredPropertyResult(op.getProperty(), result))
+      continue;
     auto enable = op.getEnable();
     Value property = result.safety;
     if (enable)
@@ -1928,6 +1961,8 @@ void LowerLTLToCorePass::runOnOperation() {
       op.emitError("failed to lower clocked cover");
       return signalPassFailure();
     }
+    if (isUnloweredPropertyResult(op.getProperty(), result))
+      continue;
     auto enable = op.getEnable();
     Value property = result.safety;
     if (enable)
