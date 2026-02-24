@@ -654,13 +654,20 @@ async function runReproInBrowser(chromium) {
         globalThis.global = globalThis;
         globalThis.__dirname = "/";
         globalThis.__filename = "/tool.js";
+        const normalizeBuiltinModule = (mod) => {
+          if (typeof mod !== "string") return mod;
+          return mod.startsWith("node:") ? mod.slice("node:".length) : mod;
+        };
+
         globalThis.require = (mod) => {
-          if (mod === "path") return PATH_SHIM;
-          if (mod === "fs") return inMemFS.nodeApi;
-          if (mod === "crypto")
+          const normalized = normalizeBuiltinModule(mod);
+          if (normalized === "path") return PATH_SHIM;
+          if (normalized === "fs") return inMemFS.nodeApi;
+          if (normalized === "crypto")
             return { randomBytes: (n) => crypto.getRandomValues(new Uint8Array(n)) };
-          if (mod === "child_process")
+          if (normalized === "child_process")
             return { spawnSync: () => ({ status: 1, stdout: "", stderr: "" }) };
+          if (normalized === "process") return proc;
           throw new Error(`require('${mod}') is not available in browser`);
         };
 
