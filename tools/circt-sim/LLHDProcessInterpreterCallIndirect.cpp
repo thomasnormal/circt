@@ -610,8 +610,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Dispatch the call
         // [SEQ-XFALLBACK] diagnostic removed
-        // AOT: Try native dispatch via nativeFuncPtrs.
-        {
+        // DISABLED: Native dispatch in Path 1 (X-fallback) causes stack
+        // overflow on deep UVM stacks via native→trampoline→interpreter
+        // recursion. Re-enable when shared globals unlock more functions.
+#if 0
+        // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
+        if (processStates[procId].callDepth < 150) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end()) {
             unsigned numArgs = funcOp.getNumArguments();
@@ -686,6 +690,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
           }
         }
+#endif
         auto &callState = processStates[procId];
         ++callState.callDepth;
         SmallVector<InterpretedValue, 4> results;
@@ -1362,8 +1367,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
 
         // [SEQ-UNMAPPED] diagnostic removed
-        // AOT: Try native dispatch via nativeFuncPtrs.
-        {
+        // DISABLED: Native dispatch in Path 3 (static fallback) causes stack
+        // overflow on deep UVM stacks. Re-enable when shared globals unlock
+        // more functions.
+#if 0
+        // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
+        if (processStates[procId].callDepth < 150) {
           auto nativeIt = nativeFuncPtrs.find(fOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end()) {
             unsigned numArgs = fOp.getNumArguments();
@@ -1438,6 +1447,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
           }
         }
+#endif
         auto &cs2 = processStates[procId];
         ++cs2.callDepth;
         SmallVector<InterpretedValue, 4> sResults;
@@ -1702,8 +1712,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         SmallVector<InterpretedValue, 4> fastArgs;
         for (Value arg : callIndirectOp.getArgOperands())
           fastArgs.push_back(getValue(procId, arg));
-        // AOT: Try native dispatch first via site cache.
-        if (siteIt->second.nativeFuncPtr) {
+        // DISABLED: Site cache native dispatch causes stack overflow on deep
+        // UVM stacks. Re-enable when shared globals unlock more functions.
+#if 0
+        // AOT: Try native dispatch first via site cache (skip if deep).
+        if (siteIt->second.nativeFuncPtr &&
+            processStates[procId].callDepth < 150) {
           auto &entry = siteIt->second;
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
@@ -1751,6 +1765,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                     uint64_t, uint64_t, uint64_t);
             using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
                                     uint64_t, uint64_t, uint64_t, uint64_t);
+            ++processStates[procId].callDepth;
             switch (numArgs) {
             case 0: result = reinterpret_cast<F0>(fptr)(); break;
             case 1: result = reinterpret_cast<F1>(fptr)(a[0]); break;
@@ -1762,6 +1777,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             case 7: result = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
             case 8: result = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
             }
+            --processStates[procId].callDepth;
             if (numResults == 1) {
               SmallVector<InterpretedValue, 2> nativeResults;
               auto resTy = cachedFuncOp.getResultTypes()[0];
@@ -1776,19 +1792,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             return success();
           }
         }
+#endif
         // Fall through to interpretFuncBody for non-native-eligible calls.
         auto &fastState = processStates[procId];
-        if (fastState.callDepth < 200) {
-          ++fastState.callDepth;
-          SmallVector<InterpretedValue, 2> fastResults;
-          interpretFuncBody(procId, siteIt->second.funcOp, fastArgs, fastResults,
-                            callIndirectOp);
-          --fastState.callDepth;
-          if (!processStates[procId].waiting) {
-            for (auto [res, val] :
-                 llvm::zip(callIndirectOp.getResults(), fastResults))
-              setValue(procId, res, val);
-          }
+        ++fastState.callDepth;
+        SmallVector<InterpretedValue, 2> fastResults;
+        interpretFuncBody(procId, siteIt->second.funcOp, fastArgs, fastResults,
+                          callIndirectOp);
+        --fastState.callDepth;
+        if (!processStates[procId].waiting) {
+          for (auto [res, val] :
+               llvm::zip(callIndirectOp.getResults(), fastResults))
+            setValue(procId, res, val);
         }
         return success();
       }
@@ -3531,19 +3546,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return success();
     }
 
-    // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
     auto &callState = processStates[procId];
-    constexpr size_t maxCallDepth = 200;
-    if (callState.callDepth >= maxCallDepth) {
-      LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: max call depth ("
-                              << maxCallDepth
-                              << ") exceeded, returning zero\n");
-      for (Value result : callIndirectOp.getResults()) {
-        unsigned width = getTypeWidth(result.getType());
-        setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
-      }
-      return success();
-    }
 
     // Recursive DFS depth detection (same as func.call handler)
     Operation *indFuncKey = funcOp.getOperation();
@@ -3614,20 +3617,29 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.valid = true;
         se.isIntercepted = false;
         se.hadVtableOverride = false;
+        // DISABLED: Site cache native pointer population. Re-enable when
+        // shared globals unlock more functions.
+#if 0
         // Populate native function pointer from nativeFuncPtrs map.
         if (!nativeFuncPtrs.empty()) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end())
             se.nativeFuncPtr = nativeIt->second;
         }
+#endif
       } else {
         se.valid = false;
         se.hadVtableOverride = true;
       }
     }
 
-    // AOT: Try native dispatch before interpretFuncBody.
-    if (!nativeFuncPtrs.empty()) {
+    // DISABLED: Main AOT native dispatch (Path 2 slow path) causes stack
+    // overflow on deep UVM stacks. Re-enable when shared globals unlock
+    // more functions.
+#if 0
+    // AOT: Try native dispatch before interpretFuncBody (only if not too deep,
+    // to prevent native→trampoline→interpreter→call_indirect→native recursion).
+    if (!nativeFuncPtrs.empty() && callState.callDepth < 150) {
       auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
       if (nativeIt != nativeFuncPtrs.end()) {
         void *fptr = nativeIt->second;
@@ -3710,6 +3722,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
       }
     }
+#endif
 
     // Call the function with depth tracking
     ++callState.callDepth;
