@@ -1,5 +1,37 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-24 Session: nested implication goto-repeat leakage fix (SVA runtime)
+
+### What changed
+- Added a red-first regression that reproduces nested consequent leakage:
+  - `test/Tools/circt-sim/sva-implication-concat-goto-pre-antecedent-hit-leak-fail-runtime.sv`
+- Updated `circt-sim` implication runtime handling for unbounded-gap consequents:
+  - added tail-repeat extraction (including nested `ltl.concat` tails).
+  - switched to antecedent-scoped repeat counting using
+    `pending.triggerSampleOrdinal + tailPrefixOffset` when discharging
+    implication obligations.
+
+### Realizations / surprises
+- The previous fix fully covered direct-root `goto/nonconsecutive` consequents,
+  but nested-repeat consequents still leaked because fallback implication logic
+  relied on full-consequent truth computed from global repetition totals.
+- Keeping full-consequent truth evaluation while adding antecedent-scoped
+  repeat-hit gating gives a maintainable fix path without regressing unrelated
+  sequence operators.
+
+### Validation snapshot
+- build:
+  - `ninja -C build_test circt-sim` -> pass.
+- red-first regression:
+  - before fix: failed (assertion unexpectedly passed).
+  - after fix: `1/1` pass.
+- focused repeat/implication regressions:
+  - `11/11` pass.
+- broader runtime SVA sweep:
+  - `125/125` pass.
+- sv-tests chapter 16 sim sweep:
+  - `42/42` pass.
+
 ## 2026-02-24 Session: assume abort_on async coverage closure (SVA)
 
 ### What changed
