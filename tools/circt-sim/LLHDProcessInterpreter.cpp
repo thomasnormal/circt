@@ -2149,6 +2149,36 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     }
   }
 
+  // Bridge tri-state destination field copies (e.g. assign s_i = S lowered as
+  // field_0 -> field_1) to resolved signal propagation. This keeps mirror fields
+  // synced from the resolved net without writing back into tri-state dest fields.
+  if (!childModuleCopyPairs.empty() && !interfaceTriStateCandidates.empty() &&
+      !interfaceFieldDrivenSignals.empty()) {
+    llvm::DenseSet<uint64_t> triStateDestAddrs;
+    for (const auto &cand : interfaceTriStateCandidates)
+      triStateDestAddrs.insert(cand.destAddr);
+
+    for (auto &[srcAddr, destAddr] : childModuleCopyPairs) {
+      if (!triStateDestAddrs.contains(srcAddr))
+        continue;
+      if (triStateDestAddrs.contains(destAddr))
+        continue;
+
+      auto drivenIt = interfaceFieldDrivenSignals.find(srcAddr);
+      if (drivenIt == interfaceFieldDrivenSignals.end())
+        continue;
+      for (SignalId drivenSigId : drivenIt->second) {
+        if (drivenSigId == 0)
+          continue;
+        auto pair = std::make_pair(drivenSigId, destAddr);
+        if (std::find(interfaceSignalCopyPairs.begin(),
+                      interfaceSignalCopyPairs.end(),
+                      pair) == interfaceSignalCopyPairs.end())
+          interfaceSignalCopyPairs.push_back(pair);
+      }
+    }
+  }
+
   // Resolve stores that copy a probed LLHD signal value into interface fields.
   // This links source signal IDs (e.g. shared inout wire) directly to all
   // copied interface field shadow signals so runtime signal updates stay in sync.
@@ -37348,6 +37378,29 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
 
     unsigned childOpsExecuted = 0;
     for (Operation &op : childModule.getBody().front()) {
+      if (auto driveOp = dyn_cast<llhd::DriveOp>(&op)) {
+        auto getChildOrParentValue = [&](Value v) -> uint64_t {
+          InterpretedValue val = getValue(childTempProcId, v);
+          if (!val.isX() && val.getUInt64() != 0)
+            return val.getUInt64();
+          auto it = moduleInitValueMap.find(v);
+          if (it != moduleInitValueMap.end() && !it->second.isX())
+            return it->second.getUInt64();
+          return 0;
+        };
+        uint64_t srcAddr = 0;
+        SignalId drivenSigId = getSignalId(driveOp.getSignal());
+        if (drivenSigId != 0 &&
+            matchFourStateStructCreateLoad(driveOp.getValue(),
+                                           getChildOrParentValue, srcAddr) &&
+            srcAddr != 0) {
+          auto &drivenSignals = interfaceFieldDrivenSignals[srcAddr];
+          if (std::find(drivenSignals.begin(), drivenSignals.end(),
+                        drivenSigId) == drivenSignals.end())
+            drivenSignals.push_back(drivenSigId);
+        }
+      }
+
       if (isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp,
               llhd::SignalOp, hw::InstanceOp, hw::OutputOp>(&op))
         continue;

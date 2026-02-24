@@ -3416,6 +3416,13 @@ private:
   llvm::SmallVector<std::pair<SignalId, uint64_t>, 8>
       interfaceSignalCopyPairs;
 
+  /// Records interface field addresses that feed an LLHD signal through a
+  /// module-level drive (fieldAddr -> [drivenSignalIds...]).
+  /// This is used to synthesize resolved-net -> mirror-field links for
+  /// patterns like `assign s_i = S` that lower as field-copy stores.
+  llvm::DenseMap<uint64_t, llvm::SmallVector<SignalId, 2>>
+      interfaceFieldDrivenSignals;
+
   /// Records (srcSignalId, destAddr) pairs for direct signal->memory mirror
   /// stores at module level (e.g., `llvm.store %stream_in_string, %alloca`).
   /// Runtime signal updates replay these stores so memory-backed always blocks

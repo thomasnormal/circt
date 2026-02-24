@@ -79,9 +79,8 @@ module top;
     $finish;
   end
 
-  // CHECK: [IFACE-STORE]{{.*}}sig_1.field_0{{.*}}copySrc=
-  // CHECK: PASSIVE_LOW_0_OK
   // CHECK-NOT: [IFACE-STORE]{{.*}}sig_1.field_0{{.*}}suppressed=1
+  // CHECK: PASSIVE_LOW_0_OK
   // CHECK: PASSIVE_HIGH_0_OK
   // CHECK: PASSIVE_LOW_1_OK
   // CHECK: PASSIVE_HIGH_1_OK
