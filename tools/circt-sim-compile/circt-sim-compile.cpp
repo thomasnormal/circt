@@ -126,6 +126,15 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
     if (isa<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect,
             func::FuncDialect>(op->getDialect()))
       return WalkResult::advance();
+    // Allow specific ops from other dialects that we can lower.
+    if (isa<hw::ConstantOp, comb::ExtractOp, comb::AndOp>(op))
+      return WalkResult::advance();
+    // Allow unrealized_conversion_cast only when types match (foldable).
+    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+      if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1 &&
+          castOp.getOperand(0).getType() == castOp.getResult(0).getType())
+        return WalkResult::advance();
+    }
     if (rejectionReason)
       *rejectionReason = op->getName().getStringRef().str();
     compilable = false;
@@ -236,6 +245,57 @@ static LLVM::ICmpPredicate convertCmpPredicate(arith::CmpIPredicate pred) {
 static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                     MLIRContext &mlirContext) {
   IRRewriter rewriter(&mlirContext);
+
+  // Phase 0: Lower hw.constant → arith.constant, comb ops → arith ops,
+  // and resolve unrealized_conversion_cast before the main arith→LLVM pass.
+  {
+    llvm::SmallVector<Operation *> preOps;
+    microModule.walk([&](Operation *op) {
+      if (isa<hw::ConstantOp, comb::ExtractOp, comb::AndOp,
+              UnrealizedConversionCastOp>(op))
+        preOps.push_back(op);
+    });
+    for (auto *op : preOps) {
+      rewriter.setInsertionPoint(op);
+      auto loc = op->getLoc();
+
+      if (auto hwConst = dyn_cast<hw::ConstantOp>(op)) {
+        auto arithConst = rewriter.create<arith::ConstantOp>(
+            loc, rewriter.getIntegerAttr(hwConst.getType(),
+                                         hwConst.getValue()));
+        hwConst.replaceAllUsesWith(arithConst.getResult());
+        rewriter.eraseOp(hwConst);
+      } else if (auto extractOp = dyn_cast<comb::ExtractOp>(op)) {
+        Value input = extractOp.getInput();
+        unsigned lowBit = extractOp.getLowBit();
+        auto resultType = extractOp.getType();
+        if (lowBit != 0) {
+          auto shift = rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(input.getType(), lowBit));
+          input = rewriter.create<arith::ShRUIOp>(loc, input, shift);
+        }
+        auto trunc = rewriter.create<arith::TruncIOp>(loc, resultType, input);
+        extractOp.replaceAllUsesWith(trunc.getResult());
+        rewriter.eraseOp(extractOp);
+      } else if (auto andOp = dyn_cast<comb::AndOp>(op)) {
+        // comb.and is variadic — fold left.
+        auto inputs = andOp.getInputs();
+        Value result = inputs[0];
+        for (unsigned i = 1; i < inputs.size(); ++i)
+          result = rewriter.create<arith::AndIOp>(loc, result, inputs[i]);
+        andOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(andOp);
+      } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+        // If single input → single output with same type, fold away.
+        if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1 &&
+            castOp.getOperand(0).getType() == castOp.getResult(0).getType()) {
+          castOp.getResult(0).replaceAllUsesWith(castOp.getOperand(0));
+          rewriter.eraseOp(castOp);
+        }
+        // Otherwise leave in place — will be stripped later if unresolvable.
+      }
+    }
+  }
 
   // Phase 1: Rewrite arith/cf/func ops to LLVM equivalents.
   llvm::SmallVector<Operation *> toRewrite;
