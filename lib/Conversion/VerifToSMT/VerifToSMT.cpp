@@ -7112,17 +7112,20 @@ struct VerifBoundedModelCheckingOpConversion
           return std::nullopt;
         return static_cast<unsigned>(clockIt - clockIndexes.begin());
       };
-      regClockToLoopIndex.reserve(numRegs);
-      regClockInverts.reserve(numRegs);
+      SmallVector<std::optional<unsigned>> regClockPosByReg(numRegs);
+      SmallVector<bool> regClockInvertByReg(numRegs, false);
+      SmallVector<bool> regClockExprByReg(numRegs, false);
       for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
         bool mapped = false;
         bool invert = false;
+        bool exprClockKey = false;
         if (regSourcesValid) {
           auto dict = dyn_cast<DictionaryAttr>(
               regClockSourcesAttr[regIndex]);
           if (dict) {
             auto invertAttr = dyn_cast_or_null<BoolAttr>(dict.get("invert"));
             bool dictInvert = invertAttr ? invertAttr.getValue() : false;
+            invert = dictInvert;
 
             // Support clock-key-based mapping for derived clocks. This is used
             // when a register clock cannot be traced to a single module input
@@ -7131,9 +7134,11 @@ struct VerifBoundedModelCheckingOpConversion
             // clock inputs.
             auto keyAttr = dyn_cast_or_null<StringAttr>(dict.get("clock_key"));
             if (keyAttr && !keyAttr.getValue().empty()) {
+              if (keyAttr.getValue().starts_with("expr:"))
+                exprClockKey = true;
               auto it = clockKeyToPos.find(keyAttr.getValue());
               if (it != clockKeyToPos.end()) {
-                regClockToLoopIndex.push_back(it->second.pos);
+                regClockPosByReg[regIndex] = it->second.pos;
                 invert = dictInvert ^ it->second.invert;
                 mapped = true;
               }
@@ -7144,7 +7149,7 @@ struct VerifBoundedModelCheckingOpConversion
             if (!mapped && argAttr) {
               unsigned argIndex = argAttr.getValue().getZExtValue();
               if (auto pos = mapArgIndexToClockPos(argIndex)) {
-                regClockToLoopIndex.push_back(*pos);
+                regClockPosByReg[regIndex] = *pos;
                 invert = dictInvert;
                 mapped = true;
               }
@@ -7155,30 +7160,66 @@ struct VerifBoundedModelCheckingOpConversion
           auto nameAttr =
               dyn_cast_or_null<StringAttr>(regClocksAttr[regIndex]);
           if (nameAttr && !nameAttr.getValue().empty()) {
-            auto nameIt = inputNameToIndex.find(nameAttr.getValue());
-            if (nameIt == inputNameToIndex.end()) {
-              op.emitError("bmc_reg_clocks entry does not match any input name");
-              return failure();
+            if (nameAttr.getValue().starts_with("expr:"))
+              exprClockKey = true;
+            if (auto keyIt = clockKeyToPos.find(nameAttr.getValue());
+                keyIt != clockKeyToPos.end()) {
+              regClockPosByReg[regIndex] = keyIt->second.pos;
+              invert = keyIt->second.invert;
+              mapped = true;
             }
-            unsigned clockInputIndex = nameIt->second;
-            auto clockIt =
-                llvm::find(clockIndexes, static_cast<int>(clockInputIndex));
-            if (clockIt == clockIndexes.end()) {
-              op.emitError("bmc_reg_clocks entry does not name a clock input");
-              return failure();
-            }
-            regClockToLoopIndex.push_back(
-                static_cast<unsigned>(clockIt - clockIndexes.begin()));
-            mapped = true;
           }
         }
-        if (!mapped) {
+        if (!mapped && regClocksValid) {
+          auto nameAttr =
+              dyn_cast_or_null<StringAttr>(regClocksAttr[regIndex]);
+          if (nameAttr && !nameAttr.getValue().empty()) {
+            auto nameIt = inputNameToIndex.find(nameAttr.getValue());
+            if (nameIt != inputNameToIndex.end()) {
+              unsigned clockInputIndex = nameIt->second;
+              auto clockIt =
+                  llvm::find(clockIndexes, static_cast<int>(clockInputIndex));
+              if (clockIt != clockIndexes.end()) {
+                regClockPosByReg[regIndex] =
+                    static_cast<unsigned>(clockIt - clockIndexes.begin());
+                mapped = true;
+              }
+            }
+          }
+        }
+        regClockInvertByReg[regIndex] = invert;
+        regClockExprByReg[regIndex] = exprClockKey;
+      }
+      SmallVector<unsigned> regClockCounts(clockIndexes.size(), 0);
+      for (auto pos : regClockPosByReg)
+        if (pos && *pos < regClockCounts.size())
+          ++regClockCounts[*pos];
+      unsigned dominantClockPos = 0;
+      unsigned dominantCount = 0;
+      bool dominantTie = false;
+      for (auto [pos, count] : llvm::enumerate(regClockCounts)) {
+        if (count > dominantCount) {
+          dominantCount = count;
+          dominantClockPos = pos;
+          dominantTie = false;
+        } else if (count == dominantCount && count != 0) {
+          dominantTie = true;
+        }
+      }
+      for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
+        if (!regClockPosByReg[regIndex]) {
+          if (regClockExprByReg[regIndex] && dominantCount != 0 &&
+              !dominantTie)
+            regClockPosByReg[regIndex] = dominantClockPos;
+        }
+        if (!regClockPosByReg[regIndex]) {
           op.emitError("multi-clock BMC requires named clock entries in "
                        "bmc_reg_clocks or valid entries in "
                        "bmc_reg_clock_sources");
           return failure();
         }
-        regClockInverts.push_back(invert);
+        regClockToLoopIndex.push_back(*regClockPosByReg[regIndex]);
+        regClockInverts.push_back(regClockInvertByReg[regIndex]);
       }
     }
 

@@ -8,10 +8,12 @@
 
 #include "circt/Conversion/HWToSMT.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDTypes.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -35,6 +37,104 @@ static unsigned getArrayDomainWidth(size_t numElements) {
   // SMT bit-vectors must have width >= 1. For 1-element arrays use a single
   // bit index and rely on explicit in-bounds checks.
   return llvm::Log2_64_Ceil(numElements > 1 ? numElements : 2);
+}
+
+static FailureOr<Value> packValueToBitVector(Type hwType, Value value,
+                                             PatternRewriter &rewriter,
+                                             Location loc) {
+  if (auto alias = dyn_cast<hw::TypeAliasType>(hwType))
+    return packValueToBitVector(alias.getCanonicalType(), value, rewriter, loc);
+
+  if (auto valueBvTy = dyn_cast<mlir::smt::BitVectorType>(value.getType())) {
+    int64_t expectedWidth = hw::getBitWidth(hwType);
+    if (expectedWidth < 0)
+      return failure();
+    if (valueBvTy.getWidth() == static_cast<unsigned>(expectedWidth))
+      return value;
+    return failure();
+  }
+
+  if (auto arrayType = dyn_cast<hw::ArrayType>(hwType)) {
+    auto arraySMT = dyn_cast<mlir::smt::ArrayType>(value.getType());
+    if (!arraySMT)
+      return failure();
+    unsigned numElements = arrayType.getNumElements();
+    unsigned indexWidth = getArrayDomainWidth(numElements);
+    Value flattened;
+    for (int64_t i = static_cast<int64_t>(numElements) - 1; i >= 0; --i) {
+      Value index =
+          mlir::smt::BVConstantOp::create(rewriter, loc, i, indexWidth);
+      Value element =
+          mlir::smt::ArraySelectOp::create(rewriter, loc, value, index);
+      auto packedElement =
+          packValueToBitVector(arrayType.getElementType(), element, rewriter, loc);
+      if (failed(packedElement))
+        return failure();
+      flattened = flattened
+                      ? mlir::smt::ConcatOp::create(rewriter, loc, flattened,
+                                                    *packedElement)
+                      : *packedElement;
+    }
+    return flattened;
+  }
+
+  return failure();
+}
+
+static FailureOr<Value> unpackBitVectorToValue(Type hwType, Value bitVector,
+                                               const TypeConverter &converter,
+                                               PatternRewriter &rewriter,
+                                               Location loc) {
+  if (auto alias = dyn_cast<hw::TypeAliasType>(hwType))
+    return unpackBitVectorToValue(alias.getCanonicalType(), bitVector, converter,
+                                  rewriter, loc);
+
+  auto bitVectorTy = dyn_cast<mlir::smt::BitVectorType>(bitVector.getType());
+  if (!bitVectorTy)
+    return failure();
+  int64_t expectedWidth = hw::getBitWidth(hwType);
+  if (expectedWidth < 0)
+    return failure();
+  if (bitVectorTy.getWidth() != static_cast<unsigned>(expectedWidth))
+    return failure();
+
+  Type convertedTy = converter.convertType(hwType);
+  if (!convertedTy)
+    return failure();
+  if (isa<mlir::smt::BitVectorType>(convertedTy))
+    return bitVector;
+
+  if (auto arrayType = dyn_cast<hw::ArrayType>(hwType)) {
+    auto arraySMT = dyn_cast<mlir::smt::ArrayType>(convertedTy);
+    if (!arraySMT)
+      return failure();
+
+    unsigned numElements = arrayType.getNumElements();
+    unsigned indexWidth = getArrayDomainWidth(numElements);
+    int64_t elementWidth = hw::getBitWidth(arrayType.getElementType());
+    if (elementWidth <= 0)
+      return failure();
+    auto elementBvTy = mlir::smt::BitVectorType::get(bitVector.getContext(),
+                                                     elementWidth);
+
+    Value array = mlir::smt::DeclareFunOp::create(rewriter, loc, arraySMT);
+    for (unsigned i = 0; i < numElements; ++i) {
+      Value elementBits = mlir::smt::ExtractOp::create(
+          rewriter, loc, elementBvTy, i * static_cast<unsigned>(elementWidth),
+          bitVector);
+      auto element = unpackBitVectorToValue(arrayType.getElementType(),
+                                            elementBits, converter, rewriter, loc);
+      if (failed(element))
+        return failure();
+      Value index =
+          mlir::smt::BVConstantOp::create(rewriter, loc, i, indexWidth);
+      array = mlir::smt::ArrayStoreOp::create(rewriter, loc, array, index,
+                                              *element);
+    }
+    return array;
+  }
+
+  return failure();
 }
 
 static LogicalResult flattenAggregateConstantAttr(Attribute attr, Type type,
@@ -260,6 +360,28 @@ struct HWModuleOpConversion : OpConversionPattern<HWModuleOp> {
   bool replaceWithSolver;
 };
 
+/// Lower a hw::HWModuleExternOp declaration to an external func::FuncOp.
+struct HWModuleExternOpConversion : OpConversionPattern<hw::HWModuleExternOp> {
+  using OpConversionPattern<hw::HWModuleExternOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(hw::HWModuleExternOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto funcTy = op.getModuleType().getFuncType();
+    SmallVector<Type> inputTypes, resultTypes;
+    if (failed(typeConverter->convertTypes(funcTy.getInputs(), inputTypes)))
+      return failure();
+    if (failed(typeConverter->convertTypes(funcTy.getResults(), resultTypes)))
+      return failure();
+    auto funcOp = mlir::func::FuncOp::create(
+        rewriter, op.getLoc(), adaptor.getSymNameAttr(),
+        rewriter.getFunctionType(inputTypes, resultTypes));
+    funcOp.setVisibility(SymbolTable::Visibility::Private);
+    rewriter.replaceOp(op, funcOp);
+    return success();
+  }
+};
+
 /// Lower a hw::OutputOp operation to func::ReturnOp.
 struct OutputOpConversion : OpConversionPattern<OutputOp> {
   using OpConversionPattern<OutputOp>::OpConversionPattern;
@@ -304,6 +426,80 @@ struct WireOpConversion : OpConversionPattern<WireOp> {
   }
 };
 
+/// Lower a hw::BitcastOp when source and result share the same SMT
+/// representation.
+struct BitcastOpConversion : OpConversionPattern<BitcastOp> {
+  using OpConversionPattern<BitcastOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(BitcastOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Location loc = op.getLoc();
+    Type convertedResultType = typeConverter->convertType(op.getType());
+    if (!convertedResultType)
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "unsupported bitcast result type");
+    if (adaptor.getInput().getType() == convertedResultType) {
+      rewriter.replaceOp(op, adaptor.getInput());
+      return success();
+    }
+
+    // Lower array<elem> -> iN bitcasts by flattening array elements into a BV.
+    if (auto srcArrayTy = dyn_cast<hw::ArrayType>(op.getInput().getType())) {
+      auto dstBvTy = dyn_cast<mlir::smt::BitVectorType>(convertedResultType);
+      if (dstBvTy) {
+        auto flattened = packValueToBitVector(
+            srcArrayTy, adaptor.getInput(), rewriter, loc);
+        if (failed(flattened))
+          return rewriter.notifyMatchFailure(
+              op.getLoc(), "array bitcast requires bitvector element sort");
+        auto flattenedTy =
+            cast<mlir::smt::BitVectorType>((*flattened).getType());
+        if (flattenedTy.getWidth() != dstBvTy.getWidth())
+          return rewriter.notifyMatchFailure(op.getLoc(),
+                                             "array bitcast width mismatch");
+        rewriter.replaceOp(op, *flattened);
+        return success();
+      }
+    }
+
+    // Lower iN -> array<elem> bitcasts by extracting element chunks.
+    if (auto dstArrayTy = dyn_cast<hw::ArrayType>(op.getType())) {
+      auto srcBvTy = dyn_cast<mlir::smt::BitVectorType>(adaptor.getInput().getType());
+      auto dstArraySMT = dyn_cast<mlir::smt::ArrayType>(convertedResultType);
+      if (srcBvTy && dstArraySMT) {
+        auto elemBvTy =
+            dyn_cast<mlir::smt::BitVectorType>(dstArraySMT.getRangeType());
+        if (!elemBvTy)
+          return rewriter.notifyMatchFailure(
+              op.getLoc(), "array bitcast requires bitvector element sort");
+        unsigned numElements = dstArrayTy.getNumElements();
+        unsigned elemWidth = elemBvTy.getWidth();
+        if (srcBvTy.getWidth() != numElements * elemWidth)
+          return rewriter.notifyMatchFailure(
+              op.getLoc(), "array bitcast width mismatch");
+        unsigned indexWidth = getArrayDomainWidth(numElements);
+
+        Value array = mlir::smt::DeclareFunOp::create(rewriter, loc, dstArraySMT);
+        for (unsigned i = 0; i < numElements; ++i) {
+          unsigned offset = i * elemWidth;
+          Value element = mlir::smt::ExtractOp::create(
+              rewriter, loc, elemBvTy, offset, adaptor.getInput());
+          Value index = mlir::smt::BVConstantOp::create(rewriter, loc, i,
+                                                        indexWidth);
+          array = mlir::smt::ArrayStoreOp::create(rewriter, loc, array, index,
+                                                  element);
+        }
+        rewriter.replaceOp(op, array);
+        return success();
+      }
+    }
+
+    return rewriter.notifyMatchFailure(
+        op.getLoc(), "bitcast source/result SMT representations differ");
+  }
+};
+
 /// Lower a hw::InstanceOp operation to func::CallOp.
 struct InstanceOpConversion : OpConversionPattern<InstanceOp> {
   using OpConversionPattern<InstanceOp>::OpConversionPattern;
@@ -314,6 +510,35 @@ struct InstanceOpConversion : OpConversionPattern<InstanceOp> {
     SmallVector<Type> resultTypes;
     if (failed(typeConverter->convertTypes(op->getResultTypes(), resultTypes)))
       return failure();
+
+    bool calleeIsExtern = false;
+    if (Operation *symbol =
+            SymbolTable::lookupNearestSymbolFrom(op, op.getModuleNameAttr())) {
+      if (isa<hw::HWModuleExternOp>(symbol))
+        calleeIsExtern = true;
+      if (auto funcOp = dyn_cast<mlir::func::FuncOp>(symbol);
+          funcOp && funcOp.isExternal())
+        calleeIsExtern = true;
+    }
+
+    // For extern modules, model each result as a fresh uninterpreted function
+    // application over the converted inputs. This avoids emitting external
+    // func.call ops that SMT-LIB export cannot represent.
+    if (calleeIsExtern) {
+      SmallVector<Value> results;
+      results.reserve(resultTypes.size());
+      SmallVector<Type> domainTypes(adaptor.getInputs().getTypes().begin(),
+                                    adaptor.getInputs().getTypes().end());
+      for (auto resultType : resultTypes) {
+        auto funcType = mlir::smt::SMTFuncType::get(domainTypes, resultType);
+        Value fn = mlir::smt::DeclareFunOp::create(rewriter, op.getLoc(), funcType);
+        Value app = mlir::smt::ApplyFuncOp::create(rewriter, op.getLoc(), fn,
+                                                   adaptor.getInputs());
+        results.push_back(app);
+      }
+      rewriter.replaceOp(op, results);
+      return success();
+    }
 
     rewriter.replaceOpWithNewOp<mlir::func::CallOp>(
         op, adaptor.getModuleNameAttr(), resultTypes, adaptor.getInputs());
@@ -447,17 +672,28 @@ struct StructCreateOpConversion : OpConversionPattern<StructCreateOp> {
     if (inputs.empty())
       return rewriter.notifyMatchFailure(op.getLoc(),
                                          "empty struct create not supported");
-    Value result = inputs.front();
-    if (!isa<mlir::smt::BitVectorType>(result.getType()))
+    auto structTy = cast<hw::StructType>(op.getType());
+    if (inputs.size() != structTy.getElements().size())
       return rewriter.notifyMatchFailure(op.getLoc(),
-                                         "struct fields must be bitvectors");
-    for (auto input : inputs.drop_front()) {
-      if (!isa<mlir::smt::BitVectorType>(input.getType()))
+                                         "struct field/input arity mismatch");
+
+    SmallVector<Value> packedInputs;
+    packedInputs.reserve(inputs.size());
+    for (auto [input, fieldInfo] : llvm::zip_equal(inputs, structTy.getElements())) {
+      auto packed =
+          packValueToBitVector(fieldInfo.type, input, rewriter, op.getLoc());
+      if (failed(packed))
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "struct field must lower to bitvector");
+      if (!isa<mlir::smt::BitVectorType>((*packed).getType()))
         return rewriter.notifyMatchFailure(op.getLoc(),
                                            "struct fields must be bitvectors");
-      result =
-          mlir::smt::ConcatOp::create(rewriter, op.getLoc(), result, input);
+      packedInputs.push_back(*packed);
     }
+
+    Value result = packedInputs.front();
+    for (auto input : llvm::drop_begin(packedInputs))
+      result = mlir::smt::ConcatOp::create(rewriter, op.getLoc(), result, input);
     rewriter.replaceOp(op, result);
     return success();
   }
@@ -473,18 +709,21 @@ struct StructExtractOpConversion : OpConversionPattern<StructExtractOp> {
     auto structTy = cast<hw::StructType>(op.getInput().getType());
     unsigned fieldIdx = op.getFieldIndex();
     auto fieldTy = structTy.getElements()[fieldIdx].type;
-    auto smtFieldTy = typeConverter->convertType(fieldTy);
-    auto bvTy = dyn_cast_or_null<mlir::smt::BitVectorType>(smtFieldTy);
-    if (!bvTy)
-      return rewriter.notifyMatchFailure(op.getLoc(),
-                                         "struct fields must be bitvectors");
-    unsigned width = bvTy.getWidth();
-    if (width == 0)
+    int64_t fieldWidth = hw::getBitWidth(fieldTy);
+    if (fieldWidth <= 0)
       return rewriter.notifyMatchFailure(op.getLoc(),
                                          "0-bit struct fields not supported");
+    auto fieldBvTy =
+        mlir::smt::BitVectorType::get(op.getContext(), fieldWidth);
     auto offset = getStructFieldOffset(structTy, fieldIdx);
-    rewriter.replaceOpWithNewOp<mlir::smt::ExtractOp>(
-        op, bvTy, offset, adaptor.getInput());
+    Value fieldBits = mlir::smt::ExtractOp::create(
+        rewriter, op.getLoc(), fieldBvTy, offset, adaptor.getInput());
+    auto unpacked = unpackBitVectorToValue(fieldTy, fieldBits, *typeConverter,
+                                           rewriter, op.getLoc());
+    if (failed(unpacked))
+      return rewriter.notifyMatchFailure(op.getLoc(),
+                                         "struct field unpack failed");
+    rewriter.replaceOp(op, *unpacked);
     return success();
   }
 };
@@ -501,18 +740,21 @@ struct StructExplodeOpConversion : OpConversionPattern<StructExplodeOp> {
     results.reserve(structTy.getElements().size());
     for (unsigned i = 0, e = structTy.getElements().size(); i < e; ++i) {
       auto fieldTy = structTy.getElements()[i].type;
-      auto smtFieldTy = typeConverter->convertType(fieldTy);
-      auto bvTy = dyn_cast_or_null<mlir::smt::BitVectorType>(smtFieldTy);
-      if (!bvTy)
-        return rewriter.notifyMatchFailure(op.getLoc(),
-                                           "struct fields must be bitvectors");
-      unsigned width = bvTy.getWidth();
-      if (width == 0)
+      int64_t fieldWidth = hw::getBitWidth(fieldTy);
+      if (fieldWidth <= 0)
         return rewriter.notifyMatchFailure(op.getLoc(),
                                            "0-bit struct fields not supported");
+      auto fieldBvTy =
+          mlir::smt::BitVectorType::get(op.getContext(), fieldWidth);
       auto offset = getStructFieldOffset(structTy, i);
-      results.push_back(mlir::smt::ExtractOp::create(
-          rewriter, op.getLoc(), bvTy, offset, adaptor.getInput()));
+      Value fieldBits = mlir::smt::ExtractOp::create(
+          rewriter, op.getLoc(), fieldBvTy, offset, adaptor.getInput());
+      auto unpacked = unpackBitVectorToValue(fieldTy, fieldBits, *typeConverter,
+                                             rewriter, op.getLoc());
+      if (failed(unpacked))
+        return rewriter.notifyMatchFailure(op.getLoc(),
+                                           "struct field unpack failed");
+      results.push_back(*unpacked);
     }
     rewriter.replaceOp(op, results);
     return success();
@@ -623,6 +865,9 @@ void circt::populateHWToSMTTypeConverter(TypeConverter &converter) {
   });
   converter.addConversion([](seq::ClockType type) -> std::optional<Type> {
     return mlir::smt::BitVectorType::get(type.getContext(), 1);
+  });
+  converter.addConversion([&](llhd::RefType type) -> std::optional<Type> {
+    return converter.convertType(type.getNestedType());
   });
   converter.addConversion([&](hw::TypeAliasType type) -> std::optional<Type> {
     return converter.convertType(type.getCanonicalType());
@@ -753,14 +998,15 @@ void circt::populateHWToSMTConversionPatterns(TypeConverter &converter,
                                               RewritePatternSet &patterns,
                                               bool forSMTLIBExport) {
   patterns.add<HWConstantOpConversion, HWAggregateConstantOpConversion,
-               WireOpConversion, InstanceOpConversion,
+               WireOpConversion, BitcastOpConversion, InstanceOpConversion,
                ReplaceWithInput<seq::ToClockOp>,
                ReplaceWithInput<seq::FromClockOp>, ConstClockOpConversion,
                ArrayCreateOpConversion, ArrayGetOpConversion,
                ArrayInjectOpConversion, StructCreateOpConversion,
                StructExtractOpConversion, StructExplodeOpConversion>(
       converter, patterns.getContext());
-  patterns.add<OutputOpConversion, HWModuleOpConversion>(
+  patterns.add<OutputOpConversion, HWModuleOpConversion,
+               HWModuleExternOpConversion>(
       converter, patterns.getContext(), forSMTLIBExport);
 }
 

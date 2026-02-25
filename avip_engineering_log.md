@@ -9239,3 +9239,39 @@ Based on these findings, the circt-sim compiled process architecture:
 - Conclusion:
   - functional smoke parity is green;
   - coverage parity-to-Xcelium is not yet green and not yet enforced by default unified smoke policy.
+
+## 2026-02-25 BMC/LEC formal parity: multiclock expr fallback + extern-instance SMT-LIB export
+
+### Goal
+- Remove two live OpenTitan formal blockers in CIRCT BMC:
+  - multiclock register clock metadata with unresolved `expr:*` entries,
+  - SMT-LIB export failures when solver regions retain extern-instance call shapes.
+
+### Findings
+- `VerifToSMT` hard-failed on unresolved `bmc_reg_clocks` names before considering key-based metadata/fallback.
+- Extern module instances in solver paths could survive as non-SMT operations, causing:
+  - `solver must not contain any non-SMT operations`.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - added robust mapping for register clock metadata:
+    - accept key-style names from `clockKeyToPos`,
+    - if only unresolved `expr:*` tails remain, map them to the dominant mapped clock domain (tie-safe).
+- `lib/Conversion/HWToSMT/HWToSMT.cpp`
+  - lower extern `hw.instance` results to SMT UF applications (`smt.declare_fun` + `smt.apply_func`) instead of `func.call` in SMT export paths.
+- `tools/circt-bmc/circt-bmc.cpp`
+  - run HW/Comb->SMT once more after `convert-verif-to-smt` so residual non-SMT ops are legalized before export.
+- Added regressions:
+  - `test/Conversion/VerifToSMT/bmc-reg-clock-sources-unresolved-expr-fallback.mlir`
+  - `test/Tools/circt-bmc/bmc-emit-smtlib-extern-instance-ref-output.mlir`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build_test/test/Conversion/HWToSMT/hw-to-smt-struct-array-bitcast.mlir build_test/test/Tools/circt-bmc/bmc-emit-smtlib-extern-instance-ref-output.mlir build_test/test/Conversion/VerifToSMT/bmc-reg-clock-sources-unresolved-expr-fallback.mlir build_test/test/Conversion/VerifToSMT/bmc-reg-clock-sources.mlir build_test/test/Conversion/VerifToSMT/bmc-clock-key-via-reg-clock-source.mlir`
+- Result: `5 passed, 0 failed`.
+- OpenTitan direct repro progression:
+  - before: `bmc_reg_clocks entry does not match any input name` / `solver must not contain any non-SMT operations`
+  - after: `circt-bmc ... --allow-multi-clock ...` returns `EXIT:0` with `BMC_RESULT=SAT` on the same prepared module.
+
+### Realization
+- Multiclock parity requires tolerant metadata reconciliation in `VerifToSMT`; strict naming assumptions are too brittle for flattened/imported designs.
+- SMT-LIB export parity requires treating extern design boundaries as symbolic functions, not residual IR call scaffolding.

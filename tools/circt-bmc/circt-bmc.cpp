@@ -871,6 +871,11 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertCombToSMT());
   pm.addPass(createConvertVerifToSMT(convertOptions));
+  // VerifToSMT may materialize/retain HW/Comb ops (e.g. nested extern-module
+  // instances that were not inlined in BMC regions). Run HW/Comb lowering once
+  // more so SMT-LIB export does not see residual non-SMT ops in solver bodies.
+  pm.addPass(createConvertHWToSMT());
+  pm.addPass(createConvertCombToSMT());
   pm.addPass(createBottomUpSimpleCanonicalizerPass());
   pm.addPass(createSMTDeadCodeEliminationPass());
   pm.addPass(mlir::createReconcileUnrealizedCastsPass());
