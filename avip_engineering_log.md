@@ -1,5 +1,78 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: VerifToSMT fallback for `bmc.clock` names via reg-clock metadata
+
+### What changed
+- Updated:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-clock-name-via-reg-clock-source.mlir`
+
+### Red-first debugging path
+- Built a direct red reproducer where:
+  - checks carry `bmc.clock = "aux_clk"` metadata,
+  - `aux_clk` is not a direct BMC input name,
+  - but `bmc_reg_clocks` + `bmc_reg_clock_sources` describe the same clock.
+- Before fix, `convert-verif-to-smt` failed with:
+  - `clocked property uses a clock that is not a BMC clock input`.
+- Fix:
+  - extended check-clock name resolution to consult reg-clock metadata:
+    - `clock_key` via `bmc_clock_keys` when present,
+    - otherwise `arg_index` via `bmc_clock_sources` / clock args.
+
+### Realizations / surprises
+- Lowered formal checks can preserve clock names that are no longer aligned with
+  final BMC input names; reg-clock metadata already held enough information to
+  resolve them, but this path was only used for per-register loop gating.
+
+### Validation snapshot
+- New conversion regression:
+  - `bmc-clock-name-via-reg-clock-source.mlir` -> pass.
+- Direct repro transition:
+  - before fix: unmapped clock error.
+  - after fix: converts successfully.
+
+## 2026-02-25 Session: BMC mixed explicit+4state clock mapping fix
+
+### What changed
+- Updated:
+  - `lib/Tools/circt-bmc/LowerToBMC.cpp`
+- Added:
+  - `test/Tools/circt-bmc/circt-bmc-explicit-plus-struct-clock.mlir`
+
+### Red-first debugging path
+- Reproduced a minimal formal failure matching the OpenTitan pinmux-style clock
+  shape:
+  - module with explicit `seq.clock` input plus an auxiliary 4-state clock
+    expression used by assertion sampling.
+  - failure before fix:
+    `clocked property uses a clock that is not a BMC clock input`.
+- Traced pass pipeline with `--mlir-print-ir-after-all` and found:
+  - `verif.clocked_assert` had already been lowered to `verif.assert` carrying
+    `bmc.clock` metadata before `LowerToBMC` clock discovery.
+  - existing discovery gate only considered explicit clocked ops, so it skipped
+    this lowered form in mixed-clock modules.
+- Fix:
+  - broadened `LowerToBMC` discovery trigger to also run when
+    `verif.assert/assume/cover` carry `bmc.clock` / `bmc.clock_edge`.
+
+### Realizations / surprises
+- The key miss was phase ordering, not solver conversion:
+  `bmc.clock` metadata survives while explicit `verif.clocked_*` ops may not.
+- This same shape is common in large formal imports where clocked assertions are
+  normalized before BMC lowering.
+
+### Validation snapshot
+- Red before fix:
+  - `build_test/bin/circt-bmc -b 1 --allow-multi-clock --module top --emit-mlir test/Tools/circt-bmc/circt-bmc-explicit-plus-struct-clock.mlir`
+    -> unmapped clock error.
+- Green after fix:
+  - same command -> `EXIT:0`.
+- Focused checks:
+  - `circt-bmc-multiclock.mlir` (both allow/fail modes) -> pass.
+  - `bmc-clock-inputs-known-default-warning.mlir` -> pass.
+  - `circt-bmc-struct-clock-gate-equivalence.mlir` -> pass.
+
 ## 2026-02-25 Session: OpenTitan FPV BMC multi-clock + optional-blackbox policy unblocking
 
 ### What changed

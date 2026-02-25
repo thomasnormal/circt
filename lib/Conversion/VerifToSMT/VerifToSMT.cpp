@@ -5934,21 +5934,64 @@ struct VerifBoundedModelCheckingOpConversion
           inputDecls.push_back(decl);
           continue;
         }
+        auto materializePackedInit =
+            [&](auto &&self, const APInt &bits, Type sourceTy,
+                Type targetTy) -> FailureOr<Value> {
+          if (auto aliasTy = dyn_cast<hw::TypeAliasType>(sourceTy))
+            return self(self, bits, aliasTy.getCanonicalType(), targetTy);
+
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(targetTy)) {
+            APInt value = bits.zextOrTrunc(bvTy.getWidth());
+            return Value(smt::BVConstantOp::create(rewriter, loc, value));
+          }
+          if (isa<smt::BoolType>(targetTy))
+            return Value(
+                smt::BoolConstantOp::create(rewriter, loc, !bits.isZero()));
+
+          auto arraySourceTy = dyn_cast<hw::ArrayType>(sourceTy);
+          auto arrayTargetTy = dyn_cast<smt::ArrayType>(targetTy);
+          if (!arraySourceTy || !arrayTargetTy)
+            return failure();
+
+          auto indexTy =
+              dyn_cast<smt::BitVectorType>(arrayTargetTy.getDomainType());
+          if (!indexTy)
+            return failure();
+
+          Type sourceElemTy = arraySourceTy.getElementType();
+          int64_t elemWidth = hw::getBitWidth(sourceElemTy);
+          if (elemWidth <= 0)
+            return failure();
+
+          unsigned numElements = arraySourceTy.getNumElements();
+          unsigned totalWidth = numElements * static_cast<unsigned>(elemWidth);
+          APInt normalized = bits.zextOrTrunc(totalWidth);
+
+          Value array =
+              smt::DeclareFunOp::create(rewriter, loc, arrayTargetTy);
+          for (unsigned i = 0; i < numElements; ++i) {
+            APInt chunk =
+                normalized.extractBits(elemWidth, i * static_cast<unsigned>(elemWidth));
+            auto elemOr = self(self, chunk, sourceElemTy,
+                               arrayTargetTy.getRangeType());
+            if (failed(elemOr))
+              return failure();
+            Value index =
+                smt::BVConstantOp::create(rewriter, loc, i, indexTy.getWidth());
+            array = smt::ArrayStoreOp::create(rewriter, loc, array, index,
+                                              *elemOr);
+          }
+          return array;
+        };
+
         auto initVal =
             initialValues[curIndex - origCircuitArgsSize + numRegs];
         if (auto initIntAttr = dyn_cast<IntegerAttr>(initVal)) {
           const auto &cstInt = initIntAttr.getValue();
-          if (auto bvTy = dyn_cast<smt::BitVectorType>(newTy)) {
-            assert(cstInt.getBitWidth() == bvTy.getWidth() &&
-                   "Width mismatch between initial value and target type");
-            auto initVal = smt::BVConstantOp::create(rewriter, loc, cstInt);
-            inputDecls.push_back(initVal);
-            continue;
-          }
-          if (isa<smt::BoolType>(newTy)) {
-            auto initVal =
-                smt::BoolConstantOp::create(rewriter, loc, !cstInt.isZero());
-            inputDecls.push_back(initVal);
+          auto initConstOr = materializePackedInit(materializePackedInit, cstInt,
+                                                   oldTy, newTy);
+          if (succeeded(initConstOr)) {
+            inputDecls.push_back(*initConstOr);
             continue;
           }
           op.emitError("unsupported integer initial value in BMC conversion");
@@ -6065,6 +6108,60 @@ struct VerifBoundedModelCheckingOpConversion
         }
       }
     }
+
+    auto mapArgIndexToClockPos = [&](unsigned argIndex)
+        -> std::optional<unsigned> {
+      if (auto it = clockSourceInputs.find(argIndex);
+          it != clockSourceInputs.end())
+        return it->second.pos;
+      auto clockIt = llvm::find(clockIndexes, static_cast<int>(argIndex));
+      if (clockIt == clockIndexes.end())
+        return std::nullopt;
+      return static_cast<unsigned>(clockIt - clockIndexes.begin());
+    };
+
+    // LowerToBMC may preserve check clock names in bmc_reg_clocks even when the
+    // corresponding BMC clock input is unnamed or remapped. Accept those names
+    // by resolving through bmc_reg_clock_sources / bmc_clock_sources metadata.
+    if (auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+      if (auto regClockSourcesAttr =
+              op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        unsigned count =
+            std::min(regClocksAttr.size(), regClockSourcesAttr.size());
+        for (unsigned idx = 0; idx < count; ++idx) {
+          auto nameAttr = dyn_cast_or_null<StringAttr>(regClocksAttr[idx]);
+          if (!nameAttr || nameAttr.getValue().empty())
+            continue;
+
+          auto dict = dyn_cast<DictionaryAttr>(regClockSourcesAttr[idx]);
+          if (!dict)
+            continue;
+
+          std::optional<unsigned> mappedPos;
+          if (auto keyAttr = dict.getAs<StringAttr>("clock_key");
+              keyAttr && !keyAttr.getValue().empty()) {
+            if (auto it = clockKeyToPos.find(keyAttr.getValue());
+                it != clockKeyToPos.end())
+              mappedPos = it->second.pos;
+          }
+          if (!mappedPos) {
+            if (auto argAttr = dict.getAs<IntegerAttr>("arg_index"))
+              mappedPos = mapArgIndexToClockPos(
+                  static_cast<unsigned>(argAttr.getInt()));
+          }
+          if (!mappedPos)
+            continue;
+
+          auto insert = clockNameToPos.try_emplace(nameAttr.getValue(), *mappedPos);
+          if (!insert.second && insert.first->second != *mappedPos) {
+            op.emitError("bmc_reg_clocks entry maps to multiple BMC clock "
+                         "inputs");
+            return failure();
+          }
+        }
+      }
+    }
+
     DenseMap<Value, StringAttr> clockValueKeys;
     op->walk([&](ltl::ClockOp clockOp) {
       if (auto keyAttr = clockOp->getAttrOfType<StringAttr>("bmc.clock_key")) {

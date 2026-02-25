@@ -1034,7 +1034,28 @@ void LowerToBMCPass::runOnOperation() {
   bool hasClk = hasExplicitClockInput;
   SmallVector<Attribute> clockSourceAttrs;
   SmallVector<Attribute> clockKeyAttrs;
-  if (!hasExplicitClockInput || structClockCount > 0) {
+  bool hasClockedPropertyOps = false;
+  hwModule.walk([&](Operation *op) {
+    if (isa<verif::ClockedAssertOp, verif::ClockedAssumeOp,
+            verif::ClockedCoverOp>(op))
+      hasClockedPropertyOps = true;
+  });
+  bool hasClockMetadataChecks = false;
+  hwModule.walk([&](Operation *op) {
+    if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
+      return;
+    if (auto clockName = op->getAttrOfType<StringAttr>("bmc.clock");
+        clockName && !clockName.getValue().empty())
+      hasClockMetadataChecks = true;
+    if (op->hasAttr("bmc.clock_edge"))
+      hasClockMetadataChecks = true;
+  });
+
+  // Even when the module has explicit seq.clock inputs, clocked verif ops may
+  // still reference additional i1/4-state clock expressions that must be
+  // discovered and mapped to BMC clock inputs.
+  if (!hasExplicitClockInput || structClockCount > 0 || hasClockedPropertyOps ||
+      hasClockMetadataChecks) {
     SmallVector<seq::ToClockOp> liveToClockOps;
     SmallVector<seq::ToClockOp> deadToClockOps;
     SmallVector<seq::ToClockOp> toClockOps;
