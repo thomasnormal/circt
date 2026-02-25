@@ -891,12 +891,16 @@ static LogicalResult executeWithSources(MLIRContext *context,
     options.defaultLibName = opts.defaultLibName;
   options.commandFiles = opts.commandFiles;
 
-  // Open the output file.
-  std::string errorMessage;
-  auto outputFile = openOutputFile(opts.outputFilename, &errorMessage);
-  if (!outputFile) {
-    WithColor::error() << errorMessage << "\n";
-    return failure();
+  std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
+  llvm::raw_ostream *outputOS = &llvm::outs();
+  if (opts.outputFilename != "-") {
+    std::string errorMessage;
+    outputFile.emplace(openOutputFile(opts.outputFilename, &errorMessage));
+    if (!outputFile.value()) {
+      WithColor::error() << errorMessage << "\n";
+      return failure();
+    }
+    outputOS = &outputFile.value()->os();
   }
 
   // Parse the input as SystemVerilog or MLIR file.
@@ -907,9 +911,13 @@ static LogicalResult executeWithSources(MLIRContext *context,
     // print the results to the configured output file.
     if (opts.loweringMode == LoweringMode::OnlyPreprocess) {
       auto result =
-          preprocessVerilog(sourceMgr, context, ts, outputFile->os(), &options);
-      if (succeeded(result))
-        outputFile->keep();
+          preprocessVerilog(sourceMgr, context, ts, *outputOS, &options);
+      if (succeeded(result)) {
+        if (opts.outputFilename == "-")
+          outputOS->flush();
+        if (outputFile)
+          outputFile.value()->keep();
+      }
       return result;
     }
 
@@ -953,13 +961,16 @@ static LogicalResult executeWithSources(MLIRContext *context,
   auto outputTimer = ts.nest("MLIR Printer");
   if (opts.emitBytecode) {
     if (failed(mlir::writeBytecodeToFile(
-            module.get(), outputFile->os(),
+            module.get(), *outputOS,
             mlir::BytecodeWriterConfig(circt::getCirctVersion()))))
       return failure();
   } else {
-    module->print(outputFile->os());
+    module->print(*outputOS);
   }
-  outputFile->keep();
+  if (opts.outputFilename == "-")
+    outputOS->flush();
+  if (outputFile)
+    outputFile.value()->keep();
   return success();
 }
 
