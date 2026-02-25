@@ -47,8 +47,8 @@
       - integrated `wasm_bmc_hostpath_input_check.sh`.
       - switched bmc stdin functional check to file output (`-o <tmp>.smt2`)
         instead of `-o -` to avoid raw-fs stdout coupling.
-      - updated bmc re-entry checks to use host-path input and relative output
-        paths (`out*.smt2`) instead of MEMFS preload `/inputs/...`.
+      - updated bmc re-entry checks to use host-path input and tempdir output
+        paths instead of MEMFS preload `/inputs/...`.
     - `utils/wasm_resource_guard_default_check.sh`
       - switched bmc default-guard check to file output (`-o <tmp>.smt2`).
   - post-fix validation:

@@ -165,6 +165,9 @@ fi
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
+BMC_REENTRY_OUT="$tmpdir/bmc-reentry.smt2"
+BMC_REENTRY_RUN1_OUT="$tmpdir/bmc-reentry-run1.smt2"
+BMC_REENTRY_RUN2_OUT="$tmpdir/bmc-reentry-run2.smt2"
 
 has_verilog_target=0
 if ninja -C "$BUILD_DIR" -t targets all >"$tmpdir/targets.list" 2>"$tmpdir/targets.err"; then
@@ -322,8 +325,8 @@ fi
 echo "[wasm-smoke] Re-entry: circt-bmc callMain help -> run"
 "$NODE_BIN" "$REENTRY_HELPER" "$BMC_JS" \
   --first --help \
-  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o out.smt2 "$BMC_TEST_INPUT" \
-  --expect-wasm-file-substr out.smt2 "(check-sat)" \
+  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o "$BMC_REENTRY_OUT" "$BMC_TEST_INPUT" \
+  --expect-wasm-file-substr "$BMC_REENTRY_OUT" "(check-sat)" \
   --forbid-substr "Aborted(" \
   >"$bmc_reentry_log" 2>&1
 if grep -q "InitLLVM was already initialized!" "$bmc_reentry_log"; then
@@ -359,10 +362,10 @@ echo "[wasm-smoke] Re-entry: circt-sim run -> run"
 
 echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
 "$NODE_BIN" "$REENTRY_HELPER" "$BMC_JS" \
-  --first --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o out1.smt2 "$BMC_TEST_INPUT" \
-  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o out2.smt2 "$BMC_TEST_INPUT" \
-  --expect-wasm-file-substr out1.smt2 "(check-sat)" \
-  --expect-wasm-file-substr out2.smt2 "(check-sat)" \
+  --first --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o "$BMC_REENTRY_RUN1_OUT" "$BMC_TEST_INPUT" \
+  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o "$BMC_REENTRY_RUN2_OUT" "$BMC_TEST_INPUT" \
+  --expect-wasm-file-substr "$BMC_REENTRY_RUN1_OUT" "(check-sat)" \
+  --expect-wasm-file-substr "$BMC_REENTRY_RUN2_OUT" "(check-sat)" \
   --forbid-substr "Aborted(" \
   >"$tmpdir/bmc-reentry-run-run.log" 2>&1
 
