@@ -9110,6 +9110,7 @@ static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
 static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block) {
   DenseSet<Value> visitedValues;
   DenseSet<Operation *> liveOps;
+  SmallVector<Value> valueWorklist;
 
   auto getTopLevelOwnerInBlock = [&](Operation *def) -> Operation * {
     Operation *owner = def;
@@ -9120,49 +9121,54 @@ static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block) {
     return owner;
   };
 
-  auto markLiveValue = [&](Value value, auto &&markLiveValueRef) -> void {
+  auto enqueueValue = [&](Value value) {
     if (!value || !visitedValues.insert(value).second)
       return;
+    valueWorklist.push_back(value);
+  };
+
+  if (auto yield = dyn_cast<verif::YieldOp>(block.getTerminator()))
+    for (Value operand : yield.getOperands())
+      enqueueValue(operand);
+
+  // Keep properties and enables in the live roots so unsupported ops that
+  // affect formal checks still produce explicit diagnostics.
+  for (Operation &op : block.without_terminator()) {
+    if (auto assumeOp = dyn_cast<verif::AssumeOp>(op)) {
+      enqueueValue(assumeOp.getProperty());
+      if (auto enable = assumeOp.getEnable())
+        enqueueValue(enable);
+      continue;
+    }
+    if (auto assertOp = dyn_cast<verif::AssertOp>(op)) {
+      enqueueValue(assertOp.getProperty());
+      if (auto enable = assertOp.getEnable())
+        enqueueValue(enable);
+      continue;
+    }
+    if (auto coverOp = dyn_cast<verif::CoverOp>(op)) {
+      enqueueValue(coverOp.getProperty());
+      if (auto enable = coverOp.getEnable())
+        enqueueValue(enable);
+      continue;
+    }
+  }
+
+  while (!valueWorklist.empty()) {
+    Value value = valueWorklist.pop_back_val();
     auto *def = value.getDefiningOp();
     if (!def)
-      return;
+      continue;
     Operation *topLevelDef = getTopLevelOwnerInBlock(def);
     if (!topLevelDef)
-      return;
+      continue;
     SmallVector<Operation *> pending{topLevelDef};
     while (!pending.empty()) {
       Operation *cur = pending.pop_back_val();
       if (!liveOps.insert(cur).second)
         continue;
       for (Value operand : cur->getOperands())
-        markLiveValueRef(operand, markLiveValueRef);
-    }
-  };
-
-  if (auto yield = dyn_cast<verif::YieldOp>(block.getTerminator()))
-    for (Value operand : yield.getOperands())
-      markLiveValue(operand, markLiveValue);
-
-  // Keep properties and enables in the live roots so unsupported ops that
-  // affect formal checks still produce explicit diagnostics.
-  for (Operation &op : block.without_terminator()) {
-    if (auto assumeOp = dyn_cast<verif::AssumeOp>(op)) {
-      markLiveValue(assumeOp.getProperty(), markLiveValue);
-      if (auto enable = assumeOp.getEnable())
-        markLiveValue(enable, markLiveValue);
-      continue;
-    }
-    if (auto assertOp = dyn_cast<verif::AssertOp>(op)) {
-      markLiveValue(assertOp.getProperty(), markLiveValue);
-      if (auto enable = assertOp.getEnable())
-        markLiveValue(enable, markLiveValue);
-      continue;
-    }
-    if (auto coverOp = dyn_cast<verif::CoverOp>(op)) {
-      markLiveValue(coverOp.getProperty(), markLiveValue);
-      if (auto enable = coverOp.getEnable())
-        markLiveValue(enable, markLiveValue);
-      continue;
+        enqueueValue(operand);
     }
   }
 

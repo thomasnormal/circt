@@ -1,5 +1,43 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: VerifToSMT live-op discovery stack-overflow fix
+
+### What changed
+- Updated:
+  - `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+
+### Red-first debugging path
+- After fixing LLHD strip array handling, OpenTitan `prim_lfsr_fpv` moved from
+  type mismatch to an internal crash:
+  - `please_submit_a_bug_report...`
+  - stack trace repeatedly in
+    `collectSMTLIBLiveOpsInBMCBlock` (VerifToSMT liveness collection).
+- Root cause:
+  - recursive DFS over value dependencies can exceed stack depth on large/deep
+    formal blocks.
+- Fix:
+  - replaced recursive value traversal with explicit worklist traversal, while
+    preserving existing op/value visited semantics.
+
+### Realizations / surprises
+- The prior `prim_lfsr_fpv` `hw.output` mismatch fix was a true unblocker: once
+  removed, this deeper VerifToSMT recursion issue became visible immediately.
+- After this fix, the same OpenTitan target now reaches a normal solver result
+  (`SAT`) instead of crashing.
+
+### Validation snapshot
+- OpenTitan targeted rerun:
+  - before fix:
+    - `ERROR ... please_submit_a_bug_report...` with stack in
+      `collectSMTLIBLiveOpsInBMCBlock`.
+  - after fix:
+    - `FAIL ... #SAT` (no internal crash).
+- Focused non-regression:
+  - `build_test/bin/circt-opt test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir --convert-verif-to-smt='for-smtlib-export=true' --reconcile-unrealized-casts -allow-unregistered-dialect | llvm/build/bin/FileCheck ...`
+    -> pass.
+  - `build_test/bin/circt-opt test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir --convert-verif-to-smt='for-smtlib-export=true' --verify-diagnostics`
+    -> pass.
+
 ## 2026-02-25 Session: strip-llhd-interface-signals array-root probe type preservation
 
 ### What changed
