@@ -509,6 +509,95 @@ static bool hasUvmMacrosInput() {
   return false;
 }
 
+static bool isHeaderLikeInput(llvm::StringRef inputFilename) {
+  auto ext = llvm::sys::path::extension(inputFilename).lower();
+  return ext == ".svh" || ext == ".vh";
+}
+
+/// Defensively sanitize root inputs for known-crashy invocation shapes.
+///
+/// In particular, `uvm_macros.svh` is an include header, not a standalone root
+/// compilation unit. When used as a root alongside multiple source roots,
+/// frontend stacks can abort in wasm builds. Drop that root input and rely on
+/// explicit `include "uvm_macros.svh"` within source files.
+static void sanitizeKnownCrashyRootInputs() {
+  if (opts.format != Format::SV)
+    return;
+
+  size_t nonHeaderRoots = 0;
+  bool hasUvmMacrosRoot = false;
+  for (const auto &inputFilename : opts.inputFilenames) {
+    if (!isHeaderLikeInput(inputFilename))
+      ++nonHeaderRoots;
+    if (llvm::sys::path::filename(inputFilename) == "uvm_macros.svh")
+      hasUvmMacrosRoot = true;
+  }
+
+  // Keep single-source flows unchanged; only sanitize the known multi-source
+  // crash shape.
+  if (!hasUvmMacrosRoot || nonHeaderRoots <= 1)
+    return;
+
+  std::vector<std::string> kept;
+  kept.reserve(opts.inputFilenames.size());
+  bool removed = false;
+  for (const auto &inputFilename : opts.inputFilenames) {
+    if (llvm::sys::path::filename(inputFilename) == "uvm_macros.svh") {
+      removed = true;
+      continue;
+    }
+    kept.push_back(inputFilename);
+  }
+
+  if (!removed)
+    return;
+
+  opts.inputFilenames.clear();
+  for (const auto &inputFilename : kept)
+    opts.inputFilenames.push_back(inputFilename);
+
+  llvm::errs()
+      << "warning: skipping root input `uvm_macros.svh` in multi-source "
+         "compile; include it from source files to avoid a known frontend "
+         "crash\n";
+}
+
+static bool sourceMentionsUvmMacros() {
+  for (const auto &inputFilename : opts.inputFilenames) {
+    auto ext = llvm::sys::path::extension(inputFilename).lower();
+    if (ext != ".sv" && ext != ".svh" && ext != ".v" && ext != ".vh")
+      continue;
+
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(inputFilename);
+    if (!bufferOrErr)
+      continue;
+
+    llvm::StringRef content = bufferOrErr.get()->getBuffer();
+    if (content.contains("`uvm_"))
+      return true;
+  }
+  return false;
+}
+
+static bool sourceIncludesUvmMacrosHeader() {
+  for (const auto &inputFilename : opts.inputFilenames) {
+    auto ext = llvm::sys::path::extension(inputFilename).lower();
+    if (ext != ".sv" && ext != ".svh" && ext != ".v" && ext != ".vh")
+      continue;
+
+    auto bufferOrErr = llvm::MemoryBuffer::getFile(inputFilename);
+    if (!bufferOrErr)
+      continue;
+
+    llvm::StringRef content = bufferOrErr.get()->getBuffer();
+    // Keep this check lightweight: if both tokens appear, users most likely
+    // include the UVM macros header directly.
+    if (content.contains("`include") && content.contains("uvm_macros.svh"))
+      return true;
+  }
+  return false;
+}
+
 static bool sourceMentionsUvm() {
   for (const auto &inputFilename : opts.inputFilenames) {
     auto ext = llvm::sys::path::extension(inputFilename).lower();
@@ -533,6 +622,11 @@ static void addUvmSupportIfAvailable() {
 
   if (opts.format != Format::SV)
     return;
+
+  // Capture user intent before mutating input file lists.
+  const size_t initialInputCount = opts.inputFilenames.size();
+  const bool usesUvmMacros = sourceMentionsUvmMacros();
+  const bool hasExplicitUvmMacroInclude = sourceIncludesUvmMacrosHeader();
 
   // Avoid injecting UVM into non-UVM sources by default.
   if (opts.uvmPath.empty() && !sourceMentionsUvm())
@@ -641,9 +735,20 @@ static void addUvmSupportIfAvailable() {
     opts.includeDirs.push_back(uvmIncludeDir);
 
   if (!uvmMacrosPath.empty() && !hasUvmMacrosInput()) {
-    opts.inputFilenames.insert(opts.inputFilenames.begin(), uvmMacrosPath);
-    if (opts.singleUnit.getNumOccurrences() == 0)
-      opts.singleUnit = true;
+    // Multi-root compiles that include uvm_macros.svh as a root input can hit
+    // a frontend abort. Only inject it as a root in the single-input case;
+    // for multi-input designs, users should include uvm_macros.svh explicitly.
+    if (initialInputCount <= 1) {
+      opts.inputFilenames.insert(opts.inputFilenames.begin(), uvmMacrosPath);
+      if (opts.singleUnit.getNumOccurrences() == 0)
+        opts.singleUnit = true;
+    } else if (usesUvmMacros && !hasExplicitUvmMacroInclude) {
+      llvm::errs()
+          << "warning: detected `uvm_*` macro usage across multiple root "
+             "inputs; skipping automatic uvm_macros.svh root injection to "
+             "avoid a known frontend crash. Add "
+             "`include \"uvm_macros.svh\" to files that use UVM macros.\n";
+    }
   }
 
   if (!hasUvmPkgInput()) {
@@ -888,6 +993,7 @@ static LogicalResult execute(MLIRContext *context) {
     opts.format = *detectedFormat;
   }
 
+  sanitizeKnownCrashyRootInputs();
   addUvmSupportIfAvailable();
 
   // Open the input files.

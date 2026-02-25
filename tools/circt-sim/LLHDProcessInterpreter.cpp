@@ -253,12 +253,10 @@ static void maybeRegisterNativeBlockFromPtrLenStruct(
   auto lenTy = dyn_cast<IntegerType>(body[1]);
   if (!lenTy || lenTy.getWidth() != 64)
     return;
-  if (loadedValue.isX() || loadedValue.getWidth() < 128)
+  uint64_t ptr = 0;
+  uint64_t len = 0;
+  if (!decodePackedPtrLenPayload(loadedValue, ptr, len))
     return;
-
-  APInt bits = loadedValue.getAPInt();
-  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
-  uint64_t len = bits.extractBits(64, 64).getZExtValue();
   if (ptr == 0 || len == 0)
     return;
   // Ignore clearly invalid pointer/length pairs from uninitialized payloads.
@@ -694,14 +692,10 @@ bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
 
 std::string LLHDProcessInterpreter::readMooreStringStruct(
     ProcessId procId, InterpretedValue packedValue) {
-  // Decode !llvm.struct<(ptr, i64)> — LLVM struct fields are low-to-high bits:
-  //   field 0 (ptr) = bits [63:0], field 1 (len/i64) = bits [127:64]
-  unsigned totalWidth = packedValue.getWidth();
-  if (totalWidth < 128 || packedValue.isX())
+  uint64_t ptr = 0;
+  uint64_t len = 0;
+  if (!decodePackedPtrLenPayload(packedValue, ptr, len))
     return {};
-  const APInt &bits = packedValue.getAPInt();
-  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
-  uint64_t len = bits.extractBits(64, 64).getZExtValue();
   if (ptr == 0 || len == 0)
     return {};
   std::string result;
@@ -733,11 +727,10 @@ LLHDProcessInterpreter::encodeMooreStringSignalValue(llvm::StringRef str) {
 
 bool LLHDProcessInterpreter::decodeMooreStringSignalValue(
     const SignalValue &value, std::string &out) {
-  if (value.getWidth() < 128)
+  uint64_t ptr = 0;
+  uint64_t len = 0;
+  if (!decodePackedPtrLenPayload(value.getAPInt(), ptr, len))
     return false;
-  llvm::APInt bits = value.getAPInt().zextOrTrunc(128);
-  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
-  uint64_t len = bits.extractBits(64, 64).getZExtValue();
   if (len == 0) {
     out.clear();
     return true;
@@ -2062,6 +2055,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
           childToParentFieldAddr.size(), interfaceFieldPropagation.size());
     }
   }
+  reportInitStage("ifaceCopyPairs");
 
   // Resolve stores that copy a probed LLHD signal value into interface fields.
   // This links source signal IDs (e.g. shared inout wire) directly to all
@@ -2093,6 +2087,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
                                            resolvedPairs, unresolvedDest);
     }
   }
+  reportInitStage("ifaceSignalCopyPairs");
 
   // Auto-link child BFM interface structs to parent interfaces for signal
   // propagation. Each BFM gets its own interface struct copy (different malloc
@@ -2248,6 +2243,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       maybeTraceInterfaceAutoLinkTotal(autoLinked);
     }
   }
+  reportInitStage("ifaceAutoLink");
 
   // Detect intra-interface field propagation links.
   // Some interfaces have internal "output" fields (e.g., txSclkOutput) that
@@ -2473,6 +2469,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       maybeTraceInterfaceIntraLinkTotal(intraLinks);
     }
   }
+  reportInitStage("ifaceIntraLink");
 
   // Resolve address-based tri-state candidates to signal-based runtime rules.
   static bool disableIfaceTriStateRules = []() {
@@ -2549,11 +2546,13 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
           interfaceTriStateRules.size());
     }
   }
+  reportInitStage("ifaceTriStateRules");
 
   // Diagnostic: dump the full interfaceFieldPropagation map.
   if (traceInterfacePropagation && !interfaceFieldPropagation.empty()) {
     maybeTraceInterfaceFieldPropagationMap();
   }
+  reportInitStage("ifaceDone");
 
   LLVM_DEBUG(maybeTraceInitializationRegistrationSummary(
       getNumSignals(), getNumProcesses()));
@@ -16331,8 +16330,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
           for (unsigned i = 0; i < touchedBytes; ++i) {
             block->data[blockOffset + firstTouchedByte + i] =
-                static_cast<uint8_t>(
-                    currentSegment.extractBits(8, i * 8).getZExtValue());
+                extractByteZExt(currentSegment, i);
           }
           block->initialized = true;
 
@@ -16461,8 +16459,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
               for (unsigned i = 0; i < touchedBytes; ++i) {
                 block->data[blockOffset + firstTouchedByte + i] =
-                    static_cast<uint8_t>(
-                        currentSegment.extractBits(8, i * 8).getZExtValue());
+                    extractByteZExt(currentSegment, i);
               }
               block->initialized = !driveVal.isX();
 
@@ -19533,10 +19530,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 2) {
     // arg[1] is struct<(ptr, i64)> type_name — a packed string
     InterpretedValue nameVal = getValue(procId, callOp.getOperand(1));
-    if (!nameVal.isX() && nameVal.getWidth() >= 128) {
-      APInt nameAPInt = nameVal.getAPInt();
-      uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
-      uint64_t strLen = nameAPInt.extractBits(64, 64).getZExtValue();
+    uint64_t strAddr = 0;
+    uint64_t strLen = 0;
+    if (decodePackedPtrLenPayload(nameVal, strAddr, strLen)) {
       if (strLen > 0 && strLen <= 1024 && strAddr != 0) {
         uint64_t strOff = 0;
         MemoryBlock *strBlk = findBlockByAddress(strAddr, strOff);
@@ -19947,10 +19943,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             if (callOp.getNumOperands() >= 4) {
               InterpretedValue prefixVal =
                   getValue(procId, callOp.getOperand(3));
-              if (!prefixVal.isX() && prefixVal.getWidth() >= 128) {
-                APInt bits = prefixVal.getAPInt();
-                uint64_t pPtr = bits.extractBits(64, 0).getZExtValue();
-                int64_t pLen = bits.extractBits(64, 64).getSExtValue();
+              uint64_t pPtr = 0;
+              uint64_t pLen = 0;
+              if (decodePackedPtrLenPayload(prefixVal, pPtr, pLen)) {
                 if (pPtr != 0 && pLen > 0) {
                   auto dynIt =
                       dynamicStrings.find(static_cast<int64_t>(pPtr));
@@ -20516,18 +20511,20 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       // arg3 is !llvm.ptr — the pointer IS the config value (object handle).
       InterpretedValue valueArg = getValue(procId, callOp.getOperand(3));
       unsigned valueBits = valueArg.getWidth();
-      unsigned valueBytes = (valueBits + 7) / 8;
-      std::vector<uint8_t> valueData(valueBytes, 0);
-      if (!valueArg.isX()) {
-        llvm::APInt valBits = valueArg.getAPInt();
-        for (unsigned i = 0; i < valueBytes; ++i)
-          valueData[i] = static_cast<uint8_t>(
-              valBits.extractBits(8, i * 8).getZExtValue());
-      }
+      bool truncatedValue = false;
+      std::vector<uint8_t> valueData =
+          serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                         &truncatedValue);
+      unsigned valueBytes = static_cast<unsigned>(valueData.size());
       configDbEntries[key] = std::move(valueData);
       if (traceConfigDbEnabled) {
         maybeTraceConfigDbFuncCallSet(callee, key, valueBytes,
                                       configDbEntries.size());
+        if (truncatedValue) {
+          llvm::errs()
+              << "[CFG-FUNC-SET] truncated oversized value payload for key=\""
+              << key << "\" bitWidth=" << valueBits << "\n";
+        }
       }
       if (traceI3CConfigHandles &&
           fieldName.find("i3c_") != std::string::npos) {
@@ -20631,10 +20628,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     // Extract the state string from the MooreString arg and restore the RNG.
     if (callOp.getNumOperands() >= 1) {
       InterpretedValue argVal = getValue(procId, callOp.getOperand(0));
-      if (!argVal.isX()) {
-        APInt bits = argVal.getAPInt();
-        uint64_t ptrVal = bits.extractBits(64, 0).getZExtValue();
-        uint64_t lenVal = bits.extractBits(64, 64).getZExtValue();
+      uint64_t ptrVal = 0;
+      uint64_t lenVal = 0;
+      if (decodePackedPtrLenPayload(argVal, ptrVal, lenVal)) {
         if (ptrVal && lenVal > 0) {
           const char *data = reinterpret_cast<const char *>(ptrVal);
           std::string stateStr(data, lenVal);
@@ -21130,12 +21126,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (argIdx >= args.size())
         return "";
       InterpretedValue strVal = args[argIdx];
-      if (strVal.isX() || strVal.getWidth() < 128)
+      uint64_t strPtr = 0;
+      uint64_t strLen = 0;
+      if (!decodePackedPtrLenPayload(strVal, strPtr, strLen))
         return "";
-      llvm::APInt bits = strVal.getAPInt();
-      uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-      int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-      if (strPtr == 0 || strLen <= 0)
+      if (strPtr == 0 || strLen == 0)
         return "";
       auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
       if (dynIt != dynamicStrings.end() && dynIt->second.first &&
@@ -21225,18 +21220,18 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     std::string strIn;
     if (callOp.getNumOperands() >= 1) {
       InterpretedValue strVal = args[0];
-      if (!strVal.isX() && strVal.getWidth() >= 128) {
-        llvm::APInt bits = strVal.getAPInt();
-        uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
-        int64_t strLen = bits.extractBits(64, 64).getSExtValue();
-        if (strPtr != 0 && strLen > 0) {
+      uint64_t strPtr = 0;
+      uint64_t strLen = 0;
+      if (decodePackedPtrLenPayload(strVal, strPtr, strLen)) {
+        int64_t strLenSigned = static_cast<int64_t>(strLen);
+        if (strPtr != 0 && strLenSigned > 0) {
           // Try dynamicStrings
           auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
           if (dynIt != dynamicStrings.end() && dynIt->second.first &&
               dynIt->second.second > 0) {
             strIn = std::string(
                 dynIt->second.first,
-                std::min(static_cast<size_t>(strLen),
+                std::min(static_cast<size_t>(strLenSigned),
                          static_cast<size_t>(dynIt->second.second)));
           } else {
             // Try global/malloc memory
@@ -21244,7 +21239,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
             if (gBlock && gBlock->initialized) {
               size_t avail =
-                  std::min(static_cast<size_t>(strLen),
+                  std::min(static_cast<size_t>(strLenSigned),
                            gBlock->data.size() - static_cast<size_t>(off));
               if (avail > 0)
                 strIn = std::string(
@@ -21253,7 +21248,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             } else if (strPtr >= 0x10000) {
               // Native memory (direct pointer read)
               const char *p = reinterpret_cast<const char *>(strPtr);
-              strIn = std::string(p, static_cast<size_t>(strLen));
+              strIn = std::string(p, static_cast<size_t>(strLenSigned));
             }
           }
         }
@@ -21597,19 +21592,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         // Serialize the value (arg4) to bytes
         InterpretedValue valueArg = getValue(procId, callOp.getOperand(4));
         unsigned valueBits = valueArg.getWidth();
-        unsigned valueBytes = (valueBits + 7) / 8;
-        std::vector<uint8_t> valueData(valueBytes, 0);
-        if (!valueArg.isX()) {
-          llvm::APInt valBits = valueArg.getAPInt();
-          for (unsigned i = 0; i < valueBytes; ++i)
-            valueData[i] = static_cast<uint8_t>(
-                valBits.extractBits(8, i * 8).getZExtValue());
-        }
+        bool truncatedValue = false;
+        std::vector<uint8_t> valueData =
+            serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                           &truncatedValue);
+        unsigned valueBytes = static_cast<unsigned>(valueData.size());
 
         configDbEntries[key] = std::move(valueData);
         LLVM_DEBUG(llvm::dbgs()
                    << "  config_db::set(\"" << key << "\", "
                    << valueBits << " bits)\n");
+        if (traceConfigDbEnabled && truncatedValue) {
+          llvm::errs()
+              << "[CFG-FUNC-SET] truncated oversized value payload for key=\""
+              << key << "\" bitWidth=" << valueBits << "\n";
+        }
       }
       return success();
     }
@@ -21766,19 +21763,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
         InterpretedValue valueArg = getValue(procId, callOp.getOperand(3));
         unsigned valueBits = valueArg.getWidth();
-        unsigned valueBytes = (valueBits + 7) / 8;
-        std::vector<uint8_t> valueData(valueBytes, 0);
-        if (!valueArg.isX()) {
-          llvm::APInt valBits = valueArg.getAPInt();
-          for (unsigned i = 0; i < valueBytes; ++i)
-            valueData[i] = static_cast<uint8_t>(
-                valBits.extractBits(8, i * 8).getZExtValue());
-        }
+        bool truncatedValue = false;
+        std::vector<uint8_t> valueData =
+            serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                           &truncatedValue);
+        unsigned valueBytes = static_cast<unsigned>(valueData.size());
 
         configDbEntries[key] = std::move(valueData);
         LLVM_DEBUG(llvm::dbgs()
                    << "  resource_db::set(\"" << key << "\", "
                    << valueBits << " bits)\n");
+        if (traceConfigDbEnabled && truncatedValue) {
+          llvm::errs()
+              << "[RSRC-FUNC-SET] truncated oversized value payload for key=\""
+              << key << "\" bitWidth=" << valueBits << "\n";
+        }
       }
       return success();
     }
@@ -22997,6 +22996,23 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   const size_t cachedMaxSteps = getEffectiveMaxProcessSteps(procId);
   const bool needsDetailedTracking =
       cachedMaxSteps > 0 || collectOpStats || profileSummaryAtExitEnabled;
+  const bool traceFuncOps = [&]() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_OPS");
+    if (!env || env[0] == '\0')
+      return false;
+    llvm::StringRef raw(env);
+    if (raw.trim() == "1")
+      return true;
+    llvm::SmallVector<llvm::StringRef, 8> filters;
+    raw.split(filters, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+    llvm::StringRef fn = funcOp.getName();
+    for (llvm::StringRef filter : filters) {
+      llvm::StringRef trimmed = filter.trim();
+      if (!trimmed.empty() && fn.contains(trimmed))
+        return true;
+    }
+    return false;
+  }();
 
   while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     // Check if termination was requested (e.g., UVM die() -> sim.terminate).
@@ -23028,6 +23044,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       }
 
       ++opCount;
+      if (traceFuncOps) {
+        llvm::errs() << "[FUNC-OP] proc=" << procId << " func="
+                     << funcOp.getName() << " op#" << opCount << " "
+                     << op.getName().getStringRef() << "\n";
+      }
       // Track func body steps in process state for global step limiting.
       // The detailed tracking (step counting, memory sampling, op stats,
       // step limit, progress trace) is gated behind needsDetailedTracking
@@ -24533,9 +24554,11 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
     int64_t ptrVal = 0;
     int64_t lenVal = 0;
 
-    if (packedVal.getBitWidth() >= 128) {
-      ptrVal = packedVal.extractBits(64, 0).getSExtValue();
-      lenVal = packedVal.extractBits(64, 64).getSExtValue();
+    uint64_t ptrBits = 0;
+    uint64_t lenBits = 0;
+    if (decodePackedPtrLenPayload(packedVal, ptrBits, lenBits)) {
+      ptrVal = static_cast<int64_t>(ptrBits);
+      lenVal = static_cast<int64_t>(lenBits);
     } else if (packedVal.getBitWidth() >= 64) {
       // Might be a simpler representation
       ptrVal = packedVal.getSExtValue();
@@ -27863,18 +27886,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (targetId != InvalidProcessId) {
             auto it = processStates.find(targetId);
             if (it != processStates.end()) {
-              APInt bits = stateVal.getAPInt();
-              uint64_t ptrVal =
-                  bits.extractBits(64, 0).getZExtValue();
-              uint64_t lenVal =
-                  bits.extractBits(64, 64).getZExtValue();
+              uint64_t ptrVal = 0;
+              uint64_t lenVal = 0;
+              if (decodePackedPtrLenPayload(stateVal, ptrVal, lenVal)) {
+                std::string stateStr =
+                    resolvePointerToString(ptrVal, static_cast<int64_t>(lenVal));
 
-              std::string stateStr =
-                  resolvePointerToString(ptrVal, static_cast<int64_t>(lenVal));
-
-              if (!stateStr.empty()) {
-                std::istringstream iss(stateStr);
-                iss >> it->second.randomGenerator;
+                if (!stateStr.empty()) {
+                  std::istringstream iss(stateStr);
+                  iss >> it->second.randomGenerator;
+                }
               }
             }
           }
@@ -27978,10 +27999,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(0)).getUInt64();
         InterpretedValue stateVal = getValue(procId, callOp.getOperand(1));
 
-        if (!stateVal.isX()) {
-          const APInt &bits = stateVal.getAPInt();
-          uint64_t ptrVal = bits.extractBits(64, 0).getZExtValue();
-          uint64_t lenVal = bits.extractBits(64, 64).getZExtValue();
+        uint64_t ptrVal = 0;
+        uint64_t lenVal = 0;
+        if (decodePackedPtrLenPayload(stateVal, ptrVal, lenVal)) {
 
           std::string stateStr =
               resolvePointerToString(ptrVal, static_cast<int64_t>(lenVal));
@@ -35940,8 +35960,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
     uvm_hdl_data_t value = 0;
     if (!dataArg.isX()) {
       APInt bits = dataArg.getAPInt();
-      value = static_cast<uvm_hdl_data_t>(
-          bits.extractBits(64, 0).getZExtValue());
+      value = static_cast<uvm_hdl_data_t>(bits.zextOrTrunc(64).getZExtValue());
     }
 
     MooreString pathStr = {const_cast<char *>(path.c_str()),
@@ -35965,8 +35984,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
     uvm_hdl_data_t value = 0;
     if (!dataArg.isX()) {
       APInt bits = dataArg.getAPInt();
-      value = static_cast<uvm_hdl_data_t>(
-          bits.extractBits(64, 0).getZExtValue());
+      value = static_cast<uvm_hdl_data_t>(bits.zextOrTrunc(64).getZExtValue());
     }
 
     MooreString pathStr = {const_cast<char *>(path.c_str()),
@@ -36351,8 +36369,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
     uvm_hdl_data_t value = 0;
     if (!dataArg.isX()) {
       APInt bits = dataArg.getAPInt();
-      value = static_cast<uvm_hdl_data_t>(
-          bits.extractBits(64, 0).getZExtValue());
+      value = static_cast<uvm_hdl_data_t>(bits.zextOrTrunc(64).getZExtValue());
     }
 
     MooreString pathStr = {const_cast<char *>(path.c_str()),
@@ -36375,8 +36392,7 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
     uvm_hdl_data_t value = 0;
     if (!dataArg.isX()) {
       APInt bits = dataArg.getAPInt();
-      value = static_cast<uvm_hdl_data_t>(
-          bits.extractBits(64, 0).getZExtValue());
+      value = static_cast<uvm_hdl_data_t>(bits.zextOrTrunc(64).getZExtValue());
     }
 
     MooreString pathStr = {const_cast<char *>(path.c_str()),
@@ -36675,6 +36691,23 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
   const size_t cachedMaxSteps = getEffectiveMaxProcessSteps(procId);
   const bool needsDetailedTracking =
       cachedMaxSteps > 0 || collectOpStats || profileSummaryAtExitEnabled;
+  const bool traceFuncOps = [&]() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_OPS");
+    if (!env || env[0] == '\0')
+      return false;
+    llvm::StringRef raw(env);
+    if (raw.trim() == "1")
+      return true;
+    llvm::SmallVector<llvm::StringRef, 8> filters;
+    raw.split(filters, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+    llvm::StringRef fn = funcOp.getName();
+    for (llvm::StringRef filter : filters) {
+      llvm::StringRef trimmed = filter.trim();
+      if (!trimmed.empty() && fn.contains(trimmed))
+        return true;
+    }
+    return false;
+  }();
 
   while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     bool tookBranch = false;
@@ -36695,6 +36728,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
       }
 
       ++opCount;
+      if (traceFuncOps) {
+        llvm::errs() << "[FUNC-OP] proc=" << procId << " func="
+                     << funcOp.getName() << " op#" << opCount << " "
+                     << op.getName().getStringRef() << "\n";
+      }
       // Track func body steps in process state for global step limiting.
       // Detailed tracking gated behind needsDetailedTracking for fast path.
       if (LLVM_UNLIKELY(needsDetailedTracking)) {

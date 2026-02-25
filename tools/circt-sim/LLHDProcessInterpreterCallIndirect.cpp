@@ -886,15 +886,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               std::string key = scope + "." + fieldName;
               InterpretedValue &valueArg = sArgs[3];
               unsigned valueBits = valueArg.getWidth();
-              unsigned valueBytes = (valueBits + 7) / 8;
-              std::vector<uint8_t> valueData(valueBytes, 0);
-              if (!valueArg.isX()) {
-                llvm::APInt valBits = valueArg.getAPInt();
-                for (unsigned i = 0; i < valueBytes; ++i)
-                  valueData[i] = static_cast<uint8_t>(
-                      valBits.extractBits(8, i * 8).getZExtValue());
-              }
+              bool truncatedValue = false;
+              std::vector<uint8_t> valueData =
+                  serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                                 &truncatedValue);
+              unsigned valueBytes = static_cast<unsigned>(valueData.size());
               configDbEntries[key] = std::move(valueData);
+              if (traceConfigDbEnabled && truncatedValue) {
+                llvm::errs() << "[RSRC-CI-STATIC-SET] truncated oversized value payload"
+                             << " key=\"" << key << "\" bitWidth=" << valueBits
+                             << "\n";
+              }
             }
             staticResolved = true;
             break;
@@ -1032,14 +1034,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
               InterpretedValue &valueArg = sArgs[4];
               unsigned valueBits = valueArg.getWidth();
-              unsigned valueBytes = (valueBits + 7) / 8;
-              std::vector<uint8_t> valueData(valueBytes, 0);
-              if (!valueArg.isX()) {
-                llvm::APInt valBits = valueArg.getAPInt();
-                for (unsigned i = 0; i < valueBytes; ++i)
-                  valueData[i] = static_cast<uint8_t>(
-                      valBits.extractBits(8, i * 8).getZExtValue());
-              }
+              bool truncatedValue = false;
+              std::vector<uint8_t> valueData =
+                  serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                                 &truncatedValue);
+              unsigned valueBytes = static_cast<unsigned>(valueData.size());
               if (traceConfigDbEnabled) {
                 llvm::errs() << "[CFG-CI-STATIC-SET] callee=" << resolvedName
                              << " key=\"" << key << "\" s1=\"" << str1
@@ -1052,6 +1051,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 llvm::errs() << "[CFG-CI-STATIC-SET] stored key=\"" << key
                              << "\" entries_after=" << configDbEntries.size()
                              << "\n";
+                if (truncatedValue) {
+                  llvm::errs() << "[CFG-CI-STATIC-SET] truncated oversized value payload"
+                               << " key=\"" << key << "\" bitWidth=" << valueBits
+                               << "\n";
+                }
               }
             }
             staticResolved = true;
@@ -1410,14 +1414,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
             InterpretedValue &valueArg = unresolvedArgs[4];
             unsigned valueBits = valueArg.getWidth();
-            unsigned valueBytes = (valueBits + 7) / 8;
-            std::vector<uint8_t> valueData(valueBytes, 0);
-            if (!valueArg.isX()) {
-              llvm::APInt valBits = valueArg.getAPInt();
-              for (unsigned i = 0; i < valueBytes; ++i)
-                valueData[i] = static_cast<uint8_t>(
-                    valBits.extractBits(8, i * 8).getZExtValue());
-            }
+            bool truncatedValue = false;
+            std::vector<uint8_t> valueData =
+                serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                               &truncatedValue);
+            unsigned valueBytes = static_cast<unsigned>(valueData.size());
             if (traceConfigDbEnabled) {
               llvm::errs() << "[CFG-CI-UNRES-SET] key=\"" << key
                            << "\" s1=\"" << str1 << "\" s2=\"" << str2
@@ -1430,6 +1431,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               llvm::errs() << "[CFG-CI-UNRES-SET] stored key=\"" << key
                            << "\" entries_after=" << configDbEntries.size()
                            << "\n";
+              if (truncatedValue) {
+                llvm::errs() << "[CFG-CI-UNRES-SET] truncated oversized value payload"
+                             << " key=\"" << key << "\" bitWidth=" << valueBits
+                             << "\n";
+              }
             }
             return success();
           }
@@ -1851,11 +1857,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Extract (ptr, length) from 128-bit struct<(ptr, i64)>
         InterpretedValue nameStruct = results[0];
-        if (nameStruct.isX() || nameStruct.getWidth() < 128)
+        uint64_t strAddr = 0;
+        uint64_t strLen = 0;
+        if (!decodePackedPtrLenPayload(nameStruct, strAddr, strLen))
           break;
-        APInt nameAPInt = nameStruct.getAPInt();
-        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
-        uint64_t strLen = nameAPInt.extractBits(64, 64).getZExtValue();
         if (strLen == 0 || strLen > 1024 || strAddr == 0)
           break;
 
@@ -1900,11 +1905,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           getValue(procId, callIndirectOp.getArgOperands()[1]);
       std::string requestedName;
       bool nameExtracted = false;
-      if (!nameVal.isX() && nameVal.getWidth() >= 128) {
-        APInt nameAPInt = nameVal.getAPInt();
-        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
-        int64_t strLen =
-            static_cast<int64_t>(nameAPInt.extractBits(64, 64).getZExtValue());
+      uint64_t strAddr = 0;
+      uint64_t strLenBits = 0;
+      if (decodePackedPtrLenPayload(nameVal, strAddr, strLenBits)) {
+        int64_t strLen = static_cast<int64_t>(strLenBits);
         if (strLen > 0 && strLen <= 1024 && strAddr != 0) {
           nameExtracted =
               tryReadStringKey(procId, strAddr, strLen, requestedName);
@@ -1971,12 +1975,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       InterpretedValue nameVal =
           getValue(procId, callIndirectOp.getArgOperands()[1]);
       uint64_t wrapperResult = 0;
-      if (!nameVal.isX() && nameVal.getWidth() >= 128 &&
-          !nativeFactoryTypeNames.empty()) {
-        APInt nameAPInt = nameVal.getAPInt();
-        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
-        int64_t strLen = static_cast<int64_t>(
-            nameAPInt.extractBits(64, 64).getZExtValue());
+      uint64_t strAddr = 0;
+      uint64_t strLenBits = 0;
+      if (!nativeFactoryTypeNames.empty() &&
+          decodePackedPtrLenPayload(nameVal, strAddr, strLenBits)) {
+        int64_t strLen = static_cast<int64_t>(strLenBits);
         std::string searchName;
         if (strLen > 0 && strLen <= 1024 && strAddr != 0 &&
             tryReadStringKey(procId, strAddr, strLen, searchName)) {
@@ -1999,12 +2002,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       InterpretedValue nameVal =
           getValue(procId, callIndirectOp.getArgOperands()[1]);
       bool found = false;
-      if (!nameVal.isX() && nameVal.getWidth() >= 128 &&
-          !nativeFactoryTypeNames.empty()) {
-        APInt nameAPInt = nameVal.getAPInt();
-        uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
-        int64_t strLen = static_cast<int64_t>(
-            nameAPInt.extractBits(64, 64).getZExtValue());
+      uint64_t strAddr = 0;
+      uint64_t strLenBits = 0;
+      if (!nativeFactoryTypeNames.empty() &&
+          decodePackedPtrLenPayload(nameVal, strAddr, strLenBits)) {
+        int64_t strLen = static_cast<int64_t>(strLenBits);
         std::string searchName;
         if (strLen > 0 && strLen <= 1024 && strAddr != 0 &&
             tryReadStringKey(procId, strAddr, strLen, searchName)) {
@@ -2544,15 +2546,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           std::string key = scope + "." + fieldName;
           InterpretedValue &valueArg = args[3];
           unsigned valueBits = valueArg.getWidth();
-          unsigned valueBytes = (valueBits + 7) / 8;
-          std::vector<uint8_t> valueData(valueBytes, 0);
-          if (!valueArg.isX()) {
-            llvm::APInt valBits = valueArg.getAPInt();
-            for (unsigned i = 0; i < valueBytes; ++i)
-              valueData[i] = static_cast<uint8_t>(
-                  valBits.extractBits(8, i * 8).getZExtValue());
-          }
+          bool truncatedValue = false;
+          std::vector<uint8_t> valueData =
+              serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                             &truncatedValue);
+          unsigned valueBytes = static_cast<unsigned>(valueData.size());
           configDbEntries[key] = std::move(valueData);
+          if (traceConfigDbEnabled && truncatedValue) {
+            llvm::errs() << "[RSRC-CI-SET] truncated oversized value payload key=\""
+                         << key << "\" bitWidth=" << valueBits << "\n";
+          }
         }
         return success();
       }
@@ -2710,19 +2713,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
           InterpretedValue &valueArg = args[4];
           unsigned valueBits = valueArg.getWidth();
-          unsigned valueBytes = (valueBits + 7) / 8;
-          std::vector<uint8_t> valueData(valueBytes, 0);
-          if (!valueArg.isX()) {
-            llvm::APInt valBits = valueArg.getAPInt();
-            for (unsigned i = 0; i < valueBytes; ++i)
-              valueData[i] = static_cast<uint8_t>(
-                  valBits.extractBits(8, i * 8).getZExtValue());
-          }
+          bool truncatedValue = false;
+          std::vector<uint8_t> valueData =
+              serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                             &truncatedValue);
+          unsigned valueBytes = static_cast<unsigned>(valueData.size());
           configDbEntries[key] = std::move(valueData);
           if (traceConfigDbEnabled) {
             llvm::errs() << "[CFG-CI-SET] stored key=\"" << key
                          << "\" entries_after=" << configDbEntries.size()
                          << "\n";
+            if (truncatedValue) {
+              llvm::errs() << "[CFG-CI-SET] truncated oversized value payload key=\""
+                           << key << "\" bitWidth=" << valueBits << "\n";
+            }
           }
         }
         return success();
