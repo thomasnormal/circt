@@ -1,5 +1,36 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: VerifToSMT clock mapping through LLHD probe/signal wrappers
+
+### What changed
+- Updated:
+  - `include/circt/Support/I1ValueSimplifier.h`
+- Added:
+  - `test/Conversion/VerifToSMT/bmc-clock-source-llhd-probe.mlir`
+
+### Red-first debugging path
+- Built a minimal two-clock `verif.bmc` reproducer where the check clock is
+  sampled as:
+  - `llhd.sig` -> `llhd.prb` -> `value & ~unknown`.
+- Before fix:
+  - `convert-verif-to-smt` failed with:
+    - `clocked property uses a clock that is not a BMC clock input`.
+- Fix:
+  - made i1 clock canonicalization/keying treat `llhd.prb` and `llhd.sig` as
+    transparent wrappers, so clock root/key resolution reaches the underlying
+    source.
+
+### Realizations / surprises
+- Existing four-state clock simplification already handled `value & ~unknown`,
+  but root/key tracing still broke when LLHD wrappers sat between the check
+  clock expression and the original source.
+
+### Validation snapshot
+- New regression:
+  - `bmc-clock-source-llhd-probe.mlir` -> pass.
+- Focused non-regression:
+  - `bmc-check-clock-key-attr.mlir` -> pass.
+
 ## 2026-02-25 Session: VerifToSMT fallback for `bmc.clock` names via reg-clock metadata
 
 ### What changed
