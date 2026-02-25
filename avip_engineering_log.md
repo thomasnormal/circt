@@ -1,5 +1,51 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: pairwise BMC auto-retry for multi-clock diagnostics
+
+### What changed
+- Updated:
+  - `utils/run_pairwise_circt_bmc.py`
+- Added:
+  - `test/Tools/run-pairwise-circt-bmc-auto-allow-multi-clock.test`
+
+### Red-first debugging path
+- Built a minimal pairwise case where the fake BMC tool fails unless it sees
+  `--allow-multi-clock` and emits:
+  - `error: modules with multiple clocks not yet supported`.
+- Before fix:
+  - default pairwise run (`BMC_ALLOW_MULTI_CLOCK=0`) produced:
+    - `ERROR ... CIRCT_BMC_ERROR modules_with_multiple_clocks_not_yet_supported`.
+- Fix:
+  - detect known multi-clock diagnostics and retry BMC once with
+    `--allow-multi-clock` when:
+    - `BMC_AUTO_ALLOW_MULTI_CLOCK=1` (default),
+    - case did not already enable multi-clock,
+    - case policy is not explicitly `allow_multi_clock=off`.
+  - added env guard:
+    - `BMC_AUTO_ALLOW_MULTI_CLOCK=0` disables this retry path for strict runs.
+
+### Realizations / surprises
+- `run_sv_tests_circt_bmc.sh` already had a similar auto-retry policy; pairing
+  the same behavior into `run_pairwise_circt_bmc.py` removes avoidable
+  multiclock gating differences across formal harnesses.
+- Keeping explicit per-case `allow_multi_clock=off` authoritative avoids hiding
+  intentionally strict contract settings.
+
+### Validation snapshot
+- Manual repro transition:
+  - before: `ERROR ... modules_with_multiple_clocks_not_yet_supported`
+  - after: `PASS ... UNSAT` with one launch retry event.
+- Focused lit:
+  - `run-pairwise-circt-bmc-auto-allow-multi-clock`
+  - `run-pairwise-circt-bmc-basic`
+  - `run-pairwise-circt-bmc-case-bmc-contract-override`
+  - `run-pairwise-circt-bmc-resolved-contracts-file`
+  - result: `4/4` pass.
+- Focused wrapper non-regression:
+  - OpenTitan FPV/runner policy tests (`run-opentitan-fpv-circt-bmc-auto-allow-multi-clock`,
+    `run-formal-all-opentitan-fpv-bmc*`,
+    `run-opentitan-bmc-case-policy-{file,provenance}`) -> pass.
+
 ## 2026-02-25 Session: VerifToSMT clock mapping through LLHD probe/signal wrappers
 
 ### What changed
