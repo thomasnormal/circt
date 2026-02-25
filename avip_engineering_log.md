@@ -9322,3 +9322,44 @@ Based on these findings, the circt-sim compiled process architecture:
   surfaced as definitive inequivalence; they need an explicit inconclusive
   diagnostic class so downstream triage can separate modeling gaps from real
   design mismatches.
+
+## 2026-02-25 OpenTitan FPV-BMC: unmask multiclock support in unified runner
+
+### Goal
+- Eliminate `modules_with_multiple_clocks_not_yet_supported` as a default
+  `opentitan/FPV_BMC` lane blocker in `run_formal_all.sh`.
+
+### Findings
+- Direct OpenTitan FPV-BMC lane repro (single target `sram_ctrl_sec_cm`)
+  failed with:
+  - `CIRCT_BMC_ERROR modules_with_multiple_clocks_not_yet_supported`.
+- Root cause was orchestration, not core lowering:
+  - `run_opentitan_fpv_circt_bmc.py` already defaults OpenTitan FPV runs to
+    multiclock (`BMC_ALLOW_MULTI_CLOCK` setdefault to `1`).
+  - `run_formal_all.sh` unconditionally exported
+    `BMC_ALLOW_MULTI_CLOCK=0` (global default), overriding that lane default.
+
+### Implementation
+- `utils/run_formal_all.sh`
+  - in `run_opentitan_fpv_bmc_lane`, only export
+    `BMC_ALLOW_MULTI_CLOCK=1` when explicitly requested.
+  - when global knob is default-off, leave env unset so FPV lane retains its
+    OpenTitan-specific multiclock default behavior.
+- `test/Tools/run-formal-all-opentitan-fpv-bmc.test`
+  - tightened to fail if FPV lane receives forced
+    `BMC_ALLOW_MULTI_CLOCK=0`.
+
+### Validation
+- Lit:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build_test/test/Tools/run-opentitan-fpv-circt-bmc-auto-allow-multi-clock.test build_test/test/Tools/run-formal-all-opentitan-fpv-bmc.test build_test/test/Tools/run-formal-all-bmc-allow-multi-clock.test`
+  - result: `3 passed, 0 failed`.
+- OpenTitan target repro (`sram_ctrl_sec_cm`):
+  - before patch:
+    - `ERROR ... modules_with_multiple_clocks_not_yet_supported`
+  - after patch (same invocation, without `--bmc-allow-multi-clock`):
+    - progresses to `BMC_RESULT=SAT` (multiclock gate no longer blocks lane).
+
+### Realization
+- For parity and triage quality, lane-level policy defaults must not be
+  silently overridden by global defaults in wrappers; otherwise solved core
+  capabilities appear unsupported in top-level regressions.

@@ -15519,9 +15519,11 @@ run_opentitan_fpv_bmc_lane() {
     BMC_MODE_LABEL="$mode_name"
     BOUND="$OPENTITAN_BMC_BOUND"
     BMC_RUN_SMTLIB=1
-    BMC_ALLOW_MULTI_CLOCK="$BMC_ALLOW_MULTI_CLOCK"
     BMC_ASSUME_KNOWN_INPUTS="$lane_assume_known_inputs"
     Z3_BIN="$Z3_BIN")
+  if [[ "$BMC_ALLOW_MULTI_CLOCK" == "1" ]]; then
+    opentitan_fpv_bmc_env+=("BMC_ALLOW_MULTI_CLOCK=1")
+  fi
   if [[ -n "$fpv_summary_baseline_for_run" ]]; then
     opentitan_fpv_bmc_env+=("BMC_FPV_SUMMARY_BASELINE_FILE=$fpv_summary_baseline_for_run")
     if [[ -n "$OPENTITAN_FPV_BMC_SUMMARY_DRIFT_FILE" ]]; then
