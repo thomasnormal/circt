@@ -856,6 +856,14 @@ public:
       llhdInterpreter->setMaxProcessSteps(maxSteps);
   }
 
+  /// Store a non-owning reference to the compiled module loader so that
+  /// globals can be pre-aliased to .so storage during interpreter creation,
+  /// BEFORE initializeGlobals() runs. This prevents dangling inter-global
+  /// pointers that arise when aliasing happens after initialization.
+  void setCompiledLoaderForPreAlias(CompiledModuleLoader *loader) {
+    compiledLoaderForPreAlias = loader;
+  }
+
   /// Load AOT-compiled functions from a .so into the interpreter's
   /// nativeFuncPtrs map for native dispatch.
   void setCompiledModule(std::unique_ptr<CompiledModuleLoader> loader) {
@@ -869,11 +877,11 @@ public:
     compiledLoader->setRuntimeContext(reinterpret_cast<void *>(this));
 
     if (llhdInterpreter) {
-      // Apply global patches: copy interpreter's initialized globals into the
-      // .so. This must happen AFTER initialize() (which populates
-      // globalMemoryBlocks) and BEFORE loadCompiledFunctions() (which decides
+      // Alias any remaining globals that weren't pre-aliased during init.
+      // Pre-aliased globals (from setCompiledLoaderForPreAlias) are skipped.
+      // This must happen BEFORE loadCompiledFunctions() (which decides
       // native dispatch eligibility).
-      compiledLoader->applyGlobalPatches(
+      compiledLoader->aliasGlobals(
           llhdInterpreter->getGlobalMemoryBlocks());
 
       llhdInterpreter->loadCompiledFunctions(*compiledLoader);
@@ -1013,6 +1021,11 @@ private:
 
   // AOT-compiled module loader (via --compiled flag)
   std::unique_ptr<CompiledModuleLoader> compiledLoader;
+
+  // Non-owning pointer to the compiled module loader for pre-aliasing globals
+  // during initialization. Set before initialize(), consumed during interpreter
+  // creation, then cleared.
+  CompiledModuleLoader *compiledLoaderForPreAlias = nullptr;
 
   std::atomic<bool> abortRequested{false};
   std::atomic<bool> abortHandled{false};
@@ -1556,6 +1569,14 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
                                       value.getWidth());
             }
           });
+
+      // Pre-alias globals to .so storage before initialization, so that
+      // initializeGlobals() writes directly to .so memory. This prevents
+      // dangling inter-global pointers from post-init aliasing.
+      if (compiledLoaderForPreAlias) {
+        compiledLoaderForPreAlias->preAliasGlobals(
+            llhdInterpreter->getGlobalMemoryBlocks());
+      }
     }
 
     // Provide port signal mappings so the interpreter can map non-ref-type
@@ -3467,26 +3488,38 @@ static LogicalResult processInput(MLIRContext &context,
     tops.push_back(top);
   }
 
+  // Load AOT-compiled module early (if provided) for pre-aliasing globals.
+  // Pre-aliasing before initialize() ensures globals point directly to .so
+  // storage from the start, preventing dangling inter-global pointers.
+  std::unique_ptr<CompiledModuleLoader> compiledLoader;
+  if (!compiledModulePath.empty()) {
+    compiledLoader = CompiledModuleLoader::load(compiledModulePath);
+    if (!compiledLoader)
+      return failure();
+    if (!compiledLoader->isCompatible()) {
+      llvm::errs() << "[circt-sim] Compiled module ABI version mismatch\n";
+      return failure();
+    }
+  }
+
   reportStage("init");
   SimulationContext simContext;
   simContext.setMaxDeltaCycles(maxDeltas);
   simContext.setMaxProcessSteps(maxProcessSteps);
   if (maxTime > 0)
     simContext.setMaxSimTime(maxTime);
+
+  // Pass compiled loader for pre-aliasing globals during interpreter creation.
+  if (compiledLoader)
+    simContext.setCompiledLoaderForPreAlias(compiledLoader.get());
+
   if (failed(simContext.initialize(*module, tops))) {
     return failure();
   }
 
-  // Load AOT-compiled module if provided.
-  if (!compiledModulePath.empty()) {
-    auto loader = CompiledModuleLoader::load(compiledModulePath);
-    if (!loader)
-      return failure();
-    if (!loader->isCompatible()) {
-      llvm::errs() << "[circt-sim] Compiled module ABI version mismatch\n";
-      return failure();
-    }
-    simContext.setCompiledModule(std::move(loader));
+  // Install compiled module (functions + processes; globals already pre-aliased).
+  if (compiledLoader) {
+    simContext.setCompiledModule(std::move(compiledLoader));
     reportStage("load-compiled");
   }
 
@@ -3607,10 +3640,12 @@ int main(int argc, char **argv) {
   llvm::cl::ResetAllOptionOccurrences();
 #endif
 
-  // Increase stack size to 64 MB to handle deep UVM call chains.
+  // Increase main thread stack size to 64 MB to handle deep UVM call chains.
   // The interpreter uses C++ recursion for func.call/call_indirect, and UVM
   // patterns (test → virtual_seq → sub_seq → start → body → ...) can nest
   // very deeply, overflowing the default 8 MB stack.
+  // Note: coroutine process stacks are sized independently via
+  // kProcessStackSize (2 MB default, override with CIRCT_SIM_STACK_SIZE).
   {
     struct rlimit rl;
     if (getrlimit(RLIMIT_STACK, &rl) == 0) {
