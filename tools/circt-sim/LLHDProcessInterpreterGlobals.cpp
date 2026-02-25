@@ -249,8 +249,12 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         unsigned bitWidth = intValue.getBitWidth();
         unsigned byteWidth = (bitWidth + 7) / 8;
         for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
+          unsigned bitOffset = j * 8;
+          if (bitOffset >= bitWidth)
+            break;
+          unsigned bitsThisByte = std::min(8u, bitWidth - bitOffset);
           block[j] = static_cast<uint8_t>(
-              intValue.extractBits(8, j * 8).getZExtValue());
+              intValue.extractBitsAsZExtValue(bitsThisByte, bitOffset));
         }
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with integer: 0x"
                                 << llvm::format_hex(intValue.getZExtValue(), 18)
@@ -259,10 +263,15 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         // Handle float initializers
         llvm::APFloat floatValue = floatAttr.getValue();
         const llvm::APInt &floatBits = floatValue.bitcastToAPInt();
+        unsigned bitWidth = floatBits.getBitWidth();
         unsigned byteWidth = (floatBits.getBitWidth() + 7) / 8;
         for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
+          unsigned bitOffset = j * 8;
+          if (bitOffset >= bitWidth)
+            break;
+          unsigned bitsThisByte = std::min(8u, bitWidth - bitOffset);
           block[j] = static_cast<uint8_t>(
-              floatBits.extractBits(8, j * 8).getZExtValue());
+              floatBits.extractBitsAsZExtValue(bitsThisByte, bitOffset));
         }
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with float\n");
       } else {
