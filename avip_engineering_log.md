@@ -9098,3 +9098,35 @@ Based on these findings, the circt-sim compiled process architecture:
 - The cycle blocker and the register-initial-width error were coupled:
   breaking cycles by adding inputs is safe only if those inputs do not enter
   the trailing `num_regs` slice expected by `VerifToSMT`.
+
+## 2026-02-25 VerifToSMT clock-key alias resolution via `bmc_reg_clock_sources`
+
+### Goal
+- Remove false multi-clock mapping failures where assertions carry
+  `bmc.clock_key=port:<source_clock>` but only remapped BMC clock keys are
+  directly present.
+
+### Findings
+- In some lowered BMC modules, source clock aliases survive only in
+  `bmc_reg_clock_sources.clock_key`; they are not guaranteed to appear in
+  `bmc_clock_keys` or `bmc_reg_clocks`.
+- `VerifToSMT` already resolved `bmc.clock` names through
+  `bmc_reg_clock_sources`, but key-only references still failed resolution.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - Added alias ingestion from `bmc_reg_clock_sources.clock_key` into
+    `clockKeyToPos`, including `:inv` companion aliases.
+  - Threaded `bmc.clock_key` through check collection and resolution so
+    key-based metadata can select clock position/edge directly.
+- Added regression:
+  - `test/Conversion/VerifToSMT/bmc-clock-key-via-reg-clock-source.mlir`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build_test/test/Conversion/VerifToSMT/bmc-clock-key-via-reg-clock-source.mlir build_test/test/Conversion/VerifToSMT/bmc-clock-name-via-reg-clock-source.mlir build_test/test/Conversion/VerifToSMT/bmc-check-clock-key-attr.mlir build_test/test/Conversion/VerifToSMT/bmc-reg-clock-sources-invert.mlir`
+- Result: `4 passed, 0 failed`.
+
+### Realization
+- For multi-clock parity, preserving only symbolic clock names is not enough;
+  alias keys (`port:*`) must be treated as first-class clock identities across
+  inlining and BMC lowering boundaries.

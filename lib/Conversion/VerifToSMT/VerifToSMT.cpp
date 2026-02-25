@@ -122,6 +122,58 @@ static LogicalResult inlineSingleBlockInstance(InstanceOp instance,
     return instance.emitError(
         "hw.instance result count does not match callee output count");
 
+  DenseMap<StringRef, unsigned> calleeInputNameToIndex;
+  for (auto [idx, nameLike] : llvm::enumerate(module.getInputNames())) {
+    auto nameAttr = dyn_cast_or_null<StringAttr>(nameLike);
+    if (!nameAttr || nameAttr.getValue().empty())
+      continue;
+    calleeInputNameToIndex.try_emplace(nameAttr.getValue(), idx);
+  }
+
+  auto getCallerBlockArgName = [&](BlockArgument arg) -> StringRef {
+    if (!arg)
+      return {};
+    if (auto bmcOp = instance->getParentOfType<verif::BoundedModelCheckingOp>()) {
+      if (arg.getOwner() != &bmcOp.getCircuit().front())
+        return {};
+      auto namesAttr = bmcOp->getAttrOfType<ArrayAttr>("bmc_input_names");
+      if (!namesAttr || arg.getArgNumber() >= namesAttr.size())
+        return {};
+      auto nameAttr = dyn_cast_or_null<StringAttr>(namesAttr[arg.getArgNumber()]);
+      if (!nameAttr || nameAttr.getValue().empty())
+        return {};
+      return nameAttr.getValue();
+    }
+    if (auto hwParent = instance->getParentOfType<HWModuleOp>()) {
+      if (arg.getOwner() != hwParent.getBodyBlock())
+        return {};
+      auto namesAttr = hwParent.getInputNames();
+      if (arg.getArgNumber() >= namesAttr.size())
+        return {};
+      auto nameAttr = dyn_cast_or_null<StringAttr>(namesAttr[arg.getArgNumber()]);
+      if (!nameAttr || nameAttr.getValue().empty())
+        return {};
+      return nameAttr.getValue();
+    }
+    return {};
+  };
+
+  auto parsePortClockKey = [&](StringRef key, StringRef &name,
+                               bool &invert) -> bool {
+    if (!key.starts_with("port:"))
+      return false;
+    auto payload = key.drop_front(5);
+    invert = false;
+    if (payload.ends_with(":inv")) {
+      invert = true;
+      payload = payload.drop_back(4);
+    }
+    if (payload.empty())
+      return false;
+    name = payload;
+    return true;
+  };
+
   IRMapping mapping;
   for (auto [arg, input] :
        llvm::zip(moduleBlock.getArguments(), instance.getInputs()))
@@ -130,6 +182,45 @@ static LogicalResult inlineSingleBlockInstance(InstanceOp instance,
   OpBuilder builder(instance);
   for (Operation &op : moduleBlock.without_terminator()) {
     Operation *cloned = builder.clone(op, mapping);
+    if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(cloned)) {
+      StringRef calleeClockName;
+      bool invert = false;
+      bool hasClockRef = false;
+      if (auto clockName = cloned->getAttrOfType<StringAttr>("bmc.clock");
+          clockName && !clockName.getValue().empty()) {
+        calleeClockName = clockName.getValue();
+        hasClockRef = true;
+      } else if (auto clockKey =
+                     cloned->getAttrOfType<StringAttr>("bmc.clock_key");
+                 clockKey && !clockKey.getValue().empty()) {
+        hasClockRef =
+            parsePortClockKey(clockKey.getValue(), calleeClockName, invert);
+      }
+
+      if (hasClockRef) {
+        if (auto it = calleeInputNameToIndex.find(calleeClockName);
+            it != calleeInputNameToIndex.end() &&
+            it->second < instance.getInputs().size()) {
+          Value callerClock = instance.getInputs()[it->second];
+          BlockArgument root;
+          StringRef remappedName;
+          if (traceI1ValueRoot(callerClock, root) && root)
+            remappedName = getCallerBlockArgName(root);
+          if (remappedName.empty()) {
+            if (auto arg = dyn_cast<BlockArgument>(callerClock))
+              remappedName = getCallerBlockArgName(arg);
+          }
+          if (!remappedName.empty()) {
+            cloned->setAttr("bmc.clock", builder.getStringAttr(remappedName));
+            std::string remappedKey = ("port:" + remappedName).str();
+            if (invert)
+              remappedKey.append(":inv");
+            cloned->setAttr("bmc.clock_key",
+                            builder.getStringAttr(remappedKey));
+          }
+        }
+      }
+    }
     for (auto [orig, mapped] : llvm::zip(op.getResults(), cloned->getResults()))
       mapping.map(orig, mapped);
   }
@@ -3227,6 +3318,8 @@ static void rewriteImplicationDelaysForBMC(Block &circuitBlock,
         rewriter.getI64IntegerAttr(0));
     if (auto clockAttr = delayOp->getAttr("bmc.clock"))
       shiftedAntecedent->setAttr("bmc.clock", clockAttr);
+    if (auto keyAttr = delayOp->getAttr("bmc.clock_key"))
+      shiftedAntecedent->setAttr("bmc.clock_key", keyAttr);
     if (auto edgeAttr = delayOp->getAttr("bmc.clock_edge"))
       shiftedAntecedent->setAttr("bmc.clock_edge", edgeAttr);
     implOp.setOperand(0, shiftedAntecedent.getResult());
@@ -4489,6 +4582,7 @@ struct VerifBoundedModelCheckingOpConversion
 
       Location loc;
       StringAttr clockName;
+      StringAttr clockKey;
       std::optional<ltl::ClockEdge> edge;
     };
 
@@ -4518,6 +4612,7 @@ struct VerifBoundedModelCheckingOpConversion
         nonFinalCheckIsCover.push_back(false);
         NonFinalCheckInfo info(assertOp.getLoc());
         info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
+        info.clockKey = assertOp->getAttrOfType<StringAttr>("bmc.clock_key");
         if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
           info.edge = edgeAttr.getValue();
@@ -4529,6 +4624,7 @@ struct VerifBoundedModelCheckingOpConversion
         nonFinalCheckIsCover.push_back(true);
         NonFinalCheckInfo info(coverOp.getLoc());
         info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
+        info.clockKey = coverOp->getAttrOfType<StringAttr>("bmc.clock_key");
         if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
           info.edge = edgeAttr.getValue();
@@ -4559,6 +4655,7 @@ struct VerifBoundedModelCheckingOpConversion
         finalCheckIsCover.push_back(false);
         NonFinalCheckInfo info(assertOp.getLoc());
         info.clockName = assertOp->getAttrOfType<StringAttr>("bmc.clock");
+        info.clockKey = assertOp->getAttrOfType<StringAttr>("bmc.clock_key");
         if (auto edgeAttr = assertOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
           info.edge = edgeAttr.getValue();
@@ -4570,6 +4667,7 @@ struct VerifBoundedModelCheckingOpConversion
         finalCheckIsCover.push_back(false);
         NonFinalCheckInfo info(assumeOp.getLoc());
         info.clockName = assumeOp->getAttrOfType<StringAttr>("bmc.clock");
+        info.clockKey = assumeOp->getAttrOfType<StringAttr>("bmc.clock_key");
         if (auto edgeAttr = assumeOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
           info.edge = edgeAttr.getValue();
@@ -4581,6 +4679,7 @@ struct VerifBoundedModelCheckingOpConversion
         finalCheckIsCover.push_back(true);
         NonFinalCheckInfo info(coverOp.getLoc());
         info.clockName = coverOp->getAttrOfType<StringAttr>("bmc.clock");
+        info.clockKey = coverOp->getAttrOfType<StringAttr>("bmc.clock_key");
         if (auto edgeAttr = coverOp->getAttrOfType<ltl::ClockEdgeAttr>(
                 "bmc.clock_edge"))
           info.edge = edgeAttr.getValue();
@@ -6120,6 +6219,104 @@ struct VerifBoundedModelCheckingOpConversion
       return static_cast<unsigned>(clockIt - clockIndexes.begin());
     };
 
+    auto addClockKeyAlias = [&](StringRef key, ClockPosInfo info,
+                                StringRef conflictError) -> LogicalResult {
+      auto keyRef = rewriter.getStringAttr(key).getValue();
+      auto keyInsert = clockKeyToPos.try_emplace(keyRef, info);
+      if (!keyInsert.second &&
+          (keyInsert.first->second.pos != info.pos ||
+           keyInsert.first->second.invert != info.invert)) {
+        op.emitError(conflictError);
+        return failure();
+      }
+      return success();
+    };
+
+    // Populate clock-name/key aliases for source arguments. LowerToBMC often
+    // preserves check metadata keyed to source signals (e.g. port:clk_src_i),
+    // while BMC clock inputs may be renamed/remapped to synthetic ports.
+    for (auto &[argIndex, sourceInfo] : clockSourceInputs) {
+      if (argIndex >= inputNamePrefixes.size())
+        continue;
+      auto sourceNameAttr = inputNamePrefixes[argIndex];
+      if (!sourceNameAttr || sourceNameAttr.getValue().empty())
+        continue;
+
+      auto nameInsert = clockNameToPos.try_emplace(sourceNameAttr.getValue(),
+                                                   sourceInfo.pos);
+      if (!nameInsert.second && nameInsert.first->second != sourceInfo.pos) {
+        op.emitError("bmc_clock_sources source name maps to multiple BMC "
+                     "clock inputs");
+        return failure();
+      }
+
+      std::string keyBase = ("port:" + sourceNameAttr.getValue()).str();
+      if (failed(addClockKeyAlias(
+              keyBase, ClockPosInfo{sourceInfo.pos, sourceInfo.invert},
+              "bmc_clock_sources source key maps to multiple BMC clock "
+              "inputs")))
+        return failure();
+      if (failed(addClockKeyAlias(
+              keyBase + ":inv",
+              ClockPosInfo{sourceInfo.pos, !sourceInfo.invert},
+              "bmc_clock_sources source key maps to multiple BMC clock "
+              "inputs")))
+        return failure();
+    }
+
+    if (auto regClockSourcesAttr =
+            op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+      for (auto attr : regClockSourcesAttr) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+        auto keyAttr = dict.getAs<StringAttr>("clock_key");
+        if (!keyAttr || keyAttr.getValue().empty())
+          continue;
+
+        std::optional<unsigned> mappedPos;
+        if (auto argAttr = dict.getAs<IntegerAttr>("arg_index"))
+          mappedPos = mapArgIndexToClockPos(
+              static_cast<unsigned>(argAttr.getInt()));
+        if (!mappedPos) {
+          auto it = clockKeyToPos.find(keyAttr.getValue());
+          if (it != clockKeyToPos.end())
+            mappedPos = it->second.pos;
+        }
+        if (!mappedPos)
+          continue;
+
+        bool invert = false;
+        if (auto invertAttr = dict.getAs<BoolAttr>("invert"))
+          invert = invertAttr.getValue();
+
+        if (failed(addClockKeyAlias(
+                keyAttr.getValue(), ClockPosInfo{*mappedPos, invert},
+                "bmc_reg_clock_sources key maps to multiple BMC clock "
+                "inputs")))
+          return failure();
+
+        StringRef key = keyAttr.getValue();
+        if (!key.starts_with("port:"))
+          continue;
+        if (key.ends_with(":inv")) {
+          auto base = key.drop_back(4);
+          if (failed(addClockKeyAlias(
+                  base, ClockPosInfo{*mappedPos, !invert},
+                  "bmc_reg_clock_sources key maps to multiple BMC clock "
+                  "inputs")))
+            return failure();
+        } else {
+          std::string invKey = (key + ":inv").str();
+          if (failed(addClockKeyAlias(
+                  invKey, ClockPosInfo{*mappedPos, !invert},
+                  "bmc_reg_clock_sources key maps to multiple BMC clock "
+                  "inputs")))
+            return failure();
+        }
+      }
+    }
+
     // LowerToBMC may preserve check clock names in bmc_reg_clocks even when the
     // corresponding BMC clock input is unnamed or remapped. Accept those names
     // by resolving through bmc_reg_clock_sources / bmc_clock_sources metadata.
@@ -6152,7 +6349,8 @@ struct VerifBoundedModelCheckingOpConversion
           if (!mappedPos)
             continue;
 
-          auto insert = clockNameToPos.try_emplace(nameAttr.getValue(), *mappedPos);
+          auto insert =
+              clockNameToPos.try_emplace(nameAttr.getValue(), *mappedPos);
           if (!insert.second && insert.first->second != *mappedPos) {
             op.emitError("bmc_reg_clocks entry maps to multiple BMC clock "
                          "inputs");
@@ -6487,10 +6685,24 @@ struct VerifBoundedModelCheckingOpConversion
               info.edge = inferred.edge;
             if (inferred.pos)
               pos = inferred.pos;
+            if (info.clockKey && !info.clockKey.getValue().empty()) {
+              auto it = clockKeyToPos.find(info.clockKey.getValue());
+              if (it != clockKeyToPos.end()) {
+                if (pos && *pos != it->second.pos) {
+                  reportUnmappedClock(
+                      info.loc,
+                      "clocked property uses conflicting clock information; "
+                      "ensure each property uses a single clock/edge");
+                }
+                pos = it->second.pos;
+                if (info.edge && it->second.invert)
+                  info.edge = invertClockEdge(*info.edge);
+              }
+            }
             if (info.clockName && !info.clockName.getValue().empty()) {
               auto it = clockNameToPos.find(info.clockName.getValue());
               if (it != clockNameToPos.end()) {
-                if (inferred.pos && *inferred.pos != it->second) {
+                if (pos && *pos != it->second) {
                   reportUnmappedClock(
                       info.loc,
                       "clocked property uses conflicting clock information; "
@@ -6503,11 +6715,61 @@ struct VerifBoundedModelCheckingOpConversion
             }
             if (!pos && !risingClocksOnly) {
               bool explicitClock =
+                  (info.clockKey && !info.clockKey.getValue().empty()) ||
                   (info.clockName && !info.clockName.getValue().empty()) ||
                   inferred.sawClock;
               if (explicitClock) {
-                reportUnmappedClock(info.loc, "clocked property uses a clock that is "
-                                             "not a BMC clock input");
+                std::string detail =
+                    "clocked property uses a clock that is not a BMC clock input";
+                detail.append(" (num_bmc_clocks=");
+                detail.append(std::to_string(clockIndexes.size()));
+                detail.push_back(')');
+                if (!clockNameToPos.empty()) {
+                  detail.append(" (known_clock_names=");
+                  bool first = true;
+                  for (auto &entry : clockNameToPos) {
+                    if (!first)
+                      detail.push_back(',');
+                    first = false;
+                    detail.append(entry.first.str());
+                  }
+                  detail.push_back(')');
+                }
+                if (!clockKeyToPos.empty()) {
+                  detail.append(" (known_clock_keys=");
+                  bool first = true;
+                  for (auto &entry : clockKeyToPos) {
+                    if (!first)
+                      detail.push_back(',');
+                    first = false;
+                    detail.append(entry.first.str());
+                  }
+                  detail.push_back(')');
+                }
+                if (info.clockName && !info.clockName.getValue().empty()) {
+                  detail.append(" (bmc.clock=");
+                  detail.append(info.clockName.getValue().str());
+                  detail.push_back(')');
+                  if (auto itArg = inputNameToArgIndex.find(info.clockName.getValue());
+                      itArg != inputNameToArgIndex.end()) {
+                    detail.append(" (clock_arg_index=");
+                    detail.append(std::to_string(itArg->second));
+                    detail.push_back(')');
+                    auto mapped = mapArgIndexToClockPos(itArg->second);
+                    detail.append(" (clock_arg_pos=");
+                    if (mapped)
+                      detail.append(std::to_string(*mapped));
+                    else
+                      detail.append("none");
+                    detail.push_back(')');
+                  }
+                }
+                if (info.clockKey && !info.clockKey.getValue().empty()) {
+                  detail.append(" (bmc.clock_key=");
+                  detail.append(info.clockKey.getValue().str());
+                  detail.push_back(')');
+                }
+                reportUnmappedClock(info.loc, detail);
               }
             }
             out.push_back(pos);
