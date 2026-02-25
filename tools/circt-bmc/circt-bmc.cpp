@@ -1176,11 +1176,13 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
     return failure();
 
   std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
-  std::string errorMessage;
-  outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
-  if (!outputFile.value()) {
-    llvm::errs() << errorMessage << "\n";
-    return failure();
+  if (outputFilename != "-") {
+    std::string errorMessage;
+    outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
+    if (!outputFile.value()) {
+      llvm::errs() << errorMessage << "\n";
+      return failure();
+    }
   }
 
   ConvertVerifToSMTOptions baseOptions;
@@ -1208,7 +1210,8 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
       llvm::outs() << "Assertion can be violated!\n";
     else
       llvm::outs() << "Solver returned unknown.\n";
-    outputFile.value()->keep();
+    if (outputFile)
+      outputFile.value()->keep();
     if (failOnViolation)
       return failure();
     return success();
@@ -1229,12 +1232,14 @@ static LogicalResult executeBMCWithInduction(MLIRContext &context) {
 
   if (stepResult == BMCResult::Unsat) {
     llvm::outs() << "BMC_RESULT=UNSAT\nInduction holds.\n";
-    outputFile.value()->keep();
+    if (outputFile)
+      outputFile.value()->keep();
     return success();
   }
 
   llvm::outs() << "BMC_RESULT=UNKNOWN\nInduction step failed.\n";
-  outputFile.value()->keep();
+  if (outputFile)
+    outputFile.value()->keep();
   if (failOnViolation)
     return failure();
   return success();
@@ -1279,12 +1284,15 @@ static LogicalResult executeBMC(MLIRContext &context) {
 
   // Create the output directory or output file depending on our mode.
   std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
-  std::string errorMessage;
-  // Create an output file.
-  outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
-  if (!outputFile.value()) {
-    llvm::errs() << errorMessage << "\n";
-    return failure();
+  llvm::raw_ostream *outputOS = &llvm::outs();
+  if (outputFilename != "-") {
+    std::string errorMessage;
+    outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
+    if (!outputFile.value()) {
+      llvm::errs() << errorMessage << "\n";
+      return failure();
+    }
+    outputOS = &outputFile.value()->os();
   }
 
   ConvertVerifToSMTOptions convertVerifToSMTOptions;
@@ -1303,8 +1311,11 @@ static LogicalResult executeBMC(MLIRContext &context) {
     circt::setResourceGuardPhase("print mlir");
     auto timer = ts.nest("Print MLIR output");
     OpPrintingFlags printingFlags;
-    module->print(outputFile.value()->os(), printingFlags);
-    outputFile.value()->keep();
+    module->print(*outputOS, printingFlags);
+    if (outputFilename == "-")
+      outputOS->flush();
+    if (outputFile)
+      outputFile.value()->keep();
     return success();
   }
 
@@ -1314,16 +1325,22 @@ static LogicalResult executeBMC(MLIRContext &context) {
     if (!hasSMTSolver(*module)) {
       // If no solver is present, there is nothing meaningful to export. Emit a
       // stub query that returns UNSAT, which corresponds to "no violations".
-      auto &os = outputFile.value()->os();
+      auto &os = *outputOS;
       os << "(assert false)\n";
       os << "(check-sat)\n";
       os << "(reset)\n";
-      outputFile.value()->keep();
+      if (outputFilename == "-")
+        outputOS->flush();
+      if (outputFile)
+        outputFile.value()->keep();
       return success();
     }
-    if (failed(smt::exportSMTLIB(module.get(), outputFile.value()->os())))
+    if (failed(smt::exportSMTLIB(module.get(), *outputOS)))
       return failure();
-    outputFile.value()->keep();
+    if (outputFilename == "-")
+      outputOS->flush();
+    if (outputFile)
+      outputFile.value()->keep();
     return success();
   }
 
@@ -1332,7 +1349,8 @@ static LogicalResult executeBMC(MLIRContext &context) {
         runSMTLIBSolver(*module, wantSolverOutput, /*printResultLines=*/true);
     if (failed(resultOr))
       return failure();
-    outputFile.value()->keep();
+    if (outputFile)
+      outputFile.value()->keep();
     BMCResult result = *resultOr;
     if (result == BMCResult::Unsat)
       return success();
@@ -1345,8 +1363,11 @@ static LogicalResult executeBMC(MLIRContext &context) {
     auto llvmModule = mlir::translateModuleToLLVMIR(module.get(), llvmContext);
     if (!llvmModule)
       return failure();
-    llvmModule->print(outputFile.value()->os(), nullptr);
-    outputFile.value()->keep();
+    llvmModule->print(*outputOS, nullptr);
+    if (outputFilename == "-")
+      outputOS->flush();
+    if (outputFile)
+      outputFile.value()->keep();
     return success();
   }
 
