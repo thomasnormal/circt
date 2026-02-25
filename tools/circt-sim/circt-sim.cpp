@@ -2950,6 +2950,10 @@ LogicalResult SimulationContext::run() {
     }
 
     bool hasReadyProcesses = scheduler.hasReadyProcesses();
+    if (llhdInterpreter &&
+        llhdInterpreter->scheduleStrandedCallStackProcessesOnce(
+            scheduler.getCurrentTime()))
+      hasReadyProcesses = scheduler.hasReadyProcesses();
 
     if (deltasExecuted == 0) {
       // Track zero-delta iterations at the same time for loop detection
@@ -3535,8 +3539,12 @@ static LogicalResult processInput(MLIRContext &context,
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - startTime)
           .count());
-  if (failed(runResult))
+  if (failed(runResult)) {
+#if defined(__EMSCRIPTEN__)
+    VPIRuntime::getInstance().resetForNewSimulationRun();
+#endif
     return failure();
+  }
 
   // Join the timeout thread before final exit-code selection so timeout state
   // is fully synchronized when the callback fired near simulation shutdown.
@@ -3619,6 +3627,7 @@ static LogicalResult processInput(MLIRContext &context,
   std::fflush(stdout);
   std::fflush(stderr);
 #if defined(__EMSCRIPTEN__)
+  VPIRuntime::getInstance().resetForNewSimulationRun();
   return exitCode == 0 ? success() : failure();
 #else
   std::_Exit(exitCode);

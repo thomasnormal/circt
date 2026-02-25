@@ -89,6 +89,48 @@ VPIRuntime &VPIRuntime::getInstance() {
   return instance;
 }
 
+void VPIRuntime::resetForNewSimulationRun() {
+  scheduler = nullptr;
+  simControl = nullptr;
+
+  objects.clear();
+  nameToId.clear();
+  iterators.clear();
+  callbacks.clear();
+  signalToObjectIds.clear();
+  nameToSiblingSignals.clear();
+  vpiDrivenSignals.clear();
+  objectToCallbackIds.clear();
+  callbacksByReason.clear();
+
+  rootModules.clear();
+  packageIds.clear();
+  topModuleNames.clear();
+  integerVarNames.clear();
+  stringVarNames.clear();
+  realVarNames.clear();
+
+  nextObjId = 1;
+  nextCbId = 1;
+  lastErrorMessage.clear();
+  lastErrorLevel = 0;
+  strBuffer.clear();
+  active = false;
+  stats = {};
+
+  vlogArgs.clear();
+  vlogArgvPtrs.clear();
+
+  deferringValueChanges = false;
+  batchingReadWriteWrites = false;
+  deferredValueChangeSignals.clear();
+  forcedSignals.clear();
+
+  postCallbackHook = {};
+  encodeStringSignal = {};
+  decodeStringSignal = {};
+}
+
 vpiHandle VPIRuntime::makeHandle(uint32_t id) {
   return getArena().allocate(id);
 }

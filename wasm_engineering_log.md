@@ -2092,3 +2092,82 @@
     PASS.
   - `node utils/repro_wasm_uvm_browser_assert.mjs --expect-pass`:
     PASS (`outMlirBytes=25034364`, `hasMalformed=false`, `hasAbort=false`).
+
+## 2026-02-25 (wasm risk scan after merge)
+- Scope:
+  - static scan of wasm-sensitive codepaths in `tools/circt-sim`,
+    `tools/circt-verilog`, `VPIRuntime`, runtime helpers, and wasm scripts.
+  - one runtime spot-check for `$system` behavior in Node-backed wasm.
+- Findings (potential wasm fragility):
+  - Node-only FS default in wasm tool wrappers (`-sNODERAWFS=1`) remains set
+    for both `circt-verilog` and `circt-sim`; true browser hosts still require
+    custom `process/require/fs/path` shims.
+  - two wasm helper scripts still invoke global `callMain(...)` instead of
+    `Module.callMain(...)`, which is brittle against Emscripten wrapper changes.
+  - `vpi_startup_register` callback storage is process-global and not reset,
+    so long-lived wasm module reuse can accumulate startup callback pointers.
+  - `--vpi` dynamic-library path has no wasm-specific diagnostic despite wasm
+    environments not supporting normal `dlopen` semantics.
+  - resource guard stays disabled on Emscripten by design; hangs/OOM are
+    therefore unbounded in wasm hosts.
+- Validation note:
+  - `$system` syscall spot-check in Node-backed wasm path passed
+    (`syscall-system.sv`), so current behavior is usable in Node-like runtimes.
+
+## 2026-02-25 (wasm VPI re-entry callback leakage regression + fix)
+- TDD repro:
+  - added `utils/wasm_vpi_reentry_callback_isolation_check.sh` to verify
+    callback isolation across same-instance `callMain` runs.
+  - repro behavior before fix (on rebuilt wasm artifacts):
+    `run2` observed stale `cbStartOfSimulation` callback without re-registration,
+    proving cross-run VPI callback leakage.
+- Root cause:
+  - `VPIRuntime` singleton callback/object state was not reset between wasm
+    `callMain` invocations.
+- Fix:
+  - added `VPIRuntime::resetForNewSimulationRun()` and invoke it on
+    emscripten after `simContext.run()` completes (including failure path), so
+    pre-registered startup callbacks remain valid for current run but do not
+    leak into subsequent runs.
+- Regression coverage:
+  - wired new helper into `utils/run_wasm_smoke.sh` and
+    `utils/internal/checks/wasm_smoke_contract_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_reentry_callback_isolation_check.sh`: PASS.
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh`: PASS.
+  - `utils/internal/checks/wasm_smoke_contract_check.sh`: PASS.
+
+## 2026-02-25 (new wasm bug found: circt-verilog abort via thread constructor)
+- Discovery path:
+  - while running wasm helper checks in `build-wasm-mergecheck`,
+    `utils/wasm_resource_guard_default_check.sh` failed in the
+    `circt-verilog` phase with hard abort.
+- Minimal repro (mergecheck artifacts):
+  - `cat test/Tools/circt-sim/reject-raw-sv-input.sv | node build-wasm-mergecheck/bin/circt-verilog.js --no-uvm-auto-include --ir-llhd --single-unit --format=sv -o /tmp/out.mlir -`
+  - observed: `Aborted()` and no output MLIR.
+- Assertion-enabled diagnosis:
+  - rebuilt `circt-verilog` with `CIRCT_VERILOG_WASM_ASSERTIONS=ON`.
+  - abort message becomes explicit:
+    `system_error was thrown in -fno-exceptions mode with error 138 and message "thread constructor failed"`.
+- Narrowing:
+  - `--parse-only` succeeds on same input/artifact.
+  - `--lint-only` aborts with the same thread-constructor failure.
+  - indicates the semantic-analysis/lint path triggers thread creation in wasm
+    where threads are unavailable.
+- Context note:
+  - this failure is present in current `build-wasm-mergecheck` artifacts and
+    explains why wasm UVM/frontend helpers fail there before simulation.
+
+## 2026-02-25 (new wasm bug found: circt-sim --timeout abort)
+- Minimal repro (works on both `build-wasm` and `build-wasm-mergecheck`):
+  - `node <build>/bin/circt-sim.js --resource-guard=false --timeout 1 test/Tools/circt-sim/llhd-combinational.mlir`
+  - observed: immediate hard abort (`RuntimeError: Aborted...`).
+- Expected:
+  - either timeout watchdog support in wasm, or a graceful diagnostic that
+    `--timeout` is unsupported on emscripten.
+- Likely root cause:
+  - `SimulationContext::startWatchdogThread()` always constructs
+    `std::thread` when `timeout > 0`.
+  - on wasm/emscripten (no pthreads), thread construction aborts.
+  - code location: `tools/circt-sim/circt-sim.cpp` around
+    `startWatchdogThread()` and the `watchdogThread = std::thread(...)` path.
