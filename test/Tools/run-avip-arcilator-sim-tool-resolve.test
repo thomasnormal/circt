@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/mbit/apb_avip/sim
+// RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
+// RUN: mkdir -p %t/circt-root/build_test/bin
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/circt-root/build_test/bin/circt-verilog
+// RUN: chmod +x %t/circt-root/build_test/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"Simulation terminated at time 10 fs\"\necho \"UVM_FATAL : 0\"\necho \"UVM_ERROR : 0\"\n' > %t/circt-root/build_test/bin/arcilator
+// RUN: chmod +x %t/circt-root/build_test/bin/arcilator
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > \"${OUT:?}\"\n\"${CIRCT_VERILOG:?}\" --help >/dev/null 2>&1\n' > %t/fake-run-avip.sh
+// RUN: chmod +x %t/fake-run-avip.sh
+// RUN: env CIRCT_ROOT=%t/circt-root MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 RUN_AVIP=%t/fake-run-avip.sh COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 SIM_TIMEOUT_GRACE=1 MAX_WALL_MS=11000 %S/../../utils/run_avip_arcilator_sim.sh %t/out > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: sim_status=OK
+
