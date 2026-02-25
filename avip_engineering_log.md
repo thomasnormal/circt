@@ -9130,3 +9130,29 @@ Based on these findings, the circt-sim compiled process architecture:
 - For multi-clock parity, preserving only symbolic clock names is not enough;
   alias keys (`port:*`) must be treated as first-class clock identities across
   inlining and BMC lowering boundaries.
+
+## 2026-02-25: OpenTitan manifest parser dependency (`hjson`)
+
+### Goal
+- Unblock OpenTitan FPV/LEC parity runs under the default `python3` toolchain.
+
+### Findings
+- `utils/select_opentitan_formal_cfgs.py` and related OpenTitan manifest flows
+  require `hjson` to parse OpenTitan cfg files.
+- In this environment, default `python3` (3.11) was missing `hjson`, causing
+  immediate manifest parsing failures before any formal run.
+
+### Implementation
+- Added an explicit pinned dependency file:
+  - `utils/python-requirements.txt` with `hjson==3.1.0`.
+- Updated `utils/README.md` to point utility users at the Python dependency
+  list.
+
+### Validation
+- `python3 -c 'import hjson; print(hjson.__version__)'` -> `3.1.0`.
+- `python3 utils/select_opentitan_formal_cfgs.py --cfg-file ...top_earlgrey_fpv_prim_cfgs.hjson --proj-root /home/thomas-ahle/opentitan --out-manifest /tmp/ot-fpv-manifest-py311.tsv` -> success.
+
+### Realization
+- OpenTitan formal productivity depends on surfacing Python prerequisites next
+  to `utils/` entrypoints, otherwise failures appear as tool bugs instead of
+  environment setup gaps.
