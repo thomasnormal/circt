@@ -25,7 +25,37 @@ function bufferLikeLength(arg) {
     return Buffer.byteLength(arg);
   if (arg && typeof arg.length === "number")
     return arg.length;
+  if (arg instanceof ArrayBuffer)
+    return arg.byteLength;
   return 0;
+}
+
+function decodeUtf8Chunk(arg, offset = 0, length = null) {
+  if (typeof arg === "string")
+    return arg;
+  if (Buffer.isBuffer(arg)) {
+    const start = Math.max(0, offset | 0);
+    const end = length == null ? arg.length : Math.min(arg.length, start + (length | 0));
+    return arg.toString("utf8", start, Math.max(start, end));
+  }
+  if (ArrayBuffer.isView(arg)) {
+    const view = arg;
+    const start = Math.max(0, offset | 0);
+    const avail = Math.max(0, view.byteLength - start);
+    const take = length == null ? avail : Math.max(0, Math.min(avail, length | 0));
+    if (take === 0)
+      return "";
+    return Buffer.from(view.buffer, view.byteOffset + start, take).toString("utf8");
+  }
+  if (arg instanceof ArrayBuffer) {
+    const start = Math.max(0, offset | 0);
+    const avail = Math.max(0, arg.byteLength - start);
+    const take = length == null ? avail : Math.max(0, Math.min(avail, length | 0));
+    if (take === 0)
+      return "";
+    return Buffer.from(arg, start, take).toString("utf8");
+  }
+  return "";
 }
 
 function appendCapped(chunks, state, text, maxBytes) {
@@ -229,7 +259,7 @@ async function main() {
   const origFsWrite = fs.write.bind(fs);
 
   process.stdout.write = (chunk, encoding, cb) => {
-    stdoutChunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    stdoutChunks.push(decodeUtf8Chunk(chunk));
     if (typeof cb === "function")
       cb();
     return true;
@@ -241,21 +271,16 @@ async function main() {
           : (typeof offsetOrPosition === "number" && typeof lengthOrEncoding === "number"
                  ? lengthOrEncoding
                  : bufferLikeLength(bufferOrString));
-      let text = "";
-      if (typeof bufferOrString === "string") {
-        text = bufferOrString;
-      } else if (bufferOrString && typeof bufferOrString.toString === "function") {
-        const offset =
-            typeof offsetOrPosition === "number" && typeof lengthOrEncoding === "number"
-            ? offsetOrPosition
-            : 0;
-        const length =
-            typeof offsetOrPosition === "number" && typeof lengthOrEncoding === "number"
-            ? lengthOrEncoding
-            : bufferLikeLength(bufferOrString);
-        const captureLength = Math.min(length, 8192);
-        text = bufferOrString.toString("utf8", offset, offset + captureLength);
-      }
+      const offset =
+          typeof offsetOrPosition === "number" && typeof lengthOrEncoding === "number"
+          ? offsetOrPosition
+          : 0;
+      const length =
+          typeof offsetOrPosition === "number" && typeof lengthOrEncoding === "number"
+          ? lengthOrEncoding
+          : bufferLikeLength(bufferOrString);
+      const captureLength = Math.min(length, 8192);
+      const text = decodeUtf8Chunk(bufferOrString, offset, captureLength);
       if (fd === 1) {
         appendCapped(fdStdoutChunks, fdStdoutState, text, MAX_FD_CAPTURE_BYTES);
       } else {
@@ -274,15 +299,10 @@ async function main() {
       const reportedBytes = isStringWrite
           ? Buffer.byteLength(bufferOrString)
           : (explicitLength ? lengthOrPosition : bufferLikeLength(bufferOrString));
-      let text = "";
-      if (isStringWrite) {
-        text = bufferOrString;
-      } else if (bufferOrString && typeof bufferOrString.toString === "function") {
-        const offset = explicitLength ? offsetOrString : 0;
-        const captureLength =
-            Math.min(explicitLength ? lengthOrPosition : bufferLikeLength(bufferOrString), 8192);
-        text = bufferOrString.toString("utf8", offset, offset + captureLength);
-      }
+      const offset = explicitLength ? offsetOrString : 0;
+      const captureLength =
+          Math.min(explicitLength ? lengthOrPosition : bufferLikeLength(bufferOrString), 8192);
+      const text = decodeUtf8Chunk(bufferOrString, offset, captureLength);
       if (fd === 1) {
         appendCapped(fdStdoutChunks, fdStdoutState, text, MAX_FD_CAPTURE_BYTES);
       } else {
@@ -297,7 +317,7 @@ async function main() {
     return origFsWrite(fd, bufferOrString, offsetOrString, lengthOrPosition, positionOrCb, maybeCb);
   };
   process.stderr.write = (chunk, encoding, cb) => {
-    stderrChunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    stderrChunks.push(decodeUtf8Chunk(chunk));
     if (typeof cb === "function")
       cb();
     return true;

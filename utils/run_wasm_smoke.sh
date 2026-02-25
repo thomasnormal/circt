@@ -10,6 +10,7 @@ WASM_SKIP_BUILD="${WASM_SKIP_BUILD:-0}"
 WASM_CHECK_CXX20_WARNINGS="${WASM_CHECK_CXX20_WARNINGS:-auto}"
 WASM_REQUIRE_CLEAN_CROSSCOMPILE="${WASM_REQUIRE_CLEAN_CROSSCOMPILE:-0}"
 REENTRY_HELPER="utils/wasm_callmain_reentry_check.js"
+REENTRY_STDOUT_CAPTURE_HELPER="utils/wasm_callmain_reentry_stdout_capture_check.sh"
 PLUSARGS_HELPER="utils/wasm_plusargs_reentry_check.sh"
 RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
 UVM_STUB_VCD_HELPER="utils/wasm_uvm_stub_vcd_check.sh"
@@ -92,6 +93,10 @@ if [[ ! -f "$REENTRY_HELPER" ]]; then
 fi
 if [[ ! -x "$PLUSARGS_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $PLUSARGS_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$REENTRY_STDOUT_CAPTURE_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $REENTRY_STDOUT_CAPTURE_HELPER" >&2
   exit 1
 fi
 if [[ ! -x "$RESOURCE_GUARD_HELPER" ]]; then
@@ -386,6 +391,9 @@ echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
   --expect-wasm-file-substr "$BMC_REENTRY_RUN2_OUT" "(check-sat)" \
   --forbid-substr "Aborted(" \
   >"$tmpdir/bmc-reentry-run-run.log" 2>&1
+
+echo "[wasm-smoke] Re-entry: callMain stdout capture"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$REENTRY_STDOUT_CAPTURE_HELPER"
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog run -> run"

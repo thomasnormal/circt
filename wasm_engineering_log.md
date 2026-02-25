@@ -2333,3 +2333,29 @@
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_verilog_diag_stdout_dash_check.sh`: PASS.
   - `WASM_SKIP_BUILD=1 ... utils/run_wasm_smoke.sh`: PASS.
+
+## 2026-02-25 (fix: wasm re-entry helper stdout capture for typed-array writes)
+- TDD regression added:
+  - `utils/wasm_callmain_reentry_stdout_capture_check.sh`
+  - exercises `utils/wasm_callmain_reentry_check.js` with `circt-bmc.js`
+    `--emit-smtlib -o -` for two same-instance `callMain` runs and expects
+    `(check-sat)` in captured stdout.
+- Pre-fix behavior:
+  - helper failed with `missing expected substring: "(check-sat)"` even though
+    direct shell invocation of the same wasm command emitted SMT-LIB.
+- Root cause:
+  - `utils/wasm_callmain_reentry_check.js` decoded intercepted fd writes via
+    `toString("utf8", ...)` on arbitrary ArrayBuffer views.
+  - for `Uint8Array`, this does not decode bytes as UTF-8 text and dropped the
+    expected stdout substrings.
+- Fix in `utils/wasm_callmain_reentry_check.js`:
+  - added `decodeUtf8Chunk()` handling `string`, `Buffer`, `ArrayBufferView`,
+    and `ArrayBuffer` using `Buffer.from(...)` byte-accurate decoding.
+  - switched `process.stdout.write`, `process.stderr.write`, `fs.writeSync`, and
+    `fs.write` capture paths to use the robust decoder.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now executes
+    `utils/wasm_callmain_reentry_stdout_capture_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_callmain_reentry_stdout_capture_check.sh`: PASS.
+  - `WASM_SKIP_BUILD=1 ... utils/run_wasm_smoke.sh`: PASS.
