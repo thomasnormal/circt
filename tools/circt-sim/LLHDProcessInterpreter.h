@@ -1221,10 +1221,18 @@ public:
     return interpreterProcessInvocations;
   }
   uint64_t getNativeFuncCallCount() const { return nativeFuncCallCount; }
+  uint64_t getNativeFuncSkippedDepth() const { return nativeFuncSkippedDepth; }
   uint64_t getInterpretedFuncCallCount() const {
     return interpretedFuncCallCount;
   }
   uint64_t getNativeEntryCallCount() const { return nativeEntryCallCount; }
+  uint64_t getTrampolineEntryCallCount() const {
+    return trampolineEntryCallCount;
+  }
+  uint64_t getEntryTableSkippedDepthCount() const {
+    return entryTableSkippedDepthCount;
+  }
+  uint32_t getMaxNativeCallDepth() const { return maxNativeCallDepth; }
 
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
@@ -3617,6 +3625,10 @@ private:
   /// Checked by finish_item poll to determine when to resume.
   llvm::DenseSet<uint64_t> itemDoneReceived;
 
+  /// Outstanding send_request() items per sequence process. These are consumed
+  /// by wait_for_item_done() interception.
+  llvm::DenseMap<ProcessId, std::deque<uint64_t>> sequencePendingItemsByProc;
+
   /// Maps pull-port / sequencer aliases to dequeued items not yet completed by
   /// item_done. A deque is required because some benches may dequeue multiple
   /// items before signaling completion.
@@ -4129,6 +4141,7 @@ private:
 
   /// Counters for native vs interpreted dispatch (for compile report).
   uint64_t nativeFuncCallCount = 0;
+  uint64_t nativeFuncSkippedDepth = 0;
   uint64_t nativeCallIndirectDispatchCount = 0;
   uint64_t interpretedFuncCallCount = 0;
 
@@ -4137,12 +4150,14 @@ private:
   const void *const *compiledFuncEntries = nullptr;
   uint32_t numCompiledAllFuncs = 0;
   uint64_t nativeEntryCallCount = 0;
+  uint64_t trampolineEntryCallCount = 0;
+  uint64_t entryTableSkippedDepthCount = 0;
+  uint32_t maxNativeCallDepth = 0;
 
   /// Bitmap indicating which FuncId entries are natively compiled functions
-  /// (true) vs trampolines that call __circt_sim_call_interpreted (false).
-  /// The interpreter must ONLY dispatch through the entry table for native
-  /// entries; dispatching to a trampoline would re-enter the interpreter and
-  /// cause infinite stack recursion.
+  /// (true) vs trampoline entries (false). The runtime dispatch path now allows
+  /// both through the entry table, guarded by nativeCallDepth to avoid
+  /// re-entrant native->interpreter->native recursion.
   std::vector<bool> compiledFuncIsNative;
 
   struct StrandedCallStackRescueStamp {

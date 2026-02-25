@@ -777,36 +777,42 @@ bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
                                                uint64_t strPtrVal,
                                                int64_t strLen,
                                                std::string &out) {
-  // Check dynamicStrings first.
+  if (strPtrVal == 0 || strLen <= 0)
+    return false;
+
+  // Prefer interpreter/global memory first: dynamicStrings addresses can
+  // collide with simulated pointers in wasm, and memory-backed strings are the
+  // authoritative source for packed-string globals.
+  uint64_t offset = 0;
+  MemoryBlock *block = findBlockByAddress(strPtrVal, offset);
+  if (!block)
+    block = findMemoryBlockByAddress(strPtrVal, procId, &offset);
+  if (block && block->initialized &&
+      block->size >= offset + static_cast<uint64_t>(strLen)) {
+    out.assign(reinterpret_cast<const char *>(block->bytes() + offset),
+               static_cast<size_t>(strLen));
+    return true;
+  }
+
+  // Fall back to dynamic host strings when the pointer isn't in simulated
+  // memory (e.g. runtime-created interned strings).
   auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtrVal));
   if (dynIt != dynamicStrings.end() && dynIt->second.first &&
       dynIt->second.second > 0) {
-    out.assign(dynIt->second.first, dynIt->second.second);
+    size_t boundedLen = std::min<size_t>(static_cast<size_t>(strLen),
+                                         static_cast<size_t>(dynIt->second.second));
+    out.assign(dynIt->second.first, boundedLen);
     return true;
   }
-  // Fall back to interpreter memory.
-  if (strPtrVal == 0 || strLen <= 0)
-    return false;
-  uint64_t offset = 0;
-  MemoryBlock *block = findBlockByAddress(strPtrVal, offset);
-  if (!block || !block->initialized ||
-      block->size < offset + static_cast<uint64_t>(strLen))
-    return false;
-  out.assign(reinterpret_cast<const char *>(block->bytes() + offset),
-             static_cast<size_t>(strLen));
-  return true;
+  return false;
 }
 
 std::string LLHDProcessInterpreter::readMooreStringStruct(
     ProcessId procId, InterpretedValue packedValue) {
-  // Decode !llvm.struct<(ptr, i64)> — LLVM struct fields are low-to-high bits:
-  //   field 0 (ptr) = bits [63:0], field 1 (len/i64) = bits [127:64]
-  unsigned totalWidth = packedValue.getWidth();
-  if (totalWidth < 128 || packedValue.isX())
+  uint64_t ptr = 0;
+  uint64_t len = 0;
+  if (!decodePackedPtrLenPayload(packedValue, ptr, len))
     return {};
-  const APInt &bits = packedValue.getAPInt();
-  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
-  uint64_t len = bits.extractBits(64, 64).getZExtValue();
   if (ptr == 0 || len == 0)
     return {};
   std::string result;
@@ -2246,6 +2252,17 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       enableHeuristicAutoLink = true;
   }
   if (enableHeuristicAutoLink && interfacePtrToFieldSignals.size() > 1) {
+    auto fieldsCompatibleForAutoLink = [&](SignalId childSigId,
+                                           SignalId parentSigId) -> bool {
+      unsigned childW = scheduler.getSignalValue(childSigId).getWidth();
+      unsigned parentW = scheduler.getSignalValue(parentSigId).getWidth();
+      if (childW == 0 || parentW == 0)
+        return false;
+      if (childW == parentW)
+        return true;
+      return childW == parentW * 2 || parentW == childW * 2;
+    };
+
     // Dump all known interface signals for diagnostics.
     maybeTraceInterfaceAutoLinkSignalDumpHeader(interfacePtrToFieldSignals.size());
     for (auto &[ifaceSigId, fieldSigIds] : interfacePtrToFieldSignals)
@@ -2312,11 +2329,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
           unsigned numFields =
               std::min(childFieldSigIds.size(), parentFieldSigIds.size());
           for (unsigned i = 0; i < numFields; ++i) {
-            unsigned childW =
-                scheduler.getSignalValue(childFieldSigIds[i]).getWidth();
-            unsigned parentW =
-                scheduler.getSignalValue(parentFieldSigIds[i]).getWidth();
-            if (childW == parentW && childW > 0)
+            if (fieldsCompatibleForAutoLink(childFieldSigIds[i],
+                                            parentFieldSigIds[i]))
               ++bestMatchCount;
           }
         }
@@ -2334,11 +2348,8 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
               std::min(childFieldSigIds.size(), parentFieldSigIds.size());
           int matchCount = 0;
           for (unsigned i = 0; i < numFields; ++i) {
-            unsigned childW =
-                scheduler.getSignalValue(childFieldSigIds[i]).getWidth();
-            unsigned parentW =
-                scheduler.getSignalValue(parentFieldSigIds[i]).getWidth();
-            if (childW == parentW && childW > 0)
+            if (fieldsCompatibleForAutoLink(childFieldSigIds[i],
+                                            parentFieldSigIds[i]))
               ++matchCount;
           }
           if (matchCount > bestMatchCount) {
@@ -2359,9 +2370,7 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       for (unsigned i = 0; i < numFields; ++i) {
         SignalId childFSig = childFieldSigIds[i];
         SignalId parentFSig = parentFieldSigIds[i];
-        unsigned childW = scheduler.getSignalValue(childFSig).getWidth();
-        unsigned parentW = scheduler.getSignalValue(parentFSig).getWidth();
-        if (childW != parentW || childW == 0)
+        if (!fieldsCompatibleForAutoLink(childFSig, parentFSig))
           continue;
 
         interfaceFieldPropagation[parentFSig].push_back(childFSig);
@@ -12132,6 +12141,21 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     for (uint64_t key : eraseAliasKeys)
       lastDequeuedItem.erase(key);
   };
+  auto dropSequencePendingForProc = [&]() {
+    itemToSequencer.erase(0xF1F1000000000000ULL |
+                          static_cast<uint64_t>(procId));
+    auto pendingIt = sequencePendingItemsByProc.find(procId);
+    if (pendingIt == sequencePendingItemsByProc.end())
+      return;
+    llvm::SmallVector<uint64_t, 8> staleItems(pendingIt->second.begin(),
+                                              pendingIt->second.end());
+    sequencePendingItemsByProc.erase(pendingIt);
+    for (uint64_t itemAddr : staleItems) {
+      finishItemWaiters.erase(itemAddr);
+      itemDoneReceived.erase(itemAddr);
+      (void)takeUvmSequencerItemOwner(itemAddr);
+    }
+  };
   if (auto *proc = scheduler.getProcess(procId)) {
     if (proc->getState() == ProcessState::Terminated) {
       removeObjectionZeroWaiter(procId);
@@ -12150,6 +12174,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       disableForkDeferredToken.erase(procId);
       disableForkDeferredPollCount.erase(procId);
 
+      dropSequencePendingForProc();
       dropDequeuedForProc();
       notifyProcessAwaiters(procId);
       return;
@@ -12251,6 +12276,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     }
   }
 
+  dropSequencePendingForProc();
   if (forkJoinManager.getForkGroupForChild(procId))
     forkJoinManager.markChildComplete(procId);
 
@@ -20322,26 +20348,24 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 2) {
     // arg[1] is struct<(ptr, i64)> type_name — a packed string
     InterpretedValue nameVal = getValue(procId, callOp.getOperand(1));
-    if (!nameVal.isX() && nameVal.getWidth() >= 128) {
-      APInt nameAPInt = nameVal.getAPInt();
-      uint64_t strAddr = nameAPInt.extractBits(64, 0).getZExtValue();
-      uint64_t strLen = nameAPInt.extractBits(64, 64).getZExtValue();
-      if (strLen > 0 && strLen <= 1024 && strAddr != 0) {
-        uint64_t strOff = 0;
-        MemoryBlock *strBlk = findBlockByAddress(strAddr, strOff);
-        if (!strBlk)
-          strBlk = findMemoryBlockByAddress(strAddr, procId, &strOff);
-        if (strBlk && strBlk->initialized &&
-            strOff + strLen <= strBlk->size) {
-          std::string typeName(
-              reinterpret_cast<const char *>(strBlk->bytes() + strOff),
-              strLen);
-          auto it = nativeFactoryTypeNames.find(typeName);
-          if (it != nativeFactoryTypeNames.end()) {
-            setValue(procId, callOp.getResult(0),
-                    InterpretedValue(it->second, 64));
-            return success();
-          }
+    uint64_t strAddr = 0;
+    uint64_t strLen = 0;
+    if (decodePackedPtrLenPayload(nameVal, strAddr, strLen) &&
+        strLen > 0 && strLen <= 1024 && strAddr != 0) {
+      uint64_t strOff = 0;
+      MemoryBlock *strBlk = findBlockByAddress(strAddr, strOff);
+      if (!strBlk)
+        strBlk = findMemoryBlockByAddress(strAddr, procId, &strOff);
+      if (strBlk && strBlk->initialized &&
+          strOff + strLen <= strBlk->size) {
+        std::string typeName(
+            reinterpret_cast<const char *>(strBlk->bytes() + strOff),
+            strLen);
+        auto it = nativeFactoryTypeNames.find(typeName);
+        if (it != nativeFactoryTypeNames.end()) {
+          setValue(procId, callOp.getResult(0),
+                   InterpretedValue(it->second, 64));
+          return success();
         }
       }
     }
@@ -20999,7 +21023,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     uint64_t seqrQueueAddr = 0;
     bool resolvedSeqrQueueHint = resolveUvmSequencerQueueAddress(
         procId, portAddr, callOp.getOperation(), seqrQueueAddr);
-    bool allowGlobalFallbackSearch = (seqrQueueAddr == 0);
+    bool allowGlobalFallbackSearch =
+        (seqrQueueAddr == 0 || !sequencerItemFifo.contains(seqrQueueAddr));
     if (resolvedSeqrQueueHint && seqrQueueAddr != 0)
       cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
 
@@ -21101,7 +21126,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto &pState = processStates[procId];
     pState.waiting = true;
     pState.sequencerGetRetryCallOp = callOp.getOperation();
-    uint64_t waitQueueAddr = resolvedSeqrQueueHint ? seqrQueueAddr : 0;
+    uint64_t waitQueueAddr =
+        (resolvedSeqrQueueHint && !allowGlobalFallbackSearch) ? seqrQueueAddr
+                                                              : 0;
     // Park the process on an empty sensitivity list and resume it only from
     // sequencer push wakeups. This avoids unrelated event wakeups repeatedly
     // re-entering empty get_next_item loops.
@@ -22802,87 +22829,92 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (!nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
-      void *fptr = nativeIt->second;
-      unsigned numArgs = args.size();
-      unsigned numResults = callOp.getNumResults();
-      if (numArgs <= 8 && numResults <= 1) {
-        uint64_t a[8] = {};
-        bool canDispatch = true;
-        for (unsigned i = 0; i < numArgs; ++i) {
-          if (args[i].getWidth() <= 64)
-            a[i] = args[i].getUInt64();
-          else {
-            canDispatch = false;
-            break;
+      if (nativeCallDepth == 0) {
+        void *fptr = nativeIt->second;
+        unsigned numArgs = args.size();
+        unsigned numResults = callOp.getNumResults();
+        if (numArgs <= 8 && numResults <= 1) {
+          uint64_t a[8] = {};
+          bool canDispatch = true;
+          for (unsigned i = 0; i < numArgs; ++i) {
+            if (args[i].getWidth() <= 64)
+              a[i] = args[i].getUInt64();
+            else {
+              canDispatch = false;
+              break;
+            }
           }
-        }
-        if (canDispatch && numResults == 1) {
-          unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
-          if (resWidth > 64)
-            canDispatch = false;
-        }
-        if (canDispatch) {
-          ++nativeFuncCallCount;
-          ++state.callDepth;
-          using F0 = uint64_t (*)();
-          using F1 = uint64_t (*)(uint64_t);
-          using F2 = uint64_t (*)(uint64_t, uint64_t);
-          using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
-          using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
-          using F5 =
-              uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-          using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t, uint64_t);
-          using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t, uint64_t, uint64_t);
-          using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t, uint64_t, uint64_t, uint64_t);
-          uint64_t retVal = 0;
-          switch (numArgs) {
-          case 0:
-            retVal = reinterpret_cast<F0>(fptr)();
-            break;
-          case 1:
-            retVal = reinterpret_cast<F1>(fptr)(a[0]);
-            break;
-          case 2:
-            retVal = reinterpret_cast<F2>(fptr)(a[0], a[1]);
-            break;
-          case 3:
-            retVal = reinterpret_cast<F3>(fptr)(a[0], a[1], a[2]);
-            break;
-          case 4:
-            retVal = reinterpret_cast<F4>(fptr)(a[0], a[1], a[2], a[3]);
-            break;
-          case 5:
-            retVal =
-                reinterpret_cast<F5>(fptr)(a[0], a[1], a[2], a[3], a[4]);
-            break;
-          case 6:
-            retVal = reinterpret_cast<F6>(fptr)(a[0], a[1], a[2], a[3], a[4],
-                                                a[5]);
-            break;
-          case 7:
-            retVal = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4],
-                                                a[5], a[6]);
-            break;
-          case 8:
-            retVal = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4],
-                                                a[5], a[6], a[7]);
-            break;
-          }
-          --state.callDepth;
-          if (addedToVisited)
-            decrementRecursionDepthEntry(state, funcKey, arg0Val);
-          if (numResults == 1) {
+          if (canDispatch && numResults == 1) {
             unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
-            setValue(procId, callOp.getResult(0),
-                     InterpretedValue(llvm::APInt(resWidth, retVal)));
+            if (resWidth > 64)
+              canDispatch = false;
           }
-          return success();
+          if (canDispatch) {
+            ++nativeFuncCallCount;
+            ++state.callDepth;
+            using F0 = uint64_t (*)();
+            using F1 = uint64_t (*)(uint64_t);
+            using F2 = uint64_t (*)(uint64_t, uint64_t);
+            using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+            using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+            using F5 =
+                uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+            using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t, uint64_t);
+            using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t, uint64_t, uint64_t);
+            using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t, uint64_t, uint64_t, uint64_t);
+            uint64_t retVal = 0;
+            switch (numArgs) {
+            case 0:
+              retVal = reinterpret_cast<F0>(fptr)();
+              break;
+            case 1:
+              retVal = reinterpret_cast<F1>(fptr)(a[0]);
+              break;
+            case 2:
+              retVal = reinterpret_cast<F2>(fptr)(a[0], a[1]);
+              break;
+            case 3:
+              retVal = reinterpret_cast<F3>(fptr)(a[0], a[1], a[2]);
+              break;
+            case 4:
+              retVal = reinterpret_cast<F4>(fptr)(a[0], a[1], a[2], a[3]);
+              break;
+            case 5:
+              retVal =
+                  reinterpret_cast<F5>(fptr)(a[0], a[1], a[2], a[3], a[4]);
+              break;
+            case 6:
+              retVal = reinterpret_cast<F6>(fptr)(a[0], a[1], a[2], a[3], a[4],
+                                                  a[5]);
+              break;
+            case 7:
+              retVal = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4],
+                                                  a[5], a[6]);
+              break;
+            case 8:
+              retVal = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4],
+                                                  a[5], a[6], a[7]);
+              break;
+            }
+            --state.callDepth;
+            if (addedToVisited)
+              decrementRecursionDepthEntry(state, funcKey, arg0Val);
+            if (numResults == 1) {
+              unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
+              setValue(procId, callOp.getResult(0),
+                       InterpretedValue(
+                           llvm::APInt(64, retVal).zextOrTrunc(resWidth)));
+            }
+            return success();
+          }
         }
+      } else {
+        ++nativeFuncSkippedDepth;
       }
-      // Fell through — can't native dispatch, use interpreter
+      // Fell through — can't native dispatch, use interpreter.
       ++interpretedFuncCallCount;
     }
   }
@@ -23025,86 +23057,91 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       nfp = cacheIt->second.nativeFuncPtr;
   }
   if (nfp) {
-    unsigned numArgs = args.size();
-    unsigned numResults = callOp.getNumResults();
-    if (numArgs <= 8 && numResults <= 1) {
-      uint64_t a[8] = {};
-      bool canDispatch = true;
-      for (unsigned i = 0; i < numArgs; ++i) {
-        if (args[i].getWidth() <= 64)
-          a[i] = args[i].getUInt64();
-        else {
-          canDispatch = false;
-          break;
+    if (nativeCallDepth == 0) {
+      unsigned numArgs = args.size();
+      unsigned numResults = callOp.getNumResults();
+      if (numArgs <= 8 && numResults <= 1) {
+        uint64_t a[8] = {};
+        bool canDispatch = true;
+        for (unsigned i = 0; i < numArgs; ++i) {
+          if (args[i].getWidth() <= 64)
+            a[i] = args[i].getUInt64();
+          else {
+            canDispatch = false;
+            break;
+          }
         }
-      }
-      if (canDispatch && numResults == 1) {
-        unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
-        if (resWidth > 64)
-          canDispatch = false;
-      }
-      if (canDispatch) {
-        ++nativeFuncCallCount;
-        ++state.callDepth;
-        using F0 = uint64_t (*)();
-        using F1 = uint64_t (*)(uint64_t);
-        using F2 = uint64_t (*)(uint64_t, uint64_t);
-        using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
-        using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
-        using F5 =
-            uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-        using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                uint64_t, uint64_t);
-        using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                uint64_t, uint64_t, uint64_t);
-        using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                uint64_t, uint64_t, uint64_t, uint64_t);
-        uint64_t retVal = 0;
-        switch (numArgs) {
-        case 0:
-          retVal = reinterpret_cast<F0>(nfp)();
-          break;
-        case 1:
-          retVal = reinterpret_cast<F1>(nfp)(a[0]);
-          break;
-        case 2:
-          retVal = reinterpret_cast<F2>(nfp)(a[0], a[1]);
-          break;
-        case 3:
-          retVal = reinterpret_cast<F3>(nfp)(a[0], a[1], a[2]);
-          break;
-        case 4:
-          retVal = reinterpret_cast<F4>(nfp)(a[0], a[1], a[2], a[3]);
-          break;
-        case 5:
-          retVal =
-              reinterpret_cast<F5>(nfp)(a[0], a[1], a[2], a[3], a[4]);
-          break;
-        case 6:
-          retVal = reinterpret_cast<F6>(nfp)(a[0], a[1], a[2], a[3], a[4],
-                                              a[5]);
-          break;
-        case 7:
-          retVal = reinterpret_cast<F7>(nfp)(a[0], a[1], a[2], a[3], a[4],
-                                              a[5], a[6]);
-          break;
-        case 8:
-          retVal = reinterpret_cast<F8>(nfp)(a[0], a[1], a[2], a[3], a[4],
-                                              a[5], a[6], a[7]);
-          break;
-        }
-        --state.callDepth;
-        if (addedToVisited)
-          decrementRecursionDepthEntry(state, funcKey, arg0Val);
-        if (numResults == 1) {
+        if (canDispatch && numResults == 1) {
           unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
-          setValue(procId, callOp.getResult(0),
-                   InterpretedValue(llvm::APInt(resWidth, retVal)));
+          if (resWidth > 64)
+            canDispatch = false;
         }
-        return success();
+        if (canDispatch) {
+          ++nativeFuncCallCount;
+          ++state.callDepth;
+          using F0 = uint64_t (*)();
+          using F1 = uint64_t (*)(uint64_t);
+          using F2 = uint64_t (*)(uint64_t, uint64_t);
+          using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+          using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+          using F5 =
+              uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+          using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t);
+          using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t, uint64_t);
+          using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                  uint64_t, uint64_t, uint64_t, uint64_t);
+          uint64_t retVal = 0;
+          switch (numArgs) {
+          case 0:
+            retVal = reinterpret_cast<F0>(nfp)();
+            break;
+          case 1:
+            retVal = reinterpret_cast<F1>(nfp)(a[0]);
+            break;
+          case 2:
+            retVal = reinterpret_cast<F2>(nfp)(a[0], a[1]);
+            break;
+          case 3:
+            retVal = reinterpret_cast<F3>(nfp)(a[0], a[1], a[2]);
+            break;
+          case 4:
+            retVal = reinterpret_cast<F4>(nfp)(a[0], a[1], a[2], a[3]);
+            break;
+          case 5:
+            retVal =
+                reinterpret_cast<F5>(nfp)(a[0], a[1], a[2], a[3], a[4]);
+            break;
+          case 6:
+            retVal = reinterpret_cast<F6>(nfp)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5]);
+            break;
+          case 7:
+            retVal = reinterpret_cast<F7>(nfp)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5], a[6]);
+            break;
+          case 8:
+            retVal = reinterpret_cast<F8>(nfp)(a[0], a[1], a[2], a[3], a[4],
+                                                a[5], a[6], a[7]);
+            break;
+          }
+          --state.callDepth;
+          if (addedToVisited)
+            decrementRecursionDepthEntry(state, funcKey, arg0Val);
+          if (numResults == 1) {
+            unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
+            setValue(procId, callOp.getResult(0),
+                     InterpretedValue(
+                         llvm::APInt(64, retVal).zextOrTrunc(resWidth)));
+          }
+          return success();
+        }
       }
+    } else {
+      ++nativeFuncSkippedDepth;
     }
-    // Fell through — can't native dispatch (wide args), use interpreter
+    // Fell through — can't native dispatch (wide args), use interpreter.
     ++interpretedFuncCallCount;
   }
 
@@ -28248,6 +28285,28 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           return success();
         }
 
+        if (calleeName == "__moore_uvm_report_fatal" && idStr == "FCTTYP") {
+          auto stateIt = processStates.find(procId);
+          if (stateIt != processStates.end()) {
+            auto &state = stateIt->second;
+            llvm::errs() << "[UVM-FCTTYP] proc=" << procId
+                         << " currentFunc=" << state.currentFuncName
+                         << " callDepth=" << state.callStack.size() << "\n";
+            for (size_t i = 0; i < state.callStack.size(); ++i) {
+              const auto &frame = state.callStack[i];
+              llvm::errs() << "[UVM-FCTTYP]   frame[" << i << "] ";
+              if (frame.isLLVM() && frame.llvmFuncOp)
+                llvm::errs() << "<llvm-func>";
+              else if (frame.funcOp)
+                llvm::errs() << "<func>";
+              else
+                llvm::errs() << "<unknown>";
+              llvm::errs() << "\n";
+            }
+          }
+          llvm::errs() << "[UVM-FCTTYP] msg=" << msgStr << "\n";
+        }
+
         // Call the appropriate runtime function
         if (calleeName == "__moore_uvm_report_info") {
           __moore_uvm_report_info(idStr.c_str(), idStr.size(),
@@ -31628,6 +31687,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // ---- __moore_dyn_cast_check ----
     if (calleeName == "__moore_dyn_cast_check") {
       if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        static bool traceDynCastChecks = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_DYN_CAST_CHECK");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
         int32_t srcId = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(0)).getUInt64());
         int32_t targetId = static_cast<int32_t>(
@@ -31636,6 +31699,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(2)).getUInt64());
         // Use RTTI parent table for correct hierarchy checking
         bool result = checkRTTICast(srcId, targetId);
+        if (traceDynCastChecks) {
+          llvm::errs() << "[DYN-CAST] proc=" << procId << " src=" << srcId
+                       << " target=" << targetId << " depth="
+                       << inheritanceDepth << " result=" << (result ? 1 : 0)
+                       << " func=" << processStates[procId].currentFuncName
+                       << "\n";
+        }
         // Return type is i1 (bool) in the runtime, but MLIR may widen to i32
         unsigned resultWidth = getTypeWidth(callOp.getResult().getType());
         setValue(procId, callOp.getResult(),
@@ -38169,16 +38239,39 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   // Intercepted functions must NOT be dispatched natively because native callers
   // would bypass the interpreter where interceptors fire, causing crashes
   // (e.g., factory returning null instead of creating objects).
-  auto isInterceptedFunc = [](llvm::StringRef name) -> bool {
-    // All uvm_ functions (factory, config_db, phasing, sequencer, etc.)
-    if (name.contains("uvm_"))
+  // Legacy compatibility mode: keep the historical broad "uvm_* means
+  // intercepted" policy. Default is off to allow native dispatch for pure
+  // arithmetic/helper UVM-prefixed functions.
+  bool interceptAllUvmByPrefix =
+      std::getenv("CIRCT_AOT_INTERCEPT_ALL_UVM") != nullptr;
+  bool aggressiveNativeUvm =
+      std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr;
+  bool allowNativeSeqBody = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_SEQ_BODY") != nullptr;
+  bool allowNativeUvmAlloc = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC") != nullptr;
+  bool allowNativeUvmTypeInfo = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_TYPEINFO") != nullptr;
+  bool allowNativeUvmAccessors = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ACCESSORS") != nullptr;
+  bool allowNativeUvmSingletonGetters = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_SINGLETON_GETTERS") != nullptr;
+  auto isInterceptedFunc = [interceptAllUvmByPrefix, allowNativeSeqBody,
+                            allowNativeUvmAlloc, allowNativeUvmTypeInfo,
+                            allowNativeUvmAccessors,
+                            allowNativeUvmSingletonGetters](
+                               llvm::StringRef name) -> bool {
+    if (interceptAllUvmByPrefix && name.contains("uvm_"))
       return true;
     // Moore runtime support (__moore_delay, __moore_string_*, etc.)
     if (name.starts_with("__moore_"))
       return true;
     // Standalone intercepted functions (short symbol names without uvm_ prefix)
-    if (name == "get_0" || name == "self" || name == "malloc" ||
-        name == "get_common_domain" || name == "get_global_hopper")
+    if (name == "self" || name == "malloc")
+      return true;
+    if (!allowNativeUvmSingletonGetters &&
+        (name == "get_0" || name == "get_common_domain" ||
+         name == "get_global_hopper"))
       return true;
     // String/class conversion
     if (name.starts_with("to_string_") || name == "to_class" ||
@@ -38202,38 +38295,44 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
       return true;
     // UVM-generated class methods with package-qualified names (no "uvm_"
     // prefix). These are emitted by uvm_component_utils/uvm_object_utils macros.
-    if (name == "create" || name.starts_with("create_") ||
-        name.ends_with("::create"))
+    if (!allowNativeUvmAlloc &&
+        (name == "create" || name.starts_with("create_") ||
+         name.ends_with("::create")))
       return true;
-    if (name == "m_initialize" || name.starts_with("m_initialize_") ||
-        name.ends_with("::m_initialize"))
+    if (!allowNativeUvmTypeInfo &&
+        (name == "m_initialize" || name.starts_with("m_initialize_") ||
+         name.ends_with("::m_initialize")))
       return true;
-    if (name.starts_with("m_register_cb"))
+    if (!allowNativeUvmTypeInfo && name.starts_with("m_register_cb"))
       return true;
-    if (name.contains("get_object_type") || name.contains("get_type_name"))
+    if (!allowNativeUvmTypeInfo &&
+        (name.contains("get_object_type") || name.contains("get_type_name")))
       return true;
     // Type registry accessors (get_type_NNN mangled names)
-    if (name.starts_with("get_type_") || name.contains("::get_type_"))
+    if (!allowNativeUvmTypeInfo &&
+        (name.starts_with("get_type_") || name.contains("::get_type_")))
       return true;
     // TLM imp port accessors (get_imp_NNN mangled names)
-    if (name.starts_with("get_imp_") || name.contains("::get_imp_"))
+    if (!allowNativeUvmAccessors &&
+        (name.starts_with("get_imp_") || name.contains("::get_imp_")))
       return true;
     // Type name string helpers (type_name_NNN)
-    if (name.starts_with("type_name_"))
+    if (!allowNativeUvmTypeInfo && name.starts_with("type_name_"))
       return true;
     // Constructors (may allocate objects the interpreter tracks)
-    if (name.ends_with("::new"))
+    if (!allowNativeUvmAlloc && name.ends_with("::new"))
       return true;
     // Sequence ::body methods — native dispatch causes deep trampoline
     // recursion (body → start_item trampoline → interpreter → deep chain)
     // that overflows the C++ stack.
-    if (name.ends_with("::body"))
+    if (!allowNativeSeqBody && name.ends_with("::body"))
       return true;
     // UVM singleton/registry accessors
-    if (name.contains("::is_auditing") ||
-        name.contains("get_print_config_matches") ||
-        name.contains("get_root_blocks") ||
-        name == "get_inst" || name.starts_with("get_inst_"))
+    if ((!allowNativeUvmAccessors &&
+         (name.contains("::is_auditing") ||
+          name.contains("get_print_config_matches") ||
+          name.contains("get_root_blocks") ||
+          name == "get_inst" || name.starts_with("get_inst_"))))
       return true;
     return false;
   };
@@ -38273,15 +38372,15 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     llvm::errs() << "[circt-sim] CIRCT_AOT_MAX_NATIVE: limited to "
                  << nativePopulated << " native func.call dispatches\n";
 
-  unsigned callIndirectExcluded = nativeEligible - nativePopulated;
+  unsigned nonNativeDispatched = nativeEligible - nativePopulated;
   if (noFuncDispatch) {
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions (func dispatch DISABLED by env)\n";
   } else {
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions: " << nativePopulated
-                 << " native-dispatched, " << callIndirectExcluded
-                 << " excluded (call_indirect), "
+                 << " native-dispatched, " << nonNativeDispatched
+                 << " not-native-dispatched, "
                  << intercepted << " intercepted\n";
   }
 
@@ -38554,6 +38653,7 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   }
   ++callState.callDepth;
   ++nativeCallDepth;
+  maxNativeCallDepth = std::max(maxNativeCallDepth, nativeCallDepth);
   (void)interpretFuncBody(procId, funcOp, interpArgs, interpResults,
                           /*callOp=*/nullptr);
   --nativeCallDepth;
