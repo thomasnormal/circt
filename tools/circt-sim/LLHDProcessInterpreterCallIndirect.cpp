@@ -652,6 +652,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             funcPtrVal.getUInt64() < 0x100000000ULL &&
             processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcPtrVal.getUInt64() - 0xF0000000ULL);
+          noteAotFuncIdCall(fid);
           if (nativeCallDepth != 0) {
             ++entryTableSkippedDepthCount;
           } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
@@ -737,6 +738,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
         }
         auto &callState = processStates[procId];
+        ++interpretedCallCounts[funcOp.getOperation()];
         ++callState.callDepth;
         SmallVector<InterpretedValue, 4> results;
         auto callResult = interpretFuncBody(procId, funcOp, args, results,
@@ -1422,6 +1424,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             funcAddr < 0x100000000ULL &&
             processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
+          noteAotFuncIdCall(fid);
           if (nativeCallDepth != 0) {
             ++entryTableSkippedDepthCount;
           } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
@@ -1507,6 +1510,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
         }
         auto &cs2 = processStates[procId];
+        ++interpretedCallCounts[fOp.getOperation()];
         ++cs2.callDepth;
         SmallVector<InterpretedValue, 4> sResults;
         auto callRes = interpretFuncBody(procId, fOp, sArgs, sResults,
@@ -1895,6 +1899,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             processStates[procId].callDepth < 2000 &&
             nativeCallDepth == 0) {
           auto &entry = siteIt->second;
+          noteAotFuncIdCall(entry.cachedFid);
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
           unsigned numResults = cachedFuncOp.getNumResults();
@@ -1979,10 +1984,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                    siteIt->second.funcAddr == funcAddr &&
                    processStates[procId].callDepth < 2000 &&
                    nativeCallDepth != 0) {
+          noteAotFuncIdCall(siteIt->second.cachedFid);
           ++entryTableSkippedDepthCount;
         }
         // Fall through to interpretFuncBody for non-native-eligible calls.
         auto &fastState = processStates[procId];
+        ++interpretedCallCounts[siteIt->second.funcOp.getOperation()];
         ++fastState.callDepth;
         SmallVector<InterpretedValue, 2> fastResults;
         interpretFuncBody(procId, siteIt->second.funcOp, fastArgs, fastResults,
@@ -4167,6 +4174,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
         funcAddr < 0x100000000ULL && callState.callDepth < 2000) {
       uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
+      noteAotFuncIdCall(fid);
       if (nativeCallDepth != 0) {
         ++entryTableSkippedDepthCount;
       } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
@@ -4257,6 +4265,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     }
 
     // Call the function with depth tracking
+    ++interpretedCallCounts[funcOp.getOperation()];
     ++callState.callDepth;
     SmallVector<InterpretedValue, 2> results;
     // Pass the call operation so it can be saved in call stack frames

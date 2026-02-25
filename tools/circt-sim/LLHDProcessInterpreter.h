@@ -1233,6 +1233,13 @@ public:
     return entryTableSkippedDepthCount;
   }
   uint32_t getMaxNativeCallDepth() const { return maxNativeCallDepth; }
+  void dumpAotHotUncompiledFuncs(llvm::raw_ostream &os, size_t topN) const;
+
+  /// Get the per-function interpreted call counts (for hottest-callee report).
+  const llvm::DenseMap<mlir::Operation *, uint64_t> &
+  getInterpretedCallCounts() const {
+    return interpretedCallCounts;
+  }
 
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
@@ -3158,6 +3165,15 @@ private:
   /// Enabled when CIRCT_SIM_PROFILE_FUNCS env var is set.
   llvm::StringMap<uint64_t> funcCallProfile;
 
+  /// AOT hot-callee profile keyed by FuncId (for speedup prioritization).
+  /// Enabled when CIRCT_AOT_STATS is set.
+  bool aotHotCalleeProfileEnabled = false;
+  llvm::SmallVector<uint64_t> aotFuncIdCallCounts;
+  llvm::SmallVector<std::string> aotFuncEntryNamesById;
+  llvm::StringMap<uint32_t> aotFuncNameToCanonicalId;
+  void noteAotFuncIdCall(uint32_t fid);
+  void noteAotCalleeNameCall(llvm::StringRef calleeName);
+
   struct JitRuntimeIndirectSiteData {
     uint64_t siteId = 0;
     std::string owner;
@@ -4144,6 +4160,10 @@ private:
   uint64_t nativeFuncSkippedDepth = 0;
   uint64_t nativeCallIndirectDispatchCount = 0;
   uint64_t interpretedFuncCallCount = 0;
+
+  /// Track how many times each function is interpreted (for hottest-callee
+  /// reporting). Keyed by the func::FuncOp Operation*.
+  llvm::DenseMap<mlir::Operation *, uint64_t> interpretedCallCounts;
 
   /// Entry table for tagged-FuncId dispatch (Step 7C).
   /// Populated from CompiledModuleLoader during loadCompiledFunctions().

@@ -3077,6 +3077,74 @@ void LLHDProcessInterpreter::maybeTraceDisableForkDeferredArm(
                << " token=" << token << "\n";
 }
 
+void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
+    llvm::raw_ostream &os, size_t topN) const {
+  if (aotFuncIdCallCounts.empty()) {
+    os << "[circt-sim] Hot uncompiled FuncIds (top " << topN
+       << "): none (no FuncIds)\n";
+    return;
+  }
+
+  struct HotRow {
+    uint32_t fid = 0;
+    uint64_t calls = 0;
+  };
+  llvm::SmallVector<HotRow, 64> rows;
+  rows.reserve(aotFuncIdCallCounts.size());
+
+  for (uint32_t fid = 0, e = aotFuncIdCallCounts.size(); fid < e; ++fid) {
+    uint64_t calls = aotFuncIdCallCounts[fid];
+    if (calls == 0)
+      continue;
+    if (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid])
+      continue;
+    rows.push_back(HotRow{fid, calls});
+  }
+
+  os << "[circt-sim] Hot uncompiled FuncIds (top " << topN << "):\n";
+  if (rows.empty()) {
+    os << "[circt-sim]   (none)\n";
+    return;
+  }
+
+  llvm::sort(rows, [](const HotRow &lhs, const HotRow &rhs) {
+    if (lhs.calls != rhs.calls)
+      return lhs.calls > rhs.calls;
+    return lhs.fid < rhs.fid;
+  });
+
+  size_t limit = std::min(topN, rows.size());
+  for (size_t i = 0; i < limit; ++i) {
+    uint32_t fid = rows[i].fid;
+    llvm::StringRef name;
+    if (fid < aotFuncEntryNamesById.size())
+      name = aotFuncEntryNamesById[fid];
+    os << "[circt-sim]   " << rows[i].calls << "x fid=" << fid;
+    if (!name.empty())
+      os << " " << name;
+    os << "\n";
+  }
+
+  // Print top N hottest interpreted callees (per-Operation* counts).
+  if (!interpretedCallCounts.empty()) {
+    std::vector<std::pair<mlir::Operation *, uint64_t>> sorted(
+        interpretedCallCounts.begin(), interpretedCallCounts.end());
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto &a, const auto &b) {
+                return a.second > b.second;
+              });
+    os << "[circt-sim] Top interpreted callees (candidates for compilation):\n";
+    unsigned shown = 0;
+    for (auto &[op, count] : sorted) {
+      if (shown >= topN)
+        break;
+      if (auto funcOp = llvm::dyn_cast<mlir::func::FuncOp>(op))
+        os << "[circt-sim]   " << count << "x  " << funcOp.getName() << "\n";
+      ++shown;
+    }
+  }
+}
+
 void LLHDProcessInterpreter::maybeTraceDisableForkChild(
     ProcessId procId, ForkId forkId, ProcessId childProcId,
     llvm::StringRef mode) const {
