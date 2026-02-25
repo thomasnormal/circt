@@ -2793,6 +2793,271 @@ static unsigned addAlwaysInlineToSmallFunctions(llvm::Module &llvmModule) {
   return count;
 }
 
+//===----------------------------------------------------------------------===//
+// Packed struct layout: rewrite GEPs for interpreter-compatible layout
+//===----------------------------------------------------------------------===//
+
+/// Compute the allocation size of a type using packed (no-padding) layout.
+/// For struct types, this sums the packed sizes of all fields without any
+/// alignment padding. For non-struct types, this uses the DataLayout.
+static uint64_t computePackedTypeAllocSize(llvm::Type *ty,
+                                           const llvm::DataLayout &DL) {
+  if (auto *st = llvm::dyn_cast<llvm::StructType>(ty)) {
+    uint64_t total = 0;
+    for (unsigned i = 0; i < st->getNumElements(); ++i)
+      total += computePackedTypeAllocSize(st->getElementType(i), DL);
+    return total;
+  }
+  if (auto *at = llvm::dyn_cast<llvm::ArrayType>(ty))
+    return at->getNumElements() *
+           computePackedTypeAllocSize(at->getElementType(), DL);
+  return DL.getTypeAllocSize(ty);
+}
+
+/// Compute the byte offset of field `fieldIdx` in a struct type using packed
+/// (no-padding) layout: sum the packed sizes of all preceding fields.
+static uint64_t computePackedFieldOffset(llvm::StructType *st,
+                                         unsigned fieldIdx,
+                                         const llvm::DataLayout &DL) {
+  uint64_t offset = 0;
+  for (unsigned i = 0; i < fieldIdx; ++i)
+    offset += computePackedTypeAllocSize(st->getElementType(i), DL);
+  return offset;
+}
+
+/// Rewrite GEP instructions that index into struct types so they use the
+/// packed (no-padding) field offsets instead of the host DataLayout offsets.
+///
+/// The interpreter uses UNALIGNED struct layout (no padding between fields).
+/// When the AOT compiler produces LLVM IR, struct GEPs use the host
+/// DataLayout which inserts alignment padding. This function rewrites every
+/// struct-indexed GEP to an i8-based byte-offset GEP with the correct
+/// packed offset, eliminating the mismatch.
+///
+/// Returns the number of GEPs rewritten.
+static unsigned rewriteGEPsForPackedLayout(llvm::Module &M) {
+  const llvm::DataLayout &DL = M.getDataLayout();
+  auto &ctx = M.getContext();
+  auto *i8Ty = llvm::Type::getInt8Ty(ctx);
+  auto *i64Ty = llvm::Type::getInt64Ty(ctx);
+
+  unsigned rewritten = 0;
+
+  for (auto &F : M) {
+    // Collect GEPs first to avoid iterator invalidation.
+    llvm::SmallVector<llvm::GetElementPtrInst *> geps;
+    for (auto &BB : F)
+      for (auto &I : BB)
+        if (auto *GEP = llvm::dyn_cast<llvm::GetElementPtrInst>(&I))
+          geps.push_back(GEP);
+
+    for (auto *GEP : geps) {
+      // Check if this GEP indexes into any struct fields. Struct field
+      // indices are always constant in LLVM IR, but other indices (first
+      // index, array indices) may be dynamic. We handle both cases:
+      // - All-constant indices: compute a constant packed offset
+      // - Mixed (dynamic first/array index + constant struct indices):
+      //   build an i8 GEP with dynamic scaling + constant struct offsets
+
+      // First pass: check if there are any struct indices and if we can
+      // handle the GEP (all indices at struct levels must be constant).
+      bool hasStructIndex = false;
+      bool hasDynamicIndex = false;
+      {
+        llvm::Type *ty = GEP->getSourceElementType();
+        auto it = GEP->idx_begin();
+        // First index can be dynamic.
+        if (it != GEP->idx_end()) {
+          if (!llvm::isa<llvm::ConstantInt>(it->get()))
+            hasDynamicIndex = true;
+          ++it;
+        }
+        for (; it != GEP->idx_end(); ++it) {
+          if (auto *st = llvm::dyn_cast<llvm::StructType>(ty)) {
+            hasStructIndex = true;
+            // Struct indices must be constant (LLVM rule).
+            auto *ci = llvm::cast<llvm::ConstantInt>(it->get());
+            ty = st->getElementType(ci->getZExtValue());
+          } else if (auto *at = llvm::dyn_cast<llvm::ArrayType>(ty)) {
+            if (!llvm::isa<llvm::ConstantInt>(it->get()))
+              hasDynamicIndex = true;
+            ty = at->getElementType();
+          }
+        }
+      }
+
+      if (!hasStructIndex)
+        continue;
+
+      // Build the replacement GEP. We compute the packed byte offset for
+      // each index level. For dynamic indices, we emit a multiply + add.
+      llvm::IRBuilder<> builder(GEP);
+      auto *basePtr = GEP->getPointerOperand();
+
+      if (!hasDynamicIndex) {
+        // Fast path: all indices are constant — compute a single constant
+        // packed byte offset.
+        uint64_t packedOffset = 0;
+        llvm::Type *curTy = GEP->getSourceElementType();
+        auto idxIt = GEP->idx_begin();
+
+        if (idxIt != GEP->idx_end()) {
+          auto *firstIdx = llvm::cast<llvm::ConstantInt>(idxIt->get());
+          int64_t idx = firstIdx->getSExtValue();
+          packedOffset += idx * computePackedTypeAllocSize(curTy, DL);
+          ++idxIt;
+        }
+        for (; idxIt != GEP->idx_end(); ++idxIt) {
+          auto *idx = llvm::cast<llvm::ConstantInt>(idxIt->get());
+          if (auto *st = llvm::dyn_cast<llvm::StructType>(curTy)) {
+            unsigned fieldIdx = static_cast<unsigned>(idx->getZExtValue());
+            packedOffset += computePackedFieldOffset(st, fieldIdx, DL);
+            curTy = st->getElementType(fieldIdx);
+          } else if (auto *at = llvm::dyn_cast<llvm::ArrayType>(curTy)) {
+            int64_t arrIdx = idx->getSExtValue();
+            packedOffset +=
+                arrIdx * computePackedTypeAllocSize(at->getElementType(), DL);
+            curTy = at->getElementType();
+          }
+        }
+
+        auto *offsetVal = llvm::ConstantInt::get(i64Ty, packedOffset);
+        llvm::Value *newGEP;
+        if (GEP->isInBounds())
+          newGEP = builder.CreateInBoundsGEP(i8Ty, basePtr, offsetVal,
+                                             GEP->getName() + ".packed");
+        else
+          newGEP = builder.CreateGEP(i8Ty, basePtr, offsetVal,
+                                     GEP->getName() + ".packed");
+        GEP->replaceAllUsesWith(newGEP);
+        GEP->eraseFromParent();
+      } else {
+        // Slow path: some indices are dynamic. Build a byte offset
+        // expression: offset = sum of (index * packed_elem_size) for each
+        // level.
+        llvm::Value *totalOffset = llvm::ConstantInt::get(i64Ty, 0);
+        llvm::Type *curTy = GEP->getSourceElementType();
+        auto idxIt = GEP->idx_begin();
+
+        if (idxIt != GEP->idx_end()) {
+          llvm::Value *idx = idxIt->get();
+          if (idx->getType() != i64Ty)
+            idx = builder.CreateSExtOrTrunc(idx, i64Ty);
+          uint64_t elemSize = computePackedTypeAllocSize(curTy, DL);
+          auto *elemSizeVal = llvm::ConstantInt::get(i64Ty, elemSize);
+          totalOffset = builder.CreateAdd(
+              totalOffset, builder.CreateMul(idx, elemSizeVal));
+          ++idxIt;
+        }
+        for (; idxIt != GEP->idx_end(); ++idxIt) {
+          if (auto *st = llvm::dyn_cast<llvm::StructType>(curTy)) {
+            auto *ci = llvm::cast<llvm::ConstantInt>(idxIt->get());
+            unsigned fieldIdx = static_cast<unsigned>(ci->getZExtValue());
+            uint64_t fieldOff = computePackedFieldOffset(st, fieldIdx, DL);
+            totalOffset = builder.CreateAdd(
+                totalOffset, llvm::ConstantInt::get(i64Ty, fieldOff));
+            curTy = st->getElementType(fieldIdx);
+          } else if (auto *at = llvm::dyn_cast<llvm::ArrayType>(curTy)) {
+            llvm::Value *idx = idxIt->get();
+            if (idx->getType() != i64Ty)
+              idx = builder.CreateSExtOrTrunc(idx, i64Ty);
+            uint64_t elemSize =
+                computePackedTypeAllocSize(at->getElementType(), DL);
+            auto *elemSizeVal = llvm::ConstantInt::get(i64Ty, elemSize);
+            totalOffset = builder.CreateAdd(
+                totalOffset, builder.CreateMul(idx, elemSizeVal));
+            curTy = at->getElementType();
+          }
+        }
+
+        llvm::Value *newGEP;
+        if (GEP->isInBounds())
+          newGEP = builder.CreateInBoundsGEP(i8Ty, basePtr, totalOffset,
+                                             GEP->getName() + ".packed");
+        else
+          newGEP = builder.CreateGEP(i8Ty, basePtr, totalOffset,
+                                     GEP->getName() + ".packed");
+        GEP->replaceAllUsesWith(newGEP);
+        GEP->eraseFromParent();
+      }
+      ++rewritten;
+    }
+  }
+
+  return rewritten;
+}
+
+/// Replace each mutable global variable's type with a flat [N x i8] array
+/// where N is the packed (unpadded) size computed by computePackedTypeAllocSize.
+///
+/// This ensures:
+/// 1. LLVM allocates exactly N bytes for the global (no alignment padding)
+/// 2. The optimizer cannot reconstruct typed struct accesses (the type is now
+///    an i8 array)
+/// 3. The GEP rewrites (which already use i8-based byte offsets) remain
+///    consistent
+///
+/// Skips constant globals, declaration-only (external) globals, unnamed
+/// globals, and internal descriptor globals (__circt_sim_*).
+///
+/// Returns the number of globals flattened.
+static unsigned flattenGlobalTypesToByteArrays(llvm::Module &M) {
+  const llvm::DataLayout &DL = M.getDataLayout();
+  unsigned count = 0;
+
+  // Collect globals to flatten first — we can't modify the global list while
+  // iterating it.
+  llvm::SmallVector<llvm::GlobalVariable *> toFlatten;
+  for (auto &G : M.globals()) {
+    if (G.isConstant() || G.isDeclaration())
+      continue;
+    if (!G.hasName() || G.getName().empty())
+      continue;
+    if (G.getName().starts_with("__circt_sim_"))
+      continue;
+    toFlatten.push_back(&G);
+  }
+
+  for (auto *oldGV : toFlatten) {
+    llvm::Type *oldTy = oldGV->getValueType();
+    uint64_t packedSize = computePackedTypeAllocSize(oldTy, DL);
+    if (packedSize == 0)
+      continue;
+
+    // Create the flat [N x i8] type.
+    auto *i8Ty = llvm::Type::getInt8Ty(M.getContext());
+    auto *flatTy = llvm::ArrayType::get(i8Ty, packedSize);
+
+    // If the global already has this type, skip it.
+    if (oldTy == flatTy)
+      continue;
+
+    // Create a new global with the flat type and zero initializer.
+    auto *newGV = new llvm::GlobalVariable(
+        M, flatTy, /*isConstant=*/false, oldGV->getLinkage(),
+        llvm::Constant::getNullValue(flatTy), oldGV->getName() + ".flat",
+        /*InsertBefore=*/oldGV, oldGV->getThreadLocalMode(),
+        oldGV->getAddressSpace());
+    newGV->setAlignment(oldGV->getAlign());
+    newGV->setSection(oldGV->getSection());
+    newGV->setVisibility(oldGV->getVisibility());
+
+    // With opaque pointers (LLVM 15+), all pointer types are just `ptr`,
+    // so we can directly replace all uses — no bitcast needed.
+    oldGV->replaceAllUsesWith(newGV);
+
+    // Transfer the name from old to new.
+    std::string name = oldGV->getName().str();
+    // Remove ".flat" suffix that was appended to avoid name collision.
+    oldGV->eraseFromParent();
+    newGV->setName(name);
+
+    ++count;
+  }
+
+  return count;
+}
+
 /// Statistics about a module used for pre/post-optimization comparison.
 struct ModuleStats {
   unsigned definedFnCount = 0;
@@ -2865,8 +3130,11 @@ static void runOptimizationPasses(llvm::Module &llvmModule,
   }
 }
 
-static LogicalResult emitObjectFile(llvm::Module &llvmModule,
-                                    llvm::StringRef outputPath, int optLvl) {
+/// Create a TargetMachine for the host, set the module's target triple and
+/// data layout, and return the machine.  The caller takes ownership.
+/// Returns nullptr on failure (error already printed to stderr).
+static llvm::TargetMachine *
+createHostTargetMachine(llvm::Module &llvmModule, int optLvl) {
   auto targetTripleStr = llvm::sys::getDefaultTargetTriple();
   llvm::Triple targetTriple(targetTripleStr);
   llvmModule.setTargetTriple(targetTriple);
@@ -2875,7 +3143,7 @@ static LogicalResult emitObjectFile(llvm::Module &llvmModule,
   auto *target = llvm::TargetRegistry::lookupTarget(targetTriple, error);
   if (!target) {
     llvm::errs() << "Error looking up target: " << error << "\n";
-    return failure();
+    return nullptr;
   }
 
   auto cpu = llvm::sys::getHostCPUName();
@@ -2908,14 +3176,19 @@ static LogicalResult emitObjectFile(llvm::Module &llvmModule,
       std::nullopt, cgOptLevel);
   if (!targetMachine) {
     llvm::errs() << "Failed to create target machine\n";
-    return failure();
+    return nullptr;
   }
 
   llvmModule.setDataLayout(targetMachine->createDataLayout());
+  return targetMachine;
+}
 
-  // Run LLVM optimization passes.
-  runOptimizationPasses(llvmModule, targetMachine, optLvl);
-
+/// Emit an already-optimized module to an object file.  The caller must have
+/// already run optimization passes and any post-optimization transforms (e.g.
+/// rewriteGEPsForPackedLayout).  Does NOT run optimization passes internally.
+static LogicalResult emitObjectFileNoOpt(llvm::Module &llvmModule,
+                                         llvm::TargetMachine *targetMachine,
+                                         llvm::StringRef outputPath) {
   std::error_code ec;
   llvm::raw_fd_ostream dest(outputPath, ec, llvm::sys::fs::OF_None);
   if (ec) {
@@ -3393,6 +3666,27 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     return failure();
   }
 
+  // Flatten mutable global variable types to [N x i8] byte arrays using the
+  // packed (unpadded) size.  This prevents LLVM from re-introducing alignment
+  // padding and keeps the layout consistent with the i8-based GEP rewrites
+  // performed below.
+  {
+    unsigned flatCount = flattenGlobalTypesToByteArrays(*llvmModule);
+    if (flatCount > 0)
+      llvm::errs() << "[circt-sim-compile] Flattened " << flatCount
+                   << " globals to byte arrays\n";
+  }
+
+  // Rewrite struct-indexed GEPs to use packed (unaligned) byte offsets matching
+  // the interpreter's struct layout.  Must run BEFORE the optimizer so all 994+
+  // GEPs are caught before LLVM converts them to raw pointer arithmetic.
+  {
+    unsigned gepCount = rewriteGEPsForPackedLayout(*llvmModule);
+    if (gepCount > 0)
+      llvm::errs() << "[circt-sim-compile] Rewrote " << gepCount
+                   << " struct GEPs for packed layout\n";
+  }
+
   // Compute build ID: encode ABI version, target triple, and a content hash of
   // the input file so that stale cached .so files can be detected at load time.
   std::string buildId = "circt-sim-abi-v" +
@@ -3429,7 +3723,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     globalPatchNames.push_back(global.getName().str());
     globalPatchVars.push_back(&global);
     auto *type = global.getValueType();
-    uint64_t size = llvmModule->getDataLayout().getTypeAllocSize(type);
+    // Use packed (no-padding) size to match the interpreter's unaligned layout.
+    uint64_t size = computePackedTypeAllocSize(type, llvmModule->getDataLayout());
     globalPatchSizes.push_back(static_cast<uint32_t>(size));
   }
   llvm::errs() << "[circt-sim-compile] Global patches: "
@@ -3495,7 +3790,41 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     }
   }
 
-  // Emit LLVM IR if requested.
+  // Initialize LLVM targets (needed for createHostTargetMachine below).
+  llvm::InitializeNativeTarget();
+  llvm::InitializeNativeTargetAsmPrinter();
+
+  // Create the target machine and set the module's data layout.  This must
+  // happen before optimization so the optimizer uses the correct layout.
+  auto *targetMachine = createHostTargetMachine(*llvmModule, optLevel);
+  if (!targetMachine) {
+    llvm::errs() << "[circt-sim-compile] Target machine creation failed\n";
+    return failure();
+  }
+
+  ModuleStats preStats;
+  if (verbose) {
+    preStats = collectModuleStats(*llvmModule);
+    llvm::errs() << "[circt-sim-compile] pre-opt: " << preStats.definedFnCount
+                 << " functions (" << preStats.internalFnCount
+                 << " internal), " << preStats.callCount << " calls\n";
+  }
+
+  // Run LLVM optimization passes.
+  runOptimizationPasses(*llvmModule, targetMachine, optLevel);
+
+  if (verbose) {
+    auto postStats = collectModuleStats(*llvmModule);
+    unsigned dce = preStats.internalFnCount > postStats.internalFnCount
+                       ? preStats.internalFnCount - postStats.internalFnCount
+                       : 0;
+    llvm::errs() << "[circt-sim-compile] post-opt: " << postStats.definedFnCount
+                 << " functions (" << postStats.internalFnCount << " internal, "
+                 << dce << " DCE'd), " << postStats.callCount << " calls\n";
+  }
+
+  // Emit LLVM IR if requested (after optimization and GEP rewrite so the
+  // dumped IR reflects exactly what will be compiled to object code).
   if (emitLLVM) {
     llvm::SmallString<256> llPath(outPath);
     if (llPath.ends_with(".so"))
@@ -3510,10 +3839,6 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     llvm::errs() << "[circt-sim-compile] Wrote LLVM IR to " << llPath << "\n";
     return success();
   }
-
-  // Initialize LLVM targets.
-  llvm::InitializeNativeTarget();
-  llvm::InitializeNativeTargetAsmPrinter();
 
   // Emit object file.
   llvm::SmallString<256> objPath;
@@ -3532,27 +3857,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     }
   }
 
-  ModuleStats preStats;
-  if (verbose) {
-    preStats = collectModuleStats(*llvmModule);
-    llvm::errs() << "[circt-sim-compile] pre-opt: " << preStats.definedFnCount
-                 << " functions (" << preStats.internalFnCount
-                 << " internal), " << preStats.callCount << " calls\n";
-  }
-
-  if (failed(emitObjectFile(*llvmModule, objPath, optLevel))) {
+  if (failed(emitObjectFileNoOpt(*llvmModule, targetMachine, objPath))) {
     llvm::errs() << "[circt-sim-compile] Object emission failed\n";
     return failure();
   }
 
   if (verbose) {
-    auto postStats = collectModuleStats(*llvmModule);
-    unsigned dce = preStats.internalFnCount > postStats.internalFnCount
-                       ? preStats.internalFnCount - postStats.internalFnCount
-                       : 0;
-    llvm::errs() << "[circt-sim-compile] post-opt: " << postStats.definedFnCount
-                 << " functions (" << postStats.internalFnCount << " internal, "
-                 << dce << " DCE'd), " << postStats.callCount << " calls\n";
     auto elapsed = std::chrono::steady_clock::now() - startTime;
     llvm::errs() << "[circt-sim-compile] codegen: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";

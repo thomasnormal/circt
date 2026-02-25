@@ -611,11 +611,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // Dispatch the call
         // [SEQ-XFALLBACK] diagnostic removed
         // Entry-table dispatch: decode tagged FuncId from X-fallback vtable addr.
+        // ONLY dispatch to native compiled entries — trampolines would re-enter
+        // the interpreter causing infinite stack recursion.
         if (compiledFuncEntries && funcPtrVal.getUInt64() >= 0xF0000000ULL &&
             funcPtrVal.getUInt64() < 0x100000000ULL &&
-            processStates[procId].callDepth < 2000) {
+            processStates[procId].callDepth < 2000 &&
+            nativeCallDepth == 0) {
           uint32_t fid = static_cast<uint32_t>(funcPtrVal.getUInt64() - 0xF0000000ULL);
-          if (fid < numCompiledAllFuncs) {
+          if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid]) {
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = funcOp.getNumArguments();
@@ -1371,11 +1374,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // [SEQ-UNMAPPED] diagnostic removed
         // Entry-table dispatch for static fallback path.
+        // ONLY dispatch to native compiled entries — trampolines would re-enter
+        // the interpreter causing infinite stack recursion.
         if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
             funcAddr < 0x100000000ULL &&
-            processStates[procId].callDepth < 2000) {
+            processStates[procId].callDepth < 2000 &&
+            nativeCallDepth == 0) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
-          if (fid < numCompiledAllFuncs) {
+          if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid]) {
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = fOp.getNumArguments();
@@ -1719,7 +1725,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // E5 site cache: entry-table dispatch via cached entry pointer.
         if (siteIt->second.cachedEntryPtr &&
             siteIt->second.funcAddr == funcAddr &&
-            processStates[procId].callDepth < 2000) {
+            processStates[procId].callDepth < 2000 &&
+            nativeCallDepth == 0) {
           auto &entry = siteIt->second;
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
@@ -2344,89 +2351,114 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
           }
 
-          // Persist the string and register in dynamicStrings.
-          interpreterStrings.push_back(std::move(fullName));
-          const std::string &stored = interpreterStrings.back();
-          int64_t pv = reinterpret_cast<int64_t>(stored.data());
-          int64_t lv = static_cast<int64_t>(stored.size());
-          dynamicStrings[pv] = {stored.data(), lv};
+          // Persist the string with interning to avoid unbounded duplicate
+          // allocations during heavy UVM startup/reporting flows.
+          constexpr size_t kMaxRuntimeNameBytes = 4096;
+          if (fullName.size() > kMaxRuntimeNameBytes)
+            fullName.resize(kMaxRuntimeNameBytes);
+
+          int64_t pv = 0;
+          int64_t lv = 0;
+          auto internIt = internedDynamicStrings.find(fullName);
+          if (internIt != internedDynamicStrings.end()) {
+            pv = internIt->second.first;
+            lv = internIt->second.second;
+          } else {
+            interpreterStrings.push_back(std::move(fullName));
+            const std::string &stored = interpreterStrings.back();
+            pv = reinterpret_cast<int64_t>(stored.data());
+            lv = static_cast<int64_t>(stored.size());
+            internedDynamicStrings[stored] = {pv, lv};
+          }
+          dynamicStrings[pv] = {reinterpret_cast<const char *>(pv), lv};
 
           writeStr(selfAddr + kFullNameOff, static_cast<uint64_t>(pv), lv);
 
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  call_indirect: m_set_full_name intercepted -> \""
-                     << stored << "\"\n");
+          LLVM_DEBUG({
+            llvm::dbgs()
+                << "  call_indirect: m_set_full_name intercepted -> \"";
+            if (pv != 0 && lv > 0)
+              llvm::dbgs().write(reinterpret_cast<const char *>(pv), lv);
+            llvm::dbgs() << "\"\n";
+          });
           return success();
         }
       }
     }
 
-    // Intercept get_full_name on uvm_component (and subclasses).
-    // Returns the stored full_name field at offset 127 directly,
-    // avoiding vtable dispatch, string comparison, and alloca ops.
-    if (calleeName.contains("get_full_name") &&
-        calleeName.contains("uvm_component") &&
-        callIndirectOp.getNumResults() >= 1 &&
-        !callIndirectOp.getArgOperands().empty()) {
-      InterpretedValue selfVal =
-          getValue(procId, callIndirectOp.getArgOperands()[0]);
-      if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
-        uint64_t selfAddr = selfVal.getUInt64();
-        constexpr uint64_t kFullNameOff2 = 127;
-        auto readU64L = [&](uint64_t addr) -> uint64_t {
-          uint64_t off = 0;
-          MemoryBlock *blk = findBlockByAddress(addr, off);
-          if (!blk)
-            blk = findMemoryBlockByAddress(addr, procId, &off);
-          if (!blk || !blk->initialized || off + 8 > blk->size)
-            return 0;
-          uint64_t val = 0;
-          for (unsigned i = 0; i < 8; ++i)
-            val |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-          return val;
-        };
-        uint64_t strPtr = readU64L(selfAddr + kFullNameOff2);
-        uint64_t strLen = readU64L(selfAddr + kFullNameOff2 + 8);
-        if (strPtr != 0 && strLen > 0) {
-          uint64_t words[2] = {strPtr, strLen};
-          llvm::APInt resultVal(128, llvm::ArrayRef<uint64_t>(words, 2));
-          setValue(procId, callIndirectOp.getResult(0),
-                   InterpretedValue(resultVal));
-          return success();
-        }
-      }
-    }
-
-    // Intercept get_name on uvm_object - returns m_inst_name at offset 12.
-    if (calleeName.contains("get_name") &&
-        calleeName.contains("uvm_object") &&
+    // Intercept direct UVM name getters in indirect-dispatch paths to avoid
+    // recursive string helper churn in startup/reporting flows.
+    const bool disableUvmNameFastPath =
+        std::getenv("CIRCT_SIM_DISABLE_UVM_NAME_FASTPATH") != nullptr;
+    bool isUvmGetNameCall =
+        (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
+        calleeName.contains("get_name") &&
         !calleeName.contains("get_name_constraint") &&
-        !calleeName.contains("get_name_enabled") &&
+        !calleeName.contains("get_name_enabled");
+    bool isUvmGetFullNameCall =
+        (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
+        calleeName.contains("get_full_name");
+    if (!disableUvmNameFastPath &&
+        (isUvmGetNameCall || isUvmGetFullNameCall) &&
         callIndirectOp.getNumResults() >= 1 &&
         !callIndirectOp.getArgOperands().empty()) {
+      auto readU64L = [&](uint64_t addr) -> uint64_t {
+        uint64_t off = 0;
+        MemoryBlock *blk = findBlockByAddress(addr, off);
+        if (!blk)
+          blk = findMemoryBlockByAddress(addr, procId, &off);
+        if (!blk || !blk->initialized || off + 8 > blk->size)
+          return 0;
+        uint64_t val = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          val |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
+        return val;
+      };
+      auto setPackedResult = [&](uint64_t strPtr, uint64_t strLen) {
+        uint64_t words[2] = {strPtr, strLen};
+        llvm::APInt packed(128, llvm::ArrayRef<uint64_t>(words, 2));
+        setValue(procId, callIndirectOp.getResult(0), InterpretedValue(packed));
+      };
+
       InterpretedValue selfVal =
           getValue(procId, callIndirectOp.getArgOperands()[0]);
-      if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
-        uint64_t selfAddr = selfVal.getUInt64();
-        constexpr uint64_t kInstNameOff2 = 12;
-        auto readU64L = [&](uint64_t addr) -> uint64_t {
-          uint64_t off = 0;
-          MemoryBlock *blk = findBlockByAddress(addr, off);
-          if (!blk)
-            blk = findMemoryBlockByAddress(addr, procId, &off);
-          if (!blk || !blk->initialized || off + 8 > blk->size)
-            return 0;
-          uint64_t val = 0;
-          for (unsigned i = 0; i < 8; ++i)
-            val |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-          return val;
-        };
-        uint64_t strPtr = readU64L(selfAddr + kInstNameOff2);
-        uint64_t strLen = readU64L(selfAddr + kInstNameOff2 + 8);
-        uint64_t words[2] = {strPtr, strLen};
-        llvm::APInt resultVal(128, llvm::ArrayRef<uint64_t>(words, 2));
-        setValue(procId, callIndirectOp.getResult(0),
-                 InterpretedValue(resultVal));
+      if (selfVal.isX() || selfVal.getUInt64() < 0x1000) {
+        setPackedResult(0, 0);
+        return success();
+      }
+
+      uint64_t selfAddr = selfVal.getUInt64();
+      constexpr uint64_t kInstNameOff = 12;
+      constexpr uint64_t kFullNameOff = 127;
+      uint64_t strPtr = 0;
+      uint64_t strLen = 0;
+
+      if (isUvmGetNameCall) {
+        strPtr = readU64L(selfAddr + kInstNameOff);
+        strLen = readU64L(selfAddr + kInstNameOff + 8);
+      } else {
+        strPtr = readU64L(selfAddr + kFullNameOff);
+        strLen = readU64L(selfAddr + kFullNameOff + 8);
+        if (strPtr == 0 || strLen == 0) {
+          strPtr = readU64L(selfAddr + kInstNameOff);
+          strLen = readU64L(selfAddr + kInstNameOff + 8);
+        }
+      }
+
+      setPackedResult(strPtr, strLen);
+      return success();
+    }
+
+    // Fast-path cached get_type_name results (cached after first successful
+    // interpretation of each callee symbol).
+    const bool disableTypeNameCache =
+        std::getenv("CIRCT_SIM_DISABLE_UVM_TYPENAME_CACHE") != nullptr;
+    if (!disableTypeNameCache && calleeName.contains("get_type_name") &&
+        !calleeName.contains("get_type_name_enabled") &&
+        callIndirectOp.getNumResults() >= 1) {
+      if (auto cachedIt = cachedTypeNameByCallee.find(calleeName);
+          cachedIt != cachedTypeNameByCallee.end()) {
+        setValue(procId, callIndirectOp.getResult(0), cachedIt->second);
         return success();
       }
     }
@@ -2554,16 +2586,26 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         auto stateIt = processStates.find(waiterProc);
         if (stateIt == processStates.end())
           continue;
-        if (!stateIt->second.waiting)
+        auto &waiterState = stateIt->second;
+        bool shouldWake = waiterState.waiting ||
+                          waiterState.sequencerGetRetryCallOp ||
+                          !waiterState.callStack.empty();
+        if (!shouldWake)
           continue;
-        stateIt->second.waiting = false;
+        waiterState.waiting = false;
         scheduler.scheduleProcess(waiterProc, SchedulingRegion::Active);
       }
     };
 
+    static bool disablePhaseHopperFastPath = []() {
+      const char *env = std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+
     // Native queue fast path for phase hopper calls dispatched via vtable.
-    if (calleeName.ends_with("uvm_phase_hopper::try_put") && args.size() >= 2 &&
-        callIndirectOp.getNumResults() >= 1) {
+    if (!disablePhaseHopperFastPath &&
+        calleeName.ends_with("uvm_phase_hopper::try_put") &&
+        args.size() >= 2 && callIndirectOp.getNumResults() >= 1) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       uint64_t phaseAddr = args[1].isX() ? 0 : args[1].getUInt64();
       phaseHopperQueue[hopperAddr].push_back(phaseAddr);
@@ -2589,8 +2631,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return success();
     }
 
-    if (calleeName.ends_with("uvm_phase_hopper::try_get") && args.size() >= 2 &&
-        callIndirectOp.getNumResults() >= 1) {
+    if (!disablePhaseHopperFastPath &&
+        calleeName.ends_with("uvm_phase_hopper::try_get") &&
+        args.size() >= 2 && callIndirectOp.getNumResults() >= 1) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       uint64_t phaseAddr = 0;
       bool hasPhase = false;
@@ -2613,8 +2656,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    if (calleeName.ends_with("uvm_phase_hopper::try_peek") && args.size() >= 2 &&
-        callIndirectOp.getNumResults() >= 1) {
+    if (!disablePhaseHopperFastPath &&
+        calleeName.ends_with("uvm_phase_hopper::try_peek") &&
+        args.size() >= 2 && callIndirectOp.getNumResults() >= 1) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       uint64_t phaseAddr = 0;
       bool hasPhase = false;
@@ -2631,7 +2675,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    if (calleeName.ends_with("uvm_phase_hopper::peek") && args.size() >= 2) {
+    if (!disablePhaseHopperFastPath &&
+        calleeName.ends_with("uvm_phase_hopper::peek") && args.size() >= 2) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       auto it = phaseHopperQueue.find(hopperAddr);
       if (it != phaseHopperQueue.end() && !it->second.empty()) {
@@ -2644,7 +2689,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    if (calleeName.ends_with("uvm_phase_hopper::get") && args.size() >= 2) {
+    if (!disablePhaseHopperFastPath &&
+        calleeName.ends_with("uvm_phase_hopper::get") && args.size() >= 2) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       auto it = phaseHopperQueue.find(hopperAddr);
       if (it != phaseHopperQueue.end() && !it->second.empty()) {
@@ -3528,14 +3574,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           ProcessId waiterProcId = waiterIt->second;
           finishItemWaiters.erase(waiterIt);
           auto waiterStateIt = processStates.find(waiterProcId);
-          if (waiterStateIt != processStates.end() &&
-              waiterStateIt->second.waiting) {
-            waiterStateIt->second.waiting = false;
-            scheduler.scheduleProcess(waiterProcId,
-                                      SchedulingRegion::Active);
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  item_done: resuming finish_item waiter proc="
-                       << waiterProcId << "\n");
+          if (waiterStateIt != processStates.end()) {
+            auto &waiterState = waiterStateIt->second;
+            bool shouldWake = waiterState.waiting ||
+                              waiterState.sequencerGetRetryCallOp ||
+                              !waiterState.callStack.empty();
+            if (shouldWake) {
+              waiterState.waiting = false;
+              scheduler.scheduleProcess(waiterProcId,
+                                        SchedulingRegion::Active);
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  item_done: resuming finish_item waiter proc="
+                         << waiterProcId << "\n");
+            }
           }
         }
       } else if (traceSeq) {
@@ -3617,10 +3668,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.isIntercepted = false;
         se.hadVtableOverride = false;
         // Populate entry-table pointer for site cache native dispatch.
+        // ONLY cache native compiled entries — trampolines would re-enter
+        // the interpreter causing infinite stack recursion.
         if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
             funcAddr < 0x100000000ULL) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
-          if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+          if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid] &&
+              compiledFuncEntries[fid]) {
             se.cachedFid = fid;
             se.cachedEntryPtr = const_cast<void *>(compiledFuncEntries[fid]);
           }
@@ -3632,10 +3686,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     }
 
     // Entry-table dispatch: try native dispatch before interpretFuncBody.
+    // ONLY dispatch to native compiled entries — trampolines would re-enter
+    // the interpreter causing infinite stack recursion.
     if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
-        funcAddr < 0x100000000ULL && callState.callDepth < 2000) {
+        funcAddr < 0x100000000ULL && callState.callDepth < 2000 &&
+        nativeCallDepth == 0) {
       uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
-      if (fid < numCompiledAllFuncs) {
+      if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid]) {
         void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
         if (entryPtr) {
           unsigned numArgs = funcOp.getNumArguments();
@@ -3735,6 +3792,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     }
 
     if (failed(funcResult)) {
+      static bool traceCallFailures = []() {
+        const char *env = std::getenv("CIRCT_SIM_TRACE_CALL_FAILURES");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
       // Check if the failure was actually a suspension that we should propagate
       // rather than swallow. When a virtual method call causes the process to
       // suspend (e.g., wait_for_state inside sync_phase called from
@@ -3759,6 +3820,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                 << "' returned failure but process is waiting"
                                 << " -- treating as suspension\n");
         return success();
+      }
+      if (traceCallFailures) {
+        auto &failState = processStates[procId];
+        llvm::errs() << "[CALLFAIL] proc=" << procId
+                     << " callee=" << calleeName
+                     << " waiting=" << failState.waiting
+                     << " halted=" << failState.halted
+                     << " callStack=" << failState.callStack.size()
+                     << " lastOp="
+                     << (failState.lastOp
+                             ? failState.lastOp->getName().getStringRef()
+                             : llvm::StringRef("<none>"))
+                     << "\n";
       }
       // uvm_root::die can intentionally unwind through termination/fatal
       // paths. Treat this as an absorbed terminal call, not an internal
@@ -3810,6 +3884,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // Set results
     for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results)) {
       setValue(procId, result, retVal);
+    }
+
+    if (!disableTypeNameCache && calleeName.contains("get_type_name") &&
+        !calleeName.contains("get_type_name_enabled") &&
+        !results.empty()) {
+      cachedTypeNameByCallee[calleeName] = results.front();
     }
 
     return success();
