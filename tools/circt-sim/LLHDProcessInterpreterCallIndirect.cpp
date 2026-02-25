@@ -610,8 +610,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Dispatch the call
         // [SEQ-XFALLBACK] diagnostic removed
-        // Re-enabled: stack overflow fixed (2MB coroutine stacks).
-#if 1
+        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
+#if 0
         // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
         if (processStates[procId].callDepth < 2000) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
@@ -1365,8 +1365,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
 
         // [SEQ-UNMAPPED] diagnostic removed
-        // Re-enabled: stack overflow fixed (2MB coroutine stacks).
-#if 1
+        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
+#if 0
         // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
         if (processStates[procId].callDepth < 2000) {
           auto nativeIt = nativeFuncPtrs.find(fOp.getOperation());
@@ -1708,8 +1708,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         SmallVector<InterpretedValue, 4> fastArgs;
         for (Value arg : callIndirectOp.getArgOperands())
           fastArgs.push_back(getValue(procId, arg));
-        // Re-enabled: stack overflow fixed (2MB coroutine stacks).
-#if 1
+        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
+#if 0
         // AOT: Try native dispatch first via site cache (skip if deep).
         if (siteIt->second.nativeFuncPtr &&
             processStates[procId].callDepth < 2000) {
@@ -3612,8 +3612,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.valid = true;
         se.isIntercepted = false;
         se.hadVtableOverride = false;
-        // Re-enabled: globals two-copies problem fixed (shared .so storage).
-#if 1
+        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
+#if 0
         // Populate native function pointer from nativeFuncPtrs map.
         if (!nativeFuncPtrs.empty()) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
@@ -3627,8 +3627,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    // Re-enabled: stack overflow fixed (2MB coroutine stacks).
-#if 1
+    // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
+#if 0
     // AOT: Try native dispatch before interpretFuncBody (only if not too deep,
     // to prevent native→trampoline→interpreter→call_indirect→native recursion).
     if (!nativeFuncPtrs.empty() && callState.callDepth < 2000) {

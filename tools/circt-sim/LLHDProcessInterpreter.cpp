@@ -22381,8 +22381,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     entry.funcOp = funcOp;
     entry.noInterception = true;
     // Check if a native compiled version exists (Phase F1).
-    // Re-enabled: globals two-copies problem fixed (shared .so storage).
-    if (!nativeFuncPtrs.empty()) {
+    // DISABLED: native func dispatch breaks UVM $cast (vtable/class_id issue).
+    // call_indirect dispatch is still active (gated by nativeFuncPtrs population).
+    if (false && !nativeFuncPtrs.empty()) {
       auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
       if (nativeIt != nativeFuncPtrs.end())
         entry.nativeFuncPtr = nativeIt->second;
@@ -22440,9 +22441,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // === Native dispatch (Phase F1) ===
-  // Re-enabled: globals two-copies problem fixed (shared .so storage).
-  // func.call native dispatch is now safe alongside call_indirect.
-  if (!nativeFuncPtrs.empty()) {
+  // DISABLED: native func dispatch breaks UVM $cast (vtable/class_id issue).
+  // call_indirect dispatch is still active (gated by nativeFuncPtrs population).
+  if (false && !nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
       void *fptr = nativeIt->second;

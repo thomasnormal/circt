@@ -123,6 +123,12 @@ public:
   /// mutable global storage, eliminating divergence between the two copies.
   void aliasGlobals(llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
 
+  /// Pre-alias globals to .so storage BEFORE interpreter initialization.
+  /// Creates MemoryBlock entries pointing to .so addresses so that
+  /// initializeGlobals() writes directly to .so memory, preventing
+  /// dangling inter-global pointers from post-init aliasing.
+  void preAliasGlobals(llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
+
   /// Get number of global patches in the .so.
   uint32_t getNumGlobalPatches() const {
     return compiledModule ? compiledModule->num_global_patches : 0;

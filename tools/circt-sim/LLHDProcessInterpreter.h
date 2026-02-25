@@ -263,6 +263,19 @@ struct MemoryBlock {
     data.clear();
     data.shrink_to_fit();
   }
+
+  /// Pre-alias this block to external storage BEFORE initialization.
+  /// Unlike aliasTo(), does NOT copy existing data — the external storage
+  /// starts zeroed and will be populated during initializeGlobals().
+  /// This prevents dangling inter-global pointers that arise when globals
+  /// reference each other's addresses and aliasing happens post-init.
+  void preAlias(void *externalAddr, size_t externalSize) {
+    aliasedStorage = static_cast<uint8_t *>(externalAddr);
+    size = externalSize;
+    elementBitWidth = 64;
+    data.clear();
+    data.shrink_to_fit();
+  }
 };
 
 using InstanceId = uint32_t;

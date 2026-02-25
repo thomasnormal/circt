@@ -154,7 +154,7 @@ void CompiledModuleLoader::aliasGlobals(
   if (!compiledModule || compiledModule->num_global_patches == 0)
     return;
 
-  unsigned aliased = 0, missed = 0;
+  unsigned newlyAliased = 0, alreadyAliased = 0, missed = 0;
   for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
     const char *name = compiledModule->global_patch_names[i];
     void *soAddr = compiledModule->global_patch_addrs[i];
@@ -166,13 +166,45 @@ void CompiledModuleLoader::aliasGlobals(
       continue;
     }
 
+    // Skip globals that were already pre-aliased before initialization.
+    if (it->second.aliasedStorage) {
+      ++alreadyAliased;
+      continue;
+    }
+
     it->second.aliasTo(soAddr, soSize);
-    ++aliased;
+    ++newlyAliased;
   }
 
-  llvm::errs() << "[circt-sim] Aliased " << aliased
+  llvm::errs() << "[circt-sim] Aliased " << newlyAliased
                << " globals to .so storage";
+  if (alreadyAliased)
+    llvm::errs() << " (" << alreadyAliased << " already pre-aliased, skipped)";
   if (missed)
     llvm::errs() << " (" << missed << " not found in interpreter)";
   llvm::errs() << "\n";
+}
+
+void CompiledModuleLoader::preAliasGlobals(
+    llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const {
+  if (!compiledModule || compiledModule->num_global_patches == 0)
+    return;
+
+  unsigned preAliased = 0;
+  for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
+    const char *name = compiledModule->global_patch_names[i];
+    void *soAddr = compiledModule->global_patch_addrs[i];
+    uint32_t soSize = compiledModule->global_patch_sizes[i];
+
+    // Create a pre-aliased MemoryBlock pointing directly to .so storage.
+    // initializeGlobals() will detect this and write initializer data
+    // directly into .so storage rather than creating a separate copy.
+    MemoryBlock block;
+    block.preAlias(soAddr, soSize);
+    globalMemoryBlocks[name] = std::move(block);
+    ++preAliased;
+  }
+
+  llvm::errs() << "[circt-sim] Pre-aliased " << preAliased
+               << " globals to .so storage\n";
 }

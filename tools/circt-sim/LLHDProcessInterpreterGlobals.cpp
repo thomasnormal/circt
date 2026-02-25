@@ -217,8 +217,18 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
     // Also populate the reverse map for address-to-global lookup
     addressToGlobal[addr] = globalName.str();
 
-    // Create memory block
-    MemoryBlock block(size, 64);
+    // Check if this global was pre-aliased to .so storage (AOT mode).
+    // Pre-aliased blocks write directly to .so memory via bytes(), preventing
+    // dangling inter-global pointers that arise from post-init aliasing.
+    {
+      auto existIt = globalMemoryBlocks.find(globalName);
+      if (!(existIt != globalMemoryBlocks.end() &&
+            existIt->second.aliasedStorage)) {
+        // Normal path: create new block in the map.
+        globalMemoryBlocks[globalName] = MemoryBlock(size, 64);
+      }
+    }
+    MemoryBlock &block = globalMemoryBlocks[globalName];
 
     // Check the initializer attribute
     // Handle both #llvm.zero and string constant initializers
@@ -298,8 +308,6 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         }
       }
     }
-
-    globalMemoryBlocks[globalName] = std::move(block);
   }
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initialized "
