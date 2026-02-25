@@ -548,6 +548,11 @@ static LogicalResult extractConcatToConcatExtract(ExtractOp op,
   }
 
   if (reverseConcatArgs.size() == 1) {
+    // In graph regions, cyclic logic can make the selected concat element the
+    // extract result itself. Replacing an op with its own result is a no-op
+    // rewrite and trips PatternRewriter's erase-use assertion.
+    if (reverseConcatArgs[0] == op.getResult())
+      return failure();
     replaceOpAndCopyNamehint(rewriter, op, reverseConcatArgs[0]);
   } else {
     replaceOpWithNewOpAndCopyNamehint<ConcatOp>(
