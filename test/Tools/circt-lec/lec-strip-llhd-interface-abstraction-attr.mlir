@@ -1,5 +1,7 @@
 // RUN: circt-opt --strip-llhd-interface-signals='strict-llhd=1' %s | FileCheck %s
 
+// CHECK: module attributes
+// CHECK-SAME: circt.lec_abstracted_llhd_interface_inputs = 3 : i32
 module {
   llvm.mlir.global internal @iface_storage() : !llvm.struct<(i1)>
 
