@@ -3719,8 +3719,17 @@ int main(int argc, char **argv) {
   registerAsmPrinterCLOptions();
 
   // Add version printer
+#if defined(__EMSCRIPTEN__)
+  static bool versionPrinterRegistered = false;
+  if (!versionPrinterRegistered) {
+    llvm::cl::AddExtraVersionPrinter(
+        [](llvm::raw_ostream &os) { os << getCirctVersion() << '\n'; });
+    versionPrinterRegistered = true;
+  }
+#else
   llvm::cl::AddExtraVersionPrinter(
       [](llvm::raw_ostream &os) { os << getCirctVersion() << '\n'; });
+#endif
 
   // Extract Verilog plusargs (+key, +key=value) from argv before LLVM parsing.
   // LLVM's option parser rejects unknown arguments, so we pre-filter them.

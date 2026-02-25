@@ -2431,3 +2431,34 @@
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_tblgen_reentry_check.sh`: PASS.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/run_wasm_smoke.sh`: PASS.
+
+## 2026-02-25 (fix: wasm `--version` re-entry duplicates CIRCT banner lines)
+- TDD regression added:
+  - `utils/wasm_version_reentry_check.sh`
+  - runs same-instance `callMain` re-entry (`--version` then `--version`) for
+    `circt-bmc.js`, `circt-sim.js`, and optional `circt-verilog.js`.
+  - asserts version banner line counts remain stable across runs
+    (no duplicate `CIRCT ` / `slang version` lines on second run).
+- Pre-fix behavior:
+  - second `--version` call emitted duplicated tool version banners:
+    - `circt-bmc.js`: second run printed `CIRCT <sha>` twice.
+    - `circt-sim.js`: second run printed `CIRCT <sha>` twice.
+    - `circt-verilog.js`: second run printed both `CIRCT <sha>` and
+      `slang version ...` twice.
+- Root cause:
+  - each wasm `main` invocation unconditionally called
+    `cl::AddExtraVersionPrinter(...)`.
+  - in same-instance wasm re-entry, these callbacks accumulate globally, so
+    `cl::PrintVersionMessage()` prints duplicate extra banners on later runs.
+- Fixes:
+  - `tools/circt-bmc/circt-bmc.cpp`
+  - `tools/circt-sim/circt-sim.cpp`
+  - `tools/circt-verilog/circt-verilog.cpp`
+  - on emscripten, guard extra version-printer registration with a
+    function-local static flag so each tool registers once per module instance.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now runs
+    `utils/wasm_version_reentry_check.sh` as a re-entry stage.
+- Validation:
+  - pre-fix: `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_version_reentry_check.sh` failed with duplicated second-run banners.
+  - post-fix: `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_version_reentry_check.sh`: PASS.

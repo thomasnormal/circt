@@ -26,6 +26,7 @@ BMC_HOSTPATH_HELPER="utils/wasm_bmc_hostpath_input_check.sh"
 BMC_STDOUT_DASH_HELPER="utils/wasm_bmc_stdout_dash_check.sh"
 TBLGEN_HOSTPATH_HELPER="utils/wasm_tblgen_hostpath_input_check.sh"
 TBLGEN_REENTRY_HELPER="utils/wasm_tblgen_reentry_check.sh"
+VERSION_REENTRY_HELPER="utils/wasm_version_reentry_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -157,6 +158,10 @@ if [[ ! -x "$TBLGEN_HOSTPATH_HELPER" ]]; then
 fi
 if [[ ! -x "$TBLGEN_REENTRY_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $TBLGEN_REENTRY_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$VERSION_REENTRY_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $VERSION_REENTRY_HELPER" >&2
   exit 1
 fi
 
@@ -419,6 +424,9 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$REENTRY_STDOUT_CAPTURE_HELPER"
 
 echo "[wasm-smoke] Re-entry: circt-tblgen help -> print-records"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$TBLGEN_REENTRY_HELPER"
+
+echo "[wasm-smoke] Re-entry: --version banner duplication"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" CHECK_VERILOG="$has_verilog_target" "$VERSION_REENTRY_HELPER"
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog run -> run"

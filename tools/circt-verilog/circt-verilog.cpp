@@ -1117,10 +1117,21 @@ int main(int argc, char **argv) {
   llvm::setBugReportMsg(circtBugReportMsg);
 
   // Print the CIRCT and Slang versions when requested.
+#if defined(__EMSCRIPTEN__)
+  static bool versionPrinterRegistered = false;
+  if (!versionPrinterRegistered) {
+    cl::AddExtraVersionPrinter([](raw_ostream &os) {
+      os << getCirctVersion() << '\n';
+      os << getSlangVersion() << '\n';
+    });
+    versionPrinterRegistered = true;
+  }
+#else
   cl::AddExtraVersionPrinter([](raw_ostream &os) {
     os << getCirctVersion() << '\n';
     os << getSlangVersion() << '\n';
   });
+#endif
 
   // Register any pass manager command line options.
   llhd::registerPasses();
