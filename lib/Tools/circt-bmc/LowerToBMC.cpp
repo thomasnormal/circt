@@ -1113,10 +1113,11 @@ void LowerToBMCPass::runOnOperation() {
         Value value = hw::StructExtractOp::create(builder, loc, input, "value");
         Value unknown =
             hw::StructExtractOp::create(builder, loc, input, "unknown");
-        Value one =
-            hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
+        auto unknownType = cast<IntegerType>(unknown.getType());
+        Value allOnes = hw::ConstantOp::create(
+            builder, loc, APInt::getAllOnes(unknownType.getWidth()));
         Value notUnknown =
-            comb::XorOp::create(builder, loc, unknown, one).getResult();
+            comb::XorOp::create(builder, loc, unknown, allOnes).getResult();
         Value lowered =
             comb::AndOp::create(builder, loc, value, notUnknown).getResult();
         materializedClockInputs.try_emplace(input, lowered);
