@@ -46,5 +46,18 @@ target_link_libraries(circt-bmc
   MLIRTargetLLVMIRExport
 )
 
+option(CIRCT_BMC_WASM_ENABLE_NODERAWFS
+  "Enable Emscripten Node.js raw filesystem bridge (-sNODERAWFS=1) for circt-bmc"
+  ON)
+
+if(EMSCRIPTEN AND CIRCT_BMC_WASM_ENABLE_NODERAWFS)
+  target_link_options(circt-bmc PRIVATE "SHELL:-sNODERAWFS=1")
+endif()
+
+if(EMSCRIPTEN)
+  target_link_options(circt-bmc PRIVATE
+    "SHELL:-sEXPORTED_RUNTIME_METHODS=['callMain']")
+endif()
+
 llvm_update_compile_flags(circt-bmc)
 mlir_check_all_link_libraries(circt-bmc)

@@ -19,6 +19,7 @@ VPI_STARTUP_YIELD_HELPER="utils/wasm_vpi_startup_yield_check.sh"
 VPI_REENTRY_ISOLATION_HELPER="utils/wasm_vpi_reentry_callback_isolation_check.sh"
 THREADED_OPTIONS_HELPER="utils/wasm_threaded_options_fallback_check.sh"
 VERILOG_ANALYSIS_HELPER="utils/wasm_verilog_analysis_fallback_check.sh"
+BMC_HOSTPATH_HELPER="utils/wasm_bmc_hostpath_input_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -120,6 +121,10 @@ if [[ ! -x "$THREADED_OPTIONS_HELPER" ]]; then
 fi
 if [[ ! -x "$VERILOG_ANALYSIS_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $VERILOG_ANALYSIS_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$BMC_HOSTPATH_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $BMC_HOSTPATH_HELPER" >&2
   exit 1
 fi
 
@@ -268,10 +273,14 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
 fi
 
 echo "[wasm-smoke] Functional: circt-bmc stdin -> SMT-LIB"
+bmc_func_out="$tmpdir/bmc-func.smt2"
 cat "$BMC_TEST_INPUT" | \
-  "$NODE_BIN" "$BMC_JS" --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o - - \
+  "$NODE_BIN" "$BMC_JS" --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o "$bmc_func_out" - \
   >"$tmpdir/bmc-func.out" 2>"$tmpdir/bmc-func.err"
-grep -q "(check-sat)" "$tmpdir/bmc-func.out"
+grep -q "(check-sat)" "$bmc_func_out"
+
+echo "[wasm-smoke] Functional: circt-bmc host-path input"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$BMC_HOSTPATH_HELPER"
 
 echo "[wasm-smoke] Functional: circt-sim stdin"
 cat "$SIM_TEST_INPUT" | \
@@ -312,10 +321,9 @@ fi
 
 echo "[wasm-smoke] Re-entry: circt-bmc callMain help -> run"
 "$NODE_BIN" "$REENTRY_HELPER" "$BMC_JS" \
-  --preload-file "$BMC_TEST_INPUT" /inputs/test.mlir \
   --first --help \
-  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out.smt2 /inputs/test.mlir \
-  --expect-wasm-file-substr /out.smt2 "(check-sat)" \
+  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o out.smt2 "$BMC_TEST_INPUT" \
+  --expect-wasm-file-substr out.smt2 "(check-sat)" \
   --forbid-substr "Aborted(" \
   >"$bmc_reentry_log" 2>&1
 if grep -q "InitLLVM was already initialized!" "$bmc_reentry_log"; then
@@ -351,11 +359,10 @@ echo "[wasm-smoke] Re-entry: circt-sim run -> run"
 
 echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
 "$NODE_BIN" "$REENTRY_HELPER" "$BMC_JS" \
-  --preload-file "$BMC_TEST_INPUT" /inputs/test.mlir \
-  --first --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out1.smt2 /inputs/test.mlir \
-  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o /out2.smt2 /inputs/test.mlir \
-  --expect-wasm-file-substr /out1.smt2 "(check-sat)" \
-  --expect-wasm-file-substr /out2.smt2 "(check-sat)" \
+  --first --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o out1.smt2 "$BMC_TEST_INPUT" \
+  --second --resource-guard=false -b 3 --module m_const_prop --emit-smtlib -o out2.smt2 "$BMC_TEST_INPUT" \
+  --expect-wasm-file-substr out1.smt2 "(check-sat)" \
+  --expect-wasm-file-substr out2.smt2 "(check-sat)" \
   --forbid-substr "Aborted(" \
   >"$tmpdir/bmc-reentry-run-run.log" 2>&1
 

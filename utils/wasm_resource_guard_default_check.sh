@@ -33,9 +33,10 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
 echo "[wasm-rg-default] circt-bmc default resource guard"
+bmc_out="$tmpdir/bmc.smt2"
 set +e
 cat "$BMC_TEST_INPUT" | \
-  "$NODE_BIN" "$BMC_JS" -b 3 --module m_const_prop --emit-smtlib -o - - \
+  "$NODE_BIN" "$BMC_JS" -b 3 --module m_const_prop --emit-smtlib -o "$bmc_out" - \
   >"$tmpdir/bmc.out" 2>"$tmpdir/bmc.err"
 bmc_rc=$?
 set -e
@@ -44,7 +45,7 @@ if [[ "$bmc_rc" -ne 0 ]]; then
   cat "$tmpdir/bmc.err" >&2
   exit 1
 fi
-if ! grep -q "(check-sat)" "$tmpdir/bmc.out"; then
+if ! grep -q "(check-sat)" "$bmc_out"; then
   echo "[wasm-rg-default] circt-bmc missing SMT-LIB output" >&2
   exit 1
 fi
