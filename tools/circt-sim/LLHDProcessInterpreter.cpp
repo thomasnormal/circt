@@ -22821,17 +22821,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           if (resWidth > 64)
             canDispatch = false;
         }
-        // Check if any pointer argument is a fake interpreter address —
-        // compiled code cannot dereference these (they only exist in mallocBlocks).
-        if (canDispatch) {
-          for (unsigned i = 0; i < numArgs; ++i) {
-            uint64_t v = a[i];
-            if (v >= 0x100000 && v < globalNextAddress) {
-              canDispatch = false;
-              break;
-            }
-          }
-        }
         if (canDispatch) {
           ++nativeFuncCallCount;
           ++state.callDepth;
@@ -23053,17 +23042,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
         if (resWidth > 64)
           canDispatch = false;
-      }
-      // Check if any pointer argument is a fake interpreter address —
-      // compiled code cannot dereference these (they only exist in mallocBlocks).
-      if (canDispatch) {
-        for (unsigned i = 0; i < numArgs; ++i) {
-          uint64_t v = a[i];
-          if (v >= 0x100000 && v < globalNextAddress) {
-            canDispatch = false;
-            break;
-          }
-        }
       }
       if (canDispatch) {
         ++nativeFuncCallCount;
@@ -38260,11 +38238,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     return false;
   };
 
-  // func.call native dispatch is disabled by default (fake interpreter
-  // addresses crash compiled code). Enable with CIRCT_AOT_ENABLE_FUNC_DISPATCH=1.
-  unsigned maxNative = 0;
-  if (std::getenv("CIRCT_AOT_ENABLE_FUNC_DISPATCH"))
-    maxNative = UINT_MAX;
+  // func.call native dispatch: enabled by default with real calloc addresses.
+  // Limit with CIRCT_AOT_MAX_NATIVE=N, disable with CIRCT_AOT_DISABLE_FUNC_DISPATCH=1.
+  unsigned maxNative = UINT_MAX;
+  if (std::getenv("CIRCT_AOT_DISABLE_FUNC_DISPATCH"))
+    maxNative = 0;
   if (const char *maxEnv = std::getenv("CIRCT_AOT_MAX_NATIVE"))
     maxNative = std::atoi(maxEnv);
   unsigned nativePopulated = 0;
