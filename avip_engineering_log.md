@@ -9495,3 +9495,41 @@ Based on these findings, the circt-sim compiled process architecture:
 - For parity and triage quality, lane-level policy defaults must not be
   silently overridden by global defaults in wrappers; otherwise solved core
   capabilities appear unsupported in top-level regressions.
+
+## 2026-02-25 OpenTitan FPV-BMC: remove mixed-width XOR crash in LowerToBMC
+
+### Goal
+- Eliminate a real formal lowering crash hit in OpenTitan FPV-BMC runs:
+  - `'comb.xor' op requires all operands to have the same type`.
+
+### Findings
+- Repro command on prepared artifact:
+  - `circt-bmc pairwise_bmc.prepared.mlir --module=pinmux_tb -b 1 --ignore-asserts-until=0 --run-smtlib --allow-multi-clock`
+- Crash reproducer pointed to `LowerToBMC`.
+- Root cause in `materializeClockInputI1`:
+  - extracted `unknown : iN` from four-state lane,
+  - xor-ed with hardcoded `i1` constant,
+  - built invalid `comb.xor (iN, i1) -> iN`.
+
+### Implementation
+- `lib/Tools/circt-bmc/LowerToBMC.cpp`
+  - changed all-ones mask construction to match `unknown` lane width:
+    - old: `hw.constant 1 : i1`
+    - new: `hw.constant -1 : iN` via `APInt::getAllOnes(width)`.
+  - `comb.xor` now always receives same-width operands.
+- Added regression:
+  - `test/Tools/circt-bmc/lower-to-bmc-wide-four-state-clock-input.mlir`
+  - checks width-matched path (`comb.xor ... : i2`).
+
+### Validation
+- Focused lit:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build_test/test/Tools/circt-bmc --filter='(lower-to-bmc-wide-four-state-clock-input|lower-to-bmc-dead-toclock-clock-input|lower-to-bmc-unit-reg-clock-source-struct-input|lower-to-bmc-struct-seq-clock-input)'`
+  - result: `4 passed, 0 failed`.
+- OpenTitan FPV-BMC filtered repro (`pinmux_fpv`):
+  - before fix: `CIRCT_BMC_ERROR comb_xor_op_requires_all_operands_to_have_the_same_type`.
+  - after fix: lane advances to solver outcome (`BMC_RESULT=UNKNOWN`) with no lowering crash.
+
+### Realization
+- This was a structural robustness issue in formal lowering, not a solver-limit issue.
+  Once fixed, OpenTitan runs move from hard frontend/lowering failure into actual
+  formal reasoning outcomes, which is exactly the parity progression we need.
