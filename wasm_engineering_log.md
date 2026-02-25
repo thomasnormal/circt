@@ -2390,3 +2390,30 @@
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_tblgen_hostpath_input_check.sh`: PASS.
   - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/run_wasm_smoke.sh`: PASS.
+
+## 2026-02-25 (fix: wasm circt-tblgen callMain re-entry + helper ready-timeout)
+- TDD regression added:
+  - `utils/wasm_tblgen_reentry_check.sh`
+  - validates same-instance `callMain` re-entry for `circt-tblgen.js`
+    (`--help` then `-print-records ...`) and checks output file content.
+- Pre-fix behavior:
+  - `utils/wasm_tblgen_reentry_check.sh` failed with
+    `timed out waiting for wasm runtime initialization`.
+- Root causes:
+  - `circt-tblgen.js` did not export `Module.callMain`, so re-entry helpers
+    could not drive it like other wasm tools.
+  - re-entry helper readiness timeout was fixed at 20s, too low for large wasm
+    module initialization in some environments.
+- Fixes:
+  - `tools/circt-tblgen/CMakeLists.txt`:
+    - export runtime method `callMain` on emscripten
+      (`-sEXPORTED_RUNTIME_METHODS=['callMain']`).
+  - `utils/wasm_callmain_reentry_check.js`:
+    - increased readiness timeout robustness via
+      `WASM_REENTRY_READY_TIMEOUT_MS` (default 60000ms).
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now runs
+    `utils/wasm_tblgen_reentry_check.sh` in the re-entry stage.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_tblgen_reentry_check.sh`: PASS.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/run_wasm_smoke.sh`: PASS.
