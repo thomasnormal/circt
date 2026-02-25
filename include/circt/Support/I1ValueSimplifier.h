@@ -11,6 +11,7 @@
 
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -104,6 +105,10 @@ inline bool traceI1ValueRoot(mlir::Value value, mlir::BlockArgument &root) {
   }
   if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
     return traceI1ValueRoot(extract.getInput(), root);
+  if (auto prb = value.getDefiningOp<llhd::ProbeOp>())
+    return traceI1ValueRoot(prb.getSignal(), root);
+  if (auto sig = value.getDefiningOp<llhd::SignalOp>())
+    return traceI1ValueRoot(sig.getInit(), root);
   if (auto extractOp = value.getDefiningOp<comb::ExtractOp>())
     return traceI1ValueRoot(extractOp.getInput(), root);
   if (value.getDefiningOp<hw::ConstantOp>() ||
@@ -331,6 +336,14 @@ inline SimplifiedI1Value simplifyI1Value(mlir::Value value) {
     }
     if (auto bitcast = value.getDefiningOp<hw::BitcastOp>()) {
       value = bitcast.getInput();
+      continue;
+    }
+    if (auto prb = value.getDefiningOp<llhd::ProbeOp>()) {
+      value = prb.getSignal();
+      continue;
+    }
+    if (auto sig = value.getDefiningOp<llhd::SignalOp>()) {
+      value = sig.getInit();
       continue;
     }
     if (auto extract = value.getDefiningOp<hw::StructExtractOp>()) {
@@ -564,6 +577,10 @@ getI1ValueKeyImpl(mlir::Value value, GetBlockArgNameT getBlockArgName) {
         result = hashValue(toClock.getInput());
       } else if (auto bitcast = mlir::dyn_cast<hw::BitcastOp>(op)) {
         result = hashValue(bitcast.getInput());
+      } else if (auto prb = mlir::dyn_cast<llhd::ProbeOp>(op)) {
+        result = hashValue(prb.getSignal());
+      } else if (auto sig = mlir::dyn_cast<llhd::SignalOp>(op)) {
+        result = hashValue(sig.getInit());
       } else if (auto extract = mlir::dyn_cast<hw::StructExtractOp>(op)) {
         auto field = extract.getFieldNameAttr();
         if (field)
