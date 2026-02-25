@@ -29,7 +29,9 @@
 #include "llvm/Support/SourceMgr.h"
 
 #include "slang/ast/Compilation.h"
+#include "slang/analysis/AnalysisManager.h"
 #include "slang/ast/SystemSubroutine.h"
+#include "slang/diagnostics/AnalysisDiags.h"
 #include "slang/diagnostics/DiagnosticClient.h"
 #include "slang/diagnostics/ExpressionsDiags.h"
 #include "slang/driver/Driver.h"
@@ -165,6 +167,117 @@ struct DenseMapInfo<slang::BufferID> {
 
 namespace {
 const static ImportVerilogOptions defaultOptions;
+
+/// CIRCT should run analysis diagnostics in all modes except parse-only.
+static bool shouldRunSlangAnalysis(const ImportVerilogOptions &options) {
+  return options.mode != ImportVerilogOptions::Mode::OnlyParse;
+}
+
+/// Keep slang's lint-mode behavior aligned with CIRCT mode selection.
+static bool getRequestedSlangLintMode(const ImportVerilogOptions &options) {
+  (void)options;
+  // CIRCT keeps slang's lint-mode gate disabled so semantic legality checks
+  // still run in all CIRCT modes, including `--lint-only`.
+  return false;
+}
+
+static void
+setDiagnosticSeverity(slang::driver::Driver &driver,
+                      std::initializer_list<slang::DiagCode> diagnostics,
+                      slang::DiagnosticSeverity severity) {
+  for (auto code : diagnostics)
+    driver.diagEngine.setSeverity(code, severity);
+}
+
+static void
+applySlangDiagnosticSeverityPolicy(slang::driver::Driver &driver,
+                                   const ImportVerilogOptions &options) {
+  // Set DynamicNotProcedural severity AFTER processOptions() so it doesn't
+  // get overwritten by the default warning option processing.
+  if (options.allowNonProceduralDynamic.value_or(false))
+    driver.diagEngine.setSeverity(slang::diag::DynamicNotProcedural,
+                                  slang::DiagnosticSeverity::Warning);
+
+  // Downgrade out-of-bounds index/range accesses from error to warning by
+  // default. Most tools (VCS, Xcelium, yosys) accept these and handle them
+  // at runtime, while slang treats them as hard errors.
+  setDiagnosticSeverity(driver, {slang::diag::IndexOOB, slang::diag::RangeOOB},
+                        slang::DiagnosticSeverity::Warning);
+
+  // CIRCT historically did not run slang's full analysis pass. Running it now
+  // is needed for strict driver legality diagnostics, but we keep most newly
+  // surfaced analysis diagnostics as warnings to avoid broad behavior churn.
+  setDiagnosticSeverity(
+      driver,
+      {
+          slang::diag::AlwaysWithoutTimingControl,
+          slang::diag::AssertionFormalMultiAssign,
+          slang::diag::AssertionFormalUnassigned,
+          slang::diag::AssertionLocalUnassigned,
+          slang::diag::AssertionNoClock,
+          slang::diag::BlockingDelayInTask,
+          slang::diag::ClockVarTargetAssign,
+          slang::diag::DifferentClockInClockingBlock,
+          slang::diag::GFSVMatchItems,
+          slang::diag::ImplicitConnNetInconsistent,
+          slang::diag::InterconnectPortVar,
+          slang::diag::InvalidMulticlockedSeqOp,
+          slang::diag::MismatchedUserDefPortConn,
+          slang::diag::MismatchedUserDefPortDir,
+          slang::diag::MulticlockedInClockingBlock,
+          slang::diag::MulticlockedSeqEmptyMatch,
+          slang::diag::NTResolveArgModify,
+          slang::diag::NoInferredClock,
+          slang::diag::NoUniqueClock,
+          slang::diag::SampledValueFuncClock,
+          slang::diag::SeqMethodEndClock,
+          slang::diag::UserDefPortMixedConcat,
+          slang::diag::UserDefPortTwoSided,
+      },
+      slang::DiagnosticSeverity::Warning);
+
+  // Keep strict legality diagnostics as errors.
+  setDiagnosticSeverity(
+      driver,
+      {
+          slang::diag::InputPortAssign,
+          slang::diag::MixedVarAssigns,
+          slang::diag::MultipleAlwaysAssigns,
+          slang::diag::MultipleContAssigns,
+          slang::diag::MultipleUDNTDrivers,
+          slang::diag::MultipleUWireDrivers,
+      },
+      slang::DiagnosticSeverity::Error);
+}
+
+/// Temporarily override a slang compilation flag and restore it on scope exit.
+class ScopedCompilationFlagOverride {
+public:
+  ScopedCompilationFlagOverride(slang::driver::Driver &driver,
+                                slang::ast::CompilationFlags flag, bool value)
+      : driver(driver), flag(flag) {
+    auto &flags = driver.options.compilationFlags;
+    if (auto it = flags.find(flag); it != flags.end()) {
+      hadOldEntry = true;
+      oldValue = it->second;
+    }
+    flags[flag] = value;
+  }
+
+  ~ScopedCompilationFlagOverride() {
+    auto &flags = driver.options.compilationFlags;
+    if (hadOldEntry)
+      flags[flag] = oldValue;
+    else
+      flags.erase(flag);
+  }
+
+private:
+  slang::driver::Driver &driver;
+  slang::ast::CompilationFlags flag;
+  bool hadOldEntry = false;
+  std::optional<bool> oldValue;
+};
 
 struct ImportDriver {
   ImportDriver(MLIRContext *mlirContext, TimingScope &ts,
@@ -448,11 +561,12 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   applyAllowVirtualIfaceWithOverride
       .template operator()<slang::ast::CompilationFlags>();
 
-  driver.options.compilationFlags.emplace(
-      slang::ast::CompilationFlags::LintMode,
-      options.mode == ImportVerilogOptions::Mode::OnlyLint);
-  driver.options.compilationFlags.emplace(
-      slang::ast::CompilationFlags::DisableInstanceCaching, false);
+  // CIRCT mode controls the baseline slang lint-mode setting; analysis can
+  // still temporarily override this to force semantic legality checks.
+  driver.options.compilationFlags[slang::ast::CompilationFlags::LintMode] =
+      getRequestedSlangLintMode(options);
+  driver.options.compilationFlags[slang::ast::CompilationFlags::DisableInstanceCaching] =
+      false;
   driver.options.topModules = options.topModules;
   driver.options.paramOverrides = options.paramOverrides;
   forEachCommaValue(options.libraryOrder, [&](StringRef libraryName) {
@@ -468,19 +582,7 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   if (!driver.processOptions())
     return failure();
 
-  // Set DynamicNotProcedural severity AFTER processOptions() so it doesn't
-  // get overwritten by the default warning option processing.
-  if (options.allowNonProceduralDynamic.value_or(false))
-    driver.diagEngine.setSeverity(slang::diag::DynamicNotProcedural,
-                                  slang::DiagnosticSeverity::Warning);
-
-  // Downgrade out-of-bounds index/range accesses from error to warning by
-  // default. Most tools (VCS, Xcelium, yosys) accept these and handle them
-  // at runtime, while slang treats them as hard errors.
-  driver.diagEngine.setSeverity(slang::diag::IndexOOB,
-                                slang::DiagnosticSeverity::Warning);
-  driver.diagEngine.setSeverity(slang::diag::RangeOOB,
-                                slang::DiagnosticSeverity::Warning);
+  applySlangDiagnosticSeverityPolicy(driver, options);
 
   return success();
 }
@@ -516,6 +618,26 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
     driver.diagEngine.issue(diag);
   if (!parseSuccess || driver.diagEngine.getNumErrors() > 0)
     return failure();
+
+  // Run slang's semantic analysis checks in all modes except parse-only.
+  // This catches illegal driver combinations (for example, multi-driver
+  // always_comb / always_ff conflicts and input-port assignments) that are
+  // diagnosed during analysis rather than initial elaboration.
+  if (shouldRunSlangAnalysis(options)) {
+#if defined(__EMSCRIPTEN__)
+    // Slang semantic analysis currently attempts to spawn worker threads in our
+    // wasm builds, which aborts in single-threaded runtimes. Skip this phase
+    // on emscripten instead of hard-aborting the entire import.
+#else
+    auto analysisTimer = ts.nest("Verilog semantic analysis");
+    ScopedCompilationFlagOverride forceAnalysisMode(
+        driver, slang::ast::CompilationFlags::LintMode, false);
+    (void)driver.runAnalysis(*compilation);
+    analysisTimer.stop();
+    if (driver.diagEngine.getNumErrors() > 0)
+      return failure();
+#endif
+  }
 
   compileTimer.stop();
 
