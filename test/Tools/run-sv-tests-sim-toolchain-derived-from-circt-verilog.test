@@ -1,0 +1,13 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests %t/bin
+// RUN: printf 'module top; endmodule\n' > %t/sv-tests/tests/coherent-sim.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat <<'\"'\"'MLIR'\"'\"'\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho \"$0 $*\" > %t/sim-invocation.txt\n' > %t/bin/circt-sim
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-sim
+// RUN: env TEST_FILTER='^coherent-sim$' OUT=%t/results.tsv EXPECT_FILE=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 CIRCT_VERILOG=%t/bin/circt-verilog /usr/bin/bash %S/../../utils/run_sv_tests_circt_sim.sh %t/sv-tests | FileCheck %s --check-prefix=SUMMARY
+// RUN: FileCheck %s --check-prefix=RESULT < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=SIMTOOL < %t/sim-invocation.txt
+//
+// SUMMARY: === sv-tests Simulation Summary ===
+// SUMMARY: total=1 pass=1
+// RESULT: PASS{{[[:space:]]+}}coherent-sim{{[[:space:]]+}}{{.*}}coherent-sim.sv
+// SIMTOOL: {{.*}}/bin/circt-sim
