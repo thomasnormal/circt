@@ -8,7 +8,10 @@ set(LLVM_LINK_COMPONENTS
   Passes
 )
 
-add_circt_tool(circt-sim-compile circt-sim-compile.cpp)
+add_circt_tool(circt-sim-compile
+  circt-sim-compile.cpp
+  LowerTaggedIndirectCalls.cpp
+)
 target_link_libraries(circt-sim-compile
   PRIVATE
   CIRCTCombToArith

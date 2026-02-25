@@ -146,6 +146,32 @@ public:
     return compiledModule->global_patch_sizes[i];
   }
 
+  /// Get the total number of functions in the unified entry table.
+  uint32_t getNumAllFuncs() const {
+    return compiledModule ? compiledModule->num_all_funcs : 0;
+  }
+
+  /// Get a function entry pointer by FuncId. Returns nullptr if out of range.
+  void *getFuncEntry(uint32_t fid) const {
+    if (!compiledModule || fid >= compiledModule->num_all_funcs ||
+        !compiledModule->all_func_entries)
+      return nullptr;
+    return const_cast<void *>(compiledModule->all_func_entries[fid]);
+  }
+
+  /// Get the symbol name for a FuncId. Returns empty string if out of range.
+  const char *getFuncEntryName(uint32_t fid) const {
+    if (!compiledModule || fid >= compiledModule->num_all_funcs ||
+        !compiledModule->all_func_entry_names)
+      return nullptr;
+    return compiledModule->all_func_entry_names[fid];
+  }
+
+  /// Get the raw entry table pointer (for bulk assignment to interpreter).
+  const void *const *getFuncEntries() const {
+    return compiledModule ? compiledModule->all_func_entries : nullptr;
+  }
+
 private:
   CompiledModuleLoader() = default;
 

@@ -21,6 +21,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "LowerTaggedIndirectCalls.h"
 #include "circt/Runtime/CirctSimABI.h"
 #include "circt/Dialect/Comb/CombOps.h"
 #include "circt/Dialect/HW/HWOps.h"
@@ -662,6 +663,50 @@ emitUnpackValue(OpBuilder &builder, Location loc, Type ty, Value retsArray,
     result = LLVM::BitcastOp::create(builder, loc, ty, raw);
   }
   return {result, slotIdx + 1};
+}
+
+/// Collect vtable FuncId assignments by walking globals with
+/// `circt.vtable_entries` in the same order as the interpreter does in
+/// LLHDProcessInterpreterGlobals.cpp. This ensures the compiler assigns the
+/// same FuncIds as the interpreter (0xF0000000+N where N is sequential).
+///
+/// Returns the list of function names indexed by FuncId.
+static llvm::SmallVector<std::string>
+collectVtableFuncIds(ModuleOp module,
+                     llvm::StringMap<unsigned> &funcNameToFid) {
+  llvm::SmallVector<std::string> allFuncNames;
+
+  // Walk globals in module iteration order — same as the interpreter does in
+  // LLHDProcessInterpreterGlobals.cpp:274-310. Each vtable entry gets a
+  // unique FuncId even if the same function name appears multiple times
+  // (matching the interpreter's `addressToFunction.size()` counter).
+  for (auto globalOp : module.getOps<LLVM::GlobalOp>()) {
+    auto vtableEntriesAttr = globalOp->getAttr("circt.vtable_entries");
+    if (!vtableEntriesAttr)
+      continue;
+
+    auto entriesArray = dyn_cast<ArrayAttr>(vtableEntriesAttr);
+    if (!entriesArray)
+      continue;
+
+    for (auto entry : entriesArray) {
+      auto entryArray = dyn_cast<ArrayAttr>(entry);
+      if (!entryArray || entryArray.size() < 2)
+        continue;
+
+      auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+      auto funcSymbol = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+      if (!indexAttr || !funcSymbol)
+        continue;
+
+      StringRef funcName = funcSymbol.getValue();
+      unsigned fid = allFuncNames.size();
+      funcNameToFid[funcName] = fid; // Last FuncId wins for the map
+      allFuncNames.push_back(funcName.str());
+    }
+  }
+
+  return allFuncNames;
 }
 
 /// Generate trampoline bodies for external function declarations in the
@@ -2198,7 +2243,11 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const std::string &buildId,
                                  const llvm::SmallVector<std::string> &globalPatchNames,
                                  const llvm::SmallVector<llvm::GlobalVariable *> &globalPatchVars,
-                                 const llvm::SmallVector<uint32_t> &globalPatchSizes) {
+                                 const llvm::SmallVector<uint32_t> &globalPatchSizes,
+                                 const llvm::SmallVector<std::string> &allFuncEntryNames,
+                                 const llvm::StringMap<unsigned> &funcNameToFid,
+                                 const llvm::StringSet<> &compiledFuncSet,
+                                 const llvm::StringSet<> &trampolineFuncSet) {
   auto &ctx = llvmModule.getContext();
   auto *i32Ty = llvm::Type::getInt32Ty(ctx);
   auto *ptrTy = llvm::PointerType::get(ctx, 0);
@@ -2372,12 +2421,56 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
         sizeArray, "__circt_sim_global_patch_sizes");
   }
 
+  // Build unified func_entries table: allFuncEntryNames[fid] → pointer.
+  // For each FuncId, the entry is either a compiled function or a trampoline.
+  unsigned numAllFuncs = allFuncEntryNames.size();
+  llvm::Constant *allFuncEntriesGlobal = nullptr;
+  llvm::Constant *allFuncEntryNamesGlobal = nullptr;
+
+  if (numAllFuncs > 0) {
+    // Build entry pointer array.
+    llvm::SmallVector<llvm::Constant *> allEntryPtrs;
+    for (unsigned i = 0; i < numAllFuncs; ++i) {
+      auto *func = llvmModule.getFunction(allFuncEntryNames[i]);
+      if (func) {
+        allEntryPtrs.push_back(func);
+      } else {
+        allEntryPtrs.push_back(llvm::ConstantPointerNull::get(ptrTy));
+      }
+    }
+    auto *allEntryArrayTy = llvm::ArrayType::get(ptrTy, numAllFuncs);
+    auto *allEntryArray = llvm::ConstantArray::get(
+        allEntryArrayTy, llvm::ArrayRef<llvm::Constant *>(allEntryPtrs));
+    allFuncEntriesGlobal = new llvm::GlobalVariable(
+        llvmModule, allEntryArrayTy, /*isConstant=*/true,
+        llvm::GlobalValue::ExternalLinkage, allEntryArray,
+        "__circt_sim_func_entries");
+
+    // Build name string array.
+    llvm::SmallVector<llvm::Constant *> allNameGlobals;
+    for (unsigned i = 0; i < numAllFuncs; ++i) {
+      auto *strConst =
+          llvm::ConstantDataArray::getString(ctx, allFuncEntryNames[i], true);
+      auto *strGlobal = new llvm::GlobalVariable(
+          llvmModule, strConst->getType(), true,
+          llvm::GlobalValue::PrivateLinkage, strConst,
+          "__circt_sim_all_fname_" + std::to_string(i));
+      allNameGlobals.push_back(strGlobal);
+    }
+    auto *allNameArrayTy = llvm::ArrayType::get(ptrTy, numAllFuncs);
+    auto *allNameArray = llvm::ConstantArray::get(
+        allNameArrayTy, llvm::ArrayRef<llvm::Constant *>(allNameGlobals));
+    allFuncEntryNamesGlobal = new llvm::GlobalVariable(
+        llvmModule, allNameArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        allNameArray, "__circt_sim_all_func_entry_names");
+  }
+
   // Build the CirctSimCompiledModule struct.
-  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr, i32, ptr, ptr, ptr}
+  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr, i32, ptr, ptr, ptr, i32, ptr, ptr}
   auto *descriptorTy = llvm::StructType::create(
       ctx,
       {i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy, i32Ty, ptrTy,
-       i32Ty, ptrTy, ptrTy, ptrTy},
+       i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy},
       "CirctSimCompiledModule");
 
   auto *nullPtr = llvm::ConstantPointerNull::get(ptrTy);
@@ -2398,6 +2491,9 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
           numGlobalPatches > 0 ? globalPatchNamesGlobal : nullPtr, // global_patch_names
           numGlobalPatches > 0 ? globalPatchAddrsGlobal : nullPtr, // global_patch_addrs
           numGlobalPatches > 0 ? globalPatchSizesGlobal : nullPtr, // global_patch_sizes
+          llvm::ConstantInt::get(i32Ty, numAllFuncs),       // num_all_funcs
+          numAllFuncs > 0 ? allFuncEntriesGlobal : nullPtr, // all_func_entries
+          numAllFuncs > 0 ? allFuncEntryNamesGlobal : nullPtr, // all_func_entry_names
       });
 
   auto *descriptorGlobal = new llvm::GlobalVariable(
@@ -2978,12 +3074,54 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                  << " functions with non-LLVM ops\n";
   }
 
+  // Collect vtable FuncId assignments from the original module.
+  // This must happen BEFORE trampoline generation so we can ensure all
+  // vtable functions have either compiled bodies or trampolines.
+  llvm::StringMap<unsigned> funcNameToFid;
+  auto allFuncEntryNames = collectVtableFuncIds(*module, funcNameToFid);
+  llvm::errs() << "[circt-sim-compile] Collected " << allFuncEntryNames.size()
+               << " vtable FuncIds\n";
+
+  // Ensure all vtable functions have declarations in the micro-module so
+  // that generateTrampolines() will create trampolines for uncompiled ones.
+  {
+    auto *mlirCtx = microModule.getContext();
+    OpBuilder declBuilder(mlirCtx);
+    declBuilder.setInsertionPointToEnd(microModule.getBody());
+
+    for (const auto &name : allFuncEntryNames) {
+      // Skip if already present (compiled or already declared).
+      if (microModule.lookupSymbol<LLVM::LLVMFuncOp>(name))
+        continue;
+      // Look up the function type from the original module.
+      auto origFunc = module->lookupSymbol<LLVM::LLVMFuncOp>(name);
+      if (origFunc) {
+        // Clone as external declaration.
+        auto declOp = LLVM::LLVMFuncOp::create(
+            declBuilder, origFunc.getLoc(), name, origFunc.getFunctionType());
+        declOp.setLinkage(LLVM::Linkage::External);
+      }
+      // If not found in original module, it's defined elsewhere — skip.
+      // The entry table will have a null entry which is fine (interpreter
+      // handles it).
+    }
+  }
+
   // Generate trampolines for uncompiled functions referenced by compiled code.
+  // This now includes vtable functions that aren't compiled.
   auto trampolineNames = generateTrampolines(microModule);
   if (!trampolineNames.empty()) {
     llvm::errs() << "[circt-sim-compile] Generated " << trampolineNames.size()
                  << " interpreter trampolines\n";
   }
+
+  // Build sets for fast lookup when constructing the entry table.
+  llvm::StringSet<> compiledFuncSet;
+  for (const auto &name : funcNames)
+    compiledFuncSet.insert(name);
+  llvm::StringSet<> trampolineFuncSet;
+  for (const auto &name : trampolineNames)
+    trampolineFuncSet.insert(name);
 
   llvm::errs() << "[circt-sim-compile] " << funcNames.size()
                << " functions + " << procNames.size()
@@ -3051,7 +3189,15 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Synthesize descriptor and entrypoints into the LLVM IR module.
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
                        procNames, procKinds, buildId,
-                       globalPatchNames, globalPatchVars, globalPatchSizes);
+                       globalPatchNames, globalPatchVars, globalPatchSizes,
+                       allFuncEntryNames, funcNameToFid,
+                       compiledFuncSet, trampolineFuncSet);
+
+  // Rewrite indirect calls through tagged synthetic vtable addresses
+  // (0xF0000000+N) to use the func_entries table. Must run after
+  // synthesizeDescriptor (which creates @__circt_sim_func_entries) and before
+  // optimization passes (so the optimizer can simplify the tagged checks).
+  runLowerTaggedIndirectCalls(*llvmModule);
 
   // Set hidden visibility on everything except entrypoints.
   setDefaultHiddenVisibility(*llvmModule);
