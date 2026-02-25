@@ -9,8 +9,8 @@
 #
 # Key env vars:
 #   IBEX_ROOT=~/ibex               Path to Ibex checkout
-#   CIRCT_VERILOG=build-test/bin/circt-verilog
-#   CIRCT_BMC=build-test/bin/circt-bmc
+#   CIRCT_VERILOG=build_test/bin/circt-verilog
+#   CIRCT_BMC=build_test/bin/circt-bmc
 #   BMC_BOUND=20                   BMC unrolling bound
 #   TIMEOUT=300                    Wall-clock timeout per target (seconds)
 
@@ -20,8 +20,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIRCT_ROOT="${CIRCT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 IBEX_ROOT="${IBEX_ROOT:-$HOME/ibex}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build-test/bin/circt-verilog}"
-CIRCT_BMC="${CIRCT_BMC:-$CIRCT_ROOT/build-test/bin/circt-bmc}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build_test/bin/circt-verilog}"
+CIRCT_BMC="${CIRCT_BMC:-$CIRCT_ROOT/build_test/bin/circt-bmc}"
 OUT_DIR="${1:-/tmp/ibex-formal-circt-bmc-$(date +%Y%m%d-%H%M%S)}"
 BMC_BOUND="${BMC_BOUND:-20}"
 TIMEOUT="${TIMEOUT:-300}"

@@ -1,6 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
 // Test $assertfailoff suppresses assertion failure messages.
-// Bug: $assertfailoff is a no-op — assertion failures still appear.
 // IEEE 1800-2017 Section 20.12: $assertfailoff should suppress the
 // execution of assertion fail statements (the else clause).
 module top;

@@ -188,6 +188,10 @@ static Value cloneAssertionValueIntoBlock(Value value, OpBuilder &builder,
   return mapping.lookup(value);
 }
 
+constexpr const char kUnsupportedSvaAttr[] = "circt.unsupported_sva";
+constexpr const char kUnsupportedSvaReasonAttr[] =
+    "circt.unsupported_sva_reason";
+
 struct StmtVisitor {
   Context &context;
   Location loc;
@@ -424,6 +428,52 @@ struct StmtVisitor {
       locked = moore::ConversionOp::create(builder, loc, targetType, locked);
     auto globalRef = moore::GetGlobalVariableOp::create(builder, loc, globalOp);
     moore::BlockingAssignOp::create(builder, loc, globalRef, locked);
+    return success();
+  }
+
+  LogicalResult
+  emitUnsupportedConcurrentAssertionPlaceholder(
+      const slang::ast::ConcurrentAssertionStatement &stmt, StringAttr label,
+      StringRef reason) {
+    if (!context.options.continueOnUnsupportedSVA)
+      return failure();
+
+    OpBuilder::InsertionGuard guard(builder);
+    auto *moduleBlock = context.intoModuleOp.getBody();
+    if (moduleBlock->mightHaveTerminator()) {
+      if (auto *terminator = moduleBlock->getTerminator())
+        builder.setInsertionPoint(terminator);
+      else
+        builder.setInsertionPointToEnd(moduleBlock);
+    } else {
+      builder.setInsertionPointToEnd(moduleBlock);
+    }
+
+    auto i1 = builder.getI1Type();
+    Value trueValue = arith::ConstantIntOp::create(builder, loc, i1, 1);
+    Value falseValue = arith::ConstantIntOp::create(builder, loc, i1, 0);
+    Operation *op = nullptr;
+    switch (stmt.assertionKind) {
+    case slang::ast::AssertionKind::Assert:
+    case slang::ast::AssertionKind::Expect:
+      op = verif::AssertOp::create(builder, loc, trueValue, Value{}, label);
+      break;
+    case slang::ast::AssertionKind::Assume:
+    case slang::ast::AssertionKind::Restrict:
+      op = verif::AssumeOp::create(builder, loc, trueValue, Value{}, label);
+      break;
+    case slang::ast::AssertionKind::CoverProperty:
+    case slang::ast::AssertionKind::CoverSequence:
+      op = verif::CoverOp::create(builder, loc, falseValue, Value{}, label);
+      break;
+    default:
+      op = verif::AssertOp::create(builder, loc, trueValue, Value{}, label);
+      break;
+    }
+    op->setAttr(kUnsupportedSvaAttr, builder.getUnitAttr());
+    op->setAttr(kUnsupportedSvaReasonAttr, builder.getStringAttr(reason));
+    mlir::emitWarning(loc)
+        << "skipping unsupported SVA assertion in continue mode: " << reason;
     return success();
   }
 
@@ -2785,6 +2835,10 @@ struct StmtVisitor {
         }
       }
     }
+    auto tolerateUnsupportedSVA = [&](StringRef reason) -> LogicalResult {
+      return emitUnsupportedConcurrentAssertionPlaceholder(stmt, assertLabel,
+                                                           reason);
+    };
 
     auto appendAssertionControlEnable =
         [&](Value existingEnable) -> FailureOr<Value> {
@@ -2812,16 +2866,8 @@ struct StmtVisitor {
     };
     auto materializeAssertLikeProperty = [&](Value property,
                                              Value anchorSignal) -> Value {
-      if (!isa<ltl::SequenceType>(property.getType()))
-        return property;
-      auto trueVal = hw::ConstantOp::create(builder, loc, builder.getI1Type(), 1);
-      Value antecedent = trueVal;
-      if (anchorSignal && anchorSignal.getType().isInteger(1)) {
-        auto notAnchor =
-            arith::XOrIOp::create(builder, loc, anchorSignal, trueVal);
-        antecedent = arith::OrIOp::create(builder, loc, anchorSignal, notAnchor);
-      }
-      return ltl::ImplicationOp::create(builder, loc, antecedent, property);
+      (void)anchorSignal;
+      return property;
     };
 
     if (context.currentAssertionClock && enclosingProc) {
@@ -2839,6 +2885,8 @@ struct StmtVisitor {
       if (!property) {
         // Slang uses InvalidAssertionExpr for dead generate branches.
         if (innerPropertySpec->as_if<slang::ast::InvalidAssertionExpr>())
+          return success();
+        if (succeeded(tolerateUnsupportedSVA("property lowering failed")))
           return success();
         return failure();
       }
@@ -2948,6 +2996,8 @@ struct StmtVisitor {
     if (!property) {
       // Slang uses InvalidAssertionExpr for dead generate branches.
       if (innerPropertySpec->as_if<slang::ast::InvalidAssertionExpr>())
+        return success();
+      if (succeeded(tolerateUnsupportedSVA("property lowering failed")))
         return success();
       return failure();
     }
@@ -3076,32 +3126,18 @@ struct StmtVisitor {
     if (failed(gatedEnable))
       return failure();
     auto assertionEnable = *gatedEnable;
-    Value assertLikeProperty = property;
     switch (stmt.assertionKind) {
     case slang::ast::AssertionKind::Assert:
-    case slang::ast::AssertionKind::Assume:
-    case slang::ast::AssertionKind::Restrict:
-    case slang::ast::AssertionKind::Expect:
-      if (isa<ltl::SequenceType>(property.getType()) &&
-          property.getDefiningOp<ltl::ConcatOp>())
-        assertLikeProperty = materializeAssertLikeProperty(property, Value{});
-      break;
-    default:
-      break;
-    }
-
-    switch (stmt.assertionKind) {
-    case slang::ast::AssertionKind::Assert:
-      verif::AssertOp::create(builder, loc, assertLikeProperty, assertionEnable,
+      verif::AssertOp::create(builder, loc, property, assertionEnable,
                               assertLabel);
       return success();
     case slang::ast::AssertionKind::Assume:
-      verif::AssumeOp::create(builder, loc, assertLikeProperty, assertionEnable,
+      verif::AssumeOp::create(builder, loc, property, assertionEnable,
                               assertLabel);
       return success();
     case slang::ast::AssertionKind::Restrict:
       // Restrict constraints are treated as assumptions in lowering.
-      verif::AssumeOp::create(builder, loc, assertLikeProperty, assertionEnable,
+      verif::AssumeOp::create(builder, loc, property, assertionEnable,
                               assertLabel);
       return success();
     case slang::ast::AssertionKind::CoverProperty:
@@ -3113,13 +3149,15 @@ struct StmtVisitor {
                              assertLabel);
       return success();
     case slang::ast::AssertionKind::Expect:
-      verif::AssertOp::create(builder, loc, assertLikeProperty, assertionEnable,
+      verif::AssertOp::create(builder, loc, property, assertionEnable,
                               assertLabel);
       return success();
     default:
       break;
     }
 
+    if (succeeded(tolerateUnsupportedSVA("unsupported concurrent assertion kind")))
+      return success();
     mlir::emitError(loc) << "unsupported concurrent assertion kind: "
                          << slang::ast::toString(stmt.assertionKind);
     return failure();

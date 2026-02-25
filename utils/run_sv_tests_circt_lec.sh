@@ -926,3 +926,7 @@ echo "sv-tests LEC summary: total=$total pass=$pass fail=$fail error=$error skip
 echo "sv-tests LEC dropped-syntax summary: drop_remark_cases=$drop_remark_cases pattern='$DROP_REMARK_PATTERN'"
 echo "sv-tests frontend cache summary: hits=$cache_hits misses=$cache_misses stores=$cache_stores"
 echo "results: $OUT"
+
+if [[ "$fail" -ne 0 || "$error" -ne 0 ]]; then
+  exit 1
+fi

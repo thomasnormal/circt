@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
 
@@ -9,8 +9,8 @@ module SVAAssertControlPassOn(input logic a);
   end
 
   // CHECK-LABEL: moore.module @SVAAssertControlPassOn
-  // CHECK: moore.constant 6 : i32
-  // CHECK: moore.constant 7 : i32
+  // CHECK-DAG: moore.constant 6 : i32
+  // CHECK-DAG: moore.constant 7 : i32
   // CHECK: moore.get_global_variable @__circt_assert_pass_msgs_enabled : <i1>
   // CHECK: moore.blocking_assign %{{.*}}, %{{.*}} : i1
 endmodule
@@ -22,8 +22,8 @@ module SVAAssertControlNonVacuousOn(input logic a);
   end
 
   // CHECK-LABEL: moore.module @SVAAssertControlNonVacuousOn
-  // CHECK: moore.constant 10 : i32
-  // CHECK: moore.constant 11 : i32
+  // CHECK-DAG: moore.constant 10 : i32
+  // CHECK-DAG: moore.constant 11 : i32
   // CHECK: moore.get_global_variable @__circt_assert_vacuous_pass_enabled : <i1>
   // CHECK: moore.blocking_assign %{{.*}}, %{{.*}} : i1
 endmodule

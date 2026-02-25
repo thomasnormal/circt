@@ -7,7 +7,7 @@
 
 // End-to-end SV -> HW -> LTL/Core -> BMC coverage for multi-clock SVA.
 
-// CHECK-BMC: verif.bmc bound 20
+// CHECK-BMC: verif.bmc bound 24
 // CHECK-BMC: loop
 // CHECK-BMC: ^bb0(%{{.*}}: !seq.clock, %{{.*}}: !seq.clock, %{{.*}}: i32):
 

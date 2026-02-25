@@ -109,6 +109,12 @@ if slang_frontend_enabled:
   if 'circt-verilog-lsp-server' not in tools:
     tools.append('circt-verilog-lsp-server')
 
+# Expose tool features only when those binaries are available. This keeps
+# REQUIRES constraints accurate for mixed configurations.
+tool_search_path = os.pathsep.join(tool_dirs + [config.environment.get('PATH', '')])
+if shutil.which('circt-sim', path=tool_search_path):
+  config.available_features.add('circt-sim')
+
 # Enable UVM-gated tests when a usable UVM runtime source tree is available.
 repo_root = os.path.normpath(os.path.join(config.test_source_root, '..'))
 uvm_candidates = [

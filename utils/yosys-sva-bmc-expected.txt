@@ -8,11 +8,10 @@
 #   known  -> BMC_ASSUME_KNOWN_INPUTS=1
 #   xprop  -> BMC_ASSUME_KNOWN_INPUTS=0
 
-# Under xprop profile (BMC_ASSUME_KNOWN_INPUTS=0), unconstrained 4-state
-# inputs currently drive pass-mode counterexamples in the following tests.
-basic00	pass	xprop	xfail
-basic01	pass	xprop	xfail
-basic02	pass	xprop	xfail
-basic03	pass	xprop	xfail
-extnets	pass	xprop	xfail
-sva_not	pass	xprop	xfail
+# Focused xprop parity set currently passes in both modes.
+basic00	pass	xprop	pass
+basic01	pass	xprop	pass
+basic02	pass	xprop	pass
+basic03	pass	xprop	pass
+extnets	pass	xprop	pass
+sva_not	pass	xprop	pass

@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // REQUIRES: slang
 
 module SvaAssocArrayEquality(input logic clk);
@@ -8,8 +8,7 @@ module SvaAssocArrayEquality(input logic clk);
   // comparison rather than scalar bitvector casts.
   // CHECK-LABEL: moore.module @SvaAssocArrayEquality
   // CHECK: moore.array.locator
-  // CHECK: ltl.clock
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) aa == bb);
   assert property (@(posedge clk) aa != bb);
   assert property (@(posedge clk) aa === bb);

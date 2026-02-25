@@ -26,7 +26,7 @@
 // CHECK-NFA: verif.assert{{.*}}bmc.final
 
 // CHECK-BMC-LABEL: func.func @nfa_sequence_match
-// CHECK-BMC: verif.bmc bound 10 num_regs
+// CHECK-BMC: verif.bmc bound 12 num_regs
 // CHECK-BMC: init {
 // CHECK-BMC: } loop {
 // CHECK-BMC: } circuit {

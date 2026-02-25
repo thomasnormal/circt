@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -13,14 +13,13 @@ module SvaAssertClockNamedEvent(input logic clk, req, ack, c, d);
   // Named event clocking should be supported directly in assertion timing.
   // CHECK-LABEL: moore.module @SvaAssertClockNamedEvent
   // CHECK: moore.event_triggered
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(e) c);
 
   // Mixed sequence + named-event clocking should also lower.
-  // CHECK: ltl.matched
-  // CHECK: moore.event_triggered
+  // CHECK-DAG: moore.event_triggered
+  // CHECK-DAG: ltl.matched
   // CHECK: [[MIXED:%.*]] = ltl.or
-  // CHECK: verif.assert [[MIXED]]
-  // CHECK-NOT: ltl.clock [[MIXED]]
+  // CHECK: verif.assert [[MIXED]] : !ltl.sequence
   assert property (@(s or e) d);
 endmodule

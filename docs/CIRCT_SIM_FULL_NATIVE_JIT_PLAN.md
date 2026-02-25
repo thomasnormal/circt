@@ -757,7 +757,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - targeted strict regressions (6 tests): PASS.
       - bounded APB compile lane (`AVIPS=apb`, `SEEDS=1`,
         `CIRCT_SIM=build/bin/circt-sim`,
-        `CIRCT_VERILOG=build-test/bin/circt-verilog`,
+        `CIRCT_VERILOG=build_test/bin/circt-verilog`,
         `CIRCT_SIM_MODE=compile`,
         `CIRCT_SIM_WRITE_JIT_REPORT=1`,
         `CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000'`):
@@ -901,12 +901,12 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - `test/Tools/circt-sim/jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
       - `test/Tools/circt-sim/jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
     - validation:
-      - targeted strict compile-mode regressions (build-test lane): PASS
+      - targeted strict compile-mode regressions (build_test lane): PASS
         - `jit-process-thunk-func-call-from-write-class-wrapper-halt.mlir`
         - `jit-process-thunk-func-call-from-read-class-wrapper-halt.mlir`
         - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
         - `jit-process-thunk-llvm-call-assoc-size-halt.mlir`
-      - targeted parallel compile-mode smoke (build-test lane): PASS
+      - targeted parallel compile-mode smoke (build_test lane): PASS
         - `jit-process-thunk-llvm-call-queue-push-back-halt.mlir`
           with `--parallel=4 --work-stealing --auto-partition`.
       - TERM-bounded AXI4 queue sample after closure
@@ -1191,7 +1191,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - validation:
       - builds:
         - `ninja -C build circt-sim`: PASS
-        - `ninja -C build-test circt-sim`: PASS
+        - `ninja -C build_test circt-sim`: PASS
       - focused lit regressions: PASS (5 tests)
         - `jit-report-call-indirect-target-profile.mlir`
         - static/vtable-slot `call_indirect` local-helper strict/parallel
@@ -1231,7 +1231,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         `__moore_packed_string_to_string`).
     - validation:
       - builds:
-        - `ninja -C build-test -j2 circt-opt circt-verilog`: PASS
+        - `ninja -C build_test -j2 circt-opt circt-verilog`: PASS
       - focused regressions:
         - `test/Conversion/MooreToCore/sscanf-time-string.mlir`: PASS
         - `test/Tools/circt-sim/syscall-sscanf.sv`: PASS
@@ -1263,7 +1263,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         (asserts first store + subsequent hit).
     - validation:
       - build:
-        - `ninja -C build-test circt-sim -j2`: PASS.
+        - `ninja -C build_test circt-sim -j2`: PASS.
       - focused wait-event regressions: PASS
         - new cache test
         - `moore-wait-event.mlir`
@@ -1357,7 +1357,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `jit_deopt_reason_missing_thunk = 0`
     - validation:
       - build:
-        - `ninja -C build-test circt-sim`: PASS.
+        - `ninja -C build_test circt-sim`: PASS.
       - focused regression:
         - manual RUN + FileCheck sequence for the new test: PASS
           (`/tmp/jit-fastpath-budget0/{log.txt,jit.json}`).
@@ -1423,7 +1423,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `jit_deopt_reason_missing_thunk = 0`
     - validation:
       - build:
-        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build_test -j4 circt-sim`: PASS.
         - `ninja -C build -j4 circt-sim`: PASS.
       - focused regressions (manual RUN + checks): PASS.
         - `jit-process-fast-path-store-wait-self-loop.mlir`
@@ -1460,7 +1460,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - validation:
       - build:
         - `ninja -C build -j4 circt-sim`: PASS.
-        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build_test -j4 circt-sim`: PASS.
       - focused regressions:
         - `func-baud-clk-generator-fast-path-delay-batch.mlir`: PASS
           (`batch-schedule` observed).
@@ -1615,7 +1615,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - validation:
       - builds:
         - `ninja -C build -j4 circt-sim`: PASS
-        - `ninja -C build-test -j4 circt-sim`: PASS
+        - `ninja -C build_test -j4 circt-sim`: PASS
       - focused regressions: PASS
         - `wait-condition-queue-fallback-backoff.mlir`
         - `wait-condition-execute-phase-objection-fallback-backoff.mlir`
@@ -1664,7 +1664,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         to lock `targetTimeFs=10000000000`.
     - validation:
       - build:
-        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build_test -j4 circt-sim`: PASS.
       - focused regressions: PASS
         - `fork-execute-phase-monitor-intercept-single-shot.mlir`
         - `execute-phase-monitor-fork-objection-waiter.mlir`
@@ -1710,7 +1710,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
     - validation:
       - builds:
         - `ninja -C build -j4 circt-sim`: PASS.
-        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build_test -j4 circt-sim`: PASS.
       - focused regressions: PASS
         - `func-start-monitoring-resume-fast-path.mlir`
         - `func-generate-baud-clk-resume-fast-path.mlir`
@@ -1751,7 +1751,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - locks default + parallel lane behavior.
     - validation:
       - build:
-        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build_test -j4 circt-sim`: PASS.
       - focused lit (filtered): PASS
         - `func-drive-to-bfm-resume-fast-path.mlir`
         - `func-start-monitoring-resume-fast-path.mlir`
@@ -1793,7 +1793,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         to lock generic shape-based collapse in default + parallel lanes.
     - validation:
       - build:
-        - `ninja -C build-test -j4 circt-sim`: PASS.
+        - `ninja -C build_test -j4 circt-sim`: PASS.
       - focused lit (filtered): PASS
         - `func-tail-wrapper-generic-resume-fast-path.mlir`
         - `func-drive-to-bfm-resume-fast-path.mlir`
@@ -1845,7 +1845,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
           - `func-baud-clk-generator-fast-path-delay-batch.mlir`
           - `execute-phase-monitor-fork-objection-waiter.mlir`
       - full suite: PASS
-        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - `ninja -C build_test -j4 check-circt-tools-circt-sim`
           (`Passed=440`, `XFAIL=49`, `Failed=0`).
       - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
         - `/tmp/avip-circt-sim-uart-tail-wrapper-elide-20260218-160749/matrix.tsv`
@@ -1925,7 +1925,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - profile-guarded call-indirect cluster
         - LLHD sub-reference regression cluster.
       - full tools suite: PASS
-        - `llvm-lit -sv -j8 build-test/test/Tools/circt-sim`
+        - `llvm-lit -sv -j8 build_test/test/Tools/circt-sim`
           (`Total=491`, `Passed=445`, `XFAIL=46`, `Failed=0`).
       - bounded AVIP UART compile lane (`SIM_TIMEOUT=60`):
         - `/tmp/avip-circt-sim-uart-profileguard-20260218-163020/matrix.tsv`
@@ -1986,7 +1986,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - parallel smoke:
           `jit-process-thunk-func-call-local-helper-nonsuspending-halt.mlir`.
       - full tools suite: PASS
-        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - `ninja -C build_test -j4 check-circt-tools-circt-sim`
           (`Total=492`, `Passed=446`, `XFAIL=46`, `Failed=0`).
       - bounded AVIP `jtag` compile mode (`CIRCT_SIM_EXTRA_ARGS=<none>`):
         - `/tmp/avip-circt-sim-jtag-defaultjit-20260218-171945/matrix.tsv`
@@ -2077,7 +2077,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         work.
     - validation:
       - builds: PASS
-        - `ninja -C build-test -j4 circt-sim`
+        - `ninja -C build_test -j4 circt-sim`
         - `ninja -C build -j4 circt-sim`
       - focused lit cluster: PASS (`5 PASS`, `1 XFAIL`)
         - `call-indirect-runtime-override-site-cache.mlir`
@@ -2106,7 +2106,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - added `test/Tools/circt-sim/proc-print-flush-env.mlir`
         to lock default + env-enabled output behavior.
     - validation:
-      - build: `ninja -C build-test -j4 circt-sim` PASS.
+      - build: `ninja -C build_test -j4 circt-sim` PASS.
       - focused checks PASS:
         - `proc-print-flush-env.mlir`
         - `call-indirect-runtime-override-site-cache.mlir`
@@ -2132,7 +2132,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - test enforces `--max-process-steps=50` with finite module-level init
         work and verifies no overflow diagnostics.
     - validation:
-      - build: `ninja -C build-test -j4 circt-sim` PASS.
+      - build: `ninja -C build_test -j4 circt-sim` PASS.
       - focused regression checks PASS:
         - `max-process-steps-global-init-relax.mlir`
         - `jit-process-fast-path-budget-zero.mlir`
@@ -2182,10 +2182,10 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - runtime override correctness (`sum = 24`).
     - validation:
       - build: PASS
-        - `ninja -C build-test -j4 circt-sim`
-        - `ninja -C build-test -j4 CIRCTSimToolTests`
+        - `ninja -C build_test -j4 circt-sim`
+        - `ninja -C build_test -j4 CIRCTSimToolTests`
       - tools regression suite: PASS
-        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - `ninja -C build_test -j4 check-circt-tools-circt-sim`
         - totals: `Passed=456`, `XFAIL=46`, `Failed=0`.
       - bounded AVIP UART compile lane (compile mode):
         - `/tmp/avip-circt-sim-uart-vtable-slot-cache-20260218-2330/matrix.tsv`
@@ -2231,7 +2231,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
       - extended `$assertcontrol` test to cover control type `5` kill path.
     - validation:
       - focused lit:
-        - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter 'syscall-assert(on|off|kill|control)\\.sv'`
+        - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter 'syscall-assert(on|off|kill|control)\\.sv'`
         - result: `Passed=4`, `Failed=0`.
       - bounded non-I3C AVIP compile-mode sweep:
         - command:
@@ -2273,7 +2273,7 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - `test/Tools/circt-sim/syscall-writememh-range.sv`
     - validation:
       - build: PASS
-        - `ninja -C build-test -j4 circt-sim`
+        - `ninja -C build_test -j4 circt-sim`
       - bounded non-I3C AVIP compile-mode sweep: PASS
         - command:
           `AVIPS=apb,uart,jtag SEEDS=1 CIRCT_SIM_MODE=compile CIRCT_SIM_WRITE_JIT_REPORT=1 SIM_TIMEOUT=120 SIM_TIMEOUT_GRACE=60 CIRCT_SIM_EXTRA_ARGS='--jit-hot-threshold=1 --jit-compile-budget=100000' utils/run_avip_circt_sim.sh /tmp/avip-circt-sim-fileio-20260219-compile`
@@ -2282,11 +2282,11 @@ Therefore: strict-native is feasible as convergence phase, not first activation 
         - JIT summary:
           `reports_scanned=3`, `deopt_process_rows=0`.
       - focused regressions: PASS
-        - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(display-format|display-write|generate|writememb-range|writememb|feof|fread)\\.sv' build-test/test/Tools/circt-sim`
+        - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(display-format|display-write|generate|writememb-range|writememb|feof|fread)\\.sv' build_test/test/Tools/circt-sim`
       - focused file-I/O cluster: PASS
-        - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(fopen-fclose|fopen-modes|fwrite-fdisplay|fwrite-time-char|ferror|fscanf|fgetc-fgets|ftell-fseek-rewind|fread|feof|ungetc|writememb|writememb-range|writememh-range|writememh)\\.sv' build-test/test/Tools/circt-sim`
+        - `llvm/build/bin/llvm-lit -sv --filter 'syscall-(fopen-fclose|fopen-modes|fwrite-fdisplay|fwrite-time-char|ferror|fscanf|fgetc-fgets|ftell-fseek-rewind|fread|feof|ungetc|writememb|writememb-range|writememh-range|writememh)\\.sv' build_test/test/Tools/circt-sim`
       - full tools suite (dirty tree):
-        - `ninja -C build-test -j4 check-circt-tools-circt-sim`
+        - `ninja -C build_test -j4 check-circt-tools-circt-sim`
         - net: `Failed=15 -> 12`.
     - remaining open failures (current dirty-tree gate):
       - `syscall-coverage.sv`

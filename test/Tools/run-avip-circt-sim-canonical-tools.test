@@ -10,4 +10,4 @@
 // RUN: not env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim RUN_AVIP=%t/fake-run-avip.sh COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out > %t/log.txt 2>&1
 // RUN: FileCheck %s < %t/log.txt
 //
-// CHECK: error: CIRCT_VERILOG must use canonical build-test path:
+// CHECK: error: CIRCT_VERILOG must use canonical build_test path:

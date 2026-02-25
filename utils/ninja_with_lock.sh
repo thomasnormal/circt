@@ -2,8 +2,8 @@
 # Serialize ninja builds across agents to avoid host-wide OOM storms.
 #
 # Usage:
-#   utils/ninja_with_lock.sh -C build-test circt-sim
-#   CIRCT_BUILD_JOBS=4 utils/ninja_with_lock.sh -C build-test circt-verilog
+#   utils/ninja_with_lock.sh -C build_test circt-sim
+#   CIRCT_BUILD_JOBS=4 utils/ninja_with_lock.sh -C build_test circt-verilog
 #
 # Env:
 #   CIRCT_BUILD_LOCKFILE      default: /tmp/circt-build.lock

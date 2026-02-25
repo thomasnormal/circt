@@ -1,6 +1,7 @@
 // RUN: circt-sim %s 2>&1 | FileCheck %s
 
-// Test: verif.assume and verif.cover in processes are no-ops in simulation.
+// Test: verif.cover in processes is a no-op and true verif.assume/verif.assert
+// do not halt process execution in simulation.
 // Deferred immediate assertions (assume #0, cover #0, assume final, cover final)
 // generate processes with infinite loops. The per-activation step limit catches
 // these loops, and the simulation completes cleanly.

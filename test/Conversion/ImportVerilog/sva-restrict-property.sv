@@ -1,11 +1,11 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
 
 module sva_restrict_property(input logic clk, rst, a, b);
   // CHECK-LABEL: moore.module @sva_restrict_property
 
-  // CHECK: verif.assume {{.*}} : !ltl.property
+  // CHECK: verif.clocked_assume {{.*}} : !ltl.property
   restrict property (@(posedge clk) a |-> b);
 
   // CHECK: verif.assume {{.*}} if {{.*}} : !ltl.property

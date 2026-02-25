@@ -10,7 +10,7 @@
 // CHECK-LTL: verif.clocked_assert
 
 // CHECK-BMC-LABEL: func.func @sva_strong_until
-// CHECK-BMC: verif.bmc bound 20
+// CHECK-BMC: verif.bmc bound 22
 hw.module @sva_strong_until(
   in %clk: i1,
   in %a: i1,

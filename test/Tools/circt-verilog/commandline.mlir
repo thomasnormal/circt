@@ -26,3 +26,4 @@
 // CHECK-DAG: --allow-self-determined-stream-concat
 // CHECK-DAG: --allow-merging-ansi-ports
 // CHECK-DAG: --allow-top-level-iface-ports
+// CHECK-DAG: --sva-continue-on-unsupported

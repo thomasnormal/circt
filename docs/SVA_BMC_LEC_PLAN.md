@@ -52,9 +52,9 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
   - nested module/function assertion cases are now explicit expected-error
     tests.
 - validation snapshot:
-  - `ninja -C build-test circt-opt`
+  - `ninja -C build_test circt-opt`
     - result: pass.
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
     - result: `1/1` pass.
 - next P0 in this track:
   - replace the guard with full interprocedural nested-check support by
@@ -95,9 +95,9 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
   - updated pairwise/OpenTitan backend-policy tests to remove `jit` acceptance
     and lock SMT-LIB-only default execution.
 - validation snapshot:
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir build-test/test/Tools/run-pairwise-circt-bmc-case-backend-invalid.test build-test/test/Tools/run-pairwise-circt-bmc-case-backend-override.test build-test/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-invalid.test build-test/test/Tools/run-opentitan-bmc-case-policy-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-regex.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build-test/test/Tools/run-opentitan-bmc-case-policy-ambiguous-pattern.test`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build_test/test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir build_test/test/Tools/run-pairwise-circt-bmc-case-backend-invalid.test build_test/test/Tools/run-pairwise-circt-bmc-case-backend-override.test build_test/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build_test/test/Tools/run-opentitan-bmc-case-policy-invalid.test build_test/test/Tools/run-opentitan-bmc-case-policy-file.test build_test/test/Tools/run-opentitan-bmc-case-policy-regex.test build_test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build_test/test/Tools/run-opentitan-bmc-case-policy-ambiguous-pattern.test`
     - result: `10/10` pass.
-  - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-pairwise-circt-bmc|run-opentitan-bmc|bmc-run-alias-smtlib|bmc-shared-libs-rejected' build-test/test/Tools build-test/test/Tools/circt-bmc`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-pairwise-circt-bmc|run-opentitan-bmc|bmc-run-alias-smtlib|bmc-shared-libs-rejected' build_test/test/Tools build_test/test/Tools/circt-bmc`
     - result: `48/48` pass.
 
 ## Latest SVA Closure Slice (February 23, 2026, stage-2 `circt-bmc` JIT retirement)
@@ -122,13 +122,13 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     `test/Tools/run-sv-tests-bmc-smtlib-fallback.test`,
     `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`.
 - validation snapshot:
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc`
     - result: `157 pass, 156 unsupported, 0 fail`.
-  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
     - result: `110 tests, failures=0`.
-  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+  - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
     - result: `14 tests, failures=0`.
-  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+  - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
     - result: `total=6 pass=6 fail=0 error=0`.
 
 ## Latest SVA Closure Slice (February 23, 2026, stage-1 `circt-bmc` JIT deprecation)
@@ -149,13 +149,13 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
 - added TDD lock for strict mode:
   - `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
 - validation snapshot:
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
     - result: `2/2` pass.
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build-test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build_test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
     - result: `2/2` pass.
-  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+  - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
     - result: `110 tests, failures=0`.
-  - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+  - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
     - result: `14 tests, failures=0`.
 
 ## Latest SVA Closure Slice (February 23, 2026, ImportVerilog SVA harness refresh for `OnlyParse` drift)
@@ -171,7 +171,7 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     `moore.past` / `verif.clocked_assert` forms.
 - validation snapshot:
   - ImportVerilog SVA bucket:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog --filter='sva-'`
     - result: `148/148` pass.
   - regular formal sanity:
     - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -221,10 +221,10 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
       assumptions around `smt.not`/`smt.and`/`smt.ite`.
 - validation snapshot:
   - targeted:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
     - result: `3/3` pass.
   - focused bucket:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='bmc-multiclock-past-buffer'`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT --filter='bmc-multiclock-past-buffer'`
     - result: `6/6` pass.
   - regular formal sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -232,7 +232,7 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `8 tests, failures=0`.
   - profiling sample:
-    - `time llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
+    - `time llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
     - result: `real 0m0.102s`.
 
 ## Previous SVA Closure Slice (February 23, 2026, BMC final-check condition folding)
@@ -252,12 +252,12 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
   - added `CHECK-BMC-NOT: smt.or %false`.
 - validation snapshot:
   - build:
-    - `ninja -C build-test circt-bmc`
+    - `ninja -C build_test circt-bmc`
   - focused regression:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
     - result: `PASS`.
   - focused final-check batch:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-sat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-disable-iff-sat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-disable-iff-unsat-e2e.sv build-test/test/Tools/circt-bmc/bmc-final-checks-any-violation-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampling.mlir build-test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-assert-final-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-disable-iff-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-disable-iff-unsat-e2e.sv build_test/test/Tools/circt-bmc/bmc-final-checks-any-violation-smtlib.mlir build_test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampling.mlir build_test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`
     - result: `4 pass, 4 unsupported`.
   - regular formal sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -299,13 +299,13 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     - `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
 - validation snapshot:
   - build:
-    - `ninja -C build-test circt-verilog circt-opt circt-bmc`
+    - `ninja -C build_test circt-verilog circt-opt circt-bmc`
   - focused lit:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
     - result: `8/8` pass.
   - focused direct checks:
-    - `build-test/bin/circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv | build_test/bin/circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
     - result: `BMC_RESULT=UNSAT`.
   - regular formal loops:
     - `TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -351,10 +351,10 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
     multi-clock use, not just extra unused clock inputs.
 - validation snapshot:
   - targeted regression:
-    - `build-test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
+    - `build_test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
     - result: `BMC_RESULT=UNSAT`
   - focused lit:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv build-test/test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build_test/test/Tools/circt-bmc/sva-multiclock-e2e.sv build_test/test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
     - result: `3/3` pass
   - Yosys BMC sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -385,7 +385,7 @@ See PROJECT_PLAN.md for detailed iteration status and prior work.
   - `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
 - validation snapshot:
   - targeted regressions:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
     - result: `8/8` pass.
   - Yosys BMC sanity:
     - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -1086,7 +1086,7 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - semantic lane breadth increased from `43` to `45` wrappers.
   - semantic obligation coverage increased from `86` to `90`.
 - Validation:
-  - `build-test/bin/circt-opt test/Tools/circt-bmc/externalize-registers-const-clock.mlir --externalize-registers='allow-multi-clock=true' | llvm/build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
+  - `build_test/bin/circt-opt test/Tools/circt-bmc/externalize-registers-const-clock.mlir --externalize-registers='allow-multi-clock=true' | llvm/build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
   - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
   - `utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
   - `utils/run_formal_all.sh --with-ovl --with-ovl-semantic --ovl /home/thomas-ahle/std_ovl --ovl-bmc-test-filter '.*' --ovl-semantic-test-filter '.*' --include-lane-regex '^std_ovl/' --out-dir /tmp/formal-ovl-full-matrix-after-constclock-arbiter-stack`
@@ -1269,13 +1269,13 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - `test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
   - `test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
 - Validation:
-  - `ninja -C build-test circt-translate`
-  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
-  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`
-  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
-  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
-  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
-  - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
+  - `ninja -C build_test circt-translate`
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-pass-vacuous-procedural.sv`
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-lock-procedural.sv`
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-lock-subroutine.sv`
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-io-labels.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-io-labels.sv`
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine.sv`
   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_yosys_sva_circt_bmc.sh`
 
 ## Latest SVA closure slice (2026-02-21)
@@ -1287,12 +1287,12 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 - New regression:
   - `test/Conversion/LTLToCore/first-match-unbounded.mlir`
 - Validation:
-  - `ninja -C build-test circt-opt`
-  - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - `ninja -C build_test circt-opt`
+  - `build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
   - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
   - profiling sample:
-    - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
+    - `time build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
 
 - Performance follow-up in same slice:
   - reduced duplicate transition masking in bounded and unbounded first-match
@@ -1340,8 +1340,8 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - regression:
     - `test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
   - validation:
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
 
 - Additional closure (same date):
@@ -1351,8 +1351,8 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - updated regression:
     - `test/Conversion/ImportVerilog/sva-abort-on.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
 
 ## Ownership and References
@@ -1369,9 +1369,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - updated regression:
     - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc="top-module=sva_strong_weak_e2e bound=2" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc="top-module=sva_strong_weak_e2e bound=2" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
 
 - Additional closure (same date):
@@ -1425,10 +1425,10 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - build:
-    - `ninja -C build-test circt-opt circt-bmc`
+    - `ninja -C build_test circt-opt circt-bmc`
   - focused BMC lowering checks:
-    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
-    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+    - `build_test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
+    - `build_test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
   - OVL semantic focused:
     - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
     - result: `4 tests, failures=0, xfail=0, xpass=0`
@@ -1473,9 +1473,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - build:
-    - `ninja -C build-test circt-opt circt-bmc`
+    - `ninja -C build_test circt-opt circt-bmc`
   - focused pass regression:
-    - `build-test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir | llvm/build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
+    - `build_test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir | llvm/build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
   - focused OVL subset:
     - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(crc|fifo|memory_async|memory_sync|multiport_fifo|valid_id)' FAIL_ON_XPASS=0 ...`
     - result: `14 tests, failures=0, xfail=1, xpass=0`
@@ -1496,9 +1496,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
 
 - Validation:
-  - `ninja -C build-test circt-opt circt-bmc`
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
+  - `ninja -C build_test circt-opt circt-bmc`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/strip-llhd-processes.mlir build_test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
   - `FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
     - result: `102 tests, failures=0, xfail=1, xpass=0`
 
@@ -1527,10 +1527,10 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - build:
-    - `ninja -C build-test circt-opt circt-bmc`
+    - `ninja -C build_test circt-opt circt-bmc`
   - focused tests:
-    - `lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir`
-    - `lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+    - `lit -sv build_test/test/Tools/circt-bmc/strip-llhd-processes.mlir`
+    - `lit -sv build_test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build_test/test/Tools/circt-bmc/strip-llhd-processes.mlir build_test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
   - targeted semantic:
     - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_multiport_fifo$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
     - result: `2 tests, failures=0, xfail=0, xpass=0`
@@ -1562,10 +1562,10 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - build:
-    - `ninja -C build-test circt-opt circt-bmc circt-verilog`
+    - `ninja -C build_test circt-opt circt-bmc circt-verilog`
   - targeted regressions:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Dialect/Verif/combine-assert-like.mlir`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Dialect/Verif/combine-assert-like.mlir`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build_test/bin/circt-bmc -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
       - result: `BMC_RESULT=UNSAT`
   - targeted Yosys SVA parity:
     - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=1 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -1611,9 +1611,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - build:
-    - `ninja -C build-test circt-bmc`
+    - `ninja -C build_test circt-bmc`
   - targeted lit:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/commandline.mlir build_test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
     - result: `2/2` pass.
   - regular formal sanity:
     - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh`
@@ -1645,13 +1645,13 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - targeted sv-tests files:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-expectations.mlir build-test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build-test/test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sv-tests-expectations.mlir build_test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build_test/test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir build_test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir build_test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
     - result: `4 pass, 1 expected-fail`.
   - harness-level contract tests:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-sv-tests-bmc-'`
     - result: `19 pass, 1 unsupported`.
   - full `circt-bmc` sv-tests bucket:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='sv-tests-'`
     - result: `11 pass, 1 expected-fail, 4 unsupported`.
 
 - Current state:
@@ -1672,16 +1672,16 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - runner feature test:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
     - result: `1/1` pass.
   - UVM tagged smoke regressions:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir build_test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
     - result: `2/2` pass.
   - harness contract tests:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-sv-tests-bmc-'`
     - result: `20 pass, 1 unsupported`.
   - full `circt-bmc` sv-tests bucket:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='sv-tests-'`
     - result: `12 pass, 4 unsupported`.
 
 - Current state:
@@ -1711,12 +1711,12 @@ Record results in CHANGELOG.md and include relevant output artifacts.
 
 - Validation:
   - build:
-    - `ninja -C build-test circt-bmc circt-opt`
+    - `ninja -C build_test circt-bmc circt-opt`
   - focused:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir build-test/test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir build-test/test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir build_test/test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir build_test/test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
     - result: `3/3` pass.
   - broad `circt-bmc` suite:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc`
     - result: `153 pass, 156 unsupported, 1 xfail, 1 fail`.
     - remaining fail is local JIT Z3 linkage (`Z3_*` symbol materialization)
       in `circt-bmc-disable-iff-constant.mlir`.
@@ -1744,10 +1744,10 @@ Record results in CHANGELOG.md and include relevant output artifacts.
     - added `test/Tools/circt-bmc/bmc-k-induction-cover.mlir`.
 
 - Validation:
-  - `ninja -C build-test circt-bmc circt-opt`
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-k-induction-cover.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-sat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir build-test/test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir build-test/test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir`
+  - `ninja -C build_test circt-bmc circt-opt`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/bmc-k-induction-cover.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-unsat.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-sat.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir build_test/test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir build_test/test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir`
     - result: `7/7` pass.
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='induction'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT --filter='induction'`
     - result: `2/2` pass.
 
 - Current state:
@@ -1765,9 +1765,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
       (`smt.solver`).
 
 - Validation:
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
     - result: `1/1` pass.
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='llhd|lower-to-bmc-inline'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='llhd|lower-to-bmc-inline'`
     - result: `18 pass, 1 unsupported`.
 
 - Current state:
@@ -1797,9 +1797,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - same repro after fix:
     - result: `total=1 pass=1 fail=0`.
   - harness contract tests:
-    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-mixed-assert-cover-classification' build-test/test`
+    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-mixed-assert-cover-classification' build_test/test`
     - result: `1/1` pass.
-    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build_test/test`
     - result: `21 pass, 1 unsupported`.
 
 - Current state:
@@ -1832,9 +1832,9 @@ Record results in CHANGELOG.md and include relevant output artifacts.
   - post-fix repro:
     - result: `total=1 pass=0 fail=1` (correct).
   - lit:
-    - `build-ot/bin/llvm-lit -sv -j 1 --filter 'run-sv-tests-bmc-mixed-assert-cover-(classification|violation-classification)' build-test/test`
+    - `build-ot/bin/llvm-lit -sv -j 1 --filter 'run-sv-tests-bmc-mixed-assert-cover-(classification|violation-classification)' build_test/test`
     - result: `2/2` pass.
-    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+    - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build_test/test`
     - result: `22 pass, 1 unsupported`.
 
 - Current state:

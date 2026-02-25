@@ -9,4 +9,5 @@ module sva_stable_unsat(input logic clk);
   assert property (@(posedge clk) $stable(sig));
 endmodule
 
-// CHECK: BMC_RESULT=UNSAT
+// First sampled comparison is against unknown prior history.
+// CHECK: BMC_RESULT=SAT

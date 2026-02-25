@@ -38,6 +38,13 @@ constexpr const char kAbortOnActionAttr[] = "sva.abort_on.action";
 constexpr const char kAbortOnSyncAttr[] = "sva.abort_on.sync";
 constexpr const char kExplicitClockingAttr[] = "sva.explicit_clocking";
 
+static mlir::InFlightDiagnostic emitUnsupportedSvaDiagnostic(Context &context,
+                                                             Location loc) {
+  if (context.options.continueOnUnsupportedSVA)
+    return mlir::emitWarning(loc);
+  return mlir::emitError(loc);
+}
+
 static Value createUnknownOrZeroConstant(Context &context, Location loc,
                                          moore::IntType type) {
   auto &builder = context.builder;
@@ -108,7 +115,8 @@ static Value buildSampledStableComparison(Context &context, Location loc,
                                           StringRef funcName) {
   auto &builder = context.builder;
   if (!lhs || !rhs || lhs.getType() != rhs.getType()) {
-    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    emitUnsupportedSvaDiagnostic(context, loc)
+        << "unsupported sampled value type for " << funcName;
     return {};
   }
 
@@ -383,7 +391,8 @@ static Value buildSampledStableComparison(Context &context, Location loc,
     return allEqual;
   }
 
-  mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+  emitUnsupportedSvaDiagnostic(context, loc)
+      << "unsupported sampled value type for " << funcName;
   return {};
 }
 
@@ -393,7 +402,8 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
                                  StringRef funcName) {
   auto &builder = context.builder;
   if (!value) {
-    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    emitUnsupportedSvaDiagnostic(context, loc)
+        << "unsupported sampled value type for " << funcName;
     return {};
   }
 
@@ -620,7 +630,8 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
 
   auto bitvec = context.convertToSimpleBitVector(value);
   if (!bitvec || !isa<moore::IntType>(bitvec.getType())) {
-    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    emitUnsupportedSvaDiagnostic(context, loc)
+        << "unsupported sampled value type for " << funcName;
     return {};
   }
   Value boolVal = moore::BoolCastOp::create(builder, loc, bitvec).getResult();
@@ -635,13 +646,15 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
 static Value buildSampledEdgeOperand(Context &context, Location loc, Value value,
                                      StringRef funcName) {
   if (!value) {
-    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    emitUnsupportedSvaDiagnostic(context, loc)
+        << "unsupported sampled value type for " << funcName;
     return {};
   }
 
   if (auto intTy = dyn_cast<moore::IntType>(value.getType())) {
     if (intTy.getWidth() == 0) {
-      mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+      emitUnsupportedSvaDiagnostic(context, loc)
+          << "unsupported sampled value type for " << funcName;
       return {};
     }
     if (intTy.getWidth() == 1)
@@ -969,7 +982,8 @@ static Value lowerSampledValueFunctionWithSamplingControl(
       !isRealStableSample && !isStringStableSample && !isEventStableSample &&
       !isRealEdgeSample && !isStringEdgeSample && !isEventEdgeSample &&
       !intType) {
-    mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+    emitUnsupportedSvaDiagnostic(context, loc)
+        << "unsupported sampled value type for " << funcName;
     return {};
   }
 
@@ -1059,19 +1073,19 @@ static Value lowerSampledValueFunctionWithSamplingControl(
     if (isUnpackedAggregateStableSample || isRealStableSample ||
         isStringStableSample) {
       if (!isa<moore::UnpackedType>(current.getType())) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported sampled value type for " << funcName;
         return {};
       }
       if (current.getType() != sampledStorageType) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported sampled value type for " << funcName;
         return {};
       }
     } else if (isEventStableSample) {
       if (!isa<moore::EventType>(current.getType()) ||
           current.getType() != loweredType) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported sampled value type for " << funcName;
         return {};
       }
@@ -1087,7 +1101,7 @@ static Value lowerSampledValueFunctionWithSamplingControl(
                isStringEdgeSample || isEventEdgeSample) {
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != loweredType) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported sampled value type for " << funcName;
         return {};
       }
@@ -1102,7 +1116,7 @@ static Value lowerSampledValueFunctionWithSamplingControl(
     } else {
       auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
       if (!currentType) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported sampled value type for " << funcName;
         return {};
       }
@@ -1315,10 +1329,18 @@ static Value lowerPastWithSamplingControl(
   if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
       !isTimeSample &&
       !intType) {
-    mlir::emitError(loc)
+    emitUnsupportedSvaDiagnostic(context, loc)
         << "unsupported $past value type with sampled-value controls (input "
            "type: "
         << originalType << ")";
+    if (context.options.continueOnUnsupportedSVA && !context.inAssertionExpr) {
+      auto fallback = context.convertRvalueExpression(valueExpr);
+      if (!fallback)
+        return {};
+      if (isa<moore::EventType>(fallback.getType()))
+        fallback = context.convertToBool(fallback);
+      return fallback;
+    }
     return {};
   }
   moore::UnpackedType storageType =
@@ -1377,7 +1399,7 @@ static Value lowerPastWithSamplingControl(
         isTimeSample) {
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported $past value type with sampled-value controls "
                "(current type: "
             << current.getType() << ", storage type: " << storageType << ")";
@@ -1386,7 +1408,7 @@ static Value lowerPastWithSamplingControl(
     } else {
       auto currentType = dyn_cast_or_null<moore::IntType>(current.getType());
       if (!currentType) {
-        mlir::emitError(loc)
+        emitUnsupportedSvaDiagnostic(context, loc)
             << "unsupported $past value type with sampled-value controls "
                "(current type: "
             << current.getType() << ")";
@@ -1593,7 +1615,8 @@ struct AssertionExprVisitor {
             lhs = binding->value;
           } else {
             if (!isa<moore::UnpackedType>(binding->value.getType())) {
-              mlir::emitError(loc, "unsupported local assertion variable type");
+              emitUnsupportedSvaDiagnostic(context, loc)
+                  << "unsupported local assertion variable type";
               return failure();
             }
             lhs = moore::PastOp::create(builder, loc, binding->value,
@@ -1605,7 +1628,8 @@ struct AssertionExprVisitor {
             return failure();
           auto lhsUnpacked = dyn_cast<moore::UnpackedType>(lhs.getType());
           if (!lhsUnpacked) {
-            mlir::emitError(loc, "unsupported match item assignment type")
+            emitUnsupportedSvaDiagnostic(context, loc)
+                << "unsupported match item assignment type"
                 << lhs.getType();
             return failure();
           }
@@ -1623,7 +1647,8 @@ struct AssertionExprVisitor {
             return failure();
         }
         if (!isa<moore::UnpackedType>(rhs.getType())) {
-          mlir::emitError(loc, "unsupported match item assignment type")
+          emitUnsupportedSvaDiagnostic(context, loc)
+              << "unsupported match item assignment type"
               << rhs.getType();
           return failure();
         }
@@ -1644,7 +1669,8 @@ struct AssertionExprVisitor {
         case UnaryOperator::Postdecrement:
           break;
         default:
-          mlir::emitError(loc, "unsupported match item unary operator");
+          emitUnsupportedSvaDiagnostic(context, loc)
+              << "unsupported match item unary operator";
           return failure();
         }
         auto *sym = unary.operand().getSymbolReference();
@@ -2718,7 +2744,8 @@ struct AssertionExprVisitor {
         break;
       }
       default:
-        mlir::emitError(loc, "unsupported match item expression");
+        emitUnsupportedSvaDiagnostic(context, loc)
+            << "unsupported match item expression";
         return failure();
       }
       if (failed(context.flushPendingAssertionLocalVarLvalues(loc)))
@@ -3532,7 +3559,8 @@ struct AssertionExprVisitor {
   /// Emit an error for all other expressions.
   template <typename T>
   Value visit(T &&node) {
-    mlir::emitError(loc, "unsupported expression: ")
+    emitUnsupportedSvaDiagnostic(context, loc)
+        << "unsupported expression: "
         << slang::ast::toString(node.kind);
     return {};
   }
@@ -3692,7 +3720,8 @@ Value Context::convertAssertionCallExpression(
          isa<moore::WildcardAssocArrayType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()))) {
-      mlir::emitError(loc) << "unsupported sampled value type for " << funcName;
+      emitUnsupportedSvaDiagnostic(*this, loc)
+          << "unsupported sampled value type for " << funcName;
       return {};
     }
 
@@ -3707,8 +3736,8 @@ Value Context::convertAssertionCallExpression(
         !isRealSample && !isStringStableSample && !isEventStableSample &&
         !isStringEdgeSample && !isEventEdgeSample &&
         !isa<moore::IntType>(value.getType())) {
-      mlir::emitError(loc) << "unsupported sampled value type for "
-                           << funcName;
+      emitUnsupportedSvaDiagnostic(*this, loc)
+          << "unsupported sampled value type for " << funcName;
       return {};
     }
     const slang::ast::TimingControl *clockingCtrl = nullptr;
@@ -4139,7 +4168,8 @@ Value Context::convertAssertionCallExpression(
   if (*result)
     return *result;
 
-  mlir::emitError(loc) << "unsupported system call `" << funcName << "`";
+  emitUnsupportedSvaDiagnostic(*this, loc)
+      << "unsupported system call `" << funcName << "`";
   return {};
 }
 

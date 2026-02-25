@@ -65,6 +65,8 @@ extern "C" PLI_INT32 circt_vpi_wasm_yield(
 static inline PLI_INT32
 circt_vpi_wasm_yield(PLI_INT32 (*cbFunc)(struct t_cb_data *),
                      struct t_cb_data *cbData) {
+  if (!cbFunc)
+    return 0;
   return cbFunc(cbData);
 }
 #endif
@@ -2132,8 +2134,13 @@ void VPIRuntime::getTime(uint32_t /*objectId*/, struct t_vpi_time *time) {
 //===----------------------------------------------------------------------===//
 
 uint32_t VPIRuntime::registerCb(struct t_cb_data *cbData) {
-  if (!cbData || !cbData->cb_rtn)
+  if (!cbData)
     return 0;
+#if !defined(__EMSCRIPTEN__)
+  // Native callback dispatch calls cb_rtn directly; require non-null there.
+  if (!cbData->cb_rtn)
+    return 0;
+#endif
 
   stats.callbacksRegistered++;
   auto cb = std::make_unique<VPICallback>();

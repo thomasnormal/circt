@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 LIT_PY="${LIT_PY:-$REPO_ROOT/llvm/llvm/utils/lit/lit.py}"
-BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build-test}"
+BUILD_DIR="${BUILD_DIR:-$REPO_ROOT/build_test}"
 SUITE_DIR="${SUITE_DIR:-$BUILD_DIR/test/Tools/circt-sim}"
 FILTER_BASE="${FILTER_BASE:-(timeout-no-spurious-vtable-warning|wasm-plusargs-reentry|uvm-phase-add-duplicate-fast-path)}"
 FILTER_OVERRIDE="${FILTER:-}"

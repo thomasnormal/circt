@@ -41,7 +41,7 @@
 // CHECK-LTL: verif.assert{{.*}}bmc.final
 
 // CHECK-BMC-LABEL: func.func @ltl_delay_property
-// CHECK-BMC: verif.bmc bound 20
+// CHECK-BMC: verif.bmc bound 22
 // CHECK-BMC-SAME: num_regs
 // The circuit region contains the lowered LTL logic
 // CHECK-BMC: circuit
@@ -79,7 +79,7 @@ hw.module @ltl_delay_property(
 //===----------------------------------------------------------------------===//
 
 // CHECK-EVENTUALLY-LABEL: func.func @ltl_eventually_property
-// CHECK-EVENTUALLY: verif.bmc bound 20
+// CHECK-EVENTUALLY: verif.bmc bound 22
 // Eventually properties create bmc.final assertions that are checked at end
 // CHECK-EVENTUALLY: circuit
 hw.module @ltl_eventually_property(
@@ -116,7 +116,7 @@ hw.module @ltl_eventually_property(
 
 // CHECK-IMPL-LABEL: func.func @ltl_implication_property
 // Same-cycle implication should become: !a || b
-// CHECK-IMPL: verif.bmc bound 20
+// CHECK-IMPL: verif.bmc bound 22
 // CHECK-IMPL: circuit
 hw.module @ltl_implication_property(
   in %clk: !seq.clock,

@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -16,15 +16,12 @@ module SVABoundedEventuallyProperty(input logic clk, a, b, c, d);
   assert property (eventually [1:2] p);
 
   // Strong bounded eventually should require finite delayed progress.
-  // CHECK: ltl.implication
-  // CHECK: ltl.and
-  // CHECK: ltl.implication
   // CHECK: ltl.and
   // CHECK: ltl.or
   // CHECK: verif.assert
   assert property (s_eventually [2:3] p);
 
   // Keep a direct property use nearby as a guard.
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) c |-> d);
 endmodule

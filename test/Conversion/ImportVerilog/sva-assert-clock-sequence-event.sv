@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -13,8 +13,6 @@ module SvaAssertClockSequenceEvent(input logic clk, a, b, c);
   // match detection instead of requiring a plain 1-bit signal expression.
 // CHECK-LABEL: moore.module @SvaAssertClockSequenceEvent
 // CHECK: [[MATCH:%.*]] = ltl.matched
-// CHECK: [[CLOCKED:%.*]] = ltl.clock {{.*}} posedge [[MATCH]]
-// CHECK-NOT: ltl.clock [[CLOCKED]]
-// CHECK: verif.assert [[CLOCKED]]
+// CHECK: verif.clocked_assert {{%.*}}, posedge [[MATCH]] : i1
 assert property (@s c);
 endmodule

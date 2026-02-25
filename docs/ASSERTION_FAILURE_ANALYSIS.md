@@ -242,7 +242,7 @@ Likely one of:
 
 Run these tests with:
 ```bash
-cd /home/thomas-ahle/circt/build-test
+cd /home/thomas-ahle/circt/build_test
 python3.9 /home/thomas-ahle/circt/llvm/build/bin/llvm-lit -v \
   test/Tools/circt-sim/syscall-asserton.sv \
   test/Tools/circt-sim/procedural-assert.sv

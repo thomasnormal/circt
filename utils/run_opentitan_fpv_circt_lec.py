@@ -569,11 +569,11 @@ def main() -> int:
         cover_results_path.parent.mkdir(parents=True, exist_ok=True)
         cover_results_path.write_text("", encoding="utf-8")
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build_test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build_test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_lec = os.environ.get("CIRCT_LEC", "build-test/bin/circt-lec")
+    circt_lec = os.environ.get("CIRCT_LEC", "build_test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"

@@ -13,7 +13,7 @@
 // CHECK-LTL: verif.clocked_assert
 
 // CHECK-BMC-LABEL: func.func @sva_unbounded_until
-// CHECK-BMC: verif.bmc bound 20
+// CHECK-BMC: verif.bmc bound 22
 
 hw.module @sva_unbounded_until(
   in %clk: i1,

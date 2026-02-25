@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -11,6 +11,6 @@ module SVASequenceMatchItemSystemSubroutine(input logic clk, a);
   // System subroutine match-items should preserve side effects in lowering.
   // CHECK-LABEL: moore.module @SVASequenceMatchItemSystemSubroutine
   // CHECK: moore.builtin.display
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) a |-> s);
 endmodule

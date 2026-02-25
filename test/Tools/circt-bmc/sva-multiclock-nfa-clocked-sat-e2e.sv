@@ -1,7 +1,6 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 4 --allow-multi-clock --module=sva_multiclock_nfa_clocked_sat - | FileCheck %s
+// RUN:   circt-bmc --run-smtlib -b 4 --allow-multi-clock --module=sva_multiclock_nfa_clocked_sat - | FileCheck %s
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_multiclock_nfa_clocked_sat(input logic clk_a, input logic clk_b);

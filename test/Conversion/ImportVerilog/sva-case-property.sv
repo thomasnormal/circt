@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
 
@@ -7,7 +7,7 @@ module sva_case_property(input logic clk, input logic [1:0] sel,
   // CHECK-LABEL: moore.module @sva_case_property
 
   // CHECK: moore.case_eq
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk)
     case (sel)
       2'b00: a;
@@ -17,7 +17,7 @@ module sva_case_property(input logic clk, input logic [1:0] sel,
   );
 
   // CHECK: moore.case_eq
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk)
     case (sel)
       2'b10: a;

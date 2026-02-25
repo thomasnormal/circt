@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -11,11 +11,11 @@ module SvaCaseEqUnpackedStruct(input logic clk);
 
   // CHECK: moore.case_eq
   // CHECK: moore.and
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) (x === y));
 
   // CHECK: moore.case_eq
   // CHECK: moore.not
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) (x !== y));
 endmodule

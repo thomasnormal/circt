@@ -52,6 +52,76 @@ def write_log(path: Path, stdout: str, stderr: str) -> None:
         data = ""
     path.write_text(data)
 
+def strip_vpi_attributes_for_opt(path: Path) -> bool:
+    """Strip trailing vpi.* op attributes that circt-opt may fail to parse."""
+    text = path.read_text()
+    had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    changed = False
+    stripped: list[str] = []
+    for line in lines:
+        marker = " attributes {vpi."
+        idx = line.find(marker)
+        if idx >= 0:
+            stripped.append(line[:idx])
+            changed = True
+            continue
+        stripped.append(line)
+    if not changed:
+        return False
+    out = "\n".join(stripped)
+    if had_trailing_newline:
+        out += "\n"
+    path.write_text(out)
+    return True
+
+def strip_proc_assertions_global_for_lec(path: Path) -> bool:
+    """Drop/replace proc-assertion helper globals that circt-lec cannot lower."""
+    text = path.read_text()
+    had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    changed = False
+    kept: list[str] = []
+    proc_assert_addr_vars: set[str] = set()
+    addressof_re = re.compile(
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.mlir\.addressof\s+"
+        r"@__circt_proc_assertions_enabled\s*:\s*!llvm\.ptr\s*$"
+    )
+    cast_re = re.compile(
+        r"^\s*%[A-Za-z0-9._$-]+\s*=\s*builtin\.unrealized_conversion_cast\s+"
+        r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr to !llhd\.ref<i1>\s*$"
+    )
+    load_re = re.compile(
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.load\s+"
+        r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr -> i1\s*$"
+    )
+    for line in lines:
+        if "llvm.mlir.global" in line and "__circt_proc_assertions_enabled" in line:
+            changed = True
+            continue
+        m_addressof = addressof_re.match(line)
+        if m_addressof:
+            proc_assert_addr_vars.add(m_addressof.group(1).strip())
+            changed = True
+            continue
+        m_cast = cast_re.match(line)
+        if m_cast and m_cast.group(1) in proc_assert_addr_vars:
+            changed = True
+            continue
+        m_load = load_re.match(line)
+        if m_load and m_load.group(2) in proc_assert_addr_vars:
+            kept.append(f"{m_load.group(1)} = hw.constant true")
+            changed = True
+            continue
+        kept.append(line)
+    if not changed:
+        return False
+    out = "\n".join(kept)
+    if had_trailing_newline:
+        out += "\n"
+    path.write_text(out)
+    return True
+
 
 def parse_lec_result(text: str) -> str | None:
     match = re.search(r"LEC_RESULT=(EQ|NEQ|UNKNOWN)", text)
@@ -288,11 +358,11 @@ def main() -> int:
         print("No AES S-Box implementations selected.", file=sys.stderr)
         return 1
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build_test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build_test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_lec = os.environ.get("CIRCT_LEC", "build-test/bin/circt-lec")
+    circt_lec = os.environ.get("CIRCT_LEC", "build_test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     # OpenTitan S-Box parity is evaluated with x-optimistic equivalence by
     # default to avoid classifying known-input-equivalent implementations as
@@ -522,6 +592,7 @@ def main() -> int:
             try:
                 stage = "verilog"
                 run_and_log(verilog_cmd, verilog_log_path)
+                strip_vpi_attributes_for_opt(out_moore)
                 if verilog_log_path.exists():
                     reasons = extract_drop_reasons(
                         verilog_log_path.read_text(), drop_remark_pattern
@@ -540,6 +611,7 @@ def main() -> int:
                             )
                 stage = "opt"
                 run_and_log(opt_cmd, impl_dir / "circt-opt.log")
+                strip_proc_assertions_global_for_lec(out_mlir)
                 stage = "lec"
                 lec_stdout = run_and_log(
                     lec_cmd,

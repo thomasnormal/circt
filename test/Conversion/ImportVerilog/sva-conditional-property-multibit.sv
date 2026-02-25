@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -10,6 +10,6 @@ module SvaConditionalPropertyMultibit(input logic clk, input logic [1:0] sel,
   // CHECK: ltl.not
   // CHECK: ltl.and
   // CHECK: ltl.or
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) if (sel) a else b);
 endmodule

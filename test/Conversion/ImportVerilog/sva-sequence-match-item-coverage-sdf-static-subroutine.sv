@@ -1,5 +1,5 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
-// RUN: circt-translate --import-verilog %s 2>&1 | FileCheck %s --check-prefix=DIAG
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=DIAG
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -11,7 +11,7 @@ module SVASequenceMatchItemCoverageSdfStaticSubroutine(input logic clk, a);
 
   // Coverage/SDF/static tasks should be recognized in match-items.
   // CHECK-LABEL: moore.module @SVASequenceMatchItemCoverageSdfStaticSubroutine
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) s);
 endmodule
 

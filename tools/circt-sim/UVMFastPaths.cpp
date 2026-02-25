@@ -266,9 +266,9 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 8 <= block->data.size()) {
+    if (block && offset + 8 <= block->size) {
       for (unsigned i = 0; i < 8; ++i)
-        block->data[offset + i] =
+        block->bytes()[offset + i] =
             static_cast<uint8_t>((ptrValue >> (i * 8)) & 0xFF);
       block->initialized = true;
       return;
@@ -319,12 +319,12 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     MemoryBlock *objBlk = findMemoryBlockByAddress(objAddr + 4, procId, &objOff);
     if (!objBlk)
       objBlk = findBlockByAddress(objAddr + 4, objOff);
-    if (!objBlk || !objBlk->initialized || objOff + 8 > objBlk->data.size())
+    if (!objBlk || !objBlk->initialized || objOff + 8 > objBlk->size)
       return false;
 
     uint64_t vtableAddr = 0;
     for (unsigned i = 0; i < 8; ++i)
-      vtableAddr |= static_cast<uint64_t>(objBlk->data[objOff + i]) << (i * 8);
+      vtableAddr |= static_cast<uint64_t>(objBlk->bytes()[objOff + i]) << (i * 8);
     if (vtableAddr == 0)
       return false;
 
@@ -334,12 +334,12 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     if (!entryBlk)
       entryBlk = findBlockByAddress(vtableAddr + slot * 8, entryOff);
     if (!entryBlk || !entryBlk->initialized ||
-        entryOff + 8 > entryBlk->data.size())
+        entryOff + 8 > entryBlk->size)
       return false;
 
     uint64_t funcAddr = 0;
     for (unsigned i = 0; i < 8; ++i)
-      funcAddr |= static_cast<uint64_t>(entryBlk->data[entryOff + i]) << (i * 8);
+      funcAddr |= static_cast<uint64_t>(entryBlk->bytes()[entryOff + i]) << (i * 8);
     auto addrIt = addressToFunction.find(funcAddr);
     if (addrIt == addressToFunction.end())
       return false;
@@ -492,9 +492,9 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
           "uvm_pkg::uvm_pkg::uvm_root::m_inst");
       if (globalIt != globalMemoryBlocks.end() &&
           globalIt->second.initialized &&
-          globalIt->second.data.size() >= 8) {
+          globalIt->second.size >= 8) {
         for (unsigned i = 0; i < 8; ++i)
-          rootAddr |= static_cast<uint64_t>(globalIt->second.data[i]) << (i * 8);
+          rootAddr |= static_cast<uint64_t>(globalIt->second[i]) << (i * 8);
       }
     }
     if (rootAddr != 0) {
@@ -673,10 +673,10 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && block->initialized && offset + 8 <= block->data.size()) {
+    if (block && block->initialized && offset + 8 <= block->size) {
       out = 0;
       for (unsigned i = 0; i < 8; ++i)
-        out |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+        out |= static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
       return true;
     }
 
@@ -703,9 +703,9 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 16 <= block->data.size()) {
-      std::memcpy(block->data.data() + offset, &strPtr, 8);
-      std::memcpy(block->data.data() + offset + 8, &strLen, 8);
+    if (block && offset + 16 <= block->size) {
+      std::memcpy(block->bytes() + offset, &strPtr, 8);
+      std::memcpy(block->bytes() + offset + 8, &strLen, 8);
       block->initialized = true;
       return true;
     }
@@ -1314,10 +1314,10 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && block->initialized && offset + 8 <= block->data.size()) {
+    if (block && block->initialized && offset + 8 <= block->size) {
       out = 0;
       for (unsigned i = 0; i < 8; ++i)
-        out |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+        out |= static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
       return true;
     }
 
@@ -1344,9 +1344,9 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 16 <= block->data.size()) {
-      std::memcpy(block->data.data() + offset, &strPtr, 8);
-      std::memcpy(block->data.data() + offset + 8, &strLen, 8);
+    if (block && offset + 16 <= block->size) {
+      std::memcpy(block->bytes() + offset, &strPtr, 8);
+      std::memcpy(block->bytes() + offset + 8, &strLen, 8);
       block->initialized = true;
       return true;
     }
@@ -1801,10 +1801,10 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
         // string(ptr=8, i64=8) + i32=4 = 32.
         // field 1 (m_max_verbosity_level) is at offset 32 from handler base.
         size_t fieldOff = off + 32;
-        if (fieldOff + 4 <= blk->data.size()) {
+        if (fieldOff + 4 <= blk->size) {
           verbosity = 0;
           for (int i = 0; i < 4; ++i)
-            verbosity |= static_cast<int32_t>(blk->data[fieldOff + i])
+            verbosity |= static_cast<int32_t>(blk->bytes()[fieldOff + i])
                          << (i * 8);
         }
       }

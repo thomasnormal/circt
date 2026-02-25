@@ -11,8 +11,8 @@ hw.module @clocked_sequence_assert(in %clk : i1, in %a : i1, in %b : i1) {
   %clocked = ltl.clock %seq, posedge %clk : !ltl.sequence
   // CHECK: seq.compreg sym @ltl_state
   // CHECK: seq.compreg sym @ltl_past
-  // CHECK: verif.assert %true{{.*}} {bmc.final} : i1
-  // CHECK: verif.assert %{{.*}} : i1
+  // CHECK: verif.assert %true{{.*}} {bmc.clock = "clk", bmc.clock_edge = #ltl<clock_edge posedge>, bmc.final} : i1
+  // CHECK: verif.assert %{{.*}} {bmc.clock = "clk", bmc.clock_edge = #ltl<clock_edge posedge>} : i1
   verif.assert %clocked : !ltl.sequence
   hw.output
 }

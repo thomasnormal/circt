@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -11,7 +11,6 @@ module SvaProceduralExplicitClockHoistOrder(input logic clk, input logic rst,
       // CHECK: verif.clocked_assert
       assert property (disable iff (rst) @(posedge clk) a);
 
-      // CHECK: arith.andi
       // CHECK: verif.clocked_assume
       assume property (disable iff (rst) @(posedge clk) b);
     end

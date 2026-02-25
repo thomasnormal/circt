@@ -94,17 +94,23 @@ if ! ninja -C "$BUILD_DIR" -t commands circt-tblgen >"$cmd_dump" 2>"$tmpdir/cmd-
   exit 1
 fi
 for src in "FIRRTLAnnotationsGen.cpp" "FIRRTLIntrinsicsGen.cpp" "circt-tblgen.cpp"; do
-  cmd_line="$(
+  src_compile_lines="$(
     grep -F -- "$src" "$cmd_dump" | \
-      grep -E -- '(^|[[:space:]])-c([[:space:]]|$)' | \
-      tail -n 1 || true
+      grep -E -- '(^|[[:space:]])-c([[:space:]]|$)' || true
   )"
-  if [[ -z "$cmd_line" ]]; then
+  if [[ -z "$src_compile_lines" ]]; then
     echo "[wasm-cxx20-warn] missing compile command for $src" >&2
     cat "$cmd_dump" >&2
     exit 1
   fi
-  if ! is_emscripten_cpp_compiler "$cmd_line"; then
+
+  cmd_line=""
+  while IFS= read -r line; do
+    if is_emscripten_cpp_compiler "$line"; then
+      cmd_line="$line"
+    fi
+  done <<<"$src_compile_lines"
+  if [[ -z "$cmd_line" ]]; then
     echo "[wasm-cxx20-warn] compile command for $src does not appear to use Emscripten em++" >&2
     cat "$cmd_dump" >&2
     exit 1

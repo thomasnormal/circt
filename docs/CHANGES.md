@@ -35,10 +35,10 @@
 
 ### Validation
 - Build:
-  - `ninja -C build-test circt-sim -k 0` PASS
+  - `ninja -C build_test circt-sim -k 0` PASS
 - Focused regressions:
-  - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS
-  - `PATH=/home/thomas-ahle/circt/build-test/bin:$PATH llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/wait-condition-memory.mlir build-test/test/Tools/circt-sim/wait-condition-signal.sv build-test/test/Tools/circt-sim/wait-condition-spurious-trigger.mlir build-test/test/Tools/circt-sim/wait-queue-size.sv` PASS (`4/4`)
+  - `PATH=/home/thomas-ahle/circt/build_test/bin:$PATH llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/wait-queue-size.sv` PASS
+  - `PATH=/home/thomas-ahle/circt/build_test/bin:$PATH llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/wait-condition-memory.mlir build_test/test/Tools/circt-sim/wait-condition-signal.sv build_test/test/Tools/circt-sim/wait-condition-spurious-trigger.mlir build_test/test/Tools/circt-sim/wait-queue-size.sv` PASS (`4/4`)
 
 ## February 17, 2026 - circt-sim Native JIT Phase A Scaffolding (Telemetry + Mode Parity Harness)
 

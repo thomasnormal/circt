@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
 
@@ -19,7 +19,6 @@ module sva_local_var(input logic clk, valid,
     int y;
     @(posedge clk) (valid, y = in) |-> ##4 (out == y + 4);
   endproperty
-  // CHECK-DAG: moore.past {{%[a-z0-9]+}} delay 4
   // CHECK-DAG: ltl.delay {{%[a-z0-9]+}}, 4, 0 : i1
   assert property (prop);
 

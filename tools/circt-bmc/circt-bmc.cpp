@@ -37,6 +37,7 @@
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqPasses.h"
 #include "circt/Dialect/Verif/VerifDialect.h"
+#include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Dialect/Verif/VerifPasses.h"
 #include "circt/Support/Passes.h"
 #include "circt/Support/ResourceGuard.h"
@@ -80,6 +81,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include <map>
+#include <vector>
 
 namespace cl = llvm::cl;
 
@@ -153,6 +155,11 @@ static cl::opt<bool> assumeKnownInputs(
     "assume-known-inputs",
     cl::desc("Assume input values are known (not X) for BMC and LEC "
              "operations."),
+    cl::init(false), cl::cat(mainCategory));
+static cl::opt<bool> dropUnsupportedSVA(
+    "drop-unsupported-sva",
+    cl::desc("Drop assert-like ops tagged with circt.unsupported_sva before "
+             "BMC lowering"),
     cl::init(false), cl::cat(mainCategory));
 static cl::opt<bool> xOptimisticOutputs(
     "x-optimistic",
@@ -259,6 +266,22 @@ static bool hasSMTSolver(mlir::ModuleOp module) {
   bool found = false;
   module.walk([&](mlir::smt::SolverOp) { found = true; });
   return found;
+}
+
+static unsigned dropUnsupportedSvaOps(mlir::ModuleOp module) {
+  constexpr const char *kUnsupportedSvaAttr = "circt.unsupported_sva";
+  std::vector<Operation *> toErase;
+  module.walk([&](Operation *op) {
+    if (!op->hasAttr(kUnsupportedSvaAttr))
+      return;
+    if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp,
+            verif::ClockedAssertOp, verif::ClockedAssumeOp,
+            verif::ClockedCoverOp>(op))
+      toErase.push_back(op);
+  });
+  for (Operation *op : toErase)
+    op->erase();
+  return toErase.size();
 }
 
 static std::optional<bool> decodeBoolModelValue(StringRef value) {
@@ -1247,6 +1270,12 @@ static LogicalResult executeBMC(MLIRContext &context) {
   }
   if (!module)
     return failure();
+  if (dropUnsupportedSVA) {
+    unsigned dropped = dropUnsupportedSvaOps(*module);
+    if (dropped)
+      llvm::errs() << "circt-bmc: dropped " << dropped
+                   << " unsupported SVA assert-like op(s)\n";
+  }
 
   // Create the output directory or output file depending on our mode.
   std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;

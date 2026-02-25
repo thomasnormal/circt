@@ -43,6 +43,7 @@
 #include <type_traits>
 #include "llvm/Support/MathExtras.h"
 #include "llvm/IR/DerivedTypes.h"
+#include <limits>
 #include <queue>
 
 namespace circt {
@@ -6768,7 +6769,6 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
                   use.getOperandNumber() == 0)
                 return true;
 
-              // Track ref-typed aliases to find indirect writes.
               for (Value result : user->getResults())
                 if (isa<moore::RefType>(result.getType()))
                   worklist.push_back(result);
@@ -6786,17 +6786,18 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
 
         auto valueZero =
             hw::ConstantOp::create(rewriter, loc, IntegerAttr::get(valueTy, 0));
-        if (hasWriteUse(op.getResult())) {
-          // Written state should not default to permanent X. Keep prior behavior
-          // for stateful signals while preserving X defaults for unwritten locals.
+        bool writtenState = hasWriteUse(op.getResult());
+        bool forceUnknownInit = !writtenState || unknownTy.getWidth() == 1;
+        if (forceUnknownInit) {
+          auto unknownOnes = hw::ConstantOp::create(
+              rewriter, loc,
+              IntegerAttr::get(unknownTy,
+                               APInt::getAllOnes(unknownTy.getWidth())));
+          init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+        } else {
           auto unknownZero = hw::ConstantOp::create(
               rewriter, loc, IntegerAttr::get(unknownTy, 0));
           init = createFourStateStruct(rewriter, loc, valueZero, unknownZero);
-        } else {
-          auto unknownOnes = hw::ConstantOp::create(
-              rewriter, loc, IntegerAttr::get(unknownTy, APInt::getAllOnes(
-                                                             unknownTy.getWidth())));
-          init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
         }
       } else {
         init = createZeroValue(elementType, loc, rewriter);
@@ -14708,6 +14709,8 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
         current = seq::CompRegOp::create(
             rewriter, loc, current, clockSignal, reset, resetValue,
             initialValue);
+        if (auto *regOp = current.getDefiningOp())
+          regOp->setAttr("circt.sva.sampled_past", rewriter.getUnitAttr());
       }
       if (castBackKind == CastKind::HWBitcast)
         current = hw::BitcastOp::create(rewriter, loc, inputType, current);
@@ -24342,6 +24345,20 @@ struct RangeConstraintInfo {
   bool isMultiRange = false; // Whether this has multiple ranges
 };
 
+/// Helper structure for foreach element-wise range constraints.
+/// Pattern: `foreach (arr[i]) arr[i] inside {[1:100]};`
+struct ForeachRangeConstraintInfo {
+  StringRef propertyName; // Name of the array property
+  StringRef constraintName; // Name of the constraint block
+  int64_t minValue;       // Minimum value (inclusive) - for single range
+  int64_t maxValue;       // Maximum value (inclusive) - for single range
+  SmallVector<std::pair<int64_t, int64_t>> ranges; // All ranges for multi-range
+  unsigned elementBitWidth; // Bit width of array element
+  bool isSigned = false;   // Signedness of element comparisons
+  bool isSoft = false;     // Whether this is a soft constraint
+  bool isMultiRange = false; // Whether this has multiple ranges
+};
+
 /// Helper structure to hold extracted soft constraint information.
 /// Soft constraints provide default values that can be overridden by hard
 /// constraints. Pattern: `constraint soft_c { soft value == 42; }`
@@ -24393,6 +24410,7 @@ struct ClassDynConstraintInfo {
   StringRef constraintName; // Name of the constraint block
   bool isUpper;           // true = upper bound, false = lower bound
   bool isStrict;          // true = strict (< >), false = non-strict (<= >=)
+  bool isEquality = false; // true = equality (prop == boundProp)
   bool isSigned = false;
   bool isSoft = false;
 };
@@ -24565,11 +24583,27 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 
     // Helper: extract a constant int64_t value
     auto getConstVal = [](Value v) -> std::optional<int64_t> {
+      // Look through zext/sext/trunc (slang may widen constants)
+      if (auto zextOp = v.getDefiningOp<ZExtOp>())
+        v = zextOp.getInput();
+      else if (auto sextOp = v.getDefiningOp<SExtOp>())
+        v = sextOp.getInput();
+      else if (auto truncOp = v.getDefiningOp<TruncOp>())
+        v = truncOp.getInput();
       if (auto constOp = v.getDefiningOp<ConstantOp>()) {
         FVInt fvVal = constOp.getValue();
         if (fvVal.hasUnknown())
           return std::nullopt;
         return fvVal.getRawValue().getSExtValue();
+      }
+      // Handle moore.neg(moore.constant N) → -N (slang emits neg for negatives)
+      if (auto negOp = v.getDefiningOp<NegOp>()) {
+        if (auto innerConst = negOp.getInput().getDefiningOp<ConstantOp>()) {
+          FVInt fvVal = innerConst.getValue();
+          if (fvVal.hasUnknown())
+            return std::nullopt;
+          return -fvVal.getRawValue().getSExtValue();
+        }
       }
       return std::nullopt;
     };
@@ -24680,6 +24714,90 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         continue;
 
       bool isSoft = exprOp.getIsSoft();
+
+      // Try to decompose or(and(cmp1, cmp2), and(cmp3, cmp4)) multi-range.
+      // Slang compiles `x inside {[a:b], [c:d]}` into this form.
+      if (isa<OrOp>(defOp) && defOp->getNumOperands() == 2) {
+        // Helper: try to extract (propName, isSigned, lo, hi) from AndOp.
+        auto tryExtractAndRange =
+            [&](Operation *op) -> std::optional<
+                                    std::tuple<StringRef, bool, int64_t, int64_t>> {
+          if (!isa<AndOp>(op) || op->getNumOperands() != 2)
+            return std::nullopt;
+          StringRef propName;
+          bool signed_ = false;
+          std::optional<int64_t> lo, hi;
+          for (unsigned i = 0; i < 2; ++i) {
+            Operation *cmpOp = op->getOperand(i).getDefiningOp();
+            if (!cmpOp || cmpOp->getNumOperands() != 2)
+              return std::nullopt;
+            Value lhsV = cmpOp->getOperand(0);
+            Value rhsV = cmpOp->getOperand(1);
+            StringRef pName = getPropertyName(lhsV);
+            auto cv = getConstVal(rhsV);
+            bool varOnLhs = true;
+            if (pName.empty() || !cv) {
+              pName = getPropertyName(rhsV);
+              cv = getConstVal(lhsV);
+              varOnLhs = false;
+            }
+            if (pName.empty() || !cv)
+              return std::nullopt;
+            if (!propName.empty() && propName != pName)
+              return std::nullopt;
+            propName = pName;
+            int64_t bound = *cv;
+            if (isa<SgeOp>(cmpOp)) {
+              signed_ = true;
+              if (varOnLhs) lo = bound; else hi = bound;
+            } else if (isa<SleOp>(cmpOp)) {
+              signed_ = true;
+              if (varOnLhs) hi = bound; else lo = bound;
+            } else if (isa<UgeOp>(cmpOp)) {
+              if (varOnLhs) lo = bound; else hi = bound;
+            } else if (isa<UleOp>(cmpOp)) {
+              if (varOnLhs) hi = bound; else lo = bound;
+            } else {
+              return std::nullopt;
+            }
+          }
+          if (propName.empty() || !lo || !hi)
+            return std::nullopt;
+          return std::make_tuple(propName, signed_, *lo, *hi);
+        };
+
+        auto lhsAndOp = defOp->getOperand(0).getDefiningOp();
+        auto rhsAndOp = defOp->getOperand(1).getDefiningOp();
+        auto lhsRange = lhsAndOp ? tryExtractAndRange(lhsAndOp) : std::nullopt;
+        auto rhsRange = rhsAndOp ? tryExtractAndRange(rhsAndOp) : std::nullopt;
+        if (lhsRange && rhsRange) {
+          auto [lprop, lsigned, llo, lhi] = *lhsRange;
+          auto [rprop, rsigned, rlo, rhi] = *rhsRange;
+          if (lprop == rprop) {
+            auto it = propertyMap.find(lprop);
+            if (it != propertyMap.end()) {
+              unsigned fieldIdx = it->second.first;
+              Type fieldType = it->second.second;
+              unsigned bitWidth = 32;
+              if (auto intType = dyn_cast<IntType>(fieldType))
+                bitWidth = intType.getWidth();
+              RangeConstraintInfo info;
+              info.propertyName = lprop;
+              info.constraintName = constraintName;
+              info.fieldIndex = fieldIdx;
+              info.bitWidth = bitWidth;
+              info.isSoft = isSoft;
+              info.isMultiRange = true;
+              info.minValue = llo;
+              info.maxValue = lhi;
+              info.ranges.push_back({llo, lhi});
+              info.ranges.push_back({rlo, rhi});
+              constraints.push_back(info);
+              continue;
+            }
+          }
+        }
+      }
 
       // Try to decompose and(cmp1, cmp2) compound constraints.
       // Slang compiles `inside {[a:b]}` into `and(uge(x, a), ule(x, b))`.
@@ -24820,6 +24938,281 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
   return constraints;
 }
 
+/// Extract foreach element-wise range constraints from class constraints.
+/// Supports fixed unpacked arrays with simple per-element comparisons:
+///   foreach (arr[i]) arr[i] == C;
+///   foreach (arr[i]) arr[i] >= C && arr[i] <= D;
+static SmallVector<ForeachRangeConstraintInfo>
+extractForeachRangeConstraints(ClassDeclOp classDecl) {
+  SmallVector<ForeachRangeConstraintInfo> constraints;
+
+  DenseMap<StringRef, Type> propertyMap;
+  for (auto &op : classDecl.getBody().getOps()) {
+    if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op))
+      propertyMap[propDecl.getSymName()] = propDecl.getPropertyType();
+  }
+
+  // Include parent class properties so inherited array constraints can resolve
+  // property types.
+  {
+    ClassDeclOp parentDecl = classDecl;
+    while (auto baseAttr = parentDecl.getBaseAttr()) {
+      ModuleOp mod = parentDecl->getParentOfType<ModuleOp>();
+      auto *baseSym = mod.lookupSymbol(baseAttr);
+      if (!baseSym)
+        break;
+      auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+      if (!baseClass)
+        break;
+      for (auto &op : baseClass.getBody().getOps()) {
+        if (auto propDecl = dyn_cast<ClassPropertyDeclOp>(op))
+          if (!propertyMap.contains(propDecl.getSymName()))
+            propertyMap[propDecl.getSymName()] = propDecl.getPropertyType();
+      }
+      parentDecl = baseClass;
+    }
+  }
+
+  // Helper: extract the array property name from an element expression.
+  // Looks through zext/sext/trunc and matches dyn_extract(read(prop), idx).
+  auto getArrayPropertyName = [](Value v) -> StringRef {
+    if (auto zextOp = v.getDefiningOp<ZExtOp>())
+      v = zextOp.getInput();
+    else if (auto sextOp = v.getDefiningOp<SExtOp>())
+      v = sextOp.getInput();
+    else if (auto truncOp = v.getDefiningOp<TruncOp>())
+      v = truncOp.getInput();
+    if (auto dynExtract = v.getDefiningOp<DynExtractOp>())
+      return traceToPropertyName(dynExtract.getInput());
+    return {};
+  };
+
+  auto getConstVal = [](Value v) -> std::optional<int64_t> {
+    if (auto zextOp = v.getDefiningOp<ZExtOp>())
+      v = zextOp.getInput();
+    else if (auto sextOp = v.getDefiningOp<SExtOp>())
+      v = sextOp.getInput();
+    else if (auto truncOp = v.getDefiningOp<TruncOp>())
+      v = truncOp.getInput();
+    if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+      FVInt fvVal = constOp.getValue();
+      if (fvVal.hasUnknown())
+        return std::nullopt;
+      return fvVal.getRawValue().getSExtValue();
+    }
+    if (auto negOp = v.getDefiningOp<NegOp>()) {
+      if (auto innerConst = negOp.getInput().getDefiningOp<ConstantOp>()) {
+        FVInt fvVal = innerConst.getValue();
+        if (fvVal.hasUnknown())
+          return std::nullopt;
+        return -fvVal.getRawValue().getSExtValue();
+      }
+    }
+    return std::nullopt;
+  };
+
+  struct BoundInfo {
+    std::optional<int64_t> lower;
+    std::optional<int64_t> upper;
+    bool isSigned = false;
+    bool isSoft = false;
+  };
+
+  auto tryExtractComparisonBounds =
+      [&](Operation *defOp, bool isSoft,
+          DenseMap<StringRef, BoundInfo> &varBounds) -> bool {
+    if (!defOp || defOp->getNumOperands() != 2)
+      return false;
+    Value lhs = defOp->getOperand(0);
+    Value rhs = defOp->getOperand(1);
+
+    StringRef propName = getArrayPropertyName(lhs);
+    auto constVal = getConstVal(rhs);
+    bool varOnLhs = true;
+    if (propName.empty() || !constVal) {
+      propName = getArrayPropertyName(rhs);
+      constVal = getConstVal(lhs);
+      varOnLhs = false;
+    }
+    if (propName.empty() || !constVal)
+      return false;
+
+    auto &bounds = varBounds[propName];
+    bounds.isSoft = isSoft;
+    int64_t cv = *constVal;
+
+    if (isa<SgeOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        if (!bounds.lower || cv > *bounds.lower)
+          bounds.lower = cv;
+      } else {
+        if (!bounds.upper || cv < *bounds.upper)
+          bounds.upper = cv;
+      }
+    } else if (isa<SleOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        if (!bounds.upper || cv < *bounds.upper)
+          bounds.upper = cv;
+      } else {
+        if (!bounds.lower || cv > *bounds.lower)
+          bounds.lower = cv;
+      }
+    } else if (isa<SgtOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      } else {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      }
+    } else if (isa<SltOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      } else {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      }
+    } else if (isa<UgeOp>(defOp)) {
+      if (varOnLhs) {
+        if (!bounds.lower || cv > *bounds.lower)
+          bounds.lower = cv;
+      } else {
+        if (!bounds.upper || cv < *bounds.upper)
+          bounds.upper = cv;
+      }
+    } else if (isa<UleOp>(defOp)) {
+      if (varOnLhs) {
+        if (!bounds.upper || cv < *bounds.upper)
+          bounds.upper = cv;
+      } else {
+        if (!bounds.lower || cv > *bounds.lower)
+          bounds.lower = cv;
+      }
+    } else if (isa<UgtOp>(defOp)) {
+      if (varOnLhs) {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      } else {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      }
+    } else if (isa<UltOp>(defOp)) {
+      if (varOnLhs) {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      } else {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      }
+    } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+      bounds.lower = cv;
+      bounds.upper = cv;
+    } else {
+      return false;
+    }
+    return true;
+  };
+
+  for (auto &op : classDecl.getBody().getOps()) {
+    auto constraintBlock = dyn_cast<ConstraintBlockOp>(op);
+    if (!constraintBlock)
+      continue;
+    StringRef constraintName = constraintBlock.getSymName();
+
+    for (auto foreachOp :
+         constraintBlock.getBody().getOps<ConstraintForeachOp>()) {
+      if (foreachOp.getBody().empty())
+        continue;
+
+      DenseMap<StringRef, BoundInfo> varBounds;
+      for (auto &bodyOp : foreachOp.getBody().front().getOperations()) {
+        auto exprOp = dyn_cast<ConstraintExprOp>(bodyOp);
+        if (!exprOp)
+          continue;
+        Operation *defOp = exprOp.getCondition().getDefiningOp();
+        if (!defOp)
+          continue;
+
+        bool isSoft = exprOp.getIsSoft();
+        if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+          Operation *lhsOp = defOp->getOperand(0).getDefiningOp();
+          Operation *rhsOp = defOp->getOperand(1).getDefiningOp();
+          if (lhsOp && rhsOp) {
+            bool matched = tryExtractComparisonBounds(lhsOp, isSoft, varBounds);
+            matched |=
+                tryExtractComparisonBounds(rhsOp, isSoft, varBounds);
+            if (matched)
+              continue;
+          }
+        }
+
+        tryExtractComparisonBounds(defOp, isSoft, varBounds);
+      }
+
+      for (auto &[propName, bounds] : varBounds) {
+        if (!bounds.lower && !bounds.upper)
+          continue;
+
+        auto propIt = propertyMap.find(propName);
+        if (propIt == propertyMap.end())
+          continue;
+        auto arrayTy = dyn_cast<UnpackedArrayType>(propIt->second);
+        if (!arrayTy)
+          continue;
+        auto elemTy = dyn_cast<IntType>(arrayTy.getElementType());
+        if (!elemTy)
+          continue;
+
+        unsigned bitWidth = elemTy.getWidth();
+        if (bitWidth == 0 || bitWidth > 64)
+          continue;
+
+        int64_t typeMin = 0;
+        int64_t typeMax = std::numeric_limits<int64_t>::max();
+        if (bounds.isSigned) {
+          if (bitWidth >= 64) {
+            typeMin = std::numeric_limits<int64_t>::min();
+            typeMax = std::numeric_limits<int64_t>::max();
+          } else {
+            typeMin = -(1LL << (bitWidth - 1));
+            typeMax = (1LL << (bitWidth - 1)) - 1;
+          }
+        } else {
+          typeMin = 0;
+          if (bitWidth < 63)
+            typeMax = (1LL << bitWidth) - 1;
+        }
+
+        ForeachRangeConstraintInfo info;
+        info.propertyName = propName;
+        info.constraintName = constraintName;
+        info.elementBitWidth = bitWidth;
+        info.isSigned = bounds.isSigned;
+        info.isSoft = bounds.isSoft;
+        info.isMultiRange = false;
+        info.minValue = bounds.lower.value_or(typeMin);
+        info.maxValue = bounds.upper.value_or(typeMax);
+        constraints.push_back(info);
+      }
+    }
+  }
+
+  return constraints;
+}
+
 /// Extract class-level dynamic (property-to-property) constraints from a class
 /// declaration. These are comparisons like `x < v` in constraint blocks where
 /// both operands are class properties and neither is a compile-time constant.
@@ -24881,6 +25274,7 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
     // Determine comparison kind
     bool isUpperBound = false;
     bool isStrict = false;
+    bool isEquality = false;
     bool isSigned = false;
 
     if (isa<SltOp>(defOp)) {
@@ -24899,6 +25293,8 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
       isStrict = true; isUpperBound = false;
     } else if (isa<UgeOp>(defOp)) {
       isStrict = false; isUpperBound = false;
+    } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+      isEquality = true;
     } else {
       return false;
     }
@@ -24910,6 +25306,7 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
     info.constraintName = constraintName;
     info.isUpper = isUpperBound;
     info.isStrict = isStrict;
+    info.isEquality = isEquality;
     info.isSigned = isSigned;
     info.isSoft = isSoft;
     results.push_back(info);
@@ -25445,6 +25842,22 @@ extractSolveBeforeOrdering(ClassDeclOp classDecl) {
 
   return ordering;
 }
+
+/// Pre-extracted constraint data cached from a ClassDeclOp before it is erased
+/// by ClassDeclOpConversion during applyFullConversion.  RandomizeOpConversion
+/// uses this cache to retrieve constraints when the ClassDeclOp is no longer
+/// available via module symbol lookup.
+struct PreExtractedConstraints {
+  SmallVector<RangeConstraintInfo> rangeConstraints;
+  SmallVector<ForeachRangeConstraintInfo> foreachRangeConstraints;
+  SmallVector<SoftConstraintInfo> softConstraints;
+  SmallVector<DistConstraintInfo> distConstraints;
+  SmallVector<SolveBeforeInfo> solveBeforeOrdering;
+  SmallVector<ConditionalConstraintInfo, 4> conditionalConstraints;
+};
+/// Maps class symbol root reference name -> pre-extracted constraint data.
+using ClassConstraintCache = DenseMap<StringAttr, PreExtractedConstraints>;
+
 
 /// Build a dependency graph for solve-before ordering.
 /// Returns a map from property name to the set of properties that must be
@@ -26235,10 +26648,12 @@ static Type resolveStructFieldType(LLVM::LLVMStructType structTy,
 /// Supports constraint-aware randomization for simple range constraints.
 struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
   RandomizeOpConversion(TypeConverter &tc, MLIRContext *ctx,
-                        ClassTypeCache &cache)
+                        ClassTypeCache &cache,
+                        ClassConstraintCache &constraintCache)
       // Use high benefit (10) to ensure this pattern runs before
       // ConstraintInsideOpConversion erases ops in the inline region.
-      : OpConversionPattern<RandomizeOp>(tc, ctx, /*benefit=*/10), cache(cache) {}
+      : OpConversionPattern<RandomizeOp>(tc, ctx, /*benefit=*/10),
+        cache(cache), constraintCache(constraintCache) {}
 
   LogicalResult
   matchAndRewrite(RandomizeOp op, OpAdaptor adaptor,
@@ -26467,11 +26882,13 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
     // Extract range constraints from the class (includes both hard and soft)
     SmallVector<RangeConstraintInfo> rangeConstraints;
+    SmallVector<ForeachRangeConstraintInfo> foreachRangeConstraints;
     SmallVector<SoftConstraintInfo> softConstraints;
     SmallVector<DistConstraintInfo> distConstraints;
     SmallVector<SolveBeforeInfo> solveBeforeOrdering;
     if (classDecl) {
       rangeConstraints = extractRangeConstraints(classDecl, cache, classSym);
+      foreachRangeConstraints = extractForeachRangeConstraints(classDecl);
       softConstraints = extractSoftConstraints(classDecl, cache, classSym);
       distConstraints = extractDistConstraints(classDecl, cache, classSym);
       solveBeforeOrdering = extractSolveBeforeOrdering(classDecl);
@@ -26488,6 +26905,9 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         for (const auto &rc : rangeConstraints)
           if (!rc.constraintName.empty())
             overriddenConstraints.insert(rc.constraintName);
+        for (const auto &frc : foreachRangeConstraints)
+          if (!frc.constraintName.empty())
+            overriddenConstraints.insert(frc.constraintName);
         for (const auto &sc : softConstraints)
           if (!sc.constraintName.empty())
             overriddenConstraints.insert(sc.constraintName);
@@ -26512,6 +26932,14 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                 overriddenConstraints.contains(rc.constraintName))
               continue; // Derived class overrides this constraint
             rangeConstraints.push_back(std::move(rc));
+          }
+
+          auto parentForeach = extractForeachRangeConstraints(baseClassDecl);
+          for (auto &frc : parentForeach) {
+            if (!frc.constraintName.empty() &&
+                overriddenConstraints.contains(frc.constraintName))
+              continue;
+            foreachRangeConstraints.push_back(std::move(frc));
           }
 
           auto parentSoft =
@@ -26539,6 +26967,17 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
           parentDecl = baseClassDecl;
         }
+      }
+    } else {
+      // ClassDeclOp was already erased by ClassDeclOpConversion.
+      // Use pre-extracted constraints from the cache.
+      auto cacheIt = constraintCache.find(classSym.getRootReference());
+      if (cacheIt != constraintCache.end()) {
+        rangeConstraints = cacheIt->second.rangeConstraints;
+        foreachRangeConstraints = cacheIt->second.foreachRangeConstraints;
+        softConstraints = cacheIt->second.softConstraints;
+        distConstraints = cacheIt->second.distConstraints;
+        solveBeforeOrdering = cacheIt->second.solveBeforeOrdering;
       }
     }
 
@@ -26582,6 +27021,109 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           parentDecl = baseClassDecl;
         }
       }
+    } else {
+      // ClassDeclOp was already erased - use cached conditional constraints.
+      auto cacheIt = constraintCache.find(classSym.getRootReference());
+      if (cacheIt != constraintCache.end())
+        conditionalConstraints = cacheIt->second.conditionalConstraints;
+    }
+
+    // UniqueConstraintGroup: a group of properties that must all have unique
+    // values after randomization (from `unique {x, y, z}` in a constraint block).
+    struct UniqueConstraintGroup {
+      SmallVector<StringRef> propNames;
+      StringRef constraintName;
+    };
+    SmallVector<UniqueConstraintGroup> uniqueConstraintGroups;
+
+    // CrossVarSumFixup: enforces a + b <= bound after hard constraints.
+    // Strategy: propA is constrained to [0, bound] via a hard range; then propB
+    // is constrained to [0, bound - propA_loaded] via a runtime fixup.
+    struct CrossVarSumFixup {
+      StringRef propA;       // randomized first via hard range [0, bound]
+      StringRef propB;       // randomized second, dynMax = bound - propA
+      int64_t bound;         // max sum value (a + b <= bound)
+      unsigned bitWidthA;
+      unsigned bitWidthB;
+      StringRef constraintName;
+    };
+    SmallVector<CrossVarSumFixup> crossVarSumFixups;
+
+    // Helper lambdas for constraint extraction below.
+    // tracePN: look through ZExtOp/SExtOp/TruncOp then trace to property name.
+    auto tracePN = [](Value v) -> StringRef {
+      if (auto zOp = v.getDefiningOp<ZExtOp>()) v = zOp.getInput();
+      else if (auto sOp = v.getDefiningOp<SExtOp>()) v = sOp.getInput();
+      else if (auto tOp = v.getDefiningOp<TruncOp>()) v = tOp.getInput();
+      return traceToPropertyName(v);
+    };
+    // extractConstI64: get a compile-time i64 from a Moore constant value.
+    auto extractConstI64 = [](Value v) -> std::optional<int64_t> {
+      if (auto zOp = v.getDefiningOp<ZExtOp>()) v = zOp.getInput();
+      else if (auto sOp = v.getDefiningOp<SExtOp>()) v = sOp.getInput();
+      if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+        FVInt fv = constOp.getValue();
+        if (fv.hasUnknown()) return std::nullopt;
+        return fv.getRawValue().getSExtValue();
+      }
+      return std::nullopt;
+    };
+    // getFieldBitWidth: look up the integer bit width for a class property.
+    auto getFieldBW = [&](StringRef name) -> unsigned {
+      auto pathIt = structInfo->propertyPath.find(name);
+      if (pathIt == structInfo->propertyPath.end()) return 0;
+      Type ft = resolveStructFieldType(structTy, pathIt->second);
+      auto it = dyn_cast_or_null<IntegerType>(ft);
+      return it ? it.getWidth() : 0;
+    };
+
+    // Extract unique constraint groups and cross-variable sum constraints
+    // from constraint blocks in the class declaration.
+    if (classDecl) {
+      for (auto &bodyOp : classDecl.getBody().getOps()) {
+        auto cb = dyn_cast<ConstraintBlockOp>(bodyOp);
+        if (!cb) continue;
+        for (auto &cOp : cb.getBody().getOps()) {
+          // Handle unique {x, y, z} constraints.
+          if (auto uniqueOp = dyn_cast<ConstraintUniqueOp>(cOp)) {
+            UniqueConstraintGroup group;
+            group.constraintName = cb.getSymName();
+            for (Value var : uniqueOp.getVariables()) {
+              StringRef pn = tracePN(var);
+              if (!pn.empty())
+                group.propNames.push_back(pn);
+            }
+            if (group.propNames.size() >= 2)
+              uniqueConstraintGroups.push_back(std::move(group));
+            continue;
+          }
+          // Handle cross-variable sum constraints: propA + propB < N.
+          auto exprOp = dyn_cast<ConstraintExprOp>(cOp);
+          if (!exprOp) continue;
+          Value cond = exprOp.getCondition();
+          Operation *cmpOp = cond.getDefiningOp();
+          if (!cmpOp || cmpOp->getNumOperands() != 2) continue;
+          bool isUlt = isa<UltOp>(cmpOp);
+          bool isUle = isa<UleOp>(cmpOp);
+          if (!isUlt && !isUle) continue;
+          auto constOpt = extractConstI64(cmpOp->getOperand(1));
+          if (!constOpt) continue;
+          // Look through optional zext to find AddOp on lhs.
+          Value addV = cmpOp->getOperand(0);
+          if (auto zOp = addV.getDefiningOp<ZExtOp>()) addV = zOp.getInput();
+          auto addOp = addV.getDefiningOp<AddOp>();
+          if (!addOp) continue;
+          StringRef pA = tracePN(addOp->getOperand(0));
+          StringRef pB = tracePN(addOp->getOperand(1));
+          if (pA.empty() || pB.empty() || pA == pB) continue;
+          unsigned bwA = getFieldBW(pA), bwB = getFieldBW(pB);
+          if (!bwA || !bwB) continue;
+          int64_t bound = *constOpt;
+          if (isUlt) --bound; // a + b < N → a + b <= N-1
+          crossVarSumFixups.push_back({pA, pB, bound, bwA, bwB,
+                                       cb.getSymName()});
+        }
+      }
     }
 
     // Also extract constraints from the inline constraint region (if present)
@@ -26597,6 +27139,14 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       bool isSoft;
     };
     SmallVector<DynFixup> dynFixups;
+    // Direct value assignment fixups for dynamic equality constraints such as
+    // `x == y` where `y` is a runtime value (possibly cross-object).
+    struct DynValueAssignFixup {
+      StringRef prop;
+      Value value;
+      bool isSoft;
+    };
+    SmallVector<DynValueAssignFixup> dynValueAssignFixups;
     struct DynArraySizeFixup {
       StringRef prop;
       int32_t size;
@@ -26812,6 +27362,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
               if (castOp.getInputs().size() == 1)
                 convertedRef = castOp.getInputs()[0];
             Type valTy = typeConverter->convertType(v.getType());
+            if (valTy)
+              valTy = convertToLLVMType(valTy);
             if (valTy && isa<LLVM::LLVMPointerType>(convertedRef.getType()))
               result = LLVM::LoadOp::create(rewriter, loc, valTy, convertedRef);
             else if (valTy)
@@ -26953,6 +27505,29 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         Value lhs = defOp->getOperand(0);
         Value rhs = defOp->getOperand(1);
 
+        // Try to detect inline cross-variable sum: propA + propB < N.
+        // Slang lowers `a + b < 50` to ult(add(zext(a_ref), zext(b_ref)), 50).
+        if (isa<UltOp>(defOp) || isa<UleOp>(defOp)) {
+          auto constOpt = extractConstI64(rhs);
+          if (constOpt) {
+            Value addV = lhs;
+            if (auto zOp = addV.getDefiningOp<ZExtOp>()) addV = zOp.getInput();
+            if (auto addOp = addV.getDefiningOp<AddOp>()) {
+              StringRef pA = getInlinePropName(addOp->getOperand(0));
+              StringRef pB = getInlinePropName(addOp->getOperand(1));
+              if (!pA.empty() && !pB.empty() && pA != pB) {
+                unsigned bwA = getFieldBW(pA), bwB = getFieldBW(pB);
+                if (bwA && bwB) {
+                  int64_t bound = *constOpt;
+                  if (isa<UltOp>(defOp)) --bound;
+                  crossVarSumFixups.push_back({pA, pB, bound, bwA, bwB, ""});
+                  continue;
+                }
+              }
+            }
+          }
+        }
+
         // Identify which side is a class property and which is the bound
         StringRef propName = getInlinePropName(lhs);
         Value dynBound = rhs;
@@ -26969,7 +27544,11 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           continue;
         // Skip if the bound is also a class property (handled by pre-pass)
         bool boundIsProp = varOnLhs ? rhsIsProp : isClassProperty(lhs);
-        if (boundIsProp)
+        StringRef boundPropName = getInlinePropName(dynBound);
+        bool boundIsSameClassProp =
+            boundIsProp && !boundPropName.empty() &&
+            structInfo->propertyPath.contains(boundPropName);
+        if (boundIsSameClassProp)
           continue;
         // Skip if the bound is a constant (handled by pre-pass)
         if (isConstVal(dynBound))
@@ -26978,6 +27557,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         // Determine constraint direction from the Moore comparison op
         bool isUpperBound = false;
         bool isStrict = false;
+        bool isEquality = false;
         bool isSigned = false;
         if (isa<SltOp>(defOp)) {
           isSigned = true; isStrict = true;
@@ -27001,6 +27581,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           isUpperBound = !varOnLhs;
         } else if (isa<UgeOp>(defOp)) {
           isUpperBound = !varOnLhs;
+        } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+          isEquality = true;
         } else {
           continue;
         }
@@ -27011,13 +27593,22 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           continue;
         Type fieldTy = resolveStructFieldType(structTy, propPathIt->second);
         auto fIntTy = dyn_cast_or_null<IntegerType>(fieldTy);
-        if (!fIntTy)
-          continue;
-        unsigned bitWidth = fIntTy.getWidth();
+        unsigned bitWidth = 0;
+        if (!isEquality) {
+          if (!fIntTy)
+            continue;
+          bitWidth = fIntTy.getWidth();
+        }
 
         Value convertedBound = convertMooreValue(dynBound);
         if (!convertedBound)
           continue;
+
+        if (isEquality) {
+          dynValueAssignFixups.push_back({propName, convertedBound,
+                                          exprOp.getIsSoft()});
+          continue;
+        }
 
         // Extend to i64
         Value boundVal64 = convertedBound;
@@ -27044,7 +27635,6 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         fixup.prop = propName;
         fixup.bitWidth = bitWidth;
         fixup.isSoft = exprOp.getIsSoft();
-
         if (isUpperBound) {
           fixup.dynMin = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
               rewriter.getI64IntegerAttr(typeMin));
@@ -27152,6 +27742,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       StringRef boundProp;    // non-empty if bound is a same-class property
       bool isUpper;           // true = upper bound, false = lower bound
       bool isStrict;          // true = strict (< >), false = non-strict (<= >=)
+      bool isEquality = false;
       bool isSigned = false;
       bool isSoft = false;
     };
@@ -27171,6 +27762,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           dc.boundProp = bp.getValue();
         dc.isUpper = dict.getAs<BoolAttr>("is_upper").getValue();
         dc.isStrict = dict.getAs<BoolAttr>("is_strict").getValue();
+        if (auto eqAttr = dict.getAs<BoolAttr>("is_eq"))
+          dc.isEquality = eqAttr.getValue();
         dc.isSigned = dict.get("signed") != nullptr;
         dc.isSoft = dict.get("soft") != nullptr;
         dynamicConstraints.push_back(dc);
@@ -27188,10 +27781,27 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         dc.boundProp = cdc.boundProp;
         dc.isUpper = cdc.isUpper;
         dc.isStrict = cdc.isStrict;
+        dc.isEquality = cdc.isEquality;
         dc.isSigned = cdc.isSigned;
         dc.isSoft = cdc.isSoft;
         dynamicConstraints.push_back(dc);
       }
+    }
+
+    // For cross-variable sum constraints (a + b <= bound), add a range
+    // constraint for propA: [0, bound]. This ensures propA is bounded before
+    // propB's dynMax = bound - propA_loaded is computed at runtime.
+    for (const auto &fix : crossVarSumFixups) {
+      RangeConstraintInfo rc;
+      rc.propertyName = fix.propA;
+      rc.constraintName = fix.constraintName;
+      rc.fieldIndex = 0; // unused; application uses propertyPath lookup
+      rc.bitWidth = fix.bitWidthA;
+      rc.minValue = 0;
+      rc.maxValue = fix.bound;
+      rc.isSoft = false;
+      rc.isMultiRange = false;
+      rangeConstraints.push_back(rc);
     }
 
     // Separate hard constraints from soft range constraints
@@ -27211,6 +27821,67 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     for (const auto &containsFixup : arrayContainsFixups) {
       if (!containsFixup.isSoft)
         hardConstrainedProps.insert(containsFixup.prop);
+    }
+
+    // For unique constraint groups, compute the effective shared [min, max]
+    // from hardConstraints, then remove those properties from hardConstraints
+    // (the unique enforcement via __moore_randomize_unique_array handles them).
+    struct UniqueGroupResolved {
+      SmallVector<StringRef> propNames;
+      SmallVector<unsigned> bitWidths;
+      int64_t minValue;
+      int64_t maxValue;
+      StringRef constraintName;
+    };
+    SmallVector<UniqueGroupResolved> resolvedUniqueGroups;
+    if (!uniqueConstraintGroups.empty()) {
+      for (const auto &group : uniqueConstraintGroups) {
+        // Compute shared [min, max] as intersection of all properties' ranges.
+        std::optional<int64_t> groupMin, groupMax;
+        SmallVector<unsigned> bitWidths;
+        bool allFound = true;
+        for (StringRef pn : group.propNames) {
+          unsigned bw = getFieldBW(pn);
+          if (!bw) { allFound = false; break; }
+          bitWidths.push_back(bw);
+          // Find range from hardConstraints for this property.
+          int64_t propMin = 0;
+          int64_t propMax = (bw < 63) ? ((1LL << bw) - 1) : INT64_MAX;
+          bool foundLo = false, foundHi = false;
+          for (const auto &hc : hardConstraints) {
+            if (hc.propertyName != pn || hc.isMultiRange) continue;
+            if (!foundLo || hc.minValue > propMin) { propMin = hc.minValue; foundLo = true; }
+            if (!foundHi || hc.maxValue < propMax) { propMax = hc.maxValue; foundHi = true; }
+          }
+          // Intersect with group range.
+          if (!groupMin || propMin > *groupMin) groupMin = propMin;
+          if (!groupMax || propMax < *groupMax) groupMax = propMax;
+        }
+        if (!allFound) continue;
+        if (!groupMin) groupMin = 0;
+        if (!groupMax) groupMax = 0;
+        UniqueGroupResolved resolved;
+        resolved.propNames = group.propNames;
+        resolved.bitWidths = bitWidths;
+        resolved.minValue = *groupMin;
+        resolved.maxValue = *groupMax;
+        resolved.constraintName = group.constraintName;
+        resolvedUniqueGroups.push_back(std::move(resolved));
+      }
+      // Remove unique-constrained properties from hardConstraints so they
+      // are not double-applied (unique handles them at a later stage).
+      if (!resolvedUniqueGroups.empty()) {
+        llvm::DenseSet<StringRef> uniqueProps;
+        for (const auto &rg : resolvedUniqueGroups)
+          for (StringRef pn : rg.propNames)
+            uniqueProps.insert(pn);
+        hardConstraints.erase(
+            llvm::remove_if(hardConstraints,
+                [&](const RangeConstraintInfo &c) {
+                  return uniqueProps.contains(c.propertyName);
+                }),
+            hardConstraints.end());
+      }
     }
 
     // IEEE 1800-2017 §18.5.14.1: Soft constraint priority rules:
@@ -27542,7 +28213,9 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
         // Compare current values using the constraint's comparison
         arith::CmpIPredicate pred;
-        if (dc.isUpper && dc.isStrict)
+        if (dc.isEquality)
+          pred = arith::CmpIPredicate::eq;
+        else if (dc.isUpper && dc.isStrict)
           pred = dc.isSigned ? arith::CmpIPredicate::slt
                              : arith::CmpIPredicate::ult;
         else if (dc.isUpper && !dc.isStrict)
@@ -27581,7 +28254,9 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     if (!hardConstraints.empty() || !effectiveSoftConstraints.empty() ||
         !softRangeConstraints.empty() ||
         !distConstraints.empty() || !conditionalConstraints.empty() ||
-        !dynamicConstraints.empty() || !dynArraySizeFixups.empty() ||
+        !foreachRangeConstraints.empty() ||
+        !dynamicConstraints.empty() || !dynValueAssignFixups.empty() ||
+        !dynArraySizeFixups.empty() ||
         !arrayContainsFixups.empty()) {
       // First, do basic randomization for the whole class
       auto classSizeConst = LLVM::ConstantOp::create(
@@ -27878,6 +28553,260 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             // Store the constrained random value
             LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
           }
+        }
+      }
+
+      // Apply foreach element-wise range constraints for fixed-size arrays.
+      // This enforces constraints like:
+      //   foreach (arr[i]) arr[i] inside {[1:100]};
+      if (!foreachRangeConstraints.empty()) {
+        auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                              "__moore_randomize_with_range",
+                                              rangeFnTy);
+        auto rangesFnTy = LLVM::LLVMFunctionType::get(i64Ty, {ptrTy, i64Ty});
+        auto rangesFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                               "__moore_randomize_with_ranges",
+                                               rangesFnTy);
+        auto one = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                            rewriter.getI64IntegerAttr(1));
+
+        for (const auto &constraint : foreachRangeConstraints) {
+          if (constraint.isSoft)
+            continue;
+
+          auto pathIt = structInfo->propertyPath.find(constraint.propertyName);
+          if (pathIt == structInfo->propertyPath.end())
+            continue;
+
+          Type fieldTy = resolveStructFieldType(structTy, pathIt->second);
+          auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(fieldTy);
+          if (!llvmArrayTy)
+            continue;
+          auto elemTy = dyn_cast<IntegerType>(llvmArrayTy.getElementType());
+          if (!elemTy || elemTy.getWidth() == 0 || elemTy.getWidth() > 64)
+            continue;
+
+          uint64_t numElements = llvmArrayTy.getNumElements();
+          if (numElements == 0)
+            continue;
+
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(constraint.propertyName);
+          Value applyCond = randEnabled;
+          if (!constraint.constraintName.empty()) {
+            Value enabled = createConstraintEnabledCheck(
+                constraint.constraintName);
+            applyCond = arith::AndIOp::create(rewriter, loc, randEnabled,
+                                              enabled);
+          }
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+          Value rangesAlloca;
+          Value numRangesConst;
+          if (constraint.isMultiRange) {
+            size_t numRanges = constraint.ranges.size();
+            auto arrayTy = LLVM::LLVMArrayType::get(i64Ty, numRanges * 2);
+            rangesAlloca =
+                LLVM::AllocaOp::create(rewriter, loc, ptrTy, arrayTy, one);
+            for (size_t i = 0; i < numRanges; ++i) {
+              auto minIdx = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2)));
+              auto minPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                rangesAlloca,
+                                                ValueRange{minIdx});
+              auto minVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.ranges[i].first));
+              LLVM::StoreOp::create(rewriter, loc, minVal, minPtr);
+
+              auto maxIdx = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(static_cast<int64_t>(i * 2 + 1)));
+              auto maxPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                                rangesAlloca,
+                                                ValueRange{maxIdx});
+              auto maxVal = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.ranges[i].second));
+              LLVM::StoreOp::create(rewriter, loc, maxVal, maxPtr);
+            }
+            numRangesConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(numRanges)));
+          }
+
+          for (uint64_t i = 0; i < numElements; ++i) {
+            Value rangeResultVal;
+            if (constraint.isMultiRange) {
+              auto rangeResult = LLVM::CallOp::create(
+                  rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangesFn),
+                  ValueRange{rangesAlloca, numRangesConst});
+              rangeResultVal = rangeResult.getResult();
+            } else {
+              auto minConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.minValue));
+              auto maxConst = LLVM::ConstantOp::create(
+                  rewriter, loc, i64Ty,
+                  rewriter.getI64IntegerAttr(constraint.maxValue));
+              auto rangeResult = LLVM::CallOp::create(
+                  rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+                  ValueRange{minConst, maxConst});
+              rangeResultVal = rangeResult.getResult();
+            }
+
+            Value elemValue = rangeResultVal;
+            if (elemTy.getWidth() < 64) {
+              elemValue =
+                  arith::TruncIOp::create(rewriter, loc, elemTy, rangeResultVal);
+            }
+
+            SmallVector<LLVM::GEPArg> gepIndices;
+            gepIndices.push_back(0);
+            for (unsigned idx : pathIt->second)
+              gepIndices.push_back(static_cast<int32_t>(idx));
+            gepIndices.push_back(static_cast<int32_t>(i));
+
+            auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                               classPtr, gepIndices);
+            LLVM::StoreOp::create(rewriter, loc, elemValue, elemPtr);
+          }
+        }
+      }
+
+      // Apply unique constraint groups: fill all properties simultaneously with
+      // unique values in [min, max] using __moore_randomize_unique_array.
+      if (!resolvedUniqueGroups.empty()) {
+        // __moore_randomize_unique_array(ptr array, i64 numElems,
+        //                               i64 elemSize, i64 min, i64 max) -> i32
+        auto uniqueFnTy = LLVM::LLVMFunctionType::get(
+            i32Ty, {ptrTy, i64Ty, i64Ty, i64Ty, i64Ty});
+        auto uniqueFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                              "__moore_randomize_unique_array",
+                                              uniqueFnTy);
+        auto one64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                              rewriter.getI64IntegerAttr(1));
+        for (const auto &rg : resolvedUniqueGroups) {
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value applyCond;
+          if (!rg.constraintName.empty()) {
+            applyCond = createConstraintEnabledCheck(rg.constraintName);
+          } else {
+            applyCond = LLVM::ConstantOp::create(
+                rewriter, loc, i1Ty,
+                IntegerAttr::get(i1Ty, APInt(1, 1)));
+          }
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+          int64_t numVars = static_cast<int64_t>(rg.propNames.size());
+          // Allocate stack array of numVars * i64 for results.
+          auto arrayTy = LLVM::LLVMArrayType::get(i64Ty, numVars);
+          auto resultsAlloca = LLVM::AllocaOp::create(rewriter, loc, ptrTy,
+                                                       arrayTy, one64);
+          auto numVarsConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(numVars));
+          auto elemSizeConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(8)); // 8 bytes per i64 element
+          auto minConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(rg.minValue));
+          auto maxConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(rg.maxValue));
+          LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                               SymbolRefAttr::get(uniqueFn),
+                               ValueRange{resultsAlloca, numVarsConst,
+                                          elemSizeConst, minConst, maxConst});
+          // Load each result and store to the corresponding struct field.
+          for (size_t i = 0; i < rg.propNames.size(); ++i) {
+            auto idxConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(static_cast<int64_t>(i)));
+            auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, i64Ty,
+                                               resultsAlloca,
+                                               ValueRange{idxConst});
+            Value elemVal = LLVM::LoadOp::create(rewriter, loc, i64Ty, elemPtr);
+            unsigned bw = rg.bitWidths[i];
+            Type fieldIntTy = IntegerType::get(ctx, bw);
+            Value truncated = elemVal;
+            if (bw < 64)
+              truncated = arith::TruncIOp::create(rewriter, loc,
+                                                   fieldIntTy, elemVal);
+            auto pathIt = structInfo->propertyPath.find(rg.propNames[i]);
+            if (pathIt == structInfo->propertyPath.end()) continue;
+            SmallVector<LLVM::GEPArg> gepIndices;
+            gepIndices.push_back(0);
+            for (unsigned idx : pathIt->second)
+              gepIndices.push_back(static_cast<int32_t>(idx));
+            auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                                classPtr, gepIndices);
+            LLVM::StoreOp::create(rewriter, loc, truncated, fieldPtr);
+          }
+        }
+      }
+
+      // Apply cross-variable sum fixups (a + b <= bound).
+      // propA was constrained to [0, bound] by hardConstraints above.
+      // Now constrain propB to [0, bound - propA_loaded].
+      if (!crossVarSumFixups.empty()) {
+        auto sumRangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto sumRangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                                 "__moore_randomize_with_range",
+                                                 sumRangeFnTy);
+        auto zero64 = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+                                               rewriter.getI64IntegerAttr(0));
+        for (const auto &fix : crossVarSumFixups) {
+          // Load propA's current constrained value from the struct.
+          auto propAPathIt = structInfo->propertyPath.find(fix.propA);
+          if (propAPathIt == structInfo->propertyPath.end()) continue;
+          Type propATy = resolveStructFieldType(structTy, propAPathIt->second);
+          auto propAIntTy = dyn_cast_or_null<IntegerType>(propATy);
+          if (!propAIntTy) continue;
+          SmallVector<LLVM::GEPArg> gepA;
+          gepA.push_back(0);
+          for (unsigned idx : propAPathIt->second)
+            gepA.push_back(static_cast<int32_t>(idx));
+          auto ptrA = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                           classPtr, gepA);
+          Value valA = LLVM::LoadOp::create(rewriter, loc, propATy, ptrA);
+          Value valA64;
+          if (propAIntTy.getWidth() < 64)
+            valA64 = arith::ExtUIOp::create(rewriter, loc, i64Ty, valA);
+          else if (propAIntTy.getWidth() > 64)
+            valA64 = arith::TruncIOp::create(rewriter, loc, i64Ty, valA);
+          else
+            valA64 = valA;
+          // dynMaxB = max(0, bound - valA)
+          Value boundConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(fix.bound));
+          Value diff = arith::SubIOp::create(rewriter, loc, boundConst, valA64);
+          Value dynMaxB = arith::MaxSIOp::create(rewriter, loc, zero64, diff);
+          auto propBPathIt = structInfo->propertyPath.find(fix.propB);
+          if (propBPathIt == structInfo->propertyPath.end()) continue;
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabledB = createRandEnabledCheck(fix.propB);
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabledB,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+          auto rangeResult = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(sumRangeFn),
+              ValueRange{zero64, dynMaxB});
+          unsigned bwB = fix.bitWidthB;
+          Value resultB = rangeResult.getResult();
+          if (bwB < 64) {
+            Type fieldBIntTy = IntegerType::get(ctx, bwB);
+            resultB = arith::TruncIOp::create(rewriter, loc, fieldBIntTy,
+                                               resultB);
+          }
+          SmallVector<LLVM::GEPArg> gepB;
+          gepB.push_back(0);
+          for (unsigned idx : propBPathIt->second)
+            gepB.push_back(static_cast<int32_t>(idx));
+          auto ptrB = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                           classPtr, gepB);
+          LLVM::StoreOp::create(rewriter, loc, resultB, ptrB);
         }
       }
 
@@ -28295,11 +29224,15 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           auto propPathIt = structInfo->propertyPath.find(dc.prop);
           if (propPathIt == structInfo->propertyPath.end())
             continue;
-          Type fieldTy = resolveStructFieldType(structTy, propPathIt->second);
+          Type fieldTy =
+              convertToLLVMType(resolveStructFieldType(structTy, propPathIt->second));
           auto intTy = dyn_cast_or_null<IntegerType>(fieldTy);
-          if (!intTy)
-            continue;
-          unsigned bitWidth = intTy.getWidth();
+          unsigned bitWidth = 0;
+          if (!dc.isEquality) {
+            if (!intTy)
+              continue;
+            bitWidth = intTy.getWidth();
+          }
 
           // Load the bound property AFTER randomize_basic
           auto boundPathIt = structInfo->propertyPath.find(dc.boundProp);
@@ -28311,10 +29244,15 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             boundGep.push_back(static_cast<int32_t>(idx));
           auto boundPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
                                                classPtr, boundGep);
-          Type boundFieldTy = resolveStructFieldType(structTy,
-                                                      boundPathIt->second);
+          Type boundFieldTy = convertToLLVMType(
+              resolveStructFieldType(structTy, boundPathIt->second));
           Value boundVal = LLVM::LoadOp::create(rewriter, loc, boundFieldTy,
                                                  boundPtr);
+          if (dc.isEquality) {
+            dynValueAssignFixups.push_back({dc.prop, boundVal, dc.isSoft});
+            continue;
+          }
+
           // Extend to i64
           if (auto bIntTy = dyn_cast<IntegerType>(boundFieldTy)) {
             if (bIntTy.getWidth() < 64) {
@@ -28423,6 +29361,50 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
                                                  gepIndices);
             LLVM::StoreOp::create(rewriter, loc, truncatedVal, fieldPtr);
           }
+        }
+      }
+
+      // Apply direct assignment fixups from dynamic equality constraints.
+      if (!dynValueAssignFixups.empty()) {
+        for (const auto &fixup : dynValueAssignFixups) {
+          auto propPathIt = structInfo->propertyPath.find(fixup.prop);
+          if (propPathIt == structInfo->propertyPath.end())
+            continue;
+          Type fieldTy =
+              convertToLLVMType(resolveStructFieldType(structTy, propPathIt->second));
+
+          Value toStore = convertValueToLLVMType(fixup.value, loc, rewriter);
+          if (auto castOp = toStore.getDefiningOp<UnrealizedConversionCastOp>())
+            if (castOp.getInputs().size() == 1)
+              toStore = castOp.getInputs()[0];
+
+          if (toStore.getType() != fieldTy) {
+            auto fromIntTy = dyn_cast<IntegerType>(toStore.getType());
+            auto toIntTy = dyn_cast<IntegerType>(fieldTy);
+            if (fromIntTy && toIntTy) {
+              if (fromIntTy.getWidth() > toIntTy.getWidth())
+                toStore = arith::TruncIOp::create(rewriter, loc, toIntTy, toStore);
+              else if (fromIntTy.getWidth() < toIntTy.getWidth())
+                toStore = arith::ExtUIOp::create(rewriter, loc, toIntTy, toStore);
+            }
+          }
+
+          if (toStore.getType() != fieldTy)
+            continue;
+
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(fixup.prop);
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabled,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+          SmallVector<LLVM::GEPArg> gepIndices;
+          gepIndices.push_back(0);
+          for (unsigned idx : propPathIt->second)
+            gepIndices.push_back(static_cast<int32_t>(idx));
+          auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                              classPtr, gepIndices);
+          LLVM::StoreOp::create(rewriter, loc, toStore, fieldPtr);
         }
       }
 
@@ -28643,6 +29625,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
 
 private:
   ClassTypeCache &cache;
+  ClassConstraintCache &constraintCache;
 };
 
 /// Conversion for moore.std_randomize -> runtime function call.
@@ -29630,7 +30613,8 @@ static void populateTypeConversion(TypeConverter &typeConverter) {
 static void populateOpConversion(ConversionPatternSet &patterns,
                                  TypeConverter &typeConverter,
                                  ClassTypeCache &classCache,
-                                 InterfaceTypeCache &interfaceCache) {
+                                 InterfaceTypeCache &interfaceCache,
+                                 ClassConstraintCache &constraintCache) {
 
   patterns.add<ClassDeclOpConversion>(typeConverter, patterns.getContext(),
                                       classCache);
@@ -30057,7 +31041,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
 
   // Randomization (needs class cache for struct info)
   patterns.add<RandomizeOpConversion>(typeConverter, patterns.getContext(),
-                                      classCache);
+                                      classCache, constraintCache);
   patterns.add<StdRandomizeOpConversion>(typeConverter, patterns.getContext());
 
   // Constraint mode and randomize callbacks
@@ -30121,6 +31105,7 @@ void MooreToCorePass::runOnOperation() {
 
   ClassTypeCache classCache;
   InterfaceTypeCache interfaceCache;
+  ClassConstraintCache constraintCache;
 
   IRRewriter rewriter(module);
   (void)mlir::eraseUnreachableBlocks(rewriter, module->getRegions());
@@ -30212,6 +31197,7 @@ void MooreToCorePass::runOnOperation() {
         StringRef boundProp;         // non-empty if bound is same-class property
         bool isUpperBound = true;    // true: prop < bound, false: prop > bound
         bool isStrict = true;        // strict (< >) vs non-strict (<= >=)
+        bool isEquality = false;     // true: prop == bound
         bool isSigned = false;
         bool isSoft = false;
       };
@@ -30305,6 +31291,7 @@ void MooreToCorePass::runOnOperation() {
         // Determine the comparison kind
         bool isUpperBound = false; // Does this constrain the upper bound?
         bool isStrict = false;
+        bool isEquality = false;
         bool isSigned = false;
 
         if (isa<SltOp>(defOp)) {
@@ -30335,6 +31322,8 @@ void MooreToCorePass::runOnOperation() {
         } else if (isa<UgeOp>(defOp)) {
           isStrict = false;
           isUpperBound = !varOnLhs;
+        } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+          isEquality = true;
         } else {
           return false;
         }
@@ -30366,6 +31355,7 @@ void MooreToCorePass::runOnOperation() {
         info.constrainedProp = propName;
         info.isUpperBound = isUpperBound;
         info.isStrict = isStrict;
+        info.isEquality = isEquality;
         info.isSigned = isSigned;
         info.isSoft = isSoft;
 
@@ -30469,6 +31459,10 @@ void MooreToCorePass::runOnOperation() {
           entries.push_back(NamedAttribute(
               StringAttr::get(&context, "is_strict"),
               BoolAttr::get(&context, dyn.isStrict)));
+          if (dyn.isEquality)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "is_eq"),
+                BoolAttr::get(&context, true)));
           if (dyn.isSigned)
             entries.push_back(NamedAttribute(
                 StringAttr::get(&context, "signed"),
@@ -30492,8 +31486,28 @@ void MooreToCorePass::runOnOperation() {
     });
   }
 
+  // Pre-extract all constraints from ClassDeclOps before applyFullConversion
+  // erases them via ClassDeclOpConversion.  RandomizeOpConversion looks up
+  // constraints from this cache when the ClassDeclOp is no longer available.
+  module.walk([&](ClassDeclOp classDecl) {
+    auto className = classDecl.getSymNameAttr();
+    auto classSym = SymbolRefAttr::get(className);
+    auto &entry = constraintCache[className];
+    entry.rangeConstraints =
+        extractRangeConstraints(classDecl, classCache, classSym);
+    entry.foreachRangeConstraints = extractForeachRangeConstraints(classDecl);
+    entry.softConstraints =
+        extractSoftConstraints(classDecl, classCache, classSym);
+    entry.distConstraints =
+        extractDistConstraints(classDecl, classCache, classSym);
+    entry.solveBeforeOrdering = extractSolveBeforeOrdering(classDecl);
+    entry.conditionalConstraints =
+        extractConditionalConstraints(classDecl, classCache, classSym);
+  });
+
   ConversionPatternSet patterns(&context, typeConverter);
-  populateOpConversion(patterns, typeConverter, classCache, interfaceCache);
+  populateOpConversion(patterns, typeConverter, classCache, interfaceCache,
+                      constraintCache);
   mlir::cf::populateCFStructuralTypeConversionsAndLegality(typeConverter,
                                                            patterns, target);
 

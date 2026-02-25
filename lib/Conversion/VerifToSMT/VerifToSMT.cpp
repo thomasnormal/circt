@@ -13,6 +13,7 @@
 #include "circt/Dialect/HW/HWDialect.h"
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWTypes.h"
+#include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/Seq/SeqDialect.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/LTL/LTLOps.h"
@@ -206,6 +207,59 @@ static Value gatePropertyWithEnable(Value property, Value enable, bool isCover,
     return ltl::AndOp::create(builder, loc,
                               SmallVector<Value, 2>{enable, property})
         .getResult();
+
+  // Preserve disable-iff/procedural-enable semantics for non-overlap
+  // implications: antecedent history must only sample on enabled cycles.
+  if (auto implication = property.getDefiningOp<ltl::ImplicationOp>()) {
+    auto gateI1WithEnable = [&](Value value) -> Value {
+      auto valueTy = dyn_cast<IntegerType>(value.getType());
+      if (!valueTy || valueTy.getWidth() != 1)
+        return Value();
+      return comb::AndOp::create(builder, loc,
+                                 SmallVector<Value, 2>{enable, value}, true)
+          .getResult();
+    };
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPoint(implication);
+
+    auto makeImplicationWithAttrs = [&](Value antecedent,
+                                        Value consequent) -> Value {
+      auto gatedImplication =
+          ltl::ImplicationOp::create(builder, loc, antecedent, consequent);
+      gatedImplication->setAttrs(implication->getAttrs());
+      return gatedImplication.getResult();
+    };
+
+    // Rewritten shape: implication(delay(a, N), b)
+    if (auto delayOp = implication.getAntecedent().getDefiningOp<ltl::DelayOp>()) {
+      auto lengthAttr = delayOp.getLengthAttr();
+      if (delayOp.getDelay() > 0 &&
+          (!lengthAttr || lengthAttr.getValue().getZExtValue() == 0)) {
+        if (Value gatedInput = gateI1WithEnable(delayOp.getInput())) {
+          auto shiftedAntecedent =
+              ltl::DelayOp::create(builder, loc, gatedInput,
+                                   delayOp.getDelayAttr(), delayOp.getLengthAttr());
+          shiftedAntecedent->setAttrs(delayOp->getAttrs());
+          property = makeImplicationWithAttrs(shiftedAntecedent,
+                                              implication.getConsequent());
+        }
+      }
+    }
+
+    // Unrewritten shape: implication(a, delay(b, N))
+    if (auto delayOp = implication.getConsequent().getDefiningOp<ltl::DelayOp>()) {
+      auto lengthAttr = delayOp.getLengthAttr();
+      if (delayOp.getDelay() > 0 &&
+          (!lengthAttr || lengthAttr.getValue().getZExtValue() == 0)) {
+        if (Value gatedAntecedent = gateI1WithEnable(implication.getAntecedent())) {
+          property = makeImplicationWithAttrs(gatedAntecedent,
+                                              implication.getConsequent());
+        }
+      }
+    }
+  }
+
   auto notEnable = ltl::NotOp::create(builder, loc, enable);
   return ltl::OrOp::create(builder, loc,
                            SmallVector<Value, 2>{notEnable, property})
@@ -2232,6 +2286,19 @@ struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
           if (innerCast.getInputs().size() == 1 &&
               isa<smt::BoolType>(innerCast.getInputs()[0].getType()))
             boolVal = innerCast.getInputs()[0];
+        }
+        // Handle direct i1 constants that are not routed through smt.bool.
+        if (!boolVal) {
+          if (matchPattern(input, m_One())) {
+            auto one = smt::BVConstantOp::create(rewriter, loc, 1, 1);
+            rewriter.replaceOp(op, one);
+            return success();
+          }
+          if (matchPattern(input, m_Zero())) {
+            auto zero = smt::BVConstantOp::create(rewriter, loc, 0, 1);
+            rewriter.replaceOp(op, zero);
+            return success();
+          }
         }
       }
       if (boolVal) {
@@ -4425,12 +4492,25 @@ struct VerifBoundedModelCheckingOpConversion
       std::optional<ltl::ClockEdge> edge;
     };
 
+    // Collect nested checks that cannot be represented as top-level BMC
+    // outputs. These arise from procedural scaffolding (e.g. stripped sim ops)
+    // and are dropped for SMT export.
+    SmallVector<Operation *> nestedChecksToErase;
+    circuitBlock.walk([&](Operation *curOp) {
+      if (curOp->getBlock() == &circuitBlock)
+        return;
+      if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(curOp))
+        nestedChecksToErase.push_back(curOp);
+    });
+
     // Collect non-final properties so BMC can detect any assertion violation
     // or cover hit.
     SmallVector<Operation *> nonFinalOps;
     SmallVector<NonFinalCheckInfo> nonFinalCheckInfos;
     SmallVector<bool> nonFinalCheckIsCover;
     circuitBlock.walk([&](Operation *curOp) {
+      if (curOp->getBlock() != &circuitBlock)
+        return;
       if (curOp->hasAttr("bmc.final"))
         return;
       if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
@@ -4471,6 +4551,8 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<NonFinalCheckInfo> finalCheckInfos;
     SmallVector<Operation *> opsToErase;
     circuitBlock.walk([&](Operation *curOp) {
+      if (curOp->getBlock() != &circuitBlock)
+        return;
       if (!curOp->hasAttr("bmc.final"))
         return;
       if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
@@ -4537,6 +4619,7 @@ struct VerifBoundedModelCheckingOpConversion
     SmallVector<Type> oldCircuitInputTy(op.getCircuit().getArgumentTypes());
     unsigned numRegs = op.getNumRegs();
     DenseSet<unsigned> knownClockArgIndices;
+    DenseSet<unsigned> knownDisableIffArgIndices;
     auto collectKnownClockArgIndices = [&](ArrayAttr sourcesAttr) {
       if (!sourcesAttr)
         return;
@@ -4631,9 +4714,118 @@ struct VerifBoundedModelCheckingOpConversion
       inputNameToArgIndex.try_emplace(nameAttr.getValue(), idx);
     }
 
+    auto collectDisableIffArgIndicesFromCheckMetadata = [&](Operation *checkOp) {
+      if (!checkOp)
+        return;
+      auto namesAttr =
+          checkOp->getAttrOfType<ArrayAttr>("bmc.disable_iff_inputs");
+      if (!namesAttr)
+        return;
+      for (Attribute nameLike : namesAttr) {
+        auto nameAttr = dyn_cast<StringAttr>(nameLike);
+        if (!nameAttr || nameAttr.getValue().empty())
+          continue;
+        auto it = inputNameToArgIndex.find(nameAttr.getValue());
+        if (it == inputNameToArgIndex.end())
+          continue;
+        knownDisableIffArgIndices.insert(it->second);
+      }
+    };
+
+    size_t originalNumNonStateInputs = originalArgCount;
+    if (numRegs <= originalNumNonStateInputs)
+      originalNumNonStateInputs -= numRegs;
+    else
+      originalNumNonStateInputs = 0;
+    size_t originalCircuitYieldCount = 0;
+    if (auto originalYield =
+            dyn_cast_or_null<verif::YieldOp>(circuitBlock.getTerminator()))
+      originalCircuitYieldCount = originalYield.getNumOperands();
+    size_t originalNumNonStateOutputs = originalCircuitYieldCount;
+    if (numRegs <= originalNumNonStateOutputs)
+      originalNumNonStateOutputs -= numRegs;
+    else
+      originalNumNonStateOutputs = 0;
+
+    DenseMap<Value, SmallVector<Value>> llhdSignalDrivers;
+    circuitBlock.walk([&](llhd::DriveOp driveOp) {
+      llhdSignalDrivers[driveOp.getSignal()].push_back(driveOp.getValue());
+    });
+    auto enqueueSignalSources = [&](Value signal,
+                                    SmallVectorImpl<Value> &worklist) {
+      if (!signal)
+        return;
+      if (auto sigOp = signal.getDefiningOp<llhd::SignalOp>())
+        worklist.push_back(sigOp.getInit());
+      if (auto it = llhdSignalDrivers.find(signal);
+          it != llhdSignalDrivers.end())
+        worklist.append(it->second.begin(), it->second.end());
+    };
+
+    auto collectRootArgIndicesFromValue = [&](Value root) {
+      if (!root)
+        return;
+      auto circuitYield = dyn_cast_or_null<verif::YieldOp>(
+          circuitBlock.getTerminator());
+      SmallVector<Value> worklist{root};
+      DenseSet<Value> visited;
+      while (!worklist.empty()) {
+        Value current = worklist.pop_back_val();
+        if (!current || !visited.insert(current).second)
+          continue;
+        if (auto arg = dyn_cast<BlockArgument>(current)) {
+          if (arg.getOwner() == &circuitBlock &&
+              arg.getArgNumber() < originalArgCount) {
+            unsigned argIndex = arg.getArgNumber();
+            if (argIndex < originalNumNonStateInputs) {
+              knownDisableIffArgIndices.insert(argIndex);
+            } else if (circuitYield) {
+              size_t stateOffset = argIndex - originalNumNonStateInputs;
+              size_t yieldIndex = originalNumNonStateOutputs + stateOffset;
+              if (yieldIndex < circuitYield.getNumOperands())
+                worklist.push_back(circuitYield.getOperand(yieldIndex));
+            }
+          }
+          continue;
+        }
+        if (auto *def = current.getDefiningOp()) {
+          if (auto prbOp = dyn_cast<llhd::ProbeOp>(def)) {
+            enqueueSignalSources(prbOp.getSignal(), worklist);
+            continue;
+          }
+          if (auto sigOp = dyn_cast<llhd::SignalOp>(def)) {
+            enqueueSignalSources(sigOp.getResult(), worklist);
+            continue;
+          }
+          worklist.append(def->operand_begin(), def->operand_end());
+        }
+      }
+    };
+
+    auto collectDisableIffArgIndicesFromProperty = [&](Value property) {
+      if (!property)
+        return;
+      constexpr StringRef kDisableIffAttr = "sva.disable_iff";
+      SmallVector<Operation *> worklist;
+      DenseSet<Operation *> visited;
+      if (Operation *def = property.getDefiningOp())
+        worklist.push_back(def);
+      while (!worklist.empty()) {
+        Operation *opDef = worklist.pop_back_val();
+        if (!opDef || !visited.insert(opDef).second)
+          continue;
+        if (opDef->hasAttr(kDisableIffAttr) && opDef->getNumOperands() > 0)
+          collectRootArgIndicesFromValue(opDef->getOperand(0));
+        for (Value operand : opDef->getOperands())
+          if (Operation *operandDef = operand.getDefiningOp())
+            worklist.push_back(operandDef);
+      }
+    };
+
     auto maybeAssertKnown = [&](size_t argIndex, Type originalTy, Value smtVal,
                                 OpBuilder &builder) {
-      if (!assumeKnownInputs && !knownClockArgIndices.contains(argIndex))
+      if (!assumeKnownInputs && !knownClockArgIndices.contains(argIndex) &&
+          !knownDisableIffArgIndices.contains(argIndex))
         return;
       maybeAssertKnownInput(originalTy, smtVal, loc, builder);
     };
@@ -5265,6 +5457,18 @@ struct VerifBoundedModelCheckingOpConversion
       }
     }
 
+    for (Value property : nonFinalCheckProps)
+      collectDisableIffArgIndicesFromProperty(property);
+    for (Value property : finalCheckProps)
+      collectDisableIffArgIndicesFromProperty(property);
+    // Keep default 4-state inputs unconstrained unless explicitly requested
+    // (e.g. --assume-known-inputs), except for clock sources and disable-iff
+    // roots handled above.
+    for (Operation *checkOp : nonFinalOps)
+      collectDisableIffArgIndicesFromCheckMetadata(checkOp);
+    for (Operation *checkOp : opsToErase)
+      collectDisableIffArgIndicesFromCheckMetadata(checkOp);
+
     // Append non-final and final check outputs after delay/past buffers so
     // circuit outputs are ordered as:
     // [original outputs] [delay/past buffers] [nfa states]
@@ -5285,6 +5489,8 @@ struct VerifBoundedModelCheckingOpConversion
     for (auto *opToErase : nonFinalOps)
       rewriter.eraseOp(opToErase);
     for (auto *opToErase : opsToErase)
+      rewriter.eraseOp(opToErase);
+    for (auto *opToErase : nestedChecksToErase)
       rewriter.eraseOp(opToErase);
 
     // Extend name list with delay/past buffer slots appended to the circuit
@@ -6563,15 +6769,23 @@ struct VerifBoundedModelCheckingOpConversion
       if (isa<smt::BoolType>(value.getType()))
         return value;
       if (auto bvTy = dyn_cast<smt::BitVectorType>(value.getType())) {
-        if (bvTy.getWidth() != 1) {
-          op.emitError("event-arm witness lowering expects i1-compatible "
-                       "signal values");
+        if (bvTy.getWidth() == 0) {
+          op.emitError(
+              "event-arm witness lowering expects non-zero width bitvector "
+              "signal values");
           return failure();
         }
-        auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
-        return Value(smt::EqOp::create(builder, loc, value, one));
+        if (bvTy.getWidth() == 1) {
+          auto one = smt::BVConstantOp::create(builder, loc, 1, 1);
+          return Value(smt::EqOp::create(builder, loc, value, one));
+        }
+        // Follow Verilog truthiness for multi-bit event expressions: any
+        // non-zero value is treated as logical true.
+        auto zero = smt::BVConstantOp::create(
+            builder, loc, APInt(bvTy.getWidth(), 0));
+        return Value(smt::DistinctOp::create(builder, loc, value, zero));
       }
-      op.emitError("event-arm witness lowering expects bool or bv<1> "
+      op.emitError("event-arm witness lowering expects bool or bitvector "
                    "signal values");
       return failure();
     };
@@ -7498,19 +7712,13 @@ struct VerifBoundedModelCheckingOpConversion
         SmallVector<Value> circuitInputs(
             iterRange.take_front(numCircuitArgs).begin(),
             iterRange.take_front(numCircuitArgs).end());
-        // Use post-edge clock values for property/circuit evaluation so
-        // clocked expressions observe the sampled clock value.
-        if (!clockIndexes.empty()) {
-          for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
-            if (static_cast<size_t>(clockIndex) < circuitInputs.size() &&
-                static_cast<size_t>(idx) < loopVals.size())
-              circuitInputs[clockIndex] = loopVals[idx];
-          }
-        }
+        // Evaluate circuit/property expressions on pre-edge sampled clock
+        // values. This preserves SVA sampling semantics when an antecedent
+        // references the clock signal itself.
         if (!clockSourceInputs.empty()) {
           for (auto [argIndex, info] : clockSourceInputs) {
             if (argIndex >= circuitInputs.size() ||
-                info.pos >= loopVals.size())
+                info.pos >= clockIndexes.size())
               continue;
             int64_t valueWidth = 0;
             int64_t unknownWidth = 0;
@@ -7524,7 +7732,10 @@ struct VerifBoundedModelCheckingOpConversion
             if (!bvTy || bvTy.getWidth() !=
                              static_cast<unsigned>(valueWidth + unknownWidth))
               continue;
-            Value valueBit = loopVals[info.pos];
+            unsigned clockArgIndex = clockIndexes[info.pos];
+            if (clockArgIndex >= circuitInputs.size())
+              continue;
+            Value valueBit = circuitInputs[clockArgIndex];
             if (info.invert)
               valueBit = smt::BVNotOp::create(rewriter, loc, valueBit);
             auto unkTy =
@@ -7608,43 +7819,47 @@ struct VerifBoundedModelCheckingOpConversion
                                ? isTrue
                                : smt::NotOp::create(rewriter, loc, isTrue);
               Value gate;
-              if (!risingClocksOnly && !clockIndexes.empty() &&
-                  checkIdx < nonFinalCheckInfos.size()) {
+              if (!risingClocksOnly && checkIdx < nonFinalCheckInfos.size()) {
                 auto edge = nonFinalCheckInfos[checkIdx].edge.value_or(
                     ltl::ClockEdge::Pos);
-                auto clockPos =
-                    checkIdx < nonFinalCheckClockPos.size()
-                        ? nonFinalCheckClockPos[checkIdx]
-                        : std::optional<unsigned>{};
-                if (clockPos) {
-                  if (edge == ltl::ClockEdge::Pos) {
-                    if (clockIndexes.size() == 1)
-                      gate = isPosedge;
-                    else if (*clockPos < posedges.size())
-                      gate = posedges[*clockPos];
-                  } else if (edge == ltl::ClockEdge::Neg) {
-                    if (clockIndexes.size() == 1)
-                      gate = isNegedge;
-                    else if (*clockPos < negedges.size())
-                      gate = negedges[*clockPos];
-                  } else if (edge == ltl::ClockEdge::Both) {
-                    if (clockIndexes.size() == 1)
-                      gate = smt::OrOp::create(rewriter, loc, isPosedge,
-                                               isNegedge);
-                    else if (*clockPos < posedges.size())
-                      gate = smt::OrOp::create(rewriter, loc,
-                                               posedges[*clockPos],
-                                               negedges[*clockPos]);
+                if (clockIndexes.empty()) {
+                  if (nonFinalCheckInfos[checkIdx].edge)
+                    gate = constFalse;
+                } else {
+                  auto clockPos =
+                      checkIdx < nonFinalCheckClockPos.size()
+                          ? nonFinalCheckClockPos[checkIdx]
+                          : std::optional<unsigned>{};
+                  if (clockPos) {
+                    if (edge == ltl::ClockEdge::Pos) {
+                      if (clockIndexes.size() == 1)
+                        gate = isPosedge;
+                      else if (*clockPos < posedges.size())
+                        gate = posedges[*clockPos];
+                    } else if (edge == ltl::ClockEdge::Neg) {
+                      if (clockIndexes.size() == 1)
+                        gate = isNegedge;
+                      else if (*clockPos < negedges.size())
+                        gate = negedges[*clockPos];
+                    } else if (edge == ltl::ClockEdge::Both) {
+                      if (clockIndexes.size() == 1)
+                        gate = smt::OrOp::create(rewriter, loc, isPosedge,
+                                                 isNegedge);
+                      else if (*clockPos < posedges.size())
+                        gate = smt::OrOp::create(rewriter, loc,
+                                                 posedges[*clockPos],
+                                                 negedges[*clockPos]);
+                    }
                   }
-                }
-                if (!gate && anyPosedge) {
-                  if (edge == ltl::ClockEdge::Pos) {
-                    gate = anyPosedge;
-                  } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
-                    gate = anyNegedge;
-                  } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
-                    gate =
-                        smt::OrOp::create(rewriter, loc, anyPosedge, anyNegedge);
+                  if (!gate && anyPosedge) {
+                    if (edge == ltl::ClockEdge::Pos) {
+                      gate = anyPosedge;
+                    } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
+                      gate = anyNegedge;
+                    } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
+                      gate = smt::OrOp::create(rewriter, loc, anyPosedge,
+                                               anyNegedge);
+                    }
                   }
                 }
               }
@@ -7690,42 +7905,47 @@ struct VerifBoundedModelCheckingOpConversion
                                ? isTrue
                                : smt::NotOp::create(rewriter, loc, isTrue);
               Value gate;
-              if (!risingClocksOnly && !clockIndexes.empty() &&
-                  checkIdx < finalCheckInfos.size()) {
+              if (!risingClocksOnly && checkIdx < finalCheckInfos.size()) {
                 auto edge =
                     finalCheckInfos[checkIdx].edge.value_or(ltl::ClockEdge::Pos);
-                auto clockPos =
-                    checkIdx < finalCheckClockPos.size()
-                        ? finalCheckClockPos[checkIdx]
-                        : std::optional<unsigned>{};
-                if (clockPos) {
-                  if (edge == ltl::ClockEdge::Pos) {
-                    if (clockIndexes.size() == 1)
-                      gate = isPosedge;
-                    else if (*clockPos < posedges.size())
-                      gate = posedges[*clockPos];
-                  } else if (edge == ltl::ClockEdge::Neg) {
-                    if (clockIndexes.size() == 1)
-                      gate = isNegedge;
-                    else if (*clockPos < negedges.size())
-                      gate = negedges[*clockPos];
-                  } else if (edge == ltl::ClockEdge::Both) {
-                    if (clockIndexes.size() == 1)
-                      gate = smt::OrOp::create(rewriter, loc, isPosedge,
-                                               isNegedge);
-                    else if (*clockPos < posedges.size())
-                      gate = smt::OrOp::create(rewriter, loc, posedges[*clockPos],
-                                               negedges[*clockPos]);
+                if (clockIndexes.empty()) {
+                  if (finalCheckInfos[checkIdx].edge)
+                    gate = constFalse;
+                } else {
+                  auto clockPos =
+                      checkIdx < finalCheckClockPos.size()
+                          ? finalCheckClockPos[checkIdx]
+                          : std::optional<unsigned>{};
+                  if (clockPos) {
+                    if (edge == ltl::ClockEdge::Pos) {
+                      if (clockIndexes.size() == 1)
+                        gate = isPosedge;
+                      else if (*clockPos < posedges.size())
+                        gate = posedges[*clockPos];
+                    } else if (edge == ltl::ClockEdge::Neg) {
+                      if (clockIndexes.size() == 1)
+                        gate = isNegedge;
+                      else if (*clockPos < negedges.size())
+                        gate = negedges[*clockPos];
+                    } else if (edge == ltl::ClockEdge::Both) {
+                      if (clockIndexes.size() == 1)
+                        gate = smt::OrOp::create(rewriter, loc, isPosedge,
+                                                 isNegedge);
+                      else if (*clockPos < posedges.size())
+                        gate = smt::OrOp::create(rewriter, loc,
+                                                 posedges[*clockPos],
+                                                 negedges[*clockPos]);
+                    }
                   }
-                }
-                if (!gate && anyPosedge) {
-                  if (edge == ltl::ClockEdge::Pos) {
-                    gate = anyPosedge;
-                  } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
-                    gate = anyNegedge;
-                  } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
-                    gate =
-                        smt::OrOp::create(rewriter, loc, anyPosedge, anyNegedge);
+                  if (!gate && anyPosedge) {
+                    if (edge == ltl::ClockEdge::Pos) {
+                      gate = anyPosedge;
+                    } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
+                      gate = anyNegedge;
+                    } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
+                      gate = smt::OrOp::create(rewriter, loc, anyPosedge,
+                                               anyNegedge);
+                    }
                   }
                 }
               }
@@ -7894,9 +8114,10 @@ struct VerifBoundedModelCheckingOpConversion
         auto getCheckGate =
             [&](size_t checkIdx, ArrayRef<std::optional<unsigned>> clockPoses,
                 ArrayRef<NonFinalCheckInfo> infos) -> Value {
-          if (risingClocksOnly || clockIndexes.empty() ||
-              checkIdx >= infos.size())
+          if (risingClocksOnly || checkIdx >= infos.size())
             return Value();
+          if (clockIndexes.empty())
+            return infos[checkIdx].edge ? constFalse : Value();
           auto edge = infos[checkIdx].edge.value_or(ltl::ClockEdge::Pos);
           auto clockPos = checkIdx < clockPoses.size()
                               ? clockPoses[checkIdx]
@@ -8326,19 +8547,13 @@ struct VerifBoundedModelCheckingOpConversion
           SmallVector<Value> circuitInputs(
               iterArgs.take_front(numCircuitArgs).begin(),
               iterArgs.take_front(numCircuitArgs).end());
-          // Use post-edge clock values for property/circuit evaluation so
-          // clocked expressions observe the sampled clock value.
-          if (!clockIndexes.empty()) {
-            for (auto [idx, clockIndex] : llvm::enumerate(clockIndexes)) {
-              if (static_cast<size_t>(clockIndex) < circuitInputs.size() &&
-                  static_cast<size_t>(idx) < loopVals.size())
-                circuitInputs[clockIndex] = loopVals[idx];
-            }
-          }
+          // Evaluate circuit/property expressions on pre-edge sampled clock
+          // values. This preserves SVA sampling semantics when an antecedent
+          // references the clock signal itself.
           if (!clockSourceInputs.empty()) {
             for (auto [argIndex, info] : clockSourceInputs) {
               if (argIndex >= circuitInputs.size() ||
-                  info.pos >= loopVals.size())
+                  info.pos >= clockIndexes.size())
                 continue;
               int64_t valueWidth = 0;
               int64_t unknownWidth = 0;
@@ -8353,7 +8568,10 @@ struct VerifBoundedModelCheckingOpConversion
                                static_cast<unsigned>(valueWidth +
                                                      unknownWidth))
                 continue;
-              Value valueBit = loopVals[info.pos];
+              unsigned clockArgIndex = clockIndexes[info.pos];
+              if (clockArgIndex >= circuitInputs.size())
+                continue;
+              Value valueBit = circuitInputs[clockArgIndex];
               if (info.invert)
                 valueBit = smt::BVNotOp::create(builder, loc, valueBit);
               auto unkTy =
@@ -8453,43 +8671,47 @@ struct VerifBoundedModelCheckingOpConversion
                                ? isTrue
                                : smt::NotOp::create(builder, loc, isTrue);
               Value gate;
-              if (!risingClocksOnly && !clockIndexes.empty() &&
-                  checkIdx < nonFinalCheckInfos.size()) {
+              if (!risingClocksOnly && checkIdx < nonFinalCheckInfos.size()) {
                 auto edge = nonFinalCheckInfos[checkIdx].edge.value_or(
                     ltl::ClockEdge::Pos);
-                auto clockPos =
-                    checkIdx < nonFinalCheckClockPos.size()
-                        ? nonFinalCheckClockPos[checkIdx]
-                        : std::optional<unsigned>{};
-                if (clockPos) {
-                  if (edge == ltl::ClockEdge::Pos) {
-                    if (clockIndexes.size() == 1)
-                      gate = isPosedge;
-                    else if (*clockPos < posedges.size())
-                      gate = posedges[*clockPos];
-                  } else if (edge == ltl::ClockEdge::Neg) {
-                    if (clockIndexes.size() == 1)
-                      gate = isNegedge;
-                    else if (*clockPos < negedges.size())
-                      gate = negedges[*clockPos];
-                  } else if (edge == ltl::ClockEdge::Both) {
-                    if (clockIndexes.size() == 1)
-                      gate = smt::OrOp::create(builder, loc, isPosedge,
-                                               isNegedge);
-                    else if (*clockPos < posedges.size())
-                      gate = smt::OrOp::create(builder, loc,
-                                               posedges[*clockPos],
-                                               negedges[*clockPos]);
+                if (clockIndexes.empty()) {
+                  if (nonFinalCheckInfos[checkIdx].edge)
+                    gate = smtConstFalse;
+                } else {
+                  auto clockPos =
+                      checkIdx < nonFinalCheckClockPos.size()
+                          ? nonFinalCheckClockPos[checkIdx]
+                          : std::optional<unsigned>{};
+                  if (clockPos) {
+                    if (edge == ltl::ClockEdge::Pos) {
+                      if (clockIndexes.size() == 1)
+                        gate = isPosedge;
+                      else if (*clockPos < posedges.size())
+                        gate = posedges[*clockPos];
+                    } else if (edge == ltl::ClockEdge::Neg) {
+                      if (clockIndexes.size() == 1)
+                        gate = isNegedge;
+                      else if (*clockPos < negedges.size())
+                        gate = negedges[*clockPos];
+                    } else if (edge == ltl::ClockEdge::Both) {
+                      if (clockIndexes.size() == 1)
+                        gate = smt::OrOp::create(builder, loc, isPosedge,
+                                                 isNegedge);
+                      else if (*clockPos < posedges.size())
+                        gate = smt::OrOp::create(builder, loc,
+                                                 posedges[*clockPos],
+                                                 negedges[*clockPos]);
+                    }
                   }
-                }
-                if (!gate && anyPosedge) {
-                  if (edge == ltl::ClockEdge::Pos) {
-                    gate = anyPosedge;
-                  } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
-                    gate = anyNegedge;
-                  } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
-                    gate = smt::OrOp::create(builder, loc, anyPosedge,
-                                             anyNegedge);
+                  if (!gate && anyPosedge) {
+                    if (edge == ltl::ClockEdge::Pos) {
+                      gate = anyPosedge;
+                    } else if (edge == ltl::ClockEdge::Neg && anyNegedge) {
+                      gate = anyNegedge;
+                    } else if (edge == ltl::ClockEdge::Both && anyNegedge) {
+                      gate = smt::OrOp::create(builder, loc, anyPosedge,
+                                               anyNegedge);
+                    }
                   }
                 }
               }
@@ -8690,9 +8912,10 @@ struct VerifBoundedModelCheckingOpConversion
               [&](size_t checkIdx,
                   ArrayRef<std::optional<unsigned>> clockPoses,
                   ArrayRef<NonFinalCheckInfo> infos) -> Value {
-            if (risingClocksOnly || clockIndexes.empty() ||
-                checkIdx >= infos.size())
+            if (risingClocksOnly || checkIdx >= infos.size())
               return Value();
+            if (clockIndexes.empty())
+              return infos[checkIdx].edge ? smtConstFalse : Value();
             auto edge = infos[checkIdx].edge.value_or(ltl::ClockEdge::Pos);
             auto clockPos = checkIdx < clockPoses.size()
                                 ? clockPoses[checkIdx]
@@ -8887,15 +9110,33 @@ static FailureOr<BMCCheckMode> parseBMCMode(StringRef mode) {
 static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block) {
   DenseSet<Value> visitedValues;
   DenseSet<Operation *> liveOps;
+
+  auto getTopLevelOwnerInBlock = [&](Operation *def) -> Operation * {
+    Operation *owner = def;
+    while (owner && owner->getBlock() != &block)
+      owner = owner->getParentOp();
+    if (!owner || owner->getBlock() != &block)
+      return nullptr;
+    return owner;
+  };
+
   auto markLiveValue = [&](Value value, auto &&markLiveValueRef) -> void {
     if (!value || !visitedValues.insert(value).second)
       return;
     auto *def = value.getDefiningOp();
-    if (!def || def->getBlock() != &block)
+    if (!def)
       return;
-    if (liveOps.insert(def).second)
-      for (Value operand : def->getOperands())
+    Operation *topLevelDef = getTopLevelOwnerInBlock(def);
+    if (!topLevelDef)
+      return;
+    SmallVector<Operation *> pending{topLevelDef};
+    while (!pending.empty()) {
+      Operation *cur = pending.pop_back_val();
+      if (!liveOps.insert(cur).second)
+        continue;
+      for (Value operand : cur->getOperands())
         markLiveValueRef(operand, markLiveValueRef);
+    }
   };
 
   if (auto yield = dyn_cast<verif::YieldOp>(block.getTerminator()))
@@ -8935,41 +9176,52 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     SmallVector<LLVM::GEPOp> geps;
     SmallVector<int64_t> elementIndices;
   };
+  struct MallocLoadAccessInfo {
+    LLVM::CallOp mallocCall;
+    SmallVector<LLVM::GEPOp> geps;
+    SmallVector<int64_t> elementIndices;
+  };
+  struct MallocLoadNondetInfo {
+    Operation *mallocCall = nullptr;
+    Type loadType;
+    SmallVector<int64_t> elementIndices;
+    Value value;
+  };
+  constexpr int64_t kUnknownDynamicIndex = std::numeric_limits<int64_t>::min();
 
   auto isSupportedSMTLIBScalarType = [](Type ty) {
     return isa<IntegerType, FloatType>(ty);
   };
+  auto getConstantIndexValue = [](Value value) -> std::optional<int64_t> {
+    // Unwrap simple one-to-one casts that can appear around constant indices.
+    while (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+        break;
+      value = cast.getOperand(0);
+    }
+    if (auto cst = value.getDefiningOp<LLVM::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+        APInt apInt = intAttr.getValue();
+        if (!apInt.isSignedIntN(64))
+          return std::nullopt;
+        return apInt.getSExtValue();
+      }
+    }
+    if (auto cst = value.getDefiningOp<arith::ConstantOp>()) {
+      if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
+        APInt apInt = intAttr.getValue();
+        if (!apInt.isSignedIntN(64))
+          return std::nullopt;
+        return apInt.getSExtValue();
+      }
+    }
+    if (auto zero = value.getDefiningOp<LLVM::ZeroOp>())
+      if (isa<IntegerType>(zero.getType()))
+        return 0;
+    return std::nullopt;
+  };
   auto resolveGlobalLoadAccess =
-      [](Value loadAddr) -> std::optional<GlobalLoadAccessInfo> {
-    auto getConstantIndexValue = [](Value value) -> std::optional<int64_t> {
-      // Unwrap simple one-to-one casts that can appear around constant indices.
-      while (auto cast = value.getDefiningOp<UnrealizedConversionCastOp>()) {
-        if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
-          break;
-        value = cast.getOperand(0);
-      }
-      if (auto cst = value.getDefiningOp<LLVM::ConstantOp>()) {
-        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
-          APInt apInt = intAttr.getValue();
-          if (!apInt.isSignedIntN(64))
-            return std::nullopt;
-          return apInt.getSExtValue();
-        }
-      }
-      if (auto cst = value.getDefiningOp<arith::ConstantOp>()) {
-        if (auto intAttr = dyn_cast<IntegerAttr>(cst.getValue())) {
-          APInt apInt = intAttr.getValue();
-          if (!apInt.isSignedIntN(64))
-            return std::nullopt;
-          return apInt.getSExtValue();
-        }
-      }
-      if (auto zero = value.getDefiningOp<LLVM::ZeroOp>())
-        if (isa<IntegerType>(zero.getType()))
-          return 0;
-      return std::nullopt;
-    };
-
+      [&](Value loadAddr) -> std::optional<GlobalLoadAccessInfo> {
     GlobalLoadAccessInfo access;
     SmallVector<LLVM::GEPOp> reversedGeps;
     Value current = loadAddr;
@@ -9006,6 +9258,83 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         if (dynamicCursor >= dynamicIndices.size())
           return std::nullopt;
         auto idxValue = getConstantIndexValue(dynamicIndices[dynamicCursor++]);
+        if (!idxValue) {
+          // Keep symbolic dynamic indices as "unknown path" slots and legalize
+          // loads through them to stable nondeterministic symbols.
+          resolvedIndices.push_back(kUnknownDynamicIndex);
+          continue;
+        }
+        resolvedIndices.push_back(*idxValue);
+      }
+      if (dynamicCursor != dynamicIndices.size())
+        return std::nullopt;
+      if (resolvedIndices.empty() || resolvedIndices.front() != 0)
+        return std::nullopt;
+      access.geps.push_back(gep);
+      for (int64_t idx : llvm::drop_begin(resolvedIndices)) {
+        if (idx < 0 && idx != kUnknownDynamicIndex)
+          return std::nullopt;
+        access.elementIndices.push_back(idx);
+      }
+    }
+    return access;
+  };
+  auto resolveMallocLoadAccess =
+      [&](Value loadAddr) -> std::optional<MallocLoadAccessInfo> {
+    MallocLoadAccessInfo access;
+    SmallVector<LLVM::GEPOp> reversedGeps;
+    Value current = loadAddr;
+    while (true) {
+      if (auto call = current.getDefiningOp<LLVM::CallOp>()) {
+        auto callee = call.getCalleeAttr();
+        if (!callee || callee.getValue() != "malloc")
+          return std::nullopt;
+        access.mallocCall = call;
+        break;
+      }
+      if (auto gep = current.getDefiningOp<LLVM::GEPOp>()) {
+        auto rawIndices = gep.getRawConstantIndices();
+        if (rawIndices.empty())
+          return std::nullopt;
+        reversedGeps.push_back(gep);
+        current = gep.getBase();
+        continue;
+      }
+      if (auto bitcast = current.getDefiningOp<LLVM::BitcastOp>()) {
+        current = bitcast.getArg();
+        continue;
+      }
+      if (auto addrCast = current.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+        current = addrCast.getArg();
+        continue;
+      }
+      if (auto cast = current.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+          return std::nullopt;
+        current = cast.getOperand(0);
+        continue;
+      }
+      return std::nullopt;
+    }
+
+    for (auto it = reversedGeps.rbegin(), e = reversedGeps.rend(); it != e;
+         ++it) {
+      auto gep = *it;
+      auto rawIndices = gep.getRawConstantIndices();
+      if (rawIndices.empty())
+        return std::nullopt;
+      ValueRange dynamicIndices = gep.getDynamicIndices();
+      unsigned dynamicCursor = 0;
+      SmallVector<int64_t> resolvedIndices;
+      resolvedIndices.reserve(rawIndices.size());
+      for (int32_t rawIdx : rawIndices) {
+        if (rawIdx != LLVM::GEPOp::kDynamicIndex) {
+          resolvedIndices.push_back(rawIdx);
+          continue;
+        }
+        if (dynamicCursor >= dynamicIndices.size())
+          return std::nullopt;
+        auto idxValue = getConstantIndexValue(dynamicIndices[dynamicCursor++]);
         if (!idxValue)
           return std::nullopt;
         resolvedIndices.push_back(*idxValue);
@@ -9022,6 +9351,36 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       }
     }
     return access;
+  };
+  auto findMallocRootCall = [&](Value address) -> LLVM::CallOp {
+    Value current = address;
+    while (true) {
+      if (auto call = current.getDefiningOp<LLVM::CallOp>()) {
+        auto callee = call.getCalleeAttr();
+        if (callee && callee.getValue() == "malloc")
+          return call;
+        return {};
+      }
+      if (auto gep = current.getDefiningOp<LLVM::GEPOp>()) {
+        current = gep.getBase();
+        continue;
+      }
+      if (auto bitcast = current.getDefiningOp<LLVM::BitcastOp>()) {
+        current = bitcast.getArg();
+        continue;
+      }
+      if (auto addrCast = current.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+        current = addrCast.getArg();
+        continue;
+      }
+      if (auto cast = current.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+          return {};
+        current = cast.getOperand(0);
+        continue;
+      }
+      return {};
+    }
   };
   auto coerceToTypedScalarAttr =
       [&](Attribute value, Type loadType) -> std::optional<TypedAttr> {
@@ -9483,6 +9842,179 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     op->erase();
   }
 
+  SmallVector<MallocLoadNondetInfo> mallocLoadNondetCache;
+  auto createFreshMallocNondetValue = [&](Type scalarType, Location loc,
+                                          OpBuilder &builder) -> Value {
+    auto intTy = dyn_cast<IntegerType>(scalarType);
+    if (!intTy || intTy.getWidth() == 0)
+      return {};
+    auto smtTy = smt::BitVectorType::get(builder.getContext(), intTy.getWidth());
+    Value nondet = smt::DeclareFunOp::create(builder, loc, smtTy);
+    auto cast = UnrealizedConversionCastOp::create(
+        builder, loc, TypeRange{scalarType}, ValueRange{nondet});
+    return cast.getResult(0);
+  };
+  auto getOrCreateMallocNondetValue =
+      [&](LLVM::CallOp mallocCall, ArrayRef<int64_t> elementIndices,
+          Type scalarType, Location loc, OpBuilder &builder) -> Value {
+    for (auto &entry : mallocLoadNondetCache) {
+      if (entry.mallocCall != mallocCall.getOperation())
+        continue;
+      if (entry.loadType != scalarType)
+        continue;
+      if (!llvm::equal(entry.elementIndices, elementIndices))
+        continue;
+      return entry.value;
+    }
+
+    Value replacement = createFreshMallocNondetValue(scalarType, loc, builder);
+    if (!replacement)
+      return {};
+
+    MallocLoadNondetInfo info;
+    info.mallocCall = mallocCall.getOperation();
+    info.loadType = scalarType;
+    info.elementIndices.append(elementIndices.begin(), elementIndices.end());
+    info.value = replacement;
+    mallocLoadNondetCache.push_back(std::move(info));
+    return replacement;
+  };
+  auto eraseUnusedAddressChain = [&](Value value, auto &&eraseUnusedAddressChainRef) {
+    auto *def = value.getDefiningOp();
+    if (!def || !def->use_empty())
+      return;
+
+    Value next;
+    if (auto gep = dyn_cast<LLVM::GEPOp>(def)) {
+      next = gep.getBase();
+    } else if (auto bitcast = dyn_cast<LLVM::BitcastOp>(def)) {
+      next = bitcast.getArg();
+    } else if (auto addrCast = dyn_cast<LLVM::AddrSpaceCastOp>(def)) {
+      next = addrCast.getArg();
+    } else if (auto cast = dyn_cast<UnrealizedConversionCastOp>(def)) {
+      if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+        return;
+      next = cast.getOperand(0);
+    } else {
+      return;
+    }
+    def->erase();
+    eraseUnusedAddressChainRef(next, eraseUnusedAddressChainRef);
+  };
+
+  auto getAggregateSubelementType = [](Type baseType, int64_t index) -> Type {
+    if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(baseType)) {
+      int64_t dim = arrayTy.getNumElements();
+      if (index < 0 || index >= dim)
+        return {};
+      return arrayTy.getElementType();
+    }
+    auto structTy = dyn_cast<LLVM::LLVMStructType>(baseType);
+    if (!structTy || structTy.isOpaque())
+      return {};
+    ArrayRef<Type> body = structTy.getBody();
+    if (index < 0 || index >= static_cast<int64_t>(body.size()))
+      return {};
+    return body[index];
+  };
+
+  std::function<std::optional<TypedAttr>(Value, Type, ArrayRef<int64_t>, Type)>
+      extractAggregateConstant =
+          [&](Value container, Type containerType, ArrayRef<int64_t> path,
+              Type resultType) -> std::optional<TypedAttr> {
+    if (path.empty()) {
+      if (auto cst = container.getDefiningOp<LLVM::ConstantOp>())
+        return coerceToTypedScalarAttr(cst.getValue(), resultType);
+      if (container.getDefiningOp<LLVM::ZeroOp>()) {
+        if (auto intTy = dyn_cast<IntegerType>(resultType))
+          return IntegerAttr::get(intTy, 0);
+        if (auto floatTy = dyn_cast<FloatType>(resultType))
+          return FloatAttr::get(floatTy, 0.0);
+      }
+      return std::nullopt;
+    }
+
+    if (auto insert = container.getDefiningOp<LLVM::InsertValueOp>()) {
+      ArrayRef<int64_t> pos = insert.getPosition();
+      if (path.size() >= pos.size() &&
+          llvm::equal(pos, path.take_front(pos.size()))) {
+        Type insertedType = containerType;
+        for (int64_t idx : pos) {
+          insertedType = getAggregateSubelementType(insertedType, idx);
+          if (!insertedType)
+            return std::nullopt;
+        }
+        return extractAggregateConstant(insert.getValue(), insertedType,
+                                        path.drop_front(pos.size()),
+                                        resultType);
+      }
+      return extractAggregateConstant(insert.getContainer(), containerType, path,
+                                      resultType);
+    }
+
+    if (auto cst = container.getDefiningOp<LLVM::ConstantOp>()) {
+      Attribute currentAttr = cst.getValue();
+      Type currentType = containerType;
+      for (int64_t idx : path) {
+        if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+          if (!isa<LLVM::ZeroAttr>(currentAttr)) {
+            auto arrayAttr = dyn_cast<ArrayAttr>(currentAttr);
+            if (!arrayAttr || idx < 0 ||
+                idx >= static_cast<int64_t>(arrayAttr.size()))
+              return std::nullopt;
+            currentAttr = arrayAttr[idx];
+          }
+          currentType = arrayTy.getElementType();
+          continue;
+        }
+        auto structTy = dyn_cast<LLVM::LLVMStructType>(currentType);
+        if (!structTy || structTy.isOpaque())
+          return std::nullopt;
+        ArrayRef<Type> body = structTy.getBody();
+        if (idx < 0 || idx >= static_cast<int64_t>(body.size()))
+          return std::nullopt;
+        if (!isa<LLVM::ZeroAttr>(currentAttr)) {
+          auto arrayAttr = dyn_cast<ArrayAttr>(currentAttr);
+          if (!arrayAttr || idx < 0 ||
+              idx >= static_cast<int64_t>(arrayAttr.size()))
+            return std::nullopt;
+          currentAttr = arrayAttr[idx];
+        }
+        currentType = body[idx];
+      }
+
+      if (currentType != resultType || !isSupportedSMTLIBScalarType(currentType))
+        return std::nullopt;
+      if (auto typedLeaf = coerceToTypedScalarAttr(currentAttr, resultType))
+        return typedLeaf;
+      if (auto dense = dyn_cast<DenseElementsAttr>(currentAttr)) {
+        if (dense.getNumElements() != 1)
+          return std::nullopt;
+        if (auto intTy = dyn_cast<IntegerType>(currentType))
+          return IntegerAttr::get(intTy, *dense.getValues<APInt>().begin());
+        if (auto floatTy = dyn_cast<FloatType>(currentType))
+          return FloatAttr::get(floatTy, *dense.getValues<APFloat>().begin());
+      }
+      return std::nullopt;
+    }
+
+    if (container.getDefiningOp<LLVM::ZeroOp>()) {
+      Type currentType = containerType;
+      for (int64_t idx : path) {
+        currentType = getAggregateSubelementType(currentType, idx);
+        if (!currentType)
+          return std::nullopt;
+      }
+      if (currentType != resultType || !isSupportedSMTLIBScalarType(currentType))
+        return std::nullopt;
+      if (auto intTy = dyn_cast<IntegerType>(currentType))
+        return IntegerAttr::get(intTy, 0);
+      if (auto floatTy = dyn_cast<FloatType>(currentType))
+        return FloatAttr::get(floatTy, 0.0);
+    }
+    return std::nullopt;
+  };
+
   for (auto extractValue : llvmExtractValues) {
     if (!isSupportedSMTLIBScalarType(extractValue.getType()))
       continue;
@@ -9514,118 +10046,181 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       }
     }
 
+    if (auto typedAttr = extractAggregateConstant(
+            extractValue.getContainer(), extractValue.getContainer().getType(),
+            extractValue.getPosition(), extractValue.getType())) {
+      OpBuilder builder(extractValue);
+      auto arithConstant =
+          arith::ConstantOp::create(builder, extractValue.getLoc(), *typedAttr);
+      extractValue.replaceAllUsesWith(arithConstant.getResult());
+      extractValue.erase();
+      continue;
+    }
+
     auto load = extractValue.getContainer().getDefiningOp<LLVM::LoadOp>();
     if (!load)
       continue;
-    auto loadAccess = resolveGlobalLoadAccess(load.getAddr());
-    if (!loadAccess)
-      continue;
-    auto addr = loadAccess->addrOf;
-    auto module = extractValue->getParentOfType<ModuleOp>();
-    if (!module)
-      continue;
-    auto global =
-        module.lookupSymbol<LLVM::GlobalOp>(addr.getGlobalNameAttr().getValue());
-    if (!global)
-      continue;
-    bool allowGlobalConstFold = global->hasAttr("constant");
-    if (!allowGlobalConstFold &&
-        hasAnyStoreToGlobal(module, addr.getGlobalNameAttr()))
-      continue;
+    if (auto loadAccess = resolveGlobalLoadAccess(load.getAddr())) {
+      auto addr = loadAccess->addrOf;
+      auto module = extractValue->getParentOfType<ModuleOp>();
+      if (!module)
+        continue;
+      auto global =
+          module.lookupSymbol<LLVM::GlobalOp>(addr.getGlobalNameAttr().getValue());
+      if (!global)
+        continue;
+      bool allowGlobalConstFold = global->hasAttr("constant");
+      if (!allowGlobalConstFold &&
+          hasAnyStoreToGlobal(module, addr.getGlobalNameAttr()))
+        continue;
 
-    SmallVector<int64_t> elementIndices(loadAccess->elementIndices.begin(),
-                                        loadAccess->elementIndices.end());
-    llvm::append_range(elementIndices, extractValue.getPosition());
-    auto typedAttr =
-        extractGlobalLoadConstant(global, elementIndices, extractValue.getType());
-    if (!typedAttr)
-      continue;
-    if ((*typedAttr).getType() != extractValue.getType())
-      return extractValue.emitOpError(
-          "cannot legalize llvm.extractvalue of scalar constant global with "
-          "mismatched result type for SMT-LIB export");
+      SmallVector<int64_t> elementIndices(loadAccess->elementIndices.begin(),
+                                          loadAccess->elementIndices.end());
+      llvm::append_range(elementIndices, extractValue.getPosition());
+      auto typedAttr =
+          extractGlobalLoadConstant(global, elementIndices, extractValue.getType());
+      if (!typedAttr)
+        continue;
+      if ((*typedAttr).getType() != extractValue.getType())
+        return extractValue.emitOpError(
+            "cannot legalize llvm.extractvalue of scalar constant global with "
+            "mismatched result type for SMT-LIB export");
 
+      OpBuilder builder(extractValue);
+      auto arithConstant =
+          arith::ConstantOp::create(builder, extractValue.getLoc(), *typedAttr);
+      extractValue.replaceAllUsesWith(arithConstant.getResult());
+      extractValue.erase();
+      continue;
+    }
+
+    auto mallocAccess = resolveMallocLoadAccess(load.getAddr());
     OpBuilder builder(extractValue);
-    auto arithConstant =
-        arith::ConstantOp::create(builder, extractValue.getLoc(), *typedAttr);
-    extractValue.replaceAllUsesWith(arithConstant.getResult());
+    Value replacement;
+    if (mallocAccess) {
+      SmallVector<int64_t> elementIndices(mallocAccess->elementIndices.begin(),
+                                          mallocAccess->elementIndices.end());
+      llvm::append_range(elementIndices, extractValue.getPosition());
+      replacement = getOrCreateMallocNondetValue(
+          mallocAccess->mallocCall, elementIndices, extractValue.getType(),
+          extractValue.getLoc(), builder);
+    } else if (auto mallocRoot = findMallocRootCall(load.getAddr())) {
+      replacement = createFreshMallocNondetValue(
+          extractValue.getType(), extractValue.getLoc(), builder);
+    } else {
+      continue;
+    }
+    if (!replacement)
+      continue;
+    extractValue.replaceAllUsesWith(replacement);
     extractValue.erase();
   }
 
   for (auto llvmLoad : llvmLoads) {
-    auto loadAccess = resolveGlobalLoadAccess(llvmLoad.getAddr());
-    if (!loadAccess)
-      continue;
-    auto addr = loadAccess->addrOf;
-    auto module = llvmLoad->getParentOfType<ModuleOp>();
-    if (!module)
-      continue;
-    auto global =
-        module.lookupSymbol<LLVM::GlobalOp>(addr.getGlobalNameAttr().getValue());
-    if (!global)
-      continue;
-    bool allowGlobalConstFold = global->hasAttr("constant");
-    if (!allowGlobalConstFold &&
-        hasAnyStoreToGlobal(module, addr.getGlobalNameAttr()))
-      continue;
-    auto typedAttr = extractGlobalLoadConstant(
-        global, loadAccess->elementIndices, llvmLoad.getType());
-    if (!typedAttr)
-      continue;
-    if (!isSupportedSMTLIBScalarType((*typedAttr).getType()))
-      continue;
-    if ((*typedAttr).getType() != llvmLoad.getType())
-      return llvmLoad.emitOpError(
-          "cannot legalize llvm.load of scalar constant global with mismatched "
-          "load type for SMT-LIB export");
+    bool handled = false;
+    if (auto loadAccess = resolveGlobalLoadAccess(llvmLoad.getAddr())) {
+      auto addr = loadAccess->addrOf;
+      auto module = llvmLoad->getParentOfType<ModuleOp>();
+      if (!module)
+        continue;
+      auto global =
+          module.lookupSymbol<LLVM::GlobalOp>(addr.getGlobalNameAttr().getValue());
+      if (!global)
+        continue;
+      bool allowGlobalConstFold = global->hasAttr("constant");
+      if (!allowGlobalConstFold &&
+          hasAnyStoreToGlobal(module, addr.getGlobalNameAttr()))
+        continue;
+      auto typedAttr = extractGlobalLoadConstant(
+          global, loadAccess->elementIndices, llvmLoad.getType());
+      if (!typedAttr)
+        continue;
+      if (!isSupportedSMTLIBScalarType((*typedAttr).getType()))
+        continue;
+      if ((*typedAttr).getType() != llvmLoad.getType())
+        return llvmLoad.emitOpError(
+            "cannot legalize llvm.load of scalar constant global with mismatched "
+            "load type for SMT-LIB export");
 
-    // Prefer replacing cast users directly with SMT constants so the SMT-LIB
-    // export path does not retain unrealized casts inside smt.solver regions.
-    auto intAttr = dyn_cast<IntegerAttr>(*typedAttr);
-    if (intAttr) {
-      SmallVector<UnrealizedConversionCastOp> castsToErase;
-      for (Operation *user : llvmLoad.getResult().getUsers()) {
-        auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
-        if (!castOp || castOp->getNumOperands() != 1 || castOp->getNumResults() != 1)
-          continue;
-        Type dstTy = castOp->getResult(0).getType();
-        Value replacement;
-        OpBuilder builder(castOp);
-        if (auto bvTy = dyn_cast<smt::BitVectorType>(dstTy)) {
-          if (bvTy.getWidth() != intAttr.getValue().getBitWidth())
+      // Prefer replacing cast users directly with SMT constants so the SMT-LIB
+      // export path does not retain unrealized casts inside smt.solver regions.
+      auto intAttr = dyn_cast<IntegerAttr>(*typedAttr);
+      if (intAttr) {
+        SmallVector<UnrealizedConversionCastOp> castsToErase;
+        for (Operation *user : llvmLoad.getResult().getUsers()) {
+          auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
+          if (!castOp || castOp->getNumOperands() != 1 ||
+              castOp->getNumResults() != 1)
             continue;
-          replacement = smt::BVConstantOp::create(
-              builder, castOp.getLoc(),
-              intAttr.getValue().zextOrTrunc(bvTy.getWidth()));
-        } else if (isa<smt::BoolType>(dstTy)) {
-          if (intAttr.getValue().getBitWidth() != 1)
+          Type dstTy = castOp->getResult(0).getType();
+          Value replacement;
+          OpBuilder builder(castOp);
+          if (auto bvTy = dyn_cast<smt::BitVectorType>(dstTy)) {
+            if (bvTy.getWidth() != intAttr.getValue().getBitWidth())
+              continue;
+            replacement = smt::BVConstantOp::create(
+                builder, castOp.getLoc(),
+                intAttr.getValue().zextOrTrunc(bvTy.getWidth()));
+          } else if (isa<smt::BoolType>(dstTy)) {
+            if (intAttr.getValue().getBitWidth() != 1)
+              continue;
+            replacement = smt::BoolConstantOp::create(
+                builder, castOp.getLoc(), intAttr.getValue().isOne());
+          } else {
             continue;
-          replacement = smt::BoolConstantOp::create(
-              builder, castOp.getLoc(), intAttr.getValue().isOne());
-        } else {
-          continue;
+          }
+          castOp->getResult(0).replaceAllUsesWith(replacement);
+          castsToErase.push_back(castOp);
         }
-        castOp->getResult(0).replaceAllUsesWith(replacement);
-        castsToErase.push_back(castOp);
+        for (auto castOp : castsToErase)
+          if (castOp->use_empty())
+            castOp.erase();
       }
-      for (auto castOp : castsToErase)
-        if (castOp->use_empty())
-          castOp.erase();
-    }
 
-    if (!llvmLoad.getResult().use_empty()) {
-      OpBuilder builder(llvmLoad);
-      auto arithConstant =
-          arith::ConstantOp::create(builder, llvmLoad.getLoc(), *typedAttr);
-      llvmLoad.replaceAllUsesWith(arithConstant.getResult());
+      if (!llvmLoad.getResult().use_empty()) {
+        OpBuilder builder(llvmLoad);
+        auto arithConstant =
+            arith::ConstantOp::create(builder, llvmLoad.getLoc(), *typedAttr);
+        llvmLoad.replaceAllUsesWith(arithConstant.getResult());
+      }
+      llvmLoad.erase();
+      for (auto it = loadAccess->geps.rbegin(), e = loadAccess->geps.rend();
+           it != e; ++it)
+        if ((*it)->use_empty())
+          (*it).erase();
+      if (addr->use_empty())
+        addr.erase();
+      handled = true;
     }
+    if (handled)
+      continue;
+
+    OpBuilder builder(llvmLoad);
+    auto mallocAccess = resolveMallocLoadAccess(llvmLoad.getAddr());
+    LLVM::CallOp mallocRoot =
+        mallocAccess ? mallocAccess->mallocCall : findMallocRootCall(llvmLoad.getAddr());
+    if (!mallocRoot)
+      continue;
+
+    Value replacement;
+    if (mallocAccess) {
+      replacement = getOrCreateMallocNondetValue(
+          mallocAccess->mallocCall, mallocAccess->elementIndices,
+          llvmLoad.getType(), llvmLoad.getLoc(), builder);
+    } else {
+      replacement =
+          createFreshMallocNondetValue(llvmLoad.getType(), llvmLoad.getLoc(), builder);
+    }
+    if (!replacement && !llvmLoad.getResult().use_empty())
+      continue;
+
+    Value loadAddr = llvmLoad.getAddr();
+    if (replacement)
+      llvmLoad.replaceAllUsesWith(replacement);
     llvmLoad.erase();
-    for (auto it = loadAccess->geps.rbegin(), e = loadAccess->geps.rend();
-         it != e; ++it)
-      if ((*it)->use_empty())
-        (*it).erase();
-    if (addr->use_empty())
-      addr.erase();
+    eraseUnusedAddressChain(loadAddr, eraseUnusedAddressChain);
+    if (mallocRoot->use_empty())
+      mallocRoot.erase();
   }
   return success();
 }
@@ -9679,7 +10274,20 @@ void ConvertVerifToSMTPass::runOnOperation() {
           if (failed(inlineBMCRegionFuncCalls(bmcOp, symbolTable)))
             return WalkResult::interrupt();
 
-          if (forSMTLIBExport) {
+          bool hasLocalCheck = false;
+          op->walk([&](Operation *curOp) {
+            if (isa<verif::AssertOp, verif::CoverOp>(curOp)) {
+              hasLocalCheck = true;
+              return WalkResult::interrupt();
+            }
+            return WalkResult::advance();
+          });
+
+          // Propertyless BMC ops are short-circuited to "true" by lowering.
+          // Skip SMT-LIB unsupported-LLVM diagnostics in this case so unrelated
+          // runtime scaffolding (e.g. UVM helper calls) does not block
+          // propertyless no-op checks.
+          if (forSMTLIBExport && hasLocalCheck) {
             if (failed(legalizeSMTLIBSupportedLLVMOps(bmcOp)))
               return WalkResult::interrupt();
             Operation *unsupportedOp = nullptr;

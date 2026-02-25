@@ -21,10 +21,15 @@
 namespace circt {
 
 inline std::optional<unsigned> getTwoStateValueWidth(mlir::Type type) {
-  auto width = hw::getBitWidth(type);
-  if (width <= 0)
+  type = hw::getCanonicalType(type);
+  if (auto intTy = llvm::dyn_cast<mlir::IntegerType>(type))
+    return intTy.getWidth();
+  if (auto hwIntTy = llvm::dyn_cast<hw::IntType>(type)) {
+    if (auto widthAttr = llvm::dyn_cast<mlir::IntegerAttr>(hwIntTy.getWidth()))
+      return static_cast<unsigned>(widthAttr.getInt());
     return std::nullopt;
-  return static_cast<unsigned>(width);
+  }
+  return std::nullopt;
 }
 
 inline mlir::Value resolveTwoStateValuesWithEnable(
@@ -34,6 +39,8 @@ inline mlir::Value resolveTwoStateValuesWithEnable(
   if (values.empty() || values.size() != enables.size())
     return mlir::Value();
   mlir::Type valueType = values.front().getType();
+  if (!llvm::isa<mlir::IntegerType, hw::IntType>(valueType))
+    return mlir::Value();
   auto widthOpt = getTwoStateValueWidth(valueType);
   if (!widthOpt)
     return mlir::Value();

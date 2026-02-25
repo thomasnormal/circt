@@ -9,12 +9,20 @@
 set -euo pipefail
 
 # --- Configuration ---
-CIRCT_VERILOG="${CIRCT_VERILOG:-build-test/bin/circt-verilog}"
-CIRCT_SIM="${CIRCT_SIM:-build-test/bin/circt-sim}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils/formal_toolchain_resolve.sh
+source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
+CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
+CIRCT_SIM="${CIRCT_SIM:-$(resolve_default_circt_tool "circt-sim" "$CIRCT_TOOL_DIR_DEFAULT")}"
 COCOTB_ROOT="${COCOTB_ROOT:-$HOME/cocotb}"
 COCOTB_PKG="$HOME/.local/lib/python3.9/site-packages/cocotb"
 VPI_LIB="${VPI_LIB:-$COCOTB_PKG/libs/libcocotbvpi_ius.so}"
-WORKDIR="${COCOTB_WORKDIR:-/tmp/cocotb_test}"
+if [ -n "${COCOTB_WORKDIR:-}" ]; then
+    WORKDIR="$COCOTB_WORKDIR"
+else
+    WORKDIR="/tmp/cocotb_test_${USER:-user}_$$"
+fi
 MAX_SIM_TIME="${COCOTB_MAX_SIM_TIME:-1000000000000}"  # 1ms in ps (timescale 1ps)
 
 PYGPI_PYTHON_BIN="${PYGPI_PYTHON_BIN:-$(python3 -m cocotb_tools.config --python-bin 2>/dev/null || echo python3)}"
@@ -178,7 +186,9 @@ echo "--- Compiling designs ---"
 
 SAMPLE_MODULE_SV="$DESIGNS/sample_module/sample_module.sv"
 SAMPLE_MODULE_MLIR="$WORKDIR/compiled/sample_module.mlir"
-compile_sv "sample_module" "$SAMPLE_MODULE_SV" -D _VCP || true
+# Keep sample_module in LLHD form so VPI-observable string helper variables
+# survive lowering and can be updated by runtime string writes.
+compile_sv "sample_module" --ir-llhd "$SAMPLE_MODULE_SV" || true
 
 BASIC_HIERARCHY_V="$DESIGNS/basic_hierarchy_module/basic_hierarchy_module.v"
 BASIC_HIERARCHY_MLIR="$WORKDIR/compiled/basic_hierarchy_module.mlir"
@@ -218,7 +228,9 @@ for local_test in issue_2255 test_3270 test_defaultless_parameter test_fatal \
             compile_sv "$local_test" "$TESTS/test_fatal/fatal.sv" || true
             ;;
         test_first_on_coincident_triggers)
-            compile_sv "$local_test" "$TESTS/test_first_on_coincident_triggers/test.sv" || true
+            # Keep this test in LLHD form so local regs remain VPI-visible.
+            compile_sv "$local_test" --ir-llhd \
+                "$TESTS/test_first_on_coincident_triggers/test.sv" || true
             ;;
         test_iteration_verilog)
             compile_sv "$local_test" "$TESTS/test_iteration_verilog/endian_swapper.sv" || true

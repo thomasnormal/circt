@@ -1,4 +1,4 @@
-// RUN: ! circt-translate --import-verilog %s 2>&1 | FileCheck %s
+// RUN: ! circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s
 // REQUIRES: slang
 
 module SvaInvalidClockingError(input logic a);

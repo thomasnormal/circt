@@ -68,7 +68,7 @@ on:
         type: string
 
 jobs:
-  build-test-and-install:
+  build_test-and-install:
     runs-on: ubuntu-latest
     container: "alpine"
     permissions:
@@ -210,10 +210,10 @@ jobs:
 
   # Clean up cache after build completes
   cleanup-cache:
-    needs: build-test-and-install
+    needs: build_test-and-install
     if: always() # Run even if build fails
     uses: ./.github/workflows/cleanupCache.yml
     permissions:
       actions: write
     with:
-      cache_key_pattern: ${{ needs.build-test-and-install.outputs.cache-key-pattern }}
+      cache_key_pattern: ${{ needs.build_test-and-install.outputs.cache-key-pattern }}

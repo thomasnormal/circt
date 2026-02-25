@@ -117,6 +117,7 @@ TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
+UNSUPPORTED_SVA_POLICY="${UNSUPPORTED_SVA_POLICY:-strict}"
 Z3_BIN="${Z3_BIN:-}"
 SKIP_VHDL="${SKIP_VHDL:-1}"
 YOSYS_SVA_USE_VHDL_STUBS="${YOSYS_SVA_USE_VHDL_STUBS:-1}"
@@ -267,6 +268,10 @@ if [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
 fi
 if [[ "$BMC_RUN_SMTLIB" != "1" && "$BMC_SMOKE_ONLY" != "1" ]]; then
   echo "warning: BMC_RUN_SMTLIB=0 is ignored; circt-bmc JIT backend has been removed" >&2
+fi
+if [[ "$UNSUPPORTED_SVA_POLICY" != "strict" && "$UNSUPPORTED_SVA_POLICY" != "lenient" ]]; then
+  echo "invalid UNSUPPORTED_SVA_POLICY: $UNSUPPORTED_SVA_POLICY (expected strict or lenient)" >&2
+  exit 1
 fi
 
 tmpdir="$(mktemp -d)"
@@ -8582,6 +8587,9 @@ EOF
     if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
       verilog_args+=("--no-uvm-auto-include")
     fi
+    if [[ "$UNSUPPORTED_SVA_POLICY" == "lenient" ]]; then
+      verilog_args+=("--sva-continue-on-unsupported")
+    fi
     if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
       read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
       verilog_args+=("${extra_args[@]}")
@@ -8638,6 +8646,9 @@ EOF
   local verilog_args=()
   if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" ]]; then
     verilog_args+=("--no-uvm-auto-include")
+  fi
+  if [[ "$UNSUPPORTED_SVA_POLICY" == "lenient" ]]; then
+    verilog_args+=("--sva-continue-on-unsupported")
   fi
   if [[ -n "$CIRCT_VERILOG_ARGS" ]]; then
     read -r -a extra_args <<<"$CIRCT_VERILOG_ARGS"
@@ -8720,6 +8731,9 @@ EOF
   fi
   if [[ "$BMC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
     bmc_args+=("--assume-known-inputs")
+  fi
+  if [[ "$UNSUPPORTED_SVA_POLICY" == "lenient" ]]; then
+    bmc_args+=("--drop-unsupported-sva")
   fi
   if [[ -n "$CIRCT_BMC_ARGS" ]]; then
     read -r -a extra_bmc_args <<<"$CIRCT_BMC_ARGS"

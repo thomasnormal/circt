@@ -3576,10 +3576,16 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     SmallVector<NamedAttribute> structEntries;
     auto addStructFields =
         [&](std::string_view sigName, const slang::ast::Type &type) {
-          auto &ct = type.getCanonicalType();
-          if (ct.kind != slang::ast::SymbolKind::UnpackedStructType)
+          // Support both plain unpacked structs and unpacked arrays of
+          // unpacked structs (e.g. `rec_t sig[0:1]`).
+          const slang::ast::Type *ct = &type.getCanonicalType();
+          while (ct->kind ==
+                 slang::ast::SymbolKind::FixedSizeUnpackedArrayType)
+            ct = &ct->as<slang::ast::FixedSizeUnpackedArrayType>()
+                      .elementType.getCanonicalType();
+          if (ct->kind != slang::ast::SymbolKind::UnpackedStructType)
             return;
-          auto &ust = ct.as<slang::ast::UnpackedStructType>();
+          auto &ust = ct->as<slang::ast::UnpackedStructType>();
           SmallVector<Attribute> fieldList;
           for (auto *field : ust.fields) {
             SmallVector<NamedAttribute> fieldAttrs;
@@ -3590,6 +3596,29 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
             fieldAttrs.push_back(builder.getNamedAttr(
                 "width",
                 builder.getI32IntegerAttr(field->getType().getBitstreamWidth())));
+            auto &fieldType = field->getType().getCanonicalType();
+            if (fieldType.kind ==
+                slang::ast::SymbolKind::FixedSizeUnpackedArrayType) {
+              auto &arrType =
+                  fieldType.as<slang::ast::FixedSizeUnpackedArrayType>();
+              int32_t left = arrType.range.left;
+              int32_t right = arrType.range.right;
+              int32_t numElems =
+                  left >= right ? (left - right + 1) : (right - left + 1);
+              fieldAttrs.push_back(
+                  builder.getNamedAttr("is_array", builder.getBoolAttr(true)));
+              fieldAttrs.push_back(builder.getNamedAttr(
+                  "num_elements", builder.getI32IntegerAttr(numElems)));
+              fieldAttrs.push_back(builder.getNamedAttr(
+                  "left_bound", builder.getI32IntegerAttr(left)));
+              fieldAttrs.push_back(builder.getNamedAttr(
+                  "right_bound", builder.getI32IntegerAttr(right)));
+              fieldAttrs.push_back(builder.getNamedAttr(
+                  "element_width",
+                  builder.getI32IntegerAttr(
+                      arrType.elementType.getCanonicalType()
+                          .getBitstreamWidth())));
+            }
             fieldList.push_back(builder.getDictionaryAttr(fieldAttrs));
           }
           if (!fieldList.empty())
@@ -3694,6 +3723,50 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
     if (!realNames.empty())
       lowering.op->setAttr("vpi.real_vars",
                            builder.getArrayAttr(realNames));
+  }
+
+  // Collect all VPI-visible variables/ports with bitstream widths so circt-sim
+  // can synthesize missing signals if optimization removes dead locals.
+  {
+    llvm::StringSet<> seen;
+    SmallVector<NamedAttribute> allVarEntries;
+    auto addAllVar = [&](std::string_view name, const slang::ast::Type &type) {
+      if (name.empty())
+        return;
+      auto inserted = seen.insert(
+          llvm::StringRef(name.data(), name.size()));
+      if (!inserted.second)
+        return;
+
+      auto &ct = type.getCanonicalType();
+      if (ct.isFloating() || ct.isString())
+        return;
+
+      int64_t bitWidth = ct.getBitstreamWidth();
+      if (bitWidth <= 0 || bitWidth > INT32_MAX)
+        return;
+
+      allVarEntries.push_back(builder.getNamedAttr(
+          llvm::StringRef(name.data(), name.size()),
+          builder.getI32IntegerAttr(static_cast<int32_t>(bitWidth))));
+    };
+
+    for (auto &member : module->members()) {
+      if (auto *varSym = member.as_if<slang::ast::VariableSymbol>())
+        addAllVar(varSym->name, varSym->getType());
+      else if (auto *netSym = member.as_if<slang::ast::NetSymbol>())
+        addAllVar(netSym->name, netSym->getType());
+    }
+    for (auto *portSym : module->getPortList()) {
+      if (!portSym)
+        continue;
+      if (auto *port = portSym->as_if<slang::ast::PortSymbol>())
+        addAllVar(port->name, port->getType());
+    }
+
+    if (!allVarEntries.empty())
+      lowering.op->setAttr("vpi.all_vars",
+                           builder.getDictionaryAttr(allVarEntries));
   }
 
   moore::OutputOp::create(builder, lowering.op.getLoc(), outputs);

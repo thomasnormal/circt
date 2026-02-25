@@ -1,9 +1,8 @@
 // RUN: circt-verilog %s --ir-hw -o %t.mlir 2>/dev/null
 // RUN: circt-sim %t.mlir --top verif_noop_tb 2>&1 | FileCheck %s
 
-// Test: verif.cover, verif.assume, and verif.assert ops are treated as no-ops
-// in simulation. These are formal verification constructs that should not cause
-// the simulator to hang in an infinite loop.
+// Test: verif.cover remains a no-op and verif.assume/verif.assert do not halt
+// process execution in simulation when conditions hold.
 
 // CHECK: before_cover
 // CHECK: after_cover

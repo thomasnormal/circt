@@ -400,6 +400,12 @@ struct CLOptions {
                "for strict SystemVerilog semantics."),
       cl::init(true), cl::cat(cat)};
 
+  cl::opt<bool> continueOnUnsupportedSVA{
+      "sva-continue-on-unsupported",
+      cl::desc("Continue lowering when an unsupported SVA construct is "
+               "encountered by emitting tagged placeholder assert-like ops"),
+      cl::init(false), cl::cat(cat)};
+
   cl::list<std::string> topModules{
       "top",
       cl::desc("One or more top-level modules to instantiate (instead of "
@@ -866,6 +872,7 @@ static LogicalResult executeWithSources(MLIRContext *context,
   options.allowVirtualIfaceWithOverride = opts.allowVirtualIfaceWithOverride;
   options.ignoreTimingControls = opts.ignoreTimingControls;
   options.allowNonProceduralDynamic = opts.allowNonProceduralDynamic;
+  options.continueOnUnsupportedSVA = opts.continueOnUnsupportedSVA;
   if (opts.loweringMode != LoweringMode::OnlyLint)
     options.topModules = opts.topModules;
   options.paramOverrides = opts.paramOverrides;

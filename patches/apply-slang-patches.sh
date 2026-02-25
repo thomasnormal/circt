@@ -30,5 +30,9 @@ git apply --ignore-whitespace "$script_dir/slang-randomize-with-scope.patch" || 
 git apply --ignore-whitespace "$script_dir/slang-covergroup-iff-noparen.patch" || true
 # Allow missing semicolon before endsequence in sequence declarations
 git apply --ignore-whitespace "$script_dir/slang-sequence-decl-semicolon.patch" || true
+# Allow open upper bounds for eventually/s_always/nexttime/s_nexttime unary property ranges
+git apply --ignore-whitespace "$script_dir/slang-unbounded-unary-range.patch" || true
+# Add sequence `.ended` method support as alias of `.matched`
+git apply --ignore-whitespace "$script_dir/slang-sequence-ended-method.patch" || true
 # Skip ifdef/endif inside `define bodies in skipped preprocessor branches (IEEE §22.5.1)
 git apply --ignore-whitespace "$script_dir/slang-define-skip-ifdef.patch" || true

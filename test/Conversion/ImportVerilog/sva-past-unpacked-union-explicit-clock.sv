@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -14,7 +14,7 @@ module SvaPastUnpackedUnionExplicitClock(input logic clk_a, input logic clk_b);
   // CHECK: moore.blocking_assign
   // CHECK: moore.union_extract
   // CHECK: moore.eq
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk_a)
                    ($past(u, 1, @(posedge clk_b)).a == u.a));
 endmodule

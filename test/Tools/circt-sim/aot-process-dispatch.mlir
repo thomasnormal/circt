@@ -1,11 +1,9 @@
 // RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=STATS
-// XFAIL: *
 //
 // Test that an eligible single-fire driver process is dispatched through the
 // compiled AOT callback path rather than the interpreter.
-// Requires Phase L (scheduler dispatch wire-up). XFAIL until then.
 //
 // The driver process (1 wait, drives 1-bit signal) is eligible for AOT
 // compilation. After Phase L, running with --compiled should route that

@@ -1,5 +1,5 @@
 // RUN: circt-verilog --ir-moore --no-uvm-auto-include %s 2>&1 | FileCheck %s
-// RUN: circt-translate --import-verilog %s | FileCheck %s --check-prefix=IR
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s --check-prefix=IR
 // REQUIRES: slang
 
 // Regression: event-typed assertion ports used for explicit $past clocking

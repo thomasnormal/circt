@@ -21,8 +21,8 @@ Validation log:
 
 - `bash -n utils/run_regression_unified.sh` (PASS)
 - `python3 -m compileall -q utils test/Tools/Inputs` (PASS)
-- `ninja -C build-test circt-sim arcilator CIRCTSimToolTests` (PASS)
-- `build-test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='*JITDelay*'` (PASS)
-- `build-test/bin/arcilator test/arcilator/arcilator.mlir` (PASS)
-- `build-test/bin/arcilator test/arcilator/compreg.mlir` (PASS)
+- `ninja -C build_test circt-sim arcilator CIRCTSimToolTests` (PASS)
+- `build_test/unittests/Tools/circt-sim/CIRCTSimToolTests --gtest_filter='*JITDelay*'` (PASS)
+- `build_test/bin/arcilator test/arcilator/arcilator.mlir` (PASS)
+- `build_test/bin/arcilator test/arcilator/compreg.mlir` (PASS)
 - `build-ot/bin/llvm-lit -sv test/Tools --filter='run-regression-unified-.*|formal-runner-common-retry'` (PASS)

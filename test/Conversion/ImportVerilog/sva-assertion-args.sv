@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
 
@@ -31,21 +31,14 @@ module sva_assertion_args(
   // CHECK: [[DA:%.*]] = ltl.delay [[A]], 0, 0 : i1
   // CHECK: [[B:%.*]] = moore.to_builtin_bool {{%.*}} : l1
   // CHECK: [[DB:%.*]] = ltl.delay [[B]], 0, 0 : i1
-  // CHECK: [[BASE:%.*]] = ltl.concat [[DA]], [[DB]] : !ltl.sequence, !ltl.sequence
-  // CHECK: [[BASE_DELAY:%.*]] = ltl.delay [[BASE]], 0, 0 : !ltl.sequence
   // CHECK: [[C:%.*]] = moore.to_builtin_bool {{%.*}} : l1
   // CHECK: [[DC:%.*]] = ltl.delay [[C]], 0, 0 : i1
-  // CHECK: [[SEQ:%.*]] = ltl.concat [[BASE_DELAY]], [[DC]] : !ltl.sequence, !ltl.sequence
+  // CHECK: [[SEQ:%.*]] = ltl.concat [[DA]], [[DB]], [[DC]] : !ltl.sequence, !ltl.sequence, !ltl.sequence
   // CHECK: [[CLK:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED:%.*]] = ltl.clock [[SEQ]],{{ *}}posedge [[CLK]]{{.*}} : !ltl.sequence
-  // CHECK: verif.assert [[CLOCKED]] : !ltl.sequence
+  // CHECK: verif.clocked_assert [[SEQ]], posedge [[CLK]] : !ltl.sequence
   assert property (@(posedge clk) seq_arg(base_seq(a, b), c));
 
-  // CHECK: [[A2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[B2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[IMP:%.*]] = ltl.implication [[A2]], [[B2]] : i1, i1
-  // CHECK: [[CLK2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED2:%.*]] = ltl.clock [[IMP]],{{ *}}posedge [[CLK2]]{{.*}} : !ltl.property
-  // CHECK: verif.assert [[CLOCKED2]] : !ltl.property
+  // CHECK: [[IMP:%.*]] = ltl.implication [[A]], [[B]] : i1, i1
+  // CHECK: verif.clocked_assert [[IMP]], posedge [[CLK]] : !ltl.property
   assert property (@(posedge clk) prop_arg(base_prop(a, b)));
 endmodule

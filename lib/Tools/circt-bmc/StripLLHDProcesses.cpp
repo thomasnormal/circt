@@ -10,6 +10,7 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWInstanceGraph.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
+#include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-bmc/Passes.h"
@@ -136,6 +137,12 @@ static std::optional<llvm::APInt> getConstantBitsFromAttr(Attribute attr,
 }
 
 static std::optional<llvm::APInt> getConstantBits(Value value) {
+  if (auto result = dyn_cast<OpResult>(value))
+    if (auto process = dyn_cast<llhd::ProcessOp>(result.getOwner()))
+      if (auto halt =
+              dyn_cast<llhd::HaltOp>(process.getBody().front().getTerminator()))
+        if (result.getResultNumber() < halt.getOperands().size())
+          return getConstantBits(halt.getOperand(result.getResultNumber()));
   if (auto hwConst = value.getDefiningOp<hw::ConstantOp>())
     return hwConst.getValue();
   if (auto aggConst = value.getDefiningOp<hw::AggregateConstantOp>())
@@ -340,6 +347,24 @@ struct StripLLHDProcessesPass
               builder, hwModule.getLoc(), /*time=*/0, /*timeUnit=*/"ns",
               /*delta=*/0, /*epsilon=*/1);
           return zeroTime;
+        };
+          auto createZeroTimeDrive = [&](Location loc, Value signal,
+                                         Value value) {
+          OpBuilder builder(hwModule.getContext());
+          if (auto *defOp = signal.getDefiningOp();
+              defOp && defOp->getBlock() == hwModule.getBodyBlock())
+            builder.setInsertionPointAfter(defOp);
+          else
+            builder.setInsertionPoint(hwModule.getBodyBlock()->getTerminator());
+          DriveOp::create(builder, loc, signal, value, getZeroTime(), Value{});
+        };
+        auto isZeroTimeLike = [](Value time) -> bool {
+          auto ct = time.getDefiningOp<ConstantTimeOp>();
+          if (!ct)
+            return false;
+          auto attr = ct.getValue();
+          return attr.getTime() == 0 && attr.getDelta() == 0 &&
+                 attr.getEpsilon() <= 1;
         };
 
         for (auto process : processes) {
@@ -755,21 +780,63 @@ struct StripLLHDProcessesPass
             recordAbstractedInterfaceInput(newInput.first, baseName, signalType,
                                            reason, getSignalName(signal),
                                            std::nullopt, loc, defaultBits);
-            OpBuilder builder(hwModule.getContext());
-            builder.setInsertionPoint(hwModule.getBodyBlock()->getTerminator());
-            DriveOp::create(builder, loc, signal, newInput.second,
-                            getZeroTime(), Value{});
+            createZeroTimeDrive(loc, signal, newInput.second);
             return newInput.second;
+          };
+          auto absorbInitDriveIntoRegister = [&](DriveOp drvOp) -> bool {
+            if (!signalsWithDynamicDrives.contains(drvOp.getSignal()))
+              return false;
+            if (drvOp.getEnable())
+              return false;
+            if (!isZeroTimeLike(drvOp.getTime()))
+              return false;
+            auto initBits = getConstantBits(drvOp.getValue());
+            if (!initBits)
+              return false;
+
+            seq::FirRegOp stateReg;
+            unsigned stateRegDrives = 0;
+            for (auto *user : drvOp.getSignal().getUsers()) {
+              auto otherDrive = dyn_cast<DriveOp>(user);
+              if (!otherDrive || otherDrive == drvOp)
+                continue;
+              if (otherDrive.getEnable())
+                continue;
+              if (!isZeroTimeLike(otherDrive.getTime()))
+                continue;
+              if (auto otherProcess = otherDrive->getParentOfType<ProcessOp>()) {
+                if (otherProcess == process)
+                  continue;
+                if (!processHasWait.lookup(otherProcess.getOperation()))
+                  continue;
+              }
+
+              Value stateValue = otherDrive.getValue();
+              while (auto bitcast = stateValue.getDefiningOp<hw::BitcastOp>())
+                stateValue = bitcast.getInput();
+              auto reg = stateValue.getDefiningOp<seq::FirRegOp>();
+              if (!reg)
+                continue;
+
+              if (stateReg && stateReg != reg)
+                return false;
+              stateReg = reg;
+              ++stateRegDrives;
+            }
+
+            if (!stateReg || stateRegDrives != 1)
+              return false;
+            int64_t bitWidth = hw::getBitWidth(stateReg.getType());
+            if (bitWidth <= 0)
+              return false;
+            auto presetType = IntegerType::get(hwModule.getContext(), bitWidth);
+            auto presetAttr =
+                IntegerAttr::get(presetType, initBits->zextOrTrunc(bitWidth));
+            stateReg->setAttr(stateReg.getPresetAttrName(), presetAttr);
+            return true;
           };
 
         if (!dynamicDrives.empty()) {
-          auto isZeroTimeConst = [](Value time) -> bool {
-            auto ct = time.getDefiningOp<ConstantTimeOp>();
-            if (!ct)
-              return false;
-            auto attr = ct.getValue();
-            return attr.getTime() == 0 && attr.getDelta() == 0;
-          };
           auto resolveDynamicDriveValue = [&](Value signal) -> Value {
             Value resolved;
             for (auto drvOp : dynamicDrives) {
@@ -781,7 +848,7 @@ struct StripLLHDProcessesPass
                 return {};
               if (!isValueFromAbove(drvOp.getTime(), process))
                 return {};
-              if (!isZeroTimeConst(drvOp.getTime()))
+              if (!isZeroTimeLike(drvOp.getTime()))
                 return {};
               Value val = drvOp.getValue();
               if (!resolved)
@@ -800,11 +867,7 @@ struct StripLLHDProcessesPass
             if (signalInputs.contains(signal))
               continue;
             if (Value resolved = resolveDynamicDriveValue(signal)) {
-              OpBuilder builder(hwModule.getContext());
-              builder.setInsertionPoint(
-                  hwModule.getBodyBlock()->getTerminator());
-              DriveOp::create(builder, process.getLoc(), signal, resolved,
-                              getZeroTime(), Value{});
+              createZeroTimeDrive(process.getLoc(), signal, resolved);
               continue;
             }
             auto typeIt = driveValueTypes.find(signal);
@@ -825,11 +888,7 @@ struct StripLLHDProcessesPass
                 newInput.first, baseName, typeIt->second,
                 "dynamic_drive_resolution_unknown", getSignalName(signal),
                 std::nullopt, driveLoc, std::nullopt);
-            OpBuilder builder(hwModule.getContext());
-            builder.setInsertionPoint(
-                hwModule.getBodyBlock()->getTerminator());
-            DriveOp::create(builder, process.getLoc(), signal, newInput.second,
-                            getZeroTime(), Value{});
+            createZeroTimeDrive(process.getLoc(), signal, newInput.second);
           }
         } else {
           OpBuilder builder(process);
@@ -842,6 +901,8 @@ struct StripLLHDProcessesPass
             // Drop only the redundant "drive signal to its own init at zero
             // time" form in that case.
             if (signalsWithDynamicDrives.contains(drvOp.getSignal())) {
+              if (absorbInitDriveIntoRegister(drvOp))
+                continue;
               if (auto sigOp =
                       drvOp.getSignal().getDefiningOp<llhd::SignalOp>()) {
                 if (!drvOp.getEnable() &&
@@ -881,6 +942,10 @@ struct StripLLHDProcessesPass
                 abstractionReason = "non_drive_use";
               abstractionLoc = use.getOwner()->getLoc();
                 break;
+              }
+              if (!hasWait && absorbInitDriveIntoRegister(drv)) {
+                droppableResultDrives.push_back(drv);
+                continue;
               }
               if (hasObservableSignalUse(drv.getSignal(), drv)) {
                 Type signalType = driveValueTypes.lookup(drv.getSignal());

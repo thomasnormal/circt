@@ -1,5 +1,5 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
-// RUN: circt-translate --import-verilog %s 2>&1 | FileCheck %s --check-prefix=DIAG
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=DIAG
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -12,11 +12,10 @@ module SVASequenceMatchItemFormatArgsSubroutine(input logic clk, a);
   // Match-item display/fdisplay should preserve format arguments, not just
   // emit task-name marker literals.
   // CHECK-LABEL: moore.module @SVASequenceMatchItemFormatArgsSubroutine
-  // CHECK: moore.read %a
-  // CHECK: moore.fmt.int decimal
+  // CHECK: moore.fmt.int decimal %a
   // CHECK: moore.builtin.display
   // CHECK: moore.builtin.fwrite
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) s);
 endmodule
 
