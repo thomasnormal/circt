@@ -8081,3 +8081,40 @@ Based on these findings, the circt-sim compiled process architecture:
   `FourStateStruct -> union` width-aware behavior, another needed a new
   structure-flattening primitive. Handling both in one conversion pass closed
   both classes.
+
+## 2026-02-25: Mixed packed array -> four-state cast gap
+
+### Gap identified (red-first)
+- Added local repro: `/tmp/packed_array_mixed_to_logic.sv`
+- Pre-fix result:
+  - `build-test/bin/circt-verilog /tmp/packed_array_mixed_to_logic.sv --ir-hw`
+  - `EXIT:1` with:
+    - `error: 'hw.bitcast' op Bitwidth of input must match result`
+    - source: `!hw.array<2xstruct<a: !hw.struct<value: i1, unknown: i1>, b: i1>>`
+    - target: `!hw.struct<value: i4, unknown: i4>`
+
+### Root cause
+- `flattenToFlatPacked(...)` only handled integer/4-state leaves,
+  `hw::StructType`, and `hw::UnionType`.
+- Mixed packed arrays therefore had no legal flattening path, falling back to
+  invalid direct `hw.bitcast`.
+
+### Implementation
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - extended `flattenToFlatPacked(...)` for `hw::ArrayType`:
+    - iterates elements with HW packed reverse-indexing convention.
+    - recursively flattens each element.
+    - concatenates per-element value/unknown into packed streams.
+
+### Validation
+- `ninja -C build-test circt-verilog`
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog/packed-mixed-array-to-fourstate-bitcast.sv build-test/test/Conversion/ImportVerilog/packed-mixed-struct-to-fourstate-bitcast.sv build-test/test/Conversion/ImportVerilog/packed-union-fourstate-bitcast.sv`
+  - result: `3/3 PASS`
+- Repro rerun:
+  - `build-test/bin/circt-verilog /tmp/packed_array_mixed_to_logic.sv --ir-hw`
+  - `EXIT:0`
+
+### Realizations / surprises
+- The flatten/reconstruct approach scales cleanly from structs/unions to arrays,
+  and this closes another class of packed mixed-domain cast failures with one
+  recursive extension.
