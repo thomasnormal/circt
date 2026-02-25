@@ -3819,8 +3819,20 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (wantHelp || wantHelpHidden || wantHelpList || wantHelpListHidden) {
-    llvm::cl::PrintHelpMessage(/*Hidden=*/wantHelpHidden || wantHelpListHidden,
-                               /*Categorized=*/wantHelp || wantHelpHidden);
+    llvm::outs()
+        << "OVERVIEW: CIRCT Event-Driven Simulation Tool\n\n"
+        << "USAGE: circt-sim [options] <input>\n\n"
+        << "Common options:\n"
+        << "  --mode <mode>        Simulation mode: interpret, compile, analyze\n"
+        << "  --top <module>       Top module name (repeatable)\n"
+        << "  --vcd <path>         Write waveform VCD output\n"
+        << "  --max-time <fs>      Stop simulation at or after this time\n"
+        << "  --parallel           Enable parallel scheduler (experimental)\n"
+        << "  --resource-guard     Enable runtime resource guard (default)\n"
+        << "  --resource-guard=false\n"
+        << "                       Disable runtime resource guard\n"
+        << "  --version            Display version information\n"
+        << "  --help               Display this help text\n";
     llvm::outs().flush();
     llvm::errs().flush();
     return 0;

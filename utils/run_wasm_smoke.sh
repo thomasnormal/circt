@@ -22,6 +22,7 @@ THREADED_OPTIONS_HELPER="utils/wasm_threaded_options_fallback_check.sh"
 VERILOG_ANALYSIS_HELPER="utils/wasm_verilog_analysis_fallback_check.sh"
 VERILOG_STDOUT_DASH_HELPER="utils/wasm_verilog_stdout_dash_check.sh"
 VERILOG_DIAG_STDOUT_DASH_HELPER="utils/wasm_verilog_diag_stdout_dash_check.sh"
+HELP_TEXT_HELPER="utils/wasm_help_text_check.sh"
 BMC_HOSTPATH_HELPER="utils/wasm_bmc_hostpath_input_check.sh"
 BMC_STDOUT_DASH_HELPER="utils/wasm_bmc_stdout_dash_check.sh"
 TBLGEN_HOSTPATH_HELPER="utils/wasm_tblgen_hostpath_input_check.sh"
@@ -142,6 +143,10 @@ if [[ ! -x "$VERILOG_STDOUT_DASH_HELPER" ]]; then
 fi
 if [[ ! -x "$VERILOG_DIAG_STDOUT_DASH_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $VERILOG_DIAG_STDOUT_DASH_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$HELP_TEXT_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $HELP_TEXT_HELPER" >&2
   exit 1
 fi
 if [[ ! -x "$BMC_HOSTPATH_HELPER" ]]; then
@@ -284,6 +289,9 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
     exit 1
   fi
 
+  echo "[wasm-smoke] Smoke: wasm help text coverage"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" CHECK_VERILOG="$has_verilog_target" "$HELP_TEXT_HELPER"
+
   echo "[wasm-smoke] Functional: circt-verilog stdin (.sv) -> IR"
   verilog_ir_out="$tmpdir/verilog-func.mlir"
   cat "$SV_TEST_INPUT" | \
@@ -317,6 +325,11 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
     echo "[wasm-smoke] expected SV pipeline VCD to include \$enddefinitions: $tmpdir/verilog-sim.vcd" >&2
     exit 1
   fi
+fi
+
+if [[ "$has_verilog_target" -eq 0 ]]; then
+  echo "[wasm-smoke] Smoke: wasm help text coverage"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" CHECK_VERILOG=0 "$HELP_TEXT_HELPER"
 fi
 
 echo "[wasm-smoke] Functional: circt-bmc stdin -> SMT-LIB"
