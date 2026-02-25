@@ -143,6 +143,23 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
     // Branch from merge to original normal dest.
     builder.CreateBr(normalDest);
 
+    // Fix PHI nodes in normalDest: origBB → mergeBB
+    for (auto &Phi : normalDest->phis()) {
+      int Idx = Phi.getBasicBlockIndex(origBB);
+      if (Idx >= 0)
+        Phi.setIncomingBlock(Idx, mergeBB);
+    }
+
+    // Fix PHI nodes in unwindDest: origBB → {taggedBB, directBB}
+    for (auto &Phi : unwindDest->phis()) {
+      int Idx = Phi.getBasicBlockIndex(origBB);
+      if (Idx >= 0) {
+        llvm::Value *Val = Phi.getIncomingValue(Idx);
+        Phi.setIncomingBlock(Idx, taggedBB);
+        Phi.addIncoming(Val, directBB);
+      }
+    }
+
     // Remove the original invoke.
     II->eraseFromParent();
     return true;
