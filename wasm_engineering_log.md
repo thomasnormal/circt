@@ -2265,3 +2265,24 @@
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_threaded_options_fallback_check.sh`: PASS.
   - direct commands now return rc=0 with warnings instead of aborting.
+
+## 2026-02-25 (fix: wasm circt-bmc `-o -` stdout emission)
+- TDD regression added:
+  - `utils/wasm_bmc_stdout_dash_check.sh`
+  - verifies `node <build>/bin/circt-bmc.js --emit-smtlib -o - ...` writes SMT-LIB
+    to stdout and contains `(check-sat)`.
+- Pre-fix behavior:
+  - command returned rc=0 but produced empty stdout in wasm/node artifacts.
+- Root cause:
+  - output path always opened via `ToolOutputFile` even for `-`, and the
+    stdout stream path was not explicitly handled/flushed in wasm runtime mode.
+- Fix in `tools/circt-bmc/circt-bmc.cpp`:
+  - when `outputFilename == "-"`, use `llvm::outs()` directly.
+  - guard `keep()` calls behind `if (outputFile)`.
+  - flush stdout explicitly after `emit-mlir`, `emit-smtlib`, and `emit-llvm`
+    output modes.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now executes
+    `utils/wasm_bmc_stdout_dash_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_bmc_stdout_dash_check.sh`: PASS.

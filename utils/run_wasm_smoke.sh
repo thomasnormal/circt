@@ -20,6 +20,7 @@ VPI_REENTRY_ISOLATION_HELPER="utils/wasm_vpi_reentry_callback_isolation_check.sh
 THREADED_OPTIONS_HELPER="utils/wasm_threaded_options_fallback_check.sh"
 VERILOG_ANALYSIS_HELPER="utils/wasm_verilog_analysis_fallback_check.sh"
 BMC_HOSTPATH_HELPER="utils/wasm_bmc_hostpath_input_check.sh"
+BMC_STDOUT_DASH_HELPER="utils/wasm_bmc_stdout_dash_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -125,6 +126,10 @@ if [[ ! -x "$VERILOG_ANALYSIS_HELPER" ]]; then
 fi
 if [[ ! -x "$BMC_HOSTPATH_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $BMC_HOSTPATH_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$BMC_STDOUT_DASH_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $BMC_STDOUT_DASH_HELPER" >&2
   exit 1
 fi
 
@@ -284,6 +289,9 @@ grep -q "(check-sat)" "$bmc_func_out"
 
 echo "[wasm-smoke] Functional: circt-bmc host-path input"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$BMC_HOSTPATH_HELPER"
+
+echo "[wasm-smoke] Functional: circt-bmc '-o -' stdout"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$BMC_STDOUT_DASH_HELPER"
 
 echo "[wasm-smoke] Functional: circt-sim stdin"
 cat "$SIM_TEST_INPUT" | \
