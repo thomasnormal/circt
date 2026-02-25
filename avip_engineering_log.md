@@ -8930,3 +8930,25 @@ Based on these findings, the circt-sim compiled process architecture:
 
 ### Realization
 - The upstream APInt fix in `initializeGlobals` is sufficient to remove the wasm init-time assert on sub-byte globals; remaining failures in this workspace are attributable to unrelated local frontend modifications.
+
+## 2026-02-25: post-merge cleanups and hardening
+
+### Completed cleanups
+- Reverted temporary APInt triage instrumentation in submodule file `llvm/lib/Support/APInt.cpp`.
+- Dropped temporary merge stash `temp-pre-merge-globals` after upstream merge landed cleanly.
+
+### Regression test added
+- Added `test/Tools/circt-sim/global-subbyte-initializer.mlir`.
+- Test covers `llvm.mlir.global` initializers with widths `i1` and `i9` and checks runtime-loaded values to ensure no init-time APInt extraction failure.
+
+### wasm helper hardening
+- Updated `utils/wasm_uvm_pkg_sim_check.sh` to accept explicit artifact overrides:
+  - `VERILOG_JS`
+  - `SIM_JS`
+- This allows running the check against known-good tool artifacts in dirty worktrees.
+
+### Validation
+- `node build-wasm-mergecheck/bin/circt-sim.js test/Tools/circt-sim/global-subbyte-initializer.mlir`
+  - confirms `g_i1=1`, `g_i9=257`, and simulation completion.
+- `VERILOG_JS=build-wasm/bin/circt-verilog.js SIM_JS=build-wasm-mergecheck/bin/circt-sim.js NODE_BIN=node utils/wasm_uvm_pkg_sim_check.sh`
+  - PASS.

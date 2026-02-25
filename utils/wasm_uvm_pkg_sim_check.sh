@@ -5,8 +5,8 @@ BUILD_DIR="${BUILD_DIR:-build-wasm}"
 NODE_BIN="${NODE_BIN:-node}"
 MAX_TIME_FS="${MAX_TIME_FS:-1000000}"
 
-VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
-SIM_JS="$BUILD_DIR/bin/circt-sim.js"
+VERILOG_JS="${VERILOG_JS:-$BUILD_DIR/bin/circt-verilog.js}"
+SIM_JS="${SIM_JS:-$BUILD_DIR/bin/circt-sim.js}"
 
 if [[ ! -s "$VERILOG_JS" ]]; then
   echo "[wasm-uvm-sim] missing wasm frontend artifact: $VERILOG_JS" >&2
@@ -32,6 +32,9 @@ if (( MAX_TIME_FS < 1 )); then
   echo "[wasm-uvm-sim] MAX_TIME_FS must be >= 1 (got $MAX_TIME_FS)" >&2
   exit 1
 fi
+
+echo "[wasm-uvm-sim] frontend artifact: $VERILOG_JS"
+echo "[wasm-uvm-sim] simulator artifact: $SIM_JS"
 
 tmpdir="$(mktemp -d)"
 cleanup() {
