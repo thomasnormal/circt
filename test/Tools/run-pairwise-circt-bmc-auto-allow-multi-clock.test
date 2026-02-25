@@ -1,0 +1,18 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: printf 'module top(input logic clk_a, input logic clk_b, input logic a, input logic b); endmodule\n' > %t/src/a.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nout=""\nwhile [[ $# -gt 0 ]]; do\n  case "$1" in\n    -o) out="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n: "${out:?}"\ncat > "$out" <<"MLIR"\nmodule @top(clocks: clk_a, clk_b; sigs: a, b)\nMLIR\nexit 0\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nallow=0\nmlir=""\nfor a in "$@"; do\n  [[ "$a" == "--allow-multi-clock" ]] && allow=1\n  if [[ -f "$a" ]]; then\n    mlir="$a"\n  fi\ndone\n: "${mlir:?}"\nif grep -q "clk_b" "$mlir"; then\n  if [[ "$allow" != "1" ]]; then\n    echo "$mlir:1:1: error: modules with multiple clocks not yet supported" >&2\n    exit 1\n  fi\nfi\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-verilog %t/bin/circt-bmc
+// RUN: printf 'retry_case\ttop\t%t/src/a.sv\t%t/src\t%t/work/retry\n' > %t/cases.tsv
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_ALLOW_MULTI_CLOCK=0 OUT=%t/results.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=RES < %t/results.tsv
+// RUN: not env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 BMC_ALLOW_MULTI_CLOCK=0 BMC_AUTO_ALLOW_MULTI_CLOCK=0 OUT=%t/results-off.tsv %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work | FileCheck %s --check-prefix=OFF-LOG
+// RUN: FileCheck %s --check-prefix=OFF-RES < %t/results-off.tsv
+//
+// LOG: Running BMC on 1 pairwise case(s)...
+// LOG: pairwise BMC summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// RES: PASS{{[[:space:]]+}}retry_case{{[[:space:]]+}}{{.*}}work/retry{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}UNSAT
+// OFF-LOG: Running BMC on 1 pairwise case(s)...
+// OFF-LOG: pairwise BMC summary: total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 unknown=0 timeout=0
+// OFF-RES: ERROR{{[[:space:]]+}}retry_case{{[[:space:]]+}}{{.*}}work/retry{{[[:space:]]+}}pairwise{{[[:space:]]+}}BMC{{[[:space:]]+}}CIRCT_BMC_ERROR{{[[:space:]]+}}modules_with_multiple_clocks_not_yet_supported

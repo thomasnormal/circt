@@ -422,6 +422,16 @@ def is_single_unit_retryable_preprocessor_failure(log_text: str) -> bool:
     )
 
 
+def is_multiclock_retryable_bmc_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "modules with multiple clocks not yet supported" in low
+        or "designs with multiple clocks not yet supported" in low
+        or "multi-clock bmc requires bmc_reg_clocks" in low
+        or "multi-clock bmc requires bmc_input_names" in low
+    )
+
+
 def extract_unknown_modules(log_text: str) -> set[str]:
     modules: set[str] = set()
     for line in log_text.splitlines():
@@ -1598,6 +1608,17 @@ def main() -> int:
         )
     bmc_assume_known_inputs = os.environ.get("BMC_ASSUME_KNOWN_INPUTS", "0") == "1"
     bmc_allow_multi_clock = os.environ.get("BMC_ALLOW_MULTI_CLOCK", "0") == "1"
+    bmc_auto_allow_multi_clock_raw = os.environ.get("BMC_AUTO_ALLOW_MULTI_CLOCK", "1")
+    if bmc_auto_allow_multi_clock_raw not in {"0", "1"}:
+        print(
+            (
+                f"invalid BMC_AUTO_ALLOW_MULTI_CLOCK: "
+                f"{bmc_auto_allow_multi_clock_raw} (expected 0 or 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    bmc_auto_allow_multi_clock = bmc_auto_allow_multi_clock_raw == "1"
     bmc_prepare_core_with_circt_opt = (
         os.environ.get("BMC_PREPARE_CORE_WITH_CIRCT_OPT", "1") == "1"
     )
@@ -2988,6 +3009,47 @@ def main() -> int:
                     stage,
                 )
                 combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
+                if (
+                    bmc_result.returncode != 0
+                    and bmc_auto_allow_multi_clock
+                    and not case_allow_multi_clock
+                    and case.allow_multi_clock_mode != "off"
+                    and is_multiclock_retryable_bmc_failure(combined)
+                ):
+                    if launch_event_rows is not None:
+                        launch_event_rows.append(
+                            (
+                                "RETRY",
+                                case.case_id,
+                                case_path,
+                                stage,
+                                circt_bmc,
+                                "auto_allow_multi_clock",
+                                "1",
+                                "0.000",
+                                str(bmc_result.returncode),
+                                "",
+                            )
+                        )
+                    bmc_cmd_retry = list(bmc_cmd)
+                    bmc_cmd_retry.append("--allow-multi-clock")
+                    bmc_result = run_and_log(
+                        bmc_cmd_retry,
+                        bmc_log_path,
+                        bmc_out_path,
+                        case_timeout_secs,
+                        etxtbsy_retries,
+                        etxtbsy_backoff_secs,
+                        launch_retry_attempts,
+                        launch_retry_backoff_secs,
+                        launch_retryable_exit_codes,
+                        launch_copy_fallback,
+                        launch_event_rows,
+                        case.case_id,
+                        case_path,
+                        stage,
+                    )
+                    combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
                 bmc_tag = parse_bmc_result(combined)
 
                 if case_smoke_only:
