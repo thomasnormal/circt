@@ -64,6 +64,7 @@ SIM_RETRIES="${SIM_RETRIES:-0}"
 SIM_RETRY_ON_FCTTYP="${SIM_RETRY_ON_FCTTYP:-1}"
 SIM_RETRY_ON_CRASH="${SIM_RETRY_ON_CRASH:-1}"
 SIM_RETRY_ON_UVM_FIELD_OP="${SIM_RETRY_ON_UVM_FIELD_OP:-1}"
+SIM_RETRY_ON_TIMEOUT="${SIM_RETRY_ON_TIMEOUT:-1}"
 SIM_TIMEOUT_HARD=$((SIM_TIMEOUT + SIM_TIMEOUT_GRACE))
 if [[ -z "${MAX_WALL_MS+x}" ]]; then
   MAX_WALL_MS="$((SIM_TIMEOUT_HARD * 1000))"
@@ -371,6 +372,9 @@ sim_status_from_exit() {
 should_retry_sim_failure() {
   local code="$1"
   local log="$2"
+  if [[ "$SIM_RETRY_ON_TIMEOUT" != "0" ]] && [[ "$code" -eq 124 || "$code" -eq 137 ]]; then
+    return 0
+  fi
   if [[ "$SIM_RETRY_ON_FCTTYP" != "0" ]] && [[ "$code" -ne 0 ]] && \
      [[ -f "$log" ]] && grep -q "UVM_FATAL @ 0: FCTTYP" "$log"; then
     return 0
