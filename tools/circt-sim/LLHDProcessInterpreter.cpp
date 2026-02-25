@@ -660,6 +660,9 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
     return defaultValue;
   };
   profilingEnabled = std::getenv("CIRCT_SIM_PROFILE_FUNCS") != nullptr;
+  aotHotCalleeProfileEnabled =
+      std::getenv("CIRCT_AOT_STATS") != nullptr ||
+      std::getenv("CIRCT_AOT_HOT_UNCOMPILED") != nullptr;
   traceSeqEnabled = std::getenv("CIRCT_SIM_TRACE_SEQ") != nullptr;
   traceSeqResolveLimit = envUint64Value("CIRCT_SIM_TRACE_SEQ_RESOLVE_LIMIT",
                                         traceSeqEnabled ? 8 : 0);
@@ -20128,6 +20131,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   if (profilingEnabled)
     ++funcCallProfile[calleeName];
+  noteAotCalleeNameCall(calleeName);
 
   // Fast path for CallOps with cached no-interception result.
   // Skips all UVM string-matching interceptors (~20+ checks).
@@ -22920,6 +22924,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // Execute the function body with depth tracking
+  ++interpretedCallCounts[funcOp.getOperation()];
   ++state.callDepth;
   llvm::SmallVector<InterpretedValue, 4> returnValues;
   // Pass the call operation so it can be saved in call stack frames
@@ -23146,6 +23151,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   }
 
   // Execute function body.
+  ++interpretedCallCounts[funcOp.getOperation()];
   ++state.callDepth;
   llvm::SmallVector<InterpretedValue, 4> returnValues;
   LogicalResult funcResult =
@@ -38227,6 +38233,23 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
 }
 
 
+void LLHDProcessInterpreter::noteAotFuncIdCall(uint32_t fid) {
+  if (!aotHotCalleeProfileEnabled)
+    return;
+  if (fid >= aotFuncIdCallCounts.size())
+    return;
+  ++aotFuncIdCallCounts[fid];
+}
+
+void LLHDProcessInterpreter::noteAotCalleeNameCall(llvm::StringRef calleeName) {
+  if (!aotHotCalleeProfileEnabled || aotFuncNameToCanonicalId.empty())
+    return;
+  auto it = aotFuncNameToCanonicalId.find(calleeName);
+  if (it == aotFuncNameToCanonicalId.end())
+    return;
+  noteAotFuncIdCall(it->second);
+}
+
 void LLHDProcessInterpreter::loadCompiledFunctions(
     const CompiledModuleLoader &loader) {
   if (!rootModule)
@@ -38438,6 +38461,19 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   // Initialize entry table for tagged-FuncId dispatch (Step 7C).
   compiledFuncEntries = loader.getFuncEntries();
   numCompiledAllFuncs = loader.getNumAllFuncs();
+  aotFuncIdCallCounts.assign(numCompiledAllFuncs, 0);
+  aotFuncEntryNamesById.assign(numCompiledAllFuncs, "");
+  aotFuncNameToCanonicalId.clear();
+  for (uint32_t fid = 0; fid < numCompiledAllFuncs; ++fid) {
+    const char *entryName = loader.getFuncEntryName(fid);
+    if (!entryName)
+      continue;
+    aotFuncEntryNamesById[fid] = entryName;
+    // A function name may appear under multiple FuncIds (multiple vtable slots).
+    // Use the first observed FuncId as the canonical direct-call mapping.
+    if (!aotFuncNameToCanonicalId.contains(entryName))
+      aotFuncNameToCanonicalId[entryName] = fid;
+  }
   compiledFuncIsNative.clear();
   compiledFuncIsNative.resize(numCompiledAllFuncs, false);
   unsigned nativeCount = 0;
