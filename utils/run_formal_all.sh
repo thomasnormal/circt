@@ -9236,6 +9236,9 @@ if [[ "${#OPENTITAN_FPV_CFG_FILES[@]}" -gt 0 ]]; then
   if [[ "$FAIL_ON_OPENTITAN_FPV_UNKNOWN_TASK" == "1" ]]; then
     opentitan_contract_resolver_args+=(--fail-on-unknown-task)
   fi
+  if [[ -n "$OPENTITAN_FPV_TARGET_FILTER" ]]; then
+    opentitan_contract_resolver_args+=(--target-filter "$OPENTITAN_FPV_TARGET_FILTER")
+  fi
   python3 "$SCRIPT_DIR/resolve_opentitan_formal_compile_contracts.py" \
     "${opentitan_contract_resolver_args[@]}"
 
