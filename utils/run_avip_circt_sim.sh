@@ -346,6 +346,11 @@ log_has_sim_completed() {
   grep -Eq "Simulation (completed|terminated) at time[[:space:]]+[0-9]+[[:space:]]+fs" "$log" 2>/dev/null
 }
 
+log_has_virtual_call_failure() {
+  local log="$1"
+  grep -Fq "[circt-sim] WARNING: virtual method call" "$log" 2>/dev/null
+}
+
 sim_status_from_exit() {
   local code="$1"
   case "$code" in
@@ -501,6 +506,13 @@ for row in "${selected_avips[@]}"; do
         set -e
 
         if [[ "$sim_exit" -eq 0 ]]; then
+          # Treat internal virtual-dispatch failures as retry-worthy infra
+          # errors. These can appear transiently and often disappear on rerun.
+          if log_has_virtual_call_failure "$sim_log" && (( retry_count < SIM_RETRIES )); then
+            retry_count=$((retry_count + 1))
+            cp -f "$sim_log" "$sim_log.attempt${retry_count}.log" 2>/dev/null || true
+            continue
+          fi
           break
         fi
         if (( retry_count >= SIM_RETRIES )); then

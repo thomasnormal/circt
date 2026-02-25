@@ -19,12 +19,12 @@
 # mcy_examples	nightly,full	-	-	~/mcy/examples	mcy_examples_native_real	-	--jobs 2 --example-retries 1
 #
 # --- AVIP simulation (explicit commands; $1=out_dir, env vars for config) ---
-avip_sim_smoke	smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_circt_sim.sh /tmp/unified-avip-smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_xcelium_reference.sh /tmp/unified-avip-xcelium-smoke	-	-	-	-
-avip_sim_nightly	nightly,full	AVIP_SET=all9 SEEDS=1,2,3 SIM_TIMEOUT=600 SIM_TIMEOUT_GRACE=120 MAX_WALL_MS=600000 utils/run_avip_circt_sim.sh /tmp/unified-avip-nightly	AVIP_SET=all9 SEEDS=1,2,3 utils/run_avip_xcelium_reference.sh /tmp/unified-avip-xcelium-nightly	-	-	-	-
-avip_arcilator_smoke	smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_arcilator_sim.sh /tmp/unified-avip-arcilator-smoke	-	-	-	-	-
-avip_arcilator_nightly	nightly,full	AVIP_SET=all9 SEEDS=1 utils/run_avip_arcilator_sim.sh /tmp/unified-avip-arcilator-nightly	-	-	-	-	-
-avip_verilog_smoke	smoke	AVIP_SET=core8 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
-avip_verilog_nightly	nightly,full	AVIP_SET=all9 utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
+avip_sim_smoke	smoke	AVIP_SET=core8 SEEDS=1 SIM_RETRIES=1 FAIL_ON_FUNCTIONAL_GATE=1 utils/run_avip_circt_sim.sh "$UNIFIED_LANE_OUT_DIR"	AVIP_SET=core8 SEEDS=1 utils/run_avip_xcelium_reference.sh "$UNIFIED_LANE_OUT_DIR"	-	-	-	-
+avip_sim_nightly	nightly,full	AVIP_SET=all9 SEEDS=1,2,3 SIM_TIMEOUT=600 SIM_TIMEOUT_GRACE=120 MAX_WALL_MS=600000 SIM_RETRIES=1 FAIL_ON_FUNCTIONAL_GATE=1 utils/run_avip_circt_sim.sh "$UNIFIED_LANE_OUT_DIR"	AVIP_SET=all9 SEEDS=1,2,3 utils/run_avip_xcelium_reference.sh "$UNIFIED_LANE_OUT_DIR"	-	-	-	-
+avip_arcilator_smoke	smoke	AVIP_SET=core8 SEEDS=1 utils/run_avip_arcilator_sim.sh "$UNIFIED_LANE_OUT_DIR"	-	-	-	-	-
+avip_arcilator_nightly	nightly,full	AVIP_SET=all9 SEEDS=1 utils/run_avip_arcilator_sim.sh "$UNIFIED_LANE_OUT_DIR"	-	-	-	-	-
+avip_verilog_smoke	smoke	AVIP_SET=core8 OUT="$UNIFIED_LANE_OUT_DIR/avip-circt-verilog.log" utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
+avip_verilog_nightly	nightly,full	AVIP_SET=all9 OUT="$UNIFIED_LANE_OUT_DIR/avip-circt-verilog.log" utils/run_avip_circt_verilog.sh ~/mbit/apb_avip	-	-	-	-	-
 #
 # --- sv-tests (explicit commands; $1=suite_root) ---
 sv_tests_bmc	nightly,full	TEST_FILTER='.' utils/run_sv_tests_circt_bmc.sh ~/sv-tests	-	-	-	-	-
@@ -96,6 +96,6 @@ cvdp_cocotb_commercial_smoke25	smoke,nightly,full	CVDP_MIN_COCOTB_PASS=0 CVDP_MA
 cvdp_cocotb_commercial_compileonly	nightly,full	python3 ~/cvdp_benchmark/run_circt_cocotb.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl --compile-only -o /tmp/unified-cvdp-commercial-compileonly	-	-	-	-	-
 #
 # --- CVDP: golden RTL smoke tests (commercial dataset, 103 entries with golden RTL) ---
-cvdp_golden_smoke	nightly,full	python3 ~/cvdp_benchmark/run_circt_golden_smoke.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -o /tmp/unified-cvdp-golden-smoke	-	-	-	-	-
-cvdp_golden_commercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_golden_smoke.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -n 25 -o /tmp/unified-cvdp-golden-commercial-smoke25	-	-	-	-	-
-cvdp_golden_noncommercial_smoke25	smoke,nightly,full	python3 ~/cvdp_benchmark/run_circt_golden_smoke.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -n 25 -o /tmp/unified-cvdp-golden-noncommercial-smoke25	-	-	-	-	-
+cvdp_golden_smoke	nightly,full	python3 utils/run_cvdp_golden_smoke_runner.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -o /tmp/unified-cvdp-golden-smoke	-	-	-	-	-
+cvdp_golden_commercial_smoke25	smoke,nightly,full	python3 utils/run_cvdp_golden_smoke_runner.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_commercial.jsonl -n 25 -o /tmp/unified-cvdp-golden-commercial-smoke25	-	-	-	-	-
+cvdp_golden_noncommercial_smoke25	smoke,nightly,full	python3 utils/run_cvdp_golden_smoke_runner.py -f ~/cvdp_benchmark/datasets/cvdp_v1.0.2_nonagentic_code_generation_no_commercial.jsonl -n 25 -o /tmp/unified-cvdp-golden-noncommercial-smoke25	-	-	-	-	-
