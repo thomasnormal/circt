@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t %t/logs
+// RUN: printf 'module top; endmodule\n' > %t/extnets.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat <<"MLIR"\nmodule {\n  llvm.mlir.global internal @__circt_proc_assertions_enabled(true) {addr_space = 0 : i32} : i1\n  hw.module @top() {\n    %%%%p = llvm.mlir.addressof @__circt_proc_assertions_enabled : !llvm.ptr\n    %%%%g = llvm.load %%%%p : !llvm.ptr -> i1\n    verif.assert %%%%g : i1\n    hw.output\n  }\n}\nMLIR\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat "${@: -1}"\n' > %t/fake-opt.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nmlir="${@: -1}"\nif rg -q "__circt_proc_assertions_enabled|llvm\\.mlir\\.addressof" "$mlir"; then\n  echo "$mlir:1:1: error: solver must not contain any non-SMT operations" >&2\n  exit 1\nfi\necho "LEC_RESULT=EQ"\n' > %t/fake-lec.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-opt.sh %t/fake-lec.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_OPT=%t/fake-opt.sh CIRCT_LEC=%t/fake-lec.sh KEEP_LOGS_DIR=%t/logs DISABLE_UVM_AUTO_INCLUDE=1 SKIP_VHDL=0 OUT=%t/results.tsv TEST_FILTER='extnets' %S/../../utils/run_yosys_sva_circt_lec.sh %t > %t/out.log
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out.log
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+// RUN: not rg -n '__circt_proc_assertions_enabled|llvm\.mlir\.addressof' %t/logs/extnets.opt.mlir
+// RUN: rg -n 'hw\.constant true' %t/logs/extnets.opt.mlir
+//
+// SUMMARY: yosys LEC summary: total=1 pass=1 fail=0 error=0 skip=0
+// RESULTS: PASS{{[[:space:]]+}}extnets{{[[:space:]]+}}{{.*}}extnets.sv{{[[:space:]]+}}yosys/tests/sva{{[[:space:]]+}}LEC{{[[:space:]]+}}EQ

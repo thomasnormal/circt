@@ -405,6 +405,70 @@ extract_lec_result_tag() {
   fi
 }
 
+strip_proc_assertions_global_for_lec_mlir() {
+  local mlir_file="$1"
+  if [[ ! -f "$mlir_file" ]]; then
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  python3 - "$mlir_file" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+had_trailing_newline = text.endswith("\n")
+lines = text.splitlines()
+
+changed = False
+kept = []
+proc_assert_addr_vars = set()
+addressof_re = re.compile(
+    r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.mlir\.addressof\s+"
+    r"@__circt_proc_assertions_enabled\s*:\s*!llvm\.ptr\s*$"
+)
+cast_re = re.compile(
+    r"^\s*%[A-Za-z0-9._$-]+\s*=\s*builtin\.unrealized_conversion_cast\s+"
+    r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr to !llhd\.ref<i1>\s*$"
+)
+load_re = re.compile(
+    r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.load\s+"
+    r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr -> i1\s*$"
+)
+
+for line in lines:
+    if "llvm.mlir.global" in line and "__circt_proc_assertions_enabled" in line:
+        changed = True
+        continue
+    m_addressof = addressof_re.match(line)
+    if m_addressof:
+        proc_assert_addr_vars.add(m_addressof.group(1).strip())
+        changed = True
+        continue
+    m_cast = cast_re.match(line)
+    if m_cast and m_cast.group(1) in proc_assert_addr_vars:
+        changed = True
+        continue
+    m_load = load_re.match(line)
+    if m_load and m_load.group(2) in proc_assert_addr_vars:
+        kept.append(f"{m_load.group(1)} = hw.constant true")
+        changed = True
+        continue
+    kept.append(line)
+
+if not changed:
+    raise SystemExit(0)
+
+out = "\n".join(kept)
+if had_trailing_newline:
+    out += "\n"
+path.write_text(out, encoding="utf-8")
+PY
+}
+
 for sv in "$YOSYS_SVA_DIR"/*.sv; do
   if [[ ! -f "$sv" ]]; then
     continue
@@ -589,6 +653,8 @@ extra_file=${extra_sv}
       continue
     fi
   fi
+
+  strip_proc_assertions_global_for_lec_mlir "$opt_mlir"
 
   lec_args=()
   if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
