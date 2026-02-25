@@ -1,6 +1,6 @@
 // RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
-// RUN: env CIRCT_AOT_ENABLE_FUNC_DISPATCH=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
+// RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=COMPILED
 
 // Test vtable dispatch through AOT-compiled functions.
 //
@@ -19,6 +19,8 @@
 // SIM: mul100(3) = 300
 //
 // COMPILED: Loaded 2 compiled functions: 2 native-dispatched, 0 excluded (call_indirect), 0 intercepted
+// COMPILED: Entry table: 2 entries for tagged-FuncId dispatch (2 native, 0 non-native)
+// COMPILED: Entry-table native calls:         2
 // COMPILED: add42(5) = 47
 // COMPILED: mul100(3) = 300
 

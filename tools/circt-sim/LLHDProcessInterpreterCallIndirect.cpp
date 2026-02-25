@@ -670,11 +670,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 for (unsigned i = 0; i < numArgs; ++i)
                   a[i] = args[i].getUInt64();
 
-                // Skip native dispatch if any arg is a fake interpreter address.
-                for (unsigned i = 0; i < numArgs; ++i)
-                  if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
-                    eligible = false; break;
-                  }
                 if (eligible) {
 
                 uint64_t result = 0;
@@ -1441,11 +1436,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 for (unsigned i = 0; i < numArgs; ++i)
                   a[i] = sArgs[i].getUInt64();
 
-                // Skip native dispatch if any arg is a fake interpreter address.
-                for (unsigned i = 0; i < numArgs; ++i)
-                  if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
-                    eligible = false; break;
-                  }
                 if (eligible) {
 
                 uint64_t result = 0;
@@ -1804,11 +1794,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             for (unsigned i = 0; i < numArgs; ++i)
               a[i] = fastArgs[i].getUInt64();
 
-            // Skip native dispatch if any arg is a fake interpreter address.
-            for (unsigned i = 0; i < numArgs; ++i)
-              if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
-                eligible = false; break;
-              }
             if (eligible) {
 
             void *fptr = entry.cachedEntryPtr;
@@ -2125,6 +2110,98 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       // the type still gets registered. Critical for test classes.
     }
 
+    auto tryInvokeWrapperFactoryMethod =
+        [&](uint64_t wrapperAddr, uint64_t slotIndex,
+            llvm::ArrayRef<InterpretedValue> extraArgs,
+            InterpretedValue &outResult) -> bool {
+      // Wrapper layout: uvm_void { i32 class_handle, ptr vtable }.
+      uint64_t off = 0;
+      MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
+      if (!blk || !blk->initialized || off + 8 > blk->size)
+        return false;
+
+      uint64_t vtableAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        vtableAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
+      if (vtableAddr == 0)
+        return false;
+
+      uint64_t off2 = 0;
+      MemoryBlock *vtBlk = findBlockByAddress(vtableAddr + slotIndex * 8, off2);
+      if (!vtBlk || !vtBlk->initialized || off2 + 8 > vtBlk->size)
+        return false;
+
+      uint64_t funcAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        funcAddr |= static_cast<uint64_t>(vtBlk->bytes()[off2 + i]) << (i * 8);
+      auto funcIt = addressToFunction.find(funcAddr);
+      if (funcIt == addressToFunction.end())
+        return false;
+
+      auto funcOp = rootModule.lookupSymbol<mlir::func::FuncOp>(funcIt->second);
+      if (!funcOp)
+        return false;
+
+      SmallVector<InterpretedValue, 4> invokeArgs;
+      invokeArgs.push_back(InterpretedValue(wrapperAddr, 64));
+      invokeArgs.append(extraArgs.begin(), extraArgs.end());
+      SmallVector<InterpretedValue, 1> results;
+      if (failed(interpretFuncBody(procId, funcOp, invokeArgs, results)) ||
+          results.empty())
+        return false;
+      outResult = results.front();
+      return true;
+    };
+
+    // Intercept create_component_by_type/object_by_type — when factory
+    // register fast-path stores wrappers in nativeFactoryTypeNames, executing
+    // the full MLIR path can still miss wrappers during early startup.
+    // By-type calls already provide the wrapper pointer directly (arg1), so
+    // dispatch straight to wrapper vtable create_* methods.
+    if ((calleeName ==
+             "uvm_pkg::uvm_default_factory::create_component_by_type" ||
+         calleeName == "uvm_pkg::uvm_factory::create_component_by_type") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 5) {
+      InterpretedValue wrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
+        InterpretedValue nameArg =
+            getValue(procId, callIndirectOp.getArgOperands()[3]);
+        InterpretedValue parentArg =
+            getValue(procId, callIndirectOp.getArgOperands()[4]);
+        InterpretedValue createdObj;
+        if (tryInvokeWrapperFactoryMethod(
+                wrapperVal.getUInt64(),
+                /*slotIndex=*/1, {nameArg, parentArg}, createdObj)) {
+          setValue(procId, callIndirectOp.getResults()[0], createdObj);
+          return success();
+        }
+      }
+      // Fall through to MLIR interpretation if fast-path fails.
+    }
+
+    if ((calleeName ==
+             "uvm_pkg::uvm_default_factory::create_object_by_type" ||
+         calleeName == "uvm_pkg::uvm_factory::create_object_by_type") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 4) {
+      InterpretedValue wrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
+        InterpretedValue nameArg =
+            getValue(procId, callIndirectOp.getArgOperands()[3]);
+        InterpretedValue createdObj;
+        if (tryInvokeWrapperFactoryMethod(
+                wrapperVal.getUInt64(),
+                /*slotIndex=*/0, {nameArg}, createdObj)) {
+          setValue(procId, callIndirectOp.getResults()[0], createdObj);
+          return success();
+        }
+      }
+      // Fall through to MLIR interpretation if fast-path fails.
+    }
+
     // Intercept create_component_by_name — since factory.register was
     // fast-pathed (skipping MLIR-side data population), the MLIR-side
     // create_component_by_name won't find registered types. This
@@ -2156,47 +2233,52 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         auto it = nativeFactoryTypeNames.find(requestedName);
         if (it != nativeFactoryTypeNames.end()) {
           uint64_t wrapperAddr = it->second;
-          // Read wrapper's vtable pointer (at offset 4 after i32).
-          uint64_t off = 0;
-          MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-          if (blk && blk->initialized && off + 8 <= blk->size) {
-            uint64_t vtableAddr = 0;
-            for (unsigned i = 0; i < 8; ++i)
-              vtableAddr |=
-                  static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-            // Read vtable slot 1 = create_component.
-            uint64_t off2 = 0;
-            MemoryBlock *vtBlk =
-                findBlockByAddress(vtableAddr + 1 * 8, off2);
-            if (vtBlk && vtBlk->initialized &&
-                off2 + 8 <= vtBlk->size) {
-              uint64_t funcAddr = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                funcAddr |= static_cast<uint64_t>(vtBlk->bytes()[off2 + i])
-                            << (i * 8);
-              auto funcIt = addressToFunction.find(funcAddr);
-              if (funcIt != addressToFunction.end()) {
-                auto funcOp = rootModule.lookupSymbol<mlir::func::FuncOp>(
-                    funcIt->second);
-                if (funcOp) {
-                  // create_component(wrapper, name, parent) -> ptr
-                  InterpretedValue wrapperVal(wrapperAddr, 64);
-                  InterpretedValue nameArg =
-                      getValue(procId, callIndirectOp.getArgOperands()[3]);
-                  InterpretedValue parentArg =
-                      getValue(procId, callIndirectOp.getArgOperands()[4]);
-                  SmallVector<InterpretedValue, 1> results;
-                  if (succeeded(interpretFuncBody(
-                          procId, funcOp,
-                          {wrapperVal, nameArg, parentArg}, results)) &&
-                      !results.empty()) {
-                    setValue(procId, callIndirectOp.getResults()[0],
-                             results[0]);
-                    return success();
-                  }
-                }
-              }
-            }
+          InterpretedValue nameArg =
+              getValue(procId, callIndirectOp.getArgOperands()[3]);
+          InterpretedValue parentArg =
+              getValue(procId, callIndirectOp.getArgOperands()[4]);
+          InterpretedValue createdObj;
+          if (tryInvokeWrapperFactoryMethod(
+                  wrapperAddr,
+                  /*slotIndex=*/1, {nameArg, parentArg}, createdObj)) {
+            setValue(procId, callIndirectOp.getResults()[0], createdObj);
+            return success();
+          }
+        }
+      }
+      // Fall through to MLIR interpretation if fast-path fails.
+    }
+
+    // Intercept create_object_by_name — mirrors create_component_by_name but
+    // dispatches wrapper slot 0 (create_object).
+    if ((calleeName ==
+             "uvm_pkg::uvm_default_factory::create_object_by_name" ||
+         calleeName == "uvm_pkg::uvm_factory::create_object_by_name") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 4) {
+      InterpretedValue nameVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      std::string requestedName;
+      bool nameExtracted = false;
+      uint64_t strAddr = 0;
+      uint64_t strLenBits = 0;
+      if (decodePackedPtrLenPayload(nameVal, strAddr, strLenBits)) {
+        int64_t strLen = static_cast<int64_t>(strLenBits);
+        if (strLen > 0 && strLen <= 1024 && strAddr != 0) {
+          nameExtracted =
+              tryReadStringKey(procId, strAddr, strLen, requestedName);
+        }
+      }
+      if (nameExtracted && !requestedName.empty()) {
+        auto it = nativeFactoryTypeNames.find(requestedName);
+        if (it != nativeFactoryTypeNames.end()) {
+          InterpretedValue nameArg =
+              getValue(procId, callIndirectOp.getArgOperands()[3]);
+          InterpretedValue createdObj;
+          if (tryInvokeWrapperFactoryMethod(
+                  it->second, /*slotIndex=*/0, {nameArg}, createdObj)) {
+            setValue(procId, callIndirectOp.getResults()[0], createdObj);
+            return success();
           }
         }
       }
@@ -3813,11 +3895,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             for (unsigned i = 0; i < numArgs; ++i)
               a[i] = args[i].getUInt64();
 
-            // Skip native dispatch if any arg is a fake interpreter address.
-            for (unsigned i = 0; i < numArgs; ++i)
-              if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
-                eligible = false; break;
-              }
             if (eligible) {
 
             uint64_t result = 0;
