@@ -3710,6 +3710,20 @@ Value Context::convertAssertionCallExpression(
     bool isEventEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         isa<moore::EventType>(value.getType());
+    auto emitUnsupportedNonConcurrentSampledPlaceholder = [&]() -> Value {
+      if (!(options.continueOnUnsupportedSVA && !inAssertionExpr))
+        return {};
+      auto resultType = moore::IntType::getInt(builder.getContext(), 1);
+      mlir::emitWarning(loc)
+          << funcName << " has unsupported sampled value type " << value.getType()
+          << " in continue mode; returning 0 as a placeholder";
+      return moore::ConstantOp::create(builder, loc, resultType, 0);
+    };
+    auto isSimpleBitVectorCastable = [&](Type ty) -> bool {
+      return isa<moore::IntType, moore::QueueType, moore::ClassHandleType,
+                 moore::StringType, moore::FormatStringType,
+                 moore::PackedType>(ty);
+    };
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
         !isStringEdgeSample && !isEventEdgeSample &&
@@ -3720,6 +3734,18 @@ Value Context::convertAssertionCallExpression(
          isa<moore::WildcardAssocArrayType>(value.getType()) ||
          isa<moore::UnpackedStructType>(value.getType()) ||
          isa<moore::UnpackedUnionType>(value.getType()))) {
+      if (auto fallback = emitUnsupportedNonConcurrentSampledPlaceholder())
+        return fallback;
+      emitUnsupportedSvaDiagnostic(*this, loc)
+          << "unsupported sampled value type for " << funcName;
+      return {};
+    }
+    if (!isAggregateSample && !isAggregateEdgeSample &&
+        !isRealSample && !isStringStableSample && !isEventStableSample &&
+        !isStringEdgeSample && !isEventEdgeSample &&
+        !isSimpleBitVectorCastable(value.getType())) {
+      if (auto fallback = emitUnsupportedNonConcurrentSampledPlaceholder())
+        return fallback;
       emitUnsupportedSvaDiagnostic(*this, loc)
           << "unsupported sampled value type for " << funcName;
       return {};

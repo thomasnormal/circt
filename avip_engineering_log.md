@@ -8475,3 +8475,43 @@ Based on these findings, the circt-sim compiled process architecture:
 - Mixed `build-test`/`build_test` path assumptions can masquerade as SVA
   semantic regressions; toolchain derivation must be centralized across all
   harnesses to keep parity signals trustworthy.
+
+## 2026-02-25: Non-concurrent sampled-value tolerant-mode closure (`$stable/$rose`)
+
+### Gap identified (red-first)
+- `--sva-continue-on-unsupported` still failed for non-concurrent sampled-value
+  expressions when sampled operands could not lower to simple bit-vectors.
+- Deterministic repro:
+  - `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
+  - pre-fix strict + lenient both failed with:
+    - `expression of type '!moore.virtual_interface<@ifc>' cannot be cast to a simple bit vector`
+
+### Implementation
+- `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+  - In `$rose/$fell/$stable/$changed` lowering:
+    - added continue-mode fallback for non-concurrent contexts
+      (`!inAssertionExpr`):
+      - unsupported sampled operand type now emits warning and returns `i1 0`
+        placeholder.
+    - strict behavior preserved (hard error).
+
+### Regression coverage
+- Added:
+  - `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
+- Revalidated:
+  - `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv`
+  - `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
+
+### Validation
+- `ninja -C build_test circt-verilog`
+- New red-first test:
+  - strict path: fails with `unsupported sampled value type for $stable`.
+  - lenient path: passes and emits:
+    - warning for `$stable` unsupported type
+    - warning for `$rose` unsupported type
+- Existing tolerant-mode tests above: PASS via direct RUN-equivalent + FileCheck.
+
+### Realization
+- Unsupported-SVA tolerant mode needs symmetric handling for concurrent and
+  non-concurrent assertion contexts; otherwise `--sva-continue-on-unsupported`
+  gives partial coverage and misses immediate/procedural assertion paths.
