@@ -1130,6 +1130,10 @@ public:
   /// Poll the active $monitor registration and emit output on value changes.
   void pollRegisteredMonitor();
 
+  /// Re-queue stranded call-stack processes at most once per simulation
+  /// timestamp, preventing silent stalls without creating same-time spin loops.
+  bool scheduleStrandedCallStackProcessesOnce(const SimTime &now);
+
   /// Set a callback to check if abort has been requested (e.g., by timeout).
   void setShouldAbortCallback(std::function<bool()> callback) {
     shouldAbortCallback = std::move(callback);
@@ -3829,6 +3833,10 @@ private:
   /// get_type_name once instead of 7 times). Used by find_wrapper_by_name.
   llvm::StringMap<uint64_t> nativeFactoryTypeNames;
 
+  /// Cache for resolved get_type_name packed-string results by callee symbol.
+  /// This avoids repeatedly interpreting identical virtual type-name helpers.
+  llvm::StringMap<InterpretedValue> cachedTypeNameByCallee;
+
   /// Tracks wrappers whose *_registry_*::initialize fast path has run.
   /// Avoids repeated initialization work for the same wrapper object.
   llvm::DenseSet<uint64_t> nativeFactoryInitializedWrappers;
@@ -4105,6 +4113,31 @@ private:
   const void *const *compiledFuncEntries = nullptr;
   uint32_t numCompiledAllFuncs = 0;
   uint64_t nativeEntryCallCount = 0;
+
+  /// Bitmap indicating which FuncId entries are natively compiled functions
+  /// (true) vs trampolines that call __circt_sim_call_interpreted (false).
+  /// The interpreter must ONLY dispatch through the entry table for native
+  /// entries; dispatching to a trampoline would re-enter the interpreter and
+  /// cause infinite stack recursion.
+  std::vector<bool> compiledFuncIsNative;
+
+  struct StrandedCallStackRescueStamp {
+    uint64_t timeFs = 0;
+    uint32_t delta = 0;
+    uint16_t attempts = 0;
+  };
+
+  /// Tracks bounded rescue attempts for stranded call-stack processes per
+  /// simulation timestamp. Keyed by process ID.
+  llvm::DenseMap<ProcessId, StrandedCallStackRescueStamp>
+      strandedCallStackRescueStamp;
+
+  /// Reentrance depth for native->interpreter callbacks.
+  /// When > 0, we're inside __circt_sim_call_interpreted (dispatchTrampoline)
+  /// and should NOT dispatch call_indirect through the entry table, as that
+  /// would create a native->interpreter->native->interpreter->... chain that
+  /// accumulates C++ stack frames until overflow.
+  unsigned nativeCallDepth = 0;
 
   /// AOT invocation counters (for --stats reporting).
   uint64_t compiledCallbackInvocations = 0;
