@@ -597,6 +597,35 @@ static bool flattenToFlatPacked(OpBuilder &builder, Location loc, Value input,
     return true;
   }
 
+  if (auto arrayType = dyn_cast<hw::ArrayType>(type)) {
+    unsigned numElements = arrayType.getNumElements();
+    if (numElements == 0)
+      return false;
+    unsigned idxWidth = llvm::Log2_64_Ceil(numElements);
+    if (idxWidth == 0)
+      idxWidth = 1;
+
+    SmallVector<Value> values;
+    SmallVector<Value> unknowns;
+    values.reserve(numElements);
+    unknowns.reserve(numElements);
+    for (unsigned i = 0; i < numElements; ++i) {
+      // hw.array uses reverse indexing for packed layout.
+      Value idx = hw::ConstantOp::create(
+          builder, loc, APInt(idxWidth, numElements - 1 - i));
+      Value elem = hw::ArrayGetOp::create(builder, loc, input, idx);
+      Value fv;
+      Value fu;
+      if (!flattenToFlatPacked(builder, loc, elem, fv, fu))
+        return false;
+      values.push_back(fv);
+      unknowns.push_back(fu);
+    }
+    valueBits = concatIfNeeded(values);
+    unknownBits = concatIfNeeded(unknowns);
+    return true;
+  }
+
   if (auto unionType = dyn_cast<hw::UnionType>(type)) {
     auto elements = unionType.getElements();
     if (elements.empty())
