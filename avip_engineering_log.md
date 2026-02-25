@@ -1,5 +1,51 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: OpenTitan FPV BMC multi-clock + optional-blackbox policy unblocking
+
+### What changed
+- Updated:
+  - `utils/run_opentitan_fpv_circt_bmc.py`
+  - `test/Tools/run-opentitan-fpv-circt-bmc-task-policy.test`
+  - `test/Tools/run-formal-all-opentitan-fpv-bmc-task-policy-forwarding.test`
+- Added:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-auto-allow-multi-clock.test`
+
+### Red-first debugging path
+- Reproduced concrete OpenTitan FPV-BMC failure:
+  - `sram_ctrl_sec_cm` -> `CIRCT_OPT_ERROR missing_requested_modules_prim_double_lfsr`
+  - task policy always externalized `prim_count,prim_double_lfsr` even when one
+    module was absent in the current target.
+- Patched task policy emission so externalization is emitted as:
+  - `--hw-externalize-modules=module-names=... allow-missing=1`
+  - passed as a single shell token (quoted) to preserve pass option parsing.
+- Re-ran the same target:
+  - `missing_requested_modules_*` removed; target advanced to deeper BMC path.
+- Focused next blocker:
+  - `modules_with_multiple_clocks_not_yet_supported` remained a top error class.
+- Enabled direct OpenTitan FPV-BMC default:
+  - set `BMC_ALLOW_MULTI_CLOCK=1` unless caller already set policy.
+- Re-ran targeted + full OpenTitan FPV-BMC:
+  - all `modules_with_multiple_clocks_not_yet_supported` rows cleared; cases
+    progressed to next real blockers (cycle/legalization/resource limits).
+
+### Realizations / surprises
+- The multi-clock capability already existed behind `--allow-multi-clock`; the
+  primary parity gap was policy wiring/defaults in the OpenTitan FPV runner.
+- Clearing one error bucket did not reduce top-line error count immediately;
+  it replaced shallow gate failures with deeper actionable failures.
+
+### Validation snapshot
+- Targeted OpenTitan row transition:
+  - `sram_ctrl_sec_cm`:
+    - before policy fix: `missing_requested_modules_prim_double_lfsr`
+    - after policy + multi-clock defaults:
+      `failed_to_legalize_operation_hw_module_extern_that_was_explicitl`
+- Full `earlgrey` FPV-BMC delta:
+  - `modules_with_multiple_clocks_not_yet_supported`: `9 -> 0` rows.
+- Runner behavior regression (manual harness-equivalent):
+  - confirmed `BMC_ALLOW_MULTI_CLOCK=1` is present when unset by caller and run
+    succeeds.
+
 ## 2026-02-25 Session: VerifToSMT live-op discovery stack-overflow fix
 
 ### What changed
