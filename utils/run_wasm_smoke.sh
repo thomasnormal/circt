@@ -19,6 +19,7 @@ VPI_STARTUP_YIELD_HELPER="utils/wasm_vpi_startup_yield_check.sh"
 VPI_REENTRY_ISOLATION_HELPER="utils/wasm_vpi_reentry_callback_isolation_check.sh"
 THREADED_OPTIONS_HELPER="utils/wasm_threaded_options_fallback_check.sh"
 VERILOG_ANALYSIS_HELPER="utils/wasm_verilog_analysis_fallback_check.sh"
+VERILOG_STDOUT_DASH_HELPER="utils/wasm_verilog_stdout_dash_check.sh"
 BMC_HOSTPATH_HELPER="utils/wasm_bmc_hostpath_input_check.sh"
 BMC_STDOUT_DASH_HELPER="utils/wasm_bmc_stdout_dash_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
@@ -122,6 +123,10 @@ if [[ ! -x "$THREADED_OPTIONS_HELPER" ]]; then
 fi
 if [[ ! -x "$VERILOG_ANALYSIS_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $VERILOG_ANALYSIS_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$VERILOG_STDOUT_DASH_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $VERILOG_STDOUT_DASH_HELPER" >&2
   exit 1
 fi
 if [[ ! -x "$BMC_HOSTPATH_HELPER" ]]; then
@@ -409,6 +414,9 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] wasm verilog semantic-analysis fallback checks"
   BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$VERILOG_ANALYSIS_HELPER"
+
+  echo "[wasm-smoke] wasm verilog '-o -' stdout"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$VERILOG_STDOUT_DASH_HELPER"
 
   echo "[wasm-smoke] UVM stub frontend+sim+VCD"
   BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_STUB_VCD_HELPER"

@@ -2286,3 +2286,26 @@
     `utils/wasm_bmc_stdout_dash_check.sh`.
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_bmc_stdout_dash_check.sh`: PASS.
+
+## 2026-02-25 (fix: wasm circt-verilog `-o -` stdout emission)
+- TDD regression added:
+  - `utils/wasm_verilog_stdout_dash_check.sh`
+  - validates both host-path and stdin inputs with `circt-verilog.js ... -o -`
+    emit IR text to stdout.
+- Pre-fix behavior:
+  - wasm `circt-verilog.js` returned rc=0 for `-o -` but produced zero stdout
+    bytes; native `circt-verilog` printed MLIR as expected.
+- Root cause:
+  - output path always used `ToolOutputFile` even for `-`; in wasm/node this
+    path could complete without emitting buffered output to process stdout.
+- Fix in `tools/circt-verilog/circt-verilog.cpp`:
+  - use `llvm::outs()` directly when `opts.outputFilename == "-"`.
+  - flush stdout explicitly for preprocess/final emission paths.
+  - guard `keep()` calls so they are only applied when a real output file was
+    opened.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now runs
+    `utils/wasm_verilog_stdout_dash_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_verilog_stdout_dash_check.sh`: PASS.
+  - `WASM_SKIP_BUILD=1 ... utils/run_wasm_smoke.sh`: PASS.
