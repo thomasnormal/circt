@@ -141,10 +141,38 @@ void CompiledModuleLoader::applyGlobalPatches(
 
     const auto &block = it->second;
     uint32_t copySize = std::min(size, static_cast<uint32_t>(block.size));
-    std::memcpy(soAddr, block.data.data(), copySize);
+    std::memcpy(soAddr, block.bytes(), copySize);
     ++patched;
   }
 
   llvm::errs() << "[circt-sim] Applied " << patched
                << " global patches (" << missed << " not found)\n";
+}
+
+void CompiledModuleLoader::aliasGlobals(
+    llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const {
+  if (!compiledModule || compiledModule->num_global_patches == 0)
+    return;
+
+  unsigned aliased = 0, missed = 0;
+  for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
+    const char *name = compiledModule->global_patch_names[i];
+    void *soAddr = compiledModule->global_patch_addrs[i];
+    uint32_t soSize = compiledModule->global_patch_sizes[i];
+
+    auto it = globalMemoryBlocks.find(name);
+    if (it == globalMemoryBlocks.end()) {
+      ++missed;
+      continue;
+    }
+
+    it->second.aliasTo(soAddr, soSize);
+    ++aliased;
+  }
+
+  llvm::errs() << "[circt-sim] Aliased " << aliased
+               << " globals to .so storage";
+  if (missed)
+    llvm::errs() << " (" << missed << " not found in interpreter)";
+  llvm::errs() << "\n";
 }

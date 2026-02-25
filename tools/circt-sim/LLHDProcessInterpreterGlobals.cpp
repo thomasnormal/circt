@@ -229,8 +229,8 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
       if (auto strAttr = dyn_cast<StringAttr>(initAttr)) {
         StringRef strContent = strAttr.getValue();
         // Copy the string content to the memory block
-        size_t copyLen = std::min(strContent.size(), block.data.size());
-        std::memcpy(block.data.data(), strContent.data(), copyLen);
+        size_t copyLen = std::min(strContent.size(), block.size);
+        std::memcpy(block.bytes(), strContent.data(), copyLen);
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with string: \""
                                 << strContent << "\" (" << copyLen << " bytes)\n");
       } else if (auto intAttr = dyn_cast<IntegerAttr>(initAttr)) {
@@ -238,8 +238,8 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         APInt intValue = intAttr.getValue();
         unsigned bitWidth = intValue.getBitWidth();
         unsigned byteWidth = (bitWidth + 7) / 8;
-        for (unsigned j = 0; j < byteWidth && j < block.data.size(); ++j) {
-          block.data[j] = static_cast<uint8_t>(
+        for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
+          block[j] = static_cast<uint8_t>(
               intValue.extractBits(8, j * 8).getZExtValue());
         }
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with integer: 0x"
@@ -250,8 +250,8 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         llvm::APFloat floatValue = floatAttr.getValue();
         const llvm::APInt &floatBits = floatValue.bitcastToAPInt();
         unsigned byteWidth = (floatBits.getBitWidth() + 7) / 8;
-        for (unsigned j = 0; j < byteWidth && j < block.data.size(); ++j) {
-          block.data[j] = static_cast<uint8_t>(
+        for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
+          block[j] = static_cast<uint8_t>(
               floatBits.extractBits(8, j * 8).getZExtValue());
         }
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with float\n");
@@ -284,8 +284,8 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
 
                 // Store the function address in the vtable memory
                 // (little-endian)
-                for (unsigned i = 0; i < 8 && (index * 8 + i) < block.data.size(); ++i) {
-                  block.data[index * 8 + i] = (funcAddr >> (i * 8)) & 0xFF;
+                for (unsigned i = 0; i < 8 && (index * 8 + i) < block.size; ++i) {
+                  block[index * 8 + i] = (funcAddr >> (i * 8)) & 0xFF;
                 }
                 block.initialized = true;
 
