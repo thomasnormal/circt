@@ -182,42 +182,38 @@ static LogicalResult inlineSingleBlockInstance(InstanceOp instance,
   OpBuilder builder(instance);
   for (Operation &op : moduleBlock.without_terminator()) {
     Operation *cloned = builder.clone(op, mapping);
-    if (isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(cloned)) {
-      StringRef calleeClockName;
-      bool invert = false;
-      bool hasClockRef = false;
-      if (auto clockName = cloned->getAttrOfType<StringAttr>("bmc.clock");
-          clockName && !clockName.getValue().empty()) {
-        calleeClockName = clockName.getValue();
-        hasClockRef = true;
-      } else if (auto clockKey =
-                     cloned->getAttrOfType<StringAttr>("bmc.clock_key");
-                 clockKey && !clockKey.getValue().empty()) {
-        hasClockRef =
-            parsePortClockKey(clockKey.getValue(), calleeClockName, invert);
-      }
+    StringRef calleeClockName;
+    bool invert = false;
+    bool hasClockRef = false;
+    if (auto clockName = cloned->getAttrOfType<StringAttr>("bmc.clock");
+        clockName && !clockName.getValue().empty()) {
+      calleeClockName = clockName.getValue();
+      hasClockRef = true;
+    } else if (auto clockKey = cloned->getAttrOfType<StringAttr>("bmc.clock_key");
+               clockKey && !clockKey.getValue().empty()) {
+      hasClockRef =
+          parsePortClockKey(clockKey.getValue(), calleeClockName, invert);
+    }
 
-      if (hasClockRef) {
-        if (auto it = calleeInputNameToIndex.find(calleeClockName);
-            it != calleeInputNameToIndex.end() &&
-            it->second < instance.getInputs().size()) {
-          Value callerClock = instance.getInputs()[it->second];
-          BlockArgument root;
-          StringRef remappedName;
-          if (traceI1ValueRoot(callerClock, root) && root)
-            remappedName = getCallerBlockArgName(root);
-          if (remappedName.empty()) {
-            if (auto arg = dyn_cast<BlockArgument>(callerClock))
-              remappedName = getCallerBlockArgName(arg);
-          }
-          if (!remappedName.empty()) {
-            cloned->setAttr("bmc.clock", builder.getStringAttr(remappedName));
-            std::string remappedKey = ("port:" + remappedName).str();
-            if (invert)
-              remappedKey.append(":inv");
-            cloned->setAttr("bmc.clock_key",
-                            builder.getStringAttr(remappedKey));
-          }
+    if (hasClockRef) {
+      if (auto it = calleeInputNameToIndex.find(calleeClockName);
+          it != calleeInputNameToIndex.end() &&
+          it->second < instance.getInputs().size()) {
+        Value callerClock = instance.getInputs()[it->second];
+        BlockArgument root;
+        StringRef remappedName;
+        if (traceI1ValueRoot(callerClock, root) && root)
+          remappedName = getCallerBlockArgName(root);
+        if (remappedName.empty()) {
+          if (auto arg = dyn_cast<BlockArgument>(callerClock))
+            remappedName = getCallerBlockArgName(arg);
+        }
+        if (!remappedName.empty()) {
+          cloned->setAttr("bmc.clock", builder.getStringAttr(remappedName));
+          std::string remappedKey = ("port:" + remappedName).str();
+          if (invert)
+            remappedKey.append(":inv");
+          cloned->setAttr("bmc.clock_key", builder.getStringAttr(remappedKey));
         }
       }
     }
@@ -6626,6 +6622,100 @@ struct VerifBoundedModelCheckingOpConversion
       return result;
     };
 
+    SmallVector<std::optional<ClockPosInfo>> regClockPosByIndex(numRegs);
+    if (numRegs > 0) {
+      auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
+      auto regClockSourcesAttr =
+          op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources");
+      bool regClocksValid = regClocksAttr && regClocksAttr.size() == numRegs;
+      bool regSourcesValid =
+          regClockSourcesAttr && regClockSourcesAttr.size() == numRegs;
+      if (regSourcesValid || regClocksValid) {
+        for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
+          std::optional<ClockPosInfo> info;
+          if (regSourcesValid) {
+            auto dict = dyn_cast<DictionaryAttr>(regClockSourcesAttr[regIndex]);
+            if (dict) {
+              bool invert = false;
+              if (auto invertAttr = dict.getAs<BoolAttr>("invert"))
+                invert = invertAttr.getValue();
+              if (auto keyAttr = dict.getAs<StringAttr>("clock_key");
+                  keyAttr && !keyAttr.getValue().empty()) {
+                if (auto it = clockKeyToPos.find(keyAttr.getValue());
+                    it != clockKeyToPos.end())
+                  info = ClockPosInfo{it->second.pos,
+                                      static_cast<bool>(invert ^
+                                                        it->second.invert)};
+              }
+              if (!info) {
+                if (auto argAttr = dict.getAs<IntegerAttr>("arg_index")) {
+                  unsigned argIndex = argAttr.getValue().getZExtValue();
+                  if (auto pos = mapArgIndexToClockPos(argIndex))
+                    info = ClockPosInfo{*pos, invert};
+                }
+              }
+            }
+          }
+          if (!info && regClocksValid) {
+            auto nameAttr = dyn_cast_or_null<StringAttr>(regClocksAttr[regIndex]);
+            if (nameAttr && !nameAttr.getValue().empty()) {
+              auto nameIt = inputNameToArgIndex.find(nameAttr.getValue());
+              if (nameIt != inputNameToArgIndex.end()) {
+                if (auto pos = mapArgIndexToClockPos(nameIt->second))
+                  info = ClockPosInfo{*pos, false};
+              }
+            }
+          }
+          regClockPosByIndex[regIndex] = info;
+        }
+      }
+    }
+
+    auto inferClockFromRegDependencies =
+        [&](Value prop) -> std::optional<ClockPosInfo> {
+      if (!prop || numRegs == 0 || regClockPosByIndex.empty())
+        return std::nullopt;
+      std::optional<ClockPosInfo> inferred;
+      SmallVector<Value> worklist{prop};
+      DenseSet<Value> visited;
+      while (!worklist.empty()) {
+        Value current = worklist.pop_back_val();
+        if (!current || !visited.insert(current).second)
+          continue;
+        if (auto arg = dyn_cast<BlockArgument>(current)) {
+          if (arg.getOwner() == &circuitBlock &&
+              arg.getArgNumber() >= originalNumNonStateInputs &&
+              arg.getArgNumber() < originalArgCount) {
+            unsigned regIndex = arg.getArgNumber() - originalNumNonStateInputs;
+            if (regIndex < regClockPosByIndex.size()) {
+              auto info = regClockPosByIndex[regIndex];
+              if (!info)
+                continue;
+              if (!inferred) {
+                inferred = info;
+              } else if (inferred->pos != info->pos ||
+                         inferred->invert != info->invert) {
+                return std::nullopt;
+              }
+            }
+          }
+          continue;
+        }
+        if (auto *def = current.getDefiningOp()) {
+          if (auto prbOp = dyn_cast<llhd::ProbeOp>(def)) {
+            enqueueSignalSources(prbOp.getSignal(), worklist);
+            continue;
+          }
+          if (auto sigOp = dyn_cast<llhd::SignalOp>(def)) {
+            enqueueSignalSources(sigOp.getResult(), worklist);
+            continue;
+          }
+          worklist.append(def->operand_begin(), def->operand_end());
+        }
+      }
+      return inferred;
+    };
+
     bool unmappedClockError = false;
     auto reportUnmappedClock = [&](Location loc, StringRef detail) {
       if (unmappedClockError)
@@ -6712,6 +6802,18 @@ struct VerifBoundedModelCheckingOpConversion
               }
             } else if (!risingClocksOnly && clockIndexes.size() == 1) {
               pos = 0;
+            }
+            if (!pos && !risingClocksOnly) {
+              if (auto regClock = inferClockFromRegDependencies(
+                      idx < props.size() ? props[idx] : Value{})) {
+                pos = regClock->pos;
+                if (info.edge) {
+                  if (regClock->invert)
+                    info.edge = invertClockEdge(*info.edge);
+                } else if (regClock->invert) {
+                  info.edge = ltl::ClockEdge::Neg;
+                }
+              }
             }
             if (!pos && !risingClocksOnly) {
               bool explicitClock =

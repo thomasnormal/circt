@@ -830,11 +830,6 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
     stripLLHDOpts.requireNoLLHD = false;
     pm.addPass(createStripLLHDInterfaceSignals(stripLLHDOpts));
   }
-  pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
-  pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
-  pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
-  pm.addPass(mlir::createCSEPass());
-  pm.addPass(createBottomUpSimpleCanonicalizerPass());
   if (flattenModules) {
     hw::FlattenModulesOptions flattenOptions;
     // We can inline public hw.modules since we're only operating over one
@@ -844,6 +839,14 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
     pm.addPass(mlir::createCSEPass());
     pm.addPass(createBottomUpSimpleCanonicalizerPass());
   }
+  // Lower clocked assertions after module flattening so clock metadata is
+  // derived from the flattened/top-level clock names rather than stale callee
+  // port aliases.
+  pm.nest<hw::HWModuleOp>().addPass(createLowerSVAToLTLPass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
+  pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
+  pm.addPass(mlir::createCSEPass());
+  pm.addPass(createBottomUpSimpleCanonicalizerPass());
   // Normalize aggregate bitcasts before externalizing registers so any clock
   // keys computed during externalization match the post-normalization form
   // seen by LowerToBMC. This avoids multi-clock key mismatches caused by

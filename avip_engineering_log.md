@@ -9131,6 +9131,42 @@ Based on these findings, the circt-sim compiled process architecture:
   alias keys (`port:*`) must be treated as first-class clock identities across
   inlining and BMC lowering boundaries.
 
+## 2026-02-25 BMC multiclock stale-alias remap after flattening
+
+### Goal
+- Eliminate remaining OpenTitan multiclock failures where clocked checks carry
+  stale callee clock aliases (`clk_src_i`, `clk_dst_i`) instead of top-level
+  BMC clock names.
+
+### Findings
+- Instance inlining remapped `bmc.clock`/`bmc.clock_key` only for direct
+  `verif.assert/assume/cover` ops; clock metadata on other cloned forms could
+  remain stale until later lowering.
+- In `circt-bmc`, running SVA/LTL lowering before module flattening made stale
+  callee alias attributes more likely to survive into `LowerToBMC`.
+- A robust fallback is needed when explicit clock metadata is present but
+  unmapped: infer clock identity from register-state dependencies using
+  `bmc_reg_clock_sources`.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - generalized instance clock remapping to all cloned ops carrying
+    `bmc.clock` / `bmc.clock_key`.
+  - added fallback clock-position inference from property dependencies on
+    externalized register block arguments and reg clock metadata.
+- `tools/circt-bmc/circt-bmc.cpp`
+  - reordered pass pipeline so SVA/LTL lowering runs after flattening.
+- Added regression:
+  - `test/Tools/circt-bmc/circt-bmc-multiclock-instance-clock-alias.mlir`
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build_test/test/Tools/circt-bmc/circt-bmc-multiclock-instance-clock-alias.mlir build_test/test/Tools/circt-bmc/circt-bmc-explicit-plus-struct-clock.mlir build_test/test/Tools/circt-bmc/bmc-multiclock-reg-clock-keys.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-assert-clock-name-no-reg-metadata.mlir build_test/test/Conversion/VerifToSMT/bmc-clock-key-via-reg-clock-source.mlir build_test/test/Conversion/VerifToSMT/bmc-clock-name-via-reg-clock-source.mlir build_test/test/Conversion/VerifToSMT/bmc-multiclock-delay-buffer-clocked.mlir build_test/test/Conversion/VerifToSMT/bmc-unmapped-clock.mlir`
+- Result: `8 passed, 0 failed`.
+
+### Realization
+- For multiclock parity, clock metadata correctness depends on both attribute
+  remapping and pass ordering; either one alone leaves residual alias failures.
+
 ## 2026-02-25: OpenTitan manifest parser dependency (`hjson`)
 
 ### Goal
