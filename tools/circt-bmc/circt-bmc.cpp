@@ -1435,8 +1435,20 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (wantHelp || wantHelpHidden || wantHelpList || wantHelpListHidden) {
-    cl::PrintHelpMessage(/*Hidden=*/wantHelpHidden || wantHelpListHidden,
-                         /*Categorized=*/wantHelp || wantHelpHidden);
+    llvm::outs()
+        << "OVERVIEW: circt-bmc - bounded model checker\n\n"
+        << "USAGE: circt-bmc [options] <input>\n\n"
+        << "Common options:\n"
+        << "  -b <bound>           Time bound for bounded model checking\n"
+        << "  --module <name>      Target module to check\n"
+        << "  --emit-smtlib        Emit SMT-LIB instead of running solver\n"
+        << "  --emit-llvm          Emit lowered LLVM IR\n"
+        << "  -o <filename>        Output path ('-' for stdout)\n"
+        << "  --resource-guard     Enable runtime resource guard (default)\n"
+        << "  --resource-guard=false\n"
+        << "                       Disable runtime resource guard\n"
+        << "  --version            Display version information\n"
+        << "  --help               Display this help text\n";
     llvm::outs().flush();
     llvm::errs().flush();
     return 0;

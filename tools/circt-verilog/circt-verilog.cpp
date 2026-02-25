@@ -1163,8 +1163,21 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (wantHelp || wantHelpHidden || wantHelpList || wantHelpListHidden) {
-    cl::PrintHelpMessage(/*Hidden=*/wantHelpHidden || wantHelpListHidden,
-                         /*Categorized=*/wantHelp || wantHelpHidden);
+    llvm::outs()
+        << "OVERVIEW: Verilog and SystemVerilog frontend\n\n"
+        << "USAGE: circt-verilog [options] <input>\n\n"
+        << "Common options:\n"
+        << "  --ir-llhd            Lower to LLHD IR\n"
+        << "  --format=<fmt>       Input format (for example: sv)\n"
+        << "  --single-unit        Parse all inputs as one translation unit\n"
+        << "  --top <module>       Top module name\n"
+        << "  --uvm-path <path>    UVM package root path\n"
+        << "  -I <dir>             Add include search path\n"
+        << "  -o <filename>        Output path ('-' for stdout)\n"
+        << "  --diagnostic-output <filename>\n"
+        << "                       Diagnostic output path ('-' for stdout)\n"
+        << "  --version            Display version information\n"
+        << "  --help               Display this help text\n";
     llvm::outs().flush();
     llvm::errs().flush();
     return 0;

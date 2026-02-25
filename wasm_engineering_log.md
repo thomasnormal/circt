@@ -2462,3 +2462,35 @@
 - Validation:
   - pre-fix: `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_version_reentry_check.sh` failed with duplicated second-run banners.
   - post-fix: `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_version_reentry_check.sh`: PASS.
+
+## 2026-02-25 (fix: wasm `--help` output was effectively empty)
+- TDD regression added:
+  - `utils/wasm_help_text_check.sh`
+  - validates wasm `--help` output includes tool-specific option tokens:
+    - `circt-bmc.js`: `--emit-smtlib`
+    - `circt-sim.js`: `--mode`
+    - `circt-verilog.js`: `--ir-llhd`
+- Pre-fix behavior:
+  - wasm help output for `circt-bmc.js`, `circt-sim.js`, and
+    `circt-verilog.js` was only:
+    - `USAGE: [options]`
+    - `OPTIONS:`
+  - no useful tool options were shown.
+- Root cause:
+  - wasm help path routed directly to `cl::PrintHelpMessage(...)`, but in this
+    runtime path it produced a minimal generic banner instead of actionable
+    tool help.
+- Fixes:
+  - `tools/circt-bmc/circt-bmc.cpp`
+  - `tools/circt-sim/circt-sim.cpp`
+  - `tools/circt-verilog/circt-verilog.cpp`
+  - on emscripten `--help*` paths, print compact explicit help text with
+    commonly used options and usage.
+  - `utils/run_wasm_smoke.sh` now runs `utils/wasm_help_text_check.sh` during
+    smoke help checks.
+- Validation:
+  - pre-fix:
+    `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_help_text_check.sh`
+    failed (`missing expected token`).
+  - post-fix:
+    `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_help_text_check.sh`: PASS.
