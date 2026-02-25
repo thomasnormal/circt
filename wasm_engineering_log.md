@@ -31,6 +31,32 @@
     - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh` : PASS
     - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh` : PASS
 
+- Iteration update (circt-bmc wasm host-path input gap):
+  - bug discovery:
+    - `circt-bmc.js` in wasm/node mode failed to open positional input files
+      (`error: could not open input file ...`) for both relative and absolute
+      paths, while `circt-sim.js` host-path loading worked.
+  - regression-first proof:
+    - added `utils/wasm_bmc_hostpath_input_check.sh`.
+    - pre-fix run failed with host-path open error.
+  - fix:
+    - `tools/circt-bmc/CMakeLists.txt`
+      - added `CIRCT_BMC_WASM_ENABLE_NODERAWFS` (default `ON`).
+      - enabled `-sNODERAWFS=1` for `circt-bmc` in emscripten builds.
+    - `utils/run_wasm_smoke.sh`
+      - integrated `wasm_bmc_hostpath_input_check.sh`.
+      - switched bmc stdin functional check to file output (`-o <tmp>.smt2`)
+        instead of `-o -` to avoid raw-fs stdout coupling.
+      - updated bmc re-entry checks to use host-path input and relative output
+        paths (`out*.smt2`) instead of MEMFS preload `/inputs/...`.
+    - `utils/wasm_resource_guard_default_check.sh`
+      - switched bmc default-guard check to file output (`-o <tmp>.smt2`).
+  - post-fix validation:
+    - `ninja -C build-wasm-mergecheck -j4 circt-bmc` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_bmc_hostpath_input_check.sh` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_resource_guard_default_check.sh` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh` : PASS
+
 ## 2026-02-24
 - Goal: enable wasm-friendly VPI callback suspension and JS-side startup
   registration for `circt-sim`.
