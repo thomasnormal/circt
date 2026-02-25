@@ -9141,13 +9141,15 @@ Based on these findings, the circt-sim compiled process architecture:
   require `hjson` to parse OpenTitan cfg files.
 - `utils/resolve_opentitan_formal_compile_contracts.py` requires `PyYAML` to
   parse FuseSoC-generated `.eda.yml` files.
+- OpenTitan FuseSoC setup for FPV targets invokes `regtool.py`, which requires
+  `mako` in the active Python environment.
 - In this environment, default `python3` (3.11) was missing `hjson`, causing
   immediate manifest parsing failures before any formal run.
 
 ### Implementation
 - Added an explicit pinned dependency file:
   - `utils/python-requirements.txt` with `hjson==3.1.0` and
-    `pyyaml==6.0.3`.
+    `pyyaml==6.0.3`, `mako==1.3.10`.
 - Updated `utils/README.md` to point utility users at the Python dependency
   list.
 
