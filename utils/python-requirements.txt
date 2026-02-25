@@ -1,3 +1,4 @@
 # Python dependencies for utility scripts in this directory.
 # Keep versions pinned when they are coupled to upstream project manifests.
 hjson==3.1.0
+pyyaml==6.0.3
