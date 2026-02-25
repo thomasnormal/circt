@@ -1,5 +1,52 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: Yosys SVA LEC `extnets` non-SMT solver-op closure
+
+### What changed
+- Updated:
+  - `utils/run_yosys_sva_circt_lec.sh`
+- Added:
+  - `test/Tools/run-yosys-sva-circt-lec-strip-proc-assertions-global.test`
+
+### Red-first debugging path
+- Ran full Yosys SVA LEC lane and found one real error:
+  - `ERROR: extnets`.
+- Captured keep-logs repro showed:
+  - `circt-lec` failed with
+    `solver must not contain any non-SMT operations`
+  - offending op in prepared MLIR:
+    `llvm.mlir.addressof @__circt_proc_assertions_enabled`.
+- Root cause:
+  - this harness did not sanitize procedural-assertion helper globals before
+    LEC solving, unlike existing OpenTitan LEC flow handling.
+- Fix:
+  - added a sanitize step on `opt_mlir` that:
+    - removes helper `llvm.mlir.global` for
+      `@__circt_proc_assertions_enabled`,
+    - removes corresponding `llvm.mlir.addressof` / cast ops,
+    - rewrites corresponding `llvm.load` gates to `hw.constant true`.
+
+### Realizations / surprises
+- This was a harness-parity gap, not a frontend parsing issue: BMC lane already
+  handled the same test, but LEC path retained non-SMT helper ops in solver
+  scope.
+- Using the same normalization approach already proven in OpenTitan LEC flow
+  quickly closed the Yosys `extnets` failure without affecting other cases.
+
+### Validation snapshot
+- New lit regression:
+  - `run-yosys-sva-circt-lec-strip-proc-assertions-global` -> pass.
+- Focused non-regression:
+  - `run-yosys-sva-circt-lec-error-diag`
+  - `run-yosys-sva-circt-lec-toolchain-derived-from-circt-verilog`
+  - result: `3/3` pass.
+- Real harness checks:
+  - `TEST_FILTER='^extnets$'`:
+    - before fix: `ERROR`
+    - after fix: `PASS`
+  - `TEST_FILTER='.*'` full Yosys SVA LEC:
+    - `total=16 pass=16 fail=0 error=0 skip=0`.
+
 ## 2026-02-25 Session: pairwise BMC auto-retry for multi-clock diagnostics
 
 ### What changed
