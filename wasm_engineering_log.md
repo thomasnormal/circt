@@ -2309,3 +2309,27 @@
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_verilog_stdout_dash_check.sh`: PASS.
   - `WASM_SKIP_BUILD=1 ... utils/run_wasm_smoke.sh`: PASS.
+
+## 2026-02-25 (fix: wasm circt-verilog `--diagnostic-output -` stream)
+- TDD regression added:
+  - `utils/wasm_verilog_diag_stdout_dash_check.sh`
+  - feeds invalid SV and checks `--diagnostic-format=plain --diagnostic-output -`
+    emits diagnostics on stdout with non-zero exit.
+- Pre-fix behavior:
+  - wasm `circt-verilog.js` returned failure but emitted zero bytes for
+    diagnostics to `-`.
+  - native `circt-verilog` emitted the expected `error:` diagnostics to stdout.
+- Root cause:
+  - diagnostic output always used `ToolOutputFile` when
+    `opts.diagnosticOutput` was non-empty, including `-`; wasm/node artifacts
+    could drop that buffered output.
+- Fix in `tools/circt-verilog/circt-verilog.cpp`:
+  - special-case `opts.diagnosticOutput == "-"` to route diagnostics directly
+    to `llvm::outs()`.
+  - explicitly flush stdout after `printer.flush()` on the `-` path.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now runs
+    `utils/wasm_verilog_diag_stdout_dash_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_verilog_diag_stdout_dash_check.sh`: PASS.
+  - `WASM_SKIP_BUILD=1 ... utils/run_wasm_smoke.sh`: PASS.
