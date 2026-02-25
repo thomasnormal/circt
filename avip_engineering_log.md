@@ -1,5 +1,44 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: LEC z3-path canonicalization for sv-tests + verilator wrappers
+
+### What changed
+- Updated:
+  - `utils/run_sv_tests_circt_lec.sh`
+  - `utils/run_verilator_verification_circt_lec.sh`
+- Added:
+  - `test/Tools/run-sv-tests-lec-z3-auto-path.test`
+  - `test/Tools/run-verilator-verification-circt-lec-z3-auto-path.test`
+- Updated:
+  - `test/Tools/run-sv-tests-lec-z3-validation.test`
+
+### Red-first debugging path
+- Added two new lit checks that require wrappers to pass:
+  - `--z3-path=<absolute executable path>`
+  in non-smoke LEC mode.
+- Before script changes:
+  - new tests failed because wrappers propagated unresolved `--z3-path=z3`.
+- Fix:
+  - canonicalize bare `Z3_BIN` names via `circt_common_resolve_tool` /
+    `command -v` and persist the resolved absolute path.
+  - fail fast in non-smoke mode when no z3 can be resolved.
+
+### Realizations / surprises
+- The path handling gap was wrapper-level reliability, not solver semantics:
+  runs with constrained runtime environments can fail even when z3 exists on
+  the launch PATH if only a bare token is propagated.
+- `run_sv_tests_circt_lec.sh` already validated z3 existence, but did not
+  canonicalize; `run_verilator_verification_circt_lec.sh` also lacked strict
+  non-smoke validation.
+
+### Validation snapshot
+- Focused lit:
+  - `run-sv-tests-lec-z3-auto-path`
+  - `run-verilator-verification-circt-lec-z3-auto-path`
+  - `run-sv-tests-lec-z3-validation`
+  - `run-verilator-verification-circt-lec-toolchain-derived-from-circt-verilog`
+  - result: `4/4` pass.
+
 ## 2026-02-25 Session: Yosys SVA LEC `extnets` non-SMT solver-op closure
 
 ### What changed

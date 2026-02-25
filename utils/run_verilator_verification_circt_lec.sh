@@ -10,6 +10,11 @@ CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS="${CIRCT_RETRY_TEXT_FILE_BUSY_DELAY_SECS:-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=utils/formal_toolchain_resolve.sh
 source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
+COMMON_SH="$SCRIPT_DIR/lib/common.sh"
+if [[ -f "$COMMON_SH" ]]; then
+  # shellcheck source=utils/lib/common.sh
+  source "$COMMON_SH"
+fi
 
 CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
 CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
@@ -51,15 +56,50 @@ if [[ -z "$TEST_FILTER" ]]; then
   fi
 fi
 
-if [[ -z "$Z3_BIN" ]]; then
-  if command -v z3 >/dev/null 2>&1; then
-    Z3_BIN="z3"
-  elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
-    Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
-  elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
-    Z3_BIN="/home/thomas-ahle/z3/build/z3"
+if [[ "$LEC_SMOKE_ONLY" != "1" ]]; then
+  if [[ -n "$Z3_BIN" ]]; then
+    if [[ "$Z3_BIN" == */* ]]; then
+      if [[ ! -x "$Z3_BIN" ]]; then
+        echo "z3 not found or not executable: $Z3_BIN" >&2
+        exit 1
+      fi
+    else
+      requested_z3="$Z3_BIN"
+      if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
+        if ! Z3_BIN="$(circt_common_resolve_tool "$Z3_BIN" 2>/dev/null)"; then
+          echo "z3 not found in PATH: $requested_z3" >&2
+          exit 1
+        fi
+      else
+        if ! Z3_BIN="$(command -v "$Z3_BIN" 2>/dev/null)"; then
+          echo "z3 not found in PATH: $requested_z3" >&2
+          exit 1
+        fi
+      fi
+    fi
   else
-    Z3_BIN="z3"
+    if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
+      if Z3_BIN="$(circt_common_resolve_tool z3 2>/dev/null)"; then
+        :
+      elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+      elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3/build/z3"
+      fi
+    else
+      if Z3_BIN="$(command -v z3 2>/dev/null)"; then
+        :
+      elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
+      elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
+        Z3_BIN="/home/thomas-ahle/z3/build/z3"
+      fi
+    fi
+  fi
+
+  if [[ -z "$Z3_BIN" ]]; then
+    echo "z3 not found; set Z3_BIN or enable LEC_SMOKE_ONLY" >&2
+    exit 1
   fi
 fi
 
