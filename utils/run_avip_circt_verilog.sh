@@ -2,6 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils/formal_toolchain_resolve.sh
+source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
 CIRCT_ROOT="${CIRCT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 if [[ $# -lt 1 ]]; then
@@ -16,25 +18,179 @@ FILELISTS_ARRAY=()
 if [[ $# -gt 0 ]]; then
   FILELISTS_ARRAY=("$@")
 fi
+
+try_use_axi4lite_nested_filelists() {
+  local avip_dir="$1"
+  local avip_base
+  avip_base="$(basename "$avip_dir" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$avip_base" != *axi4lite* ]] && [[ ! -d "$avip_dir/src/axi4LiteMasterVIP" ]]; then
+    return 1
+  fi
+
+  local candidates=(
+    "$avip_dir/src/axi4LiteMasterVIP/src/axi4LiteMasterWriteVIP/sim/Axi4LiteWriteMaster.f"
+    "$avip_dir/src/axi4LiteMasterVIP/src/axi4LiteMasterReadVIP/sim/Axi4LiteReadMaster.f"
+    "$avip_dir/src/axi4LiteSlaveVIP/src/axi4LiteSlaveWriteVIP/sim/Axi4LiteWriteSlave.f"
+    "$avip_dir/src/axi4LiteSlaveVIP/src/axi4LiteSlaveReadVIP/sim/Axi4LiteReadSlave.f"
+    "$avip_dir/src/axi4LiteMasterVIP/sim/Axi4LiteMasterProject.f"
+    "$avip_dir/src/axi4LiteSlaveVIP/sim/Axi4LiteSlaveProject.f"
+    "$avip_dir/src/tb/Axi4LiteCoverAssert.f"
+  )
+
+  local existing=()
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "$candidate" ]]; then
+      existing+=("$candidate")
+    fi
+  done
+
+  if [[ ${#existing[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  FILELISTS_ARRAY=("${existing[@]}")
+  echo "warning: using AXI4Lite nested filelists" >&2
+  return 0
+}
+
+emit_synth_filelist() {
+  local avip_dir="$1"
+  local out_file="$2"
+  python3 - "$avip_dir" "$out_file" <<'PY'
+import pathlib
+import re
+import sys
+
+avip_dir = pathlib.Path(sys.argv[1])
+out_file = pathlib.Path(sys.argv[2])
+src_root = avip_dir / "src"
+if not src_root.exists():
+    raise SystemExit("missing src directory")
+
+sv_files = sorted(src_root.rglob("*.sv"))
+if not sv_files:
+    raise SystemExit("no .sv files under src")
+
+incdirs = sorted({p.parent.resolve() for p in sv_files})
+
+has_hdl_top_tree = (src_root / "hdl_top").exists() or (src_root / "hdlTop").exists()
+
+top_re = re.compile(r"(hdl_top|hvl_top|hdlTop|hvlTop|HdlTop|HvlTop)", re.IGNORECASE)
+pkg_re = re.compile(r"(pkg|package)", re.IGNORECASE)
+if_re = re.compile(r"(interface|_if)(?:\.sv)$", re.IGNORECASE)
+bfm_re = re.compile(r"(bfm)(?:\.sv)$", re.IGNORECASE)
+assert_re = re.compile(r"(assertion|assertions|coverproperty)(?:\.sv)$",
+                       re.IGNORECASE)
+
+selected = []
+for path in sv_files:
+    rel = path.relative_to(src_root).as_posix()
+    name = path.name
+
+    keep = False
+    if pkg_re.search(name):
+        keep = True
+    if top_re.search(name):
+        keep = True
+    if if_re.search(name):
+        keep = True
+    if "/globals/" in f"/{rel}":
+        keep = True
+
+    # Legacy AVIP trees (with src/hdl_top or src/hdlTop) require standalone
+    # BFM + assertion/cover modules for hdl_top elaboration. Newer trees often
+    # include these via package wrappers; restrict direct pulls there.
+    if has_hdl_top_tree:
+        if ("/hdl_top/" in f"/{rel}" or "/hdlTop/" in f"/{rel}") and (
+            bfm_re.search(name) or assert_re.search(name)
+        ):
+            keep = True
+
+    # Exclude assertion/testbench-only collateral under tb unless the file is a
+    # package or one of the main top modules.
+    if "/tb/" in f"/{rel}" and not (pkg_re.search(name) or top_re.search(name)):
+        keep = False
+
+    if keep:
+        selected.append(path.resolve())
+
+if not selected:
+    raise SystemExit("no synth filelist candidates selected")
+
+def rank(path: pathlib.Path):
+    name = path.name
+    if pkg_re.search(name):
+        cls = 0
+    elif if_re.search(name):
+        cls = 1
+    elif bfm_re.search(name) or assert_re.search(name):
+        cls = 2
+    elif top_re.search(name):
+        cls = 3
+    else:
+        cls = 4
+    return (cls, str(path))
+
+selected = sorted(dict.fromkeys(selected), key=rank)
+
+out_file.parent.mkdir(parents=True, exist_ok=True)
+with out_file.open("w") as f:
+    for d in incdirs:
+        f.write(f"+incdir+{d}\n")
+    for p in selected:
+        f.write(f"{p}\n")
+PY
+}
+
 if [[ ${#FILELISTS_ARRAY[@]} -eq 0 ]]; then
   if [[ -n "${FILELIST:-}" ]]; then
     FILELISTS_ARRAY=("$FILELIST")
   else
-    mapfile -t candidates < <(find "$AVIP_DIR/sim" -maxdepth 2 -iname "*compile*.f" 2>/dev/null || true)
+    mapfile -t candidates < <(
+      find "$AVIP_DIR/sim" -maxdepth 3 -type f \
+        \( -iname "*compile*.f" -o -iname "*project*.f" \) \
+        2>/dev/null || true
+    )
     if [[ ${#candidates[@]} -eq 0 ]]; then
-      echo "no filelist found under $AVIP_DIR/sim (set FILELIST or pass as args)" >&2
-      exit 1
+      if ! try_use_axi4lite_nested_filelists "$AVIP_DIR"; then
+        synth_filelist="$(mktemp /tmp/avip-synth-filelist.XXXXXX.f)"
+        if ! emit_synth_filelist "$AVIP_DIR" "$synth_filelist"; then
+          echo "no filelist found under $AVIP_DIR/sim and failed to synthesize one from $AVIP_DIR/src (set FILELIST or pass args)" >&2
+          rm -f "$synth_filelist" 2>/dev/null || true
+          exit 1
+        fi
+        FILELISTS_ARRAY=("$synth_filelist")
+        echo "warning: synthesized AVIP filelist: $synth_filelist" >&2
+      fi
+    else
+      FILELISTS_ARRAY=("${candidates[0]}")
     fi
-    FILELISTS_ARRAY=("${candidates[0]}")
   fi
 fi
 
+resolved_filelists=()
 for filelist in "${FILELISTS_ARRAY[@]}"; do
-  if [[ ! -f "$filelist" ]]; then
-    echo "filelist not found: $filelist" >&2
-    exit 1
+  if [[ -f "$filelist" ]]; then
+    resolved_filelists+=("$filelist")
+  else
+    echo "warning: filelist not found, ignoring: $filelist" >&2
   fi
 done
+FILELISTS_ARRAY=("${resolved_filelists[@]}")
+
+if [[ ${#FILELISTS_ARRAY[@]} -eq 0 ]]; then
+  if ! try_use_axi4lite_nested_filelists "$AVIP_DIR"; then
+    synth_filelist="$(mktemp /tmp/avip-synth-filelist.XXXXXX.f)"
+    if ! emit_synth_filelist "$AVIP_DIR" "$synth_filelist"; then
+      echo "all provided filelists were missing and failed to synthesize from $AVIP_DIR/src" >&2
+      rm -f "$synth_filelist" 2>/dev/null || true
+      exit 1
+    fi
+    FILELISTS_ARRAY=("$synth_filelist")
+    echo "warning: synthesized AVIP filelist: $synth_filelist" >&2
+  fi
+fi
 
 FILELIST_BASE="${FILELIST_BASE:-}"
 if [[ -n "$FILELIST_BASE" && ! -d "$FILELIST_BASE" ]]; then
@@ -42,7 +198,7 @@ if [[ -n "$FILELIST_BASE" && ! -d "$FILELIST_BASE" ]]; then
   exit 1
 fi
 
-CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build-test/bin/circt-verilog}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog" "$CIRCT_ROOT/build_test/bin")}"
 UVM_DIR="${UVM_DIR:-/home/thomas-ahle/uvm-core/src}"
 OUT="${OUT:-$PWD/avip-circt-verilog.log}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
