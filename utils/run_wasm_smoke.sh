@@ -24,6 +24,7 @@ VERILOG_STDOUT_DASH_HELPER="utils/wasm_verilog_stdout_dash_check.sh"
 VERILOG_DIAG_STDOUT_DASH_HELPER="utils/wasm_verilog_diag_stdout_dash_check.sh"
 BMC_HOSTPATH_HELPER="utils/wasm_bmc_hostpath_input_check.sh"
 BMC_STDOUT_DASH_HELPER="utils/wasm_bmc_stdout_dash_check.sh"
+TBLGEN_HOSTPATH_HELPER="utils/wasm_tblgen_hostpath_input_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -49,9 +50,11 @@ validate_positive_int_env() {
 
 BMC_JS="$BUILD_DIR/bin/circt-bmc.js"
 SIM_JS="$BUILD_DIR/bin/circt-sim.js"
+TBLGEN_JS="$BUILD_DIR/bin/circt-tblgen.js"
 VERILOG_JS="$BUILD_DIR/bin/circt-verilog.js"
 BMC_WASM="$BUILD_DIR/bin/circt-bmc.wasm"
 SIM_WASM="$BUILD_DIR/bin/circt-sim.wasm"
+TBLGEN_WASM="$BUILD_DIR/bin/circt-tblgen.wasm"
 VERILOG_WASM="$BUILD_DIR/bin/circt-verilog.wasm"
 
 BMC_TEST_INPUT="test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir"
@@ -147,6 +150,10 @@ if [[ ! -x "$BMC_STDOUT_DASH_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $BMC_STDOUT_DASH_HELPER" >&2
   exit 1
 fi
+if [[ ! -x "$TBLGEN_HOSTPATH_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $TBLGEN_HOSTPATH_HELPER" >&2
+  exit 1
+fi
 
 validate_bool_env "WASM_REQUIRE_VERILOG" "$WASM_REQUIRE_VERILOG"
 validate_bool_env "WASM_SKIP_BUILD" "$WASM_SKIP_BUILD"
@@ -174,12 +181,12 @@ if [[ "$WASM_SKIP_BUILD" == "1" ]]; then
   echo "[wasm-smoke] Skipping wasm rebuild (WASM_SKIP_BUILD=1)"
 else
   echo "[wasm-smoke] Building wasm tools (jobs=$NINJA_JOBS)"
-  ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-bmc circt-sim
+  ninja -C "$BUILD_DIR" -j "$NINJA_JOBS" circt-bmc circt-sim circt-tblgen
 fi
 
-if [[ ! -s "$BMC_JS" || ! -s "$SIM_JS" || ! -s "$BMC_WASM" || ! -s "$SIM_WASM" ]]; then
+if [[ ! -s "$BMC_JS" || ! -s "$SIM_JS" || ! -s "$TBLGEN_JS" || ! -s "$BMC_WASM" || ! -s "$SIM_WASM" || ! -s "$TBLGEN_WASM" ]]; then
   echo "[wasm-smoke] expected wasm tool outputs are missing or empty" >&2
-  echo "  missing: $BMC_JS and/or $SIM_JS and/or $BMC_WASM and/or $SIM_WASM" >&2
+  echo "  missing: $BMC_JS and/or $SIM_JS and/or $TBLGEN_JS and/or $BMC_WASM and/or $SIM_WASM and/or $TBLGEN_WASM" >&2
   exit 1
 fi
 
@@ -252,6 +259,13 @@ if [[ ! -s "$tmpdir/sim-help.out" ]]; then
   exit 1
 fi
 
+echo "[wasm-smoke] Smoke: circt-tblgen.js --help"
+"$NODE_BIN" "$TBLGEN_JS" --help >"$tmpdir/tblgen-help.out" 2>"$tmpdir/tblgen-help.err"
+if [[ ! -s "$tmpdir/tblgen-help.out" ]]; then
+  echo "[wasm-smoke] circt-tblgen.js --help produced no stdout" >&2
+  exit 1
+fi
+
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Smoke: circt-verilog.js --help"
   "$NODE_BIN" "$VERILOG_JS" --help >"$tmpdir/verilog-help.out" 2>"$tmpdir/verilog-help.err"
@@ -307,6 +321,9 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$BMC_HOSTPATH_HELPER"
 
 echo "[wasm-smoke] Functional: circt-bmc '-o -' stdout"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$BMC_STDOUT_DASH_HELPER"
+
+echo "[wasm-smoke] Functional: circt-tblgen host-path input"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$TBLGEN_HOSTPATH_HELPER"
 
 echo "[wasm-smoke] Functional: circt-sim stdin"
 cat "$SIM_TEST_INPUT" | \

@@ -2359,3 +2359,34 @@
 - Validation:
   - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_callmain_reentry_stdout_capture_check.sh`: PASS.
   - `WASM_SKIP_BUILD=1 ... utils/run_wasm_smoke.sh`: PASS.
+
+## 2026-02-25 (fix: wasm circt-tblgen host-path input + help output)
+- TDD regression added:
+  - `utils/wasm_tblgen_hostpath_input_check.sh`
+  - verifies `circt-tblgen.js` in wasm/node mode accepts host-path `.td` input
+    and emits records output.
+- Pre-fix behavior:
+  - `utils/wasm_tblgen_hostpath_input_check.sh` failed with:
+    `Could not open input file 'include/circt/Dialect/HW/HW.td'`.
+  - `node <build>/bin/circt-tblgen.js --help` returned rc=0 but emitted no
+    useful tool help text in wasm smoke coverage.
+- Root causes:
+  - wasm `circt-tblgen` link flags did not enable Node raw-fs bridging, so
+    host-path inputs were inaccessible.
+  - wasm help path required explicit handling for one-shot usage output.
+- Fixes:
+  - `tools/circt-tblgen/CMakeLists.txt`:
+    - added `CIRCT_TBLGEN_WASM_ENABLE_NODERAWFS` (default ON) and
+      `-sNODERAWFS=1` on emscripten.
+  - `tools/circt-tblgen/circt-tblgen.cpp`:
+    - added emscripten main-path handling for repeated invocations
+      (`ResetAllOptionOccurrences`).
+    - added explicit wasm help/version handling with flushed output.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now:
+    - validates `circt-tblgen.js`/`circt-tblgen.wasm` artifacts,
+    - runs `circt-tblgen.js --help` smoke check,
+    - runs `utils/wasm_tblgen_hostpath_input_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_tblgen_hostpath_input_check.sh`: PASS.
+  - `WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/run_wasm_smoke.sh`: PASS.
