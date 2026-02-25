@@ -8952,3 +8952,45 @@ Based on these findings, the circt-sim compiled process architecture:
   - confirms `g_i1=1`, `g_i9=257`, and simulation completion.
 - `VERILOG_JS=build-wasm/bin/circt-verilog.js SIM_JS=build-wasm-mergecheck/bin/circt-sim.js NODE_BIN=node utils/wasm_uvm_pkg_sim_check.sh`
   - PASS.
+
+## 2026-02-25: OpenTitan BMC cycle blocker in `prim_fifo_sync_fpv`
+
+### Goal
+- Unblock OpenTitan formal BMC flow past `could_not_resolve_cycles_in_module`
+  for `prim_fifo_sync_fpv::prim_fifo_sync_tb`.
+
+### Findings
+- The failing pre-`LowerToBMC` module had 18 SCCs in pure comb IR after LLHD
+  stripping:
+  - 16 x `comb.extract -> comb.concat -> comb.or`
+  - 2 x `comb.extract -> comb.concat`
+- Existing cycle-break logic handled only the OR-merged form.
+- Appending `bmc_cycle_break*` at the end of module inputs can shift
+  externalized register-state trailing inputs and break `num_regs` /
+  `initial_values` alignment in `VerifToSMT`.
+
+### Implementation
+- `lib/Tools/circt-bmc/LowerToBMC.cpp`
+  - extended self-preserving cycle breaking to also match degenerate
+    `extract/concat` loops.
+  - insert cycle-break ports before trailing register-state inputs:
+    - insertion point = `numInputPorts - num_regs`.
+  - keeps trailing register slice stable for downstream
+    `verif.bmc num_regs/initial_values` checks.
+- Added regression:
+  - `test/Tools/circt-bmc/circt-bmc-self-preserving-cycles.mlir`
+
+### Validation
+- New regression RUN-equivalent:
+  - `build_test/bin/circt-bmc test/Tools/circt-bmc/circt-bmc-self-preserving-cycles.mlir --module=top -b 1 --ignore-asserts-until=0 --emit-mlir | llvm/build/bin/FileCheck test/Tools/circt-bmc/circt-bmc-self-preserving-cycles.mlir`
+- OpenTitan targeted repro:
+  - command:
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog python3 utils/run_opentitan_fpv_circt_bmc.py --compile-contracts /tmp/opentitan-fpv-all-20260225-earlgrey/opentitan-fpv-compile-contracts.tsv --target-filter '^prim_fifo_sync_fpv$' --max-targets 1 ...`
+  - status progression:
+    - before: `ERROR (CIRCT_BMC_ERROR)` with `could not resolve cycles in module`
+    - after cycle fix + reg-slice insertion fix: `FAIL (SAT)` (no cycle-resolution or initial-width errors)
+
+### Realization
+- The cycle blocker and the register-initial-width error were coupled:
+  breaking cycles by adding inputs is safe only if those inputs do not enter
+  the trailing `num_regs` slice expected by `VerifToSMT`.

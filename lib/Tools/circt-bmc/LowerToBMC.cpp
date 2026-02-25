@@ -103,6 +103,219 @@ inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
   return success();
 }
 
+static FailureOr<Attribute> foldValueToConstantAttr(
+    Value value, DenseMap<Value, Attribute> &cache, DenseSet<Value> &active) {
+  if (auto it = cache.find(value); it != cache.end())
+    return it->second;
+
+  if (!active.insert(value).second)
+    return failure();
+
+  auto clearActive = [&]() { active.erase(value); };
+
+  Attribute attr;
+  if (matchPattern(value, m_Constant(&attr))) {
+    clearActive();
+    cache[value] = attr;
+    return attr;
+  }
+
+  auto result = dyn_cast<OpResult>(value);
+  if (!result) {
+    clearActive();
+    return failure();
+  }
+
+  Operation *def = result.getDefiningOp();
+  if (!def) {
+    clearActive();
+    return failure();
+  }
+
+  SmallVector<Attribute> constantOperands;
+  constantOperands.reserve(def->getNumOperands());
+  for (Value operand : def->getOperands()) {
+    auto folded = foldValueToConstantAttr(operand, cache, active);
+    if (failed(folded)) {
+      clearActive();
+      return failure();
+    }
+    constantOperands.push_back(*folded);
+  }
+
+  SmallVector<OpFoldResult> foldResults;
+  if (failed(def->fold(constantOperands, foldResults)) ||
+      result.getResultNumber() >= foldResults.size()) {
+    clearActive();
+    return failure();
+  }
+
+  auto foldedAttr = dyn_cast<Attribute>(foldResults[result.getResultNumber()]);
+  if (!foldedAttr) {
+    clearActive();
+    return failure();
+  }
+
+  clearActive();
+  cache[value] = foldedAttr;
+  return foldedAttr;
+}
+
+static std::optional<APInt>
+getConstIntBits(Value value, DenseMap<Value, Attribute> &cache,
+                DenseSet<Value> &active) {
+  auto folded = foldValueToConstantAttr(value, cache, active);
+  if (failed(folded))
+    return std::nullopt;
+  if (auto intAttr = dyn_cast<IntegerAttr>(*folded))
+    return intAttr.getValue();
+  if (auto boolAttr = dyn_cast<BoolAttr>(*folded))
+    return APInt(1, boolAttr.getValue() ? 1 : 0);
+  return std::nullopt;
+}
+
+static bool isConstantZeroInt(Value value, DenseMap<Value, Attribute> &cache,
+                              DenseSet<Value> &active) {
+  if (matchPattern(value, m_Zero()))
+    return true;
+  if (auto bits = getConstIntBits(value, cache, active))
+    return bits->isZero();
+  return false;
+}
+
+static bool hasKnownZeroHighBits(Value value, unsigned highBitWidth,
+                                 DenseMap<Value, Attribute> &cache,
+                                 DenseSet<Value> &active) {
+  if (highBitWidth == 0)
+    return true;
+
+  auto intTy = dyn_cast<IntegerType>(value.getType());
+  if (!intTy || intTy.getWidth() < highBitWidth)
+    return false;
+  unsigned fullWidth = intTy.getWidth();
+
+  if (auto bits = getConstIntBits(value, cache, active)) {
+    APInt wide = bits->zextOrTrunc(fullWidth);
+    return wide.lshr(fullWidth - highBitWidth).isZero();
+  }
+
+  // Common lowered form: `concat(0-high-bits, low-bits)`.
+  if (auto concat = value.getDefiningOp<comb::ConcatOp>()) {
+    if (concat.getInputs().size() != 2)
+      return false;
+    auto highTy = dyn_cast<IntegerType>(concat.getInputs()[0].getType());
+    if (!highTy || highTy.getWidth() != highBitWidth)
+      return false;
+    return isConstantZeroInt(concat.getInputs()[0], cache, active);
+  }
+
+  return false;
+}
+
+static bool breakSelfPreservingOrCycles(hw::HWModuleOp hwModule,
+                                        Namespace &names) {
+  if (hwModule.getBody().empty())
+    return false;
+
+  Block &body = hwModule.getBody().front();
+  SmallVector<comb::ExtractOp> cycleExtracts;
+  DenseSet<Operation *> seen;
+  DenseMap<Value, Attribute> constantCache;
+  DenseSet<Value> activeConstantFold;
+  auto matchSelfPreservingConcat =
+      [&](comb::ConcatOp concat, Value selfValue) -> std::optional<comb::ExtractOp> {
+    if (!concat || concat.getInputs().size() != 2)
+      return std::nullopt;
+    auto selfTy = dyn_cast<IntegerType>(selfValue.getType());
+    if (!selfTy)
+      return std::nullopt;
+    auto extract = concat.getInputs()[0].getDefiningOp<comb::ExtractOp>();
+    if (!extract || extract.getInput() != selfValue)
+      return std::nullopt;
+
+    auto extractTy = dyn_cast<IntegerType>(extract.getType());
+    auto lowTy = dyn_cast<IntegerType>(concat.getInputs()[1].getType());
+    if (!extractTy || !lowTy)
+      return std::nullopt;
+    if (!isConstantZeroInt(concat.getInputs()[1], constantCache,
+                           activeConstantFold))
+      return std::nullopt;
+    if (extract.getLowBit() != lowTy.getWidth())
+      return std::nullopt;
+    if (extractTy.getWidth() + lowTy.getWidth() != selfTy.getWidth())
+      return std::nullopt;
+
+    return extract;
+  };
+
+  for (auto orOp : body.getOps<comb::OrOp>()) {
+    for (Value operand : orOp.getOperands()) {
+      auto concat = operand.getDefiningOp<comb::ConcatOp>();
+      auto extract = matchSelfPreservingConcat(concat, orOp.getResult());
+      if (!extract)
+        continue;
+
+      Value other = (operand == orOp.getOperands()[0]) ? orOp.getOperands()[1]
+                                                       : orOp.getOperands()[0];
+      unsigned highBitWidth = cast<IntegerType>((*extract).getType()).getWidth();
+      if (!hasKnownZeroHighBits(other, highBitWidth, constantCache,
+                                activeConstantFold))
+        continue;
+
+      if (seen.insert((*extract).getOperation()).second)
+        cycleExtracts.push_back(*extract);
+    }
+  }
+
+  // Degenerate self-preserving loops can survive as:
+  //   x = concat(extract x from N, 0)
+  // without a combining `or`. Break these as well.
+  for (auto concat : body.getOps<comb::ConcatOp>()) {
+    if (concat.getInputs().size() != 2)
+      continue;
+    auto extract = concat.getInputs()[0].getDefiningOp<comb::ExtractOp>();
+    if (!extract || extract.getInput().getDefiningOp() != concat.getOperation())
+      continue;
+    auto concatTy = dyn_cast<IntegerType>(concat.getType());
+    auto extractTy = dyn_cast<IntegerType>(extract.getType());
+    auto lowTy = dyn_cast<IntegerType>(concat.getInputs()[1].getType());
+    if (!concatTy || !extractTy || !lowTy)
+      continue;
+    if (!isConstantZeroInt(concat.getInputs()[1], constantCache,
+                           activeConstantFold))
+      continue;
+    if (extract.getLowBit() != lowTy.getWidth())
+      continue;
+    if (extractTy.getWidth() + lowTy.getWidth() != concatTy.getWidth())
+      continue;
+    if (seen.insert(extract.getOperation()).second)
+      cycleExtracts.push_back(extract);
+  }
+
+  if (cycleExtracts.empty())
+    return false;
+
+  unsigned insertPos = hwModule.getNumInputPorts();
+  if (auto numRegsAttr = hwModule->getAttrOfType<IntegerAttr>("num_regs")) {
+    int64_t numRegs = numRegsAttr.getInt();
+    if (numRegs > 0 && numRegs <= static_cast<int64_t>(insertPos))
+      insertPos -= static_cast<unsigned>(numRegs);
+  }
+
+  for (auto extract : cycleExtracts) {
+    auto extractTy = cast<IntegerType>(extract.getType());
+    std::string name = names.newName("bmc_cycle_break").str();
+    auto inputName = StringAttr::get(hwModule.getContext(), name);
+    auto inputArg = hwModule.insertInput(insertPos, inputName, extractTy).second;
+    ++insertPos;
+    extract.getResult().replaceAllUsesWith(inputArg);
+    if (extract->use_empty())
+      extract.erase();
+  }
+
+  return true;
+}
+
 static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp,
                                      Namespace &names) {
   // Hoist simple top-level drives so probes see current combinational inputs.
@@ -466,9 +679,40 @@ void LowerToBMCPass::runOnOperation() {
     if (auto str = dyn_cast<StringAttr>(nameAttr))
       names.add(str.getValue());
 
-  if (!sortTopologically(&hwModule.getBodyRegion().front())) {
-    hwModule->emitError("could not resolve cycles in module");
-    return signalPassFailure();
+  // Externalized aggregate rewrites can leave self-preserving OR cycles of the
+  // form `x = or(concat(extract x, 0), y)`. Preserve these high bits as fresh
+  // unconstrained inputs so strict cycle checks can still reject other cycles.
+  (void)breakSelfPreservingOrCycles(hwModule, names);
+
+  auto isLlhdEdge = [](Operation *op) {
+    if (!op)
+      return false;
+    // Some pipelines may carry LLHD ops through parsing/bridging states where
+    // dialect handles are not yet attached. Match by op-name namespace first
+    // so LLHD feedback edges can still be deferred safely.
+    if (op->getName().getStringRef().starts_with("llhd."))
+      return true;
+    return op->getDialect() && op->getDialect()->getNamespace() == "llhd";
+  };
+  auto shouldBreakLlhdCycleEdge = [&](Value operand, Operation *user) {
+    Operation *def = operand.getDefiningOp();
+    // LLHD lowering rewrites signal/probe/drive semantics later in this pass.
+    // Treat LLHD-related edges as ready for this initial ordering step so mixed
+    // LLHD/dataflow feedback does not fail before that rewrite runs.
+    return isLlhdEdge(def) || isLlhdEdge(user);
+  };
+  if (!sortTopologically(&hwModule.getBodyRegion().front(),
+                         shouldBreakLlhdCycleEdge)) {
+    bool hasLlhdOps = false;
+    hwModule.walk([&](Operation *op) {
+      hasLlhdOps |= isLlhdEdge(op);
+    });
+    if (!hasLlhdOps) {
+      hwModule->emitError("could not resolve cycles in module");
+      return signalPassFailure();
+    }
+    hwModule.emitRemark(
+        "deferred initial topological cycle check due LLHD operations");
   }
 
   if (bound < ignoreAssertionsUntil) {
