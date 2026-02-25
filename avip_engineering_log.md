@@ -8570,6 +8570,74 @@ Based on these findings, the circt-sim compiled process architecture:
 - Coverage parity: **not yet**.
   - CIRCT coverage fields are `0.00/0.00` for all rows with emitted coverage values in this snapshot.
 
+## 2026-02-25 Session: CIRCT-only unified verification rerun (no arcilator)
+
+### Scope requested
+- User requested CIRCT-only verification for now:
+  - event-based
+  - 4-state
+  - interpreted mode
+  - explicitly ignoring arcilator status
+
+### Command
+- `CIRCT_SIM_MODE=interpret UNIFIED_REGRESSION_OUT_DIR=/tmp/unified-circt-only-verify-1772014537 utils/run_regression_unified.sh --suite-regex '^(avip_sim_smoke|avip_verilog_smoke|sv_tests_sim_smoke|sv_tests_bmc_smoke|sv_tests_lec_smoke|verilator_bmc_smoke|verilator_lec_smoke|yosys_bmc_smoke|yosys_lec_smoke|opentitan_sim_smoke|opentitan_verilog_smoke|cocotb_vpi|cvdp_cocotb_noncommercial_smoke25|cvdp_cocotb_commercial_smoke25|cvdp_golden_commercial_smoke25|cvdp_golden_noncommercial_smoke25)$'`
+
+### Unified result
+- Exit: `RC=0`
+- Runner summary:
+  - `selected=16`
+  - `failures=0`
+  - `lane_retries=0`
+- Artifacts:
+  - summary: `/tmp/unified-circt-only-verify-1772014537/summary.tsv`
+  - retries: `/tmp/unified-circt-only-verify-1772014537/retry-summary.tsv`
+
+### AVIP-specific result (interpreted CIRCT path)
+- matrix: `/tmp/unified-circt-only-verify-1772014537/lanes/avip_sim_smoke/circt/matrix.tsv`
+- all AVIPs `compile_status=OK`, `sim_status=OK`, `UVM_FATAL=0`, `UVM_ERROR=0`:
+  - `apb, ahb, axi4, axi4Lite, i2s, i3c, jtag, spi`
+- `avip_verilog_smoke`: PASS in the same run.
+
+### Notes / surprises
+- `cvdp_golden_commercial_smoke25` still reported `SIM_TIMEOUT=2` internally
+  (`cvdp_copilot_IIR_filter_0012`, `cvdp_copilot_IIR_filter_0016`) while lane
+  status remained `PASS` by current policy contract.
+- `cvdp_golden_noncommercial_smoke25` had `0/0` selected entries and passed.
+
+## 2026-02-25 Session: CIRCT-only unified verification rerun #2 (interpreted mode, no arcilator)
+
+### Command
+- `CIRCT_SIM_MODE=interpret UNIFIED_REGRESSION_OUT_DIR=/tmp/unified-circt-only-verify2-1772015249 utils/run_regression_unified.sh --suite-regex '^(avip_sim_smoke|avip_verilog_smoke|sv_tests_sim_smoke|sv_tests_bmc_smoke|sv_tests_lec_smoke|verilator_bmc_smoke|verilator_lec_smoke|yosys_bmc_smoke|yosys_lec_smoke|opentitan_sim_smoke|opentitan_verilog_smoke|cocotb_vpi|cvdp_cocotb_noncommercial_smoke25|cvdp_cocotb_commercial_smoke25|cvdp_golden_commercial_smoke25|cvdp_golden_noncommercial_smoke25)$'`
+
+### Unified result
+- Exit: `RC=0`
+- Runner summary:
+  - `selected=16`
+  - `failures=0`
+  - `lane_retries=0`
+- Artifacts:
+  - summary: `/tmp/unified-circt-only-verify2-1772015249/summary.tsv`
+  - retries: `/tmp/unified-circt-only-verify2-1772015249/retry-summary.tsv`
+
+### AVIP-specific result (event-based 4-state interpreted path)
+- matrix: `/tmp/unified-circt-only-verify2-1772015249/lanes/avip_sim_smoke/circt/matrix.tsv`
+- all AVIPs `compile_status=OK`, `sim_status=OK`, `UVM_FATAL=0`, `UVM_ERROR=0`:
+  - `apb, ahb, axi4, axi4Lite, i2s, i3c, jtag, spi`
+- `avip_verilog_smoke`: PASS in the same run.
+
+### Timing notes from this rerun (seed=1)
+- compile seconds by AVIP:
+  - `apb=41`, `ahb=26`, `axi4=96`, `axi4Lite=38`, `i2s=34`, `i3c=29`, `jtag=23`, `spi=35`
+- sim seconds by AVIP:
+  - `apb=9`, `ahb=8`, `axi4=13`, `axi4Lite=8`, `i2s=8`, `i3c=15`, `jtag=8`, `spi=7`
+
+### Notes / surprises
+- `cvdp_golden_commercial_smoke25` again reported internal:
+  - `SIM_TIMEOUT=2`
+  - entries: `cvdp_copilot_IIR_filter_0012`, `cvdp_copilot_IIR_filter_0016`
+  - lane still ended `PASS` by current policy.
+- `cvdp_golden_noncommercial_smoke25` remained `0/0` selected and `PASS`.
+
 ## 2026-02-25: Sequence `.ended` parity restored (slang patch integrity fix)
 
 ### Gap identified (red-first)
@@ -8681,3 +8749,184 @@ Based on these findings, the circt-sim compiled process architecture:
 - Unsupported-SVA tolerant mode needs symmetric handling for concurrent and
   non-concurrent assertion contexts; otherwise `--sva-continue-on-unsupported`
   gives partial coverage and misses immediate/procedural assertion paths.
+
+## 2026-02-25 Session: CIRCT-only unified verification rerun #3 (interpreted mode, no arcilator)
+
+### Scope requested
+- User requested CIRCT-only verification:
+  - event-based
+  - 4-state
+  - interpreted mode
+  - no arcilator consideration
+
+### Command
+- `CIRCT_SIM_MODE=interpret UNIFIED_REGRESSION_OUT_DIR=/tmp/unified-circt-only-verify3-1772015934 utils/run_regression_unified.sh --suite-regex '^(avip_sim_smoke|avip_verilog_smoke|sv_tests_sim_smoke|sv_tests_bmc_smoke|sv_tests_lec_smoke|verilator_bmc_smoke|verilator_lec_smoke|yosys_bmc_smoke|yosys_lec_smoke|opentitan_sim_smoke|opentitan_verilog_smoke|cocotb_vpi|cvdp_cocotb_noncommercial_smoke25|cvdp_cocotb_commercial_smoke25|cvdp_golden_commercial_smoke25|cvdp_golden_noncommercial_smoke25)$'`
+
+### Unified result
+- Exit: `RC=0`
+- Runner summary:
+  - `selected=16`
+  - `failures=0`
+  - `lane_retries=0`
+- Artifacts:
+  - summary: `/tmp/unified-circt-only-verify3-1772015934/summary.tsv`
+  - retries: `/tmp/unified-circt-only-verify3-1772015934/retry-summary.tsv`
+
+### AVIP-specific result (event-based 4-state interpreted path)
+- matrix: `/tmp/unified-circt-only-verify3-1772015934/lanes/avip_sim_smoke/circt/matrix.tsv`
+- all AVIPs `compile_status=OK`, `sim_status=OK`, `UVM_FATAL=0`, `UVM_ERROR=0`:
+  - `apb, ahb, axi4, axi4Lite, i2s, i3c, jtag, spi`
+- per-AVIP timing (seed=1):
+  - compile seconds: `apb=25, ahb=26, axi4=97, axi4Lite=44, i2s=37, i3c=30, jtag=28, spi=47`
+  - sim seconds: `apb=8, ahb=8, axi4=13, axi4Lite=9, i2s=8, i3c=22, jtag=9, spi=9`
+
+### Comparison vs Xcelium baseline (status update)
+- Functional smoke parity: unchanged and green for the 7 Xcelium-baselined AVIPs (`apb, ahb, axi4, i2s, i3c, jtag, spi`).
+- Performance parity: still open.
+  - compile total (7 baselined AVIPs): `290s` (CIRCT) vs `33s` (Xcelium) => `8.79x` slower.
+  - sim total (7 baselined AVIPs): `77s` (CIRCT) vs `13s` (Xcelium) => `5.92x` slower.
+- Coverage parity: still open.
+  - CIRCT rows continue to report `0.00/0.00` (or `-/-` where unavailable), below Xcelium target rows.
+
+### Notes
+- `cvdp_golden_commercial_smoke25` completed `PASS` with internal `SIM_TIMEOUT=2` under current suite policy.
+- `cvdp_golden_noncommercial_smoke25` remained `0/0` selected and `PASS`.
+
+## 2026-02-25: Coverage parity gate status vs Xcelium baseline
+
+### Current state
+- CIRCT AVIP functional gates are green in recent unified runs, but coverage parity vs
+  Xcelium baselines is still not enforced by default.
+- Recent AVIP matrices still show low coverage values (`0.00/0.00` or `-/-`) for
+  rows that are functionally PASS, which remains below the Xcelium target table.
+
+### What the scripts currently enforce
+- `utils/run_avip_circt_sim.sh` has two gates:
+  - functional gate (`FAIL_ON_FUNCTIONAL_GATE`, default `0`)
+  - coverage gate (`FAIL_ON_COVERAGE_BASELINE`, default `0`)
+- The current coverage gate is a generic fixed threshold (`COVERAGE_BASELINE_PCT`,
+  default `10`) and is **not** per-AVIP/per-metric Xcelium baseline matching.
+- `docs/unified_regression_manifest.tsv` enables only:
+  - `FAIL_ON_FUNCTIONAL_GATE=1` for AVIP lanes
+  - no `FAIL_ON_COVERAGE_BASELINE=1` in AVIP unified commands.
+
+### Conclusion
+- Answer to "are AVIPs green vs Xcelium-like coverage now?": **No**.
+- Answer to "does unified regression test that now?": **No, not by default**.
+- To enforce this contract, we need to add and enable a per-AVIP Xcelium coverage
+  baseline gate in AVIP unified lanes.
+
+## 2026-02-25: ImportVerilog hierarchical SVA fix for cloned generate scopes
+
+### Gap identified (red-first)
+- Deterministic repros failed in ImportVerilog with:
+  - `unknown hierarchical name 'err_o'`
+  - note: `no rvalue generated for Variable`
+- Trigger shape:
+  - multiple generated scopes each asserting over the same nested hierarchical
+    output (e.g. `$rose(u_accu.u_prim_count.err_o)`).
+
+### Root cause
+- Two issues interacted:
+  - generate traversal ordering could lower assertion/procedural members before
+    corresponding instance members in generated scopes.
+  - module-header dedup reused a canonical instance body but did not propagate
+    hierarchical path indices back to clone bodies, so `hierPath.idx` remained
+    unset for later generated clones.
+- Net effect: later generated assertions referenced clone symbols that never
+  received threaded instance output values.
+
+### Implementation
+- `lib/Conversion/ImportVerilog/Structure.cpp`
+  - staged generate-block lowering: declarations -> instances -> procedural /
+    assertion / nested-generate.
+  - on deduplicated module headers, synchronize hierarchical path/interface
+    indices from canonical body to requested clone body.
+  - record clone->canonical value-symbol aliases during synchronization.
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`
+  - collect generate-block hierarchical names with instance-first traversal.
+  - deduplicate hierarchical paths by `(name, direction)` and record aliases.
+- `lib/Conversion/ImportVerilog/Expressions.cpp`
+  - hierarchical rvalue/lvalue lookups now follow alias chains.
+- `lib/Conversion/ImportVerilog/ImportVerilogInternals.h`
+  - added `hierValueAliases` state.
+
+### Regression coverage
+- Added:
+  - `test/Conversion/ImportVerilog/sva-hierarchical-generate-cloned-symbols.sv`
+
+### Validation
+- Repro cases now pass:
+  - `build_test/bin/circt-verilog --ir-moore --top=top /tmp/hier_err_o_two_named_blocks.sv`
+  - `build_test/bin/circt-verilog --ir-moore --top=top /tmp/hier_err_o_gen_readonly.sv`
+  - control: `... /tmp/hier_err_o_nogen_readonly.sv`
+- New regression RUN-equivalent:
+  - `build_test/bin/circt-verilog --ir-moore --top=top test/Conversion/ImportVerilog/sva-hierarchical-generate-cloned-symbols.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-hierarchical-generate-cloned-symbols.sv`
+
+### Realization
+- Hierarchical path symbol identity in generated clones is not stable across
+  deduplicated instance bodies; any threading keyed only on canonical bodies
+  must synchronize indices/aliases back to requested clone bodies.
+
+## 2026-02-25: wasm runtime contract + UVM sim triage
+
+### Goal
+- Verify post-merge wasm behavior for the recently upstreamed async-yield/VPI work and tutorial runtime compatibility.
+
+### Findings
+- `Module.callMain` was missing from generated wasm JS wrappers (`circt-verilog.js`, `circt-sim.js`, `circt-bmc.js`), while global `callMain` existed.
+- Existing re-entry helper used global `callMain`, so this contract regression was not caught.
+- `utils/wasm_uvm_pkg_memfs_reentry_check.sh` false-failed on colorized diagnostics (`\x1b[...]RUN1`) due strict `^RUN1` grep on raw logs.
+- UVM simulation abort (`APInt.cpp extractBits`) still reproduces in wasm (`utils/wasm_uvm_pkg_sim_check.sh`) after these contract/test harness fixes.
+
+### Changes made
+- Exported runtime method `callMain` for wasm targets:
+  - `tools/circt-verilog/CMakeLists.txt`
+  - `tools/circt-sim/CMakeLists.txt`
+  - `tools/circt-bmc/CMakeLists.txt`
+  - via `-sEXPORTED_RUNTIME_METHODS=['callMain']`.
+- Tightened regression harness to require `Module.callMain`:
+  - `utils/wasm_callmain_reentry_check.js`
+- Hardened UVM MEMFS re-entry harness against ANSI diagnostics:
+  - `utils/wasm_uvm_pkg_memfs_reentry_check.sh` strips ANSI before assertions.
+
+### Validation
+- Pass:
+  - `node utils/wasm_callmain_reentry_check.js build-wasm-mergecheck/bin/circt-{sim,verilog,bmc}.js ...`
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh`
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_uvm_pkg_memfs_reentry_check.sh`
+- Still failing:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_uvm_pkg_sim_check.sh`
+  - assert: `APInt.cpp:484 extractBits` during `circt-sim` init stage.
+
+### Realization
+- The wasm API compatibility issue and the APInt UVM sim abort are independent; fixing `Module.callMain` and harness drift does not resolve the simulator assert.
+
+## 2026-02-25: merged APInt global-init fix from origin/main
+
+### Goal
+- Pull/merge upstream `a28567e47` (`[circt-sim] Guard sub-byte global initializer bit extraction`) and validate wasm regressions.
+
+### Merge
+- Fetched `origin/main` at `a28567e47`.
+- Local branch had an uncommitted edit in `tools/circt-sim/LLHDProcessInterpreterGlobals.cpp`; stashed that file (`temp-pre-merge-globals`) before merge.
+- Merged `origin/main` with `ort`.
+
+### Validation
+- Pass: `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh`
+- Pass: `node utils/wasm_callmain_reentry_check.js build-wasm-mergecheck/bin/circt-sim.js --first --help --second --help`
+- Pass (direct APInt repro, post-merge sim binary):
+  - `node build-wasm/bin/circt-verilog.js test/Tools/circt-sim/syscall-asserton.sv --no-uvm-auto-include -o /tmp/asserton_postmerge.mlir`
+  - `node build-wasm-mergecheck/bin/circt-sim.js --mode interpret --top top /tmp/asserton_postmerge.mlir`
+  - result: no `APInt::extractBits` abort; simulation completes.
+- Pass (full UVM compile+sim flow with known-good frontend artifact):
+  - frontend: `build-wasm/bin/circt-verilog.js`
+  - sim: `build-wasm-mergecheck/bin/circt-sim.js`
+  - result: UVM run reaches `UVM/REPORT/SERVER`, emits `Running test my_test...`, completes with no `Illegal bit extraction`.
+
+### Caveat
+- In this dirty workspace, rebuilding `build-wasm-mergecheck/bin/circt-verilog.js` currently aborts in frontend parsing due unrelated local edits (`lib/Conversion/ImportVerilog/ImportVerilog.cpp`).
+- Because of that local contamination, `utils/wasm_uvm_pkg_sim_check.sh` is not a clean signal here unless frontend is taken from a known-good build.
+
+### Realization
+- The upstream APInt fix in `initializeGlobals` is sufficient to remove the wasm init-time assert on sub-byte globals; remaining failures in this workspace are attributable to unrelated local frontend modifications.
