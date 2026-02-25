@@ -8145,3 +8145,69 @@ Based on these findings, the circt-sim compiled process architecture:
   - `test/Tools/run-avip-circt-sim-retry-on-crash.test`
     - fake `circt-sim` crashes once with the crash-handler banner and exit 139
       then succeeds, ensuring we snapshot `.attempt1.log` and the run passes.
+
+## 2026-02-25 Session: Nightly AVIP spi seed=1 transient hang + UVM/FIELD_OP errors (retry hardening)
+
+### Symptom
+- In `avip_sim_nightly`, `spi` can occasionally get stuck at time 0 with:
+  - `UVM_ERROR ... UVM/FIELD_OP/SET Attempting to set values in policy without flushing`
+  - `UVM_ERROR ... UVM/FIELD_OP/GET_OP_TYPE Calling get_op_type() before calling set() is not allowed`
+- When this happens, `circt-sim` can consume CPU without producing further log
+  output until killed by the external timeout.
+- Immediate rerun of the same generated MLIR and plusargs can succeed, so this
+  appears to be a transient simulator/infra failure.
+
+### Mitigation (infra-level stability)
+- `utils/run_avip_circt_sim.sh`
+  - added `log_has_uvm_field_op_failure(...)` and retry the sim invocation when
+    these two UVM errors appear and `SIM_RETRIES>0` (covers both exit=0 and
+    non-zero exit cases).
+  - new env toggle: `SIM_RETRY_ON_UVM_FIELD_OP` (default `1`).
+- Added regression test:
+  - `test/Tools/run-avip-circt-sim-retry-on-uvm-field-op.test`
+
+## 2026-02-25: Foreach fixed-array randomize constraints were parsed but not enforced
+
+### Gap identified (red-first)
+- Minimal runtime repro:
+  - `foreach (arr[i]) arr[i] inside {[1:1]};`
+  - pre-fix run returned success, but values violated the constraint:
+    - `ok=1`
+    - `all_one=0`
+
+### Root cause
+- `ConstraintForeachOp` lowering path had only erase semantics.
+- `RandomizeOpConversion` extracted/solved scalar constraints, but did not
+  extract per-element bounds from foreach bodies.
+- Result: foreach constraints survived parse/import but had no runtime effect.
+
+### Implementation
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - added `ForeachRangeConstraintInfo`.
+  - added `extractForeachRangeConstraints(ClassDeclOp)` for simple fixed-array
+    element comparisons (equality and bounded ranges).
+  - integrated foreach constraints into `PreExtractedConstraints` cache.
+  - wired `RandomizeOpConversion` to enforce extracted foreach constraints by
+    writing each fixed-array element through:
+    - `__moore_randomize_with_range` / `__moore_randomize_with_ranges`
+    - with `rand_mode` and `constraint_mode` checks.
+
+### Validation
+- Build:
+  - `ninja -C build-test circt-verilog`
+- New regression:
+  - `test/Tools/circt-sim/syscall-randomize-foreach-range.sv`
+  - post-fix output:
+    - `randomize_ok=1`
+    - `foreach_all_one=1`
+- Focused non-regression:
+  - `test/Tools/circt-sim/syscall-randomize-with.sv`
+  - `test/Tools/circt-sim/syscall-randomize-with-constraint.sv`
+  - `test/Tools/circt-sim/syscall-constraint-mode-effect.sv`
+  - all passed via direct compile+run checks.
+
+### Surprise / note
+- Running `ninja -C build-test check-circt-tools-circt-sim` currently fails in
+  unrelated dirty-tree files (`tools/circt-sim/AOTProcessCompiler.cpp`,
+  `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp`) due external
+  compile errors not touched by this change.
