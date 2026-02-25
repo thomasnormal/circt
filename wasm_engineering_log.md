@@ -2379,8 +2379,7 @@
     - added `CIRCT_TBLGEN_WASM_ENABLE_NODERAWFS` (default ON) and
       `-sNODERAWFS=1` on emscripten.
   - `tools/circt-tblgen/circt-tblgen.cpp`:
-    - added emscripten main-path handling for repeated invocations
-      (`ResetAllOptionOccurrences`).
+    - added emscripten main-path handling for wasm help/version output.
     - added explicit wasm help/version handling with flushed output.
 - Smoke wiring:
   - `utils/run_wasm_smoke.sh` now:
@@ -2395,17 +2394,22 @@
 - TDD regression added:
   - `utils/wasm_tblgen_reentry_check.sh`
   - validates same-instance `callMain` re-entry for `circt-tblgen.js`
-    (`--help` then `-print-records ...`) and checks output file content.
+    (`--help` then `-print-records ...`, and `-print-records` then
+    `-print-records`) and checks output file content.
 - Pre-fix behavior:
   - `utils/wasm_tblgen_reentry_check.sh` failed with
     `timed out waiting for wasm runtime initialization`.
   - once `callMain` export was added, same-instance run->run still aborted with
     `InitLLVM was already initialized!` in assert-enabled builds.
+  - after removing `InitLLVM`, run->run then failed with
+    `RuntimeError: null function or function signature mismatch`.
 - Root causes:
   - `circt-tblgen.js` did not export `Module.callMain`, so re-entry helpers
     could not drive it like other wasm tools.
   - `MlirTblgenMain` always constructs `InitLLVM`; this is intentionally
     single-use and asserts on second initialization in one process.
+  - forcibly resetting tblgen command-line option occurrences on every wasm
+    call re-entry destabilized repeated `-print-records` invocations.
   - re-entry helper readiness timeout was fixed at 20s, too low for large wasm
     module initialization in some environments.
 - Fixes:
@@ -2416,6 +2420,8 @@
     - add an emscripten-local tblgen driver path that mirrors mlir-tblgen
       behavior without constructing `InitLLVM`, enabling safe same-instance
       `callMain` re-entry.
+    - keep tblgen command-line option registrations stable across calls (no
+      forced occurrence reset), which fixes run->run `-print-records` re-entry.
   - `utils/wasm_callmain_reentry_check.js`:
     - increased readiness timeout robustness via
       `WASM_REENTRY_READY_TIMEOUT_MS` (default 60000ms).

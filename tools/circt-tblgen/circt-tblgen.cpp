@@ -120,7 +120,7 @@ static bool wasmTblgenMain(raw_ostream &os, const RecordKeeper &records) {
 }
 
 static int wasmTblgenDriverMain(int argc, char **argv) {
-  llvm::cl::opt<DeprecatedAction, true> actionOnDeprecated(
+  static llvm::cl::opt<DeprecatedAction, true> actionOnDeprecated(
       "on-deprecated", llvm::cl::desc("Action to perform on deprecated def"),
       llvm::cl::values(
           clEnumValN(DeprecatedAction::None, "none", "No action"),
@@ -128,7 +128,8 @@ static int wasmTblgenDriverMain(int argc, char **argv) {
           clEnumValN(DeprecatedAction::Error, "error", "Error on use")),
       cl::location(actionOnDeprecatedValue), llvm::cl::init(Warn));
 
-  llvm::cl::opt<const mlir::GenInfo *, true, mlir::GenNameParser> generatorOpt(
+  static llvm::cl::opt<const mlir::GenInfo *, true, mlir::GenNameParser>
+      generatorOpt(
       "", llvm::cl::desc("Generator to run"), cl::location(::generator));
 
   cl::ParseCommandLineOptions(argc, argv);
@@ -147,10 +148,6 @@ static int wasmTblgenDriverMain(int argc, char **argv) {
 
 int main(int argc, char **argv) {
 #if defined(__EMSCRIPTEN__)
-  // Wasm/node integrations may invoke this entrypoint repeatedly via callMain
-  // in the same loaded module instance.
-  llvm::cl::ResetAllOptionOccurrences();
-
   auto hasArg = [&](llvm::StringRef needle) {
     for (int i = 1; i < argc; ++i)
       if (argv[i] && llvm::StringRef(argv[i]) == needle)
