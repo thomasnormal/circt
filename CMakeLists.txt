@@ -667,7 +667,7 @@ if (CMAKE_CROSSCOMPILING AND LLVM_USE_HOST_TOOLS AND NOT LLVM_NATIVE_TOOL_DIR)
   llvm_create_cross_target(${PROJECT_NAME} NATIVE "" Release
     ${circt_native_extra_args})
   if (DEFINED LLVM_NATIVE_BUILD AND NOT "${LLVM_NATIVE_BUILD}" STREQUAL "")
-    add_dependencies(CONFIGURE_CIRCT_NATIVE CIRCT_PREREQ_MLIRTableGen)
+    add_dependencies(CONFIGURE_${PROJECT_NAME}_NATIVE CIRCT_PREREQ_MLIRTableGen)
   endif()
 endif()
 
