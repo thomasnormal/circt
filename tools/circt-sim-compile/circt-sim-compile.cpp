@@ -137,13 +137,6 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
           castOp.getOperand(0).getType() == castOp.getResult(0).getType())
         return WalkResult::advance();
     }
-    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
-      llvm::errs() << "[reject-cast] ";
-      castOp.getOperandTypes()[0].print(llvm::errs());
-      llvm::errs() << " -> ";
-      castOp.getResultTypes()[0].print(llvm::errs());
-      llvm::errs() << "\n";
-    }
     if (rejectionReason)
       *rejectionReason = op->getName().getStringRef().str();
     compilable = false;
@@ -3299,14 +3292,58 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       if (microModule.lookupSymbol<LLVM::LLVMFuncOp>(name))
         continue;
       // Look up the function type from the original module.
+      // Try LLVM::LLVMFuncOp first (already lowered), then func::FuncOp
+      // (user functions in the original module are func::FuncOp, not LLVM).
       auto origFunc = module->lookupSymbol<LLVM::LLVMFuncOp>(name);
       if (origFunc) {
         // Clone as external declaration.
         auto declOp = LLVM::LLVMFuncOp::create(
             declBuilder, origFunc.getLoc(), name, origFunc.getFunctionType());
         declOp.setLinkage(LLVM::Linkage::External);
+      } else if (auto funcFunc =
+                     module->lookupSymbol<func::FuncOp>(name)) {
+        // Convert func::FuncOp's FunctionType to LLVM::LLVMFunctionType.
+        auto funcType = funcFunc.getFunctionType();
+        SmallVector<Type> argTypes;
+        bool unsupported = false;
+        for (auto ty : funcType.getInputs()) {
+          if (isa<IntegerType>(ty) || isa<LLVM::LLVMPointerType>(ty) ||
+              isa<FloatType>(ty)) {
+            argTypes.push_back(ty);
+          } else if (isa<IndexType>(ty)) {
+            argTypes.push_back(IntegerType::get(mlirCtx, 64));
+          } else {
+            unsupported = true;
+            break;
+          }
+        }
+        if (!unsupported) {
+          Type retType;
+          if (funcType.getNumResults() == 0) {
+            retType = LLVM::LLVMVoidType::get(mlirCtx);
+          } else if (funcType.getNumResults() == 1) {
+            auto rt = funcType.getResult(0);
+            if (isa<IntegerType>(rt) || isa<LLVM::LLVMPointerType>(rt) ||
+                isa<FloatType>(rt)) {
+              retType = rt;
+            } else if (isa<IndexType>(rt)) {
+              retType = IntegerType::get(mlirCtx, 64);
+            } else {
+              unsupported = true;
+            }
+          } else {
+            unsupported = true;
+          }
+          if (!unsupported) {
+            auto llvmFuncType = LLVM::LLVMFunctionType::get(retType, argTypes);
+            auto declOp = LLVM::LLVMFuncOp::create(declBuilder,
+                                                     funcFunc.getLoc(), name,
+                                                     llvmFuncType);
+            declOp.setLinkage(LLVM::Linkage::External);
+          }
+        }
       }
-      // If not found in original module, it's defined elsewhere — skip.
+      // If not found in original module (or unsupported type), skip.
       // The entry table will have a null entry which is fine (interpreter
       // handles it).
     }
@@ -3363,6 +3400,19 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                         llvm::sys::getDefaultTargetTriple() + "-" +
                         contentHash;
 
+  // Collect vtable global names — these must NOT be in the patch table.
+  // Vtable globals use synthetic addresses (0xF0000000+N) that compiled code
+  // can't dereference as real pointers.
+  llvm::SmallDenseSet<llvm::StringRef> vtableGlobalNames;
+  for (auto globalOp : module->getOps<LLVM::GlobalOp>()) {
+    if (globalOp->hasAttr("circt.vtable_entries"))
+      vtableGlobalNames.insert(globalOp.getSymName());
+  }
+  if (!vtableGlobalNames.empty()) {
+    llvm::errs() << "[circt-sim-compile] Excluding " << vtableGlobalNames.size()
+                 << " vtable globals from patch table\n";
+  }
+
   // Collect mutable globals for the patch table.
   llvm::SmallVector<std::string> globalPatchNames;
   llvm::SmallVector<llvm::GlobalVariable *> globalPatchVars;
@@ -3374,6 +3424,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       continue;
     if (global.getName().starts_with("__circt_sim_"))
       continue;
+    if (vtableGlobalNames.count(global.getName()))
+      continue; // Skip vtable globals — they use synthetic addresses
     globalPatchNames.push_back(global.getName().str());
     globalPatchVars.push_back(&global);
     auto *type = global.getValueType();
