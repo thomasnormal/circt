@@ -8118,3 +8118,30 @@ Based on these findings, the circt-sim compiled process architecture:
 - The flatten/reconstruct approach scales cleanly from structs/unions to arrays,
   and this closes another class of packed mixed-domain cast failures with one
   recursive extension.
+
+## 2026-02-25 Session: Nightly AVIP i2s seed=1 transient crash (retry hardening)
+
+### Symptom (red-first)
+- In `utils/run_regression_unified.sh --profile nightly --engine circt`, the
+  `avip_sim_nightly` lane can fail due to an intermittent `circt-sim` crash on
+  `i2s` with `seed=1`.
+- Observed log signature:
+  - `UVM_FATAL ... [UVM/BAD_TOP] The uvm_top variable has been overwritten outside of uvm_root!`
+  - followed by LLVM crash handler banner:
+    - `PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/ ...`
+  - exit code: `139` (segfault) and `timeout: the monitored command dumped core`
+
+### Observation
+- Rerunning the exact same generated MLIR and plusargs (`+ntb_random_seed=1`)
+  often succeeds immediately, suggesting this is a transient interpreter/runtime
+  failure rather than a deterministic functional failure of the design.
+
+### Mitigation (infra-level stability)
+- `utils/run_avip_circt_sim.sh`
+  - extended `should_retry_sim_failure(...)` to treat crash signatures (exit 139
+    and/or LLVM crash handler banner) as retry-worthy when `SIM_RETRIES>0`.
+  - new env toggle: `SIM_RETRY_ON_CRASH` (default `1`).
+- Added regression test:
+  - `test/Tools/run-avip-circt-sim-retry-on-crash.test`
+    - fake `circt-sim` crashes once with the crash-handler banner and exit 139
+      then succeeds, ensuring we snapshot `.attempt1.log` and the run passes.

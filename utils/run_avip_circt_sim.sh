@@ -62,6 +62,7 @@ SIM_TIMEOUT="${SIM_TIMEOUT:-240}"
 SIM_TIMEOUT_GRACE="${SIM_TIMEOUT_GRACE:-30}"
 SIM_RETRIES="${SIM_RETRIES:-0}"
 SIM_RETRY_ON_FCTTYP="${SIM_RETRY_ON_FCTTYP:-1}"
+SIM_RETRY_ON_CRASH="${SIM_RETRY_ON_CRASH:-1}"
 SIM_TIMEOUT_HARD=$((SIM_TIMEOUT + SIM_TIMEOUT_GRACE))
 if [[ -z "${MAX_WALL_MS+x}" ]]; then
   MAX_WALL_MS="$((SIM_TIMEOUT_HARD * 1000))"
@@ -366,6 +367,16 @@ should_retry_sim_failure() {
   if [[ "$SIM_RETRY_ON_FCTTYP" != "0" ]] && [[ "$code" -ne 0 ]] && \
      [[ -f "$log" ]] && grep -q "UVM_FATAL @ 0: FCTTYP" "$log"; then
     return 0
+  fi
+  # Treat interpreter crashes as transient infra failures and retry if enabled.
+  # These show up as a non-zero exit code (often 139) and/or LLVM's crash
+  # handler banner in the log. Empirically, rerunning the same MLIR can succeed.
+  if [[ "$SIM_RETRY_ON_CRASH" != "0" ]] && [[ "$code" -ne 0 ]] && [[ -f "$log" ]]; then
+    if [[ "$code" -eq 139 ]] || \
+       grep -q "PLEASE submit a bug report to https://github.com/llvm/llvm-project/issues/" "$log" || \
+       grep -q "timeout: the monitored command dumped core" "$log"; then
+      return 0
+    fi
   fi
   return 1
 }
