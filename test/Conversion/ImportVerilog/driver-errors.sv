@@ -1,14 +1,14 @@
 // RUN: circt-translate --import-verilog --verify-diagnostics --split-input-file %s
 // REQUIRES: slang
 
-// Test: multiple continuous assignments to the same variable should be rejected.
-// IEEE 1800-2017 §10.3.1: It shall be an error to have multiple continuous
-// assignments to the same variable.
+// Test: multiple continuous assignments to the same variable are reported as a
+// warning for compatibility with mainstream simulator behavior.
 
 module MultipleContAssign;
   int v;
+  // expected-remark @below {{also assigned here}}
   assign v = 12;
-  // expected-error @below {{cannot have multiple continuous assignments to variable 'v'}}
+  // expected-warning @below {{cannot have multiple continuous assignments to variable 'v'}}
   assign v = 13;
 endmodule
 
@@ -20,9 +20,10 @@ endmodule
 
 module MixedContProcAssign;
   wire clk = 0;
-  // expected-error @below {{cannot mix continuous and procedural assignments to variable 'v'}}
   int v;
+  // expected-remark @below {{also assigned here}}
   assign v = 12;
+  // expected-error @below {{cannot mix continuous and procedural assignments to variable 'v'}}
   always @(posedge clk) v <= ~v;
 endmodule
 
