@@ -672,8 +672,7 @@ emitUnpackValue(OpBuilder &builder, Location loc, Type ty, Value retsArray,
 ///
 /// Returns the list of function names indexed by FuncId.
 static llvm::SmallVector<std::string>
-collectVtableFuncIds(ModuleOp module,
-                     llvm::StringMap<unsigned> &funcNameToFid) {
+collectVtableFuncIds(ModuleOp module) {
   llvm::SmallVector<std::string> allFuncNames;
 
   // Walk globals in module iteration order — same as the interpreter does in
@@ -700,8 +699,6 @@ collectVtableFuncIds(ModuleOp module,
         continue;
 
       StringRef funcName = funcSymbol.getValue();
-      unsigned fid = allFuncNames.size();
-      funcNameToFid[funcName] = fid; // Last FuncId wins for the map
       allFuncNames.push_back(funcName.str());
     }
   }
@@ -2244,10 +2241,7 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const llvm::SmallVector<std::string> &globalPatchNames,
                                  const llvm::SmallVector<llvm::GlobalVariable *> &globalPatchVars,
                                  const llvm::SmallVector<uint32_t> &globalPatchSizes,
-                                 const llvm::SmallVector<std::string> &allFuncEntryNames,
-                                 const llvm::StringMap<unsigned> &funcNameToFid,
-                                 const llvm::StringSet<> &compiledFuncSet,
-                                 const llvm::StringSet<> &trampolineFuncSet) {
+                                 const llvm::SmallVector<std::string> &allFuncEntryNames) {
   auto &ctx = llvmModule.getContext();
   auto *i32Ty = llvm::Type::getInt32Ty(ctx);
   auto *ptrTy = llvm::PointerType::get(ctx, 0);
@@ -3077,8 +3071,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Collect vtable FuncId assignments from the original module.
   // This must happen BEFORE trampoline generation so we can ensure all
   // vtable functions have either compiled bodies or trampolines.
-  llvm::StringMap<unsigned> funcNameToFid;
-  auto allFuncEntryNames = collectVtableFuncIds(*module, funcNameToFid);
+  auto allFuncEntryNames = collectVtableFuncIds(*module);
   llvm::errs() << "[circt-sim-compile] Collected " << allFuncEntryNames.size()
                << " vtable FuncIds\n";
 
@@ -3114,14 +3107,6 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     llvm::errs() << "[circt-sim-compile] Generated " << trampolineNames.size()
                  << " interpreter trampolines\n";
   }
-
-  // Build sets for fast lookup when constructing the entry table.
-  llvm::StringSet<> compiledFuncSet;
-  for (const auto &name : funcNames)
-    compiledFuncSet.insert(name);
-  llvm::StringSet<> trampolineFuncSet;
-  for (const auto &name : trampolineNames)
-    trampolineFuncSet.insert(name);
 
   llvm::errs() << "[circt-sim-compile] " << funcNames.size()
                << " functions + " << procNames.size()
@@ -3190,8 +3175,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
                        procNames, procKinds, buildId,
                        globalPatchNames, globalPatchVars, globalPatchSizes,
-                       allFuncEntryNames, funcNameToFid,
-                       compiledFuncSet, trampolineFuncSet);
+                       allFuncEntryNames);
 
   // Rewrite indirect calls through tagged synthetic vtable addresses
   // (0xF0000000+N) to use the func_entries table. Must run after

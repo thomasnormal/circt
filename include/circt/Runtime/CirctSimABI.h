@@ -155,7 +155,8 @@ typedef struct {
 
   /// Unified function entry table indexed by FuncId. Each entry is a callable
   /// pointer — either a natively compiled function or a trampoline that calls
-  /// __circt_sim_call_interpreted(). Never null for valid FuncIds.
+  /// __circt_sim_call_interpreted(). May be null if function was not found
+  /// during compilation.
   const void *const *all_func_entries;
 
   /// Symbol name for each entry, indexed by FuncId. Used for diagnostics
