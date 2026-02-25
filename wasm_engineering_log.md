@@ -2171,3 +2171,24 @@
   - on wasm/emscripten (no pthreads), thread construction aborts.
   - code location: `tools/circt-sim/circt-sim.cpp` around
     `startWatchdogThread()` and the `watchdogThread = std::thread(...)` path.
+
+## 2026-02-25 (fix: wasm thread-option fallbacks for circt-sim)
+- TDD regression added:
+  - `utils/wasm_threaded_options_fallback_check.sh`
+  - checks that in wasm/node artifacts:
+    - `circt-sim.js --timeout 5` does not abort
+    - `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1 circt-sim.js --parallel 2` does not abort
+- Pre-fix behavior:
+  - both commands aborted with `RuntimeError: Aborted(...)`.
+- Fixes in `tools/circt-sim/circt-sim.cpp`:
+  - `startWatchdogThread()` now no-ops on emscripten (no `std::thread`).
+  - `setupParallelSimulation()` now gracefully falls back to sequential mode on
+    emscripten even when `CIRCT_SIM_EXPERIMENTAL_PARALLEL=1`.
+  - global `WallClockTimeout` thread guard in `processInput()` is disabled on
+    emscripten with an explicit warning; cooperative timeout checks remain.
+- Smoke wiring:
+  - `utils/run_wasm_smoke.sh` now runs
+    `utils/wasm_threaded_options_fallback_check.sh`.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_threaded_options_fallback_check.sh`: PASS.
+  - direct commands now return rc=0 with warnings instead of aborting.
