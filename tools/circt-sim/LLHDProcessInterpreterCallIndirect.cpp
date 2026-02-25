@@ -83,6 +83,25 @@ static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
   llvm::errs() << " callee=" << calleeName << "\n";
 }
 
+static void decrementRecursionDepthEntry(ProcessExecutionState &state,
+                                         Operation *funcKey,
+                                         uint64_t arg0Val) {
+  auto funcIt = state.recursionVisited.find(funcKey);
+  if (funcIt == state.recursionVisited.end())
+    return;
+  auto &depthMap = funcIt->second;
+  auto argIt = depthMap.find(arg0Val);
+  if (argIt == depthMap.end())
+    return;
+  if (argIt->second > 1) {
+    --argIt->second;
+    return;
+  }
+  depthMap.erase(argIt);
+  if (depthMap.empty())
+    state.recursionVisited.erase(funcIt);
+}
+
 static unsigned writeConfigDbBytesToNativeMemory(
     uint64_t addr, uint64_t nativeOffset, size_t nativeSize,
     const std::vector<uint8_t> &valueData, unsigned requestedBytes,
@@ -2473,6 +2492,28 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return success();
     }
 
+    // Intercept get_uvm_seeding helper and virtual methods.
+    if ((calleeName == "get_uvm_seeding" ||
+         calleeName.ends_with("::get_uvm_seeding")) &&
+        callIndirectOp.getNumResults() >= 1) {
+      bool value = true;
+      auto it =
+          globalAddresses.find("uvm_pkg::uvm_pkg::uvm_object::use_uvm_seeding");
+      if (it != globalAddresses.end()) {
+        uint64_t globalAddr = it->getValue();
+        uint64_t off = 0;
+        if (MemoryBlock *blk = findBlockByAddress(globalAddr, off))
+          if (blk->initialized && off < blk->size)
+            value = (blk->bytes()[off] & 1) != 0;
+      }
+      unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
+      if (width == 0)
+        width = 1;
+      setValue(procId, callIndirectOp.getResult(0),
+               InterpretedValue(llvm::APInt(width, value ? 1 : 0)));
+      return success();
+    }
+
     // Fast-path cached get_type_name results (cached after first successful
     // interpretation of each callee symbol).
     const bool disableTypeNameCache =
@@ -3673,11 +3714,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           dropPhaseObjection(handle, count);
         }
       }
-      if (indAddedToVisited) {
-        auto &depthRef = processStates[procId].recursionVisited[indFuncKey][indArg0Val];
-        if (depthRef > 0)
-          --depthRef;
-      }
+      if (indAddedToVisited)
+        decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
       return success();
     }
 
@@ -3794,12 +3832,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
               setValue(procId, callIndirectOp.getResult(i), results[i]);
             // Decrement depth counter after returning.
-            if (indAddedToVisited) {
-              auto &depthRef =
-                  processStates[procId].recursionVisited[indFuncKey][indArg0Val];
-              if (depthRef > 0)
-                --depthRef;
-            }
+            if (indAddedToVisited)
+              decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
             ++nativeEntryCallCount;
             return success();
             } // eligible (no fake addr)
@@ -3817,11 +3851,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     --callState.callDepth;
 
     // Decrement depth counter after returning
-    if (indAddedToVisited) {
-      auto &depthRef = processStates[procId].recursionVisited[indFuncKey][indArg0Val];
-      if (depthRef > 0)
-        --depthRef;
-    }
+    if (indAddedToVisited)
+      decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
 
     if (failed(funcResult)) {
       static bool traceCallFailures = []() {
@@ -3843,11 +3874,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // The function suspended -- this is not an error. Propagate the
         // suspension so the caller can save a call stack frame.
         // callDepth was already decremented above (line after interpretFuncBody).
-        if (indAddedToVisited) {
-          auto &depthRef = processStates[procId].recursionVisited[indFuncKey][indArg0Val];
-          if (depthRef > 0)
-            --depthRef;
-        }
+        if (indAddedToVisited)
+          decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
         LLVM_DEBUG(llvm::dbgs() << "  call_indirect: '" << calleeName
                                 << "' returned failure but process is waiting"
                                 << " -- treating as suspension\n");
@@ -3895,12 +3923,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
       }
       // Decrement depth counter since we're returning early
-      if (indAddedToVisited) {
-        auto &depthRef =
-            processStates[procId].recursionVisited[indFuncKey][indArg0Val];
-        if (depthRef > 0)
-          --depthRef;
-      }
+      if (indAddedToVisited)
+        decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
       return success();
     }
 

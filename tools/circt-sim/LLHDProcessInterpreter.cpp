@@ -207,6 +207,25 @@ static bool computeMemoryBackedArrayBitOffset(hw::ArrayType arrayType,
   return true;
 }
 
+static void decrementRecursionDepthEntry(ProcessExecutionState &state,
+                                         Operation *funcKey,
+                                         uint64_t arg0Val) {
+  auto funcIt = state.recursionVisited.find(funcKey);
+  if (funcIt == state.recursionVisited.end())
+    return;
+  auto &depthMap = funcIt->second;
+  auto argIt = depthMap.find(arg0Val);
+  if (argIt == depthMap.end())
+    return;
+  if (argIt->second > 1) {
+    --argIt->second;
+    return;
+  }
+  depthMap.erase(argIt);
+  if (depthMap.empty())
+    state.recursionVisited.erase(funcIt);
+}
+
 // circt-sim evaluates clocked assertions/assumptions through the LTL runtime
 // evaluator. For sequence-typed assert-like properties, routing evaluation
 // through an implication form preserves established runtime behavior without
@@ -20115,6 +20134,30 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
+  // Intercept get_uvm_seeding helper and virtual methods.
+  // This avoids repeated dynamic dispatch for a single global i1 flag,
+  // and prevents unbounded allocation in the virtual dispatch chain.
+  if ((calleeName == "get_uvm_seeding" ||
+       calleeName.ends_with("::get_uvm_seeding")) &&
+      callOp.getNumResults() >= 1) {
+    bool value = true;
+    auto it =
+        globalAddresses.find("uvm_pkg::uvm_pkg::uvm_object::use_uvm_seeding");
+    if (it != globalAddresses.end()) {
+      uint64_t globalAddr = it->getValue();
+      uint64_t off = 0;
+      if (MemoryBlock *blk = findBlockByAddress(globalAddr, off))
+        if (blk->initialized && off < blk->size)
+          value = (blk->bytes()[off] & 1) != 0;
+    }
+    unsigned width = getTypeWidth(callOp.getResult(0).getType());
+    if (width == 0)
+      width = 1;
+    setValue(procId, callOp.getResult(0),
+             InterpretedValue(APInt(width, value ? 1 : 0)));
+    return success();
+  }
+
   // Intercept get_core_state - reads global m_uvm_core_state.
   if (calleeName == "uvm_pkg::get_core_state" && callOp.getNumResults() >= 1) {
     auto it = globalAddresses.find("uvm_pkg::m_uvm_core_state");
@@ -21802,6 +21845,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (calleeName == "uvm_pkg::uvm_create_random_seed" &&
       callOp.getNumResults() >= 1) {
     // Args: (struct<(ptr,i64)> type_id, struct<(ptr,i64)> inst_id)
+    constexpr size_t kMaxRuntimeStringBytes = 4096;
     auto readStrArg = [&](size_t argIdx) -> std::string {
       if (argIdx >= args.size())
         return "";
@@ -21813,25 +21857,25 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       int64_t strLen = bits.extractBits(64, 64).getSExtValue();
       if (strPtr == 0 || strLen <= 0)
         return "";
+      size_t boundedLen =
+          std::min(static_cast<size_t>(strLen), kMaxRuntimeStringBytes);
+      if (boundedLen == 0)
+        return "";
       auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
       if (dynIt != dynamicStrings.end() && dynIt->second.first &&
           dynIt->second.second > 0)
-        return std::string(
-            dynIt->second.first,
-            std::min(static_cast<size_t>(strLen),
-                     static_cast<size_t>(dynIt->second.second)));
+        return std::string(dynIt->second.first,
+                           std::min(boundedLen,
+                                    static_cast<size_t>(dynIt->second.second)));
       uint64_t off = 0;
       MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
       if (gBlock && gBlock->initialized) {
         size_t avail =
-            std::min(static_cast<size_t>(strLen),
+            std::min(boundedLen,
                      gBlock->size - static_cast<size_t>(off));
         if (avail > 0)
           return std::string(
               reinterpret_cast<const char *>(gBlock->bytes() + off), avail);
-      } else if (strPtr >= 0x10000) {
-        const char *p = reinterpret_cast<const char *>(strPtr);
-        return std::string(p, static_cast<size_t>(strLen));
       }
       return "";
     };
@@ -21898,6 +21942,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (calleeName == "uvm_pkg::uvm_oneway_hash") {
     // Args: (struct<(ptr,i64)> string_in, i32 seed)
     // Read string from struct<(ptr, i64)> — same pattern as config_db.
+    constexpr size_t kMaxRuntimeStringBytes = 4096;
     std::string strIn;
     if (callOp.getNumOperands() >= 1) {
       InterpretedValue strVal = args[0];
@@ -21906,13 +21951,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         uint64_t strPtr = bits.extractBits(64, 0).getZExtValue();
         int64_t strLen = bits.extractBits(64, 64).getSExtValue();
         if (strPtr != 0 && strLen > 0) {
+          size_t boundedLen =
+              std::min(static_cast<size_t>(strLen), kMaxRuntimeStringBytes);
+          if (boundedLen == 0)
+            boundedLen = 1;
           // Try dynamicStrings
           auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
           if (dynIt != dynamicStrings.end() && dynIt->second.first &&
               dynIt->second.second > 0) {
             strIn = std::string(
                 dynIt->second.first,
-                std::min(static_cast<size_t>(strLen),
+                std::min(boundedLen,
                          static_cast<size_t>(dynIt->second.second)));
           } else {
             // Try global/malloc memory
@@ -21920,16 +21969,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
             if (gBlock && gBlock->initialized) {
               size_t avail =
-                  std::min(static_cast<size_t>(strLen),
+                  std::min(boundedLen,
                            gBlock->size - static_cast<size_t>(off));
               if (avail > 0)
                 strIn = std::string(
                     reinterpret_cast<const char *>(gBlock->bytes() + off),
                     avail);
-            } else if (strPtr >= 0x10000) {
-              // Native memory (direct pointer read)
-              const char *p = reinterpret_cast<const char *>(strPtr);
-              strIn = std::string(p, static_cast<size_t>(strLen));
             }
           }
         }
@@ -22750,12 +22795,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             break;
           }
           --state.callDepth;
-          if (addedToVisited) {
-            auto &depthRef =
-                processStates[procId].recursionVisited[funcKey][arg0Val];
-            if (depthRef > 0)
-              --depthRef;
-          }
+          if (addedToVisited)
+            decrementRecursionDepthEntry(state, funcKey, arg0Val);
           if (numResults == 1) {
             unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
             setValue(procId, callOp.getResult(0),
@@ -22778,11 +22819,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   --state.callDepth;
 
   // Decrement depth counter after returning
-  if (addedToVisited) {
-    auto &depthRef = processStates[procId].recursionVisited[funcKey][arg0Val];
-    if (depthRef > 0)
-      --depthRef;
-  }
+  if (addedToVisited)
+    decrementRecursionDepthEntry(state, funcKey, arg0Val);
 
   if (failed(funcResult)) {
     // Check if the failure was actually a suspension
@@ -22990,12 +23028,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
           break;
         }
         --state.callDepth;
-        if (addedToVisited) {
-          auto &depthRef =
-              processStates[procId].recursionVisited[funcKey][arg0Val];
-          if (depthRef > 0)
-            --depthRef;
-        }
+        if (addedToVisited)
+          decrementRecursionDepthEntry(state, funcKey, arg0Val);
         if (numResults == 1) {
           unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
           setValue(procId, callOp.getResult(0),
@@ -23016,11 +23050,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   --state.callDepth;
 
   // Decrement depth counter.
-  if (addedToVisited) {
-    auto &depthRef = processStates[procId].recursionVisited[funcKey][arg0Val];
-    if (depthRef > 0)
-      --depthRef;
-  }
+  if (addedToVisited)
+    decrementRecursionDepthEntry(state, funcKey, arg0Val);
 
   // Handle failures.
   if (failed(funcResult)) {
@@ -36470,11 +36501,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   --state.callDepth;
 
   // Decrement depth counter after returning
-  if (llvmAddedToVisited) {
-    auto &depthRef = processStates[procId].recursionVisited[llvmFuncKey][llvmArg0Val];
-    if (depthRef > 0)
-      --depthRef;
-  }
+  if (llvmAddedToVisited)
+    decrementRecursionDepthEntry(state, llvmFuncKey, llvmArg0Val);
 
   if (failed(funcResult))
     return failure();
@@ -38068,7 +38096,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     return false;
   };
 
-  unsigned maxNative = UINT_MAX;
+  // func.call native dispatch is disabled by default (fake interpreter
+  // addresses crash compiled code). Enable with CIRCT_AOT_ENABLE_FUNC_DISPATCH=1.
+  unsigned maxNative = 0;
+  if (std::getenv("CIRCT_AOT_ENABLE_FUNC_DISPATCH"))
+    maxNative = UINT_MAX;
   if (const char *maxEnv = std::getenv("CIRCT_AOT_MAX_NATIVE"))
     maxNative = std::atoi(maxEnv);
   unsigned nativePopulated = 0;
