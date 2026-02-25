@@ -102,28 +102,32 @@ if [[ "$LEC_SMOKE_ONLY" != "1" ]]; then
         exit 1
       fi
     else
+      resolved_z3=""
       if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
-        if ! circt_common_resolve_tool "$Z3_BIN" >/dev/null 2>&1; then
+        if ! resolved_z3="$(circt_common_resolve_tool "$Z3_BIN" 2>/dev/null)"; then
           echo "z3 not found in PATH: $Z3_BIN" >&2
           exit 1
         fi
-      elif ! command -v "$Z3_BIN" >/dev/null 2>&1; then
-        echo "z3 not found in PATH: $Z3_BIN" >&2
-        exit 1
+      else
+        if ! resolved_z3="$(command -v "$Z3_BIN" 2>/dev/null)"; then
+          echo "z3 not found in PATH: $Z3_BIN" >&2
+          exit 1
+        fi
       fi
+      Z3_BIN="$resolved_z3"
     fi
   else
     if declare -F circt_common_resolve_tool >/dev/null 2>&1; then
-      if circt_common_resolve_tool z3 >/dev/null 2>&1; then
-        Z3_BIN="z3"
+      if resolved_z3="$(circt_common_resolve_tool z3 2>/dev/null)"; then
+        Z3_BIN="$resolved_z3"
       elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
         Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
       elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
         Z3_BIN="/home/thomas-ahle/z3/build/z3"
       fi
     else
-      if command -v z3 >/dev/null 2>&1; then
-        Z3_BIN="z3"
+      if resolved_z3="$(command -v z3 2>/dev/null)"; then
+        Z3_BIN="$resolved_z3"
       elif [[ -x /home/thomas-ahle/z3-install/bin/z3 ]]; then
         Z3_BIN="/home/thomas-ahle/z3-install/bin/z3"
       elif [[ -x /home/thomas-ahle/z3/build/z3 ]]; then
