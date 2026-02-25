@@ -8166,6 +8166,20 @@ Based on these findings, the circt-sim compiled process architecture:
 - Added regression test:
   - `test/Tools/run-avip-circt-sim-retry-on-uvm-field-op.test`
 
+## 2026-02-25 Session: Nightly AVIP transient TIMEOUTs (retry hardening)
+
+### Symptom
+- Some AVIP seeds can rarely end up in a transient hang (100% CPU, no forward
+  progress) even without the explicit `UVM/FIELD_OP/*` signature. Rerun of the
+  same generated MLIR and plusargs often succeeds immediately.
+
+### Mitigation (infra-level stability)
+- `utils/run_avip_circt_sim.sh`
+  - retry any `timeout(1)`-style exit (`124`/`137`) when `SIM_RETRIES>0`.
+  - new env toggle: `SIM_RETRY_ON_TIMEOUT` (default `1`).
+- Added regression test:
+  - `test/Tools/run-avip-circt-sim-retry-on-timeout.test`
+
 ## 2026-02-25: Foreach fixed-array randomize constraints were parsed but not enforced
 
 ### Gap identified (red-first)
