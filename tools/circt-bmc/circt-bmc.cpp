@@ -868,6 +868,11 @@ static LogicalResult runPassPipeline(MLIRContext &context, ModuleOp module,
   lowerToBMCOptions.allowMultiClock = allowMultiClock;
   lowerToBMCOptions.emitResultMessages = emitResultMessages;
   pm.addPass(createLowerToBMC(lowerToBMCOptions));
+  // Lower remaining symbolic values (e.g. in non-top helper modules) so
+  // downstream HW->SMT conversion never sees verif.symbolic_value outside
+  // valid module/formal parent contexts.
+  pm.addPass(verif::createLowerSymbolicValuesPass(
+      {verif::SymbolicValueLowering::ExtModule}));
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertCombToSMT());
   pm.addPass(createConvertVerifToSMT(convertOptions));

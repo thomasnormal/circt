@@ -530,6 +530,15 @@ struct InstanceOpConversion : OpConversionPattern<InstanceOp> {
       SmallVector<Type> domainTypes(adaptor.getInputs().getTypes().begin(),
                                     adaptor.getInputs().getTypes().end());
       for (auto resultType : resultTypes) {
+        // SMT allows zero-argument function symbols (`declare-const` form).
+        // Model extern instances without inputs as fresh symbolic values
+        // directly, avoiding `!smt.func<()>` construction.
+        if (domainTypes.empty()) {
+          Value sym = mlir::smt::DeclareFunOp::create(rewriter, op.getLoc(),
+                                                      resultType);
+          results.push_back(sym);
+          continue;
+        }
         auto funcType = mlir::smt::SMTFuncType::get(domainTypes, resultType);
         Value fn = mlir::smt::DeclareFunOp::create(rewriter, op.getLoc(), funcType);
         Value app = mlir::smt::ApplyFuncOp::create(rewriter, op.getLoc(), fn,

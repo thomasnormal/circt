@@ -1,5 +1,57 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: BMC symbolic-value legalization across flattened helper modules
+
+### What changed
+- Updated:
+  - `tools/circt-bmc/circt-bmc.cpp`
+  - `lib/Conversion/HWToSMT/HWToSMT.cpp`
+- Added:
+  - `test/Conversion/HWToSMT/hw-to-smt-extern-zero-arg.mlir`
+  - `test/Tools/circt-bmc/circt-bmc-symbolic-submodule.mlir`
+
+### Red-first debugging path
+- Reproduced a deterministic `circt-bmc` failure with a minimal nested-module
+  symbolic case:
+  - top instantiates leaf; leaf contains `verif.symbolic_value`.
+  - failure:
+    - `'verif.symbolic_value' op expects parent op to be one of 'verif.formal, hw.module'`
+    during `convert-hw-to-smt`.
+- Instrumented pass dumps showed:
+  - symbolic values in helper modules survived `lower-to-bmc`.
+  - later conversion moved those ops into `func.func`, violating parent
+    constraints.
+- Added `verif-lower-symbolic-values` in `circt-bmc` pipeline after
+  `lower-to-bmc` to legalize residual symbolics before SMT conversion.
+- Found and fixed follow-on conversion crash:
+  - lowering extmodule-backed symbolic instances with zero operands attempted to
+    build `!smt.func<()>`, triggering `domain must not be empty`.
+  - fixed `HWToSMT` extern-instance lowering to emit direct
+    `smt.declare_fun : <sort>` for zero-input extern instances.
+
+### Realizations / surprises
+- This was a cross-pass interaction bug, not a single verifier issue:
+  symbolic legality depended on where hierarchy flattening and HW->SMT
+  conversion relocated ops.
+- The zero-arg extern path is common for symbolic helper stubs; missing support
+  there blocked a straightforward symbolic legalization strategy.
+
+### Validation snapshot
+- Focused lit:
+  - `Conversion/HWToSMT/hw-to-smt-extern-zero-arg.mlir` -> pass
+  - `Tools/circt-bmc/circt-bmc-symbolic-submodule.mlir` -> pass
+- Direct reproducer:
+  - `/tmp/sym-submodule.mlir`:
+    - before: parent-op verifier error / conversion failure
+    - after: `circt-bmc --emit-mlir -b 1 --module top` succeeds.
+- OpenTitan FPV BMC focused probes (earlgrey compile-contracts):
+  - `edn_sec_cm`:
+    - before: `CIRCT_BMC_ERROR verif_symbolic_value_op_expects_parent...`
+    - after: `UNKNOWN`
+  - `keymgr_sec_cm`:
+    - before: same `CIRCT_BMC_ERROR` class
+    - after: `FAIL (SAT)`
+
 ## 2026-02-25 Session: OpenTitan FPV duplicate continuous assign compatibility (`prim_lfsr_fpv`)
 
 ### What changed
