@@ -8403,3 +8403,75 @@ Based on these findings, the circt-sim compiled process architecture:
   - sim total: `62s` (CIRCT) vs `13s` (Xcelium) => `4.77x` slower.
 - Coverage parity: **not yet**.
   - CIRCT coverage fields are `0.00/0.00` for all rows with emitted coverage values in this snapshot.
+
+## 2026-02-25: Sequence `.ended` parity restored (slang patch integrity fix)
+
+### Gap identified (red-first)
+- Direct frontend repro failed before CIRCT lowering:
+  - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-ended-method.sv`
+  - result: `EXIT:1`
+  - diagnostic: `error: invalid member access for type 'sequence'`
+
+### Root cause
+- `patches/slang-sequence-ended-method.patch` was malformed (`git apply --check` reported `corrupt patch`).
+- `patches/apply-slang-patches.sh` applies patches with `|| true`, so this failure was silent and `.ended` support never landed in fetched slang sources.
+
+### Implementation
+- Replaced `patches/slang-sequence-ended-method.patch` with a valid unified diff that applies cleanly to slang v10.0 and adds:
+  - sequence system method registration for `.ended` (aliasing `.matched` endpoint semantics),
+  - assertion-analysis handling for `.ended` in sequence-method clock/local-var checks,
+  - sampled-value expression checks that treat `.ended` like `.matched` for restrictions.
+- Added/kept focused end-to-end regressions for importer/sim/bmc:
+  - `test/Conversion/ImportVerilog/sva-sequence-ended-method.sv`
+  - `test/Tools/circt-sim/sva-ended-runtime.sv`
+  - `test/Tools/circt-bmc/sva-ended-e2e.sv`
+
+### Validation
+- Post-fix importer check:
+  - same command now `EXIT:0`; IR contains `ltl.matched` and `verif.clocked_assert`.
+- Runtime path:
+  - `build_test/bin/circt-verilog --no-uvm-auto-include test/Tools/circt-sim/sva-ended-runtime.sv --ir-llhd -o /tmp/sva-ended-runtime.mlir`
+  - `build_test/bin/circt-sim /tmp/sva-ended-runtime.mlir --top top --max-time=60000000`
+  - result: expected assertion-failure trace observed.
+- BMC path:
+  - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-llhd --timescale=1ns/1ns --single-unit test/Tools/circt-bmc/sva-ended-e2e.sv | build_test/bin/circt-bmc --run-smtlib -b 3 --ignore-asserts-until=0 --module=sva_ended_e2e -`
+  - result: `BMC_RESULT=SAT`.
+
+### Realization
+- A malformed patch file can silently erase an SVA feature when patch-apply failures are tolerated; regression tests covering that feature are essential to catch patch-integrity drift.
+
+## 2026-02-25: sv-tests sim false `COMPILE_FAIL` closure via toolchain-derived defaults
+
+### Gap identified (red-first)
+- Unmasked sv-tests sim reproduction:
+  - `EXPECT_FILE=/dev/null TEST_FILTER='^16\.2--assume(|-final|0)$' utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+  - result before fix: `3/3 COMPILE_FAIL`
+- Log signature:
+  - `timeout: failed to run command 'build-test/bin/circt-verilog': No such file or directory`
+
+### Root cause
+- `utils/run_sv_tests_circt_sim.sh` hardcoded default tools to
+  `build-test/bin/circt-verilog` and `build-test/bin/circt-sim`.
+- Current harness ecosystem uses `build_test/bin` resolver defaults; sim harness
+  diverged from BMC/LEC and produced false compile failures.
+
+### Implementation
+- Updated `utils/run_sv_tests_circt_sim.sh` to source
+  `utils/formal_toolchain_resolve.sh` and resolve defaults consistently:
+  - `CIRCT_VERILOG` via `resolve_default_circt_tool`.
+  - `CIRCT_SIM` derived from resolved `CIRCT_VERILOG` directory via
+    `derive_tool_dir_from_verilog` + `resolve_default_circt_tool`.
+- Added regression:
+  - `test/Tools/run-sv-tests-sim-toolchain-derived-from-circt-verilog.test`
+  - verifies that setting only `CIRCT_VERILOG=%t/bin/circt-verilog` causes
+    sim to launch `%t/bin/circt-sim` (derived toolchain path).
+
+### Validation
+- New regression RUN-equivalent: PASS.
+- sv-tests focused rerun after fix:
+  - same `16.2--assume*` filter now reports `3/3 PASS`, `compile_fail=0`.
+
+### Realization
+- Mixed `build-test`/`build_test` path assumptions can masquerade as SVA
+  semantic regressions; toolchain derivation must be centralized across all
+  harnesses to keep parity signals trustworthy.

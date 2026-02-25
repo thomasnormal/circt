@@ -4,6 +4,9 @@ set -uo pipefail
 # main loop to avoid aborting the whole run on a single test failure.
 
 SV_TESTS_DIR="${1:-/home/thomas-ahle/sv-tests}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils/formal_toolchain_resolve.sh
+source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
 
 # Memory limit settings to prevent system hangs
 CIRCT_MEMORY_LIMIT_GB="${CIRCT_MEMORY_LIMIT_GB:-20}"
@@ -51,8 +54,9 @@ run_sim_limited() {
 
 # Simulation max-time in femtoseconds (default: 10us = 10^13 fs)
 MAX_SIM_TIME="${MAX_SIM_TIME:-10000000000000}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-build-test/bin/circt-verilog}"
-CIRCT_SIM="${CIRCT_SIM:-build-test/bin/circt-sim}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog")}"
+CIRCT_TOOL_DIR_DEFAULT="$(derive_tool_dir_from_verilog "$CIRCT_VERILOG")"
+CIRCT_SIM="${CIRCT_SIM:-$(resolve_default_circt_tool "circt-sim" "$CIRCT_TOOL_DIR_DEFAULT")}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 CIRCT_SIM_ARGS="${CIRCT_SIM_ARGS:-}"
 TAG_REGEX="${TAG_REGEX:-}"
@@ -60,7 +64,6 @@ TEST_FILTER="${TEST_FILTER:-}"
 OUT="${OUT:-$PWD/sv-tests-sim-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXPECT_FILE="${EXPECT_FILE:-$SCRIPT_DIR/sv-tests-sim-expect.txt}"
 UVM_PATH="${UVM_PATH:-$SCRIPT_DIR/../lib/Runtime/uvm}"
 KEEP_LOGS_DIR="${KEEP_LOGS_DIR:-}"
