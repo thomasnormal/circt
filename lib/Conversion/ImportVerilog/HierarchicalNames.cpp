@@ -381,15 +381,22 @@ struct HierPathValueExprVisitor
     if (!currentInstBody || !outermostInstBody)
       return;
 
+    auto *exprValueSym = expr.symbol.as_if<slang::ast::ValueSymbol>();
+    if (!exprValueSym)
+      return;
     auto addHierPath = [&](const slang::ast::InstanceBodySymbol *sym,
                            mlir::StringAttr nameAttr,
                            slang::ast::ArgumentDirection dir) {
       auto &paths = context.hierPaths[sym];
-      bool exists = llvm::any_of(paths, [&](const auto &info) {
-        return info.hierName == nameAttr;
+      auto existing = llvm::find_if(paths, [&](const auto &info) {
+        return info.hierName == nameAttr && info.direction == dir;
       });
-      if (!exists)
-        paths.push_back(HierPathInfo{nameAttr, {}, dir, &expr.symbol});
+      if (existing == paths.end()) {
+        paths.push_back(HierPathInfo{nameAttr, {}, dir, exprValueSym});
+        return;
+      }
+      if (existing->valueSym != exprValueSym)
+        context.hierValueAliases[exprValueSym] = existing->valueSym;
     };
 
 
@@ -545,16 +552,22 @@ struct HierPathValueExprVisitor
         if (!lca)
           return;
 
+        auto *exprValueSym = expr.symbol.as_if<slang::ast::ValueSymbol>();
+        if (!exprValueSym)
+          return;
         auto addHierPath = [&](const slang::ast::InstanceBodySymbol *sym,
                                mlir::StringAttr nameAttr,
                                slang::ast::ArgumentDirection dir) {
           auto &paths = context.hierPaths[sym];
-          bool exists = llvm::any_of(paths, [&](const auto &info) {
-            return info.hierName == nameAttr;
+          auto existing = llvm::find_if(paths, [&](const auto &info) {
+            return info.hierName == nameAttr && info.direction == dir;
           });
-          if (!exists)
-            paths.push_back(
-                HierPathInfo{nameAttr, {}, dir, &expr.symbol});
+          if (existing == paths.end()) {
+            paths.push_back(HierPathInfo{nameAttr, {}, dir, exprValueSym});
+            return;
+          }
+          if (existing->valueSym != exprValueSym)
+            context.hierValueAliases[exprValueSym] = existing->valueSym;
         };
 
         auto nameAttr = builder.getStringAttr(expr.symbol.name);
@@ -946,9 +959,23 @@ struct InstBodyVisitor {
 
   // Traverse generate blocks.
   LogicalResult visit(const slang::ast::GenerateBlockSymbol &genNode) {
+    SmallVector<const slang::ast::Symbol *> instanceMembers;
+    SmallVector<const slang::ast::Symbol *> otherMembers;
     for (auto &member : genNode.members()) {
-      auto loc = context.convertLocation(member.location);
-      if (failed(member.visit(InstBodyVisitor(context, loc))))
+      if (member.kind == slang::ast::SymbolKind::Instance ||
+          member.kind == slang::ast::SymbolKind::InstanceArray)
+        instanceMembers.push_back(&member);
+      else
+        otherMembers.push_back(&member);
+    }
+    for (auto *member : instanceMembers) {
+      auto loc = context.convertLocation(member->location);
+      if (failed(member->visit(InstBodyVisitor(context, loc))))
+        return failure();
+    }
+    for (auto *member : otherMembers) {
+      auto loc = context.convertLocation(member->location);
+      if (failed(member->visit(InstBodyVisitor(context, loc))))
         return failure();
     }
     return success();

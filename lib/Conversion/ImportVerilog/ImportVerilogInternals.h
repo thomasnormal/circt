@@ -647,6 +647,12 @@ struct Context {
   /// Collect all hierarchical names used for the per module/instance.
   DenseMap<const slang::ast::InstanceBodySymbol *, SmallVector<HierPathInfo>>
       hierPaths;
+  /// When hierarchical paths are deduplicated by textual name, generated blocks
+  /// can yield cloned AST symbols for the same underlying hierarchical object.
+  /// Track aliases from clone symbols to the canonical symbol used in `hierPaths`
+  /// so expression lowering can still resolve the value.
+  DenseMap<const slang::ast::ValueSymbol *, const slang::ast::ValueSymbol *>
+      hierValueAliases;
 
   /// Collect hierarchical interface instances that need to be threaded through
   /// module ports.

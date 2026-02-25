@@ -2437,7 +2437,19 @@ struct RvalueExprVisitor : public ExprVisitor {
   // Handle hierarchical values, such as `x = Top.sub.var`.
   Value visit(const slang::ast::HierarchicalValueExpression &expr) {
     auto hierLoc = context.convertLocation(expr.symbol.location);
-    if (auto value = context.valueSymbols.lookup(&expr.symbol)) {
+    auto lookupHierValue = [&](const slang::ast::ValueSymbol *sym) -> Value {
+      const slang::ast::ValueSymbol *current = sym;
+      for (unsigned depth = 0; current && depth < 16; ++depth) {
+        if (auto value = context.valueSymbols.lookup(current))
+          return value;
+        auto it = context.hierValueAliases.find(current);
+        if (it == context.hierValueAliases.end() || it->second == current)
+          break;
+        current = it->second;
+      }
+      return {};
+    };
+    if (auto value = lookupHierValue(&expr.symbol)) {
       if (isa<moore::RefType>(value.getType())) {
         auto readOp = moore::ReadOp::create(builder, hierLoc, value);
         if (context.rvalueReadCallback)
@@ -2446,7 +2458,6 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
       return value;
     }
-
     // Handle direct interface member access (e.g., intf.clk where intf is a
     // direct interface instance, not a virtual interface). Check if the
     // symbol's parent is an interface body. This applies to both VariableSymbol
@@ -9218,8 +9229,20 @@ struct LvalueExprVisitor : public ExprVisitor {
 
   // Handle hierarchical values, such as `Top.sub.var = x`.
   Value visit(const slang::ast::HierarchicalValueExpression &expr) {
+    auto lookupHierValue = [&](const slang::ast::ValueSymbol *sym) -> Value {
+      const slang::ast::ValueSymbol *current = sym;
+      for (unsigned depth = 0; current && depth < 16; ++depth) {
+        if (auto value = context.valueSymbols.lookup(current))
+          return value;
+        auto it = context.hierValueAliases.find(current);
+        if (it == context.hierValueAliases.end() || it->second == current)
+          break;
+        current = it->second;
+      }
+      return {};
+    };
     // Handle local variables.
-    if (auto value = context.valueSymbols.lookup(&expr.symbol))
+    if (auto value = lookupHierValue(&expr.symbol))
       return value;
 
     // Handle global variables.
