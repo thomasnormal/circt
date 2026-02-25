@@ -4013,6 +4013,8 @@ private:
     uint64_t funcAddr = 0;
     mlir::func::FuncOp funcOp;
     void *nativeFuncPtr = nullptr; // AOT compiled native function
+    uint32_t cachedFid = 0;       // Cached FuncId for entry-table dispatch
+    void *cachedEntryPtr = nullptr; // Cached entry pointer from func_entries
     bool valid = false;
     bool isIntercepted = false;
     bool hadVtableOverride = false;
@@ -4097,6 +4099,12 @@ private:
   uint64_t nativeFuncCallCount = 0;
   uint64_t nativeCallIndirectDispatchCount = 0;
   uint64_t interpretedFuncCallCount = 0;
+
+  /// Entry table for tagged-FuncId dispatch (Step 7C).
+  /// Populated from CompiledModuleLoader during loadCompiledFunctions().
+  const void *const *compiledFuncEntries = nullptr;
+  uint32_t numCompiledAllFuncs = 0;
+  uint64_t nativeEntryCallCount = 0;
 
   /// AOT invocation counters (for --stats reporting).
   uint64_t compiledCallbackInvocations = 0;

@@ -44,7 +44,7 @@ extern "C" {
 /// Bump this on any breaking change to the ABI (struct layout, function
 /// signature changes, removed functions). Adding new functions is NOT a
 /// breaking change.
-#define CIRCT_SIM_ABI_VERSION 3
+#define CIRCT_SIM_ABI_VERSION 4
 
 //===----------------------------------------------------------------------===//
 // Opaque Types
@@ -147,6 +147,20 @@ typedef struct {
 
   /// Size in bytes of each global (for memcpy).
   const uint32_t *global_patch_sizes;
+
+  /// Total number of functions in the unified entry table (compiled +
+  /// trampolined). Every vtable FuncId in [0, num_all_funcs) has a valid
+  /// callable entry in func_entries.
+  uint32_t num_all_funcs;
+
+  /// Unified function entry table indexed by FuncId. Each entry is a callable
+  /// pointer — either a natively compiled function or a trampoline that calls
+  /// __circt_sim_call_interpreted(). Never null for valid FuncIds.
+  const void *const *all_func_entries;
+
+  /// Symbol name for each entry, indexed by FuncId. Used for diagnostics
+  /// and matching against the interpreter's function table.
+  const char *const *all_func_entry_names;
 } CirctSimCompiledModule;
 
 //===----------------------------------------------------------------------===//

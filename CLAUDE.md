@@ -425,7 +425,8 @@ Must match by NAME, not pointer identity. This caused 0% coverage in all 9 AVIPs
 - **`CHANGELOG.md`** — All changes, organized by date/feature
 - **`perf_engineering_log.md`** — Performance measurements after each E-phase, AVIP timings
 - **`avip_engineering_log.md`** — AVIP bring-up progress, dual-top debugging history
-- **`aot_plan_3.md`** — Current AOT plan: call_indirect fix, constant globals, shared globals, snapshot workflow (Feb 24, 2026)
+- **`aot_plan_3.md`** — Previous AOT plan: call_indirect fix, constant globals, shared globals, snapshot workflow (Feb 24, 2026)
+- **`aot_plan_4.md`** — Current AOT plan: tagged FuncId entry table, LowerTaggedIndirectCalls LLVM pass, re-enable native dispatch (Feb 25, 2026)
 
 ### Auto-Memory (persist across sessions)
 - **`~/.claude/projects/-home-thomas-ahle-circt/memory/MEMORY.md`** — Master reference: architecture, workflow rules, all major fixes. First 200 lines auto-loaded.

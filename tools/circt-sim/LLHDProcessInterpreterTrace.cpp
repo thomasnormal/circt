@@ -2470,6 +2470,12 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
        << nativeCallIndirectDispatchCount << "\n";
   }
 
+  // AOT entry-table dispatch stats.
+  if (profileSummaryAtExitEnabled && nativeEntryCallCount > 0) {
+    os << "[circt-sim] AOT dispatch: " << nativeEntryCallCount
+       << " native entry calls\n";
+  }
+
   // Function symbol lookup cache stats.
   if (profileSummaryAtExitEnabled &&
       (funcLookupCacheHits || funcLookupCacheMisses ||

@@ -22381,9 +22381,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     entry.funcOp = funcOp;
     entry.noInterception = true;
     // Check if a native compiled version exists (Phase F1).
-    // DISABLED: native func dispatch breaks UVM $cast (vtable/class_id issue).
-    // call_indirect dispatch is still active (gated by nativeFuncPtrs population).
-    if (false && !nativeFuncPtrs.empty()) {
+    if (!nativeFuncPtrs.empty()) {
       auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
       if (nativeIt != nativeFuncPtrs.end())
         entry.nativeFuncPtr = nativeIt->second;
@@ -22441,9 +22439,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // === Native dispatch (Phase F1) ===
-  // DISABLED: native func dispatch breaks UVM $cast (vtable/class_id issue).
-  // call_indirect dispatch is still active (gated by nativeFuncPtrs population).
-  if (false && !nativeFuncPtrs.empty()) {
+  if (!nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
       void *fptr = nativeIt->second;
@@ -37771,8 +37767,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     return false;
   };
 
-  unsigned compiled = 0, nativeEligible = 0, intercepted = 0,
-           skippedCallIndirect = 0;
+  unsigned compiled = 0, nativeEligible = 0, intercepted = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
     if (funcOp.isExternal())
       return;
@@ -37785,27 +37780,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         ++intercepted;
         // Skip: let this function route through interpreter for interceptors.
       } else {
-        // Check for func.call_indirect — vtable slots contain synthetic
-        // addresses (0xF0000000+N) that only the interpreter can resolve.
-        // Native code calling these addresses would produce undefined behavior.
-        // Mutable globals are now handled via the patch table (applied before
-        // this function runs via applyGlobalPatches), so they are safe for
-        // native dispatch.
-        bool unsafeForNative = false;
-        funcOp.walk([&](mlir::Operation *op) {
-          if (isa<mlir::func::CallIndirectOp>(op)) {
-            unsafeForNative = true;
-            return mlir::WalkResult::interrupt();
-          }
-          return mlir::WalkResult::advance();
-        });
-        if (unsafeForNative) {
-          ++skippedCallIndirect;
-          // Keep in interpreter — has call_indirect with synthetic vtable addrs.
-        } else {
-          nativeFuncPtrs[funcOp.getOperation()] = ptr;
-          ++nativeEligible;
-        }
+        // With Step 7B (LowerTaggedIndirectCalls), call_indirect ops inside
+        // compiled functions are safe — they use the entry table instead of
+        // synthetic vtable addresses. No need to exclude them.
+        nativeFuncPtrs[funcOp.getOperation()] = ptr;
+        ++nativeEligible;
       }
     }
   });
@@ -37816,9 +37795,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   } else {
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions: " << nativeEligible
-                 << " native-eligible, " << intercepted
-                 << " intercepted, " << skippedCallIndirect
-                 << " skipped (has call_indirect)\n";
+                 << " native-eligible, " << intercepted << " intercepted\n";
   }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
@@ -37871,6 +37848,13 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
                  << numTrampolines
                  << " trampolines for interpreted dispatch, "
                  << trampolineNative << " native fallbacks\n";
+
+  // Initialize entry table for tagged-FuncId dispatch (Step 7C).
+  compiledFuncEntries = loader.getFuncEntries();
+  numCompiledAllFuncs = loader.getNumAllFuncs();
+  if (numCompiledAllFuncs > 0)
+    llvm::errs() << "[circt-sim] Entry table: " << numCompiledAllFuncs
+                 << " entries for tagged-FuncId dispatch\n";
 }
 
 /// Get the bit width of a type for trampoline packing purposes.

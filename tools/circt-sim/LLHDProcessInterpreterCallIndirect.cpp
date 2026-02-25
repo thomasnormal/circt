@@ -610,85 +610,86 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Dispatch the call
         // [SEQ-XFALLBACK] diagnostic removed
-        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
-#if 0
-        // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
-        if (processStates[procId].callDepth < 2000) {
-          auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
-          if (nativeIt != nativeFuncPtrs.end()) {
-            unsigned numArgs = funcOp.getNumArguments();
-            unsigned numResults = funcOp.getNumResults();
-            bool eligible = (numArgs <= 8 && numResults <= 1);
-            if (eligible) {
-              for (unsigned i = 0; i < numArgs && eligible; ++i) {
-                auto ty = funcOp.getArgumentTypes()[i];
-                if (auto intTy = dyn_cast<mlir::IntegerType>(ty)) {
-                  if (intTy.getWidth() > 64) eligible = false;
-                } else if (isa<mlir::IndexType>(ty) ||
-                           isa<mlir::LLVM::LLVMPointerType>(ty)) {
-                  // OK
-                } else {
-                  eligible = false;
+        // Entry-table dispatch: decode tagged FuncId from X-fallback vtable addr.
+        if (compiledFuncEntries && funcPtrVal.getUInt64() >= 0xF0000000ULL &&
+            funcPtrVal.getUInt64() < 0x100000000ULL &&
+            processStates[procId].callDepth < 2000) {
+          uint32_t fid = static_cast<uint32_t>(funcPtrVal.getUInt64() - 0xF0000000ULL);
+          if (fid < numCompiledAllFuncs) {
+            void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
+            if (entryPtr) {
+              unsigned numArgs = funcOp.getNumArguments();
+              unsigned numResults = funcOp.getNumResults();
+              bool eligible = (numArgs <= 8 && numResults <= 1);
+              if (eligible) {
+                for (unsigned i = 0; i < numArgs && eligible; ++i) {
+                  auto ty = funcOp.getArgumentTypes()[i];
+                  if (auto intTy = dyn_cast<mlir::IntegerType>(ty)) {
+                    if (intTy.getWidth() > 64) eligible = false;
+                  } else if (isa<mlir::IndexType>(ty) ||
+                             isa<mlir::LLVM::LLVMPointerType>(ty)) {
+                    // OK
+                  } else {
+                    eligible = false;
+                  }
+                }
+                if (numResults == 1) {
+                  auto resTy = funcOp.getResultTypes()[0];
+                  if (auto intTy = dyn_cast<mlir::IntegerType>(resTy)) {
+                    if (intTy.getWidth() > 64) eligible = false;
+                  } else if (!isa<mlir::IndexType>(resTy) &&
+                             !isa<mlir::LLVM::LLVMPointerType>(resTy)) {
+                    eligible = false;
+                  }
                 }
               }
-              if (numResults == 1) {
-                auto resTy = funcOp.getResultTypes()[0];
-                if (auto intTy = dyn_cast<mlir::IntegerType>(resTy)) {
-                  if (intTy.getWidth() > 64) eligible = false;
-                } else if (!isa<mlir::IndexType>(resTy) &&
-                           !isa<mlir::LLVM::LLVMPointerType>(resTy)) {
-                  eligible = false;
-                }
-              }
-            }
-            if (eligible) {
-              uint64_t a[8] = {};
-              for (unsigned i = 0; i < numArgs; ++i)
-                a[i] = args[i].getUInt64();
+              if (eligible) {
+                uint64_t a[8] = {};
+                for (unsigned i = 0; i < numArgs; ++i)
+                  a[i] = args[i].getUInt64();
 
-              void *fptr = nativeIt->second;
-              uint64_t result = 0;
-              using F0 = uint64_t (*)();
-              using F1 = uint64_t (*)(uint64_t);
-              using F2 = uint64_t (*)(uint64_t, uint64_t);
-              using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
-              using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
-              using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t);
-              using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t);
-              using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t, uint64_t);
-              using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t, uint64_t, uint64_t);
-              switch (numArgs) {
-              case 0: result = reinterpret_cast<F0>(fptr)(); break;
-              case 1: result = reinterpret_cast<F1>(fptr)(a[0]); break;
-              case 2: result = reinterpret_cast<F2>(fptr)(a[0], a[1]); break;
-              case 3: result = reinterpret_cast<F3>(fptr)(a[0], a[1], a[2]); break;
-              case 4: result = reinterpret_cast<F4>(fptr)(a[0], a[1], a[2], a[3]); break;
-              case 5: result = reinterpret_cast<F5>(fptr)(a[0], a[1], a[2], a[3], a[4]); break;
-              case 6: result = reinterpret_cast<F6>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
-              case 7: result = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
-              case 8: result = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+                uint64_t result = 0;
+                using F0 = uint64_t (*)();
+                using F1 = uint64_t (*)(uint64_t);
+                using F2 = uint64_t (*)(uint64_t, uint64_t);
+                using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+                using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+                using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t);
+                using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t, uint64_t);
+                using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t, uint64_t, uint64_t);
+                using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t, uint64_t, uint64_t, uint64_t);
+                switch (numArgs) {
+                case 0: result = reinterpret_cast<F0>(entryPtr)(); break;
+                case 1: result = reinterpret_cast<F1>(entryPtr)(a[0]); break;
+                case 2: result = reinterpret_cast<F2>(entryPtr)(a[0], a[1]); break;
+                case 3: result = reinterpret_cast<F3>(entryPtr)(a[0], a[1], a[2]); break;
+                case 4: result = reinterpret_cast<F4>(entryPtr)(a[0], a[1], a[2], a[3]); break;
+                case 5: result = reinterpret_cast<F5>(entryPtr)(a[0], a[1], a[2], a[3], a[4]); break;
+                case 6: result = reinterpret_cast<F6>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
+                case 7: result = reinterpret_cast<F7>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+                case 8: result = reinterpret_cast<F8>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+                }
+                if (numResults == 1) {
+                  SmallVector<InterpretedValue, 2> nativeResults;
+                  auto resTy = funcOp.getResultTypes()[0];
+                  unsigned bits = 64;
+                  if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
+                    bits = intTy.getWidth();
+                  nativeResults.push_back(InterpretedValue(result, bits));
+                  for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
+                    setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
+                }
+                ++nativeEntryCallCount;
+                resolved = true;
+                break;
               }
-              if (numResults == 1) {
-                SmallVector<InterpretedValue, 2> nativeResults;
-                auto resTy = funcOp.getResultTypes()[0];
-                unsigned bits = 64;
-                if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
-                  bits = intTy.getWidth();
-                nativeResults.push_back(InterpretedValue(result, bits));
-                for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-                  setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
-              }
-              ++nativeCallIndirectDispatchCount;
-              resolved = true;
-              break;
             }
           }
         }
-#endif
         auto &callState = processStates[procId];
         ++callState.callDepth;
         SmallVector<InterpretedValue, 4> results;
@@ -1369,85 +1370,86 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
 
         // [SEQ-UNMAPPED] diagnostic removed
-        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
-#if 0
-        // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
-        if (processStates[procId].callDepth < 2000) {
-          auto nativeIt = nativeFuncPtrs.find(fOp.getOperation());
-          if (nativeIt != nativeFuncPtrs.end()) {
-            unsigned numArgs = fOp.getNumArguments();
-            unsigned numResults = fOp.getNumResults();
-            bool eligible = (numArgs <= 8 && numResults <= 1);
-            if (eligible) {
-              for (unsigned i = 0; i < numArgs && eligible; ++i) {
-                auto ty = fOp.getArgumentTypes()[i];
-                if (auto intTy = dyn_cast<mlir::IntegerType>(ty)) {
-                  if (intTy.getWidth() > 64) eligible = false;
-                } else if (isa<mlir::IndexType>(ty) ||
-                           isa<mlir::LLVM::LLVMPointerType>(ty)) {
-                  // OK
-                } else {
-                  eligible = false;
+        // Entry-table dispatch for static fallback path.
+        if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
+            funcAddr < 0x100000000ULL &&
+            processStates[procId].callDepth < 2000) {
+          uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
+          if (fid < numCompiledAllFuncs) {
+            void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
+            if (entryPtr) {
+              unsigned numArgs = fOp.getNumArguments();
+              unsigned numResults = fOp.getNumResults();
+              bool eligible = (numArgs <= 8 && numResults <= 1);
+              if (eligible) {
+                for (unsigned i = 0; i < numArgs && eligible; ++i) {
+                  auto ty = fOp.getArgumentTypes()[i];
+                  if (auto intTy = dyn_cast<mlir::IntegerType>(ty)) {
+                    if (intTy.getWidth() > 64) eligible = false;
+                  } else if (isa<mlir::IndexType>(ty) ||
+                             isa<mlir::LLVM::LLVMPointerType>(ty)) {
+                    // OK
+                  } else {
+                    eligible = false;
+                  }
+                }
+                if (numResults == 1) {
+                  auto resTy = fOp.getResultTypes()[0];
+                  if (auto intTy = dyn_cast<mlir::IntegerType>(resTy)) {
+                    if (intTy.getWidth() > 64) eligible = false;
+                  } else if (!isa<mlir::IndexType>(resTy) &&
+                             !isa<mlir::LLVM::LLVMPointerType>(resTy)) {
+                    eligible = false;
+                  }
                 }
               }
-              if (numResults == 1) {
-                auto resTy = fOp.getResultTypes()[0];
-                if (auto intTy = dyn_cast<mlir::IntegerType>(resTy)) {
-                  if (intTy.getWidth() > 64) eligible = false;
-                } else if (!isa<mlir::IndexType>(resTy) &&
-                           !isa<mlir::LLVM::LLVMPointerType>(resTy)) {
-                  eligible = false;
-                }
-              }
-            }
-            if (eligible) {
-              uint64_t a[8] = {};
-              for (unsigned i = 0; i < numArgs; ++i)
-                a[i] = sArgs[i].getUInt64();
+              if (eligible) {
+                uint64_t a[8] = {};
+                for (unsigned i = 0; i < numArgs; ++i)
+                  a[i] = sArgs[i].getUInt64();
 
-              void *fptr = nativeIt->second;
-              uint64_t result = 0;
-              using F0 = uint64_t (*)();
-              using F1 = uint64_t (*)(uint64_t);
-              using F2 = uint64_t (*)(uint64_t, uint64_t);
-              using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
-              using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
-              using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t);
-              using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t);
-              using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t, uint64_t);
-              using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                      uint64_t, uint64_t, uint64_t, uint64_t);
-              switch (numArgs) {
-              case 0: result = reinterpret_cast<F0>(fptr)(); break;
-              case 1: result = reinterpret_cast<F1>(fptr)(a[0]); break;
-              case 2: result = reinterpret_cast<F2>(fptr)(a[0], a[1]); break;
-              case 3: result = reinterpret_cast<F3>(fptr)(a[0], a[1], a[2]); break;
-              case 4: result = reinterpret_cast<F4>(fptr)(a[0], a[1], a[2], a[3]); break;
-              case 5: result = reinterpret_cast<F5>(fptr)(a[0], a[1], a[2], a[3], a[4]); break;
-              case 6: result = reinterpret_cast<F6>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
-              case 7: result = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
-              case 8: result = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+                uint64_t result = 0;
+                using F0 = uint64_t (*)();
+                using F1 = uint64_t (*)(uint64_t);
+                using F2 = uint64_t (*)(uint64_t, uint64_t);
+                using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+                using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+                using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t);
+                using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t, uint64_t);
+                using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t, uint64_t, uint64_t);
+                using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                        uint64_t, uint64_t, uint64_t, uint64_t);
+                switch (numArgs) {
+                case 0: result = reinterpret_cast<F0>(entryPtr)(); break;
+                case 1: result = reinterpret_cast<F1>(entryPtr)(a[0]); break;
+                case 2: result = reinterpret_cast<F2>(entryPtr)(a[0], a[1]); break;
+                case 3: result = reinterpret_cast<F3>(entryPtr)(a[0], a[1], a[2]); break;
+                case 4: result = reinterpret_cast<F4>(entryPtr)(a[0], a[1], a[2], a[3]); break;
+                case 5: result = reinterpret_cast<F5>(entryPtr)(a[0], a[1], a[2], a[3], a[4]); break;
+                case 6: result = reinterpret_cast<F6>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
+                case 7: result = reinterpret_cast<F7>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+                case 8: result = reinterpret_cast<F8>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+                }
+                if (numResults == 1) {
+                  SmallVector<InterpretedValue, 2> nativeResults;
+                  auto resTy = fOp.getResultTypes()[0];
+                  unsigned bits = 64;
+                  if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
+                    bits = intTy.getWidth();
+                  nativeResults.push_back(InterpretedValue(result, bits));
+                  for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
+                    setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
+                }
+                ++nativeEntryCallCount;
+                staticResolved = true;
+                break;
               }
-              if (numResults == 1) {
-                SmallVector<InterpretedValue, 2> nativeResults;
-                auto resTy = fOp.getResultTypes()[0];
-                unsigned bits = 64;
-                if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
-                  bits = intTy.getWidth();
-                nativeResults.push_back(InterpretedValue(result, bits));
-                for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-                  setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
-              }
-              ++nativeCallIndirectDispatchCount;
-              staticResolved = true;
-              break;
             }
           }
         }
-#endif
         auto &cs2 = processStates[procId];
         ++cs2.callDepth;
         SmallVector<InterpretedValue, 4> sResults;
@@ -1714,10 +1716,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         SmallVector<InterpretedValue, 4> fastArgs;
         for (Value arg : callIndirectOp.getArgOperands())
           fastArgs.push_back(getValue(procId, arg));
-        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
-#if 0
-        // AOT: Try native dispatch first via site cache (skip if deep).
-        if (siteIt->second.nativeFuncPtr &&
+        // E5 site cache: entry-table dispatch via cached entry pointer.
+        if (siteIt->second.cachedEntryPtr &&
+            siteIt->second.funcAddr == funcAddr &&
             processStates[procId].callDepth < 2000) {
           auto &entry = siteIt->second;
           auto cachedFuncOp = entry.funcOp;
@@ -1751,7 +1752,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             for (unsigned i = 0; i < numArgs; ++i)
               a[i] = fastArgs[i].getUInt64();
 
-            void *fptr = entry.nativeFuncPtr;
+            void *fptr = entry.cachedEntryPtr;
             uint64_t result = 0;
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
@@ -1789,11 +1790,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
                 setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
             }
-            ++nativeCallIndirectDispatchCount;
+            ++nativeEntryCallCount;
             return success();
           }
         }
-#endif
         // Fall through to interpretFuncBody for non-native-eligible calls.
         auto &fastState = processStates[procId];
         ++fastState.callDepth;
@@ -3616,109 +3616,108 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.valid = true;
         se.isIntercepted = false;
         se.hadVtableOverride = false;
-        // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
-#if 0
-        // Populate native function pointer from nativeFuncPtrs map.
-        if (!nativeFuncPtrs.empty()) {
-          auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
-          if (nativeIt != nativeFuncPtrs.end())
-            se.nativeFuncPtr = nativeIt->second;
+        // Populate entry-table pointer for site cache native dispatch.
+        if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
+            funcAddr < 0x100000000ULL) {
+          uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
+          if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+            se.cachedFid = fid;
+            se.cachedEntryPtr = const_cast<void *>(compiledFuncEntries[fid]);
+          }
         }
-#endif
       } else {
         se.valid = false;
         se.hadVtableOverride = true;
       }
     }
 
-    // DISABLED: native dispatch breaks UVM $cast and causes stack overflow.
-#if 0
-    // AOT: Try native dispatch before interpretFuncBody (only if not too deep,
-    // to prevent native→trampoline→interpreter→call_indirect→native recursion).
-    if (!nativeFuncPtrs.empty() && callState.callDepth < 2000) {
-      auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
-      if (nativeIt != nativeFuncPtrs.end()) {
-        void *fptr = nativeIt->second;
-        unsigned numArgs = funcOp.getNumArguments();
-        unsigned numResults = funcOp.getNumResults();
-        bool eligible = (numArgs <= 8 && numResults <= 1);
-        if (eligible) {
-          for (unsigned i = 0; i < numArgs && eligible; ++i) {
-            auto ty = funcOp.getArgumentTypes()[i];
-            if (auto intTy = dyn_cast<mlir::IntegerType>(ty)) {
-              if (intTy.getWidth() > 64) eligible = false;
-            } else if (isa<mlir::IndexType>(ty) ||
-                       isa<mlir::LLVM::LLVMPointerType>(ty)) {
-              // OK
-            } else {
-              eligible = false;
+    // Entry-table dispatch: try native dispatch before interpretFuncBody.
+    if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
+        funcAddr < 0x100000000ULL && callState.callDepth < 2000) {
+      uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
+      if (fid < numCompiledAllFuncs) {
+        void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
+        if (entryPtr) {
+          unsigned numArgs = funcOp.getNumArguments();
+          unsigned numResults = funcOp.getNumResults();
+          bool eligible = (numArgs <= 8 && numResults <= 1);
+          if (eligible) {
+            for (unsigned i = 0; i < numArgs && eligible; ++i) {
+              auto ty = funcOp.getArgumentTypes()[i];
+              if (auto intTy = dyn_cast<mlir::IntegerType>(ty)) {
+                if (intTy.getWidth() > 64) eligible = false;
+              } else if (isa<mlir::IndexType>(ty) ||
+                         isa<mlir::LLVM::LLVMPointerType>(ty)) {
+                // OK
+              } else {
+                eligible = false;
+              }
+            }
+            if (numResults == 1) {
+              auto resTy = funcOp.getResultTypes()[0];
+              if (auto intTy = dyn_cast<mlir::IntegerType>(resTy)) {
+                if (intTy.getWidth() > 64) eligible = false;
+              } else if (!isa<mlir::IndexType>(resTy) &&
+                         !isa<mlir::LLVM::LLVMPointerType>(resTy)) {
+                eligible = false;
+              }
             }
           }
-          if (numResults == 1) {
-            auto resTy = funcOp.getResultTypes()[0];
-            if (auto intTy = dyn_cast<mlir::IntegerType>(resTy)) {
-              if (intTy.getWidth() > 64) eligible = false;
-            } else if (!isa<mlir::IndexType>(resTy) &&
-                       !isa<mlir::LLVM::LLVMPointerType>(resTy)) {
-              eligible = false;
-            }
-          }
-        }
-        if (eligible) {
-          uint64_t a[8] = {};
-          for (unsigned i = 0; i < numArgs; ++i)
-            a[i] = args[i].getUInt64();
+          if (eligible) {
+            uint64_t a[8] = {};
+            for (unsigned i = 0; i < numArgs; ++i)
+              a[i] = args[i].getUInt64();
 
-          uint64_t result = 0;
-          using F0 = uint64_t (*)();
-          using F1 = uint64_t (*)(uint64_t);
-          using F2 = uint64_t (*)(uint64_t, uint64_t);
-          using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
-          using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
-          using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t);
-          using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t, uint64_t);
-          using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t, uint64_t, uint64_t);
-          using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
-                                  uint64_t, uint64_t, uint64_t, uint64_t);
-          ++callState.callDepth;
-          switch (numArgs) {
-          case 0: result = reinterpret_cast<F0>(fptr)(); break;
-          case 1: result = reinterpret_cast<F1>(fptr)(a[0]); break;
-          case 2: result = reinterpret_cast<F2>(fptr)(a[0], a[1]); break;
-          case 3: result = reinterpret_cast<F3>(fptr)(a[0], a[1], a[2]); break;
-          case 4: result = reinterpret_cast<F4>(fptr)(a[0], a[1], a[2], a[3]); break;
-          case 5: result = reinterpret_cast<F5>(fptr)(a[0], a[1], a[2], a[3], a[4]); break;
-          case 6: result = reinterpret_cast<F6>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
-          case 7: result = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
-          case 8: result = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+            uint64_t result = 0;
+            using F0 = uint64_t (*)();
+            using F1 = uint64_t (*)(uint64_t);
+            using F2 = uint64_t (*)(uint64_t, uint64_t);
+            using F3 = uint64_t (*)(uint64_t, uint64_t, uint64_t);
+            using F4 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t);
+            using F5 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t);
+            using F6 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t, uint64_t);
+            using F7 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t, uint64_t, uint64_t);
+            using F8 = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t,
+                                    uint64_t, uint64_t, uint64_t, uint64_t);
+            ++callState.callDepth;
+            switch (numArgs) {
+            case 0: result = reinterpret_cast<F0>(entryPtr)(); break;
+            case 1: result = reinterpret_cast<F1>(entryPtr)(a[0]); break;
+            case 2: result = reinterpret_cast<F2>(entryPtr)(a[0], a[1]); break;
+            case 3: result = reinterpret_cast<F3>(entryPtr)(a[0], a[1], a[2]); break;
+            case 4: result = reinterpret_cast<F4>(entryPtr)(a[0], a[1], a[2], a[3]); break;
+            case 5: result = reinterpret_cast<F5>(entryPtr)(a[0], a[1], a[2], a[3], a[4]); break;
+            case 6: result = reinterpret_cast<F6>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5]); break;
+            case 7: result = reinterpret_cast<F7>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
+            case 8: result = reinterpret_cast<F8>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
+            }
+            --callState.callDepth;
+            SmallVector<InterpretedValue, 2> results;
+            if (numResults == 1) {
+              auto resTy = funcOp.getResultTypes()[0];
+              unsigned bits = 64;
+              if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
+                bits = intTy.getWidth();
+              results.push_back(InterpretedValue(result, bits));
+            }
+            for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
+              setValue(procId, callIndirectOp.getResult(i), results[i]);
+            // Decrement depth counter after returning.
+            if (indAddedToVisited) {
+              auto &depthRef =
+                  processStates[procId].recursionVisited[indFuncKey][indArg0Val];
+              if (depthRef > 0)
+                --depthRef;
+            }
+            ++nativeEntryCallCount;
+            return success();
           }
-          --callState.callDepth;
-          SmallVector<InterpretedValue, 2> results;
-          if (numResults == 1) {
-            auto resTy = funcOp.getResultTypes()[0];
-            unsigned bits = 64;
-            if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
-              bits = intTy.getWidth();
-            results.push_back(InterpretedValue(result, bits));
-          }
-          for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-            setValue(procId, callIndirectOp.getResult(i), results[i]);
-          // Decrement depth counter after returning.
-          if (indAddedToVisited) {
-            auto &depthRef =
-                processStates[procId].recursionVisited[indFuncKey][indArg0Val];
-            if (depthRef > 0)
-              --depthRef;
-          }
-          ++nativeCallIndirectDispatchCount;
-          return success();
         }
       }
     }
-#endif
 
     // Call the function with depth tracking
     ++callState.callDepth;

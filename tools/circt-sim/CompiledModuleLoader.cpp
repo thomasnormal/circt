@@ -103,6 +103,9 @@ CompiledModuleLoader::load(llvm::StringRef path) {
     llvm::errs() << ", " << numTrampolines << " trampolines";
   if (loader->compiledModule->num_procs > 0)
     llvm::errs() << ", " << loader->compiledModule->num_procs << " processes";
+  if (loader->compiledModule->num_all_funcs > 0)
+    llvm::errs() << ", " << loader->compiledModule->num_all_funcs
+                 << " entry table entries";
   if (!loader->buildId.empty())
     llvm::errs() << " (build: " << loader->buildId << ")";
   llvm::errs() << "\n";

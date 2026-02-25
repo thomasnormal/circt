@@ -1018,6 +1018,9 @@ void LLHDProcessInterpreter::printCompileReport() const {
       llvm::errs() << "  Native CI dispatch: "
                    << nativeCallIndirectDispatchCount << "\n";
     }
+    if (nativeEntryCallCount > 0) {
+      llvm::errs() << "  Entry table calls:  " << nativeEntryCallCount << "\n";
+    }
   }
 
   llvm::errs() << "===============================\n";
