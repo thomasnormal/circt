@@ -127,13 +127,22 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
             func::FuncDialect>(op->getDialect()))
       return WalkResult::advance();
     // Allow specific ops from other dialects that we can lower.
-    if (isa<hw::ConstantOp, comb::ExtractOp, comb::AndOp>(op))
+    if (isa<hw::ConstantOp, hw::BitcastOp, comb::ExtractOp, comb::AndOp,
+            comb::OrOp, comb::XorOp, comb::ICmpOp, comb::AddOp, comb::SubOp,
+            comb::DivUOp, comb::MuxOp, comb::ConcatOp, comb::ReplicateOp>(op))
       return WalkResult::advance();
     // Allow unrealized_conversion_cast only when types match (foldable).
     if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
       if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1 &&
           castOp.getOperand(0).getType() == castOp.getResult(0).getType())
         return WalkResult::advance();
+    }
+    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+      llvm::errs() << "[reject-cast] ";
+      castOp.getOperandTypes()[0].print(llvm::errs());
+      llvm::errs() << " -> ";
+      castOp.getResultTypes()[0].print(llvm::errs());
+      llvm::errs() << "\n";
     }
     if (rejectionReason)
       *rejectionReason = op->getName().getStringRef().str();
@@ -251,8 +260,10 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
   {
     llvm::SmallVector<Operation *> preOps;
     microModule.walk([&](Operation *op) {
-      if (isa<hw::ConstantOp, comb::ExtractOp, comb::AndOp,
-              UnrealizedConversionCastOp>(op))
+      if (isa<hw::ConstantOp, hw::BitcastOp, comb::ExtractOp, comb::AndOp,
+              comb::OrOp, comb::XorOp, comb::ICmpOp, comb::AddOp,
+              comb::SubOp, comb::DivUOp, comb::MuxOp, comb::ConcatOp,
+              comb::ReplicateOp, UnrealizedConversionCastOp>(op))
         preOps.push_back(op);
     });
     for (auto *op : preOps) {
@@ -285,6 +296,147 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
           result = rewriter.create<arith::AndIOp>(loc, result, inputs[i]);
         andOp.replaceAllUsesWith(result);
         rewriter.eraseOp(andOp);
+      } else if (auto icmpOp = dyn_cast<comb::ICmpOp>(op)) {
+        arith::CmpIPredicate pred;
+        switch (icmpOp.getPredicate()) {
+        case comb::ICmpPredicate::eq:
+        case comb::ICmpPredicate::ceq:
+        case comb::ICmpPredicate::weq:
+          pred = arith::CmpIPredicate::eq;
+          break;
+        case comb::ICmpPredicate::ne:
+        case comb::ICmpPredicate::cne:
+        case comb::ICmpPredicate::wne:
+          pred = arith::CmpIPredicate::ne;
+          break;
+        case comb::ICmpPredicate::slt:
+          pred = arith::CmpIPredicate::slt;
+          break;
+        case comb::ICmpPredicate::sle:
+          pred = arith::CmpIPredicate::sle;
+          break;
+        case comb::ICmpPredicate::sgt:
+          pred = arith::CmpIPredicate::sgt;
+          break;
+        case comb::ICmpPredicate::sge:
+          pred = arith::CmpIPredicate::sge;
+          break;
+        case comb::ICmpPredicate::ult:
+          pred = arith::CmpIPredicate::ult;
+          break;
+        case comb::ICmpPredicate::ule:
+          pred = arith::CmpIPredicate::ule;
+          break;
+        case comb::ICmpPredicate::ugt:
+          pred = arith::CmpIPredicate::ugt;
+          break;
+        case comb::ICmpPredicate::uge:
+          pred = arith::CmpIPredicate::uge;
+          break;
+        }
+        auto result = rewriter.create<arith::CmpIOp>(loc, pred,
+                                                       icmpOp.getLhs(),
+                                                       icmpOp.getRhs());
+        icmpOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(icmpOp);
+      } else if (auto xorOp = dyn_cast<comb::XorOp>(op)) {
+        auto inputs = xorOp.getInputs();
+        Value result = inputs[0];
+        for (unsigned i = 1; i < inputs.size(); ++i)
+          result = rewriter.create<arith::XOrIOp>(loc, result, inputs[i]);
+        xorOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(xorOp);
+      } else if (auto orOp = dyn_cast<comb::OrOp>(op)) {
+        auto inputs = orOp.getInputs();
+        Value result = inputs[0];
+        for (unsigned i = 1; i < inputs.size(); ++i)
+          result = rewriter.create<arith::OrIOp>(loc, result, inputs[i]);
+        orOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(orOp);
+      } else if (auto addOp = dyn_cast<comb::AddOp>(op)) {
+        auto inputs = addOp.getInputs();
+        Value result = inputs[0];
+        for (unsigned i = 1; i < inputs.size(); ++i)
+          result = rewriter.create<arith::AddIOp>(loc, result, inputs[i]);
+        addOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(addOp);
+      } else if (auto subOp = dyn_cast<comb::SubOp>(op)) {
+        auto result = rewriter.create<arith::SubIOp>(loc, subOp.getLhs(),
+                                                      subOp.getRhs());
+        subOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(subOp);
+      } else if (auto divOp = dyn_cast<comb::DivUOp>(op)) {
+        auto result = rewriter.create<arith::DivUIOp>(loc, divOp.getLhs(),
+                                                       divOp.getRhs());
+        divOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(divOp);
+      } else if (auto muxOp = dyn_cast<comb::MuxOp>(op)) {
+        auto result = rewriter.create<arith::SelectOp>(
+            loc, muxOp.getCond(), muxOp.getTrueValue(),
+            muxOp.getFalseValue());
+        muxOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(muxOp);
+      } else if (auto concatOp = dyn_cast<comb::ConcatOp>(op)) {
+        // concat(a, b, c) = (a << (bw+cw)) | (b << cw) | c
+        // Operands are MSB-first.
+        auto resultType = concatOp.getResult().getType();
+        unsigned numOps = concatOp.getNumOperands();
+        Value result = rewriter.create<arith::ExtUIOp>(
+            loc, resultType, concatOp.getOperand(numOps - 1));
+        unsigned shift =
+            concatOp.getOperand(numOps - 1).getType().getIntOrFloatBitWidth();
+        for (int i = numOps - 2; i >= 0; --i) {
+          auto extended = rewriter.create<arith::ExtUIOp>(
+              loc, resultType, concatOp.getOperand(i));
+          auto shiftAmt = rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(resultType, shift));
+          auto shifted =
+              rewriter.create<arith::ShLIOp>(loc, extended, shiftAmt);
+          result = rewriter.create<arith::OrIOp>(loc, result, shifted);
+          shift +=
+              concatOp.getOperand(i).getType().getIntOrFloatBitWidth();
+        }
+        concatOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(concatOp);
+      } else if (auto repOp = dyn_cast<comb::ReplicateOp>(op)) {
+        auto resultType = repOp.getResult().getType();
+        unsigned inputWidth =
+            repOp.getInput().getType().getIntOrFloatBitWidth();
+        unsigned resultWidth = resultType.getIntOrFloatBitWidth();
+        unsigned count = resultWidth / inputWidth;
+        Value result = rewriter.create<arith::ExtUIOp>(loc, resultType,
+                                                        repOp.getInput());
+        unsigned shift = inputWidth;
+        for (unsigned i = 1; i < count; ++i) {
+          auto extended = rewriter.create<arith::ExtUIOp>(loc, resultType,
+                                                           repOp.getInput());
+          auto shiftAmt = rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(resultType, shift));
+          auto shifted =
+              rewriter.create<arith::ShLIOp>(loc, extended, shiftAmt);
+          result = rewriter.create<arith::OrIOp>(loc, result, shifted);
+          shift += inputWidth;
+        }
+        repOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(repOp);
+      } else if (auto bitcastOp = dyn_cast<hw::BitcastOp>(op)) {
+        // If both types are the same, just fold away.
+        if (bitcastOp.getInput().getType() ==
+            bitcastOp.getResult().getType()) {
+          bitcastOp.replaceAllUsesWith(bitcastOp.getInput());
+          rewriter.eraseOp(bitcastOp);
+        } else {
+          // If both are integers of same width, use arith.bitcast.
+          auto inTy = bitcastOp.getInput().getType();
+          auto outTy = bitcastOp.getResult().getType();
+          if (inTy.isIntOrFloat() && outTy.isIntOrFloat() &&
+              inTy.getIntOrFloatBitWidth() == outTy.getIntOrFloatBitWidth()) {
+            auto result = rewriter.create<arith::BitcastOp>(loc, outTy,
+                                                             bitcastOp.getInput());
+            bitcastOp.replaceAllUsesWith(result.getResult());
+            rewriter.eraseOp(bitcastOp);
+          }
+        }
       } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
         // If single input → single output with same type, fold away.
         if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1 &&
