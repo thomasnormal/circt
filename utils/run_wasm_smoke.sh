@@ -14,9 +14,11 @@ PLUSARGS_HELPER="utils/wasm_plusargs_reentry_check.sh"
 RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
 UVM_STUB_VCD_HELPER="utils/wasm_uvm_stub_vcd_check.sh"
 UVM_PKG_MEMFS_HELPER="utils/wasm_uvm_pkg_memfs_reentry_check.sh"
-REENTRY_VCD="/tmp/reentry-${BASHPID}.vcd"
-REENTRY_RUN1_VCD="/tmp/reentry-run1-${BASHPID}.vcd"
-REENTRY_RUN2_VCD="/tmp/reentry-run2-${BASHPID}.vcd"
+UVM_PKG_SIM_HELPER="utils/wasm_uvm_pkg_sim_check.sh"
+SCRIPT_PID="${BASHPID:-$$}"
+REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
+REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
+REENTRY_RUN2_VCD="/tmp/reentry-run2-${SCRIPT_PID}.vcd"
 
 validate_bool_env() {
   local name="$1"
@@ -94,6 +96,10 @@ if [[ ! -x "$UVM_STUB_VCD_HELPER" ]]; then
 fi
 if [[ ! -x "$UVM_PKG_MEMFS_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $UVM_PKG_MEMFS_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$UVM_PKG_SIM_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $UVM_PKG_SIM_HELPER" >&2
   exit 1
 fi
 
@@ -300,7 +306,7 @@ fi
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog callMain help -> run"
   verilog_reentry_log="$tmpdir/verilog-reentry.log"
-  verilog_reentry_out="/tmp/verilog-reentry-${BASHPID}.mlir"
+  verilog_reentry_out="/tmp/verilog-reentry-${SCRIPT_PID}.mlir"
   rm -f "$verilog_reentry_out"
   "$NODE_BIN" "$REENTRY_HELPER" "$VERILOG_JS" \
     --first --help \
@@ -335,8 +341,8 @@ echo "[wasm-smoke] Re-entry: circt-bmc run -> run"
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
   echo "[wasm-smoke] Re-entry: circt-verilog run -> run"
-  verilog_run1_out="/tmp/verilog-reentry-run1-${BASHPID}.mlir"
-  verilog_run2_out="/tmp/verilog-reentry-run2-${BASHPID}.mlir"
+  verilog_run1_out="/tmp/verilog-reentry-run1-${SCRIPT_PID}.mlir"
+  verilog_run2_out="/tmp/verilog-reentry-run2-${SCRIPT_PID}.mlir"
   rm -f "$verilog_run1_out" "$verilog_run2_out"
   "$NODE_BIN" "$REENTRY_HELPER" "$VERILOG_JS" \
     --first --resource-guard=false --no-uvm-auto-include --ir-hw --single-unit --format=sv -o "$verilog_run1_out" "$SV_SIM_TEST_INPUT" \
@@ -359,6 +365,9 @@ if [[ "$has_verilog_target" -eq 1 ]]; then
 
   echo "[wasm-smoke] UVM pkg frontend MEMFS re-entry"
   BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_PKG_MEMFS_HELPER"
+
+  echo "[wasm-smoke] UVM pkg frontend+sim wasm runtime"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_PKG_SIM_HELPER"
 fi
 
 if git -C llvm diff --quiet -- llvm/cmake/modules/CrossCompile.cmake 2>"$tmpdir/crosscompile.err"; then

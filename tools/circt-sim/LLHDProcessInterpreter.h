@@ -167,6 +167,65 @@ private:
   unsigned width;
 };
 
+/// Decode a packed `{ptr, i64 len}` payload used by Moore/UVM runtime helpers.
+/// The payload occasionally arrives as pointer-only (<=64-bit) values in wasm
+/// paths, so normalize to 128 bits before extracting fields.
+inline bool decodePackedPtrLenPayload(const llvm::APInt &packedBits,
+                                      uint64_t &ptr, uint64_t &len) {
+  ptr = 0;
+  len = 0;
+  if (packedBits.getBitWidth() < 64)
+    return false;
+  llvm::APInt normalized = packedBits.zextOrTrunc(128);
+  ptr = normalized.extractBitsAsZExtValue(64, 0);
+  len = normalized.extractBitsAsZExtValue(64, 64);
+  return true;
+}
+
+inline bool decodePackedPtrLenPayload(const InterpretedValue &value,
+                                      uint64_t &ptr, uint64_t &len) {
+  if (value.isX()) {
+    ptr = 0;
+    len = 0;
+    return false;
+  }
+  return decodePackedPtrLenPayload(value.getAPInt(), ptr, len);
+}
+
+/// Extract one byte from an APInt using zero-extension for partial final bytes.
+/// This avoids out-of-range extractBits(8, i*8) on values not aligned to 8 bits.
+inline uint8_t extractByteZExt(const llvm::APInt &bits, unsigned byteIndex) {
+  unsigned bitOffset = byteIndex * 8;
+  if (bitOffset >= bits.getBitWidth())
+    return 0;
+  unsigned remaining = bits.getBitWidth() - bitOffset;
+  unsigned bitsToRead = remaining < 8 ? remaining : 8;
+  return static_cast<uint8_t>(
+      bits.extractBitsAsZExtValue(bitsToRead, bitOffset));
+}
+
+/// Serialize an interpreted value to little-endian bytes with a hard cap.
+/// Some malformed or intermediate values can carry extreme bit widths; capping
+/// prevents wasm allocator overflows in config/resource-db interception paths.
+inline std::vector<uint8_t>
+serializeInterpretedValueBytes(const InterpretedValue &value,
+                               uint64_t maxBytes = (1ULL << 20),
+                               bool *truncated = nullptr) {
+  uint64_t requestedBytes = (static_cast<uint64_t>(value.getWidth()) + 7) / 8;
+  uint64_t storedBytes = requestedBytes <= maxBytes ? requestedBytes : maxBytes;
+  if (truncated)
+    *truncated = storedBytes != requestedBytes;
+
+  std::vector<uint8_t> out(static_cast<size_t>(storedBytes), 0);
+  if (value.isX())
+    return out;
+
+  const llvm::APInt &bits = value.getAPInt();
+  for (size_t i = 0; i < out.size(); ++i)
+    out[i] = extractByteZExt(bits, static_cast<unsigned>(i));
+  return out;
+}
+
 //===----------------------------------------------------------------------===//
 // CallStackFrame - Saved function call context for suspend/resume
 //===----------------------------------------------------------------------===//

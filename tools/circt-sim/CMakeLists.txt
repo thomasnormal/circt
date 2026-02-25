@@ -79,7 +79,33 @@ if(EMSCRIPTEN AND CIRCT_SIM_WASM_ENABLE_NODERAWFS)
   target_link_options(circt-sim PRIVATE "SHELL:-sNODERAWFS=1")
 endif()
 
+option(CIRCT_SIM_WASM_ALLOW_MEMORY_GROWTH
+  "Enable Emscripten heap growth (-sALLOW_MEMORY_GROWTH=1) for circt-sim"
+  ON
+)
+set(CIRCT_SIM_WASM_STACK_SIZE "33554432" CACHE STRING
+  "Emscripten wasm stack size in bytes for circt-sim (-sSTACK_SIZE=...)"
+)
+
 if(EMSCRIPTEN)
+  if(NOT CIRCT_SIM_WASM_STACK_SIZE MATCHES "^[0-9]+$")
+    message(FATAL_ERROR
+      "CIRCT_SIM_WASM_STACK_SIZE must be a numeric integer, got '${CIRCT_SIM_WASM_STACK_SIZE}'"
+    )
+  endif()
+  if(CIRCT_SIM_WASM_STACK_SIZE LESS 1)
+    message(FATAL_ERROR
+      "CIRCT_SIM_WASM_STACK_SIZE must be >= 1, got '${CIRCT_SIM_WASM_STACK_SIZE}'"
+    )
+  endif()
+
+  if(CIRCT_SIM_WASM_ALLOW_MEMORY_GROWTH)
+    target_link_options(circt-sim PRIVATE "SHELL:-sALLOW_MEMORY_GROWTH=1")
+  endif()
+  target_link_options(circt-sim PRIVATE
+    "SHELL:-sSTACK_SIZE=${CIRCT_SIM_WASM_STACK_SIZE}"
+  )
+
   target_link_options(circt-sim PRIVATE
     "SHELL:--js-library=${CMAKE_CURRENT_SOURCE_DIR}/circt-sim-vpi-wasm.js"
     "SHELL:-sASYNCIFY=1"
