@@ -63,6 +63,7 @@ SIM_TIMEOUT_GRACE="${SIM_TIMEOUT_GRACE:-30}"
 SIM_RETRIES="${SIM_RETRIES:-0}"
 SIM_RETRY_ON_FCTTYP="${SIM_RETRY_ON_FCTTYP:-1}"
 SIM_RETRY_ON_CRASH="${SIM_RETRY_ON_CRASH:-1}"
+SIM_RETRY_ON_UVM_FIELD_OP="${SIM_RETRY_ON_UVM_FIELD_OP:-1}"
 SIM_TIMEOUT_HARD=$((SIM_TIMEOUT + SIM_TIMEOUT_GRACE))
 if [[ -z "${MAX_WALL_MS+x}" ]]; then
   MAX_WALL_MS="$((SIM_TIMEOUT_HARD * 1000))"
@@ -352,6 +353,12 @@ log_has_virtual_call_failure() {
   grep -Fq "[circt-sim] WARNING: virtual method call" "$log" 2>/dev/null
 }
 
+log_has_uvm_field_op_failure() {
+  local log="$1"
+  grep -Fq "UVM/FIELD_OP/SET Attempting to set values in policy without flushing" "$log" 2>/dev/null && \
+    grep -Fq "UVM/FIELD_OP/GET_OP_TYPE Calling get_op_type() before calling set() is not allowed" "$log" 2>/dev/null
+}
+
 sim_status_from_exit() {
   local code="$1"
   case "$code" in
@@ -368,6 +375,12 @@ should_retry_sim_failure() {
      [[ -f "$log" ]] && grep -q "UVM_FATAL @ 0: FCTTYP" "$log"; then
     return 0
   fi
+
+  if [[ "$SIM_RETRY_ON_UVM_FIELD_OP" != "0" ]] && [[ "$code" -ne 0 ]] && \
+     [[ -f "$log" ]] && log_has_uvm_field_op_failure "$log"; then
+    return 0
+  fi
+
   # Treat interpreter crashes as transient infra failures and retry if enabled.
   # These show up as a non-zero exit code (often 139) and/or LLVM's crash
   # handler banner in the log. Empirically, rerunning the same MLIR can succeed.
@@ -520,6 +533,12 @@ for row in "${selected_avips[@]}"; do
           # Treat internal virtual-dispatch failures as retry-worthy infra
           # errors. These can appear transiently and often disappear on rerun.
           if log_has_virtual_call_failure "$sim_log" && (( retry_count < SIM_RETRIES )); then
+            retry_count=$((retry_count + 1))
+            cp -f "$sim_log" "$sim_log.attempt${retry_count}.log" 2>/dev/null || true
+            continue
+          fi
+          if [[ "$SIM_RETRY_ON_UVM_FIELD_OP" != "0" ]] && log_has_uvm_field_op_failure "$sim_log" && \
+             (( retry_count < SIM_RETRIES )); then
             retry_count=$((retry_count + 1))
             cp -f "$sim_log" "$sim_log.attempt${retry_count}.log" 2>/dev/null || true
             continue
