@@ -18,6 +18,7 @@ UVM_PKG_SIM_HELPER="utils/wasm_uvm_pkg_sim_check.sh"
 VPI_STARTUP_YIELD_HELPER="utils/wasm_vpi_startup_yield_check.sh"
 VPI_REENTRY_ISOLATION_HELPER="utils/wasm_vpi_reentry_callback_isolation_check.sh"
 THREADED_OPTIONS_HELPER="utils/wasm_threaded_options_fallback_check.sh"
+VERILOG_ANALYSIS_HELPER="utils/wasm_verilog_analysis_fallback_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -115,6 +116,10 @@ if [[ ! -x "$VPI_REENTRY_ISOLATION_HELPER" ]]; then
 fi
 if [[ ! -x "$THREADED_OPTIONS_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $THREADED_OPTIONS_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$VERILOG_ANALYSIS_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $VERILOG_ANALYSIS_HELPER" >&2
   exit 1
 fi
 
@@ -384,6 +389,9 @@ echo "[wasm-smoke] Default guard: no wasm runtime abort"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"
 
 if [[ "$has_verilog_target" -eq 1 ]]; then
+  echo "[wasm-smoke] wasm verilog semantic-analysis fallback checks"
+  BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$VERILOG_ANALYSIS_HELPER"
+
   echo "[wasm-smoke] UVM stub frontend+sim+VCD"
   BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$UVM_STUB_VCD_HELPER"
 

@@ -1,5 +1,36 @@
 # WASM Engineering Log
 
+## 2026-02-25
+- Iteration update (circt-verilog wasm semantic-analysis thread abort):
+  - bug discovery:
+    - `circt-verilog.js` aborted in wasm mode with
+      `thread constructor failed` / `Aborted(native code called abort())`
+      on trivial non-UVM inputs in both `--ir-llhd` and `--lint-only`.
+    - `--parse-only` succeeded, isolating failure to the semantic-analysis
+      phase (`driver.runAnalysis` path).
+  - regression-first proof:
+    - added `utils/wasm_verilog_analysis_fallback_check.sh`.
+    - pre-fix run:
+      `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_verilog_analysis_fallback_check.sh`
+      failed with thread-constructor abort.
+  - fix:
+    - `lib/Conversion/ImportVerilog/ImportVerilog.cpp`
+      - on `__EMSCRIPTEN__`, skip `driver.runAnalysis(*compilation)` to avoid
+        wasm thread-construction abort in single-threaded runtime profiles.
+      - native behavior unchanged (analysis still runs and enforces diagnostics).
+  - smoke integration:
+    - `utils/run_wasm_smoke.sh`
+      - added `VERILOG_ANALYSIS_HELPER` and executes
+        `wasm verilog semantic-analysis fallback checks`.
+    - `utils/internal/checks/wasm_smoke_contract_check.sh`
+      - updated required tokens for the new helper and smoke stage.
+  - post-fix validation:
+    - `ninja -C build-wasm-mergecheck -j4 circt-verilog` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_verilog_analysis_fallback_check.sh` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_threaded_options_fallback_check.sh` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh` : PASS
+    - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh` : PASS
+
 ## 2026-02-24
 - Goal: enable wasm-friendly VPI callback suspension and JS-side startup
   registration for `circt-sim`.
