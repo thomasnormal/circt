@@ -9139,12 +9139,15 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Findings
 - `utils/select_opentitan_formal_cfgs.py` and related OpenTitan manifest flows
   require `hjson` to parse OpenTitan cfg files.
+- `utils/resolve_opentitan_formal_compile_contracts.py` requires `PyYAML` to
+  parse FuseSoC-generated `.eda.yml` files.
 - In this environment, default `python3` (3.11) was missing `hjson`, causing
   immediate manifest parsing failures before any formal run.
 
 ### Implementation
 - Added an explicit pinned dependency file:
-  - `utils/python-requirements.txt` with `hjson==3.1.0`.
+  - `utils/python-requirements.txt` with `hjson==3.1.0` and
+    `pyyaml==6.0.3`.
 - Updated `utils/README.md` to point utility users at the Python dependency
   list.
 
