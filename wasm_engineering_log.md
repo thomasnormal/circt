@@ -2399,15 +2399,23 @@
 - Pre-fix behavior:
   - `utils/wasm_tblgen_reentry_check.sh` failed with
     `timed out waiting for wasm runtime initialization`.
+  - once `callMain` export was added, same-instance run->run still aborted with
+    `InitLLVM was already initialized!` in assert-enabled builds.
 - Root causes:
   - `circt-tblgen.js` did not export `Module.callMain`, so re-entry helpers
     could not drive it like other wasm tools.
+  - `MlirTblgenMain` always constructs `InitLLVM`; this is intentionally
+    single-use and asserts on second initialization in one process.
   - re-entry helper readiness timeout was fixed at 20s, too low for large wasm
     module initialization in some environments.
 - Fixes:
   - `tools/circt-tblgen/CMakeLists.txt`:
     - export runtime method `callMain` on emscripten
       (`-sEXPORTED_RUNTIME_METHODS=['callMain']`).
+  - `tools/circt-tblgen/circt-tblgen.cpp`:
+    - add an emscripten-local tblgen driver path that mirrors mlir-tblgen
+      behavior without constructing `InitLLVM`, enabling safe same-instance
+      `callMain` re-entry.
   - `utils/wasm_callmain_reentry_check.js`:
     - increased readiness timeout robustness via
       `WASM_REENTRY_READY_TIMEOUT_MS` (default 60000ms).
