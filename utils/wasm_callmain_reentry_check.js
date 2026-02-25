@@ -129,7 +129,7 @@ function waitUntilReady(ctx, timeoutMs = 20000) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     const tick = () => {
-      if (typeof ctx.callMain === "function" &&
+      if (typeof ctx.Module.callMain === "function" &&
           typeof ctx.Module._main === "function" &&
           ctx.Module.calledRun) {
         resolve();
@@ -143,6 +143,35 @@ function waitUntilReady(ctx, timeoutMs = 20000) {
     };
     tick();
   });
+}
+
+function isExitStatusLike(err) {
+  if (!err)
+    return false;
+  if (typeof err.status === "number" && Number.isFinite(err.status))
+    return true;
+  const msg = String(err.message || err);
+  return /exit\(([-+]?\d+)\)/i.test(msg);
+}
+
+function extractExitStatus(err) {
+  if (typeof err.status === "number" && Number.isFinite(err.status))
+    return err.status;
+  const msg = String(err.message || err);
+  const match = msg.match(/exit\(([-+]?\d+)\)/i);
+  if (match)
+    return Number(match[1]);
+  return 1;
+}
+
+function callMainWithExitCapture(module, args) {
+  try {
+    return module.callMain(args);
+  } catch (err) {
+    if (isExitStatusLike(err))
+      return extractExitStatus(err);
+    throw err;
+  }
 }
 
 async function main() {
@@ -276,6 +305,8 @@ async function main() {
 
   let rc1 = -1;
   let rc2 = -1;
+  const preloadPathRemap = new Map();
+  const remapArg = arg => preloadPathRemap.get(arg) ?? arg;
   try {
     vm.runInNewContext(source, context, {filename: toolJs});
     await waitUntilReady(context);
@@ -283,17 +314,36 @@ async function main() {
     if (preloads.length > 0) {
       if (!context.FS)
         die("wasm FS API is unavailable for --preload-file");
+      const writePreload = (targetPath, hostData) => {
+        context.FS.mkdirTree(path.posix.dirname(targetPath));
+        context.FS.writeFile(targetPath, hostData);
+      };
       for (const preload of preloads) {
         const hostAbs = path.resolve(preload.hostPath);
-        const wasmTarget = preload.wasmPath;
+        const requestedTarget = preload.wasmPath;
         const hostData = fs.readFileSync(hostAbs);
-        context.FS.mkdirTree(path.posix.dirname(wasmTarget));
-        context.FS.writeFile(wasmTarget, hostData);
+        let actualTarget = requestedTarget;
+        try {
+          writePreload(actualTarget, hostData);
+        } catch (err) {
+          // With NODERAWFS enabled, absolute wasm-style paths (e.g.
+          // "/inputs/test.mlir") may map to host root, which is often
+          // unwritable in CI sandboxes. Fall back to CWD-relative placement.
+          if (!path.posix.isAbsolute(requestedTarget))
+            throw err;
+          const cwd = context.FS.cwd();
+          actualTarget =
+              path.posix.join(cwd, requestedTarget.replace(/^\/+/, ""));
+          writePreload(actualTarget, hostData);
+        }
+        preloadPathRemap.set(requestedTarget, actualTarget);
       }
     }
 
-    rc1 = context.callMain(first);
-    rc2 = context.callMain(second);
+    const firstArgs = first.map(remapArg);
+    const secondArgs = second.map(remapArg);
+    rc1 = callMainWithExitCapture(context.Module, firstArgs);
+    rc2 = callMainWithExitCapture(context.Module, secondArgs);
     // Flush any deferred Node-side stdio callbacks before restoring hooks.
     await new Promise(resolve => setTimeout(resolve, 20));
   } finally {
@@ -320,7 +370,10 @@ async function main() {
     if (combined.includes(s))
       die(`forbidden substring seen: ${JSON.stringify(s)}`);
   }
-  for (const expectedFile of expectedWasmFileSubstrings) {
+  const remappedExpectedWasmFileSubstrings =
+      expectedWasmFileSubstrings.map(
+          item => ({path: remapArg(item.path), text: item.text}));
+  for (const expectedFile of remappedExpectedWasmFileSubstrings) {
     if (!context.FS)
       die("wasm FS API is unavailable for --expect-wasm-file-substr");
     let fileText = "";

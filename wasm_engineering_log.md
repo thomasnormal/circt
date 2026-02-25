@@ -57,6 +57,22 @@
     - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_resource_guard_default_check.sh` : PASS
     - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node WASM_SKIP_BUILD=1 WASM_CHECK_CXX20_WARNINGS=0 WASM_REQUIRE_VERILOG=1 utils/run_wasm_smoke.sh` : PASS
 
+- Iteration update (wasm re-entry helper preload fallback):
+  - bug discovery:
+    - `utils/wasm_callmain_reentry_check.js` preloads could fail with
+      `ErrnoError errno=2` under `NODERAWFS` when writing absolute wasm paths
+      (e.g. `/inputs/test.mlir`) that map to unwritable host-root locations.
+  - fix:
+    - `utils/wasm_callmain_reentry_check.js`
+      - preload path remap fallback: if writing an absolute wasm preload path
+        fails, remap it under `FS.cwd()` and rewrite call arguments / file
+        expectations accordingly.
+      - callMain wrapper now captures exit-status-like throws and reports return
+        codes consistently for helper checks.
+  - validation:
+    - preloaded bmc re-entry check with `/inputs/test.mlir` now succeeds when
+      using writable output path and expected file checks.
+
 ## 2026-02-24
 - Goal: enable wasm-friendly VPI callback suspension and JS-side startup
   registration for `circt-sim`.
