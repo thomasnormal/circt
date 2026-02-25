@@ -1629,10 +1629,80 @@ struct ModuleVisitor : public BaseVisitor {
       prefix += '.';
     }
 
-    // Visit each member of the generate block.
-    for (auto &member : genNode.members())
-      if (failed(member.visit(ModuleVisitor(context, loc, prefix))))
+    // Convert generate block members in staged order, similar to module body
+    // conversion: declarations first, then instances, then procedural /
+    // assertion / nested-generate members. This guarantees hierarchical
+    // outputs from instances are available when assertions are lowered.
+    SmallVector<const slang::ast::Symbol *> instanceMembers;
+    SmallVector<const slang::ast::Symbol *> preInstanceMembers;
+    SmallVector<const slang::ast::Symbol *> postInstanceMembers;
+    for (auto &member : genNode.members()) {
+      if (member.kind == slang::ast::SymbolKind::Instance) {
+        instanceMembers.push_back(&member);
+        continue;
+      }
+      if (member.kind == slang::ast::SymbolKind::ContinuousAssign ||
+          member.kind == slang::ast::SymbolKind::ProceduralBlock ||
+          member.kind == slang::ast::SymbolKind::GenerateBlock ||
+          member.kind == slang::ast::SymbolKind::GenerateBlockArray) {
+        postInstanceMembers.push_back(&member);
+        continue;
+      }
+      preInstanceMembers.push_back(&member);
+    }
+
+    for (auto *member : preInstanceMembers) {
+      auto memberLoc = context.convertLocation(member->location);
+      if (failed(member->visit(ModuleVisitor(context, memberLoc, prefix))))
         return failure();
+    }
+
+    auto canConvertInstance = [&](const slang::ast::InstanceSymbol &instNode) {
+      for (const auto &hierPath : context.hierPaths[&instNode.body]) {
+        if (hierPath.direction != slang::ast::ArgumentDirection::In)
+          continue;
+        if (!context.valueSymbols.lookup(hierPath.valueSym)) {
+          auto placeholder = context.getOrCreateHierarchicalPlaceholder(
+              hierPath.valueSym, context.convertLocation(instNode.location));
+          if (!placeholder)
+            return false;
+          context.valueSymbols.insert(hierPath.valueSym, placeholder);
+        }
+      }
+      return true;
+    };
+
+    SmallVector<const slang::ast::Symbol *> pending = instanceMembers;
+    bool progress = true;
+    while (progress && !pending.empty()) {
+      progress = false;
+      for (size_t i = 0; i < pending.size();) {
+        auto *member = pending[i];
+        auto &instNode = member->as<slang::ast::InstanceSymbol>();
+        if (!canConvertInstance(instNode)) {
+          ++i;
+          continue;
+        }
+        auto memberLoc = context.convertLocation(member->location);
+        if (failed(member->visit(ModuleVisitor(context, memberLoc, prefix))))
+          return failure();
+        pending.erase(pending.begin() + i);
+        progress = true;
+      }
+    }
+
+    if (!pending.empty()) {
+      auto missingLoc = context.convertLocation(pending.front()->location);
+      mlir::emitError(missingLoc)
+          << "could not resolve generate-block instance dependencies";
+      return failure();
+    }
+
+    for (auto *member : postInstanceMembers) {
+      auto memberLoc = context.convertLocation(member->location);
+      if (failed(member->visit(ModuleVisitor(context, memberLoc, prefix))))
+        return failure();
+    }
     return success();
   }
 
@@ -2393,6 +2463,7 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
   using slang::ast::ParameterSymbol;
   using slang::ast::PortSymbol;
   using slang::ast::TypeParameterSymbol;
+  auto *requestedModule = module;
 
   // Keep track of the local time scale. `getTimeScale` automatically looks
   // through parent scopes to find the time scale effective locally.
@@ -2460,9 +2531,42 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
     }
   }
 
+  auto syncHierPathIndices = [&](const slang::ast::InstanceBodySymbol *fromBody,
+                                 const slang::ast::InstanceBodySymbol *toBody) {
+    if (fromBody == toBody)
+      return;
+    auto &fromPaths = hierPaths[fromBody];
+    auto &toPaths = hierPaths[toBody];
+    for (auto &fromPath : fromPaths) {
+      auto match = llvm::find_if(toPaths, [&](const auto &toPath) {
+        return fromPath.hierName == toPath.hierName &&
+               fromPath.direction == toPath.direction;
+      });
+      if (match == toPaths.end())
+        continue;
+      fromPath.idx = match->idx;
+      if (fromPath.valueSym != match->valueSym)
+        hierValueAliases[fromPath.valueSym] = match->valueSym;
+    }
+
+    auto &fromIfacePaths = hierInterfacePaths[fromBody];
+    auto &toIfacePaths = hierInterfacePaths[toBody];
+    for (auto &fromIface : fromIfacePaths) {
+      auto match = llvm::find_if(toIfacePaths, [&](const auto &toIface) {
+        return fromIface.hierName == toIface.hierName &&
+               fromIface.direction == toIface.direction;
+      });
+      if (match == toIfacePaths.end())
+        continue;
+      fromIface.idx = match->idx;
+    }
+  };
+
   auto &slot = modules[module];
-  if (slot)
+  if (slot) {
+    syncHierPathIndices(requestedModule, module);
     return slot.get();
+  }
   slot = std::make_unique<ModuleLowering>();
   auto &lowering = *slot;
 
