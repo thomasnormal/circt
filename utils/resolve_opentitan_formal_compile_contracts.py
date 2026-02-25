@@ -103,6 +103,14 @@ def parse_args() -> argparse.Namespace:
         help="FuseSoC tool name (default: symbiyosys)",
     )
     parser.add_argument(
+        "--target-filter",
+        default="",
+        help=(
+            "Optional regex filter on manifest target_name rows before "
+            "FuseSoC setup/contract resolution"
+        ),
+    )
+    parser.add_argument(
         "--fail-on-unknown-task",
         action="store_true",
         help=(
@@ -375,6 +383,14 @@ def main() -> None:
         fail(f"fusesoc executable not found: {args.fusesoc_bin}")
 
     rows = read_manifest(manifest_path)
+    target_filter = args.target_filter.strip()
+    if target_filter:
+        try:
+            target_re = re.compile(target_filter)
+        except re.error as exc:
+            fail(f"invalid --target-filter: {target_filter} ({exc})")
+        rows = [row for row in rows if target_re.search(row.target_name)]
+
     user_workdir = Path(args.workdir).resolve() if args.workdir else None
     temp_workdir_obj = None
     if user_workdir is None:
