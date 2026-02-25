@@ -119,10 +119,10 @@ static LogicalResult noteVariableAssignmentKind(
   auto &recordedKinds = context.variableAssignmentKinds[var];
   if (kindBit == kContinuousAssignmentBit &&
       (recordedKinds & kContinuousAssignmentBit)) {
-    mlir::emitError(assignLoc)
-        << "cannot have multiple continuous assignments to variable '"
-        << var->name << "'";
-    return failure();
+    // Keep repeated continuous assignments as non-fatal for compatibility.
+    // Slang reports these as diagnostics (currently warning severity), while
+    // CIRCT still rejects mixed continuous/procedural drivers below.
+    return success();
   }
 
   if ((kindBit == kContinuousAssignmentBit &&

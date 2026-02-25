@@ -1,5 +1,48 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: OpenTitan FPV duplicate continuous assign compatibility (`prim_lfsr_fpv`)
+
+### What changed
+- Updated:
+  - `lib/Conversion/ImportVerilog/ImportVerilog.cpp`
+  - `lib/Conversion/ImportVerilog/Structure.cpp`
+- Added:
+  - `test/Conversion/ImportVerilog/driver-array-element-multi-cont-assign.sv`
+- Updated:
+  - `test/Conversion/ImportVerilog/driver-errors.sv`
+
+### Red-first debugging path
+- Reproduced current OpenTitan FPV frontend blocker on `prim_lfsr_fpv`:
+  - `CIRCT_VERILOG_ERROR cannot have multiple continuous assignments to variable 'state_o[32'd12]'`.
+- Added focused import regression for duplicate element-selected output
+  connections (`a[0]`) to keep the real failure mode local and deterministic.
+- Root cause:
+  - duplicate continuous variable assignments were still treated as fatal in
+    CIRCT import, while generated formal benches rely on compatibility behavior
+    equivalent to warning-level diagnostics.
+- Fixes:
+  - moved `slang::diag::MultipleContAssigns` to warning severity in import
+    diagnostic policy.
+  - made CIRCT’s `noteVariableAssignmentKind` accept repeated continuous
+    assignments as non-fatal, while preserving strict mixed
+    continuous/procedural assignment errors.
+  - updated diagnostics expectations in `driver-errors.sv`.
+
+### Realizations / surprises
+- The same text (`cannot have multiple continuous assignments`) can originate
+  from both slang diagnostics and CIRCT-side assignment-kind enforcement, so
+  both paths had to be aligned for stable behavior.
+- OpenTitan `prim_lfsr_fpv` was blocked at import, not BMC semantics; once
+  import was unblocked, the case advanced to a real solver outcome (`SAT`).
+
+### Validation snapshot
+- Focused lit:
+  - `Conversion/ImportVerilog/driver-errors.sv` -> pass
+  - `Conversion/ImportVerilog/driver-array-element-multi-cont-assign.sv` -> pass
+- OpenTitan FPV BMC direct repro (`prim_lfsr_fpv`, compile-contracts reuse):
+  - before fix: frontend `CIRCT_VERILOG_ERROR` on duplicate `state_o[Idx]`
+  - after fix: frontend succeeds; case runs and reports `FAIL (SAT)`.
+
 ## 2026-02-25 Session: OpenTitan FPV hierarchical enum-member (`u.Idle`) import fix
 
 ### What changed
