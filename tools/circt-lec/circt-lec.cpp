@@ -782,6 +782,11 @@ static LogicalResult executeLEC(MLIRContext &context) {
   if (failed(pm.run(module.get())))
     return failure();
 
+  bool hasLLHDInterfaceAbstraction = false;
+  if (auto abstractedInputs = module->getOperation()->getAttrOfType<IntegerAttr>(
+          "circt.lec_abstracted_llhd_interface_inputs"))
+    hasLLHDInterfaceAbstraction = abstractedInputs.getInt() > 0;
+
   if (outputFormat == OutputMLIR) {
     circt::setResourceGuardPhase("print mlir");
     auto timer = ts.nest("Print MLIR output");
@@ -1144,6 +1149,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
       outputFile.value()->os() << "c1 == c2\n";
       outputFile.value()->os() << "LEC_RESULT=EQ\n";
     } else if (token && (*token == "sat" || *token == "unknown")) {
+      bool llhdAbstractionInconclusive =
+          (*token == "sat") && hasLLHDInterfaceAbstraction;
       acceptedXPropOnly =
           (*token == "sat") && acceptXPropOnly && xpropOnly && *xpropOnly;
       if (acceptedXPropOnly) {
@@ -1161,11 +1168,18 @@ static LogicalResult executeLEC(MLIRContext &context) {
       } else {
         outputFile.value()->os() << "c1 != c2\n";
         outputFile.value()->os()
-            << (*token == "sat" ? "LEC_RESULT=NEQ\n" : "LEC_RESULT=UNKNOWN\n");
+            << ((llhdAbstractionInconclusive || *token == "unknown")
+                    ? "LEC_RESULT=UNKNOWN\n"
+                    : "LEC_RESULT=NEQ\n");
         if (assumeKnownResultToken)
           outputFile.value()->os() << "LEC_DIAG_ASSUME_KNOWN_RESULT="
                                    << *assumeKnownResultToken << "\n";
-        if (xpropOnly && *xpropOnly) {
+        if (llhdAbstractionInconclusive) {
+          outputFile.value()->os() << "LEC_DIAG=LLHD_ABSTRACTION\n";
+          llvm::errs()
+              << "note: LEC mismatch is inconclusive because LLHD interface "
+                 "abstraction introduced symbolic comb inputs.\n";
+        } else if (xpropOnly && *xpropOnly) {
           outputFile.value()->os() << "LEC_DIAG=XPROP_ONLY\n";
           llvm::errs() << "note: LEC mismatch only exists when 4-state inputs "
                           "are unconstrained; under assume-known-inputs "

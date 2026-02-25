@@ -9275,3 +9275,50 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realization
 - Multiclock parity requires tolerant metadata reconciliation in `VerifToSMT`; strict naming assumptions are too brittle for flattened/imported designs.
 - SMT-LIB export parity requires treating extern design boundaries as symbolic functions, not residual IR call scaffolding.
+
+## 2026-02-25 LEC parity: LLHD abstraction should be UNKNOWN, not definitive NEQ
+
+### Goal
+- Remove a misleading OpenTitan LEC outcome where unresolved LLHD abstraction
+  was being reported as definitive inequivalence.
+
+### Findings
+- Reproduced on OpenTitan canright:
+  - `python3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright`
+  - before fix: `LEC_RESULT=NEQ`.
+- Post-pass IR for the DUT side included:
+  - module attr `circt.bmc_abstracted_llhd_interface_inputs = 3`
+  - symbolic `llhd_comb*` inputs wired into `verif.lec` and final SMT.
+- This is an abstraction-induced mismatch class, so classification should be
+  inconclusive (`UNKNOWN`) rather than definitive `NEQ`.
+
+### Implementation
+- `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+  - add module-level summary attr
+    `circt.lec_abstracted_llhd_interface_inputs` containing the total number
+    of abstracted LLHD interface inputs.
+- `tools/circt-lec/circt-lec.cpp`
+  - if solver result is `sat` and module summary attr is present, emit:
+    - `LEC_RESULT=UNKNOWN`
+    - `LEC_DIAG=LLHD_ABSTRACTION`
+  - preserve existing `XPROP_ONLY` behavior.
+
+### Validation
+- Red-first regression:
+  - added `test/Tools/circt-lec/lec-run-smtlib-llhd-abstraction-sat-unknown.mlir`
+  - pre-fix failed (`LEC_RESULT=NEQ`), post-fix passes.
+- Abstraction marker regression:
+  - updated `test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir`
+  - checks `circt.lec_abstracted_llhd_interface_inputs = 3`.
+- Focused lit run:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build_test/test/Tools/circt-lec/lec-run-smtlib-llhd-abstraction-sat-unknown.mlir build_test/test/Tools/circt-lec/lec-strip-llhd-interface-abstraction-attr.mlir build_test/test/Tools/circt-lec/lec-run-smtlib-inequivalent.mlir build_test/test/Tools/circt-lec/lec-run-smtlib-equivalent.mlir build_test/test/Tools/circt-lec/lec-run-smtlib-unknown.mlir`
+  - result: `5 passed, 0 failed`.
+- OpenTitan canright after fix:
+  - `python3 utils/run_opentitan_circt_lec.py --opentitan-root ~/opentitan --impl-filter canright --workdir /tmp/opentitan-lec-keep-after-abstraction-fix --keep-workdir`
+  - now reports `FAIL (LLHD_ABSTRACTION)` with `LEC_RESULT=UNKNOWN`.
+
+### Realization
+- For formal parity reporting, abstraction-induced SAT witnesses must not be
+  surfaced as definitive inequivalence; they need an explicit inconclusive
+  diagnostic class so downstream triage can separate modeling gaps from real
+  design mismatches.

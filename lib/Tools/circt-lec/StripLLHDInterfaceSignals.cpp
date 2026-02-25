@@ -61,6 +61,8 @@ static constexpr StringLiteral kBMCAbstractedLLHDInterfaceInputsAttr =
     "circt.bmc_abstracted_llhd_interface_inputs";
 static constexpr StringLiteral kBMCAbstractedLLHDInterfaceInputDetailsAttr =
     "circt.bmc_abstracted_llhd_interface_input_details";
+static constexpr StringLiteral kLECAbstractedLLHDInterfaceInputsAttr =
+    "circt.lec_abstracted_llhd_interface_inputs";
 
 struct ModuleState {
   Namespace ns;
@@ -4068,11 +4070,13 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
     }
   }
 
+  unsigned totalAbstractedInterfaceInputs = 0;
   for (auto &[op, state] : moduleStates) {
     auto hwModule = dyn_cast<hw::HWModuleOp>(op);
     if (!hwModule)
       continue;
     if (state.abstractedInterfaceInputCount > 0) {
+      totalAbstractedInterfaceInputs += state.abstractedInterfaceInputCount;
       hwModule->setAttr(
           kBMCAbstractedLLHDInterfaceInputsAttr,
           IntegerAttr::get(IntegerType::get(module.getContext(), 32),
@@ -4084,6 +4088,13 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
       hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputsAttr);
       hwModule->removeAttr(kBMCAbstractedLLHDInterfaceInputDetailsAttr);
     }
+  }
+  if (totalAbstractedInterfaceInputs > 0) {
+    module->setAttr(kLECAbstractedLLHDInterfaceInputsAttr,
+                    IntegerAttr::get(IntegerType::get(module.getContext(), 32),
+                                     totalAbstractedInterfaceInputs));
+  } else {
+    module->removeAttr(kLECAbstractedLLHDInterfaceInputsAttr);
   }
 
   bool hasLLHD = false;
