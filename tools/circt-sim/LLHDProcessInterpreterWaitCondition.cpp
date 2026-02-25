@@ -241,7 +241,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
             InterpretedValue queueArg =
                 getValue(procId, queueSizeCall.getOperand(0));
             if (!queueArg.isX())
-              queueWaitAddr = queueArg.getUInt64();
+              queueWaitAddr =
+                  canonicalizeUvmObjectAddress(procId, queueArg.getUInt64());
           }
         }
         if (queueWaitAddr == 0) {
@@ -259,7 +260,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
                     InterpretedValue queueAddrValue =
                         getValue(procId, queueLoad.getAddr());
                     if (!queueAddrValue.isX())
-                      queueWaitAddr = queueAddrValue.getUInt64();
+                      queueWaitAddr = canonicalizeUvmObjectAddress(
+                          procId, queueAddrValue.getUInt64());
                   }
                 }
               }
@@ -409,6 +411,9 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
       }
     }
 
+    bool isPhaseWaitForState =
+        waitConditionParentFuncName == "uvm_pkg::uvm_phase::wait_for_state";
+
     if (objectionWaitHandle != MOORE_OBJECTION_INVALID_HANDLE) {
       // execute_phase wait loops are objection-driven in UVM. Register an
       // objection-zero waiter and use a sparse timed poll as fallback.
@@ -446,7 +451,11 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
       }
       memoryEventWaiters[procId] = waiter;
 
-      if (currentTime.deltaStep < kMemoryMaxDeltaPolls)
+      // wait_for_state in UVM can stall indefinitely if resumed only via
+      // same-time delta polls; prefer real-time polling for forward progress.
+      if (isPhaseWaitForState)
+        targetTime = currentTime.advanceTime(kMemoryFallbackPollDelayFs);
+      else if (currentTime.deltaStep < kMemoryMaxDeltaPolls)
         targetTime = currentTime.nextDelta();
       else
         targetTime = currentTime.advanceTime(kMemoryFallbackPollDelayFs);

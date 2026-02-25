@@ -3591,6 +3591,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << g_trampolineCalls << "\n";
     llvm::errs() << "[circt-sim] Interpreted function calls:       "
                  << interp.getInterpretedFuncCallCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry-table native calls:         "
+                 << interp.getNativeEntryCallCount() << "\n";
   }
   // Use std::_Exit() here, before returning, to skip the expensive
   // SimulationContext destructor.  For UVM designs with millions of

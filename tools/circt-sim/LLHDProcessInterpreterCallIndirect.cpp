@@ -1737,12 +1737,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // E5: Per-call-site fast-dispatch cache.
     if (!callIndirectDirectDispatchCacheDisabled) {
       auto siteIt = callIndirectSiteCache.find(callIndirectOp.getOperation());
-      if (siteIt != callIndirectSiteCache.end() &&
-          siteIt->second.valid &&
+      bool allowSiteCacheHit = false;
+      if (siteIt != callIndirectSiteCache.end() && siteIt->second.valid &&
           siteIt->second.funcAddr == funcAddr &&
-          !siteIt->second.hadVtableOverride &&
-          !siteIt->second.isIntercepted &&
+          !siteIt->second.hadVtableOverride && !siteIt->second.isIntercepted &&
           siteIt->second.funcOp) {
+        // Keep runtime-vtable override active for sequence body dispatch.
+        // Caching the base stub at this site can suppress the override path
+        // and drop into "Body definition undefined".
+        allowSiteCacheHit =
+            siteIt->second.funcOp.getSymName().str() !=
+            "uvm_pkg::uvm_sequence_base::body";
+      }
+      if (allowSiteCacheHit) {
         ++ciSiteCacheHits;
         if (traceCallIndirectSiteCacheEnabled) {
           auto ovrIt = callIndirectRuntimeOverrideSiteInfo.find(
@@ -1753,6 +1760,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                   ? ovrIt->second.staticMethodIndex
                   : -1;
           maybeTraceCallIndirectSiteCacheHit(mi);
+          if (siteIt->second.funcOp)
+            llvm::errs() << "[CI-SITE-CACHE] hit-callee="
+                         << siteIt->second.funcOp.getSymName() << "\n";
         }
         SmallVector<InterpretedValue, 4> fastArgs;
         for (Value arg : callIndirectOp.getArgOperands())
@@ -1930,28 +1940,39 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       if (selfVal.isX())
         break;
       uint64_t objAddr = selfVal.getUInt64();
-      uint64_t vtableOff = 0;
-      MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
-      if (!objBlock || !objBlock->initialized ||
-          objBlock->size < vtableOff + 12)
-        break;
-
-      // Read vtable pointer (8 bytes at offset 4, after i32 class_id)
       uint64_t runtimeVtableAddr = 0;
-      for (unsigned i = 0; i < 8; ++i)
-        runtimeVtableAddr |= static_cast<uint64_t>(
-                                 objBlock->bytes()[vtableOff + 4 + i])
-                             << (i * 8);
+      if (!readObjectVTableAddress(objAddr, runtimeVtableAddr, procId)) {
+        // Sequence body can run in a forked child where the object header
+        // vtable pointer is observed as zero. Recover from the vtable cached
+        // at sequence start-time so virtual body override still resolves.
+        if (methodIndex == 43 &&
+            calleeName == "uvm_pkg::uvm_sequence_base::body") {
+          if (!lookupCachedSequenceRuntimeVtable(procId, objAddr,
+                                                 runtimeVtableAddr))
+            break;
+        } else {
+          break;
+        }
+      }
+      if (runtimeVtableAddr == 0)
+        break;
+      if (methodIndex == 38)
+        cacheSequenceRuntimeVtableForObject(procId, objAddr, runtimeVtableAddr);
       uint64_t runtimeFuncAddr = 0;
       auto cacheKey = std::make_pair(runtimeVtableAddr, methodIndex);
       auto cacheIt = callIndirectRuntimeVtableSlotCache.find(cacheKey);
       if (cacheIt != callIndirectRuntimeVtableSlotCache.end()) {
         runtimeFuncAddr = cacheIt->second;
         if (traceCallIndirectSiteCacheEnabled) {
+          llvm::StringRef funcName = "<unknown>";
+          if (auto fnIt = addressToFunction.find(runtimeFuncAddr);
+              fnIt != addressToFunction.end())
+            funcName = fnIt->second;
           llvm::errs() << "[CI-SITE-CACHE] runtime-slot-hit vtable=0x"
                        << llvm::format_hex(runtimeVtableAddr, 16)
                        << " method_index=" << methodIndex << " func=0x"
-                       << llvm::format_hex(runtimeFuncAddr, 16) << "\n";
+                       << llvm::format_hex(runtimeFuncAddr, 16)
+                       << " name=" << funcName << "\n";
         }
       } else {
         auto globalIt = addressToGlobal.find(runtimeVtableAddr);
@@ -1973,10 +1994,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               << (i * 8);
         callIndirectRuntimeVtableSlotCache[cacheKey] = runtimeFuncAddr;
         if (traceCallIndirectSiteCacheEnabled) {
+          llvm::StringRef funcName = "<unknown>";
+          if (auto fnIt = addressToFunction.find(runtimeFuncAddr);
+              fnIt != addressToFunction.end())
+            funcName = fnIt->second;
           llvm::errs() << "[CI-SITE-CACHE] runtime-slot-store vtable=0x"
                        << llvm::format_hex(runtimeVtableAddr, 16)
                        << " method_index=" << methodIndex << " func=0x"
-                       << llvm::format_hex(runtimeFuncAddr, 16) << "\n";
+                       << llvm::format_hex(runtimeFuncAddr, 16)
+                       << " name=" << funcName << "\n";
         }
       }
       if (runtimeFuncAddr == 0 || runtimeFuncAddr == funcAddr)

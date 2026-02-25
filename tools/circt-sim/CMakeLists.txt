@@ -105,6 +105,9 @@ if(EMSCRIPTEN)
   target_link_options(circt-sim PRIVATE
     "SHELL:-sSTACK_SIZE=${CIRCT_SIM_WASM_STACK_SIZE}"
   )
+  target_link_options(circt-sim PRIVATE
+    "SHELL:-sEXPORTED_RUNTIME_METHODS=['callMain']"
+  )
 
   target_link_options(circt-sim PRIVATE
     "SHELL:--js-library=${CMAKE_CURRENT_SOURCE_DIR}/circt-sim-vpi-wasm.js"

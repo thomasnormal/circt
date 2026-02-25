@@ -2311,6 +2311,25 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
       const auto &top = state.callStack.back();
       os << " callStack=" << state.callStack.size()
          << " topFrame=" << (top.isLLVM() ? "llvm.call" : "func.call");
+      // Include up to 3 innermost frame names to make suspended-call triage
+      // actionable without overwhelming normal summaries.
+      os << " frames=[";
+      size_t emitted = 0;
+      for (auto it = state.callStack.rbegin();
+           it != state.callStack.rend() && emitted < 3; ++it, ++emitted) {
+        if (emitted != 0)
+          os << " <- ";
+        if (it->isLLVM()) {
+          auto llvmFunc = it->llvmFuncOp;
+          os << llvmFunc.getName();
+        } else {
+          auto func = it->funcOp;
+          os << func.getName();
+        }
+      }
+      if (state.callStack.size() > 3)
+        os << " <- ...";
+      os << "]";
     }
     if (state.sequencerGetRetryCallOp)
       os << " seqRetry="

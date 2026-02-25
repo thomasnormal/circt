@@ -20114,6 +20114,94 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
+  // Intercept uvm_cmdline_processor::get_arg_values to source plusargs from
+  // CIRCT_UVM_ARGS/UVM_ARGS. This is the key path used by UVM run_test() to
+  // honor +UVM_TESTNAME=<test>, and by default UVM argument plumbing.
+  if (calleeName == "uvm_pkg::uvm_cmdline_processor::get_arg_values" &&
+      callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+    std::string pattern = readMooreStringStruct(procId, callOp.getOperand(1));
+    llvm::SmallVector<std::string, 8> matchedValues;
+
+    if (!pattern.empty()) {
+      const char *env = std::getenv("CIRCT_UVM_ARGS");
+      if (!env)
+        env = std::getenv("UVM_ARGS");
+      if (env) {
+        llvm::StringRef args(env);
+        llvm::SmallVector<llvm::StringRef, 32> tokens;
+        args.split(tokens, ' ', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+        llvm::StringRef matchRef(pattern);
+        for (llvm::StringRef token : tokens) {
+          token = token.trim();
+          if (token.empty())
+            continue;
+          if (token.starts_with(matchRef))
+            matchedValues.push_back(token.drop_front(matchRef.size()).str());
+        }
+      }
+    }
+
+    auto writePtrLenToMemory = [](MemoryBlock &blk, uint64_t offset,
+                                  uint64_t ptr, uint64_t len) {
+      for (unsigned i = 0; i < 8; ++i)
+        blk[offset + i] = static_cast<uint8_t>((ptr >> (i * 8)) & 0xFF);
+      for (unsigned i = 0; i < 8; ++i)
+        blk[offset + 8 + i] = static_cast<uint8_t>((len >> (i * 8)) & 0xFF);
+      blk.initialized = true;
+    };
+
+    // Output arg is a pointer to dynamic array descriptor:
+    // struct<(ptr data, i64 size)>.
+    InterpretedValue outVal = getValue(procId, callOp.getOperand(2));
+    if (!outVal.isX() && outVal.getUInt64() != 0) {
+      uint64_t outAddr = outVal.getUInt64();
+      uint64_t outOff = 0;
+      MemoryBlock *outBlk = findMemoryBlockByAddress(outAddr, procId, &outOff);
+      if (!outBlk)
+        outBlk = findBlockByAddress(outAddr, outOff);
+
+      if (outBlk && outOff + 16 <= outBlk->size) {
+        uint64_t dataAddr = 0;
+        uint64_t dataSize = matchedValues.size();
+
+        if (!matchedValues.empty()) {
+          uint64_t bytes = static_cast<uint64_t>(matchedValues.size()) * 16;
+          void *dataPtr = std::calloc(1, bytes);
+          dataAddr = reinterpret_cast<uint64_t>(dataPtr);
+
+          MemoryBlock dataBlk;
+          dataBlk.aliasedStorage = static_cast<uint8_t *>(dataPtr);
+          dataBlk.size = bytes;
+          dataBlk.elementBitWidth = 64;
+          dataBlk.initialized = true;
+
+          for (size_t i = 0; i < matchedValues.size(); ++i) {
+            interpreterStrings.push_back(matchedValues[i]);
+            const std::string &stored = interpreterStrings.back();
+            uint64_t strPtr = reinterpret_cast<uint64_t>(stored.data());
+            uint64_t strLen = static_cast<uint64_t>(stored.size());
+            if (strPtr != 0 && strLen > 0) {
+              dynamicStrings[static_cast<int64_t>(strPtr)] = {
+                  stored.data(), static_cast<int64_t>(strLen)};
+            }
+            writePtrLenToMemory(dataBlk, static_cast<uint64_t>(i) * 16, strPtr,
+                                strLen);
+          }
+
+          mallocBlocks[dataAddr] = std::move(dataBlk);
+          noteMallocBlockAllocated(dataAddr, bytes);
+        }
+
+        writePtrLenToMemory(*outBlk, outOff, dataAddr, dataSize);
+      }
+    }
+
+    setValue(procId, callOp.getResult(0),
+             InterpretedValue(static_cast<uint64_t>(matchedValues.size()),
+                              /*width=*/32));
+    return success();
+  }
+
   // Intercept get_0 (uvm_coreservice_t::get singleton accessor) - 907 calls.
   // After init, just reads global uvm_coreservice_t::inst pointer.
   if (calleeName == "get_0" && callOp.getNumResults() >= 1) {
@@ -20829,7 +20917,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         maybeTraceAnalysisWriteFuncCallTerminals(terminals.size());
       for (uint64_t impAddr : terminals) {
         uint64_t vtableAddr = 0;
-        if (!readObjectVTableAddress(impAddr, vtableAddr)) {
+        if (!readObjectVTableAddress(impAddr, vtableAddr, procId)) {
           if (traceAnalysisEnabled)
             maybeTraceAnalysisWriteFuncCallMissingVtableHeader(impAddr);
           continue;
@@ -23097,6 +23185,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // The hopper IS a phase (uvm_phase_hopper extends uvm_phase), so %arg0 can
   // be used as the phase address in both cases.
   StringRef funcName = funcOp.getSymName();
+  maybeSeedSequenceRuntimeVtableFromFunction(procId, funcName, args);
 
   // Handle dispatch-agnostic UVM fast-paths at function entry. This catches
   // fallback call_indirect dispatch paths that bypass call-site interceptors.
@@ -23106,8 +23195,65 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       procName = proc->getName();
     llvm::errs() << "[SEQ-BODY] proc=" << procId << " name='" << procName
                  << "' entering uvm_sequence_base::body";
-    if (!args.empty() && !args[0].isX())
-      llvm::errs() << " self=0x" << llvm::format_hex(args[0].getUInt64(), 16);
+    if (!args.empty() && !args[0].isX()) {
+      uint64_t selfAddr = args[0].getUInt64();
+      llvm::errs() << " self=0x" << llvm::format_hex(selfAddr, 16);
+      uint64_t vtableAddr = 0;
+      if (readObjectVTableAddress(selfAddr, vtableAddr, procId)) {
+        llvm::errs() << " vtbl=0x" << llvm::format_hex(vtableAddr, 16);
+        if (auto it = addressToGlobal.find(vtableAddr); it != addressToGlobal.end())
+          llvm::errs() << " vtbl_sym=" << it->second;
+        constexpr int64_t kBodySlot = 43;
+        uint64_t slotFuncAddr = 0;
+        auto cacheKey = std::make_pair(vtableAddr, kBodySlot);
+        if (auto cacheIt = callIndirectRuntimeVtableSlotCache.find(cacheKey);
+            cacheIt != callIndirectRuntimeVtableSlotCache.end()) {
+          slotFuncAddr = cacheIt->second;
+        } else if (auto globalIt = addressToGlobal.find(vtableAddr);
+                   globalIt != addressToGlobal.end()) {
+          auto blockIt = globalMemoryBlocks.find(globalIt->second);
+          if (blockIt != globalMemoryBlocks.end()) {
+            auto &vtbl = blockIt->second;
+            unsigned slotOffset = static_cast<unsigned>(kBodySlot * 8);
+            if (slotOffset + 8 <= vtbl.size) {
+              for (unsigned i = 0; i < 8; ++i)
+                slotFuncAddr |= static_cast<uint64_t>(vtbl[slotOffset + i])
+                                << (i * 8);
+            }
+          }
+        }
+        if (slotFuncAddr) {
+          llvm::errs() << " slot43=0x" << llvm::format_hex(slotFuncAddr, 16);
+          if (auto fit = addressToFunction.find(slotFuncAddr);
+              fit != addressToFunction.end())
+            llvm::errs() << " slot43_sym=" << fit->second;
+        }
+      } else {
+        auto dumpHeader = [&](llvm::StringRef tag, MemoryBlock *blk,
+                              uint64_t off) {
+          if (!blk)
+            return;
+          llvm::errs() << " " << tag << "_off=" << off << " " << tag
+                       << "_size=" << blk->size << " " << tag
+                       << "_init=" << (blk->initialized ? 1 : 0);
+          if (off + 12 <= blk->size) {
+            uint64_t rawVtable = 0;
+            for (unsigned i = 0; i < 8; ++i)
+              rawVtable |= static_cast<uint64_t>(blk->bytes()[off + 4 + i])
+                           << (i * 8);
+            llvm::errs() << " " << tag << "_hdr_vtbl=0x"
+                         << llvm::format_hex(rawVtable, 16);
+          }
+        };
+        uint64_t procOff = 0;
+        dumpHeader("procblk",
+                   findMemoryBlockByAddress(selfAddr, procId, &procOff),
+                   procOff);
+        uint64_t globalOff = 0;
+        dumpHeader("globalblk", findBlockByAddress(selfAddr, globalOff),
+                   globalOff);
+      }
+    }
     llvm::errs() << " t=" << scheduler.getCurrentTime().realTime
                  << " d=" << scheduler.getCurrentTime().deltaStep << "\n";
   }
@@ -23483,28 +23629,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // Redirect base-class stubs to derived-class overrides when the runtime
   // vtable points to the correct derived class but static vtable resolution
   // picks the base-class stub (because the GEP uses the compile-time struct
-  // type). This fixes exec_task/traverse for task phases like run_phase.
+  // type). This fixes exec_task/traverse for task phases like run_phase and
+  // avoids dropping into uvm_sequence_base::body when a derived sequence
+  // override exists.
   if (funcName == "uvm_pkg::uvm_phase::exec_task" ||
       funcName == "uvm_pkg::uvm_phase::traverse" ||
-      funcName == "uvm_pkg::uvm_phase::execute") {
-    // The function body is empty (just "return"). Try to find the correct
-    // derived-class override by reading the runtime vtable from the object.
+      funcName == "uvm_pkg::uvm_phase::execute" ||
+      funcName == "uvm_pkg::uvm_sequence_base::body") {
+    // These are base implementations that can be selected statically even when
+    // runtime objects are derived. Find the runtime vtable target and dispatch
+    // to the derived override when it differs.
     if (!args.empty() && !args[0].isX()) {
       uint64_t objAddr = args[0].getUInt64();
-      // The vtable pointer is at offset [0,0,0,1] in the object struct —
-      // but the object layout varies. Read the vtable address from memory:
-      // For UVM objects, vtable ptr is at byte offset 4 (after the 4-byte
-      // class ID at offset 0).
-      uint64_t vtableOff = 0;
-      MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
-      if (objBlock && objBlock->initialized &&
-          objBlock->size >= vtableOff + 12) {
-        // Read vtable pointer from byte offset 4 (ptr is 8 bytes)
-        uint64_t vtableAddr = 0;
-        for (unsigned i = 0; i < 8; ++i)
-          vtableAddr |= static_cast<uint64_t>(
-                            objBlock->bytes()[vtableOff + 4 + i])
-                        << (i * 8);
+      uint64_t vtableAddr = 0;
+      bool haveVtable = readObjectVTableAddress(objAddr, vtableAddr, procId);
+      if (!haveVtable && funcName == "uvm_pkg::uvm_sequence_base::body")
+        haveVtable =
+            lookupCachedSequenceRuntimeVtable(procId, objAddr, vtableAddr);
+      if (haveVtable) {
         // Look up which vtable global this address belongs to
         auto vtableIt = addressToGlobal.find(vtableAddr);
         if (vtableIt != addressToGlobal.end()) {
@@ -23512,7 +23654,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           // Derive the class name from "__vtable__"
           auto pos = vtableName.find("::__vtable__");
           if (pos != std::string::npos) {
-            std::string className = vtableName.substr(0, pos);
             // Determine which method slot we need
             int64_t methodSlot = -1;
             if (funcName.contains("exec_task"))
@@ -23521,6 +23662,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               methodSlot = 31;
             else if (funcName.contains("execute"))
               methodSlot = 32;
+            else if (funcName == "uvm_pkg::uvm_sequence_base::body")
+              methodSlot = 43;
 
             // Read the function address from the vtable at the slot
             auto globalIt = globalMemoryBlocks.find(vtableName);
@@ -28032,16 +28175,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           return success();
         }
 
-        // Use global address counter to avoid overlap between processes.
-        // Each process has its own nextMemoryAddress for allocas, but malloc
-        // blocks are stored globally in mallocBlocks, so we need a global counter.
-        uint64_t addr = globalNextAddress;
-        globalNextAddress += size;
+        // Use real calloc so native AOT code can dereference these pointers.
+        void *ptr = std::calloc(1, size);
+        if (!ptr) {
+          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+          return success();
+        }
+        uint64_t addr = reinterpret_cast<uint64_t>(ptr);
 
-        // Create a memory block for this allocation
-        MemoryBlock block(size, 64);
-        block.initialized = true;  // Mark as initialized with zeros
-        std::fill(block.begin(), block.end(), 0);
+        // Create a memory block aliased to the calloc'd storage
+        MemoryBlock block;
+        block.aliasedStorage = static_cast<uint8_t *>(ptr);
+        block.size = size;
+        block.elementBitWidth = 64;
+        block.initialized = true;
 
         // Store the block - use the address as a key
         // We need to track malloc'd blocks separately so findMemoryBlock can find them
@@ -29237,13 +29384,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               return success();
             }
 
-            // Allocate new storage with space for one more element.
-            // Use global address counter to avoid overlap with other processes.
+            // Allocate new storage with real calloc for AOT compatibility
             int64_t newLen = queueLen + 1;
-            uint64_t newDataAddr = globalNextAddress;
-            globalNextAddress += newLen * elemSize;
+            size_t allocSize = newLen * elemSize;
+            void *newPtr = std::calloc(1, allocSize);
+            uint64_t newDataAddr = reinterpret_cast<uint64_t>(newPtr);
 
-            MemoryBlock newBlock(newLen * elemSize, 64);
+            MemoryBlock newBlock;
+            newBlock.aliasedStorage = static_cast<uint8_t *>(newPtr);
+            newBlock.size = allocSize;
+            newBlock.elementBitWidth = 64;
             newBlock.initialized = true;
 
             // Copy existing elements
@@ -29484,12 +29634,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (queueLen < 0 || queueLen > 100000)
               return success();
 
-            // Use global address counter to avoid overlap with other processes.
+            // Allocate with real calloc for AOT compatibility
             int64_t newLen = queueLen + 1;
-            uint64_t newDataAddr = globalNextAddress;
-            globalNextAddress += newLen * elemSize;
+            size_t allocSize = newLen * elemSize;
+            void *newPtr = std::calloc(1, allocSize);
+            uint64_t newDataAddr = reinterpret_cast<uint64_t>(newPtr);
 
-            MemoryBlock newBlock(newLen * elemSize, 64);
+            MemoryBlock newBlock;
+            newBlock.aliasedStorage = static_cast<uint8_t *>(newPtr);
+            newBlock.size = allocSize;
+            newBlock.elementBitWidth = 64;
             newBlock.initialized = true;
 
             // Copy new element to the front
@@ -33420,11 +33574,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 for (int i = 0; i < 8; ++i)
                   queueBlock->bytes()[queueOffset + 8 + i] = 0;
               } else {
-                // Allocate new storage
+                // Allocate new storage with real calloc for AOT compatibility
                 int64_t newLen = queueLen - 1;
-                uint64_t newDataAddr = globalNextAddress;
-                globalNextAddress += newLen * elemSize;
-                MemoryBlock newBlock(newLen * elemSize, 64);
+                size_t allocSize = newLen * elemSize;
+                void *newPtr = std::calloc(1, allocSize);
+                uint64_t newDataAddr = reinterpret_cast<uint64_t>(newPtr);
+                MemoryBlock newBlock;
+                newBlock.aliasedStorage = static_cast<uint8_t *>(newPtr);
+                newBlock.size = allocSize;
+                newBlock.elementBitWidth = 64;
                 newBlock.initialized = true;
 
                 auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
@@ -33491,11 +33649,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (index < 0) index = 0;
             if (index > queueLen) index = static_cast<int32_t>(queueLen);
 
-            // Allocate new storage
+            // Allocate new storage with real calloc for AOT compatibility
             int64_t newLen = queueLen + 1;
-            uint64_t newDataAddr = globalNextAddress;
-            globalNextAddress += newLen * elemSize;
-            MemoryBlock newBlock(newLen * elemSize, 64);
+            size_t allocSize = newLen * elemSize;
+            void *newPtr = std::calloc(1, allocSize);
+            uint64_t newDataAddr = reinterpret_cast<uint64_t>(newPtr);
+            MemoryBlock newBlock;
+            newBlock.aliasedStorage = static_cast<uint8_t *>(newPtr);
+            newBlock.size = allocSize;
+            newBlock.elementBitWidth = 64;
             newBlock.initialized = true;
 
             // Copy elements before insertion point
@@ -34548,13 +34710,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               int32_t bytesPerElem = (elemBitWidth + 7) / 8;
               int64_t newSize = numElements * bytesPerElem;
 
-              // Allocate new data block in interpreter memory
-              uint64_t newDataAddr = globalNextAddress;
-              globalNextAddress += newSize;
+              // Allocate new data block with real calloc for AOT compatibility
+              void *newPtr = std::calloc(1, newSize);
+              uint64_t newDataAddr = reinterpret_cast<uint64_t>(newPtr);
 
-              MemoryBlock newBlock(newSize, 64);
+              MemoryBlock newBlock;
+              newBlock.aliasedStorage = static_cast<uint8_t *>(newPtr);
+              newBlock.size = newSize;
+              newBlock.elementBitWidth = 64;
               newBlock.initialized = true;
-              memset(newBlock.bytes(), 0, newSize);
 
               int64_t elementMask = (elemBitWidth < 64)
                                         ? ((1LL << elemBitWidth) - 1)
@@ -38118,16 +38282,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         ++intercepted;
         // Skip: let this function route through interpreter for interceptors.
       } else {
-        // Exclude functions that contain call_indirect ops: their compiled code
-        // calls through the .so entry table, hitting trampolines that bounce
-        // back to the interpreter. This creates deep C++ stack recursion
-        // (native → trampoline → interpreter → native → ...) that overflows.
-        bool hasCallIndirect = false;
-        funcOp.walk([&](mlir::Operation *op) {
-          if (mlir::isa<mlir::func::CallIndirectOp>(op))
-            hasCallIndirect = true;
-        });
-        if (!hasCallIndirect && nativePopulated < maxNative) {
+        if (nativePopulated < maxNative) {
           nativeFuncPtrs[funcOp.getOperation()] = ptr;
           ++nativePopulated;
         }
@@ -38206,22 +38361,32 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   // Initialize entry table for tagged-FuncId dispatch (Step 7C).
   compiledFuncEntries = loader.getFuncEntries();
   numCompiledAllFuncs = loader.getNumAllFuncs();
-
-  // Native call_indirect dispatch is DISABLED for now.  The 28 native entries
-  // in the entry table cause UVM $cast failures — likely from compiled code
-  // accessing UVM domain/phase objects with wrong struct offsets or bypassing
-  // interpreter-specific behavior.  Keep the bitmap all-false so the
-  // interpreter always routes call_indirect through interpretFuncBody.
-  // TODO: Re-enable once the root cause of the $cast failure is fixed.
   compiledFuncIsNative.clear();
   compiledFuncIsNative.resize(numCompiledAllFuncs, false);
   unsigned nativeCount = 0;
+  for (uint32_t fid = 0; fid < numCompiledAllFuncs; ++fid) {
+    void *entryPtr = loader.getFuncEntry(fid);
+    const char *entryName = loader.getFuncEntryName(fid);
+    if (!entryPtr || !entryName)
+      continue;
+    llvm::StringRef name(entryName);
+    if (isInterceptedFunc(name))
+      continue;
+    auto cacheIt = funcLookupCache.find(name);
+    if (cacheIt == funcLookupCache.end() || cacheIt->second.kind != 1)
+      continue;
+    auto nativeIt = nativeFuncPtrs.find(cacheIt->second.op);
+    if (nativeIt == nativeFuncPtrs.end() || nativeIt->second != entryPtr)
+      continue;
+    compiledFuncIsNative[fid] = true;
+    ++nativeCount;
+  }
+
   if (numCompiledAllFuncs > 0)
     llvm::errs() << "[circt-sim] Entry table: " << numCompiledAllFuncs
                  << " entries for tagged-FuncId dispatch ("
                  << nativeCount << " native, "
-                 << (numCompiledAllFuncs - nativeCount)
-                 << " trampolines skipped)\n";
+                 << (numCompiledAllFuncs - nativeCount) << " non-native)\n";
   // Safety valve: CIRCT_AOT_DISABLE_ALL disables ALL native dispatch while
   // keeping global pre-aliasing active. Used to isolate whether the bug is
   // in global aliasing vs function dispatch.

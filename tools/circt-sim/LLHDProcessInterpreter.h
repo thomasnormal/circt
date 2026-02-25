@@ -1224,6 +1224,7 @@ public:
   uint64_t getInterpretedFuncCallCount() const {
     return interpretedFuncCallCount;
   }
+  uint64_t getNativeEntryCallCount() const { return nativeEntryCallCount; }
 
   /// Get the bit width of a type. Made public for use by helper functions.
   /// Uses a cache for composite types (struct/array) to avoid repeated recursion.
@@ -3178,6 +3179,12 @@ private:
   llvm::DenseMap<std::pair<uint64_t, int64_t>, uint64_t>
       callIndirectRuntimeVtableSlotCache;
 
+  /// Some UVM sequence body calls execute in forked children where the sequence
+  /// object header can be observed with a transient zero vtable pointer.
+  /// Remember the last known runtime vtable per sequence object (learned during
+  /// `uvm_sequence_base::start`) so body dispatch can still resolve overrides.
+  llvm::DenseMap<uint64_t, uint64_t> sequenceRuntimeVtableByObjectAddr;
+
   JitRuntimeIndirectSiteData &
   getOrCreateJitRuntimeIndirectSiteData(ProcessId procId,
                                         mlir::func::CallIndirectOp callOp);
@@ -3337,6 +3344,22 @@ private:
   /// Canonicalize an object address to its allocation-owner base address.
   /// This is a structural normalization (no dynamic function calls).
   uint64_t canonicalizeUvmObjectAddress(ProcessId procId, uint64_t addr);
+
+  /// Cache a sequence object's runtime vtable using canonical/tag-cleared
+  /// address variants so forked/subobject call sites can reuse it.
+  void cacheSequenceRuntimeVtableForObject(ProcessId procId, uint64_t objectAddr,
+                                           uint64_t vtableAddr);
+
+  /// Lookup cached runtime vtable for a sequence object using canonical and
+  /// tag-cleared address variants.
+  bool lookupCachedSequenceRuntimeVtable(ProcessId procId, uint64_t objectAddr,
+                                         uint64_t &vtableAddr);
+
+  /// Opportunistically seed sequence runtime-vtable cache from function entry
+  /// when object headers are unreadable (e.g., forked body calls).
+  void maybeSeedSequenceRuntimeVtableFromFunction(
+      ProcessId procId, llvm::StringRef funcName,
+      llvm::ArrayRef<InterpretedValue> args);
 
   /// Seed analysis-port connection traversal from both direct and alias-equivalent
   /// port addresses (canonicalized owner base addresses).
@@ -3900,7 +3923,8 @@ private:
   /// Read an object vtable pointer from the standard runtime object header
   /// layout ([i32 class_id][ptr vtable_ptr]...) across both interpreter-managed
   /// and native memory-backed allocations.
-  bool readObjectVTableAddress(uint64_t objectAddr, uint64_t &vtableAddr);
+  bool readObjectVTableAddress(uint64_t objectAddr, uint64_t &vtableAddr,
+                               ProcessId procId = InvalidProcessId);
 
   // Return true when a function name corresponds to AHB monitor sampling
   // logic where field provenance tracing should be enabled.
