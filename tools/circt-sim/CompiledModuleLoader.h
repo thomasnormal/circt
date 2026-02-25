@@ -118,6 +118,28 @@ public:
   void applyGlobalPatches(
       const llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
 
+  /// Redirect interpreter globals to use .so storage (single-copy aliasing).
+  /// After this call, interpreter reads/writes go directly to the .so's
+  /// mutable global storage, eliminating divergence between the two copies.
+  void aliasGlobals(llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
+
+  /// Get number of global patches in the .so.
+  uint32_t getNumGlobalPatches() const {
+    return compiledModule ? compiledModule->num_global_patches : 0;
+  }
+  /// Get the name of global patch i.
+  const char *getGlobalPatchName(uint32_t i) const {
+    return compiledModule->global_patch_names[i];
+  }
+  /// Get the .so address of global patch i.
+  void *getGlobalPatchAddr(uint32_t i) const {
+    return compiledModule->global_patch_addrs[i];
+  }
+  /// Get the size of global patch i.
+  uint32_t getGlobalPatchSize(uint32_t i) const {
+    return compiledModule->global_patch_sizes[i];
+  }
+
 private:
   CompiledModuleLoader() = default;
 

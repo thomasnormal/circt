@@ -53,6 +53,8 @@ class CompiledModuleLoader;
 #include <limits>
 #include <map>
 #include <optional>
+#include <algorithm>
+#include <cstring>
 #include <random>
 #include <unordered_map>
 #include <vector>
@@ -213,8 +215,12 @@ struct CallStackFrame {
 /// Simple memory block for LLVM alloca operations.
 /// Stores a contiguous block of bytes that can be read/written.
 struct MemoryBlock {
-  /// The raw memory storage.
+  /// The raw memory storage (unused when aliased to external storage).
   std::vector<uint8_t> data;
+
+  /// External storage pointer (overrides data when set).
+  /// Used to alias .so globals so interpreter and compiled code share storage.
+  uint8_t *aliasedStorage = nullptr;
 
   /// The size of the allocated memory in bytes.
   size_t size = 0;
@@ -232,6 +238,31 @@ struct MemoryBlock {
   MemoryBlock() = default;
   MemoryBlock(size_t sz, unsigned elemBits)
       : data(sz, 0), size(sz), elementBitWidth(elemBits), initialized(false) {}
+
+  /// Canonical byte access — always use these instead of data[] directly.
+  uint8_t *bytes() { return aliasedStorage ? aliasedStorage : data.data(); }
+  const uint8_t *bytes() const {
+    return aliasedStorage ? aliasedStorage : data.data();
+  }
+
+  uint8_t &operator[](size_t i) { return bytes()[i]; }
+  const uint8_t &operator[](size_t i) const { return bytes()[i]; }
+
+  bool empty() const { return size == 0; }
+  uint8_t *begin() { return bytes(); }
+  uint8_t *end() { return bytes() + size; }
+  const uint8_t *begin() const { return bytes(); }
+  const uint8_t *end() const { return bytes() + size; }
+
+  /// Redirect this block to use external (e.g., .so) storage.
+  /// Copies current data to the external address, then aliases it.
+  void aliasTo(void *externalAddr, size_t externalSize) {
+    size_t copySize = std::min(size, externalSize);
+    std::memcpy(externalAddr, data.data(), copySize);
+    aliasedStorage = static_cast<uint8_t *>(externalAddr);
+    data.clear();
+    data.shrink_to_fit();
+  }
 };
 
 using InstanceId = uint32_t;
@@ -980,6 +1011,9 @@ public:
   /// Get the interpreter's global memory blocks (populated during initialize).
   /// Used by the AOT patch table to copy initialized global state into the .so.
   const llvm::StringMap<MemoryBlock> &getGlobalMemoryBlocks() const {
+    return globalMemoryBlocks;
+  }
+  llvm::StringMap<MemoryBlock> &getGlobalMemoryBlocks() {
     return globalMemoryBlocks;
   }
 

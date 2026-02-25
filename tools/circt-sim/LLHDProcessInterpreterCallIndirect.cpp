@@ -111,19 +111,19 @@ static unsigned writeConfigDbBytesToMemoryBlock(
     return 0;
 
   size_t start = static_cast<size_t>(offset);
-  if (start >= block->data.size())
+  if (start >= block->size)
     return 0;
 
-  size_t availableBytes = block->data.size() - start;
+  size_t availableBytes = block->size - start;
   unsigned maxWritable =
       static_cast<unsigned>(std::min<size_t>(requestedBytes, availableBytes));
   unsigned copyBytes =
       std::min(maxWritable, static_cast<unsigned>(valueData.size()));
 
   if (copyBytes > 0)
-    std::memcpy(block->data.data() + start, valueData.data(), copyBytes);
+    std::memcpy(block->bytes() + start, valueData.data(), copyBytes);
   if (zeroFillMissing && maxWritable > copyBytes)
-    std::memset(block->data.data() + start + copyBytes, 0,
+    std::memset(block->bytes() + start + copyBytes, 0,
                 maxWritable - copyBytes);
   if (maxWritable > 0)
     block->initialized = true;
@@ -383,11 +383,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
             // Vtable ptr is at byte offset 4 (after i32 class ID at offset 0)
             if (objBlock && objBlock->initialized &&
-                objBlock->data.size() >= vtableOff + 12) {
+                objBlock->size >= vtableOff + 12) {
               uint64_t runtimeVtableAddr = 0;
               for (unsigned i = 0; i < 8; ++i)
                 runtimeVtableAddr |= static_cast<uint64_t>(
-                                         objBlock->data[vtableOff + 4 + i])
+                                         objBlock->bytes()[vtableOff + 4 + i])
                                      << (i * 8);
               auto globalIt2 = addressToGlobal.find(runtimeVtableAddr);
               if (globalIt2 != addressToGlobal.end()) {
@@ -419,7 +419,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         uint64_t resolvedFuncAddr = 0;
         for (unsigned i = 0; i < 8; ++i)
           resolvedFuncAddr |=
-              static_cast<uint64_t>(vtableBlock.data[slotOffset + i]) << (i * 8);
+              static_cast<uint64_t>(vtableBlock[slotOffset + i]) << (i * 8);
 
         if (resolvedFuncAddr == 0)
           break; // Slot is empty (no function registered)
@@ -556,7 +556,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               uint64_t vtableAddr2 = 0;
               for (unsigned i = 0; i < 8; ++i)
                 vtableAddr2 |= static_cast<uint64_t>(
-                                   impBlock->data[vtableOff2 + 4 + i])
+                                   impBlock->bytes()[vtableOff2 + 4 + i])
                                << (i * 8);
               auto globalIt2 = addressToGlobal.find(vtableAddr2);
               if (globalIt2 == addressToGlobal.end())
@@ -573,7 +573,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               uint64_t writeFuncAddr = 0;
               for (unsigned i = 0; i < 8; ++i)
                 writeFuncAddr |=
-                    static_cast<uint64_t>(vtableBlock2.data[slotOff + i])
+                    static_cast<uint64_t>(vtableBlock2[slotOff + i])
                     << (i * 8);
               auto funcIt2 = addressToFunction.find(writeFuncAddr);
               if (funcIt2 == addressToFunction.end())
@@ -610,12 +610,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Dispatch the call
         // [SEQ-XFALLBACK] diagnostic removed
-        // DISABLED: Native dispatch in Path 1 (X-fallback) causes stack
-        // overflow on deep UVM stacks via native→trampoline→interpreter
-        // recursion. Re-enable when shared globals unlock more functions.
-#if 0
+        // Re-enabled: stack overflow fixed (2MB coroutine stacks).
+#if 1
         // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
-        if (processStates[procId].callDepth < 150) {
+        if (processStates[procId].callDepth < 2000) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end()) {
             unsigned numArgs = funcOp.getNumArguments();
@@ -837,12 +835,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             uint64_t vtableOff2 = 0;
             MemoryBlock *objBlock2 = findBlockByAddress(objAddr2, vtableOff2);
             if (objBlock2 && objBlock2->initialized &&
-                objBlock2->data.size() >= vtableOff2 + 12) {
+                objBlock2->size >= vtableOff2 + 12) {
               uint64_t runtimeVtableAddr2 = 0;
               for (unsigned i = 0; i < 8; ++i)
                 runtimeVtableAddr2 |=
                     static_cast<uint64_t>(
-                        objBlock2->data[vtableOff2 + 4 + i])
+                        objBlock2->bytes()[vtableOff2 + 4 + i])
                     << (i * 8);
               auto globalIt3 = addressToGlobal.find(runtimeVtableAddr2);
               if (globalIt3 != addressToGlobal.end()) {
@@ -866,7 +864,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         uint64_t resolvedFuncAddr = 0;
         for (unsigned i = 0; i < 8; ++i)
           resolvedFuncAddr |=
-              static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+              static_cast<uint64_t>(vtableBlock[slotOffset + i])
               << (i * 8);
         if (resolvedFuncAddr == 0)
           break;
@@ -1319,7 +1317,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               uint64_t vtableAddr3 = 0;
               for (unsigned i = 0; i < 8; ++i)
                 vtableAddr3 |= static_cast<uint64_t>(
-                                   impBlock3->data[vtableOff3 + 4 + i])
+                                   impBlock3->bytes()[vtableOff3 + 4 + i])
                                << (i * 8);
               auto gIt = addressToGlobal.find(vtableAddr3);
               if (gIt == addressToGlobal.end())
@@ -1334,7 +1332,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 continue;
               uint64_t wfa = 0;
               for (unsigned i = 0; i < 8; ++i)
-                wfa |= static_cast<uint64_t>(vb.data[slotOff3 + i]) << (i * 8);
+                wfa |= static_cast<uint64_t>(vb[slotOff3 + i]) << (i * 8);
               auto fi = addressToFunction.find(wfa);
               if (fi == addressToFunction.end())
                 continue;
@@ -1367,12 +1365,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
 
         // [SEQ-UNMAPPED] diagnostic removed
-        // DISABLED: Native dispatch in Path 3 (static fallback) causes stack
-        // overflow on deep UVM stacks. Re-enable when shared globals unlock
-        // more functions.
-#if 0
+        // Re-enabled: stack overflow fixed (2MB coroutine stacks).
+#if 1
         // AOT: Try native dispatch via nativeFuncPtrs (only if not too deep).
-        if (processStates[procId].callDepth < 150) {
+        if (processStates[procId].callDepth < 2000) {
           auto nativeIt = nativeFuncPtrs.find(fOp.getOperation());
           if (nativeIt != nativeFuncPtrs.end()) {
             unsigned numArgs = fOp.getNumArguments();
@@ -1712,12 +1708,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         SmallVector<InterpretedValue, 4> fastArgs;
         for (Value arg : callIndirectOp.getArgOperands())
           fastArgs.push_back(getValue(procId, arg));
-        // DISABLED: Site cache native dispatch causes stack overflow on deep
-        // UVM stacks. Re-enable when shared globals unlock more functions.
-#if 0
+        // Re-enabled: stack overflow fixed (2MB coroutine stacks).
+#if 1
         // AOT: Try native dispatch first via site cache (skip if deep).
         if (siteIt->second.nativeFuncPtr &&
-            processStates[procId].callDepth < 150) {
+            processStates[procId].callDepth < 2000) {
           auto &entry = siteIt->second;
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
@@ -1882,14 +1877,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       uint64_t vtableOff = 0;
       MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
       if (!objBlock || !objBlock->initialized ||
-          objBlock->data.size() < vtableOff + 12)
+          objBlock->size < vtableOff + 12)
         break;
 
       // Read vtable pointer (8 bytes at offset 4, after i32 class_id)
       uint64_t runtimeVtableAddr = 0;
       for (unsigned i = 0; i < 8; ++i)
         runtimeVtableAddr |= static_cast<uint64_t>(
-                                 objBlock->data[vtableOff + 4 + i])
+                                 objBlock->bytes()[vtableOff + 4 + i])
                              << (i * 8);
       uint64_t runtimeFuncAddr = 0;
       auto cacheKey = std::make_pair(runtimeVtableAddr, methodIndex);
@@ -1918,7 +1913,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break;
         for (unsigned i = 0; i < 8; ++i)
           runtimeFuncAddr |=
-              static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+              static_cast<uint64_t>(vtableBlock[slotOffset + i])
               << (i * 8);
         callIndirectRuntimeVtableSlotCache[cacheKey] = runtimeFuncAddr;
         if (traceCallIndirectSiteCacheEnabled) {
@@ -1983,11 +1978,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // vtable ptr is at offset 4 (after i32 __class_handle)
         uint64_t off = 0;
         MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-        if (!blk || !blk->initialized || off + 8 > blk->data.size())
+        if (!blk || !blk->initialized || off + 8 > blk->size)
           break;
         uint64_t vtableAddr = 0;
         for (unsigned i = 0; i < 8; ++i)
-          vtableAddr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          vtableAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
         if (vtableAddr == 0)
           break;
 
@@ -1996,12 +1991,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         MemoryBlock *vtableBlk =
             findBlockByAddress(vtableAddr + 2 * 8, off2);
         if (!vtableBlk || !vtableBlk->initialized ||
-            off2 + 8 > vtableBlk->data.size())
+            off2 + 8 > vtableBlk->size)
           break;
         uint64_t funcAddr = 0;
         for (unsigned i = 0; i < 8; ++i)
           funcAddr |=
-              static_cast<uint64_t>(vtableBlk->data[off2 + i]) << (i * 8);
+              static_cast<uint64_t>(vtableBlk->bytes()[off2 + i]) << (i * 8);
         auto funcIt = addressToFunction.find(funcAddr);
         if (funcIt == addressToFunction.end())
           break;
@@ -2030,10 +2025,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         uint64_t strOff = 0;
         MemoryBlock *strBlk = findBlockByAddress(strAddr, strOff);
         if (!strBlk || !strBlk->initialized ||
-            strOff + strLen > strBlk->data.size())
+            strOff + strLen > strBlk->size)
           break;
         std::string typeName(
-            reinterpret_cast<const char *>(strBlk->data.data() + strOff),
+            reinterpret_cast<const char *>(strBlk->bytes() + strOff),
             strLen);
 
         // Store in native factory map
@@ -2084,20 +2079,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           // Read wrapper's vtable pointer (at offset 4 after i32).
           uint64_t off = 0;
           MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-          if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+          if (blk && blk->initialized && off + 8 <= blk->size) {
             uint64_t vtableAddr = 0;
             for (unsigned i = 0; i < 8; ++i)
               vtableAddr |=
-                  static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+                  static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
             // Read vtable slot 1 = create_component.
             uint64_t off2 = 0;
             MemoryBlock *vtBlk =
                 findBlockByAddress(vtableAddr + 1 * 8, off2);
             if (vtBlk && vtBlk->initialized &&
-                off2 + 8 <= vtBlk->data.size()) {
+                off2 + 8 <= vtBlk->size) {
               uint64_t funcAddr = 0;
               for (unsigned i = 0; i < 8; ++i)
-                funcAddr |= static_cast<uint64_t>(vtBlk->data[off2 + i])
+                funcAddr |= static_cast<uint64_t>(vtBlk->bytes()[off2 + i])
                             << (i * 8);
               auto funcIt = addressToFunction.find(funcAddr);
               if (funcIt != addressToFunction.end()) {
@@ -2266,11 +2261,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             MemoryBlock *blk = findBlockByAddress(addr, off);
             if (!blk)
               blk = findMemoryBlockByAddress(addr, procId, &off);
-            if (!blk || !blk->initialized || off + 8 > blk->data.size())
+            if (!blk || !blk->initialized || off + 8 > blk->size)
               return 0;
             uint64_t val = 0;
             for (unsigned i = 0; i < 8; ++i)
-              val |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+              val |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
             return val;
           };
 
@@ -2292,10 +2287,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             if (gBlock && gBlock->initialized) {
               size_t avail =
                   std::min(static_cast<size_t>(strLen),
-                           gBlock->data.size() - static_cast<size_t>(off));
+                           gBlock->size - static_cast<size_t>(off));
               if (avail > 0)
                 return std::string(
-                    reinterpret_cast<const char *>(gBlock->data.data() + off),
+                    reinterpret_cast<const char *>(gBlock->bytes() + off),
                     avail);
             }
             return "";
@@ -2307,12 +2302,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             MemoryBlock *blk = findBlockByAddress(addr, off);
             if (!blk)
               blk = findMemoryBlockByAddress(addr, procId, &off);
-            if (!blk || off + 16 > blk->data.size())
+            if (!blk || off + 16 > blk->size)
               return;
             for (unsigned i = 0; i < 8; ++i) {
-              blk->data[off + i] =
+              blk->bytes()[off + i] =
                   static_cast<uint8_t>((strPtr >> (i * 8)) & 0xFF);
-              blk->data[off + 8 + i] = static_cast<uint8_t>(
+              blk->bytes()[off + 8 + i] = static_cast<uint8_t>(
                   (static_cast<uint64_t>(strLen) >> (i * 8)) & 0xFF);
             }
             blk->initialized = true;
@@ -2332,10 +2327,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               pBlk = findMemoryBlockByAddress(parentAddr, procId, &cidOff);
             bool isRoot = false;
             if (pBlk && pBlk->initialized &&
-                cidOff + 4 <= pBlk->data.size()) {
+                cidOff + 4 <= pBlk->size) {
               int32_t cid = 0;
               for (unsigned i = 0; i < 4; ++i)
-                cid |= static_cast<int32_t>(pBlk->data[cidOff + i])
+                cid |= static_cast<int32_t>(pBlk->bytes()[cidOff + i])
                        << (i * 8);
               isRoot = checkRTTICast(cid, 93);
             }
@@ -2381,11 +2376,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           MemoryBlock *blk = findBlockByAddress(addr, off);
           if (!blk)
             blk = findMemoryBlockByAddress(addr, procId, &off);
-          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+          if (!blk || !blk->initialized || off + 8 > blk->size)
             return 0;
           uint64_t val = 0;
           for (unsigned i = 0; i < 8; ++i)
-            val |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+            val |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
           return val;
         };
         uint64_t strPtr = readU64L(selfAddr + kFullNameOff2);
@@ -2417,11 +2412,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           MemoryBlock *blk = findBlockByAddress(addr, off);
           if (!blk)
             blk = findMemoryBlockByAddress(addr, procId, &off);
-          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+          if (!blk || !blk->initialized || off + 8 > blk->size)
             return 0;
           uint64_t val = 0;
           for (unsigned i = 0; i < 8; ++i)
-            val |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+            val |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
           return val;
         };
         uint64_t strPtr = readU64L(selfAddr + kInstNameOff2);
@@ -2456,10 +2451,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         MemoryBlock *blk = findBlockByAddress(selfVal.getUInt64() + kParentOff2, off);
         if (!blk)
           blk = findMemoryBlockByAddress(selfVal.getUInt64() + kParentOff2, procId, &off);
-        if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+        if (blk && blk->initialized && off + 8 <= blk->size) {
           uint64_t parentAddr = 0;
           for (unsigned i = 0; i < 8; ++i)
-            parentAddr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+            parentAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
           setValue(procId, callIndirectOp.getResult(0),
                    InterpretedValue(parentAddr, 64));
           return success();
@@ -2520,9 +2515,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
       uint64_t offset = 0;
       MemoryBlock *refBlock = findMemoryBlockByAddress(addr, procId, &offset);
-      if (refBlock && offset + 8 <= refBlock->data.size()) {
+      if (refBlock && offset + 8 <= refBlock->size) {
         for (unsigned i = 0; i < 8; ++i)
-          refBlock->data[offset + i] =
+          refBlock->bytes()[offset + i] =
               static_cast<uint8_t>((ptrValue >> (i * 8)) & 0xFF);
         refBlock->initialized = true;
         return true;
@@ -3155,7 +3150,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           uint64_t vtableAddr = 0;
           for (unsigned i = 0; i < 8; ++i)
             vtableAddr |= static_cast<uint64_t>(
-                              impBlock->data[vtableOff + 4 + i])
+                              impBlock->bytes()[vtableOff + 4 + i])
                           << (i * 8);
           auto globalIt = addressToGlobal.find(vtableAddr);
           if (globalIt == addressToGlobal.end()) {
@@ -3177,7 +3172,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           uint64_t writeFuncAddr = 0;
           for (unsigned i = 0; i < 8; ++i)
             writeFuncAddr |=
-                static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+                static_cast<uint64_t>(vtableBlock[slotOffset + i])
                 << (i * 8);
           auto funcIt2 = addressToFunction.find(writeFuncAddr);
           if (funcIt2 == addressToFunction.end()) {
@@ -3434,9 +3429,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           MemoryBlock *refBlock =
               findMemoryBlockByAddress(refAddr, procId, &offset);
           if (refBlock &&
-              offset + 8 <= refBlock->data.size()) {
+              offset + 8 <= refBlock->size) {
             for (unsigned i = 0; i < 8; ++i)
-              refBlock->data[offset + i] =
+              refBlock->bytes()[offset + i] =
                   static_cast<uint8_t>((itemAddr >> (i * 8)) & 0xFF);
             refBlock->initialized = true;
           } else {
@@ -3462,9 +3457,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           MemoryBlock *refBlock =
               findMemoryBlockByAddress(refAddr, procId, &offset);
           if (refBlock &&
-              offset + 8 <= refBlock->data.size()) {
+              offset + 8 <= refBlock->size) {
             for (unsigned i = 0; i < 8; ++i)
-              refBlock->data[offset + i] = 0;
+              refBlock->bytes()[offset + i] = 0;
             refBlock->initialized = true;
           } else {
             uint64_t nativeOffset = 0;
@@ -3617,9 +3612,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.valid = true;
         se.isIntercepted = false;
         se.hadVtableOverride = false;
-        // DISABLED: Site cache native pointer population. Re-enable when
-        // shared globals unlock more functions.
-#if 0
+        // Re-enabled: globals two-copies problem fixed (shared .so storage).
+#if 1
         // Populate native function pointer from nativeFuncPtrs map.
         if (!nativeFuncPtrs.empty()) {
           auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
@@ -3633,13 +3627,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    // DISABLED: Main AOT native dispatch (Path 2 slow path) causes stack
-    // overflow on deep UVM stacks. Re-enable when shared globals unlock
-    // more functions.
-#if 0
+    // Re-enabled: stack overflow fixed (2MB coroutine stacks).
+#if 1
     // AOT: Try native dispatch before interpretFuncBody (only if not too deep,
     // to prevent native→trampoline→interpreter→call_indirect→native recursion).
-    if (!nativeFuncPtrs.empty() && callState.callDepth < 150) {
+    if (!nativeFuncPtrs.empty() && callState.callDepth < 2000) {
       auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
       if (nativeIt != nativeFuncPtrs.end()) {
         void *fptr = nativeIt->second;

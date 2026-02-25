@@ -792,7 +792,7 @@ normal_memory_load:
 
   auto readByte = [&](unsigned i) -> uint8_t {
     if (block)
-      return block->data[offset + i];
+      return block->bytes()[offset + i];
     auto *nativePtr = reinterpret_cast<const uint8_t *>(ptrVal.getUInt64());
     return nativePtr[i];
   };
@@ -1233,7 +1233,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
     const APInt &apValue = storeVal.getAPInt();
     auto storeByte = [&](unsigned i, uint8_t value) {
       if (block)
-        block->data[offset + i] = value;
+        block->bytes()[offset + i] = value;
       else
         reinterpret_cast<uint8_t *>(ptrVal.getUInt64())[i] = value;
     };
@@ -1279,7 +1279,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
           auto &topBlock = topBlockIt->second;
           uint64_t value = storeVal.getUInt64();
           for (unsigned i = 0; i < storeSize && i < 8 && i < topBlock.size; ++i)
-            topBlock.data[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
+            topBlock[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
           topBlock.initialized = true;
           LLVM_DEBUG(llvm::dbgs()
                      << "  UVM fix: mirrored m_inst store to uvm_top ("
@@ -1306,7 +1306,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
         for (unsigned i = 0; i < sigBytes && i * 8 < sigWidth; ++i) {
           unsigned bitsToInsert = std::min(8u, sigWidth - i * 8);
           APInt byteVal(bitsToInsert,
-                        block->data[i] & ((1u << bitsToInsert) - 1));
+                        block->bytes()[i] & ((1u << bitsToInsert) - 1));
           safeInsertBits(newBits, byteVal, i * 8);
         }
         // Convert LLVM layout to HW layout if the signal has struct type
@@ -1644,7 +1644,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
               if (bitOffset >= targetWidth)
                 break;
               APInt byteBits(targetWidth,
-                             static_cast<uint64_t>(block->data[offset + i]));
+                             static_cast<uint64_t>(block->bytes()[offset + i]));
               bits |= byteBits.shl(bitOffset);
             }
             driveVal = InterpretedValue(bits);
@@ -1850,7 +1850,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
                 if (bits.getBitWidth() < tgtStoreSize * 8)
                   bits = bits.zext(tgtStoreSize * 8);
                 for (unsigned i = 0; i < tgtStoreSize; ++i)
-                  tgtBlock->data[tgtOff + i] =
+                  tgtBlock->bytes()[tgtOff + i] =
                       bits.extractBitsAsZExtValue(8, i * 8);
                 tgtBlock->initialized = true;
               }

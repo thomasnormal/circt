@@ -495,19 +495,19 @@ static unsigned writeConfigDbBytesToMemoryBlock(
     return 0;
 
   size_t start = static_cast<size_t>(offset);
-  if (start >= block->data.size())
+  if (start >= block->size)
     return 0;
 
-  size_t availableBytes = block->data.size() - start;
+  size_t availableBytes = block->size - start;
   unsigned maxWritable =
       static_cast<unsigned>(std::min<size_t>(requestedBytes, availableBytes));
   unsigned copyBytes =
       std::min(maxWritable, static_cast<unsigned>(valueData.size()));
 
   if (copyBytes > 0)
-    std::memcpy(block->data.data() + start, valueData.data(), copyBytes);
+    std::memcpy(block->bytes() + start, valueData.data(), copyBytes);
   if (zeroFillMissing && maxWritable > copyBytes)
-    std::memset(block->data.data() + start + copyBytes, 0,
+    std::memset(block->bytes() + start + copyBytes, 0,
                 maxWritable - copyBytes);
   if (maxWritable > 0)
     block->initialized = true;
@@ -771,9 +771,9 @@ bool LLHDProcessInterpreter::tryReadStringKey(ProcessId procId,
   uint64_t offset = 0;
   MemoryBlock *block = findBlockByAddress(strPtrVal, offset);
   if (!block || !block->initialized ||
-      block->data.size() < offset + static_cast<uint64_t>(strLen))
+      block->size < offset + static_cast<uint64_t>(strLen))
     return false;
-  out.assign(reinterpret_cast<const char *>(block->data.data() + offset),
+  out.assign(reinterpret_cast<const char *>(block->bytes() + offset),
              static_cast<size_t>(strLen));
   return true;
 }
@@ -1523,7 +1523,7 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
     for (unsigned i = 0; i < fieldSize && i * 8 < fieldBitWidth; ++i) {
       unsigned insertPos = i * 8;
       unsigned bitsToInsert = std::min(8u, fieldBitWidth - insertPos);
-      uint8_t rawByte = block->data[blockOffset + i];
+      uint8_t rawByte = block->bytes()[blockOffset + i];
       uint64_t masked = bitsToInsert == 8
                             ? static_cast<uint64_t>(rawByte)
                             : (static_cast<uint64_t>(rawByte) &
@@ -4815,7 +4815,7 @@ void LLHDProcessInterpreter::propagateAllocaWriteToBackingSignal(
   for (unsigned i = 0; i < storeBytes && i * 8 < parentWidth; ++i) {
     unsigned bitsToInsert = std::min(8u, parentWidth - i * 8);
     APInt byteVal(bitsToInsert,
-                  block->data[blockOffset + i] & ((1u << bitsToInsert) - 1));
+                  block->bytes()[blockOffset + i] & ((1u << bitsToInsert) - 1));
     safeInsertBits(allocaVal, byteVal, i * 8);
   }
 
@@ -6896,9 +6896,9 @@ bool LLHDProcessInterpreter::areAssertionFailMessagesEnabled() const {
     if (it == globalMemoryBlocks.end())
       return std::nullopt;
     const MemoryBlock &block = it->second;
-    if (block.data.empty())
+    if (block.empty())
       return std::nullopt;
-    return (block.data[0] & 1) != 0;
+    return (block[0] & 1) != 0;
   };
 
   if (auto enabled = readI1Global("__circt_assert_fail_msgs_enabled"))
@@ -10924,7 +10924,7 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
     uint64_t currentValue = 0;
     for (unsigned i = 0; i < waiter.valueSize; ++i) {
       currentValue |=
-          static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+          static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
     }
 
     // Check if value changed and matches the expected edge type.
@@ -11131,7 +11131,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       uint64_t currentValue = 0;
       for (unsigned i = 0; i < waiter.valueSize; ++i) {
         currentValue |=
-            static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+            static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
       }
 
       if (currentValue == waiter.lastValue) {
@@ -11734,7 +11734,7 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
             if (bits.getBitWidth() < storeSize * 8)
               bits = bits.zext(storeSize * 8);
             for (unsigned i = 0; i < storeSize; ++i)
-              block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+              block->bytes()[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
             block->initialized = true;
           }
         }
@@ -11761,7 +11761,7 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
       if (!block || off + storeSize > block->size)
         continue;
       for (unsigned i = 0; i < storeSize; ++i)
-        block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+        block->bytes()[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
       block->initialized = true;
       ++mirrorHits;
     }
@@ -11849,7 +11849,7 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
           else if (bits.getBitWidth() > storeSize * 8)
             bits = bits.trunc(storeSize * 8);
           for (unsigned i = 0; i < storeSize; ++i)
-            block->data[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+            block->bytes()[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
           block->initialized = true;
         }
       }
@@ -15339,7 +15339,7 @@ llvm_dispatch:
               auto blkIt = st.memoryBlocks.find(backingIt->second.second);
               if (blkIt != st.memoryBlocks.end()) {
                 uint64_t addr = reinterpret_cast<uint64_t>(
-                    blkIt->second.data.data());
+                    blkIt->second.bytes());
                 setValue(procId, output, InterpretedValue(addr, 64));
               }
             } else {
@@ -15358,12 +15358,12 @@ llvm_dispatch:
               if (!sigVal.isUnknown()) {
                 APInt v = sigVal.getAPInt();
                 for (unsigned i = 0; i < byteSize && i * 8 < width; ++i)
-                  block.data[i] = v.extractBitsAsZExtValue(
+                  block[i] = v.extractBitsAsZExtValue(
                       std::min(8u, width - i * 8), i * 8);
               }
               signalBackingMemory[sigId] = {procId, output};
               uint64_t addr = reinterpret_cast<uint64_t>(
-                  block.data.data());
+                  block.bytes());
               setValue(procId, output, InterpretedValue(addr, 64));
             }
             continue;
@@ -15615,7 +15615,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
               // Read 8 bytes (pointer size) from the memory block
               unsigned readSize = std::min(8u, static_cast<unsigned>(block.size));
               for (unsigned i = 0; i < readSize; ++i) {
-                ptrValue |= (static_cast<uint64_t>(block.data[i]) << (i * 8));
+                ptrValue |= (static_cast<uint64_t>(block[i]) << (i * 8));
               }
             }
 
@@ -15695,7 +15695,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
           for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
             unsigned bitsToInsert = std::min(8u, width - i * 8);
             APInt byteVal(bitsToInsert,
-                          block->data[offset + i] & ((1u << bitsToInsert) - 1));
+                          block->bytes()[offset + i] & ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue, byteVal, i * 8);
           }
 
@@ -15768,7 +15768,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
           for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
             unsigned bitsToInsert = std::min(8u, width - i * 8);
             APInt byteVal(bitsToInsert,
-                          block->data[i] & ((1u << bitsToInsert) - 1));
+                          block->bytes()[i] & ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue,byteVal, i * 8);
           }
 
@@ -15933,7 +15933,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                       std::min(8u, parentWidth - insertPos);
                   if (bitsToInsert > 0 && insertPos < parentWidth) {
                     APInt byteVal(bitsToInsert,
-                                  block->data[blockOffset + i] &
+                                  block->bytes()[blockOffset + i] &
                                       ((1u << bitsToInsert) - 1));
                     safeInsertBits(parentBits,byteVal, insertPos);
                   }
@@ -16090,12 +16090,12 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
 
           // Read the full value from memory
           APInt fullVal = APInt::getZero(parentWidth);
-          for (unsigned i = 0; i < loadSize && i < block->data.size(); ++i) {
+          for (unsigned i = 0; i < loadSize && i < block->size; ++i) {
             unsigned insertPos = i * 8;
             unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
             if (bitsToInsert > 0 && insertPos < parentWidth) {
               APInt byteVal(bitsToInsert,
-                            block->data[blockOffset + i] &
+                            block->bytes()[blockOffset + i] &
                                 ((1u << bitsToInsert) - 1));
               safeInsertBits(fullVal,byteVal, insertPos);
             }
@@ -16180,7 +16180,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
                       std::min(8u, parentWidth - insertPos);
                   if (bitsToInsert > 0 && insertPos < parentWidth) {
                     APInt byteVal(bitsToInsert,
-                                  block->data[blockOffset + i] &
+                                  block->bytes()[blockOffset + i] &
                                       ((1u << bitsToInsert) - 1));
                     safeInsertBits(fullVal,byteVal, insertPos);
                   }
@@ -16358,7 +16358,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
           for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
             unsigned bitsToInsert = std::min(8u, width - i * 8);
             APInt byteVal(bitsToInsert,
-                          block->data[offset + i] &
+                          block->bytes()[offset + i] &
                               ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue,byteVal, i * 8);
           }
@@ -16426,7 +16426,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
             unsigned bitsToInsert = std::min(8u, width - i * 8);
             APInt byteVal(
                 bitsToInsert,
-                block.data[i] & ((1u << bitsToInsert) - 1));
+                block[i] & ((1u << bitsToInsert) - 1));
             safeInsertBits(memValue, byteVal, i * 8);
           }
           setValue(procId, probeOp.getResult(),
@@ -16474,7 +16474,7 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
     for (unsigned i = 0; i < loadSize && i * 8 < width; ++i) {
       unsigned bitsToInsert = std::min(8u, width - i * 8);
       APInt byteVal(bitsToInsert,
-                    block->data[blockOffset + i] & ((1u << bitsToInsert) - 1));
+                    block->bytes()[blockOffset + i] & ((1u << bitsToInsert) - 1));
       safeInsertBits(memValue, byteVal, i * 8);
     }
     setValue(procId, probeOp.getResult(), InterpretedValue(memValue));
@@ -16764,7 +16764,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           unsigned segmentWidth = touchedBytes * 8;
           APInt currentSegment = APInt::getZero(segmentWidth);
           for (unsigned i = 0; i < touchedBytes; ++i) {
-            APInt byteVal(8, block->data[blockOffset + firstTouchedByte + i]);
+            APInt byteVal(8, block->bytes()[blockOffset + firstTouchedByte + i]);
             safeInsertBits(currentSegment,byteVal, i * 8);
           }
 
@@ -16779,7 +16779,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           safeInsertBits(currentSegment, insertVal, localBitOffset);
 
           for (unsigned i = 0; i < touchedBytes; ++i) {
-            block->data[blockOffset + firstTouchedByte + i] =
+            block->bytes()[blockOffset + firstTouchedByte + i] =
                 static_cast<uint8_t>(
                     currentSegment.extractBits(8, i * 8).getZExtValue());
           }
@@ -16896,7 +16896,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               APInt currentSegment = APInt::getZero(segmentWidth);
               for (unsigned i = 0; i < touchedBytes; ++i) {
                 APInt byteVal(
-                    8, block->data[blockOffset + firstTouchedByte + i]);
+                    8, block->bytes()[blockOffset + firstTouchedByte + i]);
                 safeInsertBits(currentSegment,byteVal, i * 8);
               }
 
@@ -16909,7 +16909,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               }
 
               for (unsigned i = 0; i < touchedBytes; ++i) {
-                block->data[blockOffset + firstTouchedByte + i] =
+                block->bytes()[blockOffset + firstTouchedByte + i] =
                     static_cast<uint8_t>(
                         currentSegment.extractBits(8, i * 8).getZExtValue());
               }
@@ -16977,12 +16977,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           // Write the value to memory
           if (driveVal.isX()) {
             // Write X pattern (all 1s as marker)
-            std::fill(block->data.begin(), block->data.begin() + storeSize, 0xFF);
+            std::fill(block->begin(), block->begin() + storeSize, 0xFF);
             block->initialized = false;
           } else {
             uint64_t value = driveVal.getUInt64();
             for (unsigned i = 0; i < storeSize; ++i) {
-              block->data[i] = (value >> (i * 8)) & 0xFF;
+              block->bytes()[i] = (value >> (i * 8)) & 0xFF;
             }
             block->initialized = true;
           }
@@ -17027,7 +17027,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           if (block && offset + storeSize <= block->size) {
             if (driveVal.isX()) {
               for (unsigned i = 0; i < storeSize; ++i)
-                block->data[offset + i] = 0xFF;
+                block->bytes()[offset + i] = 0xFF;
             } else {
               APInt val = driveVal.getAPInt();
               if (val.getBitWidth() < width)
@@ -17038,10 +17038,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 unsigned bitPos = i * 8;
                 unsigned bitsToWrite = std::min(8u, width - bitPos);
                 if (bitsToWrite > 0 && bitPos < width)
-                  block->data[offset + i] =
+                  block->bytes()[offset + i] =
                       val.extractBits(bitsToWrite, bitPos).getZExtValue();
                 else
-                  block->data[offset + i] = 0;
+                  block->bytes()[offset + i] = 0;
               }
             }
             block->initialized = !driveVal.isX();
@@ -17076,7 +17076,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             if (storeSize <= block.size) {
               if (driveVal.isX()) {
                 for (unsigned i = 0; i < storeSize; ++i)
-                  block.data[i] = 0xFF;
+                  block[i] = 0xFF;
                 block.initialized = false;
               } else {
                 APInt val = driveVal.getAPInt();
@@ -17088,10 +17088,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   unsigned bitPos = i * 8;
                   unsigned bitsToWrite = std::min(8u, width - bitPos);
                   if (bitsToWrite > 0 && bitPos < width)
-                    block.data[i] =
+                    block[i] =
                         val.extractBits(bitsToWrite, bitPos).getZExtValue();
                   else
-                    block.data[i] = 0;
+                    block[i] = 0;
                 }
                 block.initialized = true;
               }
@@ -17242,13 +17242,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
               // Read the current value from memory
               APInt currentVal = APInt::getZero(parentWidth);
-              for (unsigned i = 0; i < storeSize && i < block->data.size();
+              for (unsigned i = 0; i < storeSize && i < block->size;
                    ++i) {
                 unsigned insertPos = i * 8;
                 unsigned bitsToInsert = std::min(8u, parentWidth - insertPos);
                 if (bitsToInsert > 0 && insertPos < parentWidth) {
                   APInt byteVal(
-                      bitsToInsert, block->data[blockOffset + i] &
+                      bitsToInsert, block->bytes()[blockOffset + i] &
                                         ((1u << bitsToInsert) - 1));
                   safeInsertBits(currentVal,byteVal, insertPos);
                 }
@@ -17322,11 +17322,11 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 unsigned bitsToExtract =
                     std::min(8u, parentWidth - extractPos);
                 if (bitsToExtract > 0 && extractPos < parentWidth) {
-                  block->data[blockOffset + i] =
+                  block->bytes()[blockOffset + i] =
                       currentVal.extractBits(bitsToExtract, extractPos)
                           .getZExtValue();
                 } else {
-                  block->data[blockOffset + i] = 0;
+                  block->bytes()[blockOffset + i] = 0;
                 }
               }
               block->initialized = !driveVal.isX();
@@ -17445,7 +17445,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     std::min(8u, parentWidth - insertPos);
                 if (bitsToInsert > 0 && insertPos < parentWidth) {
                   APInt byteVal(bitsToInsert,
-                                block->data[blockOffset + i] &
+                                block->bytes()[blockOffset + i] &
                                     ((1u << bitsToInsert) - 1));
                   safeInsertBits(currentVal,byteVal, insertPos);
                 }
@@ -17472,11 +17472,11 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                 unsigned bitsToExtract =
                     std::min(8u, parentWidth - extractPos);
                 if (bitsToExtract > 0 && extractPos < parentWidth) {
-                  block->data[blockOffset + i] =
+                  block->bytes()[blockOffset + i] =
                       currentVal.extractBits(bitsToExtract, extractPos)
                           .getZExtValue();
                 } else {
-                  block->data[blockOffset + i] = 0;
+                  block->bytes()[blockOffset + i] = 0;
                 }
               }
               block->initialized = !driveVal.isX();
@@ -17739,7 +17739,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                   if (driveVal.isX()) {
                     // Write zeros for X
                     for (unsigned i = 0; i < elementByteWidth; ++i) {
-                      block->data[elementOffset + i] = 0;
+                      block->bytes()[elementOffset + i] = 0;
                     }
                   } else {
                     APInt val = driveVal.getAPInt();
@@ -17748,7 +17748,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     else if (val.getBitWidth() > elementWidth)
                       val = val.trunc(elementWidth);
                     for (unsigned i = 0; i < elementByteWidth; ++i) {
-                      block->data[elementOffset + i] =
+                      block->bytes()[elementOffset + i] =
                           val.extractBits(std::min(8u, elementWidth - i * 8), i * 8)
                               .getZExtValue();
                     }
@@ -17852,7 +17852,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                       if (bitsToInsert > 0 && insertPos < rootWidth) {
                         APInt byteVal(
                             bitsToInsert,
-                            block->data[blockOffset + i] &
+                            block->bytes()[blockOffset + i] &
                                 ((1u << bitsToInsert) - 1));
                         safeInsertBits(currentVal, byteVal, insertPos);
                       }
@@ -17873,12 +17873,12 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                       unsigned bitsToExtract =
                           std::min(8u, rootWidth - extractPos);
                       if (bitsToExtract > 0 && extractPos < rootWidth) {
-                        block->data[blockOffset + i] =
+                        block->bytes()[blockOffset + i] =
                             currentVal
                                 .extractBits(bitsToExtract, extractPos)
                                 .getZExtValue();
                       } else {
-                        block->data[blockOffset + i] = 0;
+                        block->bytes()[blockOffset + i] = 0;
                       }
                     }
                     block->initialized = !driveVal.isX();
@@ -18120,7 +18120,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
           if (driveVal.isX()) {
             // Write X pattern
             for (unsigned i = 0; i < storeSize; ++i)
-              block->data[offset + i] = 0xFF;
+              block->bytes()[offset + i] = 0xFF;
           } else {
             APInt val = driveVal.getAPInt();
             if (val.getBitWidth() < width)
@@ -18131,10 +18131,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               unsigned bitPos = i * 8;
               unsigned bitsToWrite = std::min(8u, width - bitPos);
               if (bitsToWrite > 0 && bitPos < width)
-                block->data[offset + i] =
+                block->bytes()[offset + i] =
                     val.extractBits(bitsToWrite, bitPos).getZExtValue();
               else
-                block->data[offset + i] = 0;
+                block->bytes()[offset + i] = 0;
             }
           }
           block->initialized = !driveVal.isX();
@@ -19294,8 +19294,8 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 4 <= block->data.size()) {
-      std::memcpy(&out, block->data.data() + offset, 4);
+    if (block && offset + 4 <= block->size) {
+      std::memcpy(&out, block->bytes() + offset, 4);
       return true;
     }
 
@@ -19314,8 +19314,8 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 4 <= block->data.size()) {
-      std::memcpy(block->data.data() + offset, &value, 4);
+    if (block && offset + 4 <= block->size) {
+      std::memcpy(block->bytes() + offset, &value, 4);
       block->initialized = true;
       return true;
     }
@@ -19336,8 +19336,8 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 1 <= block->data.size()) {
-      value = (block->data[offset] & 0x1) != 0;
+    if (block && offset + 1 <= block->size) {
+      value = (block->bytes()[offset] & 0x1) != 0;
       return true;
     }
 
@@ -19358,8 +19358,8 @@ bool LLHDProcessInterpreter::handleBaudClkGeneratorFastPath(
     MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
     if (!block)
       block = findBlockByAddress(addr, offset);
-    if (block && offset + 1 <= block->data.size()) {
-      block->data[offset] = byte;
+    if (block && offset + 1 <= block->size) {
+      block->bytes()[offset] = byte;
       block->initialized = true;
       uint64_t baseAddr = addr - offset;
       auto &byteInit = interfaceMemoryByteInitMask[baseAddr];
@@ -19894,10 +19894,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       uint64_t globalAddr = it->getValue();
       uint64_t off = 0;
       MemoryBlock *blk = findBlockByAddress(globalAddr, off);
-      if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+      if (blk && blk->initialized && off + 8 <= blk->size) {
         uint64_t ptr = 0;
         for (unsigned i = 0; i < 8; ++i)
-          ptr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          ptr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
         if (ptr != 0) {
           setValue(procId, callOp.getResult(0), InterpretedValue(ptr, 64));
           return success();
@@ -19913,26 +19913,26 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       uint64_t globalAddr = it->getValue();
       uint64_t off = 0;
       MemoryBlock *blk = findBlockByAddress(globalAddr, off);
-      if (blk && blk->initialized && off + 16 <= blk->data.size()) {
+      if (blk && blk->initialized && off + 16 <= blk->size) {
         // struct<(ptr, i64)>: read the i64 at offset 8
         uint64_t lenVal = 0;
         for (unsigned i = 0; i < 8; ++i)
-          lenVal |= static_cast<uint64_t>(blk->data[off + 8 + i]) << (i * 8);
+          lenVal |= static_cast<uint64_t>(blk->bytes()[off + 8 + i]) << (i * 8);
         int32_t result = 0;
         if (lenVal != 0) {
           // Read the ptr at offset 0, then load i32 from it
           uint64_t ptrVal = 0;
           for (unsigned i = 0; i < 8; ++i)
-            ptrVal |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+            ptrVal |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
           if (ptrVal != 0) {
             uint64_t off2 = 0;
             MemoryBlock *blk2 = findBlockByAddress(ptrVal, off2);
             if (!blk2)
               blk2 = findMemoryBlockByAddress(ptrVal, procId, &off2);
-            if (blk2 && blk2->initialized && off2 + 4 <= blk2->data.size()) {
+            if (blk2 && blk2->initialized && off2 + 4 <= blk2->size) {
               result = 0;
               for (unsigned i = 0; i < 4; ++i)
-                result |= static_cast<int32_t>(blk2->data[off2 + i]) << (i * 8);
+                result |= static_cast<int32_t>(blk2->bytes()[off2 + i]) << (i * 8);
             }
           }
         }
@@ -19955,10 +19955,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       MemoryBlock *blk = findBlockByAddress(selfVal.getUInt64() + kFactoryOff, off);
       if (!blk)
         blk = findMemoryBlockByAddress(selfVal.getUInt64() + kFactoryOff, procId, &off);
-      if (blk && blk->initialized && off + 8 <= blk->data.size()) {
+      if (blk && blk->initialized && off + 8 <= blk->size) {
         uint64_t factoryPtr = 0;
         for (unsigned i = 0; i < 8; ++i)
-          factoryPtr |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+          factoryPtr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
         if (factoryPtr != 0) {
           setValue(procId, callOp.getResult(0),
                    InterpretedValue(factoryPtr, 64));
@@ -19992,9 +19992,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         if (!strBlk)
           strBlk = findMemoryBlockByAddress(strAddr, procId, &strOff);
         if (strBlk && strBlk->initialized &&
-            strOff + strLen <= strBlk->data.size()) {
+            strOff + strLen <= strBlk->size) {
           std::string typeName(
-              reinterpret_cast<const char *>(strBlk->data.data() + strOff),
+              reinterpret_cast<const char *>(strBlk->bytes() + strOff),
               strLen);
           auto it = nativeFactoryTypeNames.find(typeName);
           if (it != nativeFactoryTypeNames.end()) {
@@ -20019,10 +20019,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   auto readU64FromObjectField = [&](uint64_t fieldAddr) -> uint64_t {
     uint64_t fieldOffset = 0;
     if (auto *block = findMemoryBlockByAddress(fieldAddr, procId, &fieldOffset)) {
-      if (block->initialized && fieldOffset + 8 <= block->data.size()) {
+      if (block->initialized && fieldOffset + 8 <= block->size) {
         uint64_t value = 0;
         for (unsigned i = 0; i < 8; ++i)
-          value |= static_cast<uint64_t>(block->data[fieldOffset + i]) << (i * 8);
+          value |= static_cast<uint64_t>(block->bytes()[fieldOffset + i]) << (i * 8);
         return value;
       }
     }
@@ -20141,9 +20141,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     uint64_t offset = 0;
     MemoryBlock *refBlock = findMemoryBlockByAddress(addr, procId, &offset);
-    if (refBlock && offset + 8 <= refBlock->data.size()) {
+    if (refBlock && offset + 8 <= refBlock->size) {
       for (unsigned i = 0; i < 8; ++i)
-        refBlock->data[offset + i] =
+        refBlock->bytes()[offset + i] =
             static_cast<uint8_t>((ptrValue >> (i * 8)) & 0xFF);
       refBlock->initialized = true;
       return true;
@@ -20587,7 +20587,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         uint64_t writeFuncAddr = 0;
         for (unsigned i = 0; i < 8; ++i)
           writeFuncAddr |=
-              static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+              static_cast<uint64_t>(vtableBlock[slotOffset + i])
               << (i * 8);
         auto funcIt2 = addressToFunction.find(writeFuncAddr);
         if (funcIt2 == addressToFunction.end()) {
@@ -20697,9 +20697,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         uint64_t offset = 0;
         MemoryBlock *refBlock =
             findMemoryBlockByAddress(refAddr, procId, &offset);
-        if (refBlock && offset + 8 <= refBlock->data.size()) {
+        if (refBlock && offset + 8 <= refBlock->size) {
           for (unsigned i = 0; i < 8; ++i)
-            refBlock->data[offset + i] =
+            refBlock->bytes()[offset + i] =
                 static_cast<uint8_t>((itemAddr >> (i * 8)) & 0xFF);
             refBlock->initialized = true;
         } else {
@@ -20727,9 +20727,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         MemoryBlock *refBlock =
             findMemoryBlockByAddress(refAddr, procId, &offset);
         if (refBlock &&
-            offset + 8 <= refBlock->data.size()) {
+            offset + 8 <= refBlock->size) {
           for (unsigned i = 0; i < 8; ++i)
-            refBlock->data[offset + i] = 0;
+            refBlock->bytes()[offset + i] = 0;
             refBlock->initialized = true;
         } else {
           uint64_t nativeOffset = 0;
@@ -21123,11 +21123,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (!blk)
         blk = findMemoryBlockByAddress(current + kParentSeqOffset, procId,
                                        &off);
-      if (!blk || off + 8 > blk->data.size())
+      if (!blk || off + 8 > blk->size)
         break;
       uint64_t parent = 0;
       for (int i = 0; i < 8; ++i)
-        parent |= static_cast<uint64_t>(blk->data[off + i]) << (i * 8);
+        parent |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
       if (parent == 0)
         break;
       if (visited.count(parent))
@@ -21440,10 +21440,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       uint64_t ptrAddr = phasePtr + field11Offset;
       uint64_t blockOff = 0;
       MemoryBlock *block = findMemoryBlockByAddress(ptrAddr, procId, &blockOff);
-      if (!block || !block->initialized || blockOff + 8 > block->data.size())
+      if (!block || !block->initialized || blockOff + 8 > block->size)
         return nullptr;
       uint64_t arrayAddr = 0;
-      std::memcpy(&arrayAddr, block->data.data() + blockOff, 8);
+      std::memcpy(&arrayAddr, block->bytes() + blockOff, 8);
       if (arrayAddr == 0)
         return nullptr;
       // Validate it's a real assoc array (must have been created via __moore_assoc_create)
@@ -21457,10 +21457,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       uint64_t field1Addr = phasePtr + field1Offset;
       uint64_t blockOff = 0;
       MemoryBlock *block = findMemoryBlockByAddress(field1Addr, procId, &blockOff);
-      if (!block || !block->initialized || blockOff + 4 > block->data.size())
+      if (!block || !block->initialized || blockOff + 4 > block->size)
         return -1; // Unknown
       int32_t phaseType = 0;
-      std::memcpy(&phaseType, block->data.data() + blockOff, 4);
+      std::memcpy(&phaseType, block->bytes() + blockOff, 4);
       return phaseType;
     };
 
@@ -21470,8 +21470,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       // No successors - store empty dynamic array
       uint64_t outOff = 0;
       MemoryBlock *outBlock = findMemoryBlockByAddress(outAddr, procId, &outOff);
-      if (outBlock && outBlock->initialized && outOff + 16 <= outBlock->data.size()) {
-        std::memset(outBlock->data.data() + outOff, 0, 16);
+      if (outBlock && outBlock->initialized && outOff + 16 <= outBlock->size) {
+        std::memset(outBlock->bytes() + outOff, 0, 16);
       }
       return success();
     }
@@ -21553,11 +21553,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     // Store the dyn array struct into %arg1
     uint64_t outOff = 0;
     MemoryBlock *outBlock = findMemoryBlockByAddress(outAddr, procId, &outOff);
-    if (outBlock && outOff + 16 <= outBlock->data.size()) {
+    if (outBlock && outOff + 16 <= outBlock->size) {
       uint64_t dataPtr = reinterpret_cast<uint64_t>(dynArray.data);
       int64_t length = static_cast<int64_t>(count);
-      std::memcpy(outBlock->data.data() + outOff, &dataPtr, 8);
-      std::memcpy(outBlock->data.data() + outOff + 8, &length, 8);
+      std::memcpy(outBlock->bytes() + outOff, &dataPtr, 8);
+      std::memcpy(outBlock->bytes() + outOff + 8, &length, 8);
       outBlock->initialized = true;
       // Register the native memory block for the array data
       if (dataPtr && byteCount > 0) {
@@ -21598,10 +21598,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (gBlock && gBlock->initialized) {
         size_t avail =
             std::min(static_cast<size_t>(strLen),
-                     gBlock->data.size() - static_cast<size_t>(off));
+                     gBlock->size - static_cast<size_t>(off));
         if (avail > 0)
           return std::string(
-              reinterpret_cast<const char *>(gBlock->data.data() + off), avail);
+              reinterpret_cast<const char *>(gBlock->bytes() + off), avail);
       } else if (strPtr >= 0x10000) {
         const char *p = reinterpret_cast<const char *>(strPtr);
         return std::string(p, static_cast<size_t>(strLen));
@@ -21624,8 +21624,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (it != globalAddresses.end()) {
         uint64_t off = 0;
         MemoryBlock *blk = findBlockByAddress(it->second, off);
-        if (blk && blk->initialized && blk->data.size() >= off + 4)
-          std::memcpy(&globalSeed, blk->data.data() + off, 4);
+        if (blk && blk->initialized && blk->size >= off + 4)
+          std::memcpy(&globalSeed, blk->bytes() + off, 4);
       }
       if (globalSeed == 0)
         globalSeed = 1;
@@ -21694,10 +21694,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             if (gBlock && gBlock->initialized) {
               size_t avail =
                   std::min(static_cast<size_t>(strLen),
-                           gBlock->data.size() - static_cast<size_t>(off));
+                           gBlock->size - static_cast<size_t>(off));
               if (avail > 0)
                 strIn = std::string(
-                    reinterpret_cast<const char *>(gBlock->data.data() + off),
+                    reinterpret_cast<const char *>(gBlock->bytes() + off),
                     avail);
             } else if (strPtr >= 0x10000) {
               // Native memory (direct pointer read)
@@ -21720,8 +21720,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       if (it != globalAddresses.end()) {
         uint64_t off = 0;
         MemoryBlock *blk = findBlockByAddress(it->second, off);
-        if (blk && blk->initialized && blk->data.size() >= off + 4) {
-          std::memcpy(&seed, blk->data.data() + off, 4);
+        if (blk && blk->initialized && blk->size >= off + 4) {
+          std::memcpy(&seed, blk->bytes() + off, 4);
         }
       }
       if (seed == 0)
@@ -22381,13 +22381,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     entry.funcOp = funcOp;
     entry.noInterception = true;
     // Check if a native compiled version exists (Phase F1).
-    // DISABLED: func.call native dispatch causes two-copies problem
-    // (see comment at "=== Native dispatch (Phase F1) ===" below).
-    // if (!nativeFuncPtrs.empty()) {
-    //   auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
-    //   if (nativeIt != nativeFuncPtrs.end())
-    //     entry.nativeFuncPtr = nativeIt->second;
-    // }
+    // Re-enabled: globals two-copies problem fixed (shared .so storage).
+    if (!nativeFuncPtrs.empty()) {
+      auto nativeIt = nativeFuncPtrs.find(funcOp.getOperation());
+      if (nativeIt != nativeFuncPtrs.end())
+        entry.nativeFuncPtr = nativeIt->second;
+    }
     funcCallCache[callOp.getOperation()] = entry;
     ++funcCallCacheMisses;
   }
@@ -22441,16 +22440,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // === Native dispatch (Phase F1) ===
-  // DISABLED: func.call native dispatch causes the two-copies problem.
-  // Mutable globals exist in both the .so (patched at load time) and the
-  // interpreter (updated during simulation). Native code reads the stale
-  // .so copy while interpreted code writes to the interpreter copy.
-  // This caused $cast failures in UVM phase domain objects (get_NNNN
-  // accessor functions reading stale global state).
-  // Only call_indirect native dispatch is safe (depth-guarded, and the
-  // .so functions themselves have compiled-in global references that
-  // were patched correctly at load time).
-  if (false && !nativeFuncPtrs.empty()) {
+  // Re-enabled: globals two-copies problem fixed (shared .so storage).
+  // func.call native dispatch is now safe alongside call_indirect.
+  if (!nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
       void *fptr = nativeIt->second;
@@ -22981,9 +22973,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     unsigned impOffset = getUvmPhaseImpOffset();
     uint64_t impOff = 0;
     MemoryBlock *impBlk = findBlockByAddress(phaseAddr + impOffset, impOff);
-    if (impBlk && impOff + 8 <= impBlk->data.size()) {
+    if (impBlk && impOff + 8 <= impBlk->size) {
       for (int i = 0; i < 8; ++i)
-        impAddr |= static_cast<uint64_t>(impBlk->data[impOff + i]) << (i * 8);
+        impAddr |= static_cast<uint64_t>(impBlk->bytes()[impOff + i]) << (i * 8);
     }
     return impAddr;
   };
@@ -23122,21 +23114,21 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       uint64_t nameOff = 0;
       MemoryBlock *nameBlk =
           findBlockByAddress(phaseAddr + 12, nameOff);
-      if (nameBlk && nameOff + 16 <= nameBlk->data.size()) {
+      if (nameBlk && nameOff + 16 <= nameBlk->size) {
         uint64_t namePtr = 0;
         for (int i = 0; i < 8; ++i)
-          namePtr |= static_cast<uint64_t>(nameBlk->data[nameOff + i])
+          namePtr |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + i])
                      << (i * 8);
         uint64_t nameLen = 0;
         for (int i = 0; i < 8; ++i)
-          nameLen |= static_cast<uint64_t>(nameBlk->data[nameOff + 8 + i])
+          nameLen |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + 8 + i])
                      << (i * 8);
         if (namePtr != 0 && nameLen > 0 && nameLen < 200) {
           uint64_t strOff = 0;
           MemoryBlock *strBlk = findBlockByAddress(namePtr, strOff);
-          if (strBlk && strOff + nameLen <= strBlk->data.size()) {
+          if (strBlk && strOff + nameLen <= strBlk->size) {
             phaseName.assign(
-                reinterpret_cast<const char *>(strBlk->data.data() + strOff),
+                reinterpret_cast<const char *>(strBlk->bytes() + strOff),
                 nameLen);
           }
         }
@@ -23190,12 +23182,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       uint64_t vtableOff = 0;
       MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
       if (objBlock && objBlock->initialized &&
-          objBlock->data.size() >= vtableOff + 12) {
+          objBlock->size >= vtableOff + 12) {
         // Read vtable pointer from byte offset 4 (ptr is 8 bytes)
         uint64_t vtableAddr = 0;
         for (unsigned i = 0; i < 8; ++i)
           vtableAddr |= static_cast<uint64_t>(
-                            objBlock->data[vtableOff + 4 + i])
+                            objBlock->bytes()[vtableOff + 4 + i])
                         << (i * 8);
         // Look up which vtable global this address belongs to
         auto vtableIt = addressToGlobal.find(vtableAddr);
@@ -23223,7 +23215,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                 uint64_t funcAddr2 = 0;
                 for (unsigned i = 0; i < 8; ++i)
                   funcAddr2 |=
-                      static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+                      static_cast<uint64_t>(vtableBlock[slotOffset + i])
                       << (i * 8);
                 if (funcAddr2 != 0) {
                   auto funcIt = addressToFunction.find(funcAddr2);
@@ -23280,14 +23272,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       MemoryBlock *blk = findBlockByAddress(selfAddr + kSemOffset, semOff);
       if (!blk)
         blk = findMemoryBlockByAddress(selfAddr + kSemOffset, procId, &semOff);
-      if (blk && semOff + 8 <= blk->data.size()) {
+      if (blk && semOff + 8 <= blk->size) {
         uint64_t semHandle = 0;
         for (int i = 0; i < 8; ++i)
-          semHandle |= static_cast<uint64_t>(blk->data[semOff + i]) << (i * 8);
+          semHandle |= static_cast<uint64_t>(blk->bytes()[semOff + i]) << (i * 8);
         if (semHandle == 0) {
           int64_t newSem = __moore_semaphore_create(1);
           for (int i = 0; i < 8; ++i)
-            blk->data[semOff + i] =
+            blk->bytes()[semOff + i] =
                 static_cast<uint8_t>((newSem >> (i * 8)) & 0xFF);
         }
       }
@@ -23298,14 +23290,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       if (!blk)
         blk = findMemoryBlockByAddress(selfAddr + kStateOffset, procId,
                                        &stateOff);
-      if (blk && stateOff + 4 <= blk->data.size()) {
+      if (blk && stateOff + 4 <= blk->size) {
         uint32_t state = 0;
         for (int i = 0; i < 4; ++i)
-          state |= static_cast<uint32_t>(blk->data[stateOff + i]) << (i * 8);
+          state |= static_cast<uint32_t>(blk->bytes()[stateOff + i]) << (i * 8);
         if (state == 0) {
           uint32_t created = 1; // UVM_CREATED
           for (int i = 0; i < 4; ++i)
-            blk->data[stateOff + i] =
+            blk->bytes()[stateOff + i] =
                 static_cast<uint8_t>((created >> (i * 8)) & 0xFF);
           LLVM_DEBUG(llvm::dbgs()
                      << "  start() init fix: set m_sequence_state to CREATED"
@@ -24402,7 +24394,7 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
       // Read bytes from memory
       APInt loadedValue(bitWidth, 0);
       for (unsigned i = 0; i < loadSize && i < (bitWidth + 7) / 8; ++i) {
-        uint64_t byte = block->data[offset + i];
+        uint64_t byte = block->bytes()[offset + i];
         loadedValue |= APInt(bitWidth, byte) << (i * 8);
       }
       InterpretedValue result(loadedValue);
@@ -25019,18 +25011,18 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
       if (blockIt != globalMemoryBlocks.end()) {
         const MemoryBlock &block = blockIt->second;
         // Use the length from the struct, or the block size if length is invalid
-        size_t effectiveLen = (lenVal > 0 && static_cast<size_t>(lenVal) <= block.data.size())
+        size_t effectiveLen = (lenVal > 0 && static_cast<size_t>(lenVal) <= block.size)
                                   ? static_cast<size_t>(lenVal)
-                                  : block.data.size();
+                                  : block.size;
         // Find null terminator if present
         size_t actualLen = 0;
         for (size_t i = 0; i < effectiveLen; ++i) {
-          if (block.data[i] == 0)
+          if (block[i] == 0)
             break;
           actualLen++;
         }
         if (actualLen > 0) {
-          return std::string(reinterpret_cast<const char *>(block.data.data()),
+          return std::string(reinterpret_cast<const char *>(block.bytes()),
                              actualLen);
         }
       }
@@ -26714,7 +26706,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
       uint64_t currentValue = 0;
       for (unsigned i = 0; i < valueSize; ++i) {
-        currentValue |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+        currentValue |= static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
       }
 
       // Set up the memory event waiter
@@ -27109,10 +27101,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   auto readObjectFieldU64 = [&](uint64_t fieldAddr) -> uint64_t {
     uint64_t offset = 0;
     if (auto *block = findMemoryBlockByAddress(fieldAddr, procId, &offset)) {
-      if (block->initialized && offset + 8 <= block->data.size()) {
+      if (block->initialized && offset + 8 <= block->size) {
         uint64_t value = 0;
         for (unsigned i = 0; i < 8; ++i)
-          value |= static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+          value |= static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
         return value;
       }
     }
@@ -27609,8 +27601,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t dataPtr = 0;
             int64_t len = 0;
             for (int i = 0; i < 8; i++) {
-              dataPtr |= (static_cast<uint64_t>(block->data[blockOffset + i]) << (i * 8));
-              len |= (static_cast<int64_t>(block->data[blockOffset + 8 + i]) << (i * 8));
+              dataPtr |= (static_cast<uint64_t>(block->bytes()[blockOffset + i]) << (i * 8));
+              len |= (static_cast<int64_t>(block->bytes()[blockOffset + 8 + i]) << (i * 8));
             }
 
             // Empty string case (ptr=0, len=0)
@@ -27628,7 +27620,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t strOffset = 0;
             MemoryBlock *strBlock = findMemoryBlockByAddress(dataPtr, procId, &strOffset);
             if (strBlock && strBlock->size >= strOffset + len) {
-              return {reinterpret_cast<const char*>(strBlock->data.data() + strOffset), len};
+              return {reinterpret_cast<const char*>(strBlock->bytes() + strOffset), len};
             }
           }
           return {nullptr, -1};  // Error case
@@ -27700,7 +27692,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           // Extract len (bytes 8-15)
           int64_t rawLen = 0;
           for (int i = 0; i < 8; i++) {
-            rawLen |= (static_cast<int64_t>(block->data[blockOffset + 8 + i]) << (i * 8));
+            rawLen |= (static_cast<int64_t>(block->bytes()[blockOffset + 8 + i]) << (i * 8));
           }
           len = static_cast<int32_t>(rawLen);
         }
@@ -27733,7 +27725,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         // Create a memory block for this allocation
         MemoryBlock block(size, 64);
         block.initialized = true;  // Mark as initialized with zeros
-        std::fill(block.data.begin(), block.data.end(), 0);
+        std::fill(block.begin(), block.end(), 0);
 
         // Store the block - use the address as a key
         // We need to track malloc'd blocks separately so findMemoryBlock can find them
@@ -27766,9 +27758,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         MemoryBlock *blk = findBlockByAddress(addr, offset);
         if (blk) {
           size_t availableLen = std::min(static_cast<size_t>(len),
-                                         blk->data.size() - static_cast<size_t>(offset));
+                                         blk->size - static_cast<size_t>(offset));
           if (availableLen > 0) {
-            return std::string(reinterpret_cast<const char*>(blk->data.data() + offset),
+            return std::string(reinterpret_cast<const char*>(blk->bytes() + offset),
                                availableLen);
           }
         }
@@ -27956,13 +27948,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (globalIt != addressToGlobal.end()) {
         auto blockIt = globalMemoryBlocks.find(globalIt->second);
         if (blockIt != globalMemoryBlocks.end() && blockIt->second.initialized)
-          return reinterpret_cast<const char *>(blockIt->second.data.data());
+          return reinterpret_cast<const char *>(blockIt->second.bytes());
       }
       // Try interpreter memory
       uint64_t off = 0;
       MemoryBlock *block = findBlockByAddress(ptrVal, off);
       if (block && block->initialized)
-        return reinterpret_cast<const char *>(block->data.data() + off);
+        return reinterpret_cast<const char *>(block->bytes() + off);
       return "";
     };
 
@@ -28585,7 +28577,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           MemoryBlock *block =
               findMemoryBlockByAddress(eventAddr, procId, &offset);
           if (block && block->size >= offset + 1) {
-            block->data[offset] = 1;
+            block->bytes()[offset] = 1;
             block->initialized = true;
             // Check if any processes are waiting on this memory location.
             checkMemoryEventWaiters();
@@ -28641,7 +28633,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               if (MemoryBlock *block =
                       findMemoryBlockByAddress(eventAddr, procId, &offset);
                   block && block->initialized && offset < block->size)
-                triggered = (block->data[offset] & 0x1) != 0;
+                triggered = (block->bytes()[offset] & 0x1) != 0;
             }
           }
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_event_triggered() - "
@@ -28772,7 +28764,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t currentValue = 0;
           unsigned valueSize = 1;
           if (block && block->size >= offset + 1 && block->initialized) {
-            currentValue = block->data[offset];
+            currentValue = block->bytes()[offset];
             // For larger values, read more bytes (up to 8).
             const uint64_t bytesAvailable = block->size - offset;
             valueSize =
@@ -28781,7 +28773,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               currentValue = 0;
               for (unsigned i = 0; i < valueSize; ++i)
                 currentValue |=
-                    static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+                    static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
             }
           }
 
@@ -28910,14 +28902,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             // Read from the correct offset within the block
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
 
             // Sanity check queue length
             if (queueLen < 0 || queueLen > 100000) {
@@ -28942,8 +28934,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (oldBlock && oldBlock->initialized) {
                 size_t copySize = std::min(static_cast<size_t>(queueLen * elemSize),
-                                           std::min(oldBlock->data.size(), newBlock.data.size()));
-                std::memcpy(newBlock.data.data(), oldBlock->data.data(), copySize);
+                                           std::min(oldBlock->size, newBlock.size));
+                std::memcpy(newBlock.bytes(), oldBlock->bytes(), copySize);
               }
             }
 
@@ -28951,12 +28943,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t elemOffset = 0;
             auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
             if (elemBlock && elemBlock->initialized) {
-              size_t availableBytes = (elemOffset < elemBlock->data.size())
-                  ? elemBlock->data.size() - elemOffset : 0;
+              size_t availableBytes = (elemOffset < elemBlock->size)
+                  ? elemBlock->size - elemOffset : 0;
               size_t copySize = std::min(static_cast<size_t>(elemSize), availableBytes);
               if (copySize > 0)
-                std::memcpy(newBlock.data.data() + queueLen * elemSize,
-                            elemBlock->data.data() + elemOffset, copySize);
+                std::memcpy(newBlock.bytes() + queueLen * elemSize,
+                            elemBlock->bytes() + elemOffset, copySize);
             }
 
             mallocBlocks[newDataAddr] = std::move(newBlock);
@@ -28966,11 +28958,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t queueOffset2 = 0;
             auto *queueBlock2 = findMemoryBlockByAddress(queueAddr, procId, &queueOffset2);
             if (queueBlock2 && queueBlock2->initialized &&
-                queueOffset2 + 16 <= queueBlock2->data.size()) {
+                queueOffset2 + 16 <= queueBlock2->size) {
               for (int i = 0; i < 8; ++i)
-                queueBlock2->data[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+                queueBlock2->bytes()[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
               for (int i = 0; i < 8; ++i)
-                queueBlock2->data[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+                queueBlock2->bytes()[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
 
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
@@ -29004,7 +28996,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
           }
         }
 
@@ -29030,7 +29022,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized) {
             // Set data ptr to 0 and len to 0 (at the correct offset)
-            std::memset(queueBlock->data.data() + queueOffset, 0, 16);
+            std::memset(queueBlock->bytes() + queueOffset, 0, 16);
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_clear("
                                     << "queue=0x" << llvm::format_hex(queueAddr, 16)
                                     << ")\n");
@@ -29052,28 +29044,28 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
 
             if (queueLen > 0 && queueLen <= 100000 && dataPtr != 0) {
               // Read the last element
               auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (dataBlock && dataBlock->initialized) {
                 size_t offset = (queueLen - 1) * elemSize;
-                if (static_cast<int64_t>(offset + std::min(elemSize, int64_t(8))) <= static_cast<int64_t>(dataBlock->data.size()))
+                if (static_cast<int64_t>(offset + std::min(elemSize, int64_t(8))) <= static_cast<int64_t>(dataBlock->size))
                   for (int64_t i = 0; i < std::min(elemSize, int64_t(8)); ++i)
-                    result |= static_cast<uint64_t>(dataBlock->data[offset + i]) << (i * 8);
+                    result |= static_cast<uint64_t>(dataBlock->bytes()[offset + i]) << (i * 8);
               }
 
               // Decrement length
               int64_t newLen = queueLen - 1;
               for (int i = 0; i < 8; ++i)
-                queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+                queueBlock->bytes()[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
           }
         }
@@ -29101,28 +29093,28 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
 
             if (queueLen > 0 && queueLen <= 100000 && dataPtr != 0) {
               auto *dataBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (dataBlock && dataBlock->initialized) {
                 // Read the first element
                 size_t readSize = std::min(elemSize, int64_t(8));
-                if (readSize <= dataBlock->data.size())
+                if (readSize <= dataBlock->size)
                   for (int64_t i = 0; i < static_cast<int64_t>(readSize); ++i)
-                    result |= static_cast<uint64_t>(dataBlock->data[i]) << (i * 8);
+                    result |= static_cast<uint64_t>(dataBlock->bytes()[i]) << (i * 8);
 
                 // Shift remaining elements forward
                 if (queueLen > 1 &&
-                    static_cast<size_t>(queueLen * elemSize) <= dataBlock->data.size()) {
-                  std::memmove(dataBlock->data.data(),
-                               dataBlock->data.data() + elemSize,
+                    static_cast<size_t>(queueLen * elemSize) <= dataBlock->size) {
+                  std::memmove(dataBlock->bytes(),
+                               dataBlock->bytes() + elemSize,
                                (queueLen - 1) * elemSize);
                 }
               }
@@ -29130,7 +29122,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // Decrement length
               int64_t newLen = queueLen - 1;
               for (int i = 0; i < 8; ++i)
-                queueBlock->data[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+                queueBlock->bytes()[queueOffset + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
           }
         }
@@ -29158,13 +29150,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
 
             // Sanity check queue length
             if (queueLen < 0 || queueLen > 100000)
@@ -29182,12 +29174,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t elemOffset = 0;
             auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
             if (elemBlock && elemBlock->initialized) {
-              size_t availableBytes = (elemOffset < elemBlock->data.size())
-                  ? elemBlock->data.size() - elemOffset : 0;
+              size_t availableBytes = (elemOffset < elemBlock->size)
+                  ? elemBlock->size - elemOffset : 0;
               size_t copySize = std::min(static_cast<size_t>(elemSize), availableBytes);
               if (copySize > 0)
-                std::memcpy(newBlock.data.data(),
-                            elemBlock->data.data() + elemOffset, copySize);
+                std::memcpy(newBlock.bytes(),
+                            elemBlock->bytes() + elemOffset, copySize);
             }
 
             // Copy existing elements after the new one
@@ -29195,10 +29187,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (oldBlock && oldBlock->initialized) {
                 size_t copySize = std::min(static_cast<size_t>(queueLen * elemSize),
-                                           oldBlock->data.size());
-                if (static_cast<size_t>(elemSize) + copySize <= newBlock.data.size())
-                  std::memcpy(newBlock.data.data() + elemSize,
-                              oldBlock->data.data(), copySize);
+                                           oldBlock->size);
+                if (static_cast<size_t>(elemSize) + copySize <= newBlock.size)
+                  std::memcpy(newBlock.bytes() + elemSize,
+                              oldBlock->bytes(), copySize);
               }
             }
 
@@ -29210,12 +29202,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t queueOffset2 = 0;
             auto *queueBlock2 = findMemoryBlockByAddress(queueAddr, procId, &queueOffset2);
             if (queueBlock2 && queueBlock2->initialized &&
-                queueOffset2 + 16 <= queueBlock2->data.size()) {
+                queueOffset2 + 16 <= queueBlock2->size) {
               // Update queue struct (at the correct offset)
               for (int i = 0; i < 8; ++i)
-                queueBlock2->data[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
+                queueBlock2->bytes()[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
               for (int i = 0; i < 8; ++i)
-                queueBlock2->data[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+                queueBlock2->bytes()[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
 
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_push_front("
@@ -29299,8 +29291,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               uint64_t storeAddr = srcAddr.getUInt64();
               uint64_t blockOffset = 0;
               MemoryBlock *block = findMemoryBlockByAddress(storeAddr, procId, &blockOffset);
-              if (block && block->initialized && blockOffset + 8 <= block->data.size()) {
-                std::memcpy(block->data.data() + blockOffset, &newAddr, 8);
+              if (block && block->initialized && blockOffset + 8 <= block->size) {
+                std::memcpy(block->bytes() + blockOffset, &newAddr, 8);
               } else {
                 auto nmIt = nativeMemoryBlocks.find(storeAddr);
                 if (nmIt != nativeMemoryBlocks.end())
@@ -29319,19 +29311,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!dst || dstSize == 0 || keyAddr == 0)
             return 0;
 
-          if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->data.size()) {
+          if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->size) {
             size_t maxCopy =
-                std::min(dstSize, keyBlock->data.size() - static_cast<size_t>(keyOffset));
-            std::memcpy(dst, keyBlock->data.data() + keyOffset, maxCopy);
+                std::min(dstSize, keyBlock->size - static_cast<size_t>(keyOffset));
+            std::memcpy(dst, keyBlock->bytes() + keyOffset, maxCopy);
             return maxCopy;
           }
 
           uint64_t globalOffset = 0;
           if (auto *globalBlock = findBlockByAddress(keyAddr, globalOffset)) {
-            if (globalBlock->initialized && globalOffset < globalBlock->data.size()) {
+            if (globalBlock->initialized && globalOffset < globalBlock->size) {
               size_t maxCopy = std::min(
-                  dstSize, globalBlock->data.size() - static_cast<size_t>(globalOffset));
-              std::memcpy(dst, globalBlock->data.data() + globalOffset, maxCopy);
+                  dstSize, globalBlock->size - static_cast<size_t>(globalOffset));
+              std::memcpy(dst, globalBlock->bytes() + globalOffset, maxCopy);
               return maxCopy;
             }
           }
@@ -29463,19 +29455,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!dst || dstSize == 0 || keyAddr == 0)
             return 0;
 
-          if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->data.size()) {
+          if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->size) {
             size_t maxCopy =
-                std::min(dstSize, keyBlock->data.size() - static_cast<size_t>(keyOffset));
-            std::memcpy(dst, keyBlock->data.data() + keyOffset, maxCopy);
+                std::min(dstSize, keyBlock->size - static_cast<size_t>(keyOffset));
+            std::memcpy(dst, keyBlock->bytes() + keyOffset, maxCopy);
             return maxCopy;
           }
 
           uint64_t globalOffset = 0;
           if (auto *globalBlock = findBlockByAddress(keyAddr, globalOffset)) {
-            if (globalBlock->initialized && globalOffset < globalBlock->data.size()) {
+            if (globalBlock->initialized && globalOffset < globalBlock->size) {
               size_t maxCopy = std::min(
-                  dstSize, globalBlock->data.size() - static_cast<size_t>(globalOffset));
-              std::memcpy(dst, globalBlock->data.data() + globalOffset, maxCopy);
+                  dstSize, globalBlock->size - static_cast<size_t>(globalOffset));
+              std::memcpy(dst, globalBlock->bytes() + globalOffset, maxCopy);
               return maxCopy;
             }
           }
@@ -29568,12 +29560,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           MooreString keyOut = {nullptr, 0};
           result = __moore_assoc_first(arrayPtr, &keyOut);
 
-          if (result && keyOutBlock && keyOutOffset + 16 <= keyOutBlock->data.size()) {
+          if (result && keyOutBlock && keyOutOffset + 16 <= keyOutBlock->size) {
             uint64_t ptrVal = reinterpret_cast<uint64_t>(keyOut.data);
             int64_t lenVal = keyOut.len;
             for (int i = 0; i < 8; ++i) {
-              keyOutBlock->data[keyOutOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
-              keyOutBlock->data[keyOutOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
+              keyOutBlock->bytes()[keyOutOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
+              keyOutBlock->bytes()[keyOutOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
             }
             keyOutBlock->initialized = true;
             // Register the malloc'd string in dynamicStrings so
@@ -29588,9 +29580,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           result = __moore_assoc_first(arrayPtr, keyBuffer);
 
           if (result && keyOutBlock) {
-            size_t availableBytes = keyOutBlock->data.size() - keyOutOffset;
+            size_t availableBytes = keyOutBlock->size - keyOutOffset;
             size_t copySize = std::min<size_t>(8, availableBytes);
-            std::memcpy(keyOutBlock->data.data() + keyOutOffset, keyBuffer, copySize);
+            std::memcpy(keyOutBlock->bytes() + keyOutOffset, keyBuffer, copySize);
             keyOutBlock->initialized = true;
           }
         }
@@ -29631,12 +29623,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         bool result = false;
         if (isStringKey) {
           MooreString keyRef = {nullptr, 0};
-          if (keyRefBlock && keyRefBlock->initialized && keyRefOffset + 16 <= keyRefBlock->data.size()) {
+          if (keyRefBlock && keyRefBlock->initialized && keyRefOffset + 16 <= keyRefBlock->size) {
             uint64_t strPtrVal = 0;
             int64_t strLen = 0;
             for (int i = 0; i < 8; ++i) {
-              strPtrVal |= static_cast<uint64_t>(keyRefBlock->data[keyRefOffset + i]) << (i * 8);
-              strLen |= static_cast<int64_t>(keyRefBlock->data[keyRefOffset + 8 + i]) << (i * 8);
+              strPtrVal |= static_cast<uint64_t>(keyRefBlock->bytes()[keyRefOffset + i]) << (i * 8);
+              strLen |= static_cast<int64_t>(keyRefBlock->bytes()[keyRefOffset + 8 + i]) << (i * 8);
             }
             keyRef.data = reinterpret_cast<char *>(strPtrVal);
             keyRef.len = strLen;
@@ -29644,12 +29636,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           result = __moore_assoc_next(arrayPtr, &keyRef);
 
-          if (result && keyRefBlock && keyRefOffset + 16 <= keyRefBlock->data.size()) {
+          if (result && keyRefBlock && keyRefOffset + 16 <= keyRefBlock->size) {
             uint64_t ptrVal = reinterpret_cast<uint64_t>(keyRef.data);
             int64_t lenVal = keyRef.len;
             for (int i = 0; i < 8; ++i) {
-              keyRefBlock->data[keyRefOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
-              keyRefBlock->data[keyRefOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
+              keyRefBlock->bytes()[keyRefOffset + i] = static_cast<uint8_t>((ptrVal >> (i * 8)) & 0xFF);
+              keyRefBlock->bytes()[keyRefOffset + 8 + i] = static_cast<uint8_t>((lenVal >> (i * 8)) & 0xFF);
             }
             // Register the malloc'd string in dynamicStrings so
             // tryReadStringKey can find it in subsequent operations.
@@ -29660,9 +29652,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           // Integer key - the key size can be 1, 2, 4, or 8 bytes.
           uint8_t keyBuffer[8] = {0};
           if (keyRefBlock && keyRefBlock->initialized) {
-            size_t availableBytes = keyRefBlock->data.size() - keyRefOffset;
+            size_t availableBytes = keyRefBlock->size - keyRefOffset;
             size_t readSize = std::min<size_t>(8, availableBytes);
-            std::memcpy(keyBuffer, keyRefBlock->data.data() + keyRefOffset, readSize);
+            std::memcpy(keyBuffer, keyRefBlock->bytes() + keyRefOffset, readSize);
           }
 
           int64_t keyBefore = 0;
@@ -29671,9 +29663,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           result = __moore_assoc_next(arrayPtr, keyBuffer);
 
           if (result && keyRefBlock) {
-            size_t availableBytes = keyRefBlock->data.size() - keyRefOffset;
+            size_t availableBytes = keyRefBlock->size - keyRefOffset;
             size_t copySize = std::min<size_t>(8, availableBytes);
-            std::memcpy(keyRefBlock->data.data() + keyRefOffset, keyBuffer, copySize);
+            std::memcpy(keyRefBlock->bytes() + keyRefOffset, keyBuffer, copySize);
           }
         }
 
@@ -29763,7 +29755,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               waiterState.pendingMailboxPeekResultAddr, waiterId, &outOffset);
           if (outBlock) { outBlock->initialized = true;
             for (int i = 0; i < 8; ++i)
-              outBlock->data[outOffset + i] =
+              outBlock->bytes()[outOffset + i] =
                   static_cast<uint8_t>((peekMsg >> (i * 8)) & 0xFF);
           }
         }
@@ -29818,7 +29810,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                       waiterState.pendingMailboxGetResultAddr, waiterId, &outOffset);
                   if (outBlock) { outBlock->initialized = true;
                     for (int i = 0; i < 8; ++i)
-                      outBlock->data[outOffset + i] =
+                      outBlock->bytes()[outOffset + i] =
                           static_cast<uint8_t>((waiterMsg >> (i * 8)) & 0xFF);
                   }
                 }
@@ -29856,7 +29848,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (outBlock) { outBlock->initialized = true;
             // Write 64-bit message value
             for (int i = 0; i < 8; ++i)
-              outBlock->data[outOffset + i] =
+              outBlock->bytes()[outOffset + i] =
                   static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
           }
         }
@@ -29911,7 +29903,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (outBlock) { outBlock->initialized = true;
             // Write 64-bit message value
             for (int i = 0; i < 8; ++i)
-              outBlock->data[outOffset + i] =
+              outBlock->bytes()[outOffset + i] =
                   static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
           }
         }
@@ -29978,7 +29970,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                       waiterState.pendingMailboxGetResultAddr, waiterId, &outOffset);
                   if (outBlock) { outBlock->initialized = true;
                     for (int i = 0; i < 8; ++i)
-                      outBlock->data[outOffset + i] =
+                      outBlock->bytes()[outOffset + i] =
                           static_cast<uint8_t>((waiterMsg >> (i * 8)) & 0xFF);
                   }
                 }
@@ -30040,7 +30032,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (outBlock) { outBlock->initialized = true;
               // Write 64-bit message value
               for (int i = 0; i < 8; ++i)
-                outBlock->data[outOffset + i] =
+                outBlock->bytes()[outOffset + i] =
                     static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
             }
           }
@@ -30117,7 +30109,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (outBlock) { outBlock->initialized = true;
               // Write 64-bit message value
               for (int i = 0; i < 8; ++i)
-                outBlock->data[outOffset + i] =
+                outBlock->bytes()[outOffset + i] =
                     static_cast<uint8_t>((msg >> (i * 8)) & 0xFF);
             }
           }
@@ -30310,8 +30302,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (block && block->initialized) {
               for (int32_t i = 0; i < strLen; ++i) {
                 size_t idx = blockOffset + i;
-                if (idx < block->data.size()) {
-                  char c = static_cast<char>(block->data[idx]);
+                if (idx < block->size) {
+                  char c = static_cast<char>(block->bytes()[idx]);
                   if (c == '\0')
                     break;
                   pattern += c;
@@ -30373,8 +30365,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (block && block->initialized) {
             for (int32_t i = 0; i < fmtLen; ++i) {
               size_t idx = blockOffset + i;
-              if (idx < block->data.size()) {
-                char c = static_cast<char>(block->data[idx]);
+              if (idx < block->size) {
+                char c = static_cast<char>(block->bytes()[idx]);
                 if (c == '\0')
                   break;
                 fmtStr += c;
@@ -30501,21 +30493,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 for (size_t i = 0;
                      i < foundValue.size() &&
                      static_cast<int32_t>(i) < outBytes &&
-                     (blockOffset + i) < outBlock->data.size();
+                     (blockOffset + i) < outBlock->size;
                      ++i)
-                  outBlock->data[blockOffset + i] =
+                  outBlock->bytes()[blockOffset + i] =
                       static_cast<uint8_t>(foundValue[i]);
                 // Null-terminate if space permits.
                 size_t termPos = blockOffset + foundValue.size();
                 if (static_cast<int32_t>(foundValue.size()) < outBytes &&
-                    termPos < outBlock->data.size())
-                  outBlock->data[termPos] = 0;
+                    termPos < outBlock->size)
+                  outBlock->bytes()[termPos] = 0;
               } else {
                 for (int32_t i = 0;
                      i < outBytes &&
-                     (blockOffset + i) < outBlock->data.size();
+                     (blockOffset + i) < outBlock->size;
                      ++i)
-                  outBlock->data[blockOffset + i] =
+                  outBlock->bytes()[blockOffset + i] =
                       static_cast<uint8_t>((intVal >> (i * 8)) & 0xFF);
               }
               written = true;
@@ -30601,12 +30593,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t structAddr = filenamePtrVal.getUInt64();
           uint64_t structOffset = 0;
           auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
-          if (block && block->initialized && structOffset + 16 <= block->data.size()) {
+          if (block && block->initialized && structOffset + 16 <= block->size) {
             uint64_t strPtr = 0;
             int64_t strLen = 0;
             for (int i = 0; i < 8; ++i) {
-              strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
-              strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+              strPtr |= static_cast<uint64_t>(block->bytes()[structOffset + i]) << (i * 8);
+              strLen |= static_cast<int64_t>(block->bytes()[structOffset + 8 + i]) << (i * 8);
             }
             if (strPtr != 0 && strLen > 0) {
               // Look up in dynamicStrings first
@@ -30620,9 +30612,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 uint64_t strOffset = 0;
                 auto *strBlock = findMemoryBlockByAddress(strPtr, procId, &strOffset);
                 if (strBlock && strBlock->initialized &&
-                    strOffset + strLen <= strBlock->data.size()) {
+                    strOffset + strLen <= strBlock->size) {
                   filename = std::string(
-                      reinterpret_cast<const char *>(strBlock->data.data() + strOffset),
+                      reinterpret_cast<const char *>(strBlock->bytes() + strOffset),
                       strLen);
                 }
               }
@@ -30813,8 +30805,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (blkIt != st.memoryBlocks.end()) {
               unsigned totalBits = arrayBits.getBitWidth();
               unsigned totalBytes = (totalBits + 7) / 8;
-              for (unsigned i = 0; i < totalBytes && i < blkIt->second.data.size(); ++i) {
-                blkIt->second.data[i] = static_cast<uint8_t>(
+              for (unsigned i = 0; i < totalBytes && i < blkIt->second.size; ++i) {
+                blkIt->second[i] = static_cast<uint8_t>(
                     arrayBits.extractBitsAsZExtValue(
                         std::min(8u, totalBits - i * 8), i * 8));
               }
@@ -30836,7 +30828,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // each element is stored as a contiguous block of bytes.
               // For 4-state types in LLVM layout: struct{iN, iN} -> {value, unknown}
               // In LLVM layout, field 0 is at offset 0 (low bytes).
-              unsigned totalElemWidth = (memBlock->data.size() - memOffset) * 8 / numElems;
+              unsigned totalElemWidth = (memBlock->size - memOffset) * 8 / numElems;
               unsigned elemBytes = totalElemWidth / 8;
 
               for (auto &[idx, val] : indexedValues) {
@@ -30849,13 +30841,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 APInt valBits = val;
                 if (valBits.getBitWidth() < elemBitWidth)
                   valBits = valBits.zext(elemBitWidth);
-                for (unsigned b = 0; b < valueBytes && byteBase + b < memBlock->data.size(); ++b) {
-                  memBlock->data[byteBase + b] =
+                for (unsigned b = 0; b < valueBytes && byteBase + b < memBlock->size; ++b) {
+                  memBlock->bytes()[byteBase + b] =
                       static_cast<uint8_t>(valBits.extractBitsAsZExtValue(8, b * 8));
                 }
                 // Clear unknown bytes (in LLVM layout, unknown field follows value)
-                for (unsigned b = valueBytes; b < elemBytes && byteBase + b < memBlock->data.size(); ++b) {
-                  memBlock->data[byteBase + b] = 0;
+                for (unsigned b = valueBytes; b < elemBytes && byteBase + b < memBlock->size; ++b) {
+                  memBlock->bytes()[byteBase + b] = 0;
                 }
               }
 
@@ -30883,12 +30875,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t structAddr = filenamePtrVal.getUInt64();
           uint64_t structOffset = 0;
           auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
-          if (block && block->initialized && structOffset + 16 <= block->data.size()) {
+          if (block && block->initialized && structOffset + 16 <= block->size) {
             uint64_t strPtr = 0;
             int64_t strLen = 0;
             for (int i = 0; i < 8; ++i) {
-              strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
-              strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+              strPtr |= static_cast<uint64_t>(block->bytes()[structOffset + i]) << (i * 8);
+              strLen |= static_cast<int64_t>(block->bytes()[structOffset + 8 + i]) << (i * 8);
             }
             if (strPtr != 0 && strLen > 0) {
               auto dynIt = dynamicStrings.find(static_cast<int64_t>(strPtr));
@@ -30900,9 +30892,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 uint64_t strOffset = 0;
                 auto *strBlock = findMemoryBlockByAddress(strPtr, procId, &strOffset);
                 if (strBlock && strBlock->initialized &&
-                    strOffset + strLen <= strBlock->data.size()) {
+                    strOffset + strLen <= strBlock->size) {
                   filename = std::string(
-                      reinterpret_cast<const char *>(strBlock->data.data() + strOffset),
+                      reinterpret_cast<const char *>(strBlock->bytes() + strOffset),
                       strLen);
                 }
               }
@@ -30962,10 +30954,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 MemoryBlock &block = blkIt->second;
                 unsigned totalBytes = (totalWidth + 7) / 8;
                 unsigned readBytes =
-                    std::min<unsigned>(totalBytes, block.data.size());
+                    std::min<unsigned>(totalBytes, block.size);
                 for (unsigned b = 0; b < readBytes && b * 8 < totalWidth; ++b) {
                   unsigned bitsToInsert = std::min(8u, totalWidth - b * 8);
-                  APInt byteVal(bitsToInsert, block.data[b] &
+                  APInt byteVal(bitsToInsert, block[b] &
                                                   ((1u << bitsToInsert) - 1u));
                   safeInsertBits(arrayBits, byteVal, b * 8);
                 }
@@ -31018,7 +31010,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t memOffset = 0;
             auto *memBlock = findMemoryBlockByAddress(memAddr, procId, &memOffset);
             if (memBlock && memBlock->initialized) {
-              unsigned totalElemWidth = (memBlock->data.size() - memOffset) * 8 / numElems;
+              unsigned totalElemWidth = (memBlock->size - memOffset) * 8 / numElems;
               unsigned elemBytes = totalElemWidth / 8;
 
               for (unsigned i = 0; i < numElems; ++i) {
@@ -31027,8 +31019,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
                 // Read value from memory (little-endian)
                 uint64_t val = 0;
-                for (unsigned b = 0; b < valueBytes && byteBase + b < memBlock->data.size(); ++b) {
-                  val |= static_cast<uint64_t>(memBlock->data[byteBase + b]) << (b * 8);
+                for (unsigned b = 0; b < valueBytes && byteBase + b < memBlock->size; ++b) {
+                  val |= static_cast<uint64_t>(memBlock->bytes()[byteBase + b]) << (b * 8);
                 }
                 APInt elemVal(elemBitWidth, val);
 
@@ -31077,15 +31069,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t structAddr = ptrArg.getUInt64();
           uint64_t structOffset = 0;
           auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
-          if (!block || !block->initialized || structOffset + 16 > block->data.size())
+          if (!block || !block->initialized || structOffset + 16 > block->size)
             return "";
 
           // Read ptr (first 8 bytes, little-endian) and len (next 8 bytes)
           uint64_t strPtr = 0;
           int64_t strLen = 0;
           for (int i = 0; i < 8; ++i) {
-            strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
-            strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+            strPtr |= static_cast<uint64_t>(block->bytes()[structOffset + i]) << (i * 8);
+            strLen |= static_cast<int64_t>(block->bytes()[structOffset + 8 + i]) << (i * 8);
           }
 
           if (strPtr == 0 || strLen <= 0)
@@ -31109,11 +31101,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (gBlock && gBlock->initialized) {
               size_t avail = std::min(
                   {static_cast<size_t>(strLen),
-                   gBlock->data.size() - static_cast<size_t>(off),
+                   gBlock->size - static_cast<size_t>(off),
                    kMaxRuntimeStringBytes});
               if (avail > 0)
                 return std::string(reinterpret_cast<const char *>(
-                                       gBlock->data.data() + off),
+                                       gBlock->bytes() + off),
                                    avail);
             }
           }
@@ -31125,11 +31117,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (blockIt != globalMemoryBlocks.end()) {
               const MemoryBlock &gBlock = blockIt->second;
               size_t avail = std::min({static_cast<size_t>(strLen),
-                                       gBlock.data.size(),
+                                       gBlock.size,
                                        kMaxRuntimeStringBytes});
               if (avail > 0 && gBlock.initialized)
                 return std::string(reinterpret_cast<const char *>(
-                                       gBlock.data.data()),
+                                       gBlock.bytes()),
                                    avail);
             }
           }
@@ -31316,8 +31308,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       MemoryBlock *block = findMemoryBlockByAddress(seedAddr, procId, &off);
       if (!block)
         block = findBlockByAddress(seedAddr, off);
-      if (block && block->initialized && off + 4 <= block->data.size()) {
-        std::memcpy(&seed, block->data.data() + off, 4);
+      if (block && block->initialized && off + 4 <= block->size) {
+        std::memcpy(&seed, block->bytes() + off, 4);
       }
       // Gather integer parameters (operands 1+).
       SmallVector<int32_t, 3> params;
@@ -31341,8 +31333,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       else if (calleeName == "__moore_dist_erlang" && params.size() >= 2)
         result = __moore_dist_erlang(&seed, params[0], params[1]);
       // Write updated seed back to memory.
-      if (block && off + 4 <= block->data.size()) {
-        std::memcpy(block->data.data() + off, &seed, 4);
+      if (block && off + 4 <= block->size) {
+        std::memcpy(block->bytes() + off, &seed, 4);
       }
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
@@ -31397,14 +31389,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               size_t fillEnd = std::min(
                   static_cast<size_t>(objOff) +
                       static_cast<size_t>(classSize),
-                  block->data.size());
+                  block->size);
               for (size_t i = static_cast<size_t>(objOff); i < fillEnd;
                    i += 4) {
                 uint32_t r = fillRng();
                 size_t bytesLeft = fillEnd - i;
                 size_t toWrite = std::min(bytesLeft, size_t(4));
                 for (size_t b = 0; b < toWrite; ++b)
-                  block->data[i + b] =
+                  block->bytes()[i + b] =
                       static_cast<uint8_t>(r >> (b * 8));
               }
             }
@@ -31478,19 +31470,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               for (uint64_t fOff : dynArrayOffsets) {
                 size_t dataOff = static_cast<size_t>(objOff) +
                                  static_cast<size_t>(fOff);
-                if (dataOff + 16 > block->data.size())
+                if (dataOff + 16 > block->size)
                   continue;
                 // Read ptr (8 bytes LE)
                 uint64_t ptrField = 0;
                 for (int i = 0; i < 8; ++i)
                   ptrField |=
-                      static_cast<uint64_t>(block->data[dataOff + i])
+                      static_cast<uint64_t>(block->bytes()[dataOff + i])
                       << (i * 8);
                 // Read len (8 bytes LE)
                 uint64_t lenField = 0;
                 for (int i = 0; i < 8; ++i)
                   lenField |=
-                      static_cast<uint64_t>(block->data[dataOff + 8 + i])
+                      static_cast<uint64_t>(block->bytes()[dataOff + 8 + i])
                       << (i * 8);
                 if (ptrField == 0 && lenField == 0) {
                   // Allocate 1-byte array (1 element for bit[7:0] types)
@@ -31502,10 +31494,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                         reinterpret_cast<uint64_t>(result.data);
                     int64_t newLen = result.len;
                     for (int i = 0; i < 8; ++i)
-                      block->data[dataOff + i] =
+                      block->bytes()[dataOff + i] =
                           static_cast<uint8_t>(newPtr >> (i * 8));
                     for (int i = 0; i < 8; ++i)
-                      block->data[dataOff + 8 + i] =
+                      block->bytes()[dataOff + 8 + i] =
                           static_cast<uint8_t>(
                               static_cast<uint64_t>(newLen) >> (i * 8));
                     nativeMemoryBlocks[newPtr] = 1;
@@ -31559,9 +31551,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *blk = findMemoryBlockByAddress(dataAddr, procId, &off);
           if (!blk)
             blk = findBlockByAddress(dataAddr, off);
-          if (blk && blk->initialized && off <= blk->data.size()) {
-            if (byteCount <= blk->data.size() - static_cast<size_t>(off)) {
-              auto *dst = blk->data.data() + off;
+          if (blk && blk->initialized && off <= blk->size) {
+            if (byteCount <= blk->size - static_cast<size_t>(off)) {
+              auto *dst = blk->bytes() + off;
               size_t i = 0;
               for (; i + 4 <= byteCount; i += 4) {
                 uint32_t word = randomWord();
@@ -31603,8 +31595,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *blk = findMemoryBlockByAddress(dataAddr, procId, &off);
             if (!blk)
               blk = findBlockByAddress(dataAddr, off);
-            if (blk && blk->initialized && off < blk->data.size()) {
-              firstByte = blk->data[off];
+            if (blk && blk->initialized && off < blk->size) {
+              firstByte = blk->bytes()[off];
             } else {
               uint64_t nativeOff = 0;
               size_t nativeSize = 0;
@@ -31648,12 +31640,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto readI64 = [&](uint64_t addr) -> int64_t {
           uint64_t off = 0;
           auto *blk = findMemoryBlockByAddress(addr, procId, &off);
-          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+          if (!blk || !blk->initialized || off + 8 > blk->size)
             return 0;
           int64_t val = 0;
           for (int i = 0; i < 8; ++i)
             val |= static_cast<int64_t>(
-                       static_cast<uint64_t>(blk->data[off + i]) << (i * 8));
+                       static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8));
           return val;
         };
 
@@ -31765,12 +31757,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         auto readI64 = [&](uint64_t addr) -> int64_t {
           uint64_t off = 0;
           auto *blk = findMemoryBlockByAddress(addr, procId, &off);
-          if (!blk || !blk->initialized || off + 8 > blk->data.size())
+          if (!blk || !blk->initialized || off + 8 > blk->size)
             return 0;
           int64_t val = 0;
           for (int i = 0; i < 8; ++i)
             val |= static_cast<int64_t>(
-                       static_cast<uint64_t>(blk->data[off + i]) << (i * 8));
+                       static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8));
           return val;
         };
 
@@ -31894,7 +31886,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       auto *block =
           findMemoryBlockByAddress(structAddr, procId, &structOffset);
       if (!block || !block->initialized ||
-          structOffset + 16 > block->data.size())
+          structOffset + 16 > block->size)
         return "";
 
       // Read ptr (first 8 bytes, little-endian) and len (next 8 bytes)
@@ -31902,8 +31894,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       int64_t strLen = 0;
       for (int i = 0; i < 8; ++i) {
         strPtr |=
-            static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
-        strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i])
+            static_cast<uint64_t>(block->bytes()[structOffset + i]) << (i * 8);
+        strLen |= static_cast<int64_t>(block->bytes()[structOffset + 8 + i])
                   << (i * 8);
       }
 
@@ -31927,10 +31919,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (gBlock && gBlock->initialized) {
           size_t avail = std::min(
               static_cast<size_t>(strLen),
-              gBlock->data.size() - static_cast<size_t>(off));
+              gBlock->size - static_cast<size_t>(off));
           if (avail > 0)
             return std::string(
-                reinterpret_cast<const char *>(gBlock->data.data() + off),
+                reinterpret_cast<const char *>(gBlock->bytes() + off),
                 avail);
         }
       }
@@ -31942,10 +31934,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (blockIt != globalMemoryBlocks.end()) {
           const MemoryBlock &gBlock = blockIt->second;
           size_t avail = std::min(static_cast<size_t>(strLen),
-                                  gBlock.data.size());
+                                  gBlock.size);
           if (avail > 0 && gBlock.initialized)
             return std::string(
-                reinterpret_cast<const char *>(gBlock.data.data()), avail);
+                reinterpret_cast<const char *>(gBlock.bytes()), avail);
         }
       }
 
@@ -31954,9 +31946,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       auto *strBlock =
           findMemoryBlockByAddress(strPtr, procId, &strOffset);
       if (strBlock && strBlock->initialized &&
-          strOffset + strLen <= strBlock->data.size()) {
+          strOffset + strLen <= strBlock->size) {
         return std::string(
-            reinterpret_cast<const char *>(strBlock->data.data() + strOffset),
+            reinterpret_cast<const char *>(strBlock->bytes() + strOffset),
             strLen);
       }
 
@@ -32064,9 +32056,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!block)
             block = findBlockByAddress(inputAddr, off);
           if (block && block->initialized &&
-              off + inputLen <= block->data.size()) {
+              off + inputLen <= block->size) {
             inputStr.assign(
-                reinterpret_cast<const char *>(block->data.data() + off),
+                reinterpret_cast<const char *>(block->bytes() + off),
                 inputLen);
           }
         }
@@ -32082,14 +32074,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (blockIt != globalMemoryBlocks.end() &&
                 blockIt->second.initialized)
               format = reinterpret_cast<const char *>(
-                  blockIt->second.data.data());
+                  blockIt->second.bytes());
           }
           if (!format || !format[0]) {
             uint64_t off = 0;
             MemoryBlock *block = findBlockByAddress(fmtAddr, off);
             if (block && block->initialized)
               format =
-                  reinterpret_cast<const char *>(block->data.data() + off);
+                  reinterpret_cast<const char *>(block->bytes() + off);
           }
         }
 
@@ -32110,10 +32102,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!wBlock)
             wBlock = findBlockByAddress(widthsAddr, wOff);
           if (wBlock && wBlock->initialized &&
-              wOff + maxResults * 4 <= wBlock->data.size()) {
+              wOff + maxResults * 4 <= wBlock->size) {
             for (int32_t i = 0; i < maxResults; ++i)
               std::memcpy(&widths[i],
-                          wBlock->data.data() + wOff + i * 4, 4);
+                          wBlock->bytes() + wOff + i * 4, 4);
           }
         }
 
@@ -32131,9 +32123,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!rBlock)
             rBlock = findBlockByAddress(resultsAddr, rOff);
           if (rBlock && rBlock->initialized &&
-              rOff + maxResults * 8 <= rBlock->data.size()) {
+              rOff + maxResults * 8 <= rBlock->size) {
             for (int32_t i = 0; i < maxResults; ++i)
-              std::memcpy(rBlock->data.data() + rOff + i * 8,
+              std::memcpy(rBlock->bytes() + rOff + i * 8,
                           &results[i], 8);
           }
         }
@@ -32169,14 +32161,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (blockIt != globalMemoryBlocks.end() &&
                 blockIt->second.initialized)
               format = reinterpret_cast<const char *>(
-                  blockIt->second.data.data());
+                  blockIt->second.bytes());
           }
           if (!format || !format[0]) {
             uint64_t off = 0;
             MemoryBlock *block = findBlockByAddress(fmtAddr, off);
             if (block && block->initialized)
               format =
-                  reinterpret_cast<const char *>(block->data.data() + off);
+                  reinterpret_cast<const char *>(block->bytes() + off);
           }
         }
 
@@ -32196,10 +32188,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!wBlock)
             wBlock = findBlockByAddress(widthsAddr, wOff);
           if (wBlock && wBlock->initialized &&
-              wOff + maxResults * 4 <= wBlock->data.size()) {
+              wOff + maxResults * 4 <= wBlock->size) {
             for (int32_t i = 0; i < maxResults; ++i)
               std::memcpy(&widths[i],
-                          wBlock->data.data() + wOff + i * 4, 4);
+                          wBlock->bytes() + wOff + i * 4, 4);
           }
         }
 
@@ -32216,9 +32208,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (!rBlock)
             rBlock = findBlockByAddress(resultsAddr, rOff);
           if (rBlock && rBlock->initialized &&
-              rOff + maxResults * 8 <= rBlock->data.size()) {
+              rOff + maxResults * 8 <= rBlock->size) {
             for (int32_t i = 0; i < maxResults; ++i)
-              std::memcpy(rBlock->data.data() + rOff + i * 8,
+              std::memcpy(rBlock->bytes() + rOff + i * 8,
                           &results[i], 8);
           }
         }
@@ -32259,14 +32251,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (blockIt != globalMemoryBlocks.end() &&
                 blockIt->second.initialized)
               suffixData = reinterpret_cast<const char *>(
-                  blockIt->second.data.data());
+                  blockIt->second.bytes());
           }
           if (!suffixData) {
             uint64_t off = 0;
             MemoryBlock *block = findBlockByAddress(addr, off);
             if (block && block->initialized)
               suffixData =
-                  reinterpret_cast<const char *>(block->data.data() + off);
+                  reinterpret_cast<const char *>(block->bytes() + off);
           }
         }
       }
@@ -32371,11 +32363,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t offset = 0;
           auto *block = findMemoryBlockByAddress(strAddr, procId, &offset);
           if (block && block->initialized &&
-              offset + 16 <= block->data.size()) {
+              offset + 16 <= block->size) {
             uint64_t ptrVal = reinterpret_cast<uint64_t>(str.data);
-            std::memcpy(block->data.data() + offset, &ptrVal, 8);
+            std::memcpy(block->bytes() + offset, &ptrVal, 8);
             int64_t lenVal = str.len;
-            std::memcpy(block->data.data() + offset + 8, &lenVal, 8);
+            std::memcpy(block->bytes() + offset + 8, &lenVal, 8);
           }
         }
       }
@@ -32475,9 +32467,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               MemoryBlock &block = blkIt->second;
               unsigned packedBytes = (packedWidth + 7) / 8;
               unsigned writeBytes =
-                  std::min<unsigned>(packedBytes, block.data.size());
+                  std::min<unsigned>(packedBytes, block.size);
               for (unsigned i = 0; i < writeBytes; ++i) {
-                block.data[i] = static_cast<uint8_t>(
+                block[i] = static_cast<uint8_t>(
                     signalBits.extractBitsAsZExtValue(
                         std::min(8u, packedWidth - i * 8), i * 8));
               }
@@ -32502,8 +32494,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (auto *block =
                     findMemoryBlockByAddress(destAddr, procId, &offset)) {
               if (block->initialized &&
-                  offset + totalBytes <= block->data.size()) {
-                auto *dest = block->data.data() + offset;
+                  offset + totalBytes <= block->size) {
+                auto *dest = block->bytes() + offset;
                 result = __moore_fread(dest, elemWidth, elemStorageBytes,
                                        numElems, fd);
               }
@@ -32633,15 +32625,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       uint64_t structAddr = ptrArg.getUInt64();
       uint64_t structOffset = 0;
       auto *block = findMemoryBlockByAddress(structAddr, procId, &structOffset);
-      if (!block || !block->initialized || structOffset + 16 > block->data.size())
+      if (!block || !block->initialized || structOffset + 16 > block->size)
         return "";
 
       // Read ptr (first 8 bytes, little-endian) and len (next 8 bytes)
       uint64_t strPtr = 0;
       int64_t strLen = 0;
       for (int i = 0; i < 8; ++i) {
-        strPtr |= static_cast<uint64_t>(block->data[structOffset + i]) << (i * 8);
-        strLen |= static_cast<int64_t>(block->data[structOffset + 8 + i]) << (i * 8);
+        strPtr |= static_cast<uint64_t>(block->bytes()[structOffset + i]) << (i * 8);
+        strLen |= static_cast<int64_t>(block->bytes()[structOffset + 8 + i]) << (i * 8);
       }
 
       if (strPtr == 0 || strLen <= 0)
@@ -32662,10 +32654,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         MemoryBlock *gBlock = findBlockByAddress(strPtr, off);
         if (gBlock && gBlock->initialized) {
           size_t avail = std::min(static_cast<size_t>(strLen),
-                                  gBlock->data.size() - static_cast<size_t>(off));
+                                  gBlock->size - static_cast<size_t>(off));
           if (avail > 0)
             return std::string(reinterpret_cast<const char *>(
-                                   gBlock->data.data() + off),
+                                   gBlock->bytes() + off),
                                avail);
         }
       }
@@ -32677,10 +32669,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (blockIt != globalMemoryBlocks.end()) {
           const MemoryBlock &gBlock = blockIt->second;
           size_t avail = std::min(static_cast<size_t>(strLen),
-                                  gBlock.data.size());
+                                  gBlock.size);
           if (avail > 0 && gBlock.initialized)
             return std::string(reinterpret_cast<const char *>(
-                                   gBlock.data.data()),
+                                   gBlock.bytes()),
                                avail);
         }
       }
@@ -32689,9 +32681,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       uint64_t strDataOffset = 0;
       auto *strDataBlock = findMemoryBlockByAddress(strPtr, procId, &strDataOffset);
       if (strDataBlock && strDataBlock->initialized &&
-          strDataOffset + strLen <= strDataBlock->data.size()) {
+          strDataOffset + strLen <= strDataBlock->size) {
         return std::string(
-            reinterpret_cast<const char *>(strDataBlock->data.data() + strDataOffset),
+            reinterpret_cast<const char *>(strDataBlock->bytes() + strDataOffset),
             strLen);
       }
 
@@ -33088,22 +33080,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
 
             // Bounds check
             if (index >= 0 && index < queueLen && dataPtr != 0) {
               if (queueLen == 1) {
                 // Last element - set data to 0 and len to 0
                 for (int i = 0; i < 8; ++i)
-                  queueBlock->data[queueOffset + i] = 0;
+                  queueBlock->bytes()[queueOffset + i] = 0;
                 for (int i = 0; i < 8; ++i)
-                  queueBlock->data[queueOffset + 8 + i] = 0;
+                  queueBlock->bytes()[queueOffset + 8 + i] = 0;
               } else {
                 // Allocate new storage
                 int64_t newLen = queueLen - 1;
@@ -33116,12 +33108,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 if (oldBlock && oldBlock->initialized) {
                   // Copy elements before deleted index
                   if (index > 0)
-                    std::memcpy(newBlock.data.data(), oldBlock->data.data(),
+                    std::memcpy(newBlock.bytes(), oldBlock->bytes(),
                                 index * elemSize);
                   // Copy elements after deleted index
                   if (index < queueLen - 1)
-                    std::memcpy(newBlock.data.data() + index * elemSize,
-                                oldBlock->data.data() + (index + 1) * elemSize,
+                    std::memcpy(newBlock.bytes() + index * elemSize,
+                                oldBlock->bytes() + (index + 1) * elemSize,
                                 (queueLen - index - 1) * elemSize);
                 }
 
@@ -33130,10 +33122,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
                 // Update queue struct
                 for (int i = 0; i < 8; ++i)
-                  queueBlock->data[queueOffset + i] =
+                  queueBlock->bytes()[queueOffset + i] =
                       static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
                 for (int i = 0; i < 8; ++i)
-                  queueBlock->data[queueOffset + 8 + i] =
+                  queueBlock->bytes()[queueOffset + 8 + i] =
                       static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
               }
               checkMemoryEventWaiters();
@@ -33163,13 +33155,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint64_t queueOffset = 0;
           auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->data[queueOffset + i]) << (i * 8);
+              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
             for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->data[queueOffset + 8 + i]) << (i * 8);
+              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
 
             // Clamp index
             if (index < 0) index = 0;
@@ -33187,8 +33179,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               auto *oldBlock = findMemoryBlockByAddress(dataPtr, procId);
               if (oldBlock && oldBlock->initialized) {
                 size_t copySize = std::min(static_cast<size_t>(index * elemSize),
-                                           oldBlock->data.size());
-                std::memcpy(newBlock.data.data(), oldBlock->data.data(), copySize);
+                                           oldBlock->size);
+                std::memcpy(newBlock.bytes(), oldBlock->bytes(), copySize);
               }
             }
 
@@ -33196,12 +33188,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             uint64_t elemOffset = 0;
             auto *elemBlock = findMemoryBlockByAddress(elemAddr, procId, &elemOffset);
             if (elemBlock && elemBlock->initialized) {
-              size_t avail = (elemOffset < elemBlock->data.size())
-                  ? elemBlock->data.size() - elemOffset : 0;
+              size_t avail = (elemOffset < elemBlock->size)
+                  ? elemBlock->size - elemOffset : 0;
               size_t copySize = std::min(static_cast<size_t>(elemSize), avail);
               if (copySize > 0)
-                std::memcpy(newBlock.data.data() + index * elemSize,
-                            elemBlock->data.data() + elemOffset, copySize);
+                std::memcpy(newBlock.bytes() + index * elemSize,
+                            elemBlock->bytes() + elemOffset, copySize);
             }
 
             // Copy elements after insertion point
@@ -33211,10 +33203,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 size_t srcOffset = index * elemSize;
                 size_t dstOffset = (index + 1) * elemSize;
                 size_t copySize = (queueLen - index) * elemSize;
-                if (srcOffset + copySize <= oldBlock->data.size() &&
-                    dstOffset + copySize <= newBlock.data.size())
-                  std::memcpy(newBlock.data.data() + dstOffset,
-                              oldBlock->data.data() + srcOffset, copySize);
+                if (srcOffset + copySize <= oldBlock->size &&
+                    dstOffset + copySize <= newBlock.size)
+                  std::memcpy(newBlock.bytes() + dstOffset,
+                              oldBlock->bytes() + srcOffset, copySize);
               }
             }
 
@@ -33223,10 +33215,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
             // Update queue struct
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + i] =
+              queueBlock->bytes()[queueOffset + i] =
                   static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
             for (int i = 0; i < 8; ++i)
-              queueBlock->data[queueOffset + 8 + i] =
+              queueBlock->bytes()[queueOffset + 8 + i] =
                   static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
 
             checkMemoryEventWaiters();
@@ -33301,20 +33293,20 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (!dst || dstSize == 0 || keyAddr == 0)
               return 0;
 
-            if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->data.size()) {
+            if (keyBlock && keyBlock->initialized && keyOffset < keyBlock->size) {
               size_t maxCopy = std::min(
-                  dstSize, keyBlock->data.size() - static_cast<size_t>(keyOffset));
-              std::memcpy(dst, keyBlock->data.data() + keyOffset, maxCopy);
+                  dstSize, keyBlock->size - static_cast<size_t>(keyOffset));
+              std::memcpy(dst, keyBlock->bytes() + keyOffset, maxCopy);
               return maxCopy;
             }
 
             uint64_t globalOffset = 0;
             if (auto *globalBlock = findBlockByAddress(keyAddr, globalOffset)) {
-              if (globalBlock->initialized && globalOffset < globalBlock->data.size()) {
+              if (globalBlock->initialized && globalOffset < globalBlock->size) {
                 size_t maxCopy = std::min(
                     dstSize,
-                    globalBlock->data.size() - static_cast<size_t>(globalOffset));
-                std::memcpy(dst, globalBlock->data.data() + globalOffset, maxCopy);
+                    globalBlock->size - static_cast<size_t>(globalOffset));
+                std::memcpy(dst, globalBlock->bytes() + globalOffset, maxCopy);
                 return maxCopy;
               }
             }
@@ -33427,10 +33419,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *initBlock =
               findMemoryBlockByAddress(initAddr, procId, &initOffset);
           if (initBlock && initBlock->initialized &&
-              initOffset + 16 <= initBlock->data.size()) {
+              initOffset + 16 <= initBlock->size) {
             // Read {data_ptr, length} from the struct
-            std::memcpy(&dataPtr, initBlock->data.data() + initOffset, 8);
-            std::memcpy(&initLen, initBlock->data.data() + initOffset + 8, 8);
+            std::memcpy(&dataPtr, initBlock->bytes() + initOffset, 8);
+            std::memcpy(&initLen, initBlock->bytes() + initOffset + 8, 8);
           } else {
             // Only dereference as native pointer if the address is known to be
             // within a tracked native allocation. This avoids invalid
@@ -33507,10 +33499,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       uint64_t off = 0;
       if (auto *block = findMemoryBlockByAddress(nameAddr, procId, &off)) {
-        if (block->initialized && off < block->data.size()) {
+        if (block->initialized && off < block->size) {
           return boundedFrom(
-              reinterpret_cast<const char *>(block->data.data() + off),
-              block->data.size() - static_cast<size_t>(off));
+              reinterpret_cast<const char *>(block->bytes() + off),
+              block->size - static_cast<size_t>(off));
         }
       }
 
@@ -33731,11 +33723,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(
-                              queueBlock->data[queueOffset + 8 + i])
+                              queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
 
             if (queueLen > 0 && dataPtr != 0) {
@@ -33753,14 +33745,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *resultBlock = findMemoryBlockByAddress(
                     resultAddr, procId, &resultOffset);
                 if (resultBlock &&
-                    lastElemOff + elemSize <= dataBlock->data.size()) {
+                    lastElemOff + elemSize <= dataBlock->size) {
                   size_t avail =
-                      resultBlock->data.size() - resultOffset;
+                      resultBlock->size - resultOffset;
                   size_t copySize =
                       std::min<size_t>(elemSize, avail);
                   std::memcpy(
-                      resultBlock->data.data() + resultOffset,
-                      dataBlock->data.data() + lastElemOff, copySize);
+                      resultBlock->bytes() + resultOffset,
+                      dataBlock->bytes() + lastElemOff, copySize);
                   resultBlock->initialized = true;
                 }
               }
@@ -33768,7 +33760,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // Decrement length
               int64_t newLen = queueLen - 1;
               for (int i = 0; i < 8; ++i)
-                queueBlock->data[queueOffset + 8 + i] =
+                queueBlock->bytes()[queueOffset + 8 + i] =
                     static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
               traceQueueOp("pop_front_ptr", queueAddr, queueLen, newLen);
             }
@@ -33802,11 +33794,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(
-                              queueBlock->data[queueOffset + 8 + i])
+                              queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
 
             if (queueLen > 0 && dataPtr != 0) {
@@ -33820,14 +33812,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *resultBlock = findMemoryBlockByAddress(
                     resultAddr, procId, &resultOffset);
                 if (resultBlock &&
-                    dataOffset + elemSize <= dataBlock->data.size()) {
+                    dataOffset + elemSize <= dataBlock->size) {
                   size_t avail =
-                      resultBlock->data.size() - resultOffset;
+                      resultBlock->size - resultOffset;
                   size_t copySize =
                       std::min<size_t>(elemSize, avail);
                   std::memcpy(
-                      resultBlock->data.data() + resultOffset,
-                      dataBlock->data.data() + dataOffset, copySize);
+                      resultBlock->bytes() + resultOffset,
+                      dataBlock->bytes() + dataOffset, copySize);
                   resultBlock->initialized = true;
                 }
 
@@ -33835,10 +33827,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 if (queueLen > 1) {
                   size_t moveSize = (queueLen - 1) * elemSize;
                   if (dataOffset + elemSize + moveSize <=
-                      dataBlock->data.size()) {
+                      dataBlock->size) {
                     std::memmove(
-                        dataBlock->data.data() + dataOffset,
-                        dataBlock->data.data() + dataOffset + elemSize,
+                        dataBlock->bytes() + dataOffset,
+                        dataBlock->bytes() + dataOffset + elemSize,
                         moveSize);
                   }
                 }
@@ -33847,7 +33839,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               // Decrement length
               int64_t newLen = queueLen - 1;
               for (int i = 0; i < 8; ++i)
-                queueBlock->data[queueOffset + 8 + i] =
+                queueBlock->bytes()[queueOffset + 8 + i] =
                     static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
             }
           }
@@ -33882,16 +33874,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (qBlock && qBlock->initialized) {
             for (int64_t i = 0; i < count; ++i) {
               size_t base = qOff + i * 16;
-              if (base + 16 > qBlock->data.size())
+              if (base + 16 > qBlock->size)
                 break;
               uint64_t dp = 0;
               int64_t ln = 0;
               for (int b = 0; b < 8; ++b)
-                dp |= static_cast<uint64_t>(qBlock->data[base + b])
+                dp |= static_cast<uint64_t>(qBlock->bytes()[base + b])
                       << (b * 8);
               for (int b = 0; b < 8; ++b)
                 ln |= static_cast<int64_t>(
-                           qBlock->data[base + 8 + b])
+                           qBlock->bytes()[base + 8 + b])
                       << (b * 8);
               // Only use dp as native pointer if it's in native memory range
               if (dp >= 0x10000000000ULL)
@@ -33960,13 +33952,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           MooreString keyOut = {nullptr, 0};
           result = __moore_assoc_last(arrayPtr, &keyOut);
           if (result && keyOutBlock &&
-              keyOutOffset + 16 <= keyOutBlock->data.size()) {
+              keyOutOffset + 16 <= keyOutBlock->size) {
             uint64_t pv = reinterpret_cast<uint64_t>(keyOut.data);
             int64_t lv = keyOut.len;
             for (int i = 0; i < 8; ++i) {
-              keyOutBlock->data[keyOutOffset + i] =
+              keyOutBlock->bytes()[keyOutOffset + i] =
                   static_cast<uint8_t>((pv >> (i * 8)) & 0xFF);
-              keyOutBlock->data[keyOutOffset + 8 + i] =
+              keyOutBlock->bytes()[keyOutOffset + 8 + i] =
                   static_cast<uint8_t>((lv >> (i * 8)) & 0xFF);
             }
             keyOutBlock->initialized = true;
@@ -33980,9 +33972,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           result = __moore_assoc_last(arrayPtr, keyBuffer);
           if (result && keyOutBlock) {
             size_t avail =
-                keyOutBlock->data.size() - keyOutOffset;
+                keyOutBlock->size - keyOutOffset;
             size_t copySize = std::min<size_t>(8, avail);
-            std::memcpy(keyOutBlock->data.data() + keyOutOffset,
+            std::memcpy(keyOutBlock->bytes() + keyOutOffset,
                         keyBuffer, copySize);
             keyOutBlock->initialized = true;
           }
@@ -34025,15 +34017,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         if (isStringKey) {
           MooreString keyRef = {nullptr, 0};
           if (keyRefBlock && keyRefBlock->initialized &&
-              keyRefOffset + 16 <= keyRefBlock->data.size()) {
+              keyRefOffset + 16 <= keyRefBlock->size) {
             uint64_t spv = 0;
             int64_t sl = 0;
             for (int i = 0; i < 8; ++i) {
               spv |= static_cast<uint64_t>(
-                         keyRefBlock->data[keyRefOffset + i])
+                         keyRefBlock->bytes()[keyRefOffset + i])
                      << (i * 8);
               sl |= static_cast<int64_t>(
-                        keyRefBlock->data[keyRefOffset + 8 + i])
+                        keyRefBlock->bytes()[keyRefOffset + 8 + i])
                     << (i * 8);
             }
             keyRef.data = reinterpret_cast<char *>(spv);
@@ -34043,13 +34035,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           result = __moore_assoc_prev(arrayPtr, &keyRef);
 
           if (result && keyRefBlock &&
-              keyRefOffset + 16 <= keyRefBlock->data.size()) {
+              keyRefOffset + 16 <= keyRefBlock->size) {
             uint64_t pv = reinterpret_cast<uint64_t>(keyRef.data);
             int64_t lv = keyRef.len;
             for (int i = 0; i < 8; ++i) {
-              keyRefBlock->data[keyRefOffset + i] =
+              keyRefBlock->bytes()[keyRefOffset + i] =
                   static_cast<uint8_t>((pv >> (i * 8)) & 0xFF);
-              keyRefBlock->data[keyRefOffset + 8 + i] =
+              keyRefBlock->bytes()[keyRefOffset + 8 + i] =
                   static_cast<uint8_t>((lv >> (i * 8)) & 0xFF);
             }
             // Register the malloc'd string in dynamicStrings so
@@ -34061,10 +34053,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           uint8_t keyBuffer[8] = {0};
           if (keyRefBlock && keyRefBlock->initialized) {
             size_t avail =
-                keyRefBlock->data.size() - keyRefOffset;
+                keyRefBlock->size - keyRefOffset;
             size_t readSize = std::min<size_t>(8, avail);
             std::memcpy(keyBuffer,
-                        keyRefBlock->data.data() + keyRefOffset,
+                        keyRefBlock->bytes() + keyRefOffset,
                         readSize);
           }
 
@@ -34072,9 +34064,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           if (result && keyRefBlock) {
             size_t avail =
-                keyRefBlock->data.size() - keyRefOffset;
+                keyRefBlock->size - keyRefOffset;
             size_t copySize = std::min<size_t>(8, avail);
-            std::memcpy(keyRefBlock->data.data() + keyRefOffset,
+            std::memcpy(keyRefBlock->bytes() + keyRefOffset,
                         keyBuffer, copySize);
           }
         }
@@ -34106,16 +34098,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *qBlock =
               findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
           if (qBlock && qBlock->initialized &&
-              queueOffset + 16 <= qBlock->data.size()) {
+              queueOffset + 16 <= qBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             qBlock->data[queueOffset + i])
+                             qBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(
-                              qBlock->data[queueOffset + 8 + i])
+                              qBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
             if (dataPtr != 0 &&
                 (dataPtr >= 0x10000000000ULL ||
@@ -34156,15 +34148,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *qBlock =
               findMemoryBlockByAddress(queueAddr, procId, &qOff);
           if (qBlock && qBlock->initialized &&
-              qOff + 16 <= qBlock->data.size()) {
+              qOff + 16 <= qBlock->size) {
             uint64_t dp = 0;
             int64_t ln = 0;
             for (int i = 0; i < 8; ++i)
-              dp |= static_cast<uint64_t>(qBlock->data[qOff + i])
+              dp |= static_cast<uint64_t>(qBlock->bytes()[qOff + i])
                     << (i * 8);
             for (int i = 0; i < 8; ++i)
               ln |= static_cast<int64_t>(
-                        qBlock->data[qOff + 8 + i])
+                        qBlock->bytes()[qOff + 8 + i])
                     << (i * 8);
             if (dp != 0) {
               // Only call native function if dp is a real native pointer,
@@ -34225,7 +34217,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *qBlock =
                 findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
             if (qBlock && qBlock->initialized &&
-                queueOffset + 16 <= qBlock->data.size()) {
+                queueOffset + 16 <= qBlock->size) {
               int64_t numElements = 64 / elemBitWidth;
               if (numElements <= 0)
                 numElements = 1;
@@ -34238,7 +34230,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
               MemoryBlock newBlock(newSize, 64);
               newBlock.initialized = true;
-              memset(newBlock.data.data(), 0, newSize);
+              memset(newBlock.bytes(), 0, newSize);
 
               int64_t elementMask = (elemBitWidth < 64)
                                         ? ((1LL << elemBitWidth) - 1)
@@ -34250,7 +34242,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                      --i) {
                   int64_t elemVal = (sourceBits >> bitPos) & elementMask;
                   for (int32_t b = 0; b < bytesPerElem && b < 8; ++b)
-                    newBlock.data[i * bytesPerElem + b] =
+                    newBlock[i * bytesPerElem + b] =
                         static_cast<uint8_t>((elemVal >> (b * 8)) & 0xFF);
                   bitPos += elemBitWidth;
                 }
@@ -34259,7 +34251,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 for (int64_t i = 0; i < numElements && bitPos < 64; ++i) {
                   int64_t elemVal = (sourceBits >> bitPos) & elementMask;
                   for (int32_t b = 0; b < bytesPerElem && b < 8; ++b)
-                    newBlock.data[i * bytesPerElem + b] =
+                    newBlock[i * bytesPerElem + b] =
                         static_cast<uint8_t>((elemVal >> (b * 8)) & 0xFF);
                   bitPos += elemBitWidth;
                 }
@@ -34270,10 +34262,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
               // Update queue struct: data ptr and len
               for (int i = 0; i < 8; ++i)
-                qBlock->data[queueOffset + i] =
+                qBlock->bytes()[queueOffset + i] =
                     static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
               for (int i = 0; i < 8; ++i)
-                qBlock->data[queueOffset + 8 + i] =
+                qBlock->bytes()[queueOffset + 8 + i] =
                     static_cast<uint8_t>((numElements >> (i * 8)) & 0xFF);
             }
           }
@@ -34301,10 +34293,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t off = 0;
         MemoryBlock *block = findMemoryBlockByAddress(indicesAddr, procId, &off);
         if (block && block->initialized) {
-          for (int32_t i = 0; i < numCps && off + 4 <= block->data.size(); ++i) {
+          for (int32_t i = 0; i < numCps && off + 4 <= block->size; ++i) {
             int32_t val = 0;
             for (int b = 0; b < 4; ++b)
-              val |= static_cast<int32_t>(block->data[off + b]) << (b * 8);
+              val |= static_cast<int32_t>(block->bytes()[off + b]) << (b * 8);
             indices[i] = val;
             off += 4;
           }
@@ -34334,10 +34326,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t off = 0;
         MemoryBlock *block = findMemoryBlockByAddress(valuesAddr, procId, &off);
         if (block && block->initialized) {
-          for (int32_t i = 0; i < numValues && off + 8 <= block->data.size(); ++i) {
+          for (int32_t i = 0; i < numValues && off + 8 <= block->size; ++i) {
             int64_t val = 0;
             for (int b = 0; b < 8; ++b)
-              val |= static_cast<int64_t>(block->data[off + b]) << (b * 8);
+              val |= static_cast<int64_t>(block->bytes()[off + b]) << (b * 8);
             values[i] = val;
             off += 8;
           }
@@ -34397,15 +34389,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *qBlock =
               findMemoryBlockByAddress(queueAddr, procId, &qOff);
           if (qBlock && qBlock->initialized &&
-              qOff + 16 <= qBlock->data.size()) {
+              qOff + 16 <= qBlock->size) {
             uint64_t dp = 0;
             int64_t ln = 0;
             for (int i = 0; i < 8; ++i)
-              dp |= static_cast<uint64_t>(qBlock->data[qOff + i])
+              dp |= static_cast<uint64_t>(qBlock->bytes()[qOff + i])
                     << (i * 8);
             for (int i = 0; i < 8; ++i)
               ln |= static_cast<int64_t>(
-                        qBlock->data[qOff + 8 + i])
+                        qBlock->bytes()[qOff + 8 + i])
                     << (i * 8);
             int64_t sliceLen = std::min(end, ln) - start;
             if (sliceLen > 0 && dp != 0 && dp >= 0x10000000000ULL) {
@@ -34504,18 +34496,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               // Read data pointer and length from queue struct
               // Layout: [ptr data @0, i64 len @8]
               uint64_t dataPtr = 0;
               int64_t queueLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 queueLen |= static_cast<int64_t>(
-                                queueBlock->data[queueOffset + 8 + i])
+                                queueBlock->bytes()[queueOffset + 8 + i])
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
@@ -34540,12 +34532,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   auto *dataBlock =
                       findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                   if (dataBlock && dataBlock->initialized &&
-                      dataBlock->data.size() > 0) {
+                      dataBlock->size > 0) {
                     int64_t availableSize = static_cast<int64_t>(
-                        dataBlock->data.size() - dataOffset);
+                        dataBlock->size - dataOffset);
                     int64_t elemSize = availableSize / queueLen;
                     if (elemSize > 0) {
-                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      uint8_t *base = dataBlock->bytes() + dataOffset;
                       // Copy elements into a sortable vector
                       std::vector<std::vector<uint8_t>> elements(queueLen);
                       for (int64_t i = 0; i < queueLen; ++i) {
@@ -34616,16 +34608,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               uint64_t dataPtr = 0;
               int64_t queueLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 queueLen |= static_cast<int64_t>(
-                                queueBlock->data[queueOffset + 8 + i])
+                                queueBlock->bytes()[queueOffset + 8 + i])
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
@@ -34644,12 +34636,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   auto *dataBlock =
                       findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                   if (dataBlock && dataBlock->initialized &&
-                      dataBlock->data.size() > 0) {
+                      dataBlock->size > 0) {
                     int64_t availableSize = static_cast<int64_t>(
-                        dataBlock->data.size() - dataOffset);
+                        dataBlock->size - dataOffset);
                     int64_t elemSize = availableSize / queueLen;
                     if (elemSize > 0) {
-                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      uint8_t *base = dataBlock->bytes() + dataOffset;
                       std::vector<std::vector<uint8_t>> elements(queueLen);
                       for (int64_t i = 0; i < queueLen; ++i) {
                         elements[i].assign(base + i * elemSize,
@@ -34732,16 +34724,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               uint64_t dataPtr = 0;
               int64_t queueLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 queueLen |= static_cast<int64_t>(
-                                queueBlock->data[queueOffset + 8 + i])
+                                queueBlock->bytes()[queueOffset + 8 + i])
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
@@ -34776,12 +34768,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   auto *dataBlock =
                       findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                   if (dataBlock && dataBlock->initialized &&
-                      dataBlock->data.size() > 0) {
+                      dataBlock->size > 0) {
                     int64_t availableSize = static_cast<int64_t>(
-                        dataBlock->data.size() - dataOffset);
+                        dataBlock->size - dataOffset);
                     int64_t elemSize = availableSize / queueLen;
                     if (elemSize > 0) {
-                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      uint8_t *base = dataBlock->bytes() + dataOffset;
                       // Fisher-Yates shuffle using per-process RNG for
                       // random stability (IEEE 1800-2017 §18.14).
                       auto &rng = processStates[procId].randomGenerator;
@@ -34845,16 +34837,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               uint64_t dataPtr = 0;
               int64_t queueLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 queueLen |= static_cast<int64_t>(
-                                queueBlock->data[queueOffset + 8 + i])
+                                queueBlock->bytes()[queueOffset + 8 + i])
                             << (i * 8);
 
               if (queueLen > 1 && dataPtr != 0) {
@@ -34873,12 +34865,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   auto *dataBlock =
                       findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                   if (dataBlock && dataBlock->initialized &&
-                      dataBlock->data.size() > 0) {
+                      dataBlock->size > 0) {
                     int64_t availableSize = static_cast<int64_t>(
-                        dataBlock->data.size() - dataOffset);
+                        dataBlock->size - dataOffset);
                     int64_t elemSize = availableSize / queueLen;
                     if (elemSize > 0) {
-                      uint8_t *base = dataBlock->data.data() + dataOffset;
+                      uint8_t *base = dataBlock->bytes() + dataOffset;
                       std::vector<uint8_t> temp(elemSize);
                       int64_t left = 0, right = queueLen - 1;
                       while (left < right) {
@@ -34924,9 +34916,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (qBlock) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
-            if (qOff + 16 <= qBlock->data.size()) {
-              std::memcpy(&dataPtr, qBlock->data.data() + qOff, 8);
-              std::memcpy(&queueLen, qBlock->data.data() + qOff + 8, 8);
+            if (qOff + 16 <= qBlock->size) {
+              std::memcpy(&dataPtr, qBlock->bytes() + qOff, 8);
+              std::memcpy(&queueLen, qBlock->bytes() + qOff + 8, 8);
             }
             if (dataPtr != 0 && queueLen > 0) {
               // Read element data
@@ -34959,14 +34951,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dOff);
                 if (dataBlock) {
-                  size_t available = dataBlock->data.size() - dOff;
+                  size_t available = dataBlock->size - dOff;
                   elemSize = (queueLen > 0)
                                  ? static_cast<int64_t>(available / queueLen)
                                  : 0;
                   if (elemSize > 0) {
                     elemData.resize(queueLen * elemSize);
                     std::memcpy(elemData.data(),
-                                dataBlock->data.data() + dOff,
+                                dataBlock->bytes() + dOff,
                                 queueLen * elemSize);
                   }
                 }
@@ -35047,16 +35039,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35072,7 +35064,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   // Build a temporary native queue from interpreter data
                   std::vector<uint8_t> tmpData(arrLen * elemSize);
                   std::memcpy(tmpData.data(), base, arrLen * elemSize);
@@ -35124,16 +35116,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35149,7 +35141,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   std::vector<uint8_t> tmpData(arrLen * elemSize);
                   std::memcpy(tmpData.data(), base, arrLen * elemSize);
                   MooreQueue tmpQ;
@@ -35196,16 +35188,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35221,7 +35213,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   std::vector<uint8_t> tmpData(arrLen * elemSize);
                   std::memcpy(tmpData.data(), base, arrLen * elemSize);
                   MooreQueue tmpQ;
@@ -35269,16 +35261,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35294,7 +35286,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   for (int64_t i = 0; i < arrLen; ++i) {
                     int64_t elem = 0;
                     int64_t bytesToRead =
@@ -35336,16 +35328,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35361,7 +35353,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   for (int64_t i = 0; i < arrLen; ++i) {
                     int64_t elem = 0;
                     int64_t bytesToRead =
@@ -35403,16 +35395,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35428,7 +35420,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   // Start with all-ones for AND
                   result = -1LL;
                   for (int64_t i = 0; i < arrLen; ++i) {
@@ -35472,16 +35464,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35497,7 +35489,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   for (int64_t i = 0; i < arrLen; ++i) {
                     int64_t elem = 0;
                     int64_t bytesToRead =
@@ -35539,16 +35531,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *queueBlock =
               findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
           if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->data.size()) {
+              queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t arrLen = 0;
             for (int i = 0; i < 8; ++i)
               dataPtr |= static_cast<uint64_t>(
-                             queueBlock->data[queueOffset + i])
+                             queueBlock->bytes()[queueOffset + i])
                          << (i * 8);
             for (int i = 0; i < 8; ++i)
               arrLen |= static_cast<int64_t>(
-                            queueBlock->data[queueOffset + 8 + i])
+                            queueBlock->bytes()[queueOffset + 8 + i])
                         << (i * 8);
             if (arrLen > 0 && dataPtr != 0) {
               auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35564,7 +35556,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 auto *dataBlock =
                     findMemoryBlockByAddress(dataPtr, procId, &dataOffset);
                 if (dataBlock && dataBlock->initialized) {
-                  uint8_t *base = dataBlock->data.data() + dataOffset;
+                  uint8_t *base = dataBlock->bytes() + dataOffset;
                   for (int64_t i = 0; i < arrLen; ++i) {
                     int64_t elem = 0;
                     int64_t bytesToRead =
@@ -35618,9 +35610,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (block && block->initialized) {
             uint64_t totalBytes =
                 static_cast<uint64_t>(numElems) * static_cast<uint64_t>(elemSize);
-            if (offset + totalBytes <= block->data.size()) {
-              arrCopy.assign(block->data.begin() + offset,
-                             block->data.begin() + offset + totalBytes);
+            if (offset + totalBytes <= block->size) {
+              arrCopy.assign(block->begin() + offset,
+                             block->begin() + offset + totalBytes);
               arrPtr = arrCopy.data();
             }
           }
@@ -35635,9 +35627,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
           if (block && block->initialized) {
             if (offset + static_cast<uint64_t>(elemSize) <=
-                block->data.size()) {
-              valueCopy.assign(block->data.begin() + offset,
-                               block->data.begin() + offset + elemSize);
+                block->size) {
+              valueCopy.assign(block->begin() + offset,
+                               block->begin() + offset + elemSize);
               valuePtr = valueCopy.data();
             }
           }
@@ -35683,9 +35675,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
           if (block && block->initialized &&
               offset + static_cast<uint64_t>(elemSize) <=
-                  block->data.size()) {
-            valueCopy.assign(block->data.begin() + offset,
-                             block->data.begin() + offset + elemSize);
+                  block->size) {
+            valueCopy.assign(block->begin() + offset,
+                             block->begin() + offset + elemSize);
             valuePtr = valueCopy.data();
           }
         }
@@ -35701,16 +35693,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               uint64_t dataPtr = 0;
               int64_t arrLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 arrLen |= static_cast<int64_t>(
-                              queueBlock->data[queueOffset + 8 + i])
+                              queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
               if (arrLen > 0 && dataPtr != 0) {
                 auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35729,7 +35721,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   if (dataBlock && dataBlock->initialized) {
                     std::vector<uint8_t> tmpData(arrLen * elemSize);
                     std::memcpy(tmpData.data(),
-                                dataBlock->data.data() + dataOffset,
+                                dataBlock->bytes() + dataOffset,
                                 arrLen * elemSize);
                     MooreQueue tmpQ;
                     tmpQ.data = tmpData.data();
@@ -35790,9 +35782,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
           if (block && block->initialized &&
               offset + static_cast<uint64_t>(elemSize) <=
-                  block->data.size()) {
-            valueCopy.assign(block->data.begin() + offset,
-                             block->data.begin() + offset + elemSize);
+                  block->size) {
+            valueCopy.assign(block->begin() + offset,
+                             block->begin() + offset + elemSize);
             valuePtr = valueCopy.data();
           }
         }
@@ -35807,16 +35799,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               uint64_t dataPtr = 0;
               int64_t arrLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 arrLen |= static_cast<int64_t>(
-                              queueBlock->data[queueOffset + 8 + i])
+                              queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
               if (arrLen > 0 && dataPtr != 0) {
                 auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35836,7 +35828,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   if (dataBlock && dataBlock->initialized) {
                     std::vector<uint8_t> tmpData(arrLen * elemSize);
                     std::memcpy(tmpData.data(),
-                                dataBlock->data.data() + dataOffset,
+                                dataBlock->bytes() + dataOffset,
                                 arrLen * elemSize);
                     MooreQueue tmpQ;
                     tmpQ.data = tmpData.data();
@@ -35903,9 +35895,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           auto *block = findMemoryBlockByAddress(valueAddr, procId, &offset);
           if (block && block->initialized &&
               offset + static_cast<uint64_t>(fieldSize) <=
-                  block->data.size()) {
-            valueCopy.assign(block->data.begin() + offset,
-                             block->data.begin() + offset + fieldSize);
+                  block->size) {
+            valueCopy.assign(block->begin() + offset,
+                             block->begin() + offset + fieldSize);
             valuePtr = valueCopy.data();
           }
         }
@@ -35921,16 +35913,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *queueBlock =
                 findMemoryBlockByAddress(arrayAddr, procId, &queueOffset);
             if (queueBlock && queueBlock->initialized &&
-                queueOffset + 16 <= queueBlock->data.size()) {
+                queueOffset + 16 <= queueBlock->size) {
               uint64_t dataPtr = 0;
               int64_t arrLen = 0;
               for (int i = 0; i < 8; ++i)
                 dataPtr |= static_cast<uint64_t>(
-                               queueBlock->data[queueOffset + i])
+                               queueBlock->bytes()[queueOffset + i])
                            << (i * 8);
               for (int i = 0; i < 8; ++i)
                 arrLen |= static_cast<int64_t>(
-                              queueBlock->data[queueOffset + 8 + i])
+                              queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
               if (arrLen > 0 && dataPtr != 0) {
                 auto nmIt = nativeMemoryBlocks.find(dataPtr);
@@ -35950,7 +35942,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   if (dataBlock && dataBlock->initialized) {
                     std::vector<uint8_t> tmpData(arrLen * elemSize);
                     std::memcpy(tmpData.data(),
-                                dataBlock->data.data() + dataOffset,
+                                dataBlock->bytes() + dataOffset,
                                 arrLen * elemSize);
                     MooreQueue tmpQ;
                     tmpQ.data = tmpData.data();
@@ -36064,7 +36056,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               findMemoryBlockByAddress(arrayAddr, procId, &offset);
           if (block && block->initialized) {
             result = __moore_constraint_unique_check(
-                block->data.data() + offset, numElements, elementSize);
+                block->bytes() + offset, numElements, elementSize);
           }
         }
       }
@@ -36096,7 +36088,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               findMemoryBlockByAddress(valuesAddr, procId, &offset);
           if (block && block->initialized) {
             result = __moore_constraint_unique_scalars(
-                block->data.data() + offset, numValues, valueSize);
+                block->bytes() + offset, numValues, valueSize);
           }
         }
       }
@@ -36265,9 +36257,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
         if (addr > 0) {
           uint64_t offset = 0;
           auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-          if (block && block->initialized && offset + 4 <= block->data.size()) {
+          if (block && block->initialized && offset + 4 <= block->size) {
             for (int i = 0; i < 4; ++i)
-              block->data[offset + i] =
+              block->bytes()[offset + i] =
                   static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
           }
         }
@@ -36277,9 +36269,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
       if (addr > 0) {
         uint64_t offset = 0;
         auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-        if (block && block->initialized && offset + 4 <= block->data.size()) {
+        if (block && block->initialized && offset + 4 <= block->size) {
           for (int i = 0; i < 4; ++i)
-            block->data[offset + i] =
+            block->bytes()[offset + i] =
                 static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
         }
       }
@@ -36557,9 +36549,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
               unsigned innerBytes = (innerBits + 7) / 8;
               for (unsigned i = 0;
                    i < std::min(innerBytes,
-                                (unsigned)(block->data.size() - offset));
+                                (unsigned)(block->size - offset));
                    ++i)
-                block->data[offset + i] =
+                block->bytes()[offset + i] =
                     (i < 8) ? static_cast<uint8_t>(
                                   (readValue >> (i * 8)) & 0xFF)
                             : 0;
@@ -36616,9 +36608,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
               unsigned innerBytes = (innerBits + 7) / 8;
               for (unsigned i = 0;
                    i < std::min(innerBytes,
-                                (unsigned)(block->data.size() - offset));
+                                (unsigned)(block->size - offset));
                    ++i)
-                block->data[offset + i] =
+                block->bytes()[offset + i] =
                     (i < 8) ? static_cast<uint8_t>(
                                   (readValue >> (i * 8)) & 0xFF)
                             : 0;
@@ -36687,9 +36679,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
         if (addr > 0) {
           uint64_t offset = 0;
           auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-          if (block && block->initialized && offset + 4 <= block->data.size()) {
+          if (block && block->initialized && offset + 4 <= block->size) {
             for (int i = 0; i < 4; ++i)
-              block->data[offset + i] =
+              block->bytes()[offset + i] =
                   static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
           }
         }
@@ -36699,9 +36691,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
       if (addr > 0) {
         uint64_t offset = 0;
         auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-        if (block && block->initialized && offset + 4 <= block->data.size()) {
+        if (block && block->initialized && offset + 4 <= block->size) {
           for (int i = 0; i < 4; ++i)
-            block->data[offset + i] =
+            block->bytes()[offset + i] =
                 static_cast<uint8_t>((value >> (i * 8)) & 0xFF);
         }
       }
@@ -36965,9 +36957,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
               unsigned innerBytes = (innerBits + 7) / 8;
               for (unsigned i = 0;
                    i < std::min(innerBytes,
-                                (unsigned)(block->data.size() - offset));
+                                (unsigned)(block->size - offset));
                    ++i)
-                block->data[offset + i] =
+                block->bytes()[offset + i] =
                     (i < 8) ? static_cast<uint8_t>(
                                   (readValue >> (i * 8)) & 0xFF)
                             : 0;
@@ -37021,9 +37013,9 @@ LogicalResult LLHDProcessInterpreter::interceptDPIFunc(
               unsigned innerBytes = (innerBits + 7) / 8;
               for (unsigned i = 0;
                    i < std::min(innerBytes,
-                                (unsigned)(block->data.size() - offset));
+                                (unsigned)(block->size - offset));
                    ++i)
-                block->data[offset + i] =
+                block->bytes()[offset + i] =
                     (i < 8) ? static_cast<uint8_t>(
                                   (readValue >> (i * 8)) & 0xFF)
                             : 0;

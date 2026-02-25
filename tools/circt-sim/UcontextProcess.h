@@ -32,9 +32,13 @@
 namespace circt {
 namespace sim {
 
-/// Default stack size for compiled process coroutines (32 KB).
+/// Default stack size for compiled process coroutines (2 MB).
+/// 32 KB was too small — deep UVM call chains (virtual sequence nesting,
+/// phase callbacks, config_db lookups) overflow at ~50 frames.
+/// 2 MB matches commercial simulators and is safe: process count is typically
+/// <1000, so worst case is ~2 GB, and only touched pages are resident.
 /// Override at runtime with CIRCT_SIM_STACK_SIZE environment variable.
-constexpr size_t kProcessStackSize = 1 << 15; // 32 KB
+constexpr size_t kProcessStackSize = 1 << 21; // 2 MB
 
 /// Get the effective default stack size, respecting CIRCT_SIM_STACK_SIZE.
 size_t getDefaultProcessStackSize();
