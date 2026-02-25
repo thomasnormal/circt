@@ -49,6 +49,14 @@ if(EMSCRIPTEN AND CIRCT_VERILOG_WASM_ALLOW_MEMORY_GROWTH)
   target_link_options(circt-verilog PRIVATE "SHELL:-sALLOW_MEMORY_GROWTH=1")
 endif()
 
+option(CIRCT_VERILOG_WASM_ASSERTIONS
+  "Enable Emscripten runtime assertions (-sASSERTIONS=2) for circt-verilog"
+  OFF
+)
+if(EMSCRIPTEN AND CIRCT_VERILOG_WASM_ASSERTIONS)
+  target_link_options(circt-verilog PRIVATE "SHELL:-sASSERTIONS=2")
+endif()
+
 set(CIRCT_VERILOG_WASM_STACK_SIZE "33554432" CACHE STRING
   "Emscripten wasm stack size in bytes (-sSTACK_SIZE=...) for circt-verilog"
 )

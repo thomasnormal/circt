@@ -647,9 +647,28 @@ if (CMAKE_CROSSCOMPILING AND LLVM_USE_HOST_TOOLS AND NOT LLVM_NATIVE_TOOL_DIR)
     list(APPEND circt_native_extra_args
       -DLLVM_DIR=${LLVM_NATIVE_BUILD}/lib/cmake/llvm
       -DMLIR_DIR=${LLVM_NATIVE_BUILD}/lib/cmake/mlir)
+
+    # The CIRCT NATIVE cmake links circt-tblgen against libMLIRTableGen.a from
+    # the LLVM NATIVE build, but the LLVM NATIVE build only compiles
+    # llvm-min-tblgen by default.  Add an explicit step to build MLIRTableGen
+    # natively before the CIRCT NATIVE cmake runs, so the library exists when
+    # circt-tblgen links against it.
+    set(_circt_native_mlir_tg "${LLVM_NATIVE_BUILD}/lib/libMLIRTableGen.a")
+    add_custom_command(OUTPUT "${_circt_native_mlir_tg}"
+      COMMAND ${CMAKE_COMMAND} --build "${LLVM_NATIVE_BUILD}"
+              --target MLIRTableGen
+      DEPENDS CONFIGURE_LLVM_NATIVE
+      COMMENT "Building native MLIRTableGen (required by CIRCT NATIVE)..."
+      USES_TERMINAL
+      VERBATIM)
+    add_custom_target(CIRCT_PREREQ_MLIRTableGen
+      DEPENDS "${_circt_native_mlir_tg}")
   endif()
   llvm_create_cross_target(${PROJECT_NAME} NATIVE "" Release
     ${circt_native_extra_args})
+  if (DEFINED LLVM_NATIVE_BUILD AND NOT "${LLVM_NATIVE_BUILD}" STREQUAL "")
+    add_dependencies(CONFIGURE_${PROJECT_NAME}_NATIVE CIRCT_PREREQ_MLIRTableGen)
+  endif()
 endif()
 
 # Add circt-tblgen early, since it sets a few variables needed by other parts of

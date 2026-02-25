@@ -2009,3 +2009,40 @@
   - harness itself is now suitable as a stability gate for healthy artifacts;
     malformed-attribute abort remains environment/artifact dependent and is not
     currently reproducible on this workspace default wasm artifact.
+
+## 2026-02-24 (follow-up: wasm `circt-sim` UVM init OOB fix via stack contract)
+- Gap identified (repro-first):
+  - Node wasm UVM flow could compile full `uvm_pkg` but `circt-sim.wasm`
+    trapped during initialization with:
+    - `RuntimeError: memory access out of bounds`
+  - failure occurred before simulation completed and blocked tutorial UVM runs.
+- Fixes:
+  - added wasm stack/memory knobs to `circt-sim`:
+    - `CIRCT_SIM_WASM_STACK_SIZE` (default `33554432`)
+    - `CIRCT_SIM_WASM_ALLOW_MEMORY_GROWTH` (default `ON`)
+    - wired to link flags `-sSTACK_SIZE=...` and `-sALLOW_MEMORY_GROWTH=1`.
+  - extended `utils/configure_wasm_build.sh` with:
+    - env passthrough + validation for both new knobs.
+  - extended `utils/wasm_configure_contract_check.sh` with:
+    - command-token and invalid-override checks for both new knobs.
+  - added UVM sim regression helper:
+    - `utils/wasm_uvm_pkg_sim_check.sh`
+    - compiles a minimal full-`uvm_pkg` sample with `circt-verilog.wasm`,
+      runs `circt-sim.wasm --mode interpret --max-time=... --vcd`,
+      and fails on wasm runtime abort signatures.
+  - hardened `utils/wasm_uvm_pkg_memfs_reentry_check.sh` for Node raw-fs
+    artifacts:
+    - switched helper payload loading to host-path re-entry mode (same-instance
+      `callMain`), avoiding MEMFS writes that fail when `-sNODERAWFS=1` is
+      enabled.
+  - wired helper into `utils/run_wasm_smoke.sh` and
+    `utils/wasm_smoke_contract_check.sh`.
+- Validation:
+  - `utils/wasm_configure_contract_check.sh`: PASS.
+  - `cmake -S llvm/llvm -B build-wasm -DCIRCT_SIM_WASM_ALLOW_MEMORY_GROWTH=ON -DCIRCT_SIM_WASM_STACK_SIZE=33554432`: PASS.
+  - `ninja -C build-wasm -j4 circt-sim`: PASS.
+  - fresh Node wasm UVM compile+sim:
+    - `circt-verilog.js` rc=0, output MLIR generated (~25MB).
+    - `circt-sim.js --mode interpret --max-time=1000000` rc=0.
+    - stdout includes `UVM_INFO ... [RNTST] Running test my_test...`.
+    - VCD generated with `$enddefinitions`.
