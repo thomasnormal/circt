@@ -536,7 +536,77 @@ static Value reconstructFromFlatPacked(OpBuilder &builder, Location loc,
     return hw::ArrayCreateOp::create(builder, loc, arrayType, elems);
   }
 
+  // hw::UnionType: reconstruct one field view and bitcast to union storage.
+  if (auto unionType = dyn_cast<hw::UnionType>(targetType)) {
+    auto elements = unionType.getElements();
+    if (elements.empty())
+      return Value();
+    Value firstField = reconstructFromFlatPacked(builder, loc, valueBits,
+                                                 unknownBits, elements[0].type);
+    if (!firstField)
+      return Value();
+    return hw::BitcastOp::create(builder, loc, unionType, firstField);
+  }
+
   return Value();
+}
+
+/// Recursively flatten a structured value into packed value+unknown integers.
+/// Two-state leaves contribute unknown=0 bits; four-state leaves contribute
+/// their native value/unknown pair.
+static bool flattenToFlatPacked(OpBuilder &builder, Location loc, Value input,
+                                Value &valueBits, Value &unknownBits) {
+  auto concatIfNeeded = [&](SmallVectorImpl<Value> &parts) -> Value {
+    if (parts.size() == 1)
+      return parts.front();
+    return comb::ConcatOp::create(builder, loc, ValueRange(parts));
+  };
+
+  Type type = input.getType();
+  if (auto intType = dyn_cast<IntegerType>(type)) {
+    valueBits = input;
+    unknownBits = hw::ConstantOp::create(builder, loc, intType, 0);
+    return true;
+  }
+
+  if (isFourStateStructType(type)) {
+    valueBits = extractFourStateValue(builder, loc, input);
+    unknownBits = extractFourStateUnknown(builder, loc, input);
+    return true;
+  }
+
+  if (auto structType = dyn_cast<hw::StructType>(type)) {
+    SmallVector<Value> values;
+    SmallVector<Value> unknowns;
+    values.reserve(structType.getElements().size());
+    unknowns.reserve(structType.getElements().size());
+    for (auto &field : structType.getElements()) {
+      Value fieldValue =
+          hw::StructExtractOp::create(builder, loc, input, field.name);
+      Value fv;
+      Value fu;
+      if (!flattenToFlatPacked(builder, loc, fieldValue, fv, fu))
+        return false;
+      values.push_back(fv);
+      unknowns.push_back(fu);
+    }
+    if (values.empty())
+      return false;
+    valueBits = concatIfNeeded(values);
+    unknownBits = concatIfNeeded(unknowns);
+    return true;
+  }
+
+  if (auto unionType = dyn_cast<hw::UnionType>(type)) {
+    auto elements = unionType.getElements();
+    if (elements.empty())
+      return false;
+    Value asField =
+        hw::BitcastOp::create(builder, loc, elements[0].type, input);
+    return flattenToFlatPacked(builder, loc, asField, valueBits, unknownBits);
+  }
+
+  return false;
 }
 
 /// Mask value bits to X for any unknown bits (used for logic/arithmetic ops).
@@ -1701,15 +1771,17 @@ static Value buildUnknownDynExtractConsensus(OpBuilder &builder, Location loc,
   return createFourStateStruct(builder, loc, value, unknown);
 }
 
-/// Convert a Moore type to its packed representation (plain integers for
-/// 4-state types). This is used for packed unions where all members share
-/// the same bit storage and we cannot expand 4-state types.
+/// Convert a Moore type to its packed representation for packed unions.
+/// Four-state leaves become `{value, unknown}` structs so union members keep
+/// the same physical storage shape as other lowered four-state values.
 static Type convertTypeToPacked(const TypeConverter &typeConverter,
                                 Type mooreType) {
   MLIRContext *ctx = mooreType.getContext();
 
-  // For IntType, always return plain integer regardless of domain
+  // For IntType, preserve four-state storage width when needed.
   if (auto intType = dyn_cast<IntType>(mooreType)) {
+    if (intType.getDomain() == Domain::FourValued)
+      return getFourStateStructType(ctx, intType.getWidth());
     return IntegerType::get(ctx, intType.getWidth());
   }
 
@@ -11689,16 +11761,6 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
       return success();
     }
 
-    // Handle 4-state struct to union bitcast.
-    // When the source is a 4-state struct and destination is a union with
-    // 4-state members, we need to extract the value component first to avoid
-    // bitwidth mismatch (the union has double bitwidth due to 4-state members).
-    if (isFourStateStructType(inputType) && isa<hw::UnionType>(type)) {
-      Value valueComponent = extractFourStateValue(rewriter, op.getLoc(), input);
-      rewriter.replaceOpWithNewOp<hw::BitcastOp>(op, type, valueComponent);
-      return success();
-    }
-
     // Handle FourStateStruct → mixed 2/4-state structured type.
     // When the target has 2-state leaf fields (plain IntegerType) alongside
     // 4-state fields (FourStateStruct), a flat hw.bitcast fails because
@@ -11718,6 +11780,25 @@ struct BitcastConversion : public OpConversionPattern<SourceOp> {
           rewriter.replaceOp(op, result);
           return success();
         }
+      }
+    }
+
+    // Handle mixed 2/4-state structured input → FourStateStruct.
+    // Flatten the source into packed value+unknown vectors, then wrap.
+    if (!isFourStateStructType(inputType) && isFourStateStructType(type)) {
+      Value valueBits;
+      Value unknownBits;
+      if (flattenToFlatPacked(rewriter, op.getLoc(), input, valueBits,
+                              unknownBits)) {
+        auto resultStructType = cast<hw::StructType>(type);
+        auto valueType = cast<IntegerType>(resultStructType.getElements()[0].type);
+        unsigned width = valueType.getWidth();
+        valueBits = adjustIntegerWidth(rewriter, valueBits, width, op.getLoc());
+        unknownBits =
+            adjustIntegerWidth(rewriter, unknownBits, width, op.getLoc());
+        rewriter.replaceOp(
+            op, createFourStateStruct(rewriter, op.getLoc(), valueBits, unknownBits));
+        return success();
       }
     }
 
