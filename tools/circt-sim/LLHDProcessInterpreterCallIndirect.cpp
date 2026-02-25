@@ -651,6 +651,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 for (unsigned i = 0; i < numArgs; ++i)
                   a[i] = args[i].getUInt64();
 
+                // Skip native dispatch if any arg is a fake interpreter address.
+                for (unsigned i = 0; i < numArgs; ++i)
+                  if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
+                    eligible = false; break;
+                  }
+                if (eligible) {
+
                 uint64_t result = 0;
                 using F0 = uint64_t (*)();
                 using F1 = uint64_t (*)(uint64_t);
@@ -689,6 +696,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 ++nativeEntryCallCount;
                 resolved = true;
                 break;
+                } // eligible (no fake addr)
               }
             }
           }
@@ -1414,6 +1422,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 for (unsigned i = 0; i < numArgs; ++i)
                   a[i] = sArgs[i].getUInt64();
 
+                // Skip native dispatch if any arg is a fake interpreter address.
+                for (unsigned i = 0; i < numArgs; ++i)
+                  if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
+                    eligible = false; break;
+                  }
+                if (eligible) {
+
                 uint64_t result = 0;
                 using F0 = uint64_t (*)();
                 using F1 = uint64_t (*)(uint64_t);
@@ -1452,6 +1467,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 ++nativeEntryCallCount;
                 staticResolved = true;
                 break;
+                } // eligible (no fake addr)
               }
             }
           }
@@ -1759,6 +1775,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             for (unsigned i = 0; i < numArgs; ++i)
               a[i] = fastArgs[i].getUInt64();
 
+            // Skip native dispatch if any arg is a fake interpreter address.
+            for (unsigned i = 0; i < numArgs; ++i)
+              if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
+                eligible = false; break;
+              }
+            if (eligible) {
+
             void *fptr = entry.cachedEntryPtr;
             uint64_t result = 0;
             using F0 = uint64_t (*)();
@@ -1799,6 +1822,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
             ++nativeEntryCallCount;
             return success();
+            } // eligible (no fake addr)
           }
         }
         // Fall through to interpretFuncBody for non-native-eligible calls.
@@ -3725,6 +3749,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             for (unsigned i = 0; i < numArgs; ++i)
               a[i] = args[i].getUInt64();
 
+            // Skip native dispatch if any arg is a fake interpreter address.
+            for (unsigned i = 0; i < numArgs; ++i)
+              if (a[i] >= 0x100000ULL && a[i] < globalNextAddress) {
+                eligible = false; break;
+              }
+            if (eligible) {
+
             uint64_t result = 0;
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
@@ -3771,6 +3802,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
             ++nativeEntryCallCount;
             return success();
+            } // eligible (no fake addr)
           }
         }
       }

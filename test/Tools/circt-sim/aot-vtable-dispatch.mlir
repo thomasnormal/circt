@@ -18,7 +18,7 @@
 // SIM: add42(5) = 47
 // SIM: mul100(3) = 300
 //
-// COMPILED: Loaded 2 compiled functions: 2 native-eligible, 0 intercepted
+// COMPILED: Loaded 2 compiled functions: 2 native-dispatched, 0 excluded (call_indirect), 0 intercepted
 // COMPILED: add42(5) = 47
 // COMPILED: mul100(3) = 300
 

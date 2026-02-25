@@ -19960,6 +19960,32 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       setValue(procId, callOp.getResult(0), cachedIt->second);
       return success();
     }
+    // Many AVIP class get_type_name bodies are semantically constant but can
+    // recurse through dynamic factory/type checks before returning. For
+    // non-uvm_pkg classes, synthesize the canonical class name directly.
+    if (!calleeName.starts_with("uvm_pkg::")) {
+      std::string typeName = calleeName.str();
+      size_t suffixPos = typeName.rfind("::get_type_name");
+      if (suffixPos != std::string::npos)
+        typeName.resize(suffixPos);
+      if (!typeName.empty()) {
+        if (typeName.size() > 4096)
+          typeName.resize(4096);
+        interpreterStrings.push_back(typeName);
+        const std::string &stored = interpreterStrings.back();
+        uint64_t ptrVal = reinterpret_cast<uint64_t>(stored.data());
+        uint64_t lenVal = static_cast<uint64_t>(stored.size());
+        dynamicStrings[static_cast<int64_t>(ptrVal)] = {
+            stored.data(), static_cast<int64_t>(lenVal)};
+        APInt packed(128, 0);
+        safeInsertBits(packed, APInt(64, ptrVal), 0);
+        safeInsertBits(packed, APInt(64, lenVal), 64);
+        InterpretedValue packedVal(packed);
+        cachedTypeNameByCallee[calleeName] = packedVal;
+        setValue(procId, callOp.getResult(0), packedVal);
+        return success();
+      }
+    }
   }
 
   static bool traceI3CConfigHandles = []() {
@@ -22662,6 +22688,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           if (resWidth > 64)
             canDispatch = false;
         }
+        // Check if any pointer argument is a fake interpreter address —
+        // compiled code cannot dereference these (they only exist in mallocBlocks).
+        if (canDispatch) {
+          for (unsigned i = 0; i < numArgs; ++i) {
+            uint64_t v = a[i];
+            if (v >= 0x100000 && v < globalNextAddress) {
+              canDispatch = false;
+              break;
+            }
+          }
+        }
         if (canDispatch) {
           ++nativeFuncCallCount;
           ++state.callDepth;
@@ -22890,6 +22927,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
         if (resWidth > 64)
           canDispatch = false;
+      }
+      // Check if any pointer argument is a fake interpreter address —
+      // compiled code cannot dereference these (they only exist in mallocBlocks).
+      if (canDispatch) {
+        for (unsigned i = 0; i < numArgs; ++i) {
+          uint64_t v = a[i];
+          if (v >= 0x100000 && v < globalNextAddress) {
+            canDispatch = false;
+            break;
+          }
+        }
       }
       if (canDispatch) {
         ++nativeFuncCallCount;
@@ -23310,7 +23358,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           // can legitimately interact via sync/end waits while peers are still
           // running. Gating them at execute_phase entry can deadlock those waits
           // and stall UVM startup traffic.
-          if (myOrder >= 4) {
+          // Do not gate run_phase (order=4) behind start_of_simulation.
+          // UVM allows run startup to overlap with late phase housekeeping,
+          // and forcing strict predecessor completion here can deadlock
+          // wait_for_state chains before any run-phase objections are raised.
+          if (myOrder >= 5) {
             uint64_t predImpAddr =
                 (static_cast<size_t>(myOrder - 1) < functionPhaseImpSequence.size())
                     ? functionPhaseImpSequence[myOrder - 1]
