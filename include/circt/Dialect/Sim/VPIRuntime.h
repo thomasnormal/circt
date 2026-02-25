@@ -687,6 +687,11 @@ public:
   /// Get the singleton instance.
   static VPIRuntime &getInstance();
 
+  /// Reset runtime state between same-instance simulator invocations.
+  /// Keeps API function pointers stable while clearing per-run objects and
+  /// callbacks to avoid wasm callMain re-entry leakage.
+  void resetForNewSimulationRun();
+
   /// Convert an object ID to a VPI handle (void*).
   /// Allocates storage in an internal arena.
   static vpiHandle makeHandle(uint32_t id);
