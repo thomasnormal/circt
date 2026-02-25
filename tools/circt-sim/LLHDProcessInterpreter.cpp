@@ -952,15 +952,17 @@ bool LLHDProcessInterpreter::wakeOneUvmSequencerGetWaiter(uint64_t queueAddr) {
     auto &state = stateIt->second;
     if (state.halted)
       continue;
-    if (state.waiting) {
-      state.waiting = false;
-      if (waiter.retryOp)
-        state.sequencerGetRetryCallOp = waiter.retryOp;
-      scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
-      if (bucket.empty())
-        sequencerGetWaitersByQueue.erase(bucketIt);
-      return true;
-    }
+    bool shouldWake = state.waiting || state.sequencerGetRetryCallOp ||
+                      !state.callStack.empty();
+    if (!shouldWake)
+      continue;
+    state.waiting = false;
+    if (waiter.retryOp)
+      state.sequencerGetRetryCallOp = waiter.retryOp;
+    scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
+    if (bucket.empty())
+      sequencerGetWaitersByQueue.erase(bucketIt);
+    return true;
   }
 
   sequencerGetWaitersByQueue.erase(bucketIt);
@@ -10986,6 +10988,67 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
   }
 }
 
+bool LLHDProcessInterpreter::scheduleStrandedCallStackProcessesOnce(
+    const SimTime &now) {
+  constexpr uint16_t kMaxRescuesPerTimestamp = 8;
+  static bool traceStrandedRescue = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_STRANDED_RESCUE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  bool scheduledAny = false;
+  processStates.forEachUntil(
+      [&](ProcessId procId, ProcessExecutionState &state) -> bool {
+        if (state.halted || state.waiting || state.callStack.empty()) {
+          strandedCallStackRescueStamp.erase(procId);
+          return false;
+        }
+
+        auto &stamp = strandedCallStackRescueStamp[procId];
+        bool sameTimestamp =
+            stamp.timeFs == now.realTime && stamp.delta == now.deltaStep;
+        if (!sameTimestamp) {
+          stamp.timeFs = now.realTime;
+          stamp.delta = now.deltaStep;
+          stamp.attempts = 0;
+        } else if (stamp.attempts >= kMaxRescuesPerTimestamp) {
+          if (traceStrandedRescue) {
+            llvm::errs() << "[STRANDED-RESCUE] skip-cap proc=" << procId
+                         << " t=" << now.realTime << " d=" << now.deltaStep
+                         << " attempts=" << stamp.attempts << "\n";
+          }
+          return false;
+        }
+
+        if (Process *proc = scheduler.getProcess(procId)) {
+          // Heal inconsistent scheduler metadata: a process may end up marked
+          // as "in ready queue" even though its state is suspended/waiting.
+          // In that case scheduleProcess would silently no-op.
+          if (proc->inReadyQueue && proc->getState() != ProcessState::Ready &&
+              proc->getState() != ProcessState::Running)
+            proc->inReadyQueue = false;
+          if (traceStrandedRescue) {
+            llvm::errs() << "[STRANDED-RESCUE] schedule proc=" << procId
+                         << " t=" << now.realTime << " d=" << now.deltaStep
+                         << " waiting=" << state.waiting
+                         << " callStack=" << state.callStack.size()
+                         << " schedState="
+                         << getProcessStateName(proc->getState())
+                         << " inReady=" << proc->inReadyQueue << "\n";
+          }
+        } else if (traceStrandedRescue) {
+          llvm::errs() << "[STRANDED-RESCUE] missing-proc proc=" << procId
+                       << " t=" << now.realTime << " d=" << now.deltaStep
+                       << "\n";
+        }
+
+        ++stamp.attempts;
+        scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+        scheduledAny = true;
+        return false;
+      });
+  return scheduledAny;
+}
+
 size_t
 LLHDProcessInterpreter::getEffectiveMaxProcessSteps(ProcessId procId) const {
   if (maxProcessSteps == 0)
@@ -11010,14 +11073,47 @@ LLHDProcessInterpreter::getEffectiveMaxProcessSteps(ProcessId procId) const {
 }
 
 void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
+  static int64_t traceProcId = []() -> int64_t {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_PROC");
+    if (!env || env[0] == '\0')
+      return -1;
+    char *end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 10);
+    if (end == env)
+      return -1;
+    return static_cast<int64_t>(parsed);
+  }();
+  static uint64_t traceProcCount = 0;
+  auto shouldTraceProc = [&](ProcessId id) -> bool {
+    if (traceProcId < 0 || id != static_cast<ProcessId>(traceProcId))
+      return false;
+    if (traceProcCount >= 2000)
+      return false;
+    ++traceProcCount;
+    return true;
+  };
+
   auto it = processStates.find(procId);
   if (it == processStates.end()) {
     LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Unknown process ID "
                             << procId << "\n");
+    if (shouldTraceProc(procId))
+      llvm::errs() << "[TRACE-PROC] proc=" << procId
+                   << " missing-state\n";
     return;
   }
 
   ProcessExecutionState &state = it->second;
+  if (shouldTraceProc(procId)) {
+    llvm::errs() << "[TRACE-PROC] enter proc=" << procId
+                 << " waiting=" << state.waiting
+                 << " halted=" << state.halted
+                 << " callStack=" << state.callStack.size()
+                 << " destBlock=" << (state.destBlock ? 1 : 0)
+                 << " waitRestart=" << (state.waitConditionRestartBlock ? 1 : 0)
+                 << " seqRetry=" << (state.sequencerGetRetryCallOp ? 1 : 0)
+                 << "\n";
+  }
   ++interpreterProcessInvocations;
 
   // Honor global termination/abort requests before dispatching any fast path.
@@ -11027,12 +11123,18 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   bool isTempProcess = procId >= kTempProcessIdBase;
   if (!isTempProcess) {
     if (isAbortRequested()) {
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " abort-requested finalize\n";
       finalizeProcess(procId, /*killed=*/false);
       if (abortCallback)
         abortCallback();
       return;
     }
     if (terminationRequested && !inGlobalInit) {
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " termination-requested finalize\n";
       finalizeProcess(procId, /*killed=*/false);
       return;
     }
@@ -11050,8 +11152,15 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   // Direct fast paths for known hot process loop shapes. These execute
   // without compile-budgeted thunk installation and avoid repeated
   // compile-mode missing-thunk deopts for common AVIP clock loops.
-  if (tryExecuteDirectProcessFastPath(procId, state))
+  if (tryExecuteDirectProcessFastPath(procId, state)) {
+    // Direct fast paths return before the generic post-activation invariant
+    // recovery below. Keep unresolved call-stack / sequencer-retry processes
+    // runnable so phase/sequencer wait chains cannot stall permanently.
+    if (!state.halted && !state.waiting &&
+        (!state.callStack.empty() || state.sequencerGetRetryCallOp))
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
     return;
+  }
 
   // Compile-mode entry hook: try native process thunk first, then attempt
   // on-demand install for currently supported trivial process shapes.
@@ -11081,6 +11190,10 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   ProcessExecutionState *savedActiveProcessState = activeProcessState;
   activeProcessId = procId;
   activeProcessState = &state;
+  auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
+    activeProcessId = savedActiveProcessId;
+    activeProcessState = savedActiveProcessState;
+  });
 
   // Check if this process is waiting on a memory event.
   // If so, check if the memory value has changed before proceeding.
@@ -11135,13 +11248,20 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       }
 
       if (currentValue == waiter.lastValue) {
-        // Value hasn't changed - keep waiting
-        // Don't re-schedule - process will be checked when memory is written
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  Memory event: value unchanged at 0x"
-                   << llvm::format_hex(addr, 16) << " (value=" << currentValue
-                   << "), process " << procId << " remains waiting\n");
-        return;
+        // Timed wait(condition) polls intentionally schedule a process even when
+        // the watched load is unchanged. In that path, keep executing so the
+        // wait-condition logic can re-arm polling and re-evaluate dependencies.
+        bool timedWaitConditionPollWake =
+            state.waitConditionRestartBlock && !state.waiting;
+        if (!timedWaitConditionPollWake) {
+          // Value hasn't changed - keep waiting.
+          // Don't re-schedule - process will be checked when memory is written.
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Memory event: value unchanged at 0x"
+                     << llvm::format_hex(addr, 16) << " (value=" << currentValue
+                     << "), process " << procId << " remains waiting\n");
+          return;
+        }
       }
 
       bool shouldWake = false;
@@ -11258,18 +11378,50 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  Process triggered while waiting on wait(condition) - "
                     "ignoring spurious trigger, will resume via poll callback\n");
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " early-return waitConditionRestartBlock\n";
       return;
     }
     if (executePhaseMonitorPollPhase.count(procId)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  Process triggered while waiting on execute_phase "
                     "monitor poll - ignoring spurious trigger\n");
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " early-return executePhaseMonitorPoll\n";
       return;
     }
     if (objectionWaitHandleByProc.count(procId)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  Process triggered while waiting on objection-zero "
                     "waiter - ignoring spurious trigger\n");
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " early-return objectionWaiter\n";
+      return;
+    }
+    if (!state.callStack.empty()) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Process triggered while waiting with active call stack "
+                    "- ignoring spurious trigger\n");
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " early-return waiting+callStack\n";
+      return;
+    }
+    bool isPhaseHopperWaiter = llvm::any_of(
+        phaseHopperWaiters, [&](const auto &entry) {
+          return llvm::is_contained(entry.second, procId);
+        });
+    if (state.sequencerGetRetryCallOp ||
+        sequencerGetWaitQueueByProc.count(procId) || isPhaseHopperWaiter) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Process triggered while waiting on sequencer/phase "
+                    "queue data - ignoring spurious trigger\n");
+      if (shouldTraceProc(procId))
+        llvm::errs() << "[TRACE-PROC] proc=" << procId
+                     << " early-return queueWait\n";
       return;
     }
     //
@@ -11374,9 +11526,17 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
 
   CallStackResumeResult callStackResume =
       resumeSavedCallStackFrames(procId, state);
-  if (callStackResume == CallStackResumeResult::Failed ||
-      callStackResume == CallStackResumeResult::Suspended)
+  if (callStackResume == CallStackResumeResult::Failed)
     return;
+  if (callStackResume == CallStackResumeResult::Suspended) {
+    if (shouldTraceProc(procId))
+      llvm::errs() << "[TRACE-PROC] proc=" << procId
+                   << " callstack-resume suspended waiting=" << state.waiting
+                   << " callStack=" << state.callStack.size() << "\n";
+    if (!state.halted && !state.waiting && !state.callStack.empty())
+      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+    return;
+  }
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Executing process "
                           << procId << "\n");
@@ -11449,6 +11609,17 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
   }
 
 
+  // A process should never leave an activation with unresolved call frames
+  // unless it is actively waiting/halted. If this invariant is violated, keep
+  // it runnable so call-stack unwind can continue instead of stalling forever.
+  if (!state.halted && !state.waiting && !state.callStack.empty()) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  Invariant recovery: process " << procId
+               << " has non-empty callStack (" << state.callStack.size()
+               << ") without waiting/halt; re-scheduling\n");
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+
   // After the loop exits, check if we have pending delay from __moore_delay.
   // If so, schedule the resumption event with the accumulated delay.
   if (state.waiting && state.pendingDelayFs > 0) {
@@ -11483,9 +11654,6 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     }
   });
 
-  // Restore the previously active process state.
-  activeProcessId = savedActiveProcessId;
-  activeProcessState = savedActiveProcessState;
 }
 
 bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
@@ -19779,6 +19947,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   maybeTraceFilteredCall(procId, "func.call", calleeName, now.realTime,
                          now.deltaStep);
   bool traceSeq = traceSeqEnabled;
+  static bool disableTypeNameCache = []() {
+    const char *env = std::getenv("CIRCT_SIM_DISABLE_UVM_TYPENAME_CACHE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
+  if (!disableTypeNameCache && calleeName.contains("get_type_name") &&
+      !calleeName.contains("get_type_name_enabled") &&
+      callOp.getNumResults() >= 1) {
+    if (auto cachedIt = cachedTypeNameByCallee.find(calleeName);
+        cachedIt != cachedTypeNameByCallee.end()) {
+      setValue(procId, callOp.getResult(0), cachedIt->second);
+      return success();
+    }
+  }
+
   static bool traceI3CConfigHandles = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CONFIG_HANDLES");
     return env && env[0] != '\0' && env[0] != '0';
@@ -20178,9 +20361,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       auto stateIt = processStates.find(waiterProc);
       if (stateIt == processStates.end())
         continue;
-      if (!stateIt->second.waiting)
+      auto &waiterState = stateIt->second;
+      bool shouldWake = waiterState.waiting || waiterState.sequencerGetRetryCallOp ||
+                        !waiterState.callStack.empty();
+      if (!shouldWake)
         continue;
-      stateIt->second.waiting = false;
+      waiterState.waiting = false;
       scheduler.scheduleProcess(waiterProc, SchedulingRegion::Active);
     }
   };
@@ -20192,8 +20378,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return hopperVal.isX() ? 0 : hopperVal.getUInt64();
   };
 
+  static bool disablePhaseHopperFastPath = []() {
+    const char *env = std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
   // Native queue fast path for phase hopper task queue operations.
-  if (calleeName.ends_with("uvm_phase_hopper::try_put") &&
+  if (!disablePhaseHopperFastPath &&
+      calleeName.ends_with("uvm_phase_hopper::try_put") &&
       callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
     uint64_t hopperAddr = getHopperAddr();
     uint64_t phaseAddr = 0;
@@ -20224,7 +20416,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  if (calleeName.ends_with("uvm_phase_hopper::try_get") &&
+  if (!disablePhaseHopperFastPath &&
+      calleeName.ends_with("uvm_phase_hopper::try_get") &&
       callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
     uint64_t hopperAddr = getHopperAddr();
     uint64_t phaseAddr = 0;
@@ -20248,7 +20441,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  if (calleeName.ends_with("uvm_phase_hopper::try_peek") &&
+  if (!disablePhaseHopperFastPath &&
+      calleeName.ends_with("uvm_phase_hopper::try_peek") &&
       callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
     uint64_t hopperAddr = getHopperAddr();
     uint64_t phaseAddr = 0;
@@ -20266,7 +20460,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  if (calleeName.ends_with("uvm_phase_hopper::peek") &&
+  if (!disablePhaseHopperFastPath &&
+      calleeName.ends_with("uvm_phase_hopper::peek") &&
       callOp.getNumOperands() >= 2) {
     uint64_t hopperAddr = getHopperAddr();
     uint64_t phaseAddr = 0;
@@ -20281,7 +20476,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  if (calleeName.ends_with("uvm_phase_hopper::get") &&
+  if (!disablePhaseHopperFastPath &&
+      calleeName.ends_with("uvm_phase_hopper::get") &&
       callOp.getNumOperands() >= 2) {
     uint64_t hopperAddr = getHopperAddr();
     auto it = phaseHopperQueue.find(hopperAddr);
@@ -20779,10 +20975,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         ProcessId waiterProcId = waiterIt->second;
         finishItemWaiters.erase(waiterIt);
         auto waiterStateIt = processStates.find(waiterProcId);
-        if (waiterStateIt != processStates.end() && waiterStateIt->second.waiting) {
-          waiterStateIt->second.waiting = false;
-          scheduler.scheduleProcess(waiterProcId, SchedulingRegion::Active);
-        }
+        if (waiterStateIt == processStates.end())
+          return success();
+        auto &waiterState = waiterStateIt->second;
+        bool shouldWake = waiterState.waiting || waiterState.sequencerGetRetryCallOp ||
+                          !waiterState.callStack.empty();
+        if (!shouldWake)
+          return success();
+        waiterState.waiting = false;
+        scheduler.scheduleProcess(waiterProcId, SchedulingRegion::Active);
       }
     } else if (traceSeq) {
       maybeTraceSequencerFuncCallItemDoneMiss(doneAddr);
@@ -21081,7 +21282,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     if (callOp.getNumOperands() >= 1) {
       InterpretedValue argVal = getValue(procId, callOp.getOperand(0));
       if (!argVal.isX()) {
-        APInt bits = argVal.getAPInt();
+        APInt bits = argVal.getAPInt().zextOrTrunc(128);
         uint64_t ptrVal = bits.extractBits(64, 0).getZExtValue();
         uint64_t lenVal = bits.extractBits(64, 64).getZExtValue();
         if (ptrVal && lenVal > 0) {
@@ -22589,6 +22790,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     setValue(procId, result, retVal);
   }
 
+  if (!disableTypeNameCache && calleeName.contains("get_type_name") &&
+      !calleeName.contains("get_type_name_enabled") && !returnValues.empty())
+    cachedTypeNameByCallee[calleeName] = returnValues.front();
+
   // Store result in function cache for cacheable functions
   if (isCacheableFunc && !returnValues.empty()) {
     if (cacheOnlyNonZeroResult) {
@@ -22964,6 +23169,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         std::getenv("CIRCT_SIM_TRACE_PHASE_ORDER") != nullptr;
     return enabled;
   };
+  static bool disablePhaseOrderIntercept = []() -> bool {
+    const char *env = std::getenv("CIRCT_SIM_DISABLE_PHASE_ORDER_INTERCEPT");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
 
   auto readUvmPhaseImpAddr = [&](uint64_t phaseAddr) -> uint64_t {
     uint64_t impAddr = 0;
@@ -22977,8 +23186,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     return impAddr;
   };
 
-  if (funcName == "uvm_pkg::uvm_phase_hopper::process_phase") {
-    if (args.size() >= 2 && !args[1].isX() && callOp) {
+  if (!disablePhaseOrderIntercept &&
+      funcName == "uvm_pkg::uvm_phase_hopper::process_phase") {
+    if (args.size() >= 2 && !args[1].isX()) {
       uint64_t phaseAddr = args[1].getUInt64();
       uint64_t impAddr = readUvmPhaseImpAddr(phaseAddr);
       auto impOrderIt = functionPhaseImpOrder.find(impAddr);
@@ -22989,52 +23199,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                 ? std::optional<int>(impOrderIt->second)
                 : std::nullopt);
       }
-      if (impOrderIt != functionPhaseImpOrder.end()) {
-        int myOrder = impOrderIt->second;
-        if (myOrder > 0) {
-          uint64_t predImpAddr =
-              (static_cast<size_t>(myOrder - 1) < functionPhaseImpSequence.size())
-                  ? functionPhaseImpSequence[myOrder - 1]
-                  : 0;
-          if (predImpAddr != 0 && !functionPhaseImpCompleted[predImpAddr]) {
-            if (tracePhaseOrderEnabled()) {
-              maybeTracePhaseOrderProcessPhaseWaitPred(phaseAddr, myOrder,
-                                                       predImpAddr);
-            }
-            // Predecessor hasn't completed. Add to wait list (notification-
-            // based, no polling). finish_phase will wake us up.
-            auto &state = processStates[procId];
-            state.waiting = true;
-            auto callOpIt = mlir::Block::iterator(callOp);
-            impWaitingProcesses[predImpAddr].push_back({procId, callOpIt});
-            return success();
-          }
-        }
-      } else if (impAddr != 0) {
-        // Unknown IMP — not a recognized function or task phase.
-        // Block until all registered phases have completed.
-        bool allComplete = true;
-        for (auto &[addr, done] : functionPhaseImpCompleted) {
-          if (!done) { allComplete = false; break; }
-        }
-        if (!allComplete && !functionPhaseImpCompleted.empty()) {
-          if (tracePhaseOrderEnabled()) {
-            maybeTracePhaseOrderProcessPhaseWaitUnknownImp(phaseAddr, impAddr);
-          }
-          auto &state = processStates[procId];
-          state.waiting = true;
-          auto callOpIt = mlir::Block::iterator(callOp);
-          impWaitingProcesses[0].push_back({procId, callOpIt});
-          return success();
-        }
-      }
     }
   }
 
   // Intercept finish_phase to mark function phase IMPs as completed.
   // This allows the next function phase IMP (blocked in process_phase
   // above) to proceed.
-  if (funcName == "uvm_pkg::uvm_phase_hopper::finish_phase") {
+  if (!disablePhaseOrderIntercept &&
+      funcName == "uvm_pkg::uvm_phase_hopper::finish_phase") {
     if (args.size() >= 2 && !args[1].isX()) {
       uint64_t phaseAddr = args[1].getUInt64();
       uint64_t impAddr = readUvmPhaseImpAddr(phaseAddr);
@@ -23049,9 +23221,26 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         }
         // [IMP-DIAG] diagnostic removed
         // Wake up processes waiting for this IMP to complete.
+        auto isPhaseOrderBlockedWaiter = [&](ProcessId waiterProc,
+                                             ProcessExecutionState &st) {
+          if (st.halted || !st.waiting)
+            return false;
+          // If a waiter has progressed into deeper suspension machinery, do not
+          // clobber its waiting state with stale phase-order wakeups.
+          if (!st.callStack.empty() || st.waitConditionRestartBlock ||
+              st.sequencerGetRetryCallOp ||
+              objectionWaitHandleByProc.count(waiterProc))
+            return false;
+          return true;
+        };
         if (waitIt != impWaitingProcesses.end()) {
           for (auto &waiter : waitIt->second) {
-            auto &st = processStates[waiter.procId];
+            auto stateIt = processStates.find(waiter.procId);
+            if (stateIt == processStates.end())
+              continue;
+            auto &st = stateIt->second;
+            if (!isPhaseOrderBlockedWaiter(waiter.procId, st))
+              continue;
             st.waiting = false;
             st.currentOp = waiter.resumeOp;
             if (tracePhaseOrderEnabled()) {
@@ -23073,7 +23262,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           auto taskWaitIt = impWaitingProcesses.find(0);
           if (taskWaitIt != impWaitingProcesses.end()) {
             for (auto &waiter : taskWaitIt->second) {
-              auto &st = processStates[waiter.procId];
+              auto stateIt = processStates.find(waiter.procId);
+              if (stateIt == processStates.end())
+                continue;
+              auto &st = stateIt->second;
+              if (!isPhaseOrderBlockedWaiter(waiter.procId, st))
+                continue;
               st.waiting = false;
               st.currentOp = waiter.resumeOp;
               scheduler.scheduleProcess(waiter.procId,
@@ -23102,6 +23296,48 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   if (funcName == "uvm_pkg::uvm_phase_hopper::execute_phase") {
     if (args.size() >= 2 && !args[1].isX()) {
       uint64_t phaseAddr = args[1].getUInt64();
+      // Enforce predecessor ordering at execute_phase entry, not at
+      // process_phase entry. Blocking too early can deadlock phase state
+      // waits in sync/end hooks that expect peer phases to have started.
+      if (!disablePhaseOrderIntercept && callOp) {
+        uint64_t impAddr = readUvmPhaseImpAddr(phaseAddr);
+        auto impOrderIt = functionPhaseImpOrder.find(impAddr);
+        if (impOrderIt != functionPhaseImpOrder.end()) {
+          int myOrder = impOrderIt->second;
+          // Only enforce predecessor gating for task phases.
+          //
+          // Function phases (build/connect/end_of_elaboration/start_of_simulation)
+          // can legitimately interact via sync/end waits while peers are still
+          // running. Gating them at execute_phase entry can deadlock those waits
+          // and stall UVM startup traffic.
+          if (myOrder >= 4) {
+            uint64_t predImpAddr =
+                (static_cast<size_t>(myOrder - 1) < functionPhaseImpSequence.size())
+                    ? functionPhaseImpSequence[myOrder - 1]
+                    : 0;
+            if (predImpAddr != 0 && !functionPhaseImpCompleted[predImpAddr]) {
+              if (tracePhaseOrderEnabled()) {
+                maybeTracePhaseOrderProcessPhaseWaitPred(phaseAddr, myOrder,
+                                                         predImpAddr);
+              }
+              auto &state = processStates[procId];
+              state.waiting = true;
+              auto callOpIt = mlir::Block::iterator(callOp);
+              auto &waiters = impWaitingProcesses[predImpAddr];
+              auto existing = llvm::find_if(
+                  waiters, [&](const auto &waiter) {
+                    return waiter.procId == procId;
+                  });
+              if (existing != waiters.end())
+                existing->resumeOp = callOpIt;
+              else
+                waiters.push_back({procId, callOpIt});
+              return success();
+            }
+          }
+        }
+      }
+
       // Read the phase name from memory to identify the phase
       // uvm_phase extends uvm_object. uvm_object layout:
       //   [0] = uvm_void (i32 class_id, ptr vtable) = 12 bytes
@@ -28311,7 +28547,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           if (targetId != InvalidProcessId) {
             auto it = processStates.find(targetId);
             if (it != processStates.end()) {
-              APInt bits = stateVal.getAPInt();
+              APInt bits = stateVal.getAPInt().zextOrTrunc(128);
               uint64_t ptrVal =
                   bits.extractBits(64, 0).getZExtValue();
               uint64_t lenVal =
@@ -28427,7 +28663,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         InterpretedValue stateVal = getValue(procId, callOp.getOperand(1));
 
         if (!stateVal.isX()) {
-          const APInt &bits = stateVal.getAPInt();
+          APInt bits = stateVal.getAPInt().zextOrTrunc(128);
           uint64_t ptrVal = bits.extractBits(64, 0).getZExtValue();
           uint64_t lenVal = bits.extractBits(64, 64).getZExtValue();
 
@@ -28891,7 +29127,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_ptr, element_size)
     if (calleeName == "__moore_queue_push_back") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
 
@@ -28985,7 +29222,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr) -> i64
     if (calleeName == "__moore_queue_size") {
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int64_t queueLen = 0;
 
         if (queueAddr != 0) {
@@ -29012,7 +29250,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr)
     if (calleeName == "__moore_queue_clear") {
       if (callOp.getNumOperands() >= 1) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
 
         if (queueAddr != 0) {
           uint64_t queueOffset = 0;
@@ -29033,7 +29272,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_size) -> element_value
     if (calleeName == "__moore_queue_pop_back") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t result = 0;
 
@@ -29082,7 +29322,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_size) -> element_value
     if (calleeName == "__moore_queue_pop_front") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t result = 0;
 
@@ -29139,7 +29380,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_ptr, element_size)
     if (calleeName == "__moore_queue_push_front") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
 
@@ -33067,7 +33309,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, index: i32, element_size: i64) -> void
     if (calleeName == "__moore_queue_delete_index") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int32_t index = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
         int64_t elemSize = static_cast<int64_t>(
@@ -33141,7 +33384,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, index: i32, element_ptr, element_size: i64) -> void
     if (calleeName == "__moore_queue_insert") {
       if (callOp.getNumOperands() >= 4) {
-        uint64_t queueAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int32_t index = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t elemAddr = getValue(procId, callOp.getOperand(2)).getUInt64();
@@ -33704,8 +33948,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr: ptr, result_ptr: ptr, elem_size: i64) -> void
     if (calleeName == "__moore_queue_pop_back_ptr") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr =
-            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t resultAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(
@@ -33775,8 +34019,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr: ptr, result_ptr: ptr, elem_size: i64) -> void
     if (calleeName == "__moore_queue_pop_front_ptr") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr =
-            getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+            procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t resultAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(
@@ -37758,6 +38002,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     // Constructors (may allocate objects the interpreter tracks)
     if (name.ends_with("::new"))
       return true;
+    // Sequence ::body methods — native dispatch causes deep trampoline
+    // recursion (body → start_item trampoline → interpreter → deep chain)
+    // that overflows the C++ stack.
+    if (name.ends_with("::body"))
+      return true;
     // UVM singleton/registry accessors
     if (name.contains("::is_auditing") ||
         name.contains("get_print_config_matches") ||
@@ -37766,6 +38015,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
       return true;
     return false;
   };
+
+  unsigned maxNative = UINT_MAX;
+  if (const char *maxEnv = std::getenv("CIRCT_AOT_MAX_NATIVE"))
+    maxNative = std::atoi(maxEnv);
+  unsigned nativePopulated = 0;
 
   unsigned compiled = 0, nativeEligible = 0, intercepted = 0;
   rootModule.walk([&](mlir::func::FuncOp funcOp) {
@@ -37780,22 +38034,38 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         ++intercepted;
         // Skip: let this function route through interpreter for interceptors.
       } else {
-        // With Step 7B (LowerTaggedIndirectCalls), call_indirect ops inside
-        // compiled functions are safe — they use the entry table instead of
-        // synthetic vtable addresses. No need to exclude them.
-        nativeFuncPtrs[funcOp.getOperation()] = ptr;
+        // Exclude functions that contain call_indirect ops: their compiled code
+        // calls through the .so entry table, hitting trampolines that bounce
+        // back to the interpreter. This creates deep C++ stack recursion
+        // (native → trampoline → interpreter → native → ...) that overflows.
+        bool hasCallIndirect = false;
+        funcOp.walk([&](mlir::Operation *op) {
+          if (mlir::isa<mlir::func::CallIndirectOp>(op))
+            hasCallIndirect = true;
+        });
+        if (!hasCallIndirect && nativePopulated < maxNative) {
+          nativeFuncPtrs[funcOp.getOperation()] = ptr;
+          ++nativePopulated;
+        }
         ++nativeEligible;
       }
     }
   });
 
+  if (maxNative < UINT_MAX)
+    llvm::errs() << "[circt-sim] CIRCT_AOT_MAX_NATIVE: limited to "
+                 << nativePopulated << " native func.call dispatches\n";
+
+  unsigned callIndirectExcluded = nativeEligible - nativePopulated;
   if (noFuncDispatch) {
     llvm::errs() << "[circt-sim] Loaded " << compiled
                  << " compiled functions (func dispatch DISABLED by env)\n";
   } else {
     llvm::errs() << "[circt-sim] Loaded " << compiled
-                 << " compiled functions: " << nativeEligible
-                 << " native-eligible, " << intercepted << " intercepted\n";
+                 << " compiled functions: " << nativePopulated
+                 << " native-dispatched, " << callIndirectExcluded
+                 << " excluded (call_indirect), "
+                 << intercepted << " intercepted\n";
   }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
@@ -37852,9 +38122,31 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   // Initialize entry table for tagged-FuncId dispatch (Step 7C).
   compiledFuncEntries = loader.getFuncEntries();
   numCompiledAllFuncs = loader.getNumAllFuncs();
+
+  // Native call_indirect dispatch is DISABLED for now.  The 28 native entries
+  // in the entry table cause UVM $cast failures — likely from compiled code
+  // accessing UVM domain/phase objects with wrong struct offsets or bypassing
+  // interpreter-specific behavior.  Keep the bitmap all-false so the
+  // interpreter always routes call_indirect through interpretFuncBody.
+  // TODO: Re-enable once the root cause of the $cast failure is fixed.
+  compiledFuncIsNative.clear();
+  compiledFuncIsNative.resize(numCompiledAllFuncs, false);
+  unsigned nativeCount = 0;
   if (numCompiledAllFuncs > 0)
     llvm::errs() << "[circt-sim] Entry table: " << numCompiledAllFuncs
-                 << " entries for tagged-FuncId dispatch\n";
+                 << " entries for tagged-FuncId dispatch ("
+                 << nativeCount << " native, "
+                 << (numCompiledAllFuncs - nativeCount)
+                 << " trampolines skipped)\n";
+  // Safety valve: CIRCT_AOT_DISABLE_ALL disables ALL native dispatch while
+  // keeping global pre-aliasing active. Used to isolate whether the bug is
+  // in global aliasing vs function dispatch.
+  if (std::getenv("CIRCT_AOT_DISABLE_ALL")) {
+    nativeFuncPtrs.clear();
+    compiledFuncEntries = nullptr;
+    numCompiledAllFuncs = 0;
+    llvm::errs() << "[circt-sim] CIRCT_AOT_DISABLE_ALL: all native dispatch disabled\n";
+  }
 }
 
 /// Get the bit width of a type for trampoline packing purposes.
@@ -38034,8 +38326,10 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
     return;
   }
   ++callState.callDepth;
+  ++nativeCallDepth;
   (void)interpretFuncBody(procId, funcOp, interpArgs, interpResults,
                           /*callOp=*/nullptr);
+  --nativeCallDepth;
   --callState.callDepth;
 
   // Convert results back to uint64_t (handle structs consuming multiple slots).
