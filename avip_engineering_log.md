@@ -1,5 +1,45 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: formal/BMC crash fix in `comb.extract` canonicalization
+
+### What changed
+- Updated:
+  - `lib/Dialect/Comb/CombFolds.cpp`
+- Added:
+  - `test/Dialect/Comb/extract-canonicalize-self-cycle.mlir`
+
+### Red-first debugging path
+- Reproduced a hard crash seen in OpenTitan FPV BMC (`prim_fifo_sync_fpv`) and
+  reduced it to a tiny IR reproducer:
+  - cyclic pattern: `comb.extract` from `comb.concat` where the selected concat
+    slice is the extract result itself.
+  - crash: `PatternMatch.cpp` assertion in `RewriterBase::eraseOp`
+    (`expected 'op' to have no uses`).
+- Confirmed stack points into `comb::ExtractOp::canonicalize` via
+  `replaceOpAndCopyNamehint`.
+- Patched canonicalization to reject the self-rewrite case and return failure
+  (no rewrite) instead of calling replace-on-self.
+
+### Realizations / surprises
+- This is not an SVA semantic mismatch; it is a generic comb canonicalization
+  bug that gets hit by formal-prepared MLIR with graph-region cyclic logic.
+- Fixing this one crash moved OpenTitan `prim_fifo_sync_fpv` to the next real
+  blocker (`could_not_resolve_cycles_in_module`), which is a cleaner actionable
+  formal gap than an internal assertion abort.
+
+### Validation snapshot
+- red repro before fix:
+  - `build_test/bin/circt-opt /tmp/comb_extract_self_cycle.mlir -canonicalize`
+    -> abort.
+- post-fix regression:
+  - `build_test/bin/circt-opt test/Dialect/Comb/extract-canonicalize-self-cycle.mlir -canonicalize | llvm/build/bin/FileCheck test/Dialect/Comb/extract-canonicalize-self-cycle.mlir`
+    -> pass.
+- OpenTitan FPV BMC targeted rerun:
+  - `python3 utils/run_opentitan_fpv_circt_bmc.py --compile-contracts /tmp/opentitan-fpv-all-20260225-earlgrey/opentitan-fpv-compile-contracts.tsv --target-filter '^prim_fifo_sync_fpv$' ...`
+  - result row:
+    `ERROR ... CIRCT_BMC_ERROR could_not_resolve_cycles_in_module`
+    (assertion crash removed).
+
 ## 2026-02-24 Session: dynamic packed-struct bit-select legalization (`dyn_extract` / `dyn_extract_ref`)
 
 ### What changed
