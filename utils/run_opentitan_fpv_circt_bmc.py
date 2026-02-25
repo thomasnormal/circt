@@ -1798,6 +1798,10 @@ def main() -> int:
                     cmd.append("--cover-granular")
 
                 cmd_env = os.environ.copy()
+                # OpenTitan FPV designs frequently include multiple explicit
+                # clocks; default to interleaved multi-clock BMC unless the
+                # caller already pinned a policy.
+                cmd_env.setdefault("BMC_ALLOW_MULTI_CLOCK", "1")
                 policy_passes: list[str] = []
                 if stopat_selectors:
                     selector_list = ",".join(stopat_selectors)
@@ -1806,8 +1810,12 @@ def main() -> int:
                     )
                 if blackbox_modules:
                     module_list = ",".join(blackbox_modules)
+                    externalize_pass = (
+                        f"--hw-externalize-modules=module-names={module_list} "
+                        "allow-missing=1"
+                    )
                     policy_passes.append(
-                        f"--hw-externalize-modules=module-names={module_list}"
+                        shlex.quote(externalize_pass)
                     )
                 if policy_passes:
                     cmd_env["BMC_PREPARE_CORE_PASSES"] = " ".join(
