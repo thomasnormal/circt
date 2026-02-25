@@ -1,5 +1,47 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: strip-llhd-interface-signals array-root probe type preservation
+
+### What changed
+- Updated:
+  - `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+- Added:
+  - `test/Tools/circt-lec/lec-strip-llhd-array-root-probe.mlir`
+
+### Red-first debugging path
+- Reproduced deterministic failure in a minimal test:
+  - LLHD array signal with element drives (`llhd.sig.array_get`) and a root
+    probe/output.
+  - failure before fix:
+    `hw.output` expected array output type but got scalar element type.
+- Traced failing OpenTitan lane (`prim_lfsr_fpv`) with
+  `--mlir-print-ir-after-failure`; failure occurred in
+  `strip-llhd-interface-signals` pass.
+- Found root cause:
+  - pathful subelement drives/probes were incorrectly routed into whole-signal
+    multi-driver resolution, collapsing type from array to element.
+- Patched pass to skip that whole-signal path for pathful refs and fall back to
+  path-aware update materialization.
+
+### Realizations / surprises
+- This was a general LLHD-strip semantic bug, not OpenTitan-specific.
+- Fixing this moved `prim_lfsr_fpv` forward to the next real blocker:
+  stack overflow in `VerifToSMT` live-op collection (deep recursion), confirming
+  type-collapse blocker is removed.
+
+### Validation snapshot
+- red before fix:
+  - `build_test/bin/circt-opt test/Tools/circt-lec/lec-strip-llhd-array-root-probe.mlir --strip-llhd-interface-signals`
+    -> output type mismatch error.
+- post-fix:
+  - `build_test/bin/circt-opt ...lec-strip-llhd-array-root-probe.mlir --strip-llhd-interface-signals | llvm/build/bin/FileCheck ...`
+    -> pass.
+  - existing:
+    `lec-strip-llhd-probe-before-drive-wire.mlir` -> pass.
+- OpenTitan targeted rerun:
+  - `prim_lfsr_fpv` transitions from `hw.output` type-mismatch error to later
+    `please_submit_a_bug_report...` with `VerifToSMT` recursion stack trace.
+
 ## 2026-02-25 Session: formal/BMC crash fix in `comb.extract` canonicalization
 
 ### What changed

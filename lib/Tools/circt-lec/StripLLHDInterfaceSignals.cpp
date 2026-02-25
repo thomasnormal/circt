@@ -2582,102 +2582,115 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           }
         }
 
-        SmallVector<Value> driveValues;
-        SmallVector<Value> driveEnables;
-        SmallVector<unsigned> driveStrength0;
-        SmallVector<unsigned> driveStrength1;
-        bool anyStrength = false;
-        driveValues.reserve(drives.size());
-        driveEnables.reserve(drives.size());
-        driveStrength0.reserve(drives.size());
-        driveStrength1.reserve(drives.size());
-        OpBuilder resolveBuilder(firstProbe);
-        Value enableTrue = hw::ConstantOp::create(
-                               resolveBuilder, firstProbe->getLoc(),
-                               resolveBuilder.getI1Type(), 1)
-                               .getResult();
-        for (auto drive : drives)
-          driveValues.push_back(drive.getValue());
-        unsigned defaultStrength =
-            static_cast<unsigned>(llhd::DriveStrength::Strong);
-        for (auto drive : drives) {
-          driveEnables.push_back(drive.getEnable() ? drive.getEnable()
-                                                   : enableTrue);
-          auto s0Attr =
-              drive->getAttrOfType<llhd::DriveStrengthAttr>("strength0");
-          auto s1Attr =
-              drive->getAttrOfType<llhd::DriveStrengthAttr>("strength1");
-          if (s0Attr || s1Attr)
-            anyStrength = true;
-          driveStrength0.push_back(
-              s0Attr ? static_cast<unsigned>(s0Attr.getValue())
-                     : defaultStrength);
-          driveStrength1.push_back(
-              s1Attr ? static_cast<unsigned>(s1Attr.getValue())
-                     : defaultStrength);
-        }
-        Type valueType = driveValues.front().getType();
-        Value resolved;
-        if (isFourStateStructType(valueType)) {
-          resolved = anyStrength
-                         ? resolveFourStateValuesWithStrength(
-                               resolveBuilder, firstProbe->getLoc(),
-                               driveValues, driveEnables, driveStrength0,
-                               driveStrength1,
-                               static_cast<unsigned>(
-                                   llhd::DriveStrength::HighZ))
-                         : resolveFourStateValuesWithEnable(
-                               resolveBuilder, firstProbe->getLoc(),
-                               driveValues, driveEnables);
-        } else {
-          auto module = sigOp->getParentOfType<hw::HWModuleOp>();
-          if (!module)
-            return sigOp.emitError("expected LLHD signal in hw.module");
-          Value unknownValue;
-          auto getUnknownValue = [&]() -> Value {
-            if (unknownValue)
-              return unknownValue;
-            std::string baseName = "llhd_sig_unknown";
-            if (auto nameAttr = sigOp.getNameAttr())
-              baseName = (nameAttr.getValue() + "_unknown").str();
-            auto signalName = sigOp.getNameAttr()
-                                  ? sigOp.getNameAttr().getValue()
-                                  : StringRef("llhd_sig");
-            unknownValue = state.addInput(
-                module, baseName, valueType, "multi_driver_unknown_resolution",
-                signalName, /*fieldIndex=*/std::nullopt, firstProbe->getLoc());
-            return unknownValue;
-          };
-          resolved =
-              anyStrength
-                  ? resolveTwoStateValuesWithStrength(
-                        resolveBuilder, firstProbe->getLoc(), driveValues,
-                        driveEnables, driveStrength0, driveStrength1,
-                        getUnknownValue(),
-                        static_cast<unsigned>(llhd::DriveStrength::HighZ))
-                  : resolveTwoStateValuesWithEnable(
-                        resolveBuilder, firstProbe->getLoc(), driveValues,
-                        driveEnables, getUnknownValue());
-        }
-        if (resolved) {
-          for (auto probe : probes) {
-            probe.getResult().replaceAllUsesWith(resolved);
-            probe.erase();
-          }
+        bool hasPathfulDrive = llvm::any_of(drives, [&](llhd::DriveOp drive) {
+          return !drivePaths.lookup(drive).empty();
+        });
+        bool hasPathfulProbe = llvm::any_of(probes, [&](llhd::ProbeOp probe) {
+          return !probePaths.lookup(probe).empty();
+        });
+        // Pathful refs (e.g. sig.array_get / sig.extract) target subelements
+        // of the signal. Resolving those as concurrent whole-signal drives can
+        // collapse the signal to an element type and break module output types.
+        if (!hasPathfulDrive && !hasPathfulProbe) {
+          SmallVector<Value> driveValues;
+          SmallVector<Value> driveEnables;
+          SmallVector<unsigned> driveStrength0;
+          SmallVector<unsigned> driveStrength1;
+          bool anyStrength = false;
+          driveValues.reserve(drives.size());
+          driveEnables.reserve(drives.size());
+          driveStrength0.reserve(drives.size());
+          driveStrength1.reserve(drives.size());
+          OpBuilder resolveBuilder(firstProbe);
+          Value enableTrue = hw::ConstantOp::create(
+                                 resolveBuilder, firstProbe->getLoc(),
+                                 resolveBuilder.getI1Type(), 1)
+                                 .getResult();
           for (auto drive : drives)
-            drive.erase();
-          for (Operation *refOp : llvm::reverse(derivedRefs)) {
-            if (refOp->use_empty())
-              refOp->erase();
+            driveValues.push_back(drive.getValue());
+          unsigned defaultStrength =
+              static_cast<unsigned>(llhd::DriveStrength::Strong);
+          for (auto drive : drives) {
+            driveEnables.push_back(drive.getEnable() ? drive.getEnable()
+                                                     : enableTrue);
+            auto s0Attr =
+                drive->getAttrOfType<llhd::DriveStrengthAttr>("strength0");
+            auto s1Attr =
+                drive->getAttrOfType<llhd::DriveStrengthAttr>("strength1");
+            if (s0Attr || s1Attr)
+              anyStrength = true;
+            driveStrength0.push_back(
+                s0Attr ? static_cast<unsigned>(s0Attr.getValue())
+                       : defaultStrength);
+            driveStrength1.push_back(
+                s1Attr ? static_cast<unsigned>(s1Attr.getValue())
+                       : defaultStrength);
           }
-          if (sigOp.use_empty()) {
-            Value init = sigOp.getInit();
-            sigOp.erase();
-            if (auto *def = init.getDefiningOp())
-              if (def->use_empty())
-                def->erase();
+          Type valueType = driveValues.front().getType();
+          Value resolved;
+          if (isFourStateStructType(valueType)) {
+            resolved = anyStrength
+                           ? resolveFourStateValuesWithStrength(
+                                 resolveBuilder, firstProbe->getLoc(),
+                                 driveValues, driveEnables, driveStrength0,
+                                 driveStrength1,
+                                 static_cast<unsigned>(
+                                     llhd::DriveStrength::HighZ))
+                           : resolveFourStateValuesWithEnable(
+                                 resolveBuilder, firstProbe->getLoc(),
+                                 driveValues, driveEnables);
+          } else {
+            auto module = sigOp->getParentOfType<hw::HWModuleOp>();
+            if (!module)
+              return sigOp.emitError("expected LLHD signal in hw.module");
+            Value unknownValue;
+            auto getUnknownValue = [&]() -> Value {
+              if (unknownValue)
+                return unknownValue;
+              std::string baseName = "llhd_sig_unknown";
+              if (auto nameAttr = sigOp.getNameAttr())
+                baseName = (nameAttr.getValue() + "_unknown").str();
+              auto signalName = sigOp.getNameAttr()
+                                    ? sigOp.getNameAttr().getValue()
+                                    : StringRef("llhd_sig");
+              unknownValue =
+                  state.addInput(module, baseName, valueType,
+                                 "multi_driver_unknown_resolution", signalName,
+                                 /*fieldIndex=*/std::nullopt,
+                                 firstProbe->getLoc());
+              return unknownValue;
+            };
+            resolved =
+                anyStrength
+                    ? resolveTwoStateValuesWithStrength(
+                          resolveBuilder, firstProbe->getLoc(), driveValues,
+                          driveEnables, driveStrength0, driveStrength1,
+                          getUnknownValue(),
+                          static_cast<unsigned>(llhd::DriveStrength::HighZ))
+                    : resolveTwoStateValuesWithEnable(
+                          resolveBuilder, firstProbe->getLoc(), driveValues,
+                          driveEnables, getUnknownValue());
           }
-          return success();
+          if (resolved) {
+            for (auto probe : probes) {
+              probe.getResult().replaceAllUsesWith(resolved);
+              probe.erase();
+            }
+            for (auto drive : drives)
+              drive.erase();
+            for (Operation *refOp : llvm::reverse(derivedRefs)) {
+              if (refOp->use_empty())
+                refOp->erase();
+            }
+            if (sigOp.use_empty()) {
+              Value init = sigOp.getInit();
+              sigOp.erase();
+              if (auto *def = init.getDefiningOp())
+                if (def->use_empty())
+                  def->erase();
+            }
+            return success();
+          }
         }
       }
 
