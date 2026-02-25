@@ -325,11 +325,14 @@ async function main() {
 
   let rc1 = -1;
   let rc2 = -1;
+  const readyTimeoutMsRaw = Number(process.env.WASM_REENTRY_READY_TIMEOUT_MS || "60000");
+  const readyTimeoutMs =
+      Number.isFinite(readyTimeoutMsRaw) && readyTimeoutMsRaw > 0 ? readyTimeoutMsRaw : 60000;
   const preloadPathRemap = new Map();
   const remapArg = arg => preloadPathRemap.get(arg) ?? arg;
   try {
     vm.runInNewContext(source, context, {filename: toolJs});
-    await waitUntilReady(context);
+    await waitUntilReady(context, readyTimeoutMs);
 
     if (preloads.length > 0) {
       if (!context.FS)

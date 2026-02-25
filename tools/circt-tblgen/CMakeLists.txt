@@ -24,6 +24,10 @@ option(CIRCT_TBLGEN_WASM_ENABLE_NODERAWFS
 if(EMSCRIPTEN AND CIRCT_TBLGEN_WASM_ENABLE_NODERAWFS)
   target_link_options(circt-tblgen PRIVATE "SHELL:-sNODERAWFS=1")
 endif()
+if(EMSCRIPTEN)
+  target_link_options(circt-tblgen PRIVATE
+    "SHELL:-sEXPORTED_RUNTIME_METHODS=['callMain']")
+endif()
 
 llvm_update_compile_flags(circt-tblgen)
 mlir_check_all_link_libraries(circt-tblgen)
