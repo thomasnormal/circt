@@ -1,5 +1,44 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-25 Session: OpenTitan FPV hierarchical enum-member (`u.Idle`) import fix
+
+### What changed
+- Updated:
+  - `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`
+- Added:
+  - `test/Conversion/ImportVerilog/hierarchical-enum-member.sv`
+
+### Red-first debugging path
+- Reproduced current formal blocker with reused OpenTitan FPV compile contracts:
+  - `rv_plic_fpv::rv_plic_tb -> CIRCT_VERILOG_ERROR unknown_hierarchical_name_idle`
+  - source note pointed to enum member `Idle` in `prim_alert_sender`.
+- Instrumented and confirmed root cause:
+  - hierarchical threading incorrectly treated enum members as runtime
+    hierarchical refs, creating invalid extra output threading and downstream
+    `moore.output` arity mismatches.
+- Fixes:
+  - Hierarchical path collection now threads only `VariableSymbol` / `NetSymbol`
+    runtime values.
+  - Hierarchical rvalue lowering now materializes enum members directly as
+    constants (`EnumValueSymbol::getValue`) instead of requiring threaded refs.
+
+### Realizations / surprises
+- The OpenTitan failure signature looked like a generic unknown-name issue, but
+  the underlying bug was in hierarchical port synthesis, not plain name lookup.
+- The same root cause can surface as two different frontend failures depending
+  on conversion order:
+  - `moore.output` operand-count mismatch
+  - `unknown hierarchical name <enum_member>`
+
+### Validation snapshot
+- Focused lit:
+  - `Conversion/ImportVerilog/hierarchical-enum-member.sv` -> pass
+  - `Conversion/ImportVerilog/hierarchical-names.sv` -> pass
+- OpenTitan FPV BMC direct repro (`rv_plic_fpv`, compile-contracts reuse):
+  - before fix: `ERROR ... unknown_hierarchical_name_idle`
+  - after fix: frontend succeeds; case progresses to `UNKNOWN`.
+
 ## 2026-02-25 Session: LEC z3-path canonicalization for sv-tests + verilator wrappers
 
 ### What changed
