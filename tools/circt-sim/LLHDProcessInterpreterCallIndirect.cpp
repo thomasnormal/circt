@@ -26,6 +26,19 @@ using namespace mlir;
 using namespace circt;
 using namespace circt::sim;
 
+static bool traceUvmFactoryByTypeEnabled() {
+  const char *env = std::getenv("CIRCT_SIM_TRACE_UVM_FACTORY_BY_TYPE");
+  return env && env[0] != '\0' && env[0] != '0';
+}
+
+static bool disableUvmFactoryByTypeFastPath() {
+  const char *env = std::getenv("CIRCT_SIM_ENABLE_UVM_FACTORY_BYTYPE_FASTPATH");
+  bool enabled = env && env[0] != '\0' && env[0] != '0';
+  // Disabled by default until object-init correctness is proven across
+  // full UVM startup; callers can opt in explicitly for performance testing.
+  return !enabled;
+}
+
 // Optional function-call tracing for focused runtime diagnosis.
 // Enable with CIRCT_SIM_TRACE_CALL_FILTER. Example:
 //   CIRCT_SIM_TRACE_CALL_FILTER=uvm_tlm_analysis_fifo::write,uvm_tlm_fifo::get
@@ -81,6 +94,10 @@ static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
   if (nowFs >= 0)
     llvm::errs() << " t=" << nowFs << " d=" << deltaStep;
   llvm::errs() << " callee=" << calleeName << "\n";
+}
+
+static uint64_t sequencerProcKey(ProcessId procId) {
+  return 0xF1F1000000000000ULL | static_cast<uint64_t>(procId);
 }
 
 static void decrementRecursionDepthEntry(ProcessExecutionState &state,
@@ -630,14 +647,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // Dispatch the call
         // [SEQ-XFALLBACK] diagnostic removed
         // Entry-table dispatch: decode tagged FuncId from X-fallback vtable addr.
-        // ONLY dispatch to native compiled entries — trampolines would re-enter
-        // the interpreter causing infinite stack recursion.
+        // Dispatch both native and trampoline entries via the entry table.
         if (compiledFuncEntries && funcPtrVal.getUInt64() >= 0xF0000000ULL &&
             funcPtrVal.getUInt64() < 0x100000000ULL &&
-            processStates[procId].callDepth < 2000 &&
-            nativeCallDepth == 0) {
+            processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcPtrVal.getUInt64() - 0xF0000000ULL);
-          if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid]) {
+          if (nativeCallDepth != 0) {
+            ++entryTableSkippedDepthCount;
+          } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = funcOp.getNumArguments();
@@ -703,11 +720,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                   unsigned bits = 64;
                   if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
                     bits = intTy.getWidth();
-                  nativeResults.push_back(InterpretedValue(result, bits));
+                  nativeResults.push_back(InterpretedValue(
+                      llvm::APInt(64, result).zextOrTrunc(bits)));
                   for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
                     setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
                 }
-                ++nativeEntryCallCount;
+                if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
+                  ++nativeEntryCallCount;
+                else
+                  ++trampolineEntryCallCount;
                 resolved = true;
                 break;
                 } // eligible (no fake addr)
@@ -1396,14 +1417,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // [SEQ-UNMAPPED] diagnostic removed
         // Entry-table dispatch for static fallback path.
-        // ONLY dispatch to native compiled entries — trampolines would re-enter
-        // the interpreter causing infinite stack recursion.
+        // Dispatch both native and trampoline entries via the entry table.
         if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
             funcAddr < 0x100000000ULL &&
-            processStates[procId].callDepth < 2000 &&
-            nativeCallDepth == 0) {
+            processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
-          if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid]) {
+          if (nativeCallDepth != 0) {
+            ++entryTableSkippedDepthCount;
+          } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = fOp.getNumArguments();
@@ -1469,11 +1490,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                   unsigned bits = 64;
                   if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
                     bits = intTy.getWidth();
-                  nativeResults.push_back(InterpretedValue(result, bits));
+                  nativeResults.push_back(InterpretedValue(
+                      llvm::APInt(64, result).zextOrTrunc(bits)));
                   for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
                     setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
                 }
-                ++nativeEntryCallCount;
+                if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
+                  ++nativeEntryCallCount;
+                else
+                  ++trampolineEntryCallCount;
                 staticResolved = true;
                 break;
                 } // eligible (no fake addr)
@@ -1724,6 +1749,112 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     StringRef calleeName = it->second;
     std::string overriddenCalleeName;
 
+    // Intercept low-level sequencer handshake immediately after target
+    // resolution, before any call-site caches or fast-dispatch paths.
+    if ((calleeName.contains("uvm_sequencer") ||
+         calleeName.contains("sqr_if_base")) &&
+        (calleeName.ends_with("::wait_for_grant") ||
+         calleeName.ends_with("::send_request") ||
+         calleeName.ends_with("::wait_for_item_done"))) {
+      SmallVector<InterpretedValue, 4> args;
+      for (Value arg : callIndirectOp.getArgOperands())
+        args.push_back(getValue(procId, arg));
+
+      if (traceSeqEnabled) {
+        uint64_t a0 = args.size() > 0 && !args[0].isX() ? args[0].getUInt64() : 0;
+        uint64_t a1 = args.size() > 1 && !args[1].isX() ? args[1].getUInt64() : 0;
+        llvm::errs() << "[SEQ-CI] " << calleeName << " a0=0x"
+                     << llvm::format_hex(a0, 16) << " a1=0x"
+                     << llvm::format_hex(a1, 16)
+                     << " fifo_maps=" << sequencerItemFifo.size() << "\n";
+      }
+
+      if (calleeName.ends_with("::wait_for_grant")) {
+        if (!args.empty() && !args[0].isX()) {
+          uint64_t sqrAddr = args[0].getUInt64();
+          if (sqrAddr != 0)
+            itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
+        }
+        return success();
+      }
+
+      if (calleeName.ends_with("::send_request") && args.size() >= 3) {
+        uint64_t sqrAddr = args[0].isX() ? 0 : args[0].getUInt64();
+        uint64_t itemAddr = args[2].isX() ? 0 : args[2].getUInt64();
+        uint64_t queueAddr = 0;
+        if (itemAddr != 0) {
+          if (auto ownerIt = itemToSequencer.find(itemAddr);
+              ownerIt != itemToSequencer.end())
+            queueAddr = ownerIt->second;
+        }
+        if (queueAddr == 0) {
+          if (auto procIt = itemToSequencer.find(sequencerProcKey(procId));
+              procIt != itemToSequencer.end())
+            queueAddr = procIt->second;
+        }
+        if (queueAddr == 0)
+          queueAddr = sqrAddr;
+        if (itemAddr != 0 && queueAddr != 0) {
+          sequencerItemFifo[queueAddr].push_back(itemAddr);
+          recordUvmSequencerItemOwner(itemAddr, queueAddr);
+          sequencePendingItemsByProc[procId].push_back(itemAddr);
+          wakeUvmSequencerGetWaiterForPush(queueAddr);
+          if (traceSeqEnabled) {
+            llvm::errs() << "[SEQ-CI] send_request item=0x"
+                         << llvm::format_hex(itemAddr, 16) << " sqr=0x"
+                         << llvm::format_hex(queueAddr, 16) << " depth="
+                         << sequencerItemFifo[queueAddr].size() << "\n";
+          }
+        }
+        return success();
+      }
+
+      if (calleeName.ends_with("::wait_for_item_done")) {
+        auto pendingIt = sequencePendingItemsByProc.find(procId);
+        if (pendingIt == sequencePendingItemsByProc.end() ||
+            pendingIt->second.empty())
+          return success();
+        uint64_t itemAddr = pendingIt->second.front();
+        if (itemDoneReceived.count(itemAddr)) {
+          pendingIt->second.pop_front();
+          if (pendingIt->second.empty())
+            sequencePendingItemsByProc.erase(pendingIt);
+          itemDoneReceived.erase(itemAddr);
+          finishItemWaiters.erase(itemAddr);
+          (void)takeUvmSequencerItemOwner(itemAddr);
+          return success();
+        }
+
+        finishItemWaiters[itemAddr] = procId;
+        auto &pState = processStates[procId];
+        pState.waiting = true;
+        pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
+        if (traceSeqEnabled)
+          llvm::errs() << "[SEQ-CI] wait_for_item_done item=0x"
+                       << llvm::format_hex(itemAddr, 16) << "\n";
+        return success();
+      }
+    }
+
+    auto isSequencerHandshakeSensitive = [](StringRef name) {
+      if (name.empty())
+        return false;
+      if (name.contains("::start_item") || name.contains("::finish_item") ||
+          name.ends_with("::wait_for_grant") ||
+          name.ends_with("::send_request") ||
+          name.ends_with("::wait_for_item_done"))
+        return true;
+      bool isSequencerSurface =
+          name.contains("seq_item_pull_port") ||
+          name.contains("seq_item_pull_imp") || name.contains("sqr_if_base") ||
+          name.contains("uvm_sequencer");
+      if (!isSequencerSurface)
+        return false;
+      return name.ends_with("::get") || name.ends_with("::get_next_item") ||
+             name.ends_with("::try_next_item") ||
+             name.ends_with("::item_done");
+    };
+
     // E5: Per-call-site fast-dispatch cache.
     if (!callIndirectDirectDispatchCacheDisabled) {
       auto siteIt = callIndirectSiteCache.find(callIndirectOp.getOperation());
@@ -1732,12 +1863,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           siteIt->second.funcAddr == funcAddr &&
           !siteIt->second.hadVtableOverride && !siteIt->second.isIntercepted &&
           siteIt->second.funcOp) {
+        StringRef cachedName = siteIt->second.funcOp.getSymName();
         // Keep runtime-vtable override active for sequence body dispatch.
         // Caching the base stub at this site can suppress the override path
         // and drop into "Body definition undefined".
         allowSiteCacheHit =
-            siteIt->second.funcOp.getSymName().str() !=
-            "uvm_pkg::uvm_sequence_base::body";
+            cachedName != "uvm_pkg::uvm_sequence_base::body" &&
+            !isSequencerHandshakeSensitive(cachedName);
       }
       if (allowSiteCacheHit) {
         ++ciSiteCacheHits;
@@ -1830,14 +1962,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               unsigned bits = 64;
               if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
                 bits = intTy.getWidth();
-              nativeResults.push_back(InterpretedValue(result, bits));
+              nativeResults.push_back(
+                  InterpretedValue(llvm::APInt(64, result).zextOrTrunc(bits)));
               for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
                 setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
             }
-            ++nativeEntryCallCount;
+            if (entry.cachedFid < compiledFuncIsNative.size() &&
+                compiledFuncIsNative[entry.cachedFid])
+              ++nativeEntryCallCount;
+            else
+              ++trampolineEntryCallCount;
             return success();
             } // eligible (no fake addr)
           }
+        } else if (siteIt->second.cachedEntryPtr &&
+                   siteIt->second.funcAddr == funcAddr &&
+                   processStates[procId].callDepth < 2000 &&
+                   nativeCallDepth != 0) {
+          ++entryTableSkippedDepthCount;
         }
         // Fall through to interpretFuncBody for non-native-eligible calls.
         auto &fastState = processStates[procId];
@@ -2150,6 +2292,44 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           results.empty())
         return false;
       outResult = results.front();
+
+      // Guard against partially initialized objects returned by aggressive
+      // wrapper dispatch: a valid Moore class instance must have a non-zero
+      // class-handle (field[0] in uvm_void). If the handle is still zero,
+      // let the original MLIR path execute instead.
+      if (!outResult.isX()) {
+        uint64_t objAddr = outResult.getUInt64();
+        if (objAddr != 0) {
+          bool haveClassHandle = false;
+          int32_t classHandle = 0;
+
+          uint64_t objOff = 0;
+          MemoryBlock *objBlk = findBlockByAddress(objAddr, objOff);
+          if (!objBlk)
+            objBlk = findMemoryBlockByAddress(objAddr, procId, &objOff);
+          if (objBlk && objBlk->initialized && objOff + 4 <= objBlk->size) {
+            uint32_t raw = 0;
+            for (unsigned i = 0; i < 4; ++i)
+              raw |= static_cast<uint32_t>(objBlk->bytes()[objOff + i])
+                     << (i * 8);
+            classHandle = static_cast<int32_t>(raw);
+            haveClassHandle = true;
+          } else {
+            uint64_t nativeOff = 0;
+            size_t nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(objAddr, &nativeOff, &nativeSize) &&
+                nativeOff + 4 <= nativeSize) {
+              std::memcpy(&classHandle,
+                          reinterpret_cast<const void *>(objAddr),
+                          sizeof(classHandle));
+              haveClassHandle = true;
+            }
+          }
+
+          if (haveClassHandle && classHandle == 0)
+            return false;
+        }
+      }
       return true;
     };
 
@@ -2158,13 +2338,23 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // the full MLIR path can still miss wrappers during early startup.
     // By-type calls already provide the wrapper pointer directly (arg1), so
     // dispatch straight to wrapper vtable create_* methods.
-    if ((calleeName ==
+    if (!disableUvmFactoryByTypeFastPath() &&
+        (calleeName ==
              "uvm_pkg::uvm_default_factory::create_component_by_type" ||
          calleeName == "uvm_pkg::uvm_factory::create_component_by_type") &&
         callIndirectOp.getNumResults() >= 1 &&
         callIndirectOp.getArgOperands().size() >= 5) {
       InterpretedValue wrapperVal =
           getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (traceUvmFactoryByTypeEnabled()) {
+        llvm::errs() << "[UVM-BYTYPE] component callee=" << calleeName
+                     << " proc=" << procId
+                     << " wrapper=0x"
+                     << llvm::format_hex(wrapperVal.isX() ? 0
+                                                          : wrapperVal.getUInt64(),
+                                         16)
+                     << " wrapperX=" << (wrapperVal.isX() ? 1 : 0) << "\n";
+      }
       if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
         InterpretedValue nameArg =
             getValue(procId, callIndirectOp.getArgOperands()[3]);
@@ -2174,20 +2364,43 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (tryInvokeWrapperFactoryMethod(
                 wrapperVal.getUInt64(),
                 /*slotIndex=*/1, {nameArg, parentArg}, createdObj)) {
+          if (traceUvmFactoryByTypeEnabled()) {
+            llvm::errs() << "[UVM-BYTYPE] component fastpath-hit wrapper=0x"
+                         << llvm::format_hex(wrapperVal.getUInt64(), 16)
+                         << " result=0x"
+                         << llvm::format_hex(createdObj.isX()
+                                                 ? 0
+                                                 : createdObj.getUInt64(),
+                                             16)
+                         << " resultX=" << (createdObj.isX() ? 1 : 0) << "\n";
+          }
           setValue(procId, callIndirectOp.getResults()[0], createdObj);
           return success();
         }
+        if (traceUvmFactoryByTypeEnabled())
+          llvm::errs() << "[UVM-BYTYPE] component fastpath-miss wrapper=0x"
+                       << llvm::format_hex(wrapperVal.getUInt64(), 16) << "\n";
       }
       // Fall through to MLIR interpretation if fast-path fails.
     }
 
-    if ((calleeName ==
+    if (!disableUvmFactoryByTypeFastPath() &&
+        (calleeName ==
              "uvm_pkg::uvm_default_factory::create_object_by_type" ||
          calleeName == "uvm_pkg::uvm_factory::create_object_by_type") &&
         callIndirectOp.getNumResults() >= 1 &&
         callIndirectOp.getArgOperands().size() >= 4) {
       InterpretedValue wrapperVal =
           getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (traceUvmFactoryByTypeEnabled()) {
+        llvm::errs() << "[UVM-BYTYPE] object callee=" << calleeName
+                     << " proc=" << procId
+                     << " wrapper=0x"
+                     << llvm::format_hex(wrapperVal.isX() ? 0
+                                                          : wrapperVal.getUInt64(),
+                                         16)
+                     << " wrapperX=" << (wrapperVal.isX() ? 1 : 0) << "\n";
+      }
       if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
         InterpretedValue nameArg =
             getValue(procId, callIndirectOp.getArgOperands()[3]);
@@ -2195,9 +2408,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (tryInvokeWrapperFactoryMethod(
                 wrapperVal.getUInt64(),
                 /*slotIndex=*/0, {nameArg}, createdObj)) {
+          if (traceUvmFactoryByTypeEnabled()) {
+            llvm::errs() << "[UVM-BYTYPE] object fastpath-hit wrapper=0x"
+                         << llvm::format_hex(wrapperVal.getUInt64(), 16)
+                         << " result=0x"
+                         << llvm::format_hex(createdObj.isX()
+                                                 ? 0
+                                                 : createdObj.getUInt64(),
+                                             16)
+                         << " resultX=" << (createdObj.isX() ? 1 : 0) << "\n";
+          }
           setValue(procId, callIndirectOp.getResults()[0], createdObj);
           return success();
         }
+        if (traceUvmFactoryByTypeEnabled())
+          llvm::errs() << "[UVM-BYTYPE] object fastpath-miss wrapper=0x"
+                       << llvm::format_hex(wrapperVal.getUInt64(), 16) << "\n";
       }
       // Fall through to MLIR interpretation if fast-path fails.
     }
@@ -3440,6 +3666,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (traceSeq &&
         (calleeName.contains("::start_item") ||
          calleeName.contains("::finish_item") ||
+         calleeName.contains("::wait_for_grant") ||
+         calleeName.contains("::send_request") ||
+         calleeName.contains("::wait_for_item_done") ||
          ((calleeName.contains("seq_item_pull_port") ||
            calleeName.contains("seq_item_pull_imp") ||
            calleeName.contains("sqr_if_base") ||
@@ -3453,6 +3682,81 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                    << llvm::format_hex(a0, 16) << " a1=0x"
                    << llvm::format_hex(a1, 16)
                    << " fifo_maps=" << sequencerItemFifo.size() << "\n";
+    }
+
+    // Intercept low-level sequencer handshake used by many AVIP/UVM benches:
+    // wait_for_grant -> send_request -> wait_for_item_done.
+    if ((calleeName.contains("uvm_sequencer") ||
+         calleeName.contains("sqr_if_base")) &&
+        (calleeName.ends_with("::wait_for_grant") ||
+         calleeName.ends_with("::send_request") ||
+         calleeName.ends_with("::wait_for_item_done"))) {
+      if (calleeName.ends_with("::wait_for_grant")) {
+        if (!args.empty() && !args[0].isX()) {
+          uint64_t sqrAddr = args[0].getUInt64();
+          if (sqrAddr != 0)
+            itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
+        }
+        // Native path grants immediately.
+        return success();
+      }
+
+      if (calleeName.ends_with("::send_request") && args.size() >= 3) {
+        uint64_t sqrAddr = args[0].isX() ? 0 : args[0].getUInt64();
+        uint64_t itemAddr = args[2].isX() ? 0 : args[2].getUInt64();
+        uint64_t queueAddr = 0;
+        if (itemAddr != 0) {
+          if (auto ownerIt = itemToSequencer.find(itemAddr);
+              ownerIt != itemToSequencer.end())
+            queueAddr = ownerIt->second;
+        }
+        if (queueAddr == 0) {
+          if (auto procIt = itemToSequencer.find(sequencerProcKey(procId));
+              procIt != itemToSequencer.end())
+            queueAddr = procIt->second;
+        }
+        if (queueAddr == 0)
+          queueAddr = sqrAddr;
+        if (itemAddr != 0 && queueAddr != 0) {
+          sequencerItemFifo[queueAddr].push_back(itemAddr);
+          recordUvmSequencerItemOwner(itemAddr, queueAddr);
+          sequencePendingItemsByProc[procId].push_back(itemAddr);
+          wakeUvmSequencerGetWaiterForPush(queueAddr);
+          if (traceSeq) {
+            llvm::errs() << "[SEQ-CI] send_request item=0x"
+                         << llvm::format_hex(itemAddr, 16) << " sqr=0x"
+                         << llvm::format_hex(queueAddr, 16) << " depth="
+                         << sequencerItemFifo[queueAddr].size() << "\n";
+          }
+        }
+        return success();
+      }
+
+      if (calleeName.ends_with("::wait_for_item_done")) {
+        auto pendingIt = sequencePendingItemsByProc.find(procId);
+        if (pendingIt == sequencePendingItemsByProc.end() ||
+            pendingIt->second.empty())
+          return success();
+        uint64_t itemAddr = pendingIt->second.front();
+        if (itemDoneReceived.count(itemAddr)) {
+          pendingIt->second.pop_front();
+          if (pendingIt->second.empty())
+            sequencePendingItemsByProc.erase(pendingIt);
+          itemDoneReceived.erase(itemAddr);
+          finishItemWaiters.erase(itemAddr);
+          (void)takeUvmSequencerItemOwner(itemAddr);
+          return success();
+        }
+
+        finishItemWaiters[itemAddr] = procId;
+        auto &pState = processStates[procId];
+        pState.waiting = true;
+        pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
+        if (traceSeq)
+          llvm::errs() << "[SEQ-CI] wait_for_item_done item=0x"
+                       << llvm::format_hex(itemAddr, 16) << "\n";
+        return success();
+      }
     }
 
     // start_item: Record item→sequencer mapping and return immediately
@@ -3485,15 +3789,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
       }
       if (itemAddr != 0 && sqrAddr != 0) {
-        uint64_t canonicalSqrAddr =
-            canonicalizeUvmObjectAddress(procId, sqrAddr);
-        if (canonicalSqrAddr == 0)
-          canonicalSqrAddr = sqrAddr;
-        recordUvmSequencerItemOwner(itemAddr, canonicalSqrAddr);
+        uint64_t queueAddr = sqrAddr;
+        itemToSequencer[sequencerProcKey(procId)] = queueAddr;
+        recordUvmSequencerItemOwner(itemAddr, queueAddr);
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: start_item intercepted: item 0x"
                    << llvm::format_hex(itemAddr, 16) << " → sequencer 0x"
-                   << llvm::format_hex(canonicalSqrAddr, 16)
+                   << llvm::format_hex(queueAddr, 16)
                    << " (raw=0x" << llvm::format_hex(sqrAddr, 16) << ")\n");
       }
       // Call set_item_context to set up the item's parent sequence and
@@ -3539,9 +3841,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // First call (not a re-poll): push item to FIFO
         if (!finishItemWaiters.count(itemAddr)) {
           uint64_t sqrAddr = takeUvmSequencerItemOwner(itemAddr);
-          uint64_t queueAddr = canonicalizeUvmObjectAddress(procId, sqrAddr);
+          if (sqrAddr == 0) {
+            if (auto procIt = itemToSequencer.find(sequencerProcKey(procId));
+                procIt != itemToSequencer.end())
+              sqrAddr = procIt->second;
+          }
+          uint64_t queueAddr = sqrAddr;
           if (queueAddr == 0)
-            queueAddr = sqrAddr;
+            return success();
           sequencerItemFifo[queueAddr].push_back(itemAddr);
           LLVM_DEBUG(llvm::dbgs()
                      << "  call_indirect: finish_item intercepted: item 0x"
@@ -3613,10 +3920,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           found = true;
         }
       }
+      bool allowGlobalFallbackSearch =
+          (seqrQueueAddr == 0 || !sequencerItemFifo.contains(seqrQueueAddr));
       // Fallback: when the port-to-sequencer resolution fails (no UVM
       // connection chain), scan all FIFOs for any available item. This
       // handles simple test cases with a single sequencer-driver pair.
-      if (!found && seqrQueueAddr == 0 && !isTryNextItem) {
+      if (!found && allowGlobalFallbackSearch && !isTryNextItem) {
         for (auto &[qAddr, fifo] : sequencerItemFifo) {
           if (!fifo.empty()) {
             seqrQueueAddr = qAddr;
@@ -3717,7 +4026,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       auto &pState = processStates[procId];
       pState.waiting = true;
       pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
-      enqueueUvmSequencerGetWaiter(seqrQueueAddr, procId,
+      uint64_t waitQueueAddr = allowGlobalFallbackSearch ? 0 : seqrQueueAddr;
+      enqueueUvmSequencerGetWaiter(waitQueueAddr, procId,
                                    callIndirectOp.getOperation());
       return success();
     }
@@ -3837,14 +4147,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.valid = true;
         se.isIntercepted = false;
         se.hadVtableOverride = false;
-        // Populate entry-table pointer for site cache native dispatch.
-        // ONLY cache native compiled entries — trampolines would re-enter
-        // the interpreter causing infinite stack recursion.
+        // Populate entry-table pointer for site cache dispatch (native + trampoline).
         if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
             funcAddr < 0x100000000ULL) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
-          if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid] &&
-              compiledFuncEntries[fid]) {
+          if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
             se.cachedFid = fid;
             se.cachedEntryPtr = const_cast<void *>(compiledFuncEntries[fid]);
           }
@@ -3855,14 +4162,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    // Entry-table dispatch: try native dispatch before interpretFuncBody.
-    // ONLY dispatch to native compiled entries — trampolines would re-enter
-    // the interpreter causing infinite stack recursion.
+    // Entry-table dispatch: try compiled dispatch (native + trampoline) before
+    // interpretFuncBody.
     if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
-        funcAddr < 0x100000000ULL && callState.callDepth < 2000 &&
-        nativeCallDepth == 0) {
+        funcAddr < 0x100000000ULL && callState.callDepth < 2000) {
       uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
-      if (fid < numCompiledAllFuncs && compiledFuncIsNative[fid]) {
+      if (nativeCallDepth != 0) {
+        ++entryTableSkippedDepthCount;
+      } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
         void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
         if (entryPtr) {
           unsigned numArgs = funcOp.getNumArguments();
@@ -3930,14 +4237,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               unsigned bits = 64;
               if (auto intTy = dyn_cast<mlir::IntegerType>(resTy))
                 bits = intTy.getWidth();
-              results.push_back(InterpretedValue(result, bits));
+              results.push_back(InterpretedValue(
+                  llvm::APInt(64, result).zextOrTrunc(bits)));
             }
             for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
               setValue(procId, callIndirectOp.getResult(i), results[i]);
             // Decrement depth counter after returning.
             if (indAddedToVisited)
               decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
-            ++nativeEntryCallCount;
+            if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
+              ++nativeEntryCallCount;
+            else
+              ++trampolineEntryCallCount;
             return success();
             } // eligible (no fake addr)
           }

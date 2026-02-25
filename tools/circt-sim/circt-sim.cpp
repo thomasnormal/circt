@@ -3593,6 +3593,14 @@ static LogicalResult processInput(MLIRContext &context,
                  << interp.getInterpretedFuncCallCount() << "\n";
     llvm::errs() << "[circt-sim] Entry-table native calls:         "
                  << interp.getNativeEntryCallCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry-table trampoline calls:     "
+                 << interp.getTrampolineEntryCallCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry-table skipped (depth):      "
+                 << interp.getEntryTableSkippedDepthCount() << "\n";
+    llvm::errs() << "[circt-sim] Max native call depth:            "
+                 << interp.getMaxNativeCallDepth() << "\n";
+    llvm::errs() << "[circt-sim] func.call skipped (depth):        "
+                 << interp.getNativeFuncSkippedDepth() << "\n";
   }
   // Use std::_Exit() here, before returning, to skip the expensive
   // SimulationContext destructor.  For UVM designs with millions of
@@ -3848,6 +3856,12 @@ int main(int argc, char **argv) {
       "This tool simulates hardware designs using CIRCT's event-driven\n"
       "simulation infrastructure with IEEE 1800 scheduling semantics.\n"))
     return 1;
+
+  // Allow environment-driven AOT stats collection for long-running workloads
+  // where adding CLI flags is inconvenient (e.g., scripted benchmark harnesses).
+  if (!aotStats && std::getenv("CIRCT_AOT_STATS"))
+    aotStats = true;
+
   // circt-sim-specific: apply tighter resource limits than the generic 10 GB
   // defaults.  Multiple circt-sim instances may be launched in parallel (e.g.
   // by lit), so each instance must stay well below the system total.  Using
