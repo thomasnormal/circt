@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -15,6 +15,6 @@ module SVASequenceMatchItemSeveritySubroutine(input logic clk, a);
   // CHECK: moore.builtin.severity info
   // CHECK: moore.builtin.severity warning
   // CHECK: moore.builtin.severity error
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) a |-> s);
 endmodule

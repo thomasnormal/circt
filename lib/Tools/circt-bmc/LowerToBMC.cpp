@@ -210,14 +210,6 @@ static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp,
         SmallVector<llhd::ProbeOp> probes;
         SmallVector<std::pair<Region *, bool>, 4> nestedRegions;
         for (Operation &op : llvm::make_early_inc_range(block)) {
-          if (auto ctime = dyn_cast<llhd::ConstantTimeOp>(op)) {
-            OpBuilder builder(ctime);
-            auto zero = hw::ConstantOp::create(builder, ctime.getLoc(),
-                                               builder.getI1Type(), 0);
-            ctime.replaceAllUsesWith(zero.getResult());
-            ctime.erase();
-            continue;
-          }
           if (auto sig = dyn_cast<llhd::SignalOp>(op)) {
             signalOps.push_back(sig);
             signalValue[sig.getResult()] = sig.getInit();
@@ -397,14 +389,6 @@ static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp,
       }
 
       for (Operation &op : llvm::make_early_inc_range(block)) {
-        if (auto ctime = dyn_cast<llhd::ConstantTimeOp>(op)) {
-          OpBuilder builder(ctime);
-          auto zero = hw::ConstantOp::create(builder, ctime.getLoc(),
-                                             builder.getI1Type(), 0);
-          ctime.replaceAllUsesWith(zero.getResult());
-          ctime.erase();
-          continue;
-        }
         if (auto sig = dyn_cast<llhd::SignalOp>(op)) {
           signalOps.push_back(sig);
           signalValue[sig.getResult()] = sig.getInit();
@@ -443,6 +427,19 @@ static LogicalResult lowerLlhdForBMC(verif::BoundedModelCheckingOp bmcOp,
   };
 
   processRegion(bmcOp.getCircuit(), /*reorderDrives=*/true, processRegion);
+
+  // Drop now-dead time constants left behind after stripping LLHD drives.
+  // Keep live ones (e.g. consumed by llhd.time_to_int in formatting code).
+  bool erasedDeadTimeConsts = true;
+  while (erasedDeadTimeConsts) {
+    erasedDeadTimeConsts = false;
+    bmcOp.getCircuit().walk([&](llhd::ConstantTimeOp ctime) {
+      if (!ctime.use_empty())
+        return;
+      ctime.erase();
+      erasedDeadTimeConsts = true;
+    });
+  }
 
   for (auto op : signalOps) {
     if (!op.use_empty())
@@ -718,6 +715,26 @@ void LowerToBMCPass::runOnOperation() {
       maybeAddExplicitClockArg(root.getArgNumber());
     });
 
+    auto collectClockUse = [&](Value clockVal) {
+      auto simplified = simplifyI1Value(clockVal);
+      Value canonical = simplified.value ? simplified.value : clockVal;
+      BlockArgument root;
+      if (!traceI1ValueRoot(canonical, root) || !root) {
+        usedClockDomains.hasUnresolvedUse = true;
+        return;
+      }
+      if (root.getOwner() != hwModule.getBodyBlock())
+        return;
+      maybeAddExplicitClockArg(root.getArgNumber());
+    };
+
+    hwModule.walk(
+        [&](verif::ClockedAssertOp op) { collectClockUse(op.getClock()); });
+    hwModule.walk(
+        [&](verif::ClockedAssumeOp op) { collectClockUse(op.getClock()); });
+    hwModule.walk(
+        [&](verif::ClockedCoverOp op) { collectClockUse(op.getClock()); });
+
     hwModule.walk([&](Operation *op) {
       if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
         return;
@@ -774,12 +791,28 @@ void LowerToBMCPass::runOnOperation() {
   SmallVector<Attribute> clockSourceAttrs;
   SmallVector<Attribute> clockKeyAttrs;
   if (!hasExplicitClockInput || structClockCount > 0) {
+    SmallVector<seq::ToClockOp> liveToClockOps;
+    SmallVector<seq::ToClockOp> deadToClockOps;
     SmallVector<seq::ToClockOp> toClockOps;
     SmallVector<ltl::ClockOp> ltlClockOps;
+    SmallVector<Value> clockedPropertyClocks;
     hwModule.walk([&](seq::ToClockOp toClockOp) {
+      if (toClockOp.use_empty())
+        deadToClockOps.push_back(toClockOp);
+      else
+        liveToClockOps.push_back(toClockOp);
       toClockOps.push_back(toClockOp);
     });
     hwModule.walk([&](ltl::ClockOp clockOp) { ltlClockOps.push_back(clockOp); });
+    hwModule.walk([&](verif::ClockedAssertOp op) {
+      clockedPropertyClocks.push_back(op.getClock());
+    });
+    hwModule.walk([&](verif::ClockedAssumeOp op) {
+      clockedPropertyClocks.push_back(op.getClock());
+    });
+    hwModule.walk([&](verif::ClockedCoverOp op) {
+      clockedPropertyClocks.push_back(op.getClock());
+    });
     struct ClockInputInfo {
       Value value;
       Value canonical;
@@ -792,7 +825,8 @@ void LowerToBMCPass::runOnOperation() {
     DenseMap<Value, Value> materializedClockInputs;
     DenseMap<Value, Value> assumeEqParent;
     DenseMap<Value, bool> assumeEqParityToParent;
-    clockInputs.reserve(toClockOps.size() + ltlClockOps.size());
+    clockInputs.reserve(liveToClockOps.size() + ltlClockOps.size() +
+                        clockedPropertyClocks.size());
 
     auto materializeClockInputI1 = [&](Value input) -> Value {
       if (!input)
@@ -1225,10 +1259,76 @@ void LowerToBMCPass::runOnOperation() {
         return;
       clockInputs.push_back({i1Input, canonical, invert, base, inputKey});
     };
-    for (auto toClockOp : toClockOps)
+    for (auto toClockOp : liveToClockOps)
       maybeAddClockInput(toClockOp.getInput());
     for (auto clockOp : ltlClockOps)
       maybeAddClockInput(clockOp.getClock());
+    for (Value clockVal : clockedPropertyClocks)
+      maybeAddClockInput(clockVal);
+    if (clockInputs.empty()) {
+      // After LowerClockedAssertLike + LowerLTLToCore, the active clock can be
+      // represented only as `bmc.clock` metadata on assert-like ops. If no
+      // explicit clock SSA value survives, recover the source from matching
+      // top-level input names.
+      auto inputNames = hwModule.getInputNames();
+      auto inputTypes = hwModule.getInputTypes();
+      Block &entryBlock = hwModule.getBody().front();
+      unsigned interfaceInputs = inputTypes.size();
+      if (numRegs) {
+        auto regCount = cast<IntegerAttr>(numRegs).getValue().getZExtValue();
+        if (regCount <= interfaceInputs)
+          interfaceInputs -= regCount;
+      }
+
+      DenseSet<StringRef> seenClockNames;
+      hwModule.walk([&](Operation *op) {
+        if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
+          return;
+        auto nameAttr = op->getAttrOfType<StringAttr>("bmc.clock");
+        if (!nameAttr || nameAttr.getValue().empty())
+          return;
+        StringRef name = nameAttr.getValue();
+        if (!seenClockNames.insert(name).second)
+          return;
+        for (unsigned idx = 0; idx < interfaceInputs; ++idx) {
+          if (idx >= inputNames.size())
+            break;
+          auto inputName = dyn_cast_or_null<StringAttr>(inputNames[idx]);
+          if (!inputName || inputName.getValue() != name)
+            continue;
+          maybeAddClockInput(entryBlock.getArgument(idx));
+          break;
+        }
+      });
+    }
+    if (clockInputs.empty()) {
+      if (auto regClockSources =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        Block &entryBlock = hwModule.getBody().front();
+        auto inputTypes = hwModule.getInputTypes();
+        unsigned interfaceInputs = inputTypes.size();
+        if (numRegs) {
+          auto regCount = cast<IntegerAttr>(numRegs).getValue().getZExtValue();
+          if (regCount <= interfaceInputs)
+            interfaceInputs -= regCount;
+        }
+        DenseSet<unsigned> seenArgIndices;
+        for (auto attr : regClockSources) {
+          auto dict = dyn_cast<DictionaryAttr>(attr);
+          if (!dict)
+            continue;
+          auto argIndexAttr = dict.getAs<IntegerAttr>("arg_index");
+          if (!argIndexAttr)
+            continue;
+          unsigned argIndex = argIndexAttr.getInt();
+          if (argIndex >= interfaceInputs)
+            continue;
+          if (!seenArgIndices.insert(argIndex).second)
+            continue;
+          maybeAddClockInput(entryBlock.getArgument(argIndex));
+        }
+      }
+    }
     if (clockInputs.empty()) {
       if (auto regClockSources =
               hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
@@ -1277,6 +1377,13 @@ void LowerToBMCPass::runOnOperation() {
           maybeAddClockInput(ensureConst(clockValue));
         }
       }
+    }
+    if (clockInputs.empty()) {
+      // As a final fallback, consider dead to_clock ops. These are often stale
+      // artifacts, but some flows intentionally rely on standalone to_clock
+      // materializations to seed clock discovery.
+      for (auto toClockOp : deadToClockOps)
+        maybeAddClockInput(toClockOp.getInput());
     }
     if (clockInputs.empty()) {
       if (auto regClocks =
@@ -1813,6 +1920,10 @@ void LowerToBMCPass::runOnOperation() {
       for (auto toClockOp : toClockOps) {
         auto idx = lookupClockInputIndex(toClockOp.getInput());
         if (!idx) {
+          if (toClockOp.use_empty()) {
+            toClockOp.erase();
+            continue;
+          }
           if (hasExplicitClockInput) {
             if (auto explicitIdx = lookupExplicitClockIndex(toClockOp.getInput())) {
               toClockOp.replaceAllUsesWith(explicitClocks[*explicitIdx]);
@@ -1836,6 +1947,10 @@ void LowerToBMCPass::runOnOperation() {
           clockOp->setAttr("bmc.clock_key", builder.getStringAttr(*key));
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {
+          if (clockOp.use_empty()) {
+            clockOp.erase();
+            continue;
+          }
           if (hasExplicitClockInput)
             if (lookupExplicitClockIndex(clockOp.getClock()))
               continue;
@@ -2008,10 +2123,15 @@ void LowerToBMCPass::runOnOperation() {
   bool multiClock = allowMultiClock && clockCount > 1;
   unsigned clockScale = multiClock ? clockCount : 1;
 
+  // Unroll one extra sampled step so `-b N` can observe obligations that
+  // complete exactly at cycle N. This matches "up to N cycles" expectations.
+  unsigned sampledSteps = bound + 1;
+
   // Scale bounds for multi-clock interleaving so each clock observes the
-  // requested number of cycles.
-  unsigned effectiveBound =
-      risingClocksOnly ? bound * clockScale : 2 * bound * clockScale;
+  // requested number of sampled steps.
+  unsigned effectiveBound = risingClocksOnly
+                                ? sampledSteps * clockScale
+                                : 2 * sampledSteps * clockScale;
 
   verif::BoundedModelCheckingOp bmcOp =
       verif::BoundedModelCheckingOp::create(

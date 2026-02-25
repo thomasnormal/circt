@@ -1,0 +1,87 @@
+diff --git a/source/analysis/AnalyzedAssertion.cpp b/source/analysis/AnalyzedAssertion.cpp
+index 121c752..0dca304 100644
+--- a/source/analysis/AnalyzedAssertion.cpp
++++ b/source/analysis/AnalyzedAssertion.cpp
+@@ -268,9 +268,11 @@ struct AssertionVisitor {
+             if constexpr (std::is_same_v<T, AssertionInstanceExpression>) {
+                 bool isForSequenceMethod = false;
+                 if (parentExpr && parentExpr->kind == ExpressionKind::Call) {
+-                    auto ksn = parentExpr->as<CallExpression>().getKnownSystemName();
++                    auto& call = parentExpr->as<CallExpression>();
++                    auto ksn = call.getKnownSystemName();
+                     isForSequenceMethod = ksn == KnownSystemName::Triggered ||
+-                                          ksn == KnownSystemName::Matched;
++                                          ksn == KnownSystemName::Matched ||
++                                          call.getSubroutineName() == "ended";
+                 }
+ 
+                 auto result = parent.visit(expr, outerClock, flags, isForSequenceMethod);
+@@ -297,7 +299,7 @@ struct AssertionVisitor {
+                     }
+ 
+                     if (lastEndClock && outerClock) {
+-                        // The end clock of a sequence used with .triggered or .matched
++                        // The end clock of a sequence used with .triggered/.matched/.ended
+                         // must match the outer clock.
+                         if (!outerClock->isEquivalentTo(*lastEndClock)) {
+                             parent.parent.bad = true;
+@@ -495,8 +497,9 @@ struct AssertionVisitor {
+             // If this is a call to sequence method we don't require an outer clock,
+             // so check for that case explicitly.
+             auto& call = expr.expr.as<CallExpression>();
+-            if (auto ksn = call.getKnownSystemName();
+-                ksn == KnownSystemName::Triggered || ksn == KnownSystemName::Matched) {
++            auto ksn = call.getKnownSystemName();
++            if (ksn == KnownSystemName::Triggered || ksn == KnownSystemName::Matched ||
++                call.getSubroutineName() == "ended") {
+                 auto args = call.arguments();
+                 if (!args.empty() && args[0]->kind == ExpressionKind::AssertionInstance) {
+                     result = visit(args[0]->as<AssertionInstanceExpression>(), outerClock, flags,
+@@ -507,7 +510,7 @@ struct AssertionVisitor {
+ 
+         if (!result) {
+             // Visit the expression to find nested sequence instantiations due to
+-            // calls to .triggered and .matched. We will still require an outer clock
++            // calls to .triggered/.matched/.ended. We still require an outer clock
+             // in the inheritedClock call below.
+             SeqExprVisitor exprVisitor(*this, outerClock, flags);
+             expr.expr.visit(exprVisitor);
+diff --git a/source/ast/builtins/MiscSystemFuncs.cpp b/source/ast/builtins/MiscSystemFuncs.cpp
+index 269a5ec..94336ae 100644
+--- a/source/ast/builtins/MiscSystemFuncs.cpp
++++ b/source/ast/builtins/MiscSystemFuncs.cpp
+@@ -311,6 +311,9 @@ class SequenceMethod : public SystemSubroutine {
+ public:
+     bool isMatched;
+ 
++    SequenceMethod(std::string name, bool isMatched) :
++        SystemSubroutine(std::move(name), SubroutineKind::Function), isMatched(isMatched) {}
++
+     SequenceMethod(KnownSystemName knownNameId, bool isMatched) :
+         SystemSubroutine(knownNameId, SubroutineKind::Function), isMatched(isMatched) {}
+ 
+@@ -429,6 +432,8 @@ void Builtins::registerMiscSystemFuncs() {
+                     std::make_shared<SequenceMethod>(KnownSystemName::Triggered, false));
+     addSystemMethod(SymbolKind::SequenceType,
+                     std::make_shared<SequenceMethod>(KnownSystemName::Matched, true));
++    addSystemMethod(SymbolKind::SequenceType,
++                    std::make_shared<SequenceMethod>("ended", true));
+ }
+ 
+ } // namespace slang::ast::builtins
+diff --git a/source/ast/expressions/AssertionExpr.cpp b/source/ast/expressions/AssertionExpr.cpp
+index 9b5fd50..ba8fe63 100644
+--- a/source/ast/expressions/AssertionExpr.cpp
++++ b/source/ast/expressions/AssertionExpr.cpp
+@@ -415,8 +415,9 @@ struct SampledValueExprVisitor {
+                     auto& call = expr.template as<CallExpression>();
+                     if (call.isSystemCall()) {
+                         auto ksn = call.getKnownSystemName();
+-                        if (ksn == KnownSystemName::Matched && !call.arguments().empty() &&
+-                            call.arguments()[0]->type->isSequenceType()) {
++                        if ((ksn == KnownSystemName::Matched ||
++                             call.getSubroutineName() == "ended") &&
++                            !call.arguments().empty() && call.arguments()[0]->type->isSequenceType()) {
+                             context.addDiag(matchedCode, expr.sourceRange);
+                         }
+ 

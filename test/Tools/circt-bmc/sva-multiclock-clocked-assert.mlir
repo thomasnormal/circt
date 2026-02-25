@@ -10,7 +10,7 @@
 // CHECK-LTL: verif.clocked_assert
 
 // CHECK-BMC-LABEL: func.func @sva_multiclock
-// CHECK-BMC: verif.bmc bound 20
+// CHECK-BMC: verif.bmc bound 24
 // CHECK-BMC: loop
 // CHECK-BMC: ^bb0(%{{.*}}: !seq.clock, %{{.*}}: !seq.clock, %{{.*}}: i32):
 

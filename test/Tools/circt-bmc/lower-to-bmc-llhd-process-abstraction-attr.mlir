@@ -8,7 +8,7 @@ module {
   }
 }
 
-// CHECK: verif.bmc bound 8 num_regs 0 initial_values [] attributes {
+// CHECK: verif.bmc bound 10 num_regs 0 initial_values [] attributes {
 // CHECK: bmc_abstracted_llhd_process_result_details =
 // CHECK-DAG: llhd_process_result
 // CHECK-DAG: observable_signal_use

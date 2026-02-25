@@ -27,8 +27,8 @@ CIRCT_ROOT="${CIRCT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OUT_DIR="${1:-/tmp/avip-arcilator-sim-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT_DIR"
 
-CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build-test/bin/circt-verilog"
-CANONICAL_ARCILATOR="$CIRCT_ROOT/build-test/bin/arcilator"
+CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build_test/bin/circt-verilog"
+CANONICAL_ARCILATOR="$CIRCT_ROOT/build_test/bin/arcilator"
 
 CIRCT_VERILOG="${CIRCT_VERILOG:-$CANONICAL_CIRCT_VERILOG}"
 ARCILATOR="${ARCILATOR:-$CANONICAL_ARCILATOR}"
@@ -52,36 +52,6 @@ MEMORY_LIMIT_KB=$((MEMORY_LIMIT_GB * 1024 * 1024))
 
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 ARCILATOR_ARGS="${ARCILATOR_ARGS:-}"
-
-resolve_tool_path() {
-  local requested="$1"
-  local tool_name="$2"
-  local candidates=("$requested")
-  if [[ "$requested" == *"/build-test/"* ]]; then
-    candidates+=("${requested/\/build-test\//\/build_test\/}")
-  fi
-  if [[ "$requested" == *"/build_test/"* ]]; then
-    candidates+=("${requested/\/build_test\//\/build-test\/}")
-  fi
-  candidates+=(
-    "$CIRCT_ROOT/build-test/bin/$tool_name"
-    "$CIRCT_ROOT/build_test/bin/$tool_name"
-    "$CIRCT_ROOT/build/bin/$tool_name"
-  )
-
-  local candidate=""
-  for candidate in "${candidates[@]}"; do
-    if [[ -x "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-  echo "$requested"
-  return 0
-}
-
-CIRCT_VERILOG="$(resolve_tool_path "$CIRCT_VERILOG" circt-verilog)"
-ARCILATOR="$(resolve_tool_path "$ARCILATOR" arcilator)"
 
 # name|avip_dir|filelist|tops|test_name
 AVIPS_CORE8=(
@@ -208,6 +178,24 @@ run_limited() {
   )
 }
 
+resolve_compile_filelist() {
+  local avip_dir="$1"
+  local preferred="$2"
+  if [[ -n "$preferred" && -f "$preferred" ]]; then
+    printf '%s\n' "$preferred"
+    return 0
+  fi
+  if [[ -d "$avip_dir/sim" ]]; then
+    local candidate=""
+    candidate="$(find "$avip_dir/sim" -maxdepth 3 -type f \( -iname "*compile*.f" -o -iname "*project*.f" \) | head -n 1 || true)"
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  printf '%s\n' ""
+}
+
 extract_uvm_count() {
   local key="$1"
   local log="$2"
@@ -285,7 +273,14 @@ fi
 
 for row in "${selected_avips[@]}"; do
   IFS='|' read -r name avip_dir filelist tops test_name <<< "$row"
-  IFS=',' read -ra top_modules <<< "$tops"
+  sim_tops="$tops"
+  sim_test_name="$test_name"
+  if [[ "$name" == "axi4Lite" ]] && [[ -n "$filelist" ]] && [[ ! -f "$filelist" ]]; then
+    sim_tops="${AXI4LITE_MASTER_TOPS:-Axi4LiteMasterHdlTop,Axi4LiteMasterHvlTop}"
+    sim_test_name="${AXI4LITE_MASTER_TESTNAME:-Axi4LiteMasterBaseTest}"
+    echo "[avip-arcilator-sim] info: using AXI4Lite master tops/test (missing $filelist): tops=$sim_tops test=$sim_test_name"
+  fi
+  IFS=',' read -ra top_modules <<< "$sim_tops"
   lane_jit_entry=""
   if [[ "$ARCILATOR_FAST_MODE" == "1" ]]; then
     for t in "${top_modules[@]}"; do
@@ -326,9 +321,12 @@ for row in "${selected_avips[@]}"; do
       lane_verilog_args="${lane_verilog_args:+$lane_verilog_args }--top $t"
     done
 
+    resolved_filelist="$(resolve_compile_filelist "$avip_dir" "$filelist")"
     compile_cmd=("$RUN_AVIP" "$avip_dir")
-    if [[ -n "$filelist" ]]; then
-      compile_cmd+=("$filelist")
+    if [[ -n "$resolved_filelist" ]]; then
+      compile_cmd+=("$resolved_filelist")
+    else
+      echo "[avip-arcilator-sim] info: no explicit sim filelist for '$name'; using runner auto filelist resolution"
     fi
     if CIRCT_VERILOG="$CIRCT_VERILOG" \
        CIRCT_VERILOG_IR=llhd \
@@ -357,8 +355,8 @@ for row in "${selected_avips[@]}"; do
 
     if [[ "$compile_status" == "OK" ]]; then
       uvm_args="+ntb_random_seed=$seed +UVM_VERBOSITY=$UVM_VERBOSITY"
-      if [[ -n "$test_name" ]]; then
-        uvm_args="+UVM_TESTNAME=$test_name $uvm_args"
+      if [[ -n "$sim_test_name" ]]; then
+        uvm_args="+UVM_TESTNAME=$sim_test_name $uvm_args"
       fi
 
       start_sim=$(date +%s)

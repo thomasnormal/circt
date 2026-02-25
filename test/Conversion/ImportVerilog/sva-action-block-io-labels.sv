@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // REQUIRES: slang
 
 module SVAActionBlockIOLabels(input logic clk, a, b, c, d);
@@ -12,9 +12,9 @@ module SVAActionBlockIOLabels(input logic clk, a, b, c, d);
   assert property (@(posedge clk) a |=> c) else $fstrobe(fd, dyn);
 
   // CHECK-LABEL: moore.module @SVAActionBlockIOLabels
-  // CHECK: verif.assert {{.*}} label "strobe_fail"
-  // CHECK: verif.assert {{.*}} label "monitor_fail"
-  // CHECK: verif.assert {{.*}} label "strobeb_fail"
-  // CHECK: verif.assert {{.*}} label "fdisplay_fail"
-  // CHECK: verif.assert {{.*}} label "$fstrobe"
+  // CHECK: verif.clocked_assert {{.*}} label "strobe_fail"
+  // CHECK: verif.clocked_assert {{.*}} label "monitor_fail"
+  // CHECK: verif.clocked_assert {{.*}} label "strobeb_fail"
+  // CHECK: verif.clocked_assert {{.*}} label "fdisplay_fail"
+  // CHECK: verif.clocked_assert {{.*}} label "$fstrobe"
 endmodule

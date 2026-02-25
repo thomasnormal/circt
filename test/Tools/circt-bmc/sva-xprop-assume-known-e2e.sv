@@ -1,9 +1,8 @@
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --module=sva_xprop_assume_known - | FileCheck %s --check-prefix=NOASSUME
+// RUN:   circt-bmc --run-smtlib -b 1 --module=sva_xprop_assume_known - | FileCheck %s --check-prefix=NOASSUME
 // RUN: circt-verilog --ir-hw %s | \
-// RUN:   circt-bmc -b 1 --assume-known-inputs --module=sva_xprop_assume_known - | FileCheck %s --check-prefix=ASSUME
+// RUN:   circt-bmc --run-smtlib -b 1 --assume-known-inputs --module=sva_xprop_assume_known - | FileCheck %s --check-prefix=ASSUME
 // REQUIRES: slang
-// REQUIRES: bmc-jit
 // REQUIRES: z3
 
 module sva_xprop_assume_known(input logic clk, input logic in);

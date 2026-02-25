@@ -2472,16 +2472,14 @@ module ConcurrentAssert(input clk);
   // CHECK: [[NONCONCATREPEAT_OP:%.+]] = ltl.non_consecutive_repeat [[CONV_A]], 2, 0 : i1
   // CHECK: verif.assert [[NONCONCATREPEAT_OP]] : !ltl.sequence
   assert property (a [= 2]);
-  // TODO: Slang rejects unbounded '$' in nonconsecutive repeat
-  // assert property (a [= 2:$]);
+  assert property (a [= 2:$]);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
   // CHECK: [[GOTO_OP:%.+]] = ltl.goto_repeat [[CONV_A]], 2, 2 : i1
   // CHECK: verif.assert [[GOTO_OP]] : !ltl.sequence
   assert property (a [-> 2:4]);
-  // TODO: Slang rejects unbounded '$' in goto repeat
-  // assert property (a [-> 2:$]);
+  assert property (a [-> 2:$]);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
@@ -2489,8 +2487,8 @@ module ConcurrentAssert(input clk);
   // CHECK: [[READ_B:%.+]] = moore.read [[B]] : <l1>
   // CHECK: [[CONV_B:%.+]] = moore.to_builtin_bool [[READ_B]] : l1
   // CHECK: [[DELAY_B:%.+]] = ltl.delay [[CONV_B]], 0, 0 : i1
-  // CHECK: [[CONCAT_OP:%.+]] = ltl.concat [[DELAY_A]], [[DELAY_B]] : !ltl.sequence, !ltl.sequence
-  // CHECK: verif.assert [[CONCAT_OP]] : !ltl.sequence
+  // CHECK: [[AND_OP:%.+]] = ltl.and [[DELAY_A]], [[DELAY_B]] : !ltl.sequence, !ltl.sequence
+  // CHECK: verif.assert [[AND_OP]] : !ltl.property
   assert property (a ##0 b);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
@@ -2525,16 +2523,14 @@ module ConcurrentAssert(input clk);
   // CHECK: [[RANGE_EVEN:%.+]] = ltl.delay [[CONV_A]], 2, 1 : i1
   // CHECK: verif.assert [[RANGE_EVEN]] : !ltl.sequence
   assert property (s_eventually [2:3] a);
-  // TODO: Slang rejects unbounded '$' in s_eventually - needs Slang support
-  // assert property (s_eventually [2:$] a);
+  assert property (s_eventually [2:$] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
   // CHECK: [[RANGE_WEAK_EVEN:%.+]] = ltl.delay [[CONV_A]], 2, 1 : i1
   // CHECK: verif.assert [[RANGE_WEAK_EVEN]] : !ltl.sequence
   assert property (eventually [2:3] a);
-  // TODO: Slang rejects unbounded '$' in eventually - needs Slang support
-  // assert property (eventually [2:$] a);
+  assert property (eventually [2:$] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
@@ -2553,16 +2549,14 @@ module ConcurrentAssert(input clk);
   // CHECK: [[REPEAT_OP:%.+]] = ltl.repeat [[CONV_A]], 2, 1 : i1
   // CHECK: verif.assert [[REPEAT_OP]] : !ltl.sequence
   assert property (s_always [2:3] a);
-  // TODO: Slang rejects unbounded '$' in s_always - needs Slang support
-  // assert property (s_always [2:$] a);
+  assert property (s_always [2:$] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
   // CHECK: [[REPEAT_OP:%.+]] = ltl.repeat [[CONV_A]], 2, 1 : i1
   // CHECK: verif.assert [[REPEAT_OP]] : !ltl.sequence
   assert property (always [2:3] a);
-  // TODO: Slang rejects unbounded '$' in always - needs Slang support
-  // assert property (always [2:$] a);
+  assert property (always [2:$] a);
   // CHECK-NOT: moore.procedure always
   // CHECK: [[READ_A:%.+]] = moore.read [[A]] : <i1>
   // CHECK: [[CONV_A:%.+]] = moore.to_builtin_bool [[READ_A]] : i1
@@ -2593,9 +2587,8 @@ module ConcurrentAssert(input clk);
   // CHECK: [[DELAY_OP:%.+]] = ltl.delay [[CONV_A]], 2, 0 : i1
   // CHECK: verif.assert [[DELAY_OP]] : !ltl.sequence
   assert property (s_nexttime [2] a);
-  // TODO: Slang rejects unbounded '$' in nexttime/s_nexttime - needs Slang support
-  // assert property (nexttime [2:$] a);
-  // assert property (s_nexttime [2:$] a);
+  assert property (nexttime [2:$] a);
+  assert property (s_nexttime [2:$] a);
 
   // Binary
   // CHECK-NOT: moore.procedure always

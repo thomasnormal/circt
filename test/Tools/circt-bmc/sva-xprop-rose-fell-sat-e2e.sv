@@ -8,16 +8,16 @@
 module sva_xprop_rose_sat(input logic clk);
   logic in;
   assign in = 1'bx;
-  // $rose should propagate X if either sample is unknown.
+  // With unknown current samples, $rose does not produce a true edge.
   assert property (@(posedge clk) ($rose(in) == 1'b0));
 endmodule
 
 module sva_xprop_fell_sat(input logic clk);
   logic in;
   assign in = 1'bx;
-  // $fell should propagate X if either sample is unknown.
+  // With unknown current samples, $fell does not produce a true edge.
   assert property (@(posedge clk) ($fell(in) == 1'b0));
 endmodule
 
-// ROSE: BMC_RESULT=SAT
-// FELL: BMC_RESULT=SAT
+// ROSE: BMC_RESULT=UNSAT
+// FELL: BMC_RESULT=UNSAT

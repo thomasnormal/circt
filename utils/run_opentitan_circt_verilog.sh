@@ -91,8 +91,10 @@ done
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=utils/formal_toolchain_resolve.sh
+source "$SCRIPT_DIR/formal_toolchain_resolve.sh"
 OPENTITAN_DIR="${OPENTITAN_DIR:-$HOME/opentitan}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-build-test/bin/circt-verilog}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$(resolve_default_circt_tool "circt-verilog" "$SCRIPT_DIR/../build_test/bin")}"
 OUT_DIR="${OUT_DIR:-$PWD}"
 TIMESCALE="${TIMESCALE:-1ns/1ps}"
 

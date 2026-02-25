@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -13,7 +13,7 @@ module SvaPastDynamicArrayQueueExplicitClock(input logic clk_a, input logic clk_
   // CHECK-DAG: moore.blocking_assign
   // CHECK-DAG: moore.array.size
   // CHECK-DAG: moore.array.locator
-  // CHECK-DAG: verif.assert
+  // CHECK-DAG: verif.clocked_assert
   assert property (@(posedge clk_a) ($past(d, 2, @(posedge clk_b)) == d));
 
   // CHECK-DAG: moore.procedure always
@@ -23,6 +23,6 @@ module SvaPastDynamicArrayQueueExplicitClock(input logic clk_a, input logic clk_
   // CHECK-DAG: moore.blocking_assign
   // CHECK-DAG: moore.array.size
   // CHECK-DAG: moore.array.locator
-  // CHECK-DAG: verif.assert
+  // CHECK-DAG: verif.clocked_assert
   assert property (@(posedge clk_a) ($past(q, 1, @(posedge clk_b)) == q));
 endmodule

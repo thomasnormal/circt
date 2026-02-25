@@ -64,7 +64,7 @@ Task(
     subagent_type="Bash",
     model="sonnet",         # MUST be explicit — "inherit" DOES NOT WORK
     mode="bypassPermissions",
-    prompt="cd /home/thomas-ahle/circt/build-test && ninja circt-sim 2>&1 | tail -5 ..."
+    prompt="cd /home/thomas-ahle/circt/build_test && ninja circt-sim 2>&1 | tail -5 ..."
 )
 
 # 3. Wait for team messages — they arrive automatically
@@ -86,7 +86,7 @@ Task(
 - Create team first (`TeamCreate`), then spawn agents with `team_name` — gives automatic message delivery
 - Use `mode: "bypassPermissions"` for build/test agents so they don't block on permission prompts
 - Don't use `run_in_background: true` — use team members instead (better messaging, no output file hassle)
-- Don't run multiple agents against `build-test/` simultaneously — they fight over ninja locks
+- Don't run multiple agents against `build_test/` simultaneously — they fight over ninja locks
 - Give agents **specific, command-oriented prompts** with exact commands to run and what to report:
   ```
   # GOOD:
@@ -107,20 +107,20 @@ Task(
 
 ```bash
 # Build
-cd /home/thomas-ahle/circt/build-test && ninja circt-sim circt-verilog
+cd /home/thomas-ahle/circt/build_test && ninja circt-sim circt-verilog
 
 # circt-sim lit tests
-cd /home/thomas-ahle/circt/build-test && ninja check-circt-tools-circt-sim
+cd /home/thomas-ahle/circt/build_test && ninja check-circt-tools-circt-sim
 # Or directly:
-/home/thomas-ahle/circt/llvm/build/bin/llvm-lit --threads=4 build-test/test/Tools/circt-sim/
+/home/thomas-ahle/circt/llvm/build/bin/llvm-lit --threads=4 build_test/test/Tools/circt-sim/
 
 # sv-tests (simulation)
-CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build-test/bin/circt-sim \
+CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_SIM=build_test/bin/circt-sim \
   bash utils/run_sv_tests_circt_sim.sh
 
 # AVIP simulation (always set wall-time guard)
 CIRCT_MAX_WALL_MS=600000 CIRCT_UVM_ARGS="+UVM_TESTNAME=apb_8b_write_test" \
-  build-test/bin/circt-sim build-test/apb_avip_dual_llhd.mlir \
+  build_test/bin/circt-sim build_test/apb_avip_dual_llhd.mlir \
   --top hvl_top --top hdl_top --max-time=500000000
 
 # cocotb VPI tests
@@ -182,8 +182,8 @@ consistently revealed efficient approaches we can adapt.
 ### Key Paths
 - `llvm-lit`: `/home/thomas-ahle/circt/llvm/build/bin/llvm-lit`
 - `FileCheck`: `/home/thomas-ahle/circt/llvm/build/bin/FileCheck`
-- Build dir: `/home/thomas-ahle/circt/build-test/`
-- AVIP MLIR: `build-test/apb_avip_dual_llhd.mlir` (NOT `build/`)
+- Build dir: `/home/thomas-ahle/circt/build_test/`
+- AVIP MLIR: `build_test/apb_avip_dual_llhd.mlir` (NOT `build/`)
 - Wall-time guard default: 300s (set `CIRCT_MAX_WALL_MS=600000` for AVIPs)
 
 ---
@@ -369,7 +369,7 @@ objection system, factory, coverage, die() absorption.
 - **`timeout` EXIT_CODE=124** doesn't mean hang — sim just took too long
 - **ccache stale objects** — clear with `ccache -C` if symbols mismatch
 - **git stash pop** can produce enormous merge conflict output — be careful
-- **Multiple agents sharing build-test/** causes contention — serialize builds
+- **Multiple agents sharing build_test/** causes contention — serialize builds
 - **`resolveDrivers()` fix**: Old `getLSB()` broken for FourStateStruct; must group by full APInt
 - **`__moore_randomize_basic`**: Must be no-op (only advance RNG) — filling object with random bytes corrupts vtable/class_id
 - **Associative array assignment** must deep-copy (not shallow ptr copy) — root cause of UVM phase livelock
@@ -425,7 +425,7 @@ Must match by NAME, not pointer identity. This caused 0% coverage in all 9 AVIPs
 - **`CHANGELOG.md`** — All changes, organized by date/feature
 - **`perf_engineering_log.md`** — Performance measurements after each E-phase, AVIP timings
 - **`avip_engineering_log.md`** — AVIP bring-up progress, dual-top debugging history
-- **`~/.claude/plans/cached-zooming-fern.md`** — Full AOT/performance engineering project plan (phases E0–E6)
+- **`aot_plan_3.md`** — Current AOT plan: call_indirect fix, constant globals, shared globals, snapshot workflow (Feb 24, 2026)
 
 ### Auto-Memory (persist across sessions)
 - **`~/.claude/projects/-home-thomas-ahle-circt/memory/MEMORY.md`** — Master reference: architecture, workflow rules, all major fixes. First 200 lines auto-loaded.

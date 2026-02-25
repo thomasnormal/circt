@@ -1,6 +1,6 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf 'module top;\nendmodule\n' > %t/retry_case.sv
-// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE="%t/verilog.state"\nif [[ ! -f "$STATE" ]]; then\n  touch "$STATE"\n  echo "timeout: failed to run command '\''/home/thomas-ahle/circt/build-test/bin/circt-verilog'\'': Text file busy" >&2\n  exit 1\nfi\ncat <<'\''MLIR'\''\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nSTATE="%t/verilog.state"\nif [[ ! -f "$STATE" ]]; then\n  touch "$STATE"\n  echo "timeout: failed to run command '\''/home/thomas-ahle/circt/build_test/bin/circt-verilog'\'': Text file busy" >&2\n  exit 1\nfi\ncat <<'\''MLIR'\''\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\n' > %t/fake-verilog.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\ncat "${@: -1}"\n' > %t/fake-opt.sh
 // RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "LEC_RESULT=EQ"\n' > %t/fake-lec.sh
 // RUN: chmod +x %t/fake-verilog.sh %t/fake-opt.sh %t/fake-lec.sh

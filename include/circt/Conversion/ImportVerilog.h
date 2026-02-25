@@ -228,6 +228,10 @@ struct ImportVerilogOptions {
   /// If true, allow dynamic type members in non-procedural contexts.
   std::optional<bool> allowNonProceduralDynamic;
 
+  /// If true, continue lowering when an unsupported SVA construct is
+  /// encountered by dropping in a tagged placeholder assert-like op.
+  bool continueOnUnsupportedSVA = false;
+
 
   //===--------------------------------------------------------------------===//
   // File lists

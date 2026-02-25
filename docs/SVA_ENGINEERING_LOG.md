@@ -31,9 +31,9 @@
       broke existing `$error` behavior; restricting failure to fatal severity
       preserved intended semantics.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Conversion/ImportVerilog/tagged-union-invalid-member-access.sv build-test/test/Conversion/ImportVerilog/tagged-union.sv build-test/test/Tools/circt-sim/tagged-union-invalid-member-runtime.sv build-test/test/Tools/circt-sim/syscall-fatal.sv`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build_test/test/Conversion/ImportVerilog/tagged-union-invalid-member-access.sv build_test/test/Conversion/ImportVerilog/tagged-union.sv build_test/test/Tools/circt-sim/tagged-union-invalid-member-runtime.sv build_test/test/Tools/circt-sim/syscall-fatal.sv`
       - result: `4/4` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Tools/circt-sim/syscall-fatal-error-warning-info.sv`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build_test/test/Tools/circt-sim/syscall-fatal-error-warning-info.sv`
       - result: `1/1` pass.
     - `TEST_FILTER='11.9--tagged_union_member_access_inv' PARALLEL=1 OUT=/tmp/sv-tagged-union-one.txt utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `pass=1 fail=0`.
@@ -59,7 +59,7 @@
       - reject multiple continuous assignments to one variable.
       - reject mixed continuous + procedural assignments to one variable.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Conversion/ImportVerilog/driver-errors.sv`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build_test/test/Conversion/ImportVerilog/driver-errors.sv`
       - result: `1/1` pass.
     - direct frontend checks:
       - `6.5--variable_mixed_assignments`: `circt-verilog` now exits `1` with
@@ -88,7 +88,7 @@
       `utils/sv-tests-sim-expect.txt`.
   - validation:
     - direct stress (single compiled MLIR):
-      - `build-test/bin/circt-sim --top=top /tmp/assume-final.mlir` repeated
+      - `build_test/bin/circt-sim --top=top /tmp/assume-final.mlir` repeated
         `30` times: `30/30` exit-0.
     - default harness:
       - `KEEP_LOGS_DIR=/tmp/sv-16_2--assume-final-after-drop TEST_FILTER='^16.2--assume-final$' DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
@@ -156,9 +156,9 @@
     - expectation now matches:
       - `moore.call_post_randomize %obj, %rand_result : <@InlineConstraintTx>`
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Conversion/ImportVerilog/randomize.sv`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build_test/test/Conversion/ImportVerilog/randomize.sv`
       - result: `1/1` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv build-test/test/Conversion/ImportVerilog/class-randomization-constraints.sv build-test/test/Conversion/ImportVerilog/runtime-randomization.sv build-test/test/Conversion/ImportVerilog/randomize.sv build-test/test/Conversion/ImportVerilog/constraint-solve.sv build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv build_test/test/Conversion/ImportVerilog/class-randomization-constraints.sv build_test/test/Conversion/ImportVerilog/runtime-randomization.sv build_test/test/Conversion/ImportVerilog/randomize.sv build_test/test/Conversion/ImportVerilog/constraint-solve.sv build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv`
       - result: `8/8` pass.
 
 - Iteration update (sv-tests sim tag filter correctness):
@@ -265,10 +265,10 @@
       - switched remaining direct continuous signal reads to sampled accessor.
   - surprises:
     - `llvm-lit` execution in this environment intermittently reported
-      `Permission denied` spawning `build-test/bin/circt-sim`, while direct
+      `Permission denied` spawning `build_test/bin/circt-sim`, while direct
       command invocation of the same binary succeeded.
   - validation:
-    - `ninja -C build-test circt-sim` -> pass.
+    - `ninja -C build_test circt-sim` -> pass.
     - direct reproducer commands:
       - `sva-property-local-var-runtime.sv` -> `SVA_PASS` (exit 0).
       - `sva-sequence-local-var-runtime.sv` -> still reports repeated sequence
@@ -308,10 +308,10 @@
       - `sva-sequence-match-item-time-incdec.sv`
   - validation:
     - focused file-level checks:
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore <file> | llvm/build/bin/FileCheck <file>`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore <file> | llvm/build/bin/FileCheck <file>`
       - result: all 13 previously failing files pass.
     - SVA ImportVerilog lit subset:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog --filter='sva-'`
       - result: `0` failures (`28` passed, `125` unsupported, `252` excluded).
 
 - Iteration update (clock metadata regression lock + open-range SVA coverage):
@@ -336,12 +336,12 @@
           - `s_always [2:$] a`
           - `always [2:$] a`
   - validation:
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-assert.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-assert.mlir`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-assert.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-assert.mlir`
       - result: pass.
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
       - result: pass.
     - reported 6-case `circt-sim` bucket recheck:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv build-test/test/Tools/circt-sim/cross-var-inline.sv build-test/test/Tools/circt-sim/cross-var-linear-sum.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build-test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv build_test/test/Tools/circt-sim/cross-var-inline.sv build_test/test/Tools/circt-sim/cross-var-linear-sum.sv build_test/test/Tools/circt-sim/fork-disable-defer-poll.sv build_test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build_test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build_test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
       - result: `9/9` pass.
     - `sv-tests` expectation-file sanity:
       - `EXPECT_FILE=/dev/null TAG_REGEX='(^| )16\\.' BOUND=10 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
@@ -410,12 +410,12 @@
         `readAssertionFailMessagesEnabled()`.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-verilog`
+      - `ninja -C build_test circt-verilog`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/syscall-assertpassoff.sv build-test/test/Tools/circt-sim/syscall-assertcontrol.sv build-test/test/Tools/circt-sim/syscall-assertfailoff.sv build-test/test/Tools/circt-sim/syscall-assertoff.sv build-test/test/Tools/circt-sim/syscall-asserton.sv build-test/test/Tools/circt-sim/sva-assertfailoff-immediate-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/syscall-assertpassoff.sv build_test/test/Tools/circt-sim/syscall-assertcontrol.sv build_test/test/Tools/circt-sim/syscall-assertfailoff.sv build_test/test/Tools/circt-sim/syscall-assertoff.sv build_test/test/Tools/circt-sim/syscall-asserton.sv build_test/test/Tools/circt-sim/sva-assertfailoff-immediate-runtime.sv`
         - result: `6/6` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-assertcontrol-pass-vacuous-procedural|immediate-assert-action-block|sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine|sva-sequence-match-item-assertcontrol-subroutine' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-assertcontrol-pass-vacuous-procedural|immediate-assert-action-block|sva-sequence-match-item-assertcontrol-pass-vacuous-subroutine|sva-sequence-match-item-assertcontrol-subroutine' build_test/test/Conversion/ImportVerilog`
         - result: `4/4` pass.
 
 - Iteration update (disable-fork deferred wakeup regression restored):
@@ -437,12 +437,12 @@
         checks (`Ready`/`Suspended`/`Waiting`) unchanged.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build-test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build_test/test/Tools/circt-sim/fork-disable-defer-poll.sv build_test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build_test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
         - result: `4/4` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv build-test/test/Tools/circt-sim/cross-var-inline.sv build-test/test/Tools/circt-sim/cross-var-linear-sum.sv build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build-test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv build_test/test/Tools/circt-sim/cross-var-inline.sv build_test/test/Tools/circt-sim/cross-var-linear-sum.sv build_test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build_test/test/Tools/circt-sim/fork-disable-defer-poll.sv build_test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build_test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
         - result: `9/9` pass.
 
 - Iteration update (implication runtime for strong `s_until`/`s_until_with`
@@ -475,14 +475,14 @@
         finalization via existing implication tracker.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-implication-suntilwith-overlap-immediate-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-suntilwith-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-suntil-immediate-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-implication-suntilwith-overlap-immediate-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-suntilwith-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-suntil-immediate-fail-runtime.sv`
         - result: `3/3` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
         - result: `53/53` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (strong repetition semantics: `strong(b[->N])` / `strong(b[=N])`
@@ -516,14 +516,14 @@
         repetition-hit obligations when no unknown-data ambiguity exists.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-strong-goto-repeat-fail-runtime.sv build-test/test/Tools/circt-sim/sva-strong-goto-repeat-pass-runtime.sv build-test/test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv build-test/test/Tools/circt-sim/sva-salways-open-range-progress-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-strong-goto-repeat-fail-runtime.sv build_test/test/Tools/circt-sim/sva-strong-goto-repeat-pass-runtime.sv build_test/test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv build_test/test/Tools/circt-sim/sva-salways-open-range-progress-pass-runtime.sv`
         - result: `4/4` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
         - result: `50/50` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (strong open-range `s_always` finite-progress closure +
@@ -559,14 +559,14 @@
           as the repeat streak had no unknown samples.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv build-test/test/Tools/circt-sim/sva-salways-open-range-progress-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-salways-open-range-progress-fail-runtime.sv build_test/test/Tools/circt-sim/sva-salways-open-range-progress-pass-runtime.sv`
         - result: `2/2` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
         - result: `48/48` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (weak `until_with` lowering semantics):
@@ -595,16 +595,16 @@
         `until_with` scenario.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-verilog circt-translate circt-sim`
+      - `ninja -C build_test circt-verilog circt-translate circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-until-with-runtime.sv build-test/test/Tools/circt-sim/sva-until-with-pass-runtime.sv build-test/test/Conversion/ImportVerilog/sva-until-with-lowering.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-until-with-runtime.sv build_test/test/Tools/circt-sim/sva-until-with-pass-runtime.sv build_test/test/Conversion/ImportVerilog/sva-until-with-lowering.sv`
         - result: `3/3` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='until' build-test/test/Conversion/ImportVerilog build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='until' build_test/test/Conversion/ImportVerilog build_test/test/Tools/circt-sim`
         - result: `6/6` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
         - result: `46/46` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-' build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (runtime implication tracking for unbounded delay
@@ -631,14 +631,14 @@
       - locks required fail behavior when no matching consequent occurs.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-fail-runtime.sv`
         - result: `2/2` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv -j 1 --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
         - result: `44/44` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-disable-iff.sv build-test/test/Tools/circt-sim/sva-implication-delay.sv build-test/test/Tools/circt-sim/sva-implication-fail.sv build-test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv build-test/test/Tools/circt-sim/sva-always-open-range-property-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-disable-iff.sv build_test/test/Tools/circt-sim/sva-implication-delay.sv build_test/test/Tools/circt-sim/sva-implication-fail.sv build_test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv build_test/test/Tools/circt-sim/sva-always-open-range-property-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-unbounded-delay-consequent-fail-runtime.sv`
         - result: `7/7` pass.
 
 - Iteration update (runtime weak-eventually semantics for `always [m:$]`
@@ -664,14 +664,14 @@
       - locks expected fail behavior when the operand property is violated.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv`
         - result: `1/1` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-always-open-range-property-fail-runtime.sv build-test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-always-open-range-property-fail-runtime.sv build_test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv`
         - result: `2/2` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-disable-iff.sv build-test/test/Tools/circt-sim/sva-implication-delay.sv build-test/test/Tools/circt-sim/sva-implication-fail.sv build-test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv build-test/test/Tools/circt-sim/sva-always-open-range-property-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-disable-iff.sv build_test/test/Tools/circt-sim/sva-implication-delay.sv build_test/test/Tools/circt-sim/sva-implication-fail.sv build_test/test/Tools/circt-sim/sva-always-open-range-property-runtime.sv build_test/test/Tools/circt-sim/sva-always-open-range-property-fail-runtime.sv`
         - result: `5/5` pass.
 
 - Iteration update (open-range unary property parity: `eventually [m:$]` and
@@ -702,15 +702,15 @@
         always over `m`-shifted property with finite-progress requirement.
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-translate circt-verilog`
+      - `ninja -C build_test circt-translate circt-verilog`
         - result: `PASS`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv build-test/test/Conversion/ImportVerilog/sva-open-range-property.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv build_test/test/Conversion/ImportVerilog/sva-open-range-property.sv`
         - result: `2/2` pass.
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv build-test/test/Conversion/ImportVerilog/sva-bounded-always-property.sv build-test/test/Conversion/ImportVerilog/sva-open-range-property.sv build-test/test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv build-test/test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv build_test/test/Conversion/ImportVerilog/sva-bounded-always-property.sv build_test/test/Conversion/ImportVerilog/sva-open-range-property.sv build_test/test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv build_test/test/Conversion/ImportVerilog/sva-strong-sequence-nexttime-always.sv`
         - result: `5/5` pass.
   - surprise:
-    - `build-test/test/Conversion/ImportVerilog/assertions.sv` is currently
+    - `build_test/test/Conversion/ImportVerilog/assertions.sv` is currently
       failing in this workspace due pre-existing `moore.eq` vs
       `moore.case_eq` FileCheck drift unrelated to this change.
 
@@ -743,17 +743,17 @@
       - added required tokens so smoke contract enforces the new `$var` checks.
   - validation:
     - command-equivalent regression checks:
-      - `build-test/bin/circt-sim test/Tools/circt-sim/vcd-named-signal-portless.mlir --top top --vcd ...` + `FileCheck` (`SIM`/`VCD`): `PASS`.
-      - `build-test/bin/circt-sim test/Tools/circt-sim/llhd-combinational.mlir --vcd ...` + `grep '^\$var '`: `PASS`.
+      - `build_test/bin/circt-sim test/Tools/circt-sim/vcd-named-signal-portless.mlir --top top --vcd ...` + `FileCheck` (`SIM`/`VCD`): `PASS`.
+      - `build_test/bin/circt-sim test/Tools/circt-sim/llhd-combinational.mlir --vcd ...` + `grep '^\$var '`: `PASS`.
     - targeted `llvm-lit`:
-      - `build-test/test/Tools/circt-sim/vcd-named-signal-portless.mlir`: `PASS`.
-      - `build-test/test/Tools/circt-sim/syscall-dumpvars-creates-file.sv`: `PASS`.
+      - `build_test/test/Tools/circt-sim/vcd-named-signal-portless.mlir`: `PASS`.
+      - `build_test/test/Tools/circt-sim/syscall-dumpvars-creates-file.sv`: `PASS`.
     - smoke contract:
       - `utils/wasm_smoke_contract_check.sh`: `PASS`.
   - surprise:
     - rebuild initially failed in unrelated dirty `AOTProcessCompiler.cpp` edits
       in this workspace; rerunning rebuild later succeeded and linked
-      `build-test/bin/circt-sim` with the new tracing fix.
+      `build_test/bin/circt-sim` with the new tracing fix.
 
 - Iteration update (preserve module-level concurrent assertion labels into
   runtime VCD SVA signal names):
@@ -783,7 +783,7 @@
       - use `actionLabel` when present; otherwise fall back to the preserved
         assertion statement label for emitted `verif.*`/`verif.clocked_*` ops.
   - validation:
-    - focused command-equivalent checks (using `build-test/bin` tools):
+    - focused command-equivalent checks (using `build_test/bin` tools):
       - `sva-labeled-concurrent-assert-no-action.sv`: `PASS`
       - `sva-vcd-assertion-signal-label.sv`: `PASS`
       - regression safety:
@@ -791,7 +791,7 @@
         - `sva-vcd-assertion-signal-trace-filter.sv`: `PASS`
         - `sva-vcd-assertion-signal-dumpvars.sv`: `PASS`
     - integrated targeted `llvm-lit`:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-labeled-concurrent-assert-no-action.sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal-label.sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal.sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal-trace-filter.sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal-dumpvars.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-labeled-concurrent-assert-no-action.sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal-label.sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal.sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal-trace-filter.sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal-dumpvars.sv`
       - result: `5/5` pass.
   - surprise:
     - rebuilding `circt-sim` in this workspace is currently blocked by an
@@ -819,7 +819,7 @@
         `__sva__stmt_label`, and records 1/0 transitions.
   - validation:
     - targeted `llvm-lit`:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-labeled-concurrent-assert-no-action.sv build-test/test/Conversion/ImportVerilog/sva-labeled-concurrent-assert-action-label-precedence.sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal-label.sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal-action-label-precedence.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-labeled-concurrent-assert-no-action.sv build_test/test/Conversion/ImportVerilog/sva-labeled-concurrent-assert-action-label-precedence.sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal-label.sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal-action-label-precedence.sv`
       - result: `4/4` pass.
 
 - Iteration update (runtime SVA VCD marker regression hardening):
@@ -843,7 +843,7 @@
       - validates `__sva__*` appears in VCD created via runtime
         `$dumpfile/$dumpvars` (no `--vcd` CLI).
   - validation:
-    - focused command-equivalent regression runs (using `build-test/bin` tools):
+    - focused command-equivalent regression runs (using `build_test/bin` tools):
       - `sva-vcd-assertion-signal.sv`: `PASS`
       - `sva-vcd-assertion-signal-trace-filter.sv`: `PASS`
       - `sva-vcd-assertion-signal-dumpvars.sv`: `PASS`
@@ -878,7 +878,7 @@
       - deleted `16.15--property-disable-iff-fail` xfail entry from
         `utils/sv-tests-bmc-expect.txt`.
   - validation:
-    - `ninja -C build-test circt-opt circt-bmc`
+    - `ninja -C build_test circt-opt circt-bmc`
       - result: `PASS`.
     - focused BMC regressions (manual RUN command equivalents):
       - `lower-to-bmc-toclock-multiclock.mlir`
@@ -889,10 +889,10 @@
       - `lower-to-bmc-dead-toclock-clock-input.mlir`
       - result: all `PASS`.
     - suite:
-      - `ninja -C build-test check-circt-tools-circt-bmc`
+      - `ninja -C build_test check-circt-tools-circt-bmc`
       - result: `159 passed / 156 unsupported / 0 failed`.
     - targeted sv-tests repro:
-      - `build-test/bin/circt-bmc ... /tmp/sva-gap-disable-iff/...mlir`
+      - `build_test/bin/circt-bmc ... /tmp/sva-gap-disable-iff/...mlir`
       - before: `BMC_RESULT=UNSAT`
       - after: `BMC_RESULT=SAT`
       - harness run (`run_sv_tests_circt_bmc.sh`, test
@@ -918,9 +918,9 @@
       - to: `16.15--property-disable-iff-fail`
       - reason text now explicitly tracks the LLHD interface-stripping gap.
   - validation:
-    - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc TEST_FILTER='^16.15--property-iff-uvm$' INCLUDE_UVM_TAGS=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc TEST_FILTER='^16.15--property-iff-uvm$' INCLUDE_UVM_TAGS=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result: `total=1 pass=1 fail=0`.
-    - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc TAG_REGEX='(^| )16\\.15( |$)' TEST_FILTER='^16.15--property-disable-iff-fail$' KEEP_LOGS_DIR=/tmp/sv_16_15_disable_iff_fail utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc TAG_REGEX='(^| )16\\.15( |$)' TEST_FILTER='^16.15--property-disable-iff-fail$' KEEP_LOGS_DIR=/tmp/sv_16_15_disable_iff_fail utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result before expectation mapping fix: `FAIL`.
       - direct bmc result from captured MLIR: `BMC_RESULT=UNSAT` with
         interface-stripping provenance warning above.
@@ -943,9 +943,9 @@
       - converted nested module/function check scenarios from "supported" to
         explicit expected-error coverage.
   - validation:
-    - `ninja -C build-test circt-opt`
+    - `ninja -C build_test circt-opt`
       - result: `PASS`.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
       - result: `1/1` pass.
   - surprise:
     - two adjacent VerifToSMT tests (`bmc-final-checks-any-violation.mlir`,
@@ -976,7 +976,7 @@
   - validation:
     - `bash -n utils/run_formal_all.sh`
       - result: `PASS`.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/run-formal-all-help.test build-test/test/Tools/run-formal-all-sv-tests-bmc-forces-smtlib.test build-test/test/Tools/run-formal-all-sv-tests-bmc-backend-parity.test build-test/test/Tools/run-formal-all-strict-gate-bmc-backend-parity-mismatch-cases.test`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/run-formal-all-help.test build_test/test/Tools/run-formal-all-sv-tests-bmc-forces-smtlib.test build_test/test/Tools/run-formal-all-sv-tests-bmc-backend-parity.test build_test/test/Tools/run-formal-all-strict-gate-bmc-backend-parity-mismatch-cases.test`
       - result: `4/4` pass.
 
 - Iteration update (stage-3 BMC backend cleanup: remove compatibility aliases
@@ -1002,11 +1002,11 @@
       - updated pairwise/OpenTitan backend-policy tests to
         `default|smtlib|smoke` semantics.
   - validation:
-    - `ninja -C build-test circt-bmc`
+    - `ninja -C build_test circt-bmc`
       - result: `PASS`.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir build-test/test/Tools/run-pairwise-circt-bmc-case-backend-invalid.test build-test/test/Tools/run-pairwise-circt-bmc-case-backend-override.test build-test/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-invalid.test build-test/test/Tools/run-opentitan-bmc-case-policy-file.test build-test/test/Tools/run-opentitan-bmc-case-policy-regex.test build-test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build-test/test/Tools/run-opentitan-bmc-case-policy-ambiguous-pattern.test`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build_test/test/Tools/circt-bmc/bmc-shared-libs-rejected.mlir build_test/test/Tools/run-pairwise-circt-bmc-case-backend-invalid.test build_test/test/Tools/run-pairwise-circt-bmc-case-backend-override.test build_test/test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test build_test/test/Tools/run-opentitan-bmc-case-policy-invalid.test build_test/test/Tools/run-opentitan-bmc-case-policy-file.test build_test/test/Tools/run-opentitan-bmc-case-policy-regex.test build_test/test/Tools/run-opentitan-bmc-case-policy-provenance.test build_test/test/Tools/run-opentitan-bmc-case-policy-ambiguous-pattern.test`
       - result: `10/10` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-pairwise-circt-bmc|run-opentitan-bmc|bmc-run-alias-smtlib|bmc-shared-libs-rejected' build-test/test/Tools build-test/test/Tools/circt-bmc`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-pairwise-circt-bmc|run-opentitan-bmc|bmc-run-alias-smtlib|bmc-shared-libs-rejected' build_test/test/Tools build_test/test/Tools/circt-bmc`
       - result: `48/48` pass.
 
 - Iteration update (BMC final-check condition folding for no-nonfinal designs):
@@ -1032,12 +1032,12 @@
       - added `CHECK-BMC-NOT: smt.or %false`.
   - validation:
     - build:
-      - `ninja -C build-test circt-bmc`
+      - `ninja -C build_test circt-bmc`
     - focused regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
       - result: `PASS`.
     - focused final-check batch:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-sat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-disable-iff-sat-e2e.sv build-test/test/Tools/circt-bmc/sva-cover-disable-iff-unsat-e2e.sv build-test/test/Tools/circt-bmc/bmc-final-checks-any-violation-smtlib.mlir build-test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampling.mlir build-test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-assert-final-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-disable-iff-sat-e2e.sv build_test/test/Tools/circt-bmc/sva-cover-disable-iff-unsat-e2e.sv build_test/test/Tools/circt-bmc/bmc-final-checks-any-violation-smtlib.mlir build_test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampling.mlir build_test/test/Tools/circt-bmc/bmc-liveness-lasso-fair-sampled-true.mlir`
       - result: `4 pass, 4 unsupported`.
     - regular formal sanity:
       - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -1045,7 +1045,7 @@
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `8 tests, failures=0`.
   - profiling sample:
-    - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
+    - `time llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-assert-final-e2e.sv`
     - result: `real 0m0.117s`.
 
 - Iteration update (clocked sampled-value helper skew closure + past clock
@@ -1090,13 +1090,13 @@
         - `test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
   - validation:
     - build:
-      - `ninja -C build-test circt-verilog circt-opt circt-bmc`
+      - `ninja -C build_test circt-verilog circt-opt circt-bmc`
     - focused regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv`
       - result: `8/8` pass.
-      - `build-test/bin/circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv`
       - result: `PASS`.
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-written-uninit-reg-known-inputs-parity.sv | build_test/bin/circt-bmc -b 6 --ignore-asserts-until=1 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
       - result: `BMC_RESULT=UNSAT`.
     - regular formal sanity:
       - `TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -1154,10 +1154,10 @@
         avoiding stale expectations based on unused extra clock ports.
   - validation:
     - targeted red/green:
-      - `build-test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
+      - `build_test/bin/circt-bmc -b 5 --module m_const_prop --run-smtlib test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir`
       - result: `BMC_RESULT=UNSAT`.
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Tools/circt-bmc/sva-multiclock-e2e.sv build-test/test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build_test/test/Tools/circt-bmc/sva-multiclock-e2e.sv build_test/test/Tools/circt-bmc/circt-bmc-multiclock.mlir`
       - result: `3/3` pass.
     - formal sanity:
       - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -1197,18 +1197,18 @@
       - keeps local/procedural signal behavior unchanged.
   - validation:
     - strip-pass regressions:
-      - `build-test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-probe-before-drive-wire.mlir`
+      - `build_test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-probe-before-drive-wire.mlir`
       - reduced repro checks:
-        - `build-test/bin/circt-opt --strip-llhd-interface-signals /tmp/extnet_core_step1.mlir`
-        - `build-test/bin/circt-opt --strip-llhd-interface-signals /tmp/extnet_core.mlir`
+        - `build_test/bin/circt-opt --strip-llhd-interface-signals /tmp/extnet_core_step1.mlir`
+        - `build_test/bin/circt-opt --strip-llhd-interface-signals /tmp/extnet_core.mlir`
     - yosys SVA parity:
       - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - result: `PASS(pass/fail)` for both `counter` and `extnets`.
     - yosys LEC parity:
-      - `env CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_OPT=build-test/bin/circt-opt CIRCT_LEC=build-test/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
+      - `env CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_OPT=build_test/bin/circt-opt CIRCT_LEC=build_test/bin/circt-lec LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir TEST_FILTER=extnets utils/run_yosys_sva_circt_lec.sh test/Tools/circt-lec/Inputs/yosys-sva-mini`
       - result: `PASS`.
     - sampled-value guard check:
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build-test/bin/circt-bmc --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only -`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build_test/bin/circt-bmc --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only -`
       - result: `BMC_RESULT=UNSAT`.
   - profiling sample:
     - `time TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -1291,7 +1291,7 @@
           when no other clocks are discovered.
         - guard rootless (constant) clock traces to avoid null-root crashes.
     - green repro:
-      - `build-test/bin/circt-bmc -b 8 --allow-multi-clock --assume-known-inputs --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so --module ovl_sem_arbiter_tmp /tmp/ovl_sem_arbiter_tmp.mlir`
+      - `build_test/bin/circt-bmc -b 8 --allow-multi-clock --assume-known-inputs --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so --module ovl_sem_arbiter_tmp /tmp/ovl_sem_arbiter_tmp.mlir`
       - result: `BMC_RESULT=UNSAT`.
   - semantic harness expansion:
     - added wrappers:
@@ -1304,7 +1304,7 @@
     - obligations increased `86 -> 90`.
   - validation:
     - const-clock regression:
-      - `build-test/bin/circt-opt test/Tools/circt-bmc/externalize-registers-const-clock.mlir --externalize-registers='allow-multi-clock=true' | llvm/build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
+      - `build_test/bin/circt-opt test/Tools/circt-bmc/externalize-registers-const-clock.mlir --externalize-registers='allow-multi-clock=true' | llvm/build/bin/FileCheck test/Tools/circt-bmc/externalize-registers-const-clock.mlir`
     - targeted semantic batch:
       - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `4 tests, failures=0, xfail=2, xpass=0`
@@ -1680,14 +1680,14 @@
       extraction fails, return task name as fallback label.
     - keep generic `"action_block"` fallback for non-message action blocks.
   - validation:
-    - `ninja -C build-test circt-translate`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`
+    - `ninja -C build_test circt-translate`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv >/dev/null` (`real=0.024s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-task-fallback-label.sv >/dev/null` (`real=0.024s`)
 
 - Iteration update (concurrent action-block fallback labeling):
   - realization:
@@ -1707,14 +1707,14 @@
       `"action_block"`.
     - retain existing extracted labels for message/severity/display cases.
   - validation:
-    - `ninja -C build-test circt-translate`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
+    - `ninja -C build_test circt-translate`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block-generic-label.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-action-block.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv >/dev/null` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-action-block-generic-label.sv >/dev/null` (`real=0.007s`)
 
 - Iteration update (no-clock sampled-value disable-iff closure):
   - realization:
@@ -1739,17 +1739,17 @@
       helper when sampled controls are present, including no-clock disable
       contexts.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-value-change.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-value-change.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-value-change.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-value-change.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv >/dev/null` (`real=0.006s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-disable-iff-no-clock.sv >/dev/null` (`real=0.006s`)
 
 - Iteration update (no-clock `$past` + top-level `disable iff`):
   - realization:
@@ -1778,15 +1778,15 @@
       - for peeled top-level `disable iff`, push/pop its condition into
         assertion-disable scope while converting the inner property expression.
   - validation:
-    - `ninja -C build-test circt-translate`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`
+    - `ninja -C build_test circt-translate`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv >/dev/null` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-disable-iff-no-clock.sv >/dev/null` (`real=0.007s`)
 
 - Iteration update (enabled `$past` without explicit clocking):
   - realization:
@@ -1809,16 +1809,16 @@
     - updated `$past` call conversion to route enable-without-clocking through
       the sampled-state helper path instead of emitting an error.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv >/dev/null` (`real=0.008s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv >/dev/null` (`real=0.008s`)
 
 - Iteration update (explicit property clock precedence in procedural contexts):
   - realization:
@@ -1846,18 +1846,18 @@
       - retain existing procedural-clock path when no explicit property clock is
         present.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-precedence.sv` (`real=0.007s`)
 
 - Iteration update (explicit-clock procedural hoist ordering):
   - realization:
@@ -1876,17 +1876,17 @@
       module body end (or before terminator), matching hardened behavior used
       in other procedural hoist paths.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-explicit-clock-hoist-order.sv` (`real=0.007s`)
 
 - Iteration update (procedural guard + `disable iff` enable composition):
   - realization:
@@ -1911,16 +1911,16 @@
     - retained warning path when guard hoisting fails, while preserving
       `disable iff` hoisting independently.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv` (`real=0.007s`)
 
 - Iteration update (property `nexttime` / `s_nexttime`):
   - realization:
@@ -1946,9 +1946,9 @@
       - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
         (now checks `always p` diagnostic).
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-nexttime-property.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (bounded property `always` / `s_always`):
@@ -1973,9 +1973,9 @@
       - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
         (`always p` unsupported diagnostic).
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-always-property.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (unbounded property `always` + range guardrail):
@@ -2002,11 +2002,11 @@
       - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
         now checks unsupported `$past(..., enable)` without explicit clocking.
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-nexttime-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-nexttime-property.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (open-range property `s_eventually` and `always`):
@@ -2031,11 +2031,11 @@
       - `test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
       - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-property.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-open-range-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-open-range-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-open-range-property.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unbounded-always-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (packed sampled-values with explicit clocking):
@@ -2057,10 +2057,10 @@
       - `test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
       - `test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-disable.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (`$past` packed values with explicit clocking):
@@ -2080,10 +2080,10 @@
       - `test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
       - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-explicit-clock-default-disable.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (packed sampled-values in regular assertion clocking):
@@ -2098,9 +2098,9 @@
     - added:
       - `test/Conversion/ImportVerilog/sva-sampled-packed.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (string sampled-values with explicit clocking):
@@ -2118,10 +2118,10 @@
       - `test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
       - `test/Conversion/ImportVerilog/sva-sampled-packed.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (string `$past` explicit-clocking regression hardening):
@@ -2136,9 +2136,9 @@
     - added:
       - `test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (sampled explicit-clocking crash hardening):
@@ -2155,10 +2155,10 @@
     - added:
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (unpacked-array sampled values under assertion clocking):
@@ -2177,11 +2177,11 @@
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
         (diagnostic text after crash-hardening path changes).
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-packed.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (bounded property `eventually` / `s_eventually`):
@@ -2207,9 +2207,9 @@
       - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
         (now checks `nexttime p` diagnostic).
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-bounded-eventually-property.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 ## 2026-02-21
@@ -2288,10 +2288,10 @@
     - updated `LTLToCore` first-match lowering to avoid hard failure on
       unbounded inputs and fall back to generic sequence lowering for now.
   - validation:
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-first-match-unbounded.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-first-match-unbounded.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-first-match-unbounded.sv`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core --lower-clocked-assert-like --externalize-registers --lower-to-bmc='top-module=unbounded_first_match bound=5'`
 
 - Iteration update (`restrict property` support):
   - realization:
@@ -2305,9 +2305,9 @@
     - added BMC pipeline regression:
       - `test/Tools/circt-bmc/sva-restrict-e2e.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-restrict-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-restrict-property.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-restrict-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-restrict-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_restrict bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-restrict-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-restrict-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-restrict-property.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-restrict-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-restrict-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_restrict bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-restrict-e2e.sv --check-prefix=CHECK-BMC`
 
 - Iteration update (`cover sequence` support):
   - realization:
@@ -2321,9 +2321,9 @@
     - added BMC pipeline regression:
       - `test/Tools/circt-bmc/sva-cover-sequence-e2e.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-cover-sequence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-cover-sequence.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-cover-sequence.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-cover-sequence-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_cover_sequence bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-cover-sequence-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-cover-sequence.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-cover-sequence.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-cover-sequence.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-cover-sequence-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_cover_sequence bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-cover-sequence-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
 
@@ -2343,9 +2343,9 @@
     - added BMC pipeline regression:
       - `test/Tools/circt-bmc/sva-abort-on-e2e.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
 
@@ -2363,9 +2363,9 @@
     - added BMC pipeline regression:
       - `test/Tools/circt-bmc/sva-strong-weak-e2e.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_strong_weak_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_strong_weak_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
 
@@ -2385,9 +2385,9 @@
     - added BMC pipeline regression:
       - `test/Tools/circt-bmc/sva-case-property-e2e.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
 
@@ -2402,9 +2402,9 @@
     - kept prioritized item-group semantics and no-default fallback behavior.
     - upgraded regression coverage to multi-bit selector constants.
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
 
@@ -2425,12 +2425,12 @@
     - strengthened regression to assert the first-hit kill-switch structure:
       - `test/Conversion/LTLToCore/first-match-unbounded.mlir`
   - validation:
-    - `ninja -C build-test circt-opt`
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `ninja -C build_test circt-opt`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/LTLToCore/first-match-unbounded.mlir`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
+      - `time build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core` (`~0.01s`)
 
 - Iteration update (sequence warmup min-bound semantics + sequence-event perf):
   - realization:
@@ -2447,13 +2447,13 @@
     - added regression:
       - `test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
   - validation:
-    - `ninja -C build-test circt-opt circt-verilog`
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - `ninja -C build_test circt-opt circt-verilog`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-unbounded.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-unbounded.mlir`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sequence-event-control.sv` (`~0.01s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sequence-event-control.sv` (`~0.01s`)
 
 - Iteration update (both-edge clock support for clocked sequence/property lowering):
   - realization:
@@ -2469,13 +2469,13 @@
     - added regression:
       - `test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
   - validation:
-    - `ninja -C build-test circt-opt`
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir build-test/test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir build-test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
+    - `ninja -C build_test circt-opt`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir build_test/test/Conversion/LTLToCore/unbounded-sequence-warmup.mlir build_test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core` (`~0.01s`)
+      - `time build_test/bin/circt-opt test/Conversion/LTLToCore/clocked-sequence-edge-both.mlir --lower-ltl-to-core` (`~0.01s`)
 
 - Iteration update (sync abort-on clock sampling semantics):
   - realization:
@@ -2491,15 +2491,15 @@
       - `test/Conversion/ImportVerilog/sva-abort-on.sv`
       - sync variants now require inner `ltl.clock` on abort condition.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-abort-on.sv build-test/test/Tools/circt-bmc/sva-abort-on-e2e.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-abort-on.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-abort-on-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_abort_on_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-abort-on-e2e.sv --check-prefix=CHECK-BMC`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-abort-on.sv build_test/test/Tools/circt-bmc/sva-abort-on-e2e.sv`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv` (`~0.03s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-abort-on.sv` (`~0.03s`)
 
 - Iteration update (strong/weak wrapper semantic split):
   - realization:
@@ -2514,15 +2514,15 @@
       - split checks for `circt-translate` vs `circt-verilog --ir-moore`
         output forms.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc="top-module=sva_strong_weak_e2e bound=2" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-strong-weak.sv build-test/test/Tools/circt-bmc/sva-strong-weak-e2e.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-strong-weak-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc="top-module=sva_strong_weak_e2e bound=2" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-strong-weak-e2e.sv --check-prefix=CHECK-BMC`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-strong-weak.sv build_test/test/Tools/circt-bmc/sva-strong-weak-e2e.sv`
     - formal smoke:
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv` (`~0.01s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv` (`~0.01s`)
 
 - Iteration update (strong/weak wrapper semantic split):
   - realization:
@@ -2533,9 +2533,9 @@
     - updated regression:
       - `test/Conversion/ImportVerilog/sva-strong-weak.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-strong-weak.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-IMPORT`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-strong-weak.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-strong-weak.sv --check-prefix=CHECK-MOORE`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-strong-weak.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (empty first_match support):
@@ -2543,8 +2543,8 @@
   - regression:
     - `test/Conversion/LTLToCore/first-match-empty.mlir`
   - validation:
-    - `build-test/bin/circt-opt test/Conversion/LTLToCore/first-match-empty.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-empty.mlir`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/LTLToCore/first-match-empty.mlir`
+    - `build_test/bin/circt-opt test/Conversion/LTLToCore/first-match-empty.mlir --lower-ltl-to-core | llvm/build/bin/FileCheck test/Conversion/LTLToCore/first-match-empty.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/LTLToCore/first-match-empty.mlir`
 
 - Iteration update (`$future_gclk` forward temporal semantics):
   - realization:
@@ -2560,12 +2560,12 @@
       checks to keep each function's pattern local, and to explicitly require
       `ltl.delay ..., 1, 0` for `$future_gclk`.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv` (`elapsed=0.032s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv` (`elapsed=0.032s`)
 
 - Iteration update (unclocked `_gclk` global-clocking semantics):
   - realization:
@@ -2582,14 +2582,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/gclk-global-clocking.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv --check-prefix=CHECK-MOORE`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build-test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/gclk-global-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-global-clocking.sv --check-prefix=CHECK-MOORE`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build_test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv` (`elapsed=0.074s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-global-clocking.sv` (`elapsed=0.074s`)
 
 - Iteration update (`$global_clock` timing controls + silent-drop hardening):
   - realization:
@@ -2610,14 +2610,14 @@
       - `test/Conversion/ImportVerilog/sva-global-clock-func.sv`
       - `test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv --check-prefix=CHECK-MOORE`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` (fails with `error: expected a 1-bit integer`)
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv build-test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build-test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv --check-prefix=CHECK-MOORE`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` (fails with `error: expected a 1-bit integer`)
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build_test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv build_test/test/Conversion/ImportVerilog/gclk-global-clocking.sv build_test/test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv` (`elapsed=0.077s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv` (`elapsed=0.077s`)
 
 - Iteration update (`$global_clock` explicit sampled-value clocking args):
   - realization:
@@ -2635,15 +2635,15 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` (fails with `error: expected a 1-bit integer`)
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-func.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-func.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv` (fails with `error: expected a 1-bit integer`)
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build_test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build_test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv` (`elapsed=0.031s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv` (`elapsed=0.031s`)
 
 - Iteration update (assertion clock event-list lowering):
   - realization:
@@ -2656,14 +2656,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-clock-event-list.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build_test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build_test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build_test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv` (`elapsed=0.041s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv` (`elapsed=0.041s`)
 
 - Iteration update (`$global_clock iff` guard preservation):
   - realization:
@@ -2682,13 +2682,13 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-global-clock-iff.sv build-test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build-test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build-test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build-test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-global-clock-iff.sv build_test/test/Conversion/ImportVerilog/sva-global-clock-func.sv build_test/test/Conversion/ImportVerilog/sva-sampled-global-clock-arg.sv build_test/test/Conversion/ImportVerilog/sva-clock-event-list.sv build_test/test/Conversion/ImportVerilog/sva-invalid-clocking-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/gclk-sampled-functions.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/gclk-sampled-functions.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='basic00' utils/run_yosys_sva_circt_bmc.sh` (`2/2` mode cases pass)
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv` (`elapsed=0.028s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv` (`elapsed=0.028s`)
 
 - Iteration update (yosys SVA `counter` known-profile XPASS cleanup):
   - realization:
@@ -2725,10 +2725,10 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
   - validation:
-    - `ninja -C build-test circt-translate`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+    - `ninja -C build_test circt-translate`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
       - `time BMC_SMOKE_ONLY=1 TEST_FILTER='^counter$' utils/run_yosys_sva_circt_bmc.sh` (`real=2.233s`)
@@ -2753,13 +2753,13 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv` (`real=0.039s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv` (`real=0.039s`)
 
 - Iteration update (sequence-valued assertion clocking events):
   - realization:
@@ -2781,13 +2781,13 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-global-clock-iff.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-global-clock-iff.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.050s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.050s`)
 
 - Iteration update (default clocking interaction with explicit `@seq`):
   - realization:
@@ -2804,14 +2804,14 @@
       `test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` to
       assert no re-clocked `ltl.clock [[CLOCKED]]` before the assert.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults-property.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults-property.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults-property.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults-property.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-defaults.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-defaults.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.053s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv` (`real=0.053s`)
 
 - Iteration update (non-uniform mixed event-list sequence inference):
   - realization:
@@ -2829,14 +2829,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.045s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.045s`)
 
 - Iteration update (edge-specific wakeups in multiclock mixed waits):
   - realization:
@@ -2852,14 +2852,14 @@
     - updated regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list-dedup.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.057s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv` (`real=0.057s`)
 
 - Iteration update (global-clocking fallback for unclocked sequence events):
   - realization:
@@ -2877,14 +2877,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv` (`real=0.048s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv` (`real=0.048s`)
 
 - Iteration update (mixed sequence event lists with named events):
   - realization:
@@ -2903,13 +2903,13 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-control-infer-multiclock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv` (`real=0.036s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv` (`real=0.036s`)
 
 - Iteration update (named events in assertion clock controls):
   - realization:
@@ -2928,14 +2928,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.034s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.034s`)
 
 - Iteration update (avoid default re-clock of composed explicit clocks):
   - realization:
@@ -2954,15 +2954,15 @@
         now checks the mixed explicit clock result is asserted directly and
         not rewrapped by an extra `ltl.clock`.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-global-clocking.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.008s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv` (`real=0.008s`)
 
 - Iteration update (clocking-block entries in mixed sequence event lists):
   - realization:
@@ -2979,14 +2979,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv` (`real=0.007s`)
 
 - Iteration update ($global_clock entries in mixed sequence event lists):
   - realization:
@@ -3002,14 +3002,14 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | build-ot/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv` (`real=0.007s`)
 
 - Iteration update (assertion mixed clock event-list with clocking blocks):
   - realization:
@@ -3028,17 +3028,17 @@
       - `test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv`
         (mixed assertion event-list with sequence + clocking block).
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assert-clock-sequence-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assert-clock-list-clocking-block.sv` (`real=0.007s`)
 
 - Iteration update (sequence `.matched` method support):
   - realization:
@@ -3056,13 +3056,13 @@
       `'matched' method can only be called from a sequence expression`; kept
       coverage in assertion context only.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sequence-event-control.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sequence-event-control.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv` (`real=0.007s`)
 
 - Iteration update (`$assertcontrol` fail-message parity):
   - realization:
@@ -3079,13 +3079,13 @@
     - added regression:
       - `test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/system-calls-complete.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/system-calls-complete.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/system-calls-complete.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/system-calls-complete.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv` (`real=0.008s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-assertcontrol-failmsg.sv` (`real=0.008s`)
 
 - Iteration update (bounded unary temporal operators on property operands):
   - realization:
@@ -3106,12 +3106,12 @@
     - new regression:
       - `test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-matched-method.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-matched-method.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-bounded-unary-property-error.sv` (`real=0.007s`)
 
 - Iteration update (explicit-clocked unpacked-array sampled support):
   - realization:
@@ -3133,20 +3133,20 @@
       - updated `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
   - surprise:
     - first test run used stale binaries (`build/bin` absent), so the new test
-      still showed old behavior until rebuilding `build-test` tools.
+      still showed old behavior until rebuilding `build_test` tools.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog --verify-diagnostics test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-string-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (explicit-clocked `$past` on unpacked arrays):
   - realization:
@@ -3161,14 +3161,14 @@
     - new regression:
       - `test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-string-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (`$past` enable with implicit default clocking):
   - realization:
@@ -3186,14 +3186,14 @@
     - new regression:
       - `test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-packed-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-enable-default-clocking.sv` (`real=0.007s`)
 
 - Iteration update (procedural sampled `_gclk` global-clock semantics):
   - realization:
@@ -3207,14 +3207,14 @@
     - new regression:
       - `test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-packed-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv` (`real=0.007s`)
 
 - Iteration update (procedural sampled default-clocking inference):
   - realization:
@@ -3227,14 +3227,14 @@
     - new regression:
       - `test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-gclk-procedural.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-disable.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv` (`real=0.007s`)
 
 - Iteration update (interface concurrent assertions at instance sites):
   - realization:
@@ -3251,14 +3251,14 @@
     - new regression:
       - `test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-property.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-interface-assert-instance.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-property.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-default-clocking-procedural.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv` (`real=0.006s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv` (`real=0.006s`)
 
 - Iteration update (unpacked-struct sampled values and explicit-clock `$past`):
   - realization:
@@ -3280,17 +3280,17 @@
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
       - `test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling samples:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv` (`real=0.007s`)
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (unpacked-struct equality/inequality lowering):
   - realization:
@@ -3309,15 +3309,15 @@
       - upgraded `test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
         to direct full-struct compare (`$past(s,...) == s`).
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-interface-assert-instance.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv` (`real=0.007s`)
 
 - Iteration update (unpacked-struct case equality/inequality lowering):
   - realization:
@@ -3333,15 +3333,15 @@
       - `test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
       - `test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv > /dev/null`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv > /dev/null`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-equality.sv > /dev/null`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv > /dev/null`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv` (`real=0.007s`)
 
 - Iteration update (unpacked-array case equality/inequality lowering):
   - realization:
@@ -3358,16 +3358,16 @@
       - `test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
       - `test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-array-case-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv` (`real=0.007s`)
 
 - Iteration update (unpacked-union sampled + explicit-clock `$past`):
   - realization:
@@ -3387,15 +3387,15 @@
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
       - `test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build_test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build_test/test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv` (`real=0.007s`)
 
 - Iteration update (unpacked-union equality and case-equality lowering):
   - realization:
@@ -3414,15 +3414,15 @@
       - `test/Conversion/ImportVerilog/unpacked-union-equality.sv`
       - `test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-union-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-union-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build-test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build-test/test/Conversion/ImportVerilog/unpacked-struct-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-array-case-equality.sv build-test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-union-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-union-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build_test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv build_test/test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv build_test/test/Conversion/ImportVerilog/unpacked-struct-equality.sv build_test/test/Conversion/ImportVerilog/unpacked-struct-case-equality.sv build_test/test/Conversion/ImportVerilog/unpacked-array-case-equality.sv build_test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-array.sv build_test/test/Conversion/ImportVerilog/sva-caseeq-unpacked-struct.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv` (`real=0.007s`)
 
 - Iteration update (nested aggregate case-equality regression hardening):
   - realization:
@@ -3433,9 +3433,9 @@
     - new regression:
       - `test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
   - validation:
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv build-test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build-test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/unpacked-struct-nested-array-case-equality.sv build_test/test/Conversion/ImportVerilog/unpacked-union-equality.sv build_test/test/Conversion/ImportVerilog/sva-unpacked-union-equality.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (unpacked aggregate `$rose/$fell` sampled support):
@@ -3460,15 +3460,15 @@
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
         now checks dynamic-array `$rose` importer failure via `not ... | FileCheck`.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (dynamic/open-array sampled-value support):
   - realization:
@@ -3496,16 +3496,16 @@
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
         now verifies unsupported associative-array `$rose`.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv 2>&1 | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build_test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (queue sampled-value semantic fix):
   - realization:
@@ -3528,16 +3528,16 @@
       - `test/Conversion/ImportVerilog/sva-sampled-queue.sv`
       - `test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog /tmp/sva_sampled_queue_probe.sv` (no queue-to-zero fallback remarks)
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build-test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog /tmp/sva_sampled_queue_probe.sv` (no queue-to-zero fallback remarks)
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build_test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build_test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-explicit-clock-error.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-rose-fell-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-array.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-struct.sv build_test/test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (dynamic-array/queue logical equality semantics):
   - realization:
@@ -3558,16 +3558,16 @@
       - `test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
       - `test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog /tmp/queue_eq_probe.sv` (no hardcoded equality constants for queue compares)
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv build-test/test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build-test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build-test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog /tmp/queue_eq_probe.sv` (no hardcoded equality constants for queue compares)
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/dynamic-array-queue-equality.sv build_test/test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv build_test/test/Conversion/ImportVerilog/sva-sampled-queue.sv build_test/test/Conversion/ImportVerilog/sva-sampled-queue-explicit-clock.sv build_test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array.sv build_test/test/Conversion/ImportVerilog/sva-sampled-dynamic-array-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-equality.sv` (`real=0.007s`)
 
 - Iteration update (dynamic-array/queue case-equality semantics):
   - realization:
@@ -3589,14 +3589,14 @@
       - `test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
       - `test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-dynamic-array-queue-case-equality.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/dynamic-array-queue-case-equality.sv` (`real=0.007s`)
 
 - Iteration update (explicit-clock `$past` for dynamic arrays/queues):
   - realization:
@@ -3606,7 +3606,7 @@
   - TDD proof:
     - added `test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`.
     - before fix:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
       - failed at first assertion with
         `error: unsupported $past value type with explicit clocking`.
   - implemented:
@@ -3614,15 +3614,15 @@
       `AssertionExpr.cpp` to treat `open_uarray` and `queue` like other typed
       unpacked aggregates for helper history storage and update semantics.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-struct-explicit-clock.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-unpacked-union-explicit-clock.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-past-dynamic-array-queue-explicit-clock.sv` (`real=0.007s`)
 
 - Iteration update (SVA `case` property match semantics):
   - realization:
@@ -3632,19 +3632,19 @@
     - updated `test/Conversion/ImportVerilog/sva-case-property.sv` checks from
       `moore.eq` to `moore.case_eq`.
     - before fix:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
       - failed because IR still emitted `moore.eq`.
   - implemented:
     - switched `CaseAssertionExpr` item compare lowering in
       `AssertionExpr.cpp` from `moore::EqOp` to `moore::CaseEqOp`.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv` (`real=0.007s`)
 
 - Iteration update (SVA `case` property with string selectors):
   - realization:
@@ -3655,7 +3655,7 @@
   - TDD proof:
     - added `test/Conversion/ImportVerilog/sva-case-property-string.sv`.
     - before fix:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
       - failed with missing `moore.string_cmp eq` and emitted remark:
         `converting string to 32-bit integer in bit-vector context`.
   - implemented:
@@ -3666,14 +3666,14 @@
       - non-string selectors:
         - preserve existing simple-bit-vector normalization + `moore.case_eq`.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
-    - `build-test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property-string.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build-test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
+    - `build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/sva-case-property-string.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-case-property-e2e.sv | build_test/bin/circt-opt --lower-clocked-assert-like --lower-ltl-to-core --externalize-registers --lower-to-bmc=\"top-module=sva_case_property_e2e bound=2\" | llvm/build/bin/FileCheck test/Tools/circt-bmc/sva-case-property-e2e.sv --check-prefix=CHECK-BMC`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv` (`real=0.007s`)
 
 - Iteration update (property conditional with multibit conditions):
   - realization:
@@ -3683,20 +3683,20 @@
   - TDD proof:
     - added `test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`.
     - before fix:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
       - failed with:
         `error: expected a 1-bit integer`.
   - implemented:
     - updated `ConditionalAssertionExpr` lowering in `AssertionExpr.cpp` to
       call `convertToBool` before `convertToI1` for condition normalization.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-case-property-string.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-case-property-string.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv` (`real=0.007s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-conditional-property-multibit.sv` (`real=0.007s`)
 
 - Iteration update (multi-bit event expressions in SVA event controls):
   - realization:
@@ -3718,19 +3718,19 @@
       including mixed sequence-event list inference and direct clock control
       conversion.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-clock-event-multibit.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-named-event.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-clocking-block.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-sequence-event-list-global-clock.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-clock-event-list.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-clock-event-list.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv` (`real=0.005s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-sequence-event-list-multibit-signal.sv` (`real=0.005s`)
 
 - Iteration update (procedural concurrent `disable iff` with multibit guards):
   - realization:
@@ -3754,16 +3754,16 @@
       - hoist/clone computed disable-iff enable values to the destination
         module block to satisfy dominance when emitting `verif.clocked_*` ops.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
     - profiling sample:
-      - `time build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv` (`real=0.052s`)
+      - `time build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv` (`real=0.052s`)
 
 - Iteration update (procedural clocked disable-guard dominance hardening):
   - realization:
@@ -3779,13 +3779,13 @@
         module block in the procedural clocked emission path, mirroring
         existing assertion-guard cloning.
   - validation:
-    - `ninja -C build-test circt-translate circt-verilog`
-    - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
-    - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `ninja -C build_test circt-translate circt-verilog`
+    - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
+    - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-disable-iff-procedural-multibit.sv`
     - compatibility checks:
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
-      - `build-test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-procedural-clock.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-procedural-clock.sv`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/sva-past-disable-iff.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-past-disable-iff.sv`
+      - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/sva-disable-iff-nested.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/sva-disable-iff-nested.sv`
     - `BMC_SMOKE_ONLY=1 TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh`
 
 - Iteration update (`ovl_next` semantic closure + assume-known state scoping):
@@ -3810,7 +3810,7 @@
     - added `test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
       to lock this behavior.
   - validation:
-    - `build-test/bin/circt-opt test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir --convert-verif-to-smt="assume-known-inputs=true" --reconcile-unrealized-casts -allow-unregistered-dialect | llvm/build/bin/FileCheck test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
+    - `build_test/bin/circt-opt test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir --convert-verif-to-smt="assume-known-inputs=true" --reconcile-unrealized-casts -allow-unregistered-dialect | llvm/build/bin/FileCheck test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir`
     - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_next$' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result flipped from `XFAIL(fail)` to `XPASS(fail)`; known-gap marker then removed.
     - expanded semantic coverage:
@@ -3858,9 +3858,9 @@
           (excluding appended register-state inputs).
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - focused regression:
-      - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir | llvm/build/bin/FileCheck test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+      - `build_test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir | llvm/build/bin/FileCheck test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
     - reproducer no longer errors:
       - `/tmp/l2bmc_unit_struct_clock.mlir` lowers to valid `verif.bmc` with
         clock yields and derived clock metadata.
@@ -3896,9 +3896,9 @@
       - removed known-gap markers for `ovl_sem_arbiter` and
         `ovl_sem_stack` in `utils/ovl_semantic/manifest.tsv`.
   - validation:
-    - `ninja -C build-test circt-opt circt-bmc`
-    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
-    - `build-test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
+    - `ninja -C build_test circt-opt circt-bmc`
+    - `build_test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-const-clock-source-prefers-named-input.mlir`
+    - `build_test/bin/circt-opt --lower-to-bmc='top-module=m bound=2 allow-multi-clock=true' test/Tools/circt-bmc/lower-to-bmc-unit-reg-clock-source-struct-input.mlir`
     - focused semantic harness:
       - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(arbiter|stack)' FAIL_ON_XPASS=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `4 tests, failures=0, xfail=0, xpass=0`
@@ -3949,9 +3949,9 @@
       - `ovl_sem_multiport_fifo` pass-mode (`known_gap=pass`)
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - new regression:
-      - `build-test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir | llvm/build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
+      - `build_test/bin/circt-opt --strip-llhd-interface-signals test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir | llvm/build/bin/FileCheck test/Tools/circt-lec/lec-strip-llhd-comb-abstraction-instance-propagation.mlir`
     - focused semantic harness:
       - `OVL_SEMANTIC_TEST_FILTER='ovl_sem_(crc|multiport_fifo)' ...`
       - result after pass fix: `crc` pass/fail both `PASS`; `multiport_fifo`
@@ -3989,10 +3989,10 @@
       - `test/Tools/circt-bmc/strip-llhd-processes.mlir`
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - focused regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/strip-llhd-processes.mlir build_test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir`
     - OVL semantic matrix:
       - `FAIL_ON_XPASS=0 ...`
       - result: `102 tests, failures=0, xfail=1, xpass=0`
@@ -4030,10 +4030,10 @@
         - removed `known_gap=pass` for `ovl_sem_multiport_fifo`.
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - focused regressions:
-      - `lit -sv build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir`
-      - `lit -sv build-test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build-test/test/Tools/circt-bmc/strip-llhd-processes.mlir build-test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
+      - `lit -sv build_test/test/Tools/circt-bmc/strip-llhd-processes.mlir`
+      - `lit -sv build_test/test/Tools/circt-bmc/circt-bmc-llhd-process.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-signals.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-llhd-process-abstraction-attr.mlir build_test/test/Tools/circt-bmc/strip-llhd-processes.mlir build_test/test/Tools/circt-bmc/strip-llhd-process-drives.mlir`
     - targeted semantic closure:
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_multiport_fifo$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `2 tests, failures=0, xfail=0, xpass=0`
@@ -4071,10 +4071,10 @@
         implication gating.
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc circt-verilog`
+      - `ninja -C build_test circt-opt circt-bmc circt-verilog`
     - targeted regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Dialect/Verif/combine-assert-like.mlir`
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build-test/bin/circt-bmc -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Dialect/Verif/combine-assert-like.mlir`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-hw test/Tools/circt-bmc/sva-sampled-first-cycle-known-inputs-parity.sv | build_test/bin/circt-bmc -b 6 --ignore-asserts-until=0 --module top --assume-known-inputs --rising-clocks-only --shared-libs=/home/thomas-ahle/z3-install/lib64/libz3.so -`
         - result: `BMC_RESULT=UNSAT`
     - targeted formal parity:
       - `TEST_FILTER='^sva_value_change_sim$' BMC_ASSUME_KNOWN_INPUTS=1 ... utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -4205,7 +4205,7 @@
         `@(posedge clk)` clocked property.
   - validation:
     - targeted conversion regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv build-test/test/Tools/circt-sim/syscall-past-rose-fell.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/sva-past-conditional-branch-clocked.sv build_test/test/Tools/circt-sim/syscall-past-rose-fell.sv`
       - result: `2 tests, failures=0`
     - targeted semantic closure:
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(increment|decrement)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
@@ -4258,9 +4258,9 @@
         - `sva-uvm-seq-subroutine-e2e.sv`
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-verilog`
+      - `ninja -C build_test circt-opt circt-verilog`
     - focused regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build-test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv build-test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-uvm-assume-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-assert-final-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-expect-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-interface-property-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-local-var-e2e.sv build_test/test/Tools/circt-bmc/sva-uvm-seq-subroutine-e2e.sv build_test/test/Tools/circt-bmc/sva-sequence-match-item-display-bmc-e2e.sv`
       - result: `8 tests, pass`.
     - Yosys sanity:
       - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -4290,10 +4290,10 @@
       so it no longer depends on fragile local emission order.
   - validation:
     - targeted multiclock-past regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clocked.mlir build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-clockop-conflict.mlir`
       - result: `3/3` pass.
     - focused VerifToSMT multiclock-past bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='bmc-multiclock-past-buffer'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT --filter='bmc-multiclock-past-buffer'`
       - result: `6/6` pass.
     - regular formal sanity:
       - `TEST_FILTER='^(counter|extnets)$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -4301,11 +4301,11 @@
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `8 tests, failures=0`.
     - profiling sample:
-      - `time llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
+      - `time llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-past-buffer-conflict.mlir`
       - result: `real 0m0.102s`.
   - surprises:
     - `llvm-lit` failed once due malformed local timing cache line in
-      `build-test/test/.lit_test_times.txt`; this was an environment artifact,
+      `build_test/test/.lit_test_times.txt`; this was an environment artifact,
       not a source regression.
   - outcome:
     - closed stale multiclock `ltl.past` expected-fail status and restored
@@ -4380,7 +4380,7 @@
         - `sva-past-default-disable-reset.sv`
   - validation:
     - ImportVerilog SVA bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog --filter='sva-'`
       - result: `148/148` pass.
     - regular formal sanity:
       - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -4390,7 +4390,7 @@
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `8 tests, failures=0`.
     - profiling sample:
-      - `time llvm/build/bin/llvm-lit -sv build-test/test/Conversion/ImportVerilog --filter='sva-'`
+      - `time llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog --filter='sva-'`
       - result: `real 0m20.195s`.
   - outcome:
     - restored SVA ImportVerilog regression signal quality by removing stale
@@ -4416,15 +4416,15 @@
         - `test/Tools/circt-bmc/commandline.mlir`
   - TDD signal:
     - before implementation:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/commandline.mlir build_test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
       - failed with:
         - missing `--x-optimistic` in help output
         - `Unknown command line argument '--x-optimistic'`
   - validation:
     - build:
-      - `ninja -C build-test circt-bmc`
+      - `ninja -C build_test circt-bmc`
     - targeted regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/commandline.mlir build_test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
       - result: `2/2` pass.
     - regular formal sanity:
       - `TEST_FILTER='.*' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh`
@@ -4458,19 +4458,19 @@
       - `test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
   - validation:
     - targeted sv-tests subset:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-expectations.mlir build-test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build-test/test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sv-tests-expectations.mlir build_test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build_test/test/Tools/circt-bmc/sv-tests-bare-property-smoke.mlir build_test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir build_test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir`
       - result: `4 pass, 1 expected-fail`.
     - sv-tests bmc harness contract tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-sv-tests-bmc-'`
       - result: `19 pass, 1 unsupported`.
     - full `circt-bmc` sv-tests bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='sv-tests-'`
       - result: `11 pass, 1 expected-fail, 4 unsupported`.
     - existing x-optimistic regressions remain green:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/commandline.mlir build-test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/commandline.mlir build_test/test/Tools/circt-bmc/bmc-x-optimistic-lec.mlir`
       - result: `2/2` pass.
     - profiling sample:
-      - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - `time llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='sv-tests-'`
       - result: `real 0m97.93s`.
   - outcome:
     - restored functional sv-tests BMC harness execution and summary output.
@@ -4498,16 +4498,16 @@
           - removed stale `XFAIL`.
   - validation:
     - new runner test:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/run-sv-tests-bmc-auto-allow-multi-clock.test`
       - result: `1/1` pass.
     - UVM tagged smoke regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir build-test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sv-tests-uvm-tags-include.mlir build_test/test/Tools/circt-bmc/sv-tests-uvm-smoke.mlir`
       - result: `2/2` pass.
     - sv-tests harness contract bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools --filter='run-sv-tests-bmc-'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-sv-tests-bmc-'`
       - result: `20 pass, 1 unsupported`.
     - `circt-bmc` sv-tests bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='sv-tests-'`
       - result: `12 pass, 4 unsupported` (no expected-fail left in this
         subset).
     - regular formal sanity:
@@ -4516,7 +4516,7 @@
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_(next|increment|decrement|reg_loaded)$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `8 tests, failures=0`.
     - profiling sample:
-      - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='sv-tests-'`
+      - `time llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='sv-tests-'`
       - result: `real 0m99.29s`.
   - outcome:
     - closed stale UVM include-tags expected-fail lane and removed manual
@@ -4550,12 +4550,12 @@
         - `bounded model checking problems with mixed assert/cover properties are not yet correctly handled`
   - validation:
     - build:
-      - `ninja -C build-test circt-bmc circt-opt`
+      - `ninja -C build_test circt-bmc circt-opt`
     - targeted regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir build-test/test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir build-test/test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/bmc-mixed-assert-cover.mlir build_test/test/Tools/circt-bmc/bmc-liveness-mode-ignores-non-final.mlir build_test/test/Tools/circt-bmc/bmc-emit-mlir-cover-inverts-result.mlir`
       - result: `3/3` pass.
     - broad `circt-bmc` suite:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc`
       - result: `153 pass, 156 unsupported, 1 xfail, 1 fail`.
       - remaining fail is local JIT Z3 linkage (`Z3_*` missing symbols) in
         `circt-bmc-disable-iff-constant.mlir`, not from this change.
@@ -4563,7 +4563,7 @@
       - `BMC_SMOKE_ONLY=1 TEST_FILTER='16.12--property|16.12--property-disj' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result: `total=9 pass=9 fail=0`.
   - profiling sample:
-    - `time llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+    - `time llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc`
     - result: `real 1m43.77s`.
   - outcome:
     - mixed assert+cover BMC checks are now supported in one query.
@@ -4591,15 +4591,15 @@
       - `k-induction does not support cover properties yet`.
   - validation:
     - build:
-      - `ninja -C build-test circt-bmc circt-opt`
+      - `ninja -C build_test circt-bmc circt-opt`
     - targeted induction lit:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-k-induction-cover.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-sat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir build-test/test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir build-test/test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir build-test/test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/bmc-k-induction-cover.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-unsat.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-sat.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-final-unsat.mlir build_test/test/Tools/circt-bmc/bmc-k-induction-final-sat.mlir build_test/test/Tools/circt-bmc/bmc-induction-alias-unsat.mlir build_test/test/Tools/circt-bmc/bmc-induction-ignore-asserts-until.mlir`
       - result: `7/7` pass.
     - induction conversion slice:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='induction'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT --filter='induction'`
       - result: `2/2` pass.
     - broader bmc slice:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='induction|cover'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='induction|cover'`
       - result: `13 pass, 5 unsupported`.
     - regular formal sanity:
       - `TEST_FILTER='^basic00$' BMC_ASSUME_KNOWN_INPUTS=1 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -4619,10 +4619,10 @@
       current `circt-bmc --emit-mlir` post-lowering output.
   - validation:
     - targeted:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/lower-to-bmc-inline-llhd-combinational.mlir`
       - result: `1/1` pass.
     - focused bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc --filter='llhd|lower-to-bmc-inline'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc --filter='llhd|lower-to-bmc-inline'`
       - result: `18 pass, 1 unsupported`.
     - regular formal sanity:
       - `OVL_SEMANTIC_TEST_FILTER='^ovl_sem_next$' FAIL_ON_XPASS=1 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
@@ -4653,9 +4653,9 @@
       - `total=1 pass=1 fail=0`.
   - validation:
     - focused harness contracts:
-      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-mixed-assert-cover-classification' build-test/test`
+      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-mixed-assert-cover-classification' build_test/test`
       - result: `1/1` pass.
-      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build_test/test`
       - result: `21 pass, 1 unsupported`.
   - outcome:
     - sv-tests mixed assert+cover runs are now classified semantically, instead
@@ -4688,10 +4688,10 @@
       - `total=1 pass=0 fail=1` (correct).
   - validation:
     - focused:
-      - `build-ot/bin/llvm-lit -sv -j 1 --filter 'run-sv-tests-bmc-mixed-assert-cover-(classification|violation-classification)' build-test/test`
+      - `build-ot/bin/llvm-lit -sv -j 1 --filter 'run-sv-tests-bmc-mixed-assert-cover-(classification|violation-classification)' build_test/test`
       - result: `2/2` pass.
     - harness contracts:
-      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build-test/test`
+      - `build-ot/bin/llvm-lit -sv --filter 'run-sv-tests-bmc-' build_test/test`
       - result: `22 pass, 1 unsupported`.
   - outcome:
     - mixed assert+cover SAT classification is now consistent for both
@@ -4737,15 +4737,15 @@
     - after fixes, both pass and OVL fail-mode repros run on SMT-LIB without
       fallback.
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-readonly.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-readonly.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
       - result: `3/3` pass.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async)' utils/run_ovl_sva_semantic_circt_bmc.sh`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async)' utils/run_ovl_sva_semantic_circt_bmc.sh`
       - result: `4 tests, failures=0`.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh`
       - result: `110 tests, failures=0`.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - result: `14 tests, failures=0`.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
       - result: `total=6 pass=6 fail=0`.
 
 - Iteration update (stage 1 JIT-path deprecation: default SMT-LIB + strict no-fallback mode):
@@ -4774,19 +4774,19 @@
       - `BMC_ALLOW_RUN_FALLBACK=0`: disable retry and keep SMT-LIB failure.
   - validation:
     - regression tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `2/2` pass.
     - default-mode `circt-bmc` sanity:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build-test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build_test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
       - result: `2/2` pass.
     - strict no-fallback harness slices:
-      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async|next)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 OVL_SEMANTIC_TEST_FILTER='ovl_sem_(proposition|never_unknown_async|next)' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `8 tests, failures=0`.
-      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+      - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `110 tests, failures=0`.
-      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+      - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - result: `14 tests, failures=0`.
-      - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+      - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog BMC_ALLOW_RUN_FALLBACK=0 TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
       - result: `total=6 pass=6 fail=0 error=0`.
 
 - Iteration update (stage 2 JIT-path retirement in `circt-bmc` + pure SMT-LIB harnessing):
@@ -4819,19 +4819,19 @@
       - `test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - `test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test`
       - result: `2/2` pass.
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build-test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build-test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/bmc-run-alias-smtlib.mlir build_test/test/Tools/circt-bmc/circt-bmc-disable-iff-constant.mlir build_test/test/Tools/circt-bmc/circt-bmc-implication-delayed-true.mlir`
       - result: `3/3` pass.
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc`
       - result: `157 pass, 156 unsupported, 0 fail`.
-    - `llvm/build/bin/llvm-lit -sv --filter='run-(sv-tests|verilator-verification)-circt-bmc' build-test/test/Tools`
+    - `llvm/build/bin/llvm-lit -sv --filter='run-(sv-tests|verilator-verification)-circt-bmc' build_test/test/Tools`
       - result: `13/13` pass.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
       - result: `110 tests, failures=0`.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog TEST_FILTER='.*' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
       - result: `14 tests, failures=0`.
-    - `CIRCT_BMC=build-test/bin/circt-bmc CIRCT_VERILOG=build-test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
+    - `CIRCT_BMC=build_test/bin/circt-bmc CIRCT_VERILOG=build_test/bin/circt-verilog TAG_REGEX='16.12' TEST_FILTER='.*' utils/run_sv_tests_circt_bmc.sh`
       - result: `total=6 pass=6 fail=0 error=0`.
 
 - Iteration update (nested `func.call` checks in `verif.bmc` are now lowered):
@@ -4868,10 +4868,10 @@
       - `test/Conversion/VerifToSMT/verif-ops-to-smt.mlir`
       - `test/Conversion/VerifToSMT/verif-to-smt.mlir`
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT`
       - result: `140/140` pass.
     - SMT-LIB tool-path slice:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
   - remaining gap after this change:
     - nested checks under instantiated modules (`hw.instance`) are still
@@ -4906,11 +4906,11 @@
         - `@two_separated_assertions`
         - `@multiple_nested_assertions`
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir build_test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
       - result: `2/2` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT`
       - result: `141/141` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
   - remaining gap after this change:
     - nested checks through non-inlineable hierarchy (for example,
@@ -4931,9 +4931,9 @@
     - inlining still happens for supported single-block callees, preserving the
       nested-check feature behavior.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir build-test/test/Conversion/VerifToSMT/bmc-nested-func-checks.mlir build-test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/bmc-nested-instance-checks.mlir build_test/test/Conversion/VerifToSMT/bmc-nested-func-checks.mlir build_test/test/Conversion/VerifToSMT/verif-to-smt-errors.mlir`
       - result: `3/3` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT`
       - result: `141/141` pass.
 
 - Iteration update (SMT-LIB export: legalize common live LLVM scalar-int ops in BMC regions):
@@ -4964,11 +4964,11 @@
     - validated existing rejection remains for unsupported op class:
       - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-constant.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-constant.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load.mlir`
       - result: `4/4` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT`
       - result: `142/142` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
 
 - Iteration update (SMT-LIB export: legalize LLVM shift/div/rem integer ops):
@@ -4996,11 +4996,11 @@
     - added:
       - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir`.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
       - result: `3/3` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT`
       - result: `143/143` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
 
 - Iteration update (semantic guard for LLVM-op SMT-LIB legalization):
@@ -5030,11 +5030,11 @@
       - `bmc-for-smtlib-llvm-int-ops.mlir`
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-flagged-op-error.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir build-test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-flagged-op-error.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-int-ops.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-shift-divrem-ops.mlir build_test/test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-op-error.mlir`
       - result: `4/4` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/VerifToSMT`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/VerifToSMT`
       - result: `144/144` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc build-test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build-test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc build_test/test/Tools/run-sv-tests-bmc-smtlib-no-fallback.test build_test/test/Tools/run-sv-tests-bmc-smtlib-fallback.test`
       - result: `21/21` pass.
 
 - Iteration update (SMT-LIB export: legalize constant global array
@@ -5074,14 +5074,14 @@
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - surprises:
     - `llvm-lit --filter='smtlib|disable-iff-constant|no-fallback'
-      build-test/test/Tools` pulled in an unrelated `circt-sim` test via
+      build_test/test/Tools` pulled in an unrelated `circt-sim` test via
       `no-fallback` name overlap.
-    - narrowed the tool slice to `build-test/test/Tools/circt-bmc` for relevant
+    - narrowed the tool slice to `build_test/test/Tools/circt-bmc` for relevant
       SMT-LIB/BMC signal.
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `145/145` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize constant struct-global
@@ -5121,9 +5121,9 @@
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `146/146` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize `llvm.load` from constant globals
@@ -5153,7 +5153,7 @@
       - unsupported/non-constant/global-with-store behavior unchanged.
   - surprises:
     - first edit accidentally introduced a brace mismatch; caught by
-      `ninja -C build-test circt-opt` compile failure and fixed immediately.
+      `ninja -C build_test circt-opt` compile failure and fixed immediately.
   - regression coverage:
     - added:
       - `test/Conversion/VerifToSMT/bmc-for-smtlib-llvm-global-load-region.mlir`
@@ -5163,9 +5163,9 @@
       - `bmc-for-smtlib-llvm-global-struct-gep-load.mlir`
       - `bmc-for-smtlib-llvm-global-load.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `148/148` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize `llvm.extractvalue` from constant
@@ -5204,9 +5204,9 @@
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `149/149` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize constant-GEP dynamic index
@@ -5248,9 +5248,9 @@
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `150/150` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize readonly non-constant global GEP
@@ -5295,9 +5295,9 @@
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `152/152` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize scalar `llvm.mlir.zero` in BMC
@@ -5329,9 +5329,9 @@
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `153/153` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (SMT-LIB export: legalize `llvm.insertvalue` /
@@ -5370,9 +5370,9 @@
       - `bmc-for-smtlib-llvm-shift-divrem-ops.mlir`
       - `bmc-for-smtlib-llvm-flagged-op-error.mlir`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `154/154` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build-test/test/Tools/circt-bmc`
+    - `llvm/build/bin/llvm-lit -sv --filter='smtlib|disable-iff-constant|no-fallback' build_test/test/Tools/circt-bmc`
       - result: `19/19` pass.
 
 - Iteration update (yosys SVA smoke expectation correctness under xprop):
@@ -5429,15 +5429,15 @@
     - retained unsupported diagnostics for non-legalized live LLVM ops.
   - validation:
     - focused conversion regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='bmc-for-smtlib-(malloc-load-nondet|malloc-aggregate-extract-nondet|llvm-op-error|llvm-dead-op|no-property-live-llvm-call)'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT --filter='bmc-for-smtlib-(malloc-load-nondet|malloc-aggregate-extract-nondet|llvm-op-error|llvm-dead-op|no-property-live-llvm-call)'`
       - result: `5/5` pass.
     - direct reproducer now passes:
-      - `build-test/bin/circt-opt /tmp/bmc_malloc_load_fail.mlir --convert-verif-to-smt='for-smtlib-export=true' --reconcile-unrealized-casts -allow-unregistered-dialect`
+      - `build_test/bin/circt-opt /tmp/bmc_malloc_load_fail.mlir --convert-verif-to-smt='for-smtlib-export=true' --reconcile-unrealized-casts -allow-unregistered-dialect`
       - result: `exit=0`, output contains `smt.declare_fun` and no malloc/load llvm ops.
     - chapter-16 UVM replay on captured MLIR set:
       - `26` cached files in `/tmp/sv16_uvm_logs/*.mlir`
       - each passes:
-        - `build-test/bin/circt-bmc -b 10 --module top --emit-smtlib -o ... <file>`
+        - `build_test/bin/circt-bmc -b 10 --module top --emit-smtlib -o ... <file>`
       - artifact check: `26` generated `.smt2` outputs.
 
 - Iteration update (SMT-LIB export: malloc-backed dynamic-index GEP load legalization):
@@ -5466,10 +5466,10 @@
       it where available.
   - validation:
     - focused regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT --filter='bmc-for-smtlib-(malloc-load-nondet|malloc-aggregate-extract-nondet|malloc-dynamic-gep-nondet|llvm-op-error|llvm-dead-op|no-property-live-llvm-call)'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT --filter='bmc-for-smtlib-(malloc-load-nondet|malloc-aggregate-extract-nondet|malloc-dynamic-gep-nondet|llvm-op-error|llvm-dead-op|no-property-live-llvm-call)'`
       - result: `6/6` pass.
     - full conversion bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `159/159` pass.
     - direct dynamic-index repros now pass:
       - `/tmp/bmc_malloc_dynidx_simple.mlir`
@@ -5503,10 +5503,10 @@
         global `--assume-known-inputs`.
   - validation:
     - targeted:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT/bmc-disable-iff-known-inputs.mlir build-test/test/Conversion/VerifToSMT/bmc-assume-known-inputs.mlir build-test/test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir build-test/test/Conversion/VerifToSMT/four-state-input-warning.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-disable-iff-known-inputs.mlir build_test/test/Conversion/VerifToSMT/bmc-assume-known-inputs.mlir build_test/test/Conversion/VerifToSMT/bmc-assume-known-inputs-register-state.mlir build_test/test/Conversion/VerifToSMT/four-state-input-warning.mlir`
       - result: `4/4` pass.
     - full conversion bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `160/160` pass.
     - yosys xprop spot check:
       - `TEST_FILTER='^(basic00|basic01|basic02|basic03|extnets|sva_not)$' BMC_ASSUME_KNOWN_INPUTS=0 utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -5542,10 +5542,10 @@
       - promote `basic00 pass xprop` from `xfail` to `pass`.
   - validation:
     - e2e regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-bmc/sva-disable-iff-known-inputs-lowering.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/sva-disable-iff-known-inputs-lowering.mlir`
       - result: `1/1` pass (post-fix).
     - conversion regression bucket:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Conversion/VerifToSMT`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT`
       - result: `160/160` pass.
     - yosys xprop targeted subset (strict pass expectations):
       - `TEST_FILTER='^(basic00|basic01|basic02|basic03|extnets|sva_not)$' BMC_ASSUME_KNOWN_INPUTS=0 EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -5578,12 +5578,12 @@
       - auto-register `__sva__*` signals for VCD tracing whenever `--vcd` is
         enabled, even without explicit `--trace`/`--trace-all`.
   - validation:
-    - `ninja -C build-test circt-sim`
+    - `ninja -C build_test circt-sim`
       - result: `PASS`.
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-vcd-assertion-signal.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-vcd-assertion-signal.sv`
       - result: `1/1` pass.
     - focused existing regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-simple-boolean.sv build-test/test/Tools/circt-sim/sva-disable-iff.sv build-test/test/Tools/circt-sim/sva-implication-delay.sv build-test/test/Tools/circt-sim/syscall-dumpvars-output.sv build-test/test/Tools/circt-sim/syscall-dumpvars-creates-file.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-simple-boolean.sv build_test/test/Tools/circt-sim/sva-disable-iff.sv build_test/test/Tools/circt-sim/sva-implication-delay.sv build_test/test/Tools/circt-sim/syscall-dumpvars-output.sv build_test/test/Tools/circt-sim/syscall-dumpvars-creates-file.sv`
       - result: `5/5` pass.
 
 - Iteration update (circt-sim runtime: close `always` non-failing gap for
@@ -5619,10 +5619,10 @@
         noise in this workspace.
   - validation:
     - build:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
       - result: `PASS`.
     - new lit regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='sva-always-runtime'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='sva-always-runtime'`
       - result: `1/1` pass.
     - focused manual runtime checks with `--no-uvm-auto-include`:
       - `sva-always-runtime.sv`: emits two `SVA assertion failed` lines and exits
@@ -5681,10 +5681,10 @@
         pending for now (explicitly tracked as remaining work).
   - validation:
     - build:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
       - result: `PASS`.
     - new lit regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-until-runtime.sv build-test/test/Tools/circt-sim/sva-nexttime-runtime.sv build-test/test/Tools/circt-sim/sva-throughout-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-until-runtime.sv build_test/test/Tools/circt-sim/sva-nexttime-runtime.sv build_test/test/Tools/circt-sim/sva-throughout-runtime.sv`
       - result: `3/3` pass.
     - focused runtime sanity (all with `--no-uvm-auto-include`):
       - `sva-implication-delay.sv`: still passes (`SVA_PASS: no assertion failures`).
@@ -5718,10 +5718,10 @@
         sequence instead of collapsing to unknown.
   - validation:
     - build:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
       - result: `PASS`.
     - regression bundle:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build-test/test/Tools/circt-sim/sva-until-runtime.sv build-test/test/Tools/circt-sim/sva-nexttime-runtime.sv build-test/test/Tools/circt-sim/sva-throughout-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build_test/test/Tools/circt-sim/sva-until-runtime.sv build_test/test/Tools/circt-sim/sva-nexttime-runtime.sv build_test/test/Tools/circt-sim/sva-throughout-runtime.sv`
       - result: `4/4` pass.
     - focused runtime sanity (`--no-uvm-auto-include`):
       - `sva-implication-delay.sv` still passes.
@@ -5755,10 +5755,10 @@
         to generic unknown handling.
   - validation:
     - build:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
       - result: `PASS`.
     - focused regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-matched-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build-test/test/Tools/circt-sim/sva-until-runtime.sv build-test/test/Tools/circt-sim/sva-nexttime-runtime.sv build-test/test/Tools/circt-sim/sva-throughout-runtime.sv build-test/test/Tools/circt-sim/sva-always-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-matched-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build_test/test/Tools/circt-sim/sva-until-runtime.sv build_test/test/Tools/circt-sim/sva-nexttime-runtime.sv build_test/test/Tools/circt-sim/sva-throughout-runtime.sv build_test/test/Tools/circt-sim/sva-always-runtime.sv`
       - result: `6/6` pass.
   - surprise:
     - from ImportVerilog CHECK coverage, remaining under-modeled runtime LTL
@@ -5790,10 +5790,10 @@
         sequence semantics while removing obvious false-pass cases.
   - validation:
     - build:
-      - `ninja -C build-test circt-sim`
+      - `ninja -C build_test circt-sim`
       - result: `PASS`.
     - regression bundle:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-goto-repeat-runtime.sv build-test/test/Tools/circt-sim/sva-nonconsecutive-repeat-runtime.sv build-test/test/Tools/circt-sim/sva-matched-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build-test/test/Tools/circt-sim/sva-until-runtime.sv build-test/test/Tools/circt-sim/sva-nexttime-runtime.sv build-test/test/Tools/circt-sim/sva-throughout-runtime.sv build-test/test/Tools/circt-sim/sva-always-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-goto-repeat-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-repeat-runtime.sv build_test/test/Tools/circt-sim/sva-matched-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build_test/test/Tools/circt-sim/sva-until-runtime.sv build_test/test/Tools/circt-sim/sva-nexttime-runtime.sv build_test/test/Tools/circt-sim/sva-throughout-runtime.sv build_test/test/Tools/circt-sim/sva-always-runtime.sv`
       - result: `8/8` pass.
   - surprise:
     - parity-critical remaining work is now concentrated in full monitor state
@@ -5819,7 +5819,7 @@
       - updated delta accounting + process dump paths to consume the new
         vector/bitvector representation.
   - validation:
-    - `ninja -C build-test circt-sim`
+    - `ninja -C build_test circt-sim`
       - result: compile/link restored.
 
 - Iteration update (circt-sim runtime: correct `s.triggered` start semantics):
@@ -5886,7 +5886,7 @@
       - invoke finalization before deriving final assertion-failure exit code.
   - validation:
     - focused runtime suite:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-eventually-final-runtime.sv build-test/test/Tools/circt-sim/sva-delay-range-runtime.sv build-test/test/Tools/circt-sim/sva-triggered-runtime.sv build-test/test/Tools/circt-sim/sva-goto-repeat-runtime.sv build-test/test/Tools/circt-sim/sva-nonconsecutive-repeat-runtime.sv build-test/test/Tools/circt-sim/sva-matched-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build-test/test/Tools/circt-sim/sva-until-runtime.sv build-test/test/Tools/circt-sim/sva-nexttime-runtime.sv build-test/test/Tools/circt-sim/sva-throughout-runtime.sv build-test/test/Tools/circt-sim/sva-always-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-eventually-final-runtime.sv build_test/test/Tools/circt-sim/sva-delay-range-runtime.sv build_test/test/Tools/circt-sim/sva-triggered-runtime.sv build_test/test/Tools/circt-sim/sva-goto-repeat-runtime.sv build_test/test/Tools/circt-sim/sva-nonconsecutive-repeat-runtime.sv build_test/test/Tools/circt-sim/sva-matched-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-runtime.sv build_test/test/Tools/circt-sim/sva-until-runtime.sv build_test/test/Tools/circt-sim/sva-nexttime-runtime.sv build_test/test/Tools/circt-sim/sva-throughout-runtime.sv build_test/test/Tools/circt-sim/sva-always-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay.sv`
       - result: `12/12` pass.
 
 - Iteration update (SVA runtime/VCD regressions + labeled assertion parity):
@@ -5897,7 +5897,7 @@
       - labeled assertion names (`a_must_hold: assert property ...`) were not preserved into `verif.clocked_assert` label attrs, so runtime VCD signals fell back to `__sva__assert_N`.
   - TDD signal:
     - reproduced with:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
     - pre-fix failures:
       - `sva-vcd-assertion-signal-dumpvars.sv` (UNRESOLVED)
       - `sva-vcd-assertion-signal-trace-filter.sv` (FAIL)
@@ -5913,17 +5913,17 @@
       - replaced fragile `$var` ERE quoting with fixed-string header checks (`' clk $end'`, `' a $end'`).
   - validation:
     - rebuilt import frontend path:
-      - `ninja -C build-test circt-verilog`
+      - `ninja -C build_test circt-verilog`
     - focused VCD regressions:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-vcd-assertion-signal-(trace-filter|dumpvars|label)' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-vcd-assertion-signal-(trace-filter|dumpvars|label)' build_test/test/Tools/circt-sim`
       - result: `3/3` pass.
     - full SVA-focused suite:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `25/25` pass.
   - note:
-    - local `ninja -C build-test circt-sim` currently hits an unrelated compile error in
+    - local `ninja -C build_test circt-sim` currently hits an unrelated compile error in
       `tools/circt-sim/LLHDProcessInterpreterBytecode.cpp` from concurrent workspace changes.
-      SVA verification above was run against existing `build-test/bin/circt-sim` binary.
+      SVA verification above was run against existing `build_test/bin/circt-sim` binary.
 
 - Iteration update (ImportVerilog SVA sampled-value equality semantics regression alignment):
   - realization:
@@ -5937,7 +5937,7 @@
       primitive for `$stable/$changed` style comparisons.
   - TDD signal:
     - failing repro:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result before fix: `148 pass / 3 fail`.
   - implemented:
     - updated FileCheck expectations to `moore.case_eq` in:
@@ -5946,7 +5946,7 @@
       - `test/Conversion/ImportVerilog/sva-sampled-unpacked-union.sv`
   - validation:
     - rerun:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result after fix: `151/151` pass.
 
 - Iteration update (runtime implication semantics for sequence consequents):
@@ -5982,13 +5982,13 @@
         concatenations to avoid regressions in non-fixed forms.
   - validation:
     - targeted new regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv`
       - result: `PASS` (failure now reported at `25000000 fs`).
     - SVA runtime suite:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `27/27` pass.
     - SVA ImportVerilog suite (sanity):
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (runtime implication semantics for bounded delay windows):
@@ -6019,16 +6019,16 @@
       - keeps existing fallback behavior for non-bounded/unsupported shapes.
   - validation:
     - targeted regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv`
       - result: `PASS`.
     - nearby SVA implication/range regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay.sv build-test/test/Tools/circt-sim/sva-implication-fail.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay.sv build_test/test/Tools/circt-sim/sva-implication-fail.sv`
       - result: `3/3` pass.
     - SVA runtime sweep:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `28/28` pass.
     - SVA ImportVerilog sanity sweep:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (bounded implication regression completeness + harness stability):
@@ -6047,9 +6047,9 @@
       - `test/Tools/circt-sim/sva-implication-fail.sv`
       - RUN lines now use `circt-verilog --no-uvm-auto-include ...`.
   - validation:
-    - `llvm/build/bin/llvm-lit -sv --filter='sva-implication' build-test/test/Tools/circt-sim`
+    - `llvm/build/bin/llvm-lit -sv --filter='sva-implication' build_test/test/Tools/circt-sim`
       - result: `5/5` pass.
-    - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+    - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `29/29` pass.
 
 - Iteration update (bounded implication obligations at simulation end):
@@ -6078,16 +6078,16 @@
         or unknown consequent sample can satisfy the bounded window.
   - validation:
     - targeted bounded-implication tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-delay-range-final-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-delay-range-final-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-pass-runtime.sv`
       - result: `3/3` pass.
     - implication slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication' build_test/test/Tools/circt-sim`
       - result: `6/6` pass.
     - full SVA runtime slice:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `30/30` pass.
     - SVA ImportVerilog sanity:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (runtime support for `ltl.past`):
@@ -6114,16 +6114,16 @@
         `ClockedAssertionState`.
   - validation:
     - targeted regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-ltl-past-runtime.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-ltl-past-runtime.mlir`
       - result: `PASS`.
     - implication + past focused slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-ltl-past-runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-ltl-past-runtime' build_test/test/Tools/circt-sim`
       - result: `7/7` pass.
     - full SVA runtime sweep:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `31/31` pass.
     - SVA ImportVerilog sanity sweep:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (runtime support for `ltl.boolean_constant`):
@@ -6142,16 +6142,16 @@
         `True/False` directly from op attribute value.
   - validation:
     - targeted MLIR regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-ltl-past-runtime.mlir build-test/test/Tools/circt-sim/sva-ltl-boolean-constant-runtime.mlir`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-ltl-past-runtime.mlir build_test/test/Tools/circt-sim/sva-ltl-boolean-constant-runtime.mlir`
       - result: `2/2` pass.
     - focused implication+MLIR slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-ltl-past-runtime|sva-ltl-boolean-constant-runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-ltl-past-runtime|sva-ltl-boolean-constant-runtime' build_test/test/Tools/circt-sim`
       - result: `8/8` pass.
     - full SVA runtime sweep:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `32/32` pass.
     - SVA ImportVerilog sanity:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (reapplied runtime handlers after local drift + bounded implication):
@@ -6172,9 +6172,9 @@
       - restored bounded implication pending-window tracking and finalization
         failure when obligations remain unsatisfied at end-of-simulation.
   - validation:
-    - `ninja -C build-test circt-sim` (builds clean)
+    - `ninja -C build_test circt-sim` (builds clean)
     - targeted regressions:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-ltl-past-runtime.mlir build-test/test/Tools/circt-sim/sva-ltl-boolean-constant-runtime.mlir build-test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-final-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-ltl-past-runtime.mlir build_test/test/Tools/circt-sim/sva-ltl-boolean-constant-runtime.mlir build_test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-final-runtime.sv`
       - result: `4/4` pass.
 
 - Iteration update (intersect start-alignment semantics):
@@ -6196,9 +6196,9 @@
         - falls back to conservative conjunction when offset sets are not
           derivable (maintains prior behavior outside covered cases).
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-intersect-start-alignment-runtime.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-intersect-start-alignment-runtime.sv`
       - result: `PASS`.
-    - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+    - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `34/34` pass.
 
 - Iteration update (test harness correctness for `circt-sim`):
@@ -6206,17 +6206,17 @@
     - `test/lit.cfg.py` did not register `circt-sim` in tool substitutions.
     - consequence: bare `circt-sim` in RUN lines resolved via user PATH (e.g.
       `~/.local/bin/circt-sim`) instead of the just-built
-      `build-test/bin/circt-sim`, making SVA runtime validation non-hermetic.
+      `build_test/bin/circt-sim`, making SVA runtime validation non-hermetic.
   - implemented:
     - `test/lit.cfg.py`
       - added `circt-sim` to `tools` list for lit tool substitution.
   - validation:
     - confirmed RUN lines now execute:
-      - `... not /home/thomas-ahle/circt/build-test/bin/circt-sim ...`
+      - `... not /home/thomas-ahle/circt/build_test/bin/circt-sim ...`
     - SVA sweeps still green with hermetic tool resolution:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
         - result: `34/34` pass.
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (within-in-implication runtime coverage):
@@ -6230,10 +6230,10 @@
     - tests are intentionally deterministic (constant antecedent) to avoid
       ambiguity from same-tick assignment ordering in sampled assertions.
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-within-implication-pass-runtime.sv build-test/test/Tools/circt-sim/sva-within-implication-fail-runtime.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-within-implication-pass-runtime.sv build_test/test/Tools/circt-sim/sva-within-implication-fail-runtime.sv`
       - result: `2/2` pass.
     - full SVA runtime slice:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `36/36` pass.
 
 - Iteration update (overlapping bounded-implication coverage):
@@ -6248,10 +6248,10 @@
       - one consequent sample satisfying multiple overlapping windows (pass)
       - one window satisfied while a later overlapping window still fails (fail)
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-delay-range-overlap-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-overlap-fail-runtime.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-delay-range-overlap-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-overlap-fail-runtime.sv`
       - result: `2/2` pass.
     - SVA runtime sweep:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
       - result: `38/38` pass.
 
 - Iteration update (implication with bounded variable-length sequence consequent):
@@ -6284,14 +6284,14 @@
         window-close failure time (`CHECK` at 45000000 fs).
   - validation:
     - targeted implication tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-fail-runtime.sv`
         - result: `2/2` pass.
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-final-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-overlap-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-delay-range-overlap-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-final-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-overlap-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-delay-range-overlap-fail-runtime.sv`
         - result: `6/6` pass.
     - full SVA slices:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
         - result: `40/40` pass.
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (implication + `goto_repeat` consequent no-early-fail):
@@ -6328,25 +6328,25 @@
       fix.
   - validation:
     - focused checks:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva-implication-goto-consequent-fail-runtime build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva-implication-goto-consequent-fail-runtime build_test/test/Tools/circt-sim`
         - result: pass, no failure at `15000000 fs`, failure reported at end-of-run (`65000000 fs`).
-      - `llvm/build/bin/llvm-lit -sv --filter=sva-within-implication-pass-runtime build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva-within-implication-pass-runtime build_test/test/Tools/circt-sim`
         - result: pass (regression removed).
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-goto-repeat|sva-nonconsecutive-repeat|sva-intersect|sva-within-implication|sva-unbounded-delay-final|sva-eventually-final' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-goto-repeat|sva-nonconsecutive-repeat|sva-intersect|sva-within-implication|sva-unbounded-delay-final|sva-eventually-final' build_test/test/Tools/circt-sim`
         - result: `21/21` pass.
     - full SVA slices:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
         - result: `41/41` pass.
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
   - follow-up coverage addition:
     - added complementary pass regression:
       - `test/Tools/circt-sim/sva-implication-goto-consequent-pass-runtime.sv`
     - validation:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-goto-consequent-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-goto-consequent-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-goto-consequent-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-goto-consequent-fail-runtime.sv`
         - result: `2/2` pass.
       - updated SVA runtime slice:
-        - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+        - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
         - result: `42/42` pass.
 
 - Iteration update (`first_match` earliest-endpoint implication semantics):
@@ -6374,15 +6374,15 @@
           unknown.
   - validation:
     - targeted new tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv`
         - result: `2/2` pass.
     - focused operator slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-firstmatch|sva-implication|sva-goto-repeat|sva-nonconsecutive-repeat|sva-within-implication|sva-intersect' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-firstmatch|sva-implication|sva-goto-repeat|sva-nonconsecutive-repeat|sva-within-implication|sva-intersect' build_test/test/Tools/circt-sim`
         - result: `23/23` pass.
     - full SVA slices:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
         - result: `44/44` pass.
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (`first_match` bounded-delay overlap false-pass closure):
@@ -6409,12 +6409,12 @@
         bounded-delay `first_match` shape.
   - validation:
     - focused first-match implication set:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv`
       - result: `4/4` pass.
     - full SVA slices:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Tools/circt-sim`
         - result: `46/46` pass.
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
         - result: `152/152` pass.
 
 - Iteration update (bounded implication windows for `or`/`and`/`intersect` sequence consequents):
@@ -6450,16 +6450,16 @@
       - `test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
   - validation:
     - focused implication tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-consequent-range-pass-runtime.sv`
       - result: `4/4` pass.
     - broader runtime operator slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-firstmatch|sva-intersect|sva-within-implication|sva-goto-repeat|sva-nonconsecutive-repeat' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-firstmatch|sva-intersect|sva-within-implication|sva-goto-repeat|sva-nonconsecutive-repeat' build_test/test/Tools/circt-sim`
       - result: `27/27` pass.
     - full runtime SVA slice excluding known unrelated test:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-(?!simple-boolean)' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-(?!simple-boolean)' build_test/test/Tools/circt-sim`
       - result: `47/47` pass.
     - full ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
   - known unrelated baseline issue observed:
     - `test/Tools/circt-sim/sva-simple-boolean.sv` currently fails in this
@@ -6506,16 +6506,16 @@
       age-gated branch-truth correction above.
   - validation:
     - focused tests:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-or-overlap-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-or-overlap-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
       - result: `7/7` pass.
     - broader runtime operator slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-firstmatch|sva-intersect|sva-within-implication|sva-goto-repeat|sva-nonconsecutive-repeat' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-firstmatch|sva-intersect|sva-within-implication|sva-goto-repeat|sva-nonconsecutive-repeat' build_test/test/Tools/circt-sim`
       - result: `28/28` pass.
     - runtime SVA slice (excluding known unrelated `sva-simple-boolean`):
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-(?!simple-boolean)' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-(?!simple-boolean)' build_test/test/Tools/circt-sim`
       - result: `48/48` pass.
     - ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (`ltl.concat` bounded-delay ordering + first_match history plumbing):
@@ -6548,7 +6548,7 @@
       is marked `XFAIL` and documented inline.
   - validation:
     - focused runtime set:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-or-overlap-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-concat-order-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-concat-order-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-or-overlap-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-concat-order-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-concat-order-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
       - result: `8/8` pass.
 
 - Iteration update (de-XFAIL closure for `first_match` implication earliest-pass in runtime):
@@ -6579,16 +6579,16 @@
       - removed stale `XFAIL: *` and associated known-gap note.
   - validation:
     - focused runtime set:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build-test/test/Tools/circt-sim/sva-firstmatch-implication-or-overlap-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-concat-order-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-concat-order-pass-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build-test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-pass-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-earliest-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-fail-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-overlap-pass-runtime.sv build_test/test/Tools/circt-sim/sva-firstmatch-implication-or-overlap-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-concat-order-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-concat-order-pass-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-fail-runtime.sv build_test/test/Tools/circt-sim/sva-implication-sequence-or-consequent-range-pass-runtime.sv`
       - result: `9/9` pass.
     - broader runtime operator slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-firstmatch|sva-intersect|sva-within-implication|sva-goto-repeat|sva-nonconsecutive-repeat' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-implication|sva-firstmatch|sva-intersect|sva-within-implication|sva-goto-repeat|sva-nonconsecutive-repeat' build_test/test/Tools/circt-sim`
       - result: `30/30` pass.
     - runtime SVA slice (excluding known unrelated `sva-simple-boolean`):
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-(?!simple-boolean)' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-(?!simple-boolean)' build_test/test/Tools/circt-sim`
       - result: `50/50` pass.
     - ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter=sva build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter=sva build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
   - surprise:
     - running overlapping `llvm-lit` subsets in parallel can race on `%t`/output
@@ -6622,13 +6622,13 @@
       - iterative discovery debug summary now reports clocked cover count.
   - validation:
     - targeted regression:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-vcd-cover-signal-runtime\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-vcd-cover-signal-runtime\\.sv' build_test/test/Tools/circt-sim`
       - result: `1/1` pass.
     - runtime SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
       - result: `54/54` pass.
     - ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (`verif.clocked_assume` runtime enforcement + finalization):
@@ -6668,19 +6668,19 @@
       - assumption failures now force non-zero exit.
   - validation:
     - targeted assume runtime set:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-assume-(fail|pass)-runtime\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-assume-(fail|pass)-runtime\\.sv' build_test/test/Tools/circt-sim`
       - result: `2/2` pass.
     - targeted assume VCD signal set:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-vcd-assume-signal-runtime\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-vcd-assume-signal-runtime\\.sv' build_test/test/Tools/circt-sim`
       - result: `1/1` pass.
     - targeted assume strong-eventually finalization set:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-assume-eventually-(final|pass)-runtime\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-assume-eventually-(final|pass)-runtime\\.sv' build_test/test/Tools/circt-sim`
       - result: `2/2` pass.
     - runtime SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
       - result: `59/59` pass.
     - ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (immediate/procedural `verif.assume` runtime enforcement):
@@ -6709,19 +6709,19 @@
         when conditions hold.
   - validation:
     - immediate assume pair:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-immediate-assume-(fail|pass)-runtime\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-immediate-assume-(fail|pass)-runtime\\.sv' build_test/test/Tools/circt-sim`
       - result: `2/2` pass.
     - legacy verif-noop behavior:
-      - `llvm/build/bin/llvm-lit -sv --filter='verif-(noop\\.sv|assume-cover-noop\\.mlir)' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='verif-(noop\\.sv|assume-cover-noop\\.mlir)' build_test/test/Tools/circt-sim`
       - result: `2/2` pass.
     - runtime SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
       - result: `61/61` pass.
     - broad Tools/circt-sim SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test/Tools/circt-sim`
       - result: `72/72` pass.
     - ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
 
 - Iteration update (multi-instance clocked checker state isolation):
@@ -6749,16 +6749,16 @@
       - finalization casts from key `.first` (operation) for assert/assume.
   - validation:
     - targeted multi-instance regressions:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-multi-instance-(assert|assume)-fail-runtime\\.sv|sva-multi-instance-cover-runtime\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-multi-instance-(assert|assume)-fail-runtime\\.sv|sva-multi-instance-cover-runtime\\.sv' build_test/test/Tools/circt-sim`
       - result: `3/3` pass.
     - runtime SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime' build_test/test/Tools/circt-sim`
       - result: `64/64` pass.
     - broad Tools/circt-sim SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test/Tools/circt-sim`
       - result: `75/75` pass.
     - ImportVerilog SVA slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test/Conversion/ImportVerilog`
       - result: `152/152` pass.
   - surprise:
     - running overlapping `llvm-lit` subsets in parallel again produced a
@@ -6789,7 +6789,7 @@
         - each has an initial `0`,
         - at least one signal transitions to `1`.
   - validation:
-    - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-vcd-immediate-cover-signal-runtime.sv`
+    - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-vcd-immediate-cover-signal-runtime.sv`
       - result: `1/1` pass.
 
 - Iteration update (clocked concurrent assertions honor `$assertoff/$asserton`):
@@ -6822,13 +6822,13 @@
           do not use assertion-control tasks.
   - validation:
     - new regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-assertoff-clocked-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-assertoff-clocked-runtime.sv`
       - result: `1/1` pass.
     - runtime SVA + assertion-control smoke slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime|syscall-assert(off|on)\\.sv|verif-assume-cover-noop\\.mlir|verif-noop\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime|syscall-assert(off|on)\\.sv|verif-assume-cover-noop\\.mlir|verif-noop\\.sv' build_test/test/Tools/circt-sim`
       - result: `70/70` pass.
     - focused ImportVerilog assert-control slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-assertcontrol|sva-sequence-match-item-assertcontrol' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-assertcontrol|sva-sequence-match-item-assertcontrol' build_test/test/Conversion/ImportVerilog`
       - result: `6/6` pass.
 
 - Iteration update (`$assertfailoff` controls clocked assertion diagnostics):
@@ -6862,16 +6862,16 @@
         - `test/Tools/circt-sim/syscall-assertfailoff.sv`
   - validation:
     - new regression:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/sva-assertfailoff-clocked-runtime.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/sva-assertfailoff-clocked-runtime.sv`
       - result: `1/1` pass.
     - assertion-control smoke set:
-      - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/syscall-assertfailoff.sv build-test/test/Tools/circt-sim/syscall-assertoff.sv build-test/test/Tools/circt-sim/syscall-asserton.sv`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/syscall-assertfailoff.sv build_test/test/Tools/circt-sim/syscall-assertoff.sv build_test/test/Tools/circt-sim/syscall-asserton.sv`
       - result: `3/3` pass.
     - runtime SVA + assertion-control slice:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime|syscall-assert(off|on|failoff)\\.sv|verif-assume-cover-noop\\.mlir|verif-noop\\.sv' build-test/test/Tools/circt-sim`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-.*runtime|syscall-assert(off|on|failoff)\\.sv|verif-assume-cover-noop\\.mlir|verif-noop\\.sv' build_test/test/Tools/circt-sim`
       - result: `72/72` pass.
     - full SVA suite:
-      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build-test/test`
+      - `llvm/build/bin/llvm-lit -sv --filter='sva-' build_test/test`
       - result: `332 pass, 149 unsupported, 0 failed`.
 
 - Iteration update (clocked i1 assertion with constant-false clock no longer
@@ -6910,9 +6910,9 @@
         - `16.17--expect`
   - validation:
     - build:
-      - `ninja -C build-test circt-bmc`
+      - `ninja -C build_test circt-bmc`
     - focused lit:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-bmc/clocked-assert-constant-false-clock-unsat.mlir build-test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build-test/test/Conversion/LTLToCore/clocked-property-gating.mlir build-test/test/Conversion/LTLToCore/clocked-assert-constant-clock.mlir build-test/test/Conversion/VerifToSMT/lower-clocked-assert-like.mlir`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-bmc/clocked-assert-constant-false-clock-unsat.mlir build_test/test/Tools/circt-bmc/disable-iff-const-property-unsat.mlir build_test/test/Conversion/LTLToCore/clocked-property-gating.mlir build_test/test/Conversion/LTLToCore/clocked-assert-constant-clock.mlir build_test/test/Conversion/VerifToSMT/lower-clocked-assert-like.mlir`
       - result: `5/5` pass.
     - sv-tests recheck without expectation masking:
       - `TEST_FILTER='16.12--property$|16.12--property-disj$' EXPECT_FILE=/dev/null utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
@@ -6940,11 +6940,11 @@
       - `until_with` regression now matches `comb.and` + `ltl.until` + clocked
         assertion emission.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build-test/test/Conversion/ImportVerilog`
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build_test/test/Conversion/ImportVerilog`
       - result: `153 passed, 0 failed` (with `252` excluded by filter scope).
-    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build-test/test/Tools/circt-sim`
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build_test/test/Tools/circt-sim`
       - result: `80 passed, 0 failed`.
-    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build-test/test/Tools/circt-bmc`
+    - `python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv build_test/test/Tools/circt-bmc`
       - result: `27 passed, 0 failed, 149 unsupported`.
       - unsupported bucket attribution from test metadata:
         - dominated by environment requirements (`REQUIRES: z3`, `REQUIRES: bmc-jit`, `REQUIRES: slang`), not new SVA lowering regressions.
@@ -6968,10 +6968,10 @@
       - keeps default behavior unchanged (no implicit coverage expansion).
   - validation:
     - default behavior (no env opt-in):
-      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='sva-' build-test/test`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='sva-' build_test/test`
       - result: `335 passed, 149 unsupported, 0 failed`.
     - opt-in behavior (local triage mode):
-      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv --show-unsupported build-test/test/Tools/circt-bmc`
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py --filter='sva-' -sv --show-unsupported build_test/test/Tools/circt-bmc`
       - result: `151 passed, 24 failed, 1 unsupported`.
       - failure shape:
         - `8` xprop SVA e2e failures (`sat` expectations).
@@ -6982,7 +6982,7 @@
       - rewrote invalid property-in-expression form to a legal property form:
         - from `((in |-> 1'b1) == 1'b0)` to `not p_imp`.
       - `CIRCT_ENABLE_BMC_JIT_TESTS=1` single-test validation:
-        - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv`
+        - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/sva-xprop-implication-sat-e2e.sv`
         - result: `1/1` pass.
 
 - Iteration update (BMC clock-source recovery from `bmc.clock` metadata and
@@ -7012,14 +7012,14 @@
       - `test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - focused lit:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/lower-to-bmc-assert-clock-name-no-reg-metadata.mlir`
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/lower-to-bmc-assert-clock-name-no-reg-metadata.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Conversion/LTLToCore/clocked-assert-edge-gating.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
       - results: `3/3` pass.
     - previously failing opt-in e2e now passes:
-      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv`
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/sva-cover-unsat-e2e.sv`
       - result: `1/1` pass.
   - new gap identified during follow-up triage:
     - `sva_xprop_always_sat` currently lowers through a vacuous form
@@ -7046,20 +7046,20 @@
       - `test/Tools/circt-bmc/lower-to-bmc-singleton-array-get-i0.mlir`
   - validation:
     - build:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - focused lit:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/lower-to-bmc-singleton-array-get-i0.mlir`
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
-      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-xprop-nested-aggregate-inject-sat-e2e.sv`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/lower-to-bmc-singleton-array-get-i0.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/clocked-cover-i1-unsat.mlir`
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/sva-xprop-nested-aggregate-inject-sat-e2e.sv`
       - results: all listed tests pass.
     - remaining failing gap (reconfirmed):
-      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/sva-xprop-eventually-always-sat-e2e.sv`
+      - `CIRCT_ENABLE_BMC_JIT_TESTS=1 python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/sva-xprop-eventually-always-sat-e2e.sv`
       - `sva_xprop_always_sat` still fails with:
         - warning: `no property provided to check in module`.
       - root cause remains frontend lowering to vacuous
         `ltl.repeat %in, 0`.
   - build-system blocker encountered:
-    - active `build-test` cannot rebuild `circt-verilog` (`unknown target
+    - active `build_test` cannot rebuild `circt-verilog` (`unknown target
       'circt-verilog'`).
     - alternate `build_test` reconfigure still fails on missing
       `slang_slang` CMake dependency target.
@@ -7274,7 +7274,7 @@
 - Iteration update (unbounded always import-check drift + open-range probe):
   - realization:
     - recent `sva-` lit failures in `Tools/circt-bmc` were stale-binary false
-      negatives after source updates; rebuilding `build-test` eliminated all 4.
+      negatives after source updates; rebuilding `build_test` eliminated all 4.
     - the remaining `ImportVerilog` failure
       (`sva-unbounded-always-property.sv`) was a stale check shape:
       explicit-clock `always a` now lowers to sequence-form
@@ -7289,13 +7289,13 @@
         - `verif.clocked_assert ..., : !ltl.sequence`
   - validation:
     - rebuild:
-      - `ninja -C build-test circt-opt circt-bmc`
+      - `ninja -C build_test circt-opt circt-bmc`
     - focused checks:
-      - `llvm/build/bin/llvm-lit -sv -j 4 build-test/test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 4 build_test/test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
         - result: `1 passed, 0 failed`
-      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build-test/test/Conversion/ImportVerilog`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Conversion/ImportVerilog`
         - result: `153 passed, 0 failed`
-      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build-test/test/Tools/circt-bmc`
+      - `llvm/build/bin/llvm-lit -sv -j 4 --filter='sva-' build_test/test/Tools/circt-bmc`
         - result: `27 passed, 0 failed`
     - feature probe (parser/lowering status):
       - unbounded forms accepted and lowered:
@@ -7321,18 +7321,18 @@
         forms.
   - validation:
     - direct import compile:
-      - `build-test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/basic.sv > /tmp/basic.moore.mlir`
+      - `build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/basic.sv > /tmp/basic.moore.mlir`
       - result: success; lowered ops include open-range forms:
         - `ltl.non_consecutive_repeat ..., 2`
         - `ltl.goto_repeat ..., 2`
         - `ltl.delay ..., 2`
         - `ltl.repeat ..., 2`
     - focused prior-gap runtime cluster:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv build-test/test/Tools/circt-sim/cross-var-inline.sv build-test/test/Tools/circt-sim/cross-var-linear-sum.sv build-test/test/Tools/circt-sim/fork-disable-defer-poll.sv build-test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build-test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build-test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv build_test/test/Tools/circt-sim/cross-var-inline.sv build_test/test/Tools/circt-sim/cross-var-linear-sum.sv build_test/test/Tools/circt-sim/fork-disable-defer-poll.sv build_test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build_test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build_test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
       - result: `9 passed, 0 failed`
     - external SVA semantic sweep (`sv-tests`):
-      - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc TAG_REGEX='(^| )16\\.(9|10|11|12|13|14|15|16|17)( |$)' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
-      - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_BMC=build-test/bin/circt-bmc TAG_REGEX='(^| )16\\.(9|10|11|12|13|14|15|16|17)( |$)' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc TAG_REGEX='(^| )16\\.(9|10|11|12|13|14|15|16|17)( |$)' BMC_SMOKE_ONLY=1 utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc TAG_REGEX='(^| )16\\.(9|10|11|12|13|14|15|16|17)( |$)' utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result (both): `total=32 pass=32 fail=0`
 
 - Iteration update (open-range `nexttime` / `s_nexttime` parity):
@@ -7370,7 +7370,7 @@
         - `test/Conversion/ImportVerilog/sva-unbounded-always-property.sv`
   - validation:
     - red-first proof:
-      - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv`
+      - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv`
       - result before patch: `FAIL` with the two parser diagnostics above.
     - rebuild:
       - `ninja -C build_test circt-verilog`
@@ -7739,7 +7739,7 @@
       - verifies sim-only pass-mode skip plus no tool invocation.
   - validation:
     - harness regression subset:
-      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-yosys-sva-bmc-(sim-only-skip|smoke-xfail-no-xpass|require-filter|toolchain-default-build-test-fallback)'`
+      - `llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-yosys-sva-bmc-(sim-only-skip|smoke-xfail-no-xpass|require-filter|toolchain-default-build_test-fallback)'`
       - result: `4/4` pass.
     - full Yosys SVA replay:
       - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_BMC=build_test/bin/circt-bmc TEST_FILTER='.' utils/run_yosys_sva_circt_bmc.sh /home/thomas-ahle/yosys/tests/sva`
@@ -7768,7 +7768,7 @@
     - previously cited parity-gap 9-test slice (`constraint-*`, `cross-var-*`,
       `fork-disable-*`, `i3c-*`):
       - in `build_test`: `9/9` pass.
-      - in `build-test`: observed 1 failure from malformed emitted MLIR in an
+      - in `build_test`: observed 1 failure from malformed emitted MLIR in an
         unrelated in-flight lane; treated as lane instability, not semantic
         regression.
 
@@ -7899,10 +7899,10 @@
       - `test/Tools/circt-bmc/sva-stable-unsat-e2e.sv` -> expect `SAT`
       - `test/Tools/circt-bmc/sva-xprop-rose-fell-sat-e2e.sv` -> expect `UNSAT`
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 6 --filter='sva-' build-test/test/Conversion/ImportVerilog` -> `157/157` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-.*runtime' build-test/test/Tools/circt-sim` -> `88/88` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 6 --filter='sva-' build-test/test/Tools/circt-sim` -> `99/99` pass.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-' build-test/test/Tools/circt-bmc` -> `177/177` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 6 --filter='sva-' build_test/test/Conversion/ImportVerilog` -> `157/157` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-.*runtime' build_test/test/Tools/circt-sim` -> `88/88` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 6 --filter='sva-' build_test/test/Tools/circt-sim` -> `99/99` pass.
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-' build_test/test/Tools/circt-bmc` -> `177/177` pass.
 
 - Iteration update (runtime sequence crash fix + implication end-of-run refinement):
   - realization:
@@ -7936,7 +7936,7 @@
         `16.2--assume0`, and `16.2--assume-final` as `compile-only` because
         runtime outcome depends on undriven top input X-state.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-' build-test/test/Tools/circt-sim`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 --filter='sva-' build_test/test/Tools/circt-sim`
       - result: `101/101` pass.
     - `OUT=/tmp/sv-tests-sim-ch16-results-after-expect.txt TEST_FILTER='^16\\.' VERBOSE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `pass=49 fail=0 xfail=1`.
@@ -7963,8 +7963,8 @@
       - `test/Tools/run-sv-tests-sim-should-fail-pass.test`
       - `test/Tools/circt-sim/sva-immediate-assume-nonfatal-runtime.sv`
   - validation:
-    - `ninja -C build-test circt-sim`
-    - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-sv-tests-sim-should-fail-pass.test build-test/test/Tools/run-sv-tests-sim-tag-regex-empty-tags.test build-test/test/Tools/circt-sim/sva-immediate-assume-nonfatal-runtime.sv`
+    - `ninja -C build_test circt-sim`
+    - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/run-sv-tests-sim-should-fail-pass.test build_test/test/Tools/run-sv-tests-sim-tag-regex-empty-tags.test build_test/test/Tools/circt-sim/sva-immediate-assume-nonfatal-runtime.sv`
       - result: `3/3` pass.
     - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch16-ch20-after-assume-nonfatal.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `total=98 pass=98 fail=0 xfail=0 xpass=0`.
@@ -7980,9 +7980,9 @@
       - keep failure trace check,
       - require normal simulation completion.
   - validation:
-    - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/circt-sim/sva-immediate-assume-fail-runtime.sv`
+    - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/circt-sim/sva-immediate-assume-fail-runtime.sv`
       - result: `1/1` pass.
-    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='sva-' build-test/test/Tools/circt-sim`
+    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='sva-' build_test/test/Tools/circt-sim`
       - result: `104/104` pass.
 
 - Iteration update (sv-tests sim parity for elaboration-negative metadata):
@@ -8001,7 +8001,7 @@
     - added regression:
       - `test/Tools/run-sv-tests-sim-should-fail-elab-compile-pass.test`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv -j 1 build-test/test/Tools/run-sv-tests-sim-should-fail-elab-compile-pass.test build-test/test/Tools/run-sv-tests-sim-should-fail-pass.test`
+    - `llvm/build/bin/llvm-lit -sv -j 1 build_test/test/Tools/run-sv-tests-sim-should-fail-elab-compile-pass.test build_test/test/Tools/run-sv-tests-sim-should-fail-pass.test`
       - result: `2/2` pass.
     - `TAG_REGEX='(^| )(18\\.|19\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-sim-results-ch18-ch19-current.txt DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `total=63 pass=63 fail=0 xfail=0 xpass=0`.
@@ -8031,7 +8031,7 @@
     - added regression:
       - `test/Tools/run-sv-tests-bmc-no-module-classification.test`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='run-sv-tests-bmc-' build-test/test/Tools`
+    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='run-sv-tests-bmc-' build_test/test/Tools`
       - result: `25/25` pass.
     - `TAG_REGEX='(^| )(18\\.|19\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch18-ch19-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result: `total=68 pass=68 fail=0 xfail=0 xpass=0 error=0`.
@@ -8060,7 +8060,7 @@
     - added regression:
       - `test/Tools/run-sv-tests-bmc-no-formal-checks-classification.test`
   - validation:
-    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='run-sv-tests-bmc-' build-test/test/Tools`
+    - `llvm/build/bin/llvm-lit -sv -j 4 --max-failures=20 --filter='run-sv-tests-bmc-' build_test/test/Tools`
       - result: `26/26` pass.
     - `TAG_REGEX='(^| )(16\\.|20\\.)' EXPECT_FILE=/dev/null OUT=sv-tests-bmc-results-ch16-ch20-current.txt utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
       - result: `total=101 pass=101 fail=0 xfail=0 xpass=0 error=0`.
@@ -8091,25 +8091,25 @@
       - `test/Tools/circt-bmc/externalize-registers-self-loop.mlir`.
   - validation:
     - red-first:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/externalize-registers-self-loop.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/externalize-registers-self-loop.mlir`
         - before fix: crash (`operation destroyed but still has uses`).
     - after fix:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc/externalize-registers-self-loop.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc/externalize-registers-self-loop.mlir`
         - result: `1/1` pass.
-      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='externalize-registers' build-test/test/Tools/circt-bmc`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='externalize-registers' build_test/test/Tools/circt-bmc`
         - result: `12/12` pass.
-      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-sv-tests-bmc-' build-test/test/Tools`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='run-sv-tests-bmc-' build_test/test/Tools`
         - result: `26/26` pass.
       - `OUT=ovl-sva-sem-results-current.txt OVL_SEMANTIC_TEST_FILTER='.' utils/run_ovl_sva_semantic_circt_bmc.sh /home/thomas-ahle/std_ovl`
         - result: `ovl semantic BMC summary: 110 tests, failures=0, xfail=0, xpass=0, skipped=0`.
     - note:
-      - `ninja -C build-test check-circt-tools-circt-bmc` currently trips
+      - `ninja -C build_test check-circt-tools-circt-bmc` currently trips
         unrelated existing compile errors in dirty `circt-sim` files from other
         in-flight work; SVA/BMC-targeted validation above is clean.
 
 - Iteration update (close 6 `circt-bmc` lit regressions after harness changes):
   - realization:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc`
       showed 6 red tests:
       - `lower-to-bmc-llvm-select.mlir`
       - `lower-to-bmc-unmapped-clock-name.mlir`
@@ -8141,17 +8141,17 @@
         hardcoded `bmc_clock`.
   - validation:
     - focused red set:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build-test/test/Tools/circt-bmc/lower-to-bmc-llvm-select.mlir build-test/test/Tools/circt-bmc/lower-to-bmc-unmapped-clock-name.mlir build-test/test/Tools/circt-bmc/sv-tests-keep-logs-logtag.mlir build-test/test/Tools/circt-bmc/sv-tests-no-property-skip.mlir build-test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build-test/test/Tools/circt-bmc/sv-tests-smoke-xfail.mlir`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build_test/test/Tools/circt-bmc/lower-to-bmc-llvm-select.mlir build_test/test/Tools/circt-bmc/lower-to-bmc-unmapped-clock-name.mlir build_test/test/Tools/circt-bmc/sv-tests-keep-logs-logtag.mlir build_test/test/Tools/circt-bmc/sv-tests-no-property-skip.mlir build_test/test/Tools/circt-bmc/sv-tests-rising-clocks-only.mlir build_test/test/Tools/circt-bmc/sv-tests-smoke-xfail.mlir`
         - result: `6/6` pass.
     - full tool suite:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-bmc`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-bmc`
         - result: `322/322` pass.
 
 - Iteration update (cross-object inline randomization equality + lit feature gating):
   - realization:
     - `test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv`
       was hidden as `Unsupported` because top-level lit config did not expose a
-      `circt-sim` feature, even when `build-test/bin/circt-sim` existed.
+      `circt-sim` feature, even when `build_test/bin/circt-sim` existed.
     - once enabled, test executed and failed (`cross_eq_ok=0`), confirming
       inline cross-object equality constraints were dropped into unconstrained
       fallback randomization for the constrained object.
@@ -8170,14 +8170,14 @@
         `convertValueToLLVMType` to avoid invalid LLVM ops on `hw.struct`
         payloads.
   - validation:
-    - `python3 llvm/llvm/utils/lit/lit.py -sv --show-suites build-test/test/Conversion/ImportVerilog`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --show-suites build_test/test/Conversion/ImportVerilog`
       - `Available Features` now includes `circt-sim`.
-    - `python3 llvm/llvm/utils/lit/lit.py -sv -v build-test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv -v build_test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv`
       - before feature fix: `Unsupported`.
       - after feature fix but before lowering fix: `FAIL` with `cross_eq_ok=0`.
       - after lowering fix: `1/1` pass.
     - focused constraint/randomization sanity:
-      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build-test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv build-test/test/Conversion/ImportVerilog/class-randomization-constraints.sv build-test/test/Conversion/ImportVerilog/runtime-randomization.sv build-test/test/Conversion/ImportVerilog/randomize.sv build-test/test/Conversion/ImportVerilog/constraint-solve.sv build-test/test/Tools/circt-sim/constraint-inside-basic.sv build-test/test/Tools/circt-sim/constraint-signed-basic.sv build-test/test/Tools/circt-sim/constraint-unique-narrow.sv`
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 build_test/test/Conversion/ImportVerilog/class-randomization-cross-object-inline.sv build_test/test/Conversion/ImportVerilog/class-randomization-constraints.sv build_test/test/Conversion/ImportVerilog/runtime-randomization.sv build_test/test/Conversion/ImportVerilog/randomize.sv build_test/test/Conversion/ImportVerilog/constraint-solve.sv build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv`
       - result: `7 passed, 1 failed`.
       - note: the `randomize.sv` failure is an existing dirty-tree expectation
         mismatch and not caused by this change set.
@@ -8202,11 +8202,204 @@
         - no invalid-member fatal on valid access.
   - validation:
     - manual FileCheck runs with local sim binary:
-      - `build-test/bin/circt-verilog ... tagged-union-valid-member-runtime.sv --ir-llhd -o /tmp/tag-valid-check.mlir`
+      - `build_test/bin/circt-verilog ... tagged-union-valid-member-runtime.sv --ir-llhd -o /tmp/tag-valid-check.mlir`
       - `build_test/bin/circt-sim /tmp/tag-valid-check.mlir --top top --max-time=1000000 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/tagged-union-valid-member-runtime.sv`
-      - `build-test/bin/circt-verilog ... tagged-union-invalid-member-runtime.sv --ir-llhd -o /tmp/tag-invalid-check.mlir`
+      - `build_test/bin/circt-verilog ... tagged-union-invalid-member-runtime.sv --ir-llhd -o /tmp/tag-invalid-check.mlir`
       - `(build_test/bin/circt-sim /tmp/tag-invalid-check.mlir --top top --max-time=1000000 2>&1 || true) | llvm/build/bin/FileCheck test/Tools/circt-sim/tagged-union-invalid-member-runtime.sv`
       - result: both pass.
     - sv-tests targeted filter:
-      - `CIRCT_VERILOG=build-test/bin/circt-verilog CIRCT_SIM=build_test/bin/circt-sim TEST_FILTER='11.9--tagged_union_member_access(-sim)?' EXPECT_FILE=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
+      - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_SIM=build_test/bin/circt-sim TEST_FILTER='11.9--tagged_union_member_access(-sim)?' EXPECT_FILE=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 utils/run_sv_tests_circt_sim.sh /home/thomas-ahle/sv-tests`
       - result: `total=3 pass=3 fail=0`.
+
+- Iteration update (Yosys SVA decompilation pass, 2026-02-25):
+  - realization:
+    - the wrapper `~/.local/bin/yosys` points to `tabby/bin/yosys`, which
+      recursively re-execs itself; the real executable is
+      `/home/thomas-ahle/tabby/tabby/libexec/yosys`.
+    - direct execution of that binary fails in this environment because
+      `libedit.so.2` is missing, so static inspection is required.
+  - implemented:
+    - static binary analysis on `/home/thomas-ahle/tabby/tabby/libexec/yosys`
+      using `nm -C`, `strings -tx`, `objdump -d --demangle`, and
+      `objdump -s -j .rodata`.
+    - recovered importer-level behavior and messages from
+      `frontends/verific/verificsva.cc` string pools:
+      - mixed clocking is rejected (`Mixed clocking is currently not supported`).
+      - local variable assignment sequences are rejected in this importer path.
+      - zero-length consecutive-repeat guard is explicitly enforced.
+      - DFSM state-control explosion guard exists, with an abort threshold.
+      - unsupported constructs can be kept as `'x` with `\unsupported_sva`
+        under `-sva-continue-on-err`.
+    - recovered primitive/operator inventory embedded in the Verific flow:
+      - includes `sva_first_match`, `sva_intersect`, `sva_throughout`,
+        `sva_within`, `sva_until_with`, `sva_s_eventually`,
+        `sva_disable_iff`, `sva_triggered`, `sva_ended`, and more.
+    - recovered additional parser/backend diagnostics that indicate separate
+      feature limits outside the importer:
+      - `assertion operator '%s' is not yet supported`
+      - `non-consecutive repeat and goto-repeat are not supported`
+      - `infinite time sequences are not supported`
+  - validation:
+    - `which yosys && readlink -f $(which yosys) && file /home/thomas-ahle/tabby/tabby/libexec/yosys`
+    - `nm -C /home/thomas-ahle/tabby/tabby/libexec/yosys | rg "VerificSvaImporter|verific_import_sva"`
+    - `objdump -s -j .rodata --start-address=0x24173e0 --stop-address=0x2417a80 /home/thomas-ahle/tabby/tabby/libexec/yosys`
+    - `objdump -s -j .rodata --start-address=0x24d0c60 --stop-address=0x24d1020 /home/thomas-ahle/tabby/tabby/libexec/yosys`
+    - `objdump -s -j .rodata --start-address=0x25ccd40 --stop-address=0x25ccf20 /home/thomas-ahle/tabby/tabby/libexec/yosys`
+
+- Iteration update (plan cleanup + canonical parity checklist, 2026-02-25):
+  - realization:
+    - the root-level SVA note (`SVA_TODO.md`) had diverged and was no longer the
+      right source of truth for SVA closure work.
+    - we needed one canonical parity checklist tied to current test evidence and
+      the Yosys decomp findings.
+  - implemented:
+    - removed stale SVA note draft:
+      - `SVA_TODO.md`
+    - added canonical checklist:
+      - `docs/SVA_PARITY_CHECKLIST.md`
+      - includes feature matrix (`DONE`/`PARTIAL`/`GAP`), prioritized work
+        queue, and exit criteria for commercial parity.
+    - checklist explicitly marks:
+      - `.ended` sequence-method parity as a `GAP` (no direct regression found).
+      - unsupported-construct tolerant-mode parity (`unsupported_sva`-style
+        marking) as a `GAP`.
+      - constraint/cross/fork/i3c lit regressions as currently passing baseline.
+  - validation:
+    - focused lit sweep:
+      - `python3 llvm/llvm/utils/lit/lit.py -sv -j 1 -v build_test/test/Tools/circt-sim/constraint-inside-basic.sv build_test/test/Tools/circt-sim/constraint-signed-basic.sv build_test/test/Tools/circt-sim/constraint-unique-narrow.sv build_test/test/Tools/circt-sim/cross-var-inline.sv build_test/test/Tools/circt-sim/cross-var-linear-sum.sv build_test/test/Tools/circt-sim/fork-disable-ready-wakeup.sv build_test/test/Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv build_test/test/Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
+      - result: `8/8` pass.
+
+- Iteration update (`.ended` sequence method parity closure, 2026-02-25):
+  - realization:
+    - `.ended` was rejected before CIRCT lowering (`invalid member access for type 'sequence'`)
+      because slang frontend only registered `.triggered` and `.matched` methods.
+  - implemented:
+    - CIRCT-side lowering:
+      - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - added method lowering case: `ended` on sequence values maps to
+        `ltl.matched` (sequence endpoint bridge op).
+    - slang integration:
+      - added patch `patches/slang-sequence-ended-method.patch`.
+      - wired patch in `patches/apply-slang-patches.sh`.
+      - patch behavior:
+        - registers `ended` as a sequence system method (matched-like semantics).
+        - includes `.ended` in assertion-analysis sequence-method checks
+          (clock compatibility and local-var flow logic).
+        - includes `.ended` in sampled-value expression matched restrictions.
+    - new regressions:
+      - `test/Conversion/ImportVerilog/sva-sequence-ended-method.sv`
+      - `test/Tools/circt-sim/sva-ended-runtime.sv`
+      - `test/Tools/circt-bmc/sva-ended-e2e.sv`
+  - validation:
+    - red-first before fix:
+      - focused lit on the 3 new tests -> `3/3` fail with
+        `invalid member access for type 'sequence'`.
+    - rebuild:
+      - `ninja -C build_test circt-verilog circt-sim circt-bmc`
+    - post-fix:
+      - focused lit on new tests -> `3/3` pass.
+      - nearby non-regression sweep:
+        - `sva-sequence-matched-method.sv`
+        - `sequence-event-control.sv`
+        - `sva-matched-runtime.sv`
+        - `sva-triggered-runtime.sv`
+        - `sva-sequence-triggered-posedge-sat-e2e.sv`
+        - plus the 3 new `.ended` tests
+        - result: `8/8` pass.
+
+- Iteration update (unsupported-SVA tolerant mode + BMC drop filter, 2026-02-25):
+  - realization:
+    - the parity checklist still had a real `GAP` for Verific/Yosys-style
+      tolerant unsupported-SVA handling (`continue-on-err` + marker attrs).
+    - we needed importer-side tolerance plus an explicit BMC-side drop switch.
+  - red repro:
+    - `assert property (@(posedge clk) $past(ev, 1, 1'b1, @(posedge clk)) == ev);`
+    - pre-fix: hard import error:
+      - `unsupported $past value type with sampled-value controls`
+  - implemented:
+    - importer option:
+      - `--sva-continue-on-unsupported` in `circt-verilog`
+      - plumbed via `ImportVerilogOptions::continueOnUnsupportedSVA`
+    - lowering behavior:
+      - on concurrent assertion property-lowering failure in continue mode,
+        emit tagged placeholder assert-like op with:
+        - `circt.unsupported_sva`
+        - `circt.unsupported_sva_reason`
+      - downgrade unsupported SVA diagnostics in assertion-expression lowering
+        from error to warning when continue mode is enabled.
+    - BMC filter:
+      - new `circt-bmc` option: `--drop-unsupported-sva`
+      - drops assert-like ops carrying `circt.unsupported_sva`.
+  - regressions:
+    - `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv`
+    - `test/Tools/circt-bmc/drop-unsupported-sva.mlir`
+    - commandline coverage:
+      - `test/Tools/circt-verilog/commandline.mlir`
+      - `test/Tools/circt-bmc/commandline.mlir`
+  - validation:
+    - rebuilt:
+      - `ninja -C build_test circt-verilog circt-bmc`
+    - focused checks executed directly (sandbox blocks lit multiprocessing):
+      - import test repro fails without flag and passes with flag + marker attrs.
+      - bmc drop test confirms `circt-bmc: dropped 1 unsupported SVA assert-like op(s)`.
+      - both commandline tests confirm new options are exposed in `--help`.
+
+- Iteration update (unsupported-SVA policy parity: harness strict/lenient wiring, 2026-02-25):
+  - realization:
+    - unsupported-SVA parity remained `PARTIAL` because harness-level policy
+      integration was still missing, even though importer + bmc options existed.
+  - implemented:
+    - `utils/run_yosys_sva_circt_bmc.sh`
+      - added `UNSUPPORTED_SVA_POLICY` env switch:
+        - `strict` (default)
+        - `lenient`
+      - fails fast on invalid values.
+      - lenient mode wiring:
+        - adds `--sva-continue-on-unsupported` to `circt-verilog`.
+        - adds `--drop-unsupported-sva` to `circt-bmc`.
+      - strict mode preserves prior behavior (no extra unsupported-SVA flags).
+  - regressions:
+    - `test/Tools/run-yosys-sva-bmc-unsupported-sva-policy.test`
+      - lenient scenario requires both flags.
+      - strict/default scenario rejects both flags.
+  - validation:
+    - executed test RUN-equivalent commands directly (lit multiprocessing
+      blocked by sandbox `multiprocessing.SemLock`):
+      - lenient check passed.
+      - strict check passed.
+      - both runs reported:
+        - `PASS(pass): simple`
+        - `SKIP(fail-no-macro): simple`
+        - `yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0`.
+
+- Iteration update (unsupported-SVA tolerant mode: immediate `$past` sampled-control fallback, 2026-02-25):
+  - realization:
+    - `--sva-continue-on-unsupported` still failed on a non-concurrent SVA form:
+      immediate/procedural assertion conditions using unsupported
+      `$past(event, delay, enable, @(clock))`.
+  - red repro:
+    - `assert ($past(ev, 1, 1'b1, @(posedge clk)));` in an `initial` block.
+    - strict mode: expected hard error.
+    - lenient mode: warning only, but still exited non-zero before this fix.
+  - implemented:
+    - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+      - in `lowerPastWithSamplingControl`, when unsupported sampled-control
+        input type is hit and continue mode is enabled outside assertion-expression
+        lowering (`!inAssertionExpr`), return a tolerant fallback value:
+        - start from the raw sampled expression value.
+        - for `event` values, convert to boolean trigger form.
+      - assertion-expression (`inAssertionExpr`) behavior remains unchanged,
+        preserving existing concurrent placeholder fallback flow.
+  - regressions:
+    - added:
+      - `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
+    - ensured existing tolerant concurrent regression remains green:
+      - `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv`
+  - validation:
+    - rebuilt:
+      - `ninja -C build_test circt-verilog`
+    - direct RUN-equivalent checks (sandbox blocks lit multiprocessing):
+      - new test:
+        - strict command fails with expected error.
+        - lenient command passes with warning and emits `moore.assert`.
+      - existing concurrent tolerant test still matches warning + placeholder path.

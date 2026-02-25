@@ -14,4 +14,5 @@
 // CHECK-DAG: --liveness-lasso
 // CHECK-DAG: --print-solver-output
 // CHECK-DAG: --prune-bmc-registers
+// CHECK-DAG: --drop-unsupported-sva
 // CHECK-DAG: --emit-smtlib

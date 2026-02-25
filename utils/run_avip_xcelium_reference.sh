@@ -43,7 +43,8 @@ AVIPS_CORE8=(
   "apb|$MBIT_DIR/apb_avip/sim/cadence_sim|apb_8b_write_test"
   "ahb|$MBIT_DIR/ahb_avip/sim/cadenceSim|AhbWriteTest"
   "axi4|$MBIT_DIR/axi4_avip/sim/cadence_sim|axi4_write_read_test"
-  "axi4Lite|$MBIT_DIR/axi4Lite_avip/sim/cadenceSim|MasterVIPSlaveIPWriteTest"
+  # Keep aligned with the CIRCT lane: default project filelist compiles Axi4LiteWriteTest.
+  "axi4Lite|$MBIT_DIR/axi4Lite_avip/sim/cadenceSim|Axi4LiteWriteTest"
   "i2s|$MBIT_DIR/i2s_avip/sim/cadenceSim|I2sWriteOperationWith8bitdataTxMasterRxSlaveWith48khzTest"
   "i3c|$MBIT_DIR/i3c_avip/sim/cadence_sim|i3c_writeOperationWith8bitsData_test"
   "jtag|$MBIT_DIR/jtag_avip/sim/cadenceSim|JtagTdiWidth24Test"
@@ -53,7 +54,8 @@ AVIPS_ALL9=(
   "apb|$MBIT_DIR/apb_avip/sim/cadence_sim|apb_8b_write_test"
   "ahb|$MBIT_DIR/ahb_avip/sim/cadenceSim|AhbWriteTest"
   "axi4|$MBIT_DIR/axi4_avip/sim/cadence_sim|axi4_write_read_test"
-  "axi4Lite|$MBIT_DIR/axi4Lite_avip/sim/cadenceSim|MasterVIPSlaveIPWriteTest"
+  # Keep aligned with the CIRCT lane: default project filelist compiles Axi4LiteWriteTest.
+  "axi4Lite|$MBIT_DIR/axi4Lite_avip/sim/cadenceSim|Axi4LiteWriteTest"
   "i2s|$MBIT_DIR/i2s_avip/sim/cadenceSim|I2sWriteOperationWith8bitdataTxMasterRxSlaveWith48khzTest"
   "i3c|$MBIT_DIR/i3c_avip/sim/cadence_sim|i3c_writeOperationWith8bitsData_test"
   "jtag|$MBIT_DIR/jtag_avip/sim/cadenceSim|JtagTdiWidth24Test"

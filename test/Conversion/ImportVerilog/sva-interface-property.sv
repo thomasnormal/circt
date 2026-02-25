@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -26,6 +26,5 @@ module top(input logic clk, input logic a, input logic b);
   // CHECK: moore.virtual_interface.signal_ref %{{.*}}[@a]
   // CHECK: moore.virtual_interface.signal_ref %{{.*}}[@b]
   // CHECK: ltl.implication
-  // CHECK: ltl.clock
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
 endmodule

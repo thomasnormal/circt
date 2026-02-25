@@ -11,22 +11,29 @@ CIRCT_TIMEOUT_SECS="${CIRCT_TIMEOUT_SECS:-120}"
 CIRCT_UVM_COMPILE_TIMEOUT_SECS="${CIRCT_UVM_COMPILE_TIMEOUT_SECS:-360}"
 CIRCT_SIM_TIMEOUT_SECS="${CIRCT_SIM_TIMEOUT_SECS:-120}"
 CIRCT_UVM_SIM_TIMEOUT_SECS="${CIRCT_UVM_SIM_TIMEOUT_SECS:-600}"
+# Allow targeted longer compile windows for known heavy tests (e.g. BlackParrot).
+CIRCT_LONG_COMPILE_REGEX="${CIRCT_LONG_COMPILE_REGEX:-^bp_}"
+CIRCT_LONG_COMPILE_TIMEOUT_SECS="${CIRCT_LONG_COMPILE_TIMEOUT_SECS:-600}"
 CIRCT_MEMORY_LIMIT_KB=$((CIRCT_MEMORY_LIMIT_GB * 1024 * 1024))
 
-# Run a command with memory limit
-run_limited() {
+# Run a command with memory limit and explicit timeout.
+run_limited_with_timeout() {
+  local timeout_secs="$1"
+  shift
   (
     ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
-    timeout --signal=KILL $CIRCT_TIMEOUT_SECS "$@"
+    timeout --signal=KILL "$timeout_secs" "$@"
   )
+}
+
+# Run a command with default compile timeout.
+run_limited() {
+  run_limited_with_timeout "$CIRCT_TIMEOUT_SECS" "$@"
 }
 
 # Run UVM compilation with longer timeout (UVM library takes ~3 minutes to compile)
 run_uvm_limited() {
-  (
-    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
-    timeout --signal=KILL $CIRCT_UVM_COMPILE_TIMEOUT_SECS "$@"
-  )
+  run_limited_with_timeout "$CIRCT_UVM_COMPILE_TIMEOUT_SECS" "$@"
 }
 
 # Run UVM simulation with even longer timeout (~35s init + ~5min UVM phases)
@@ -39,10 +46,7 @@ run_uvm_sim_limited() {
 
 # Run simulation with longer timeout (UVM tests need >120s for 25MB MLIR files)
 run_sim_limited() {
-  (
-    ulimit -v $CIRCT_MEMORY_LIMIT_KB 2>/dev/null || true
-    timeout --signal=KILL $CIRCT_SIM_TIMEOUT_SECS "$@"
-  )
+  run_limited_with_timeout "$CIRCT_SIM_TIMEOUT_SECS" "$@"
 }
 
 # Simulation max-time in femtoseconds (default: 10us = 10^13 fs)
@@ -123,6 +127,26 @@ normalize_paths() {
     fi
   done
   printf '%s\n' "${out[@]}"
+}
+
+resolve_compile_timeout_secs() {
+  local base="$1"
+  local needs_uvm="$2"
+  local timeout_secs="$CIRCT_TIMEOUT_SECS"
+
+  if [[ "$needs_uvm" -eq 1 ]]; then
+    timeout_secs="$CIRCT_UVM_COMPILE_TIMEOUT_SECS"
+  fi
+
+  if [[ -n "$CIRCT_LONG_COMPILE_REGEX" ]] &&
+     [[ "$base" =~ $CIRCT_LONG_COMPILE_REGEX ]] &&
+     [[ "$CIRCT_LONG_COMPILE_TIMEOUT_SECS" =~ ^[0-9]+$ ]] &&
+     [[ "$timeout_secs" =~ ^[0-9]+$ ]] &&
+     (( CIRCT_LONG_COMPILE_TIMEOUT_SECS > timeout_secs )); then
+    timeout_secs="$CIRCT_LONG_COMPILE_TIMEOUT_SECS"
+  fi
+
+  printf '%s\n' "$timeout_secs"
 }
 
 while IFS= read -r -d '' sv; do
@@ -275,11 +299,8 @@ while IFS= read -r -d '' sv; do
 
   # Compile (UVM tests get a longer timeout for the large UVM library)
   compiled=0
-  compile_runner=run_limited
-  if [[ "$needs_uvm" -eq 1 ]]; then
-    compile_runner=run_uvm_limited
-  fi
-  if $compile_runner "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+  compile_timeout_secs="$(resolve_compile_timeout_secs "$base" "$needs_uvm")"
+  if run_limited_with_timeout "$compile_timeout_secs" "${cmd[@]}" > "$mlir" 2> "$verilog_log"; then
     compiled=1
   elif [[ -z "$top_from_meta" ]] && grep -qE "is not a valid top-level module|could not resolve hierarchical path" "$verilog_log" 2>/dev/null; then
     # Top module was guessed as "top" and failed; retry without --top
@@ -300,7 +321,7 @@ while IFS= read -r -d '' sv; do
       cmd_notop+=("-D" "$def")
     done
     cmd_notop+=("${files[@]}")
-    if $compile_runner "${cmd_notop[@]}" > "$mlir" 2> "$verilog_log"; then
+    if run_limited_with_timeout "$compile_timeout_secs" "${cmd_notop[@]}" > "$mlir" 2> "$verilog_log"; then
       compiled=1
       # Extract top module name from compiled MLIR
       top_module="$(grep -m1 'llhd.entity\|hw.module' "$mlir" | sed -n 's/.*@\([a-zA-Z_][a-zA-Z0-9_]*\).*/\1/p')"
@@ -406,7 +427,7 @@ WRAPPER_EOF
       -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob \
       --no-uvm-auto-include --top=top \
       -I "$(dirname "$sv")" "$wrapper")
-    if run_limited "${wrapper_cmd[@]}" > "$mlir" 2> "$verilog_log"; then
+    if run_limited_with_timeout "$compile_timeout_secs" "${wrapper_cmd[@]}" > "$mlir" 2> "$verilog_log"; then
       top_module="top"
     else
       result="COMPILE_FAIL"

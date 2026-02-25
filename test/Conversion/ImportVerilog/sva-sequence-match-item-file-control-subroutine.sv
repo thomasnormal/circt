@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -13,6 +13,6 @@ module SVASequenceMatchItemFileControlSubroutine(input logic clk, a);
   // CHECK-LABEL: moore.module @SVASequenceMatchItemFileControlSubroutine
   // CHECK: moore.builtin.fflush
   // CHECK: moore.builtin.fclose
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) a |-> s);
 endmodule

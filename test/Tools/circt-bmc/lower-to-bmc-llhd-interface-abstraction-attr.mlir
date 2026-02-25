@@ -8,7 +8,7 @@ module {
   }
 }
 
-// CHECK: verif.bmc bound 8 num_regs 0 initial_values [] attributes {
+// CHECK: verif.bmc bound 10 num_regs 0 initial_values [] attributes {
 // CHECK: bmc_abstracted_llhd_interface_input_details =
 // CHECK-DAG: sig_field0_unknown
 // CHECK-DAG: interface_enable_resolution_unknown

@@ -84,6 +84,60 @@ trim_whitespace() {
   printf '%s' "$s"
 }
 
+manifest_error() {
+  local row_no="$1"
+  local msg="$2"
+  echo "invalid manifest row $row_no: $msg" >&2
+  exit 1
+}
+
+validate_profiles_column() {
+  local row_no="$1"
+  local profiles="$2"
+  local token=""
+
+  if [[ -z "$profiles" ]]; then
+    manifest_error "$row_no" "empty profiles column"
+  fi
+
+  # Preserve empty-token detection (bash IFS splitting drops trailing empties).
+  if [[ "$profiles" == ","* || "$profiles" == *"," || "$profiles" == *",,"* ]]; then
+    manifest_error "$row_no" "empty profile token in profiles column"
+  fi
+
+  IFS=',' read -r -a tokens <<< "$profiles"
+  if [[ "${#tokens[@]}" -eq 0 ]]; then
+    manifest_error "$row_no" "empty profiles column"
+  fi
+
+  for token in "${tokens[@]}"; do
+    if [[ -z "$token" ]]; then
+      manifest_error "$row_no" "empty profile token in profiles column"
+    fi
+    case "$token" in
+      smoke|nightly|full|all) ;;
+      *)
+        manifest_error "$row_no" "unsupported profile token '$token' (expected smoke|nightly|full|all)"
+        ;;
+    esac
+  done
+}
+
+split_tsv_line() {
+  local line="$1"
+  local -n out_arr="$2"
+  out_arr=()
+  while true; do
+    if [[ "$line" == *$'\t'* ]]; then
+      out_arr+=("${line%%$'\t'*}")
+      line="${line#*$'\t'}"
+    else
+      out_arr+=("$line")
+      break
+    fi
+  done
+}
+
 matches_profile() {
   local row_profiles="$1"
   local token=""
@@ -216,6 +270,7 @@ run_lane_capture() {
   local retry_row_file="$6"
 
   local log_file="${OUT_DIR}/logs/${suite_id}.${engine_kind}.log"
+  local lane_out_dir="${OUT_DIR}/lanes/${suite_id}/${engine_kind}"
   local start_sec="$(date +%s)"
   local end_sec=""
   local elapsed_sec=""
@@ -236,11 +291,17 @@ run_lane_capture() {
     exit_code="0"
     elapsed_sec="0"
   else
+    mkdir -p "$lane_out_dir"
     local lane_rc="0"
     local delay_sec=""
     while true; do
       set +e
-      bash -lc "$cmd" >"$log_file" 2>&1
+      env \
+        UNIFIED_RUN_OUT_DIR="$OUT_DIR" \
+        UNIFIED_SUITE_ID="$suite_id" \
+        UNIFIED_ENGINE="$engine_kind" \
+        UNIFIED_LANE_OUT_DIR="$lane_out_dir" \
+        bash -lc "$cmd" >"$log_file" 2>&1
       lane_rc="$?"
       set -e
 
@@ -601,29 +662,58 @@ if [[ "$RESUME" -ne 1 || ! -f "$RETRY_SUMMARY_FILE" ]]; then
   printf "suite_id\tengine\tattempts\tretries_used\tstatus\texit_code\n" > "$RETRY_SUMMARY_FILE"
 fi
 
+manifest_row=0
 while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
   if [[ "$stop_scheduling" -eq 1 ]]; then
     break
   fi
 
   line="${raw_line%$'\r'}"
-  if [[ -z "$line" || "${line:0:1}" == "#" ]]; then
+  trimmed_line="$(trim_whitespace "$line")"
+  if [[ -z "$trimmed_line" || "${trimmed_line:0:1}" == "#" ]]; then
     continue
   fi
 
-  suite_id=""
-  row_profiles=""
-  circt_cmd=""
-  xcelium_cmd=""
-  suite_root=""
-  circt_adapter=""
-  xcelium_adapter=""
-  adapter_args=""
-  IFS=$'\t' read -r suite_id row_profiles circt_cmd xcelium_cmd suite_root circt_adapter xcelium_adapter adapter_args _rest <<< "$line"
+  manifest_row="$((manifest_row + 1))"
+
+  cols=()
+  split_tsv_line "$line" cols
+  col_count="${#cols[@]}"
+  if [[ "$col_count" -lt 4 ]]; then
+    manifest_error "$manifest_row" "expected at least 4 tab-separated columns (suite_id, profiles, circt_cmd, xcelium_cmd)"
+  fi
+  if [[ "$col_count" -gt 8 ]]; then
+    manifest_error "$manifest_row" "expected at most 8 tab-separated columns"
+  fi
+
+  suite_id="${cols[0]}"
+  row_profiles="${cols[1]}"
+  circt_cmd="${cols[2]}"
+  xcelium_cmd="${cols[3]}"
+  suite_root="${cols[4]:-}"
+  circt_adapter="${cols[5]:-}"
+  xcelium_adapter="${cols[6]:-}"
+  adapter_args="${cols[7]:-}"
 
   if [[ -z "$suite_id" ]]; then
-    continue
+    manifest_error "$manifest_row" "empty suite_id"
   fi
+  if [[ "$(trim_whitespace "$suite_id")" != "$suite_id" ]]; then
+    manifest_error "$manifest_row" "suite_id has leading/trailing whitespace"
+  fi
+  if [[ -z "$row_profiles" ]]; then
+    manifest_error "$manifest_row" "empty profiles column"
+  fi
+
+  validate_profiles_column "$manifest_row" "$row_profiles"
+
+  if [[ -n "$circt_adapter" && "$(trim_whitespace "$circt_adapter")" != "$circt_adapter" ]]; then
+    manifest_error "$manifest_row" "circt_adapter has leading/trailing whitespace"
+  fi
+  if [[ -n "$xcelium_adapter" && "$(trim_whitespace "$xcelium_adapter")" != "$xcelium_adapter" ]]; then
+    manifest_error "$manifest_row" "xcelium_adapter has leading/trailing whitespace"
+  fi
+
   if ! matches_profile "$row_profiles"; then
     continue
   fi

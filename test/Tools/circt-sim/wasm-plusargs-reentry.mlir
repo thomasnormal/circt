@@ -1,3 +1,19 @@
+// RUN: circt-sim %s --top top | FileCheck %s --check-prefix=NONE
+// RUN: circt-sim %s --top top +VERBOSE +DEBUG | FileCheck %s --check-prefix=VERBOSE_DEBUG
+// RUN: circt-sim %s --top top +VERBOSE | FileCheck %s --check-prefix=VERBOSE_ONLY
+//
+// NONE: verbose_not_found
+// NONE: debug_not_found
+// NONE: missing_not_found
+//
+// VERBOSE_DEBUG: verbose_found
+// VERBOSE_DEBUG: debug_found
+// VERBOSE_DEBUG: missing_not_found
+//
+// VERBOSE_ONLY: verbose_found
+// VERBOSE_ONLY: debug_not_found
+// VERBOSE_ONLY: missing_not_found
+
 module {
   llvm.mlir.global internal constant @__plusarg_MISSING("MISSING\00") {addr_space = 0 : i32}
   llvm.mlir.global internal constant @__plusarg_DEBUG("DEBUG\00") {addr_space = 0 : i32}

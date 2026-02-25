@@ -1045,11 +1045,11 @@ def main() -> int:
     if shutil.which(args.fusesoc_bin) is None and not Path(args.fusesoc_bin).exists():
         fail(f"fusesoc executable not found: {args.fusesoc_bin}")
 
-    circt_verilog = os.environ.get("CIRCT_VERILOG", "build-test/bin/circt-verilog")
+    circt_verilog = os.environ.get("CIRCT_VERILOG", "build_test/bin/circt-verilog")
     circt_verilog_args = shlex.split(os.environ.get("CIRCT_VERILOG_ARGS", ""))
-    circt_opt = os.environ.get("CIRCT_OPT", "build-test/bin/circt-opt")
+    circt_opt = os.environ.get("CIRCT_OPT", "build_test/bin/circt-opt")
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
-    circt_lec = os.environ.get("CIRCT_LEC", "build-test/bin/circt-lec")
+    circt_lec = os.environ.get("CIRCT_LEC", "build_test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"

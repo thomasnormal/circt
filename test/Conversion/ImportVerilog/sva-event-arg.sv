@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
 // REQUIRES: slang
 
@@ -16,13 +16,10 @@ module sva_event_arg(
 
   // CHECK: [[A:%.*]] = moore.to_builtin_bool {{%.*}} : l1
   // CHECK: [[CLK:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED_A:%.*]] = ltl.clock [[A]],{{ *}}posedge [[CLK]]{{.*}} : i1
-  // CHECK: verif.assert [[CLOCKED_A]] : !ltl.sequence
+  // CHECK: verif.clocked_assert [[A]], posedge [[CLK]] : i1
   assert property (seq_event(posedge clk, a));
 
   // CHECK: [[B:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLK2:%.*]] = moore.to_builtin_bool {{%.*}} : l1
-  // CHECK: [[CLOCKED_B:%.*]] = ltl.clock [[B]],{{ *}}negedge [[CLK2]]{{.*}} : i1
-  // CHECK: verif.assert [[CLOCKED_B]] : !ltl.sequence
+  // CHECK: verif.clocked_assert [[B]], negedge [[CLK]] : i1
   assert property (seq_event(negedge clk, b));
 endmodule

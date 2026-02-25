@@ -618,6 +618,20 @@ if(CIRCT_SLANG_FRONTEND_ENABLED)
     install(TARGETS slang_slang EXPORT CIRCTTargets)
   else()
     find_package(slang 10.0 REQUIRED)
+    # Keep CIRCT target wiring stable across slang package variants.
+    # Some installed configs expose `slang::slang` or `svlang` instead of the
+    # in-tree `slang_slang` target name used throughout CIRCT.
+    if(NOT TARGET slang_slang)
+      if(TARGET slang::slang)
+        add_library(slang_slang ALIAS slang::slang)
+      elseif(TARGET svlang)
+        add_library(slang_slang ALIAS svlang)
+      else()
+        message(FATAL_ERROR
+          "slang package found, but no compatible target was provided "
+          "(expected one of: slang_slang, slang::slang, svlang)")
+      endif()
+    endif()
   endif()
 endif()
 

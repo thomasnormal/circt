@@ -343,7 +343,7 @@ USAGE
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_CIRCT_MUT="${SCRIPT_DIR}/../build-test/bin/circt-mut"
+DEFAULT_CIRCT_MUT="${SCRIPT_DIR}/../build_test/bin/circt-mut"
 
 EXAMPLES_ROOT="${HOME}/mcy/examples"
 OUT_DIR="${PWD}/mutation-mcy-examples-results"

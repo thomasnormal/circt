@@ -21,3 +21,5 @@ module {
 // CHECK: seq.to_clock
 // CHECK: seq.compreg sym @ltl_state
 // CHECK: verif.cover
+// CHECK-NOT: verif.cover {{.*}}bmc.final
+// CHECK: hw.output

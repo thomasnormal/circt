@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --ir-llhd -o %t.mlir 2>&1
+// RUN: circt-verilog --no-uvm-auto-include %s --ir-llhd -o %t.mlir 2>&1
 // RUN: circt-sim %t.mlir --top top --max-time=500000000 >%t.out 2>&1; FileCheck %s < %t.out
 // Test that SVA assertion failure is detected when a |-> ##1 b is violated.
 // a is high but b is NOT high on the next posedge.

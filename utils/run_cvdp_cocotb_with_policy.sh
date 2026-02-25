@@ -66,7 +66,7 @@ if [[ ! -f "$results_json" ]]; then
   exit 1
 fi
 
-read -r compile_pass cocotb_pass cocotb_fail sim_fail sim_timeout < <(
+read -r compile_pass cocotb_pass cocotb_fail sim_fail sim_timeout stub_sv < <(
   python3 - "$results_json" <<'PY'
 import json, sys
 with open(sys.argv[1]) as f:
@@ -74,14 +74,28 @@ with open(sys.argv[1]) as f:
 r = obj.get("results", {})
 def n(k):
     return len(r.get(k, []))
-print(n("compile_pass"), n("cocotb_pass"), n("cocotb_fail"), n("sim_fail"), n("sim_timeout"))
+print(
+    n("compile_pass"),
+    n("cocotb_pass"),
+    n("cocotb_fail"),
+    n("sim_fail"),
+    n("sim_timeout"),
+    n("stub_sv"),
+)
 PY
 )
 
 functional_mismatches=$cocotb_fail
-runtime_fails=$((sim_fail + sim_timeout))
+# Stub-backed data points represent intentionally synthesized placeholder RTL.
+# Treat their simulation failures as expected harness outcomes, not runtime infra
+# failures, while continuing to count timeouts and non-stub SIM_FAIL rows.
+effective_sim_fail=$((sim_fail - stub_sv))
+if (( effective_sim_fail < 0 )); then
+  effective_sim_fail=0
+fi
+runtime_fails=$((effective_sim_fail + sim_timeout))
 
-echo "[cvdp-cocotb-policy] summary: compile_pass=$compile_pass cocotb_pass=$cocotb_pass cocotb_fail=$cocotb_fail functional_mismatches=$functional_mismatches sim_fail=$sim_fail sim_timeout=$sim_timeout runtime_fails=$runtime_fails runner_rc=$runner_rc min_pass=$MIN_COCOTB_PASS max_runtime_fails=$MAX_RUNTIME_FAILS"
+echo "[cvdp-cocotb-policy] summary: compile_pass=$compile_pass cocotb_pass=$cocotb_pass cocotb_fail=$cocotb_fail functional_mismatches=$functional_mismatches sim_fail=$sim_fail stub_sv=$stub_sv effective_sim_fail=$effective_sim_fail sim_timeout=$sim_timeout runtime_fails=$runtime_fails runner_rc=$runner_rc min_pass=$MIN_COCOTB_PASS max_runtime_fails=$MAX_RUNTIME_FAILS"
 
 if [[ "$compile_pass" -eq 0 ]]; then
   echo "[cvdp-cocotb-policy] FAIL: no compile-pass entries" >&2

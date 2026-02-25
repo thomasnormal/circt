@@ -15,6 +15,7 @@ RESOURCE_GUARD_HELPER="utils/wasm_resource_guard_default_check.sh"
 UVM_STUB_VCD_HELPER="utils/wasm_uvm_stub_vcd_check.sh"
 UVM_PKG_MEMFS_HELPER="utils/wasm_uvm_pkg_memfs_reentry_check.sh"
 UVM_PKG_SIM_HELPER="utils/wasm_uvm_pkg_sim_check.sh"
+VPI_STARTUP_YIELD_HELPER="utils/wasm_vpi_startup_yield_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -100,6 +101,10 @@ if [[ ! -x "$UVM_PKG_MEMFS_HELPER" ]]; then
 fi
 if [[ ! -x "$UVM_PKG_SIM_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $UVM_PKG_SIM_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$VPI_STARTUP_YIELD_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $VPI_STARTUP_YIELD_HELPER" >&2
   exit 1
 fi
 
@@ -355,6 +360,9 @@ fi
 
 echo "[wasm-smoke] Re-entry: circt-sim plusargs isolation"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$PLUSARGS_HELPER"
+
+echo "[wasm-smoke] VPI startup-yield hook (cb_rtn=0)"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$VPI_STARTUP_YIELD_HELPER"
 
 echo "[wasm-smoke] Default guard: no wasm runtime abort"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"

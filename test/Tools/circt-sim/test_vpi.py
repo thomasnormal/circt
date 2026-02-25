@@ -18,7 +18,7 @@ import pytest
 CIRCT_SIM = os.environ.get(
     "CIRCT_SIM",
     os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "build-test", "bin", "circt-sim"
+        os.path.dirname(__file__), "..", "..", "..", "build_test", "bin", "circt-sim"
     ),
 )
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))

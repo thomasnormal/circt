@@ -63,7 +63,7 @@
   - Full target build currently blocked by pre-existing unrelated errors in
     `tools/circt-sim/AOTProcessCompiler.cpp` (e.g. `encodeJITDelay` undeclared,
     incomplete `mlir::ExecutionEngine` type under wasm).
-  - Native `build-test` rebuild is currently blocked by an unrelated pre-existing
+  - Native `build_test` rebuild is currently blocked by an unrelated pre-existing
     CMake regeneration issue (`JITSchedulerRuntime.cpp` missing in unittests).
   - `pytest` is not installed in this environment, so the Python VPI regression
     suite could not be executed here.
@@ -146,7 +146,7 @@
       - added contract token for
         `-DCIRCT_SIM_WASM_ENABLE_NODERAWFS=`.
   - validation:
-    - `ninja -C build-test circt-verilog circt-sim`:
+    - `ninja -C build_test circt-verilog circt-sim`:
       - result: `PASS` (including `circt-sim.cpp` recompile + link).
     - `utils/configure_wasm_build.sh --print-cmake-command`:
       - includes `-DCIRCT_SIM_WASM_ENABLE_NODERAWFS=ON` by default.
@@ -225,8 +225,8 @@
 
 ## 2026-02-23 (follow-up: interrupted regression run recovery)
 - Goal: recover and complete previously interrupted focused checks:
-  - `ninja -C build-test check-circt-conversion-veriftosmt`
-  - `ninja -C build-test check-circt-tools-circt-bmc`
+  - `ninja -C build_test check-circt-conversion-veriftosmt`
+  - `ninja -C build_test check-circt-tools-circt-bmc`
 - Results:
   - `check-circt-conversion-veriftosmt`: `Passed: 155/155`.
   - `check-circt-tools-circt-bmc`: `Passed: 158`, `Unsupported: 156`, `Failed: 0`.
@@ -266,7 +266,7 @@
   - checks `circt-sim` emits explicit guidance to run `circt-verilog` first.
 - Validation:
   - `utils/run_wasm_smoke.sh` passes end-to-end.
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim/reject-raw-sv-input.sv` passes.
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim/reject-raw-sv-input.sv` passes.
 
 ## 2026-02-23 (follow-up: close bmc real-run re-entry gap)
 - Gap identified:
@@ -1680,11 +1680,11 @@
     - updated `test/Tools/circt-sim/vpi-string-put-value-test.sv` checks and
       `--max-time` to include scheduled callback window.
 - Validation:
-  - `build-test/bin/circt-sim test/Tools/circt-sim/timeout-no-spurious-vtable-warning.mlir --top test --timeout=2`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/timeout-no-spurious-vtable-warning.mlir --top test --timeout=2`
     now exits `1`, prints timeout, and no spurious vtable diagnostics.
-  - `build-test/bin/circt-sim test/Tools/circt-sim/uvm-phase-add-duplicate-fast-path.mlir`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/uvm-phase-add-duplicate-fast-path.mlir`
     prints `phase-add calls=1`.
-  - `build-test/bin/circt-sim test/Tools/circt-sim/wasm-plusargs-reentry.mlir --top top ...`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/wasm-plusargs-reentry.mlir --top top ...`
     matches expected `verbose/debug/missing` outcomes for no args, `+VERBOSE +DEBUG`,
     and `+VERBOSE`.
   - `vpi-string-put-value-test` flow (`cc` plugin + `circt-verilog` + `circt-sim`)
@@ -1782,7 +1782,7 @@
     - `test_first_on_coincident_triggers` timing out (no visible regs)
     - array-of-struct VPI hierarchy mismatch (`test_array`)
 - Fixes:
-  - rebuilt `build-test/bin/circt-verilog` and `build-test/bin/circt-sim` from
+  - rebuilt `build_test/bin/circt-verilog` and `build_test/bin/circt-sim` from
     current tree so `vpi.all_vars` synthesis path is active.
   - fixed `circt-sim` link failure during rebuild by adding JIT deps in
     `tools/circt-sim/CMakeLists.txt`:
@@ -1801,7 +1801,7 @@
       unpacked struct;
     - include field array metadata (`is_array`, bounds, element width).
 - Validation:
-  - `build-test/bin/circt-verilog ... | llvm/build/bin/FileCheck` passes for
+  - `build_test/bin/circt-verilog ... | llvm/build/bin/FileCheck` passes for
     `test/Conversion/ImportVerilog/vpi-struct-fields-array-of-struct.sv`.
   - `COCOTB_WORKDIR=<tmp> utils/run_cocotb_tests.sh`:
     - `test_cocotb` PASS (286 tests)
@@ -1884,8 +1884,8 @@
     - `test/Tools/circt-sim/vpi-string-put-value-test.sv`
     - `test/Tools/circt-sim/vpi-string-put-value-test.c`
 - Validation:
-  - `ninja -C build-test circt-sim`: PASS
-  - `cc -shared -fPIC -o /tmp/vpi-string-put-value-test.so test/Tools/circt-sim/vpi-string-put-value-test.c -ldl && build-test/bin/circt-verilog test/Tools/circt-sim/vpi-string-put-value-test.sv --ir-moore --ir-hw --ir-llhd -o /tmp/vpi-string-put-value-test.mlir && build-test/bin/circt-sim /tmp/vpi-string-put-value-test.mlir --top vpi_string_test --max-time=100000 --vpi=/tmp/vpi-string-put-value-test.so`: PASS (`VPI_STRING: FINAL: 6 passed, 0 failed`)
+  - `ninja -C build_test circt-sim`: PASS
+  - `cc -shared -fPIC -o /tmp/vpi-string-put-value-test.so test/Tools/circt-sim/vpi-string-put-value-test.c -ldl && build_test/bin/circt-verilog test/Tools/circt-sim/vpi-string-put-value-test.sv --ir-moore --ir-hw --ir-llhd -o /tmp/vpi-string-put-value-test.mlir && build_test/bin/circt-sim /tmp/vpi-string-put-value-test.mlir --top vpi_string_test --max-time=100000 --vpi=/tmp/vpi-string-put-value-test.so`: PASS (`VPI_STRING: FINAL: 6 passed, 0 failed`)
   - `utils/run_cocotb_tests.sh test_cocotb`: PASS (`286 tests`)
 
 ## 2026-02-24 (follow-up: circt-verilog.wasm UVM compile trap after output emission)
@@ -1957,8 +1957,8 @@
     - allow pre-active registration iff reason is `cbStartOfSimulation`;
       keep rejecting null callback data and non-start reasons while inactive.
 - Validation:
-  - `ninja -C build-test CIRCTSimTests`: PASS.
-  - `build-test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter=VPIRuntimeRegisterCbTest.*`: PASS (3 tests).
+  - `ninja -C build_test CIRCTSimTests`: PASS.
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter=VPIRuntimeRegisterCbTest.*`: PASS (3 tests).
   - `pytest -q test/Tools/circt-sim/test_vpi.py -k startup_register_bridge`: PASS.
 
 ## 2026-02-24 (follow-up: browser-style UVM malformed-attribute A/B recheck)

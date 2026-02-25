@@ -74,6 +74,12 @@ static std::optional<IntegerAttr> getPresetAttr(Value init) {
   if (!init)
     return std::nullopt;
 
+  if (auto result = dyn_cast<OpResult>(init))
+    if (auto process = dyn_cast<llhd::ProcessOp>(result.getOwner()))
+      if (auto halt = dyn_cast<llhd::HaltOp>(process.getBody().front().getTerminator()))
+        if (result.getResultNumber() < halt.getOperands().size())
+          return getPresetAttr(halt.getOperand(result.getResultNumber()));
+
   if (auto bitcast = init.getDefiningOp<hw::BitcastOp>())
     return getPresetAttr(bitcast.getInput());
 
@@ -97,6 +103,13 @@ static std::optional<IntegerAttr> getPresetAttr(Value init) {
   }
 
   return std::nullopt;
+}
+
+static bool isZeroTimeLikeDrive(llhd::DriveOp driveOp) {
+  TimeAttr attr;
+  if (!matchPattern(driveOp.getTime(), m_Constant(&attr)))
+    return false;
+  return attr.getTime() == 0 && attr.getDelta() == 0 && attr.getEpsilon() <= 1;
 }
 
 /// The work horse promoting processes into concrete registers.
@@ -140,8 +153,8 @@ struct Deseq {
   /// may cause the described register to update its value.
   SmallSetVector<Value, 2> triggers;
   /// The values carried from the past into the present as destination operands
-  /// of the wait op. These values are guaranteed to also be contained in
-  /// `triggers`.
+  /// of the wait op. These may include observed trigger values as well as
+  /// non-trigger i1 state carried through the process.
   SmallVector<Value, 2> pastValues;
   /// The conditional drive operations fed by this process.
   SmallVector<DriveInfo> driveInfos;
@@ -353,13 +366,16 @@ bool Deseq::analyzeProcess() {
   for (auto [index, trigger] : llvm::enumerate(triggers))
     booleanLattice.insert({trigger, getPresentTrigger(index)});
 
-  // Record triggers that are derived from 4-state signals (value & ~unknown).
+  // Record trigger-to-signal mappings. Prefer canonical 4-state boolified
+  // forms, but also accept plain i1 signal probes.
   for (auto trigger : triggers) {
-    if (auto signal = getSignalFromBoolified(trigger)) {
-      auto it = triggerForSignal.find(signal);
-      if (it == triggerForSignal.end())
-        triggerForSignal.insert({signal, trigger});
-    }
+    Value signal = getSignalFromBoolified(trigger);
+    if (!signal)
+      signal = traceSignal(trigger);
+    if (!signal)
+      continue;
+    if (auto it = triggerForSignal.find(signal); it == triggerForSignal.end())
+      triggerForSignal.insert({signal, trigger});
   }
 
   // Ensure the wait op destination operands, i.e. the values passed from the
@@ -371,13 +387,18 @@ bool Deseq::analyzeProcess() {
                               << ": uses non-i1 past value\n");
       return false;
     }
-    auto trigger = tracePastValue(operand);
-    if (!trigger)
+    auto pastValue = tracePastValue(operand);
+    if (!pastValue)
       return false;
-    pastValues.push_back(trigger);
-    unsigned index =
-        std::distance(triggers.begin(), llvm::find(triggers, trigger));
-    booleanLattice.insert({blockArg, getPastTrigger(index)});
+    pastValues.push_back(pastValue);
+    if (auto it = llvm::find(triggers, pastValue); it != triggers.end()) {
+      unsigned index = std::distance(triggers.begin(), it);
+      booleanLattice.insert({blockArg, getPastTrigger(index)});
+    } else if (matchPattern(pastValue, m_One())) {
+      booleanLattice.insert({blockArg, getConstBoolean(true)});
+    } else if (matchPattern(pastValue, m_Zero())) {
+      booleanLattice.insert({blockArg, getConstBoolean(false)});
+    }
   }
 
   return true;
@@ -405,13 +426,20 @@ Value Deseq::tracePastValue(Value pastValue) {
     // block arguments backwards to their predecessors.
     if (triggers.contains(value) || !arg) {
       if (!triggers.contains(value) && !arg) {
-        if (auto signal = getSignalFromBoolified(value)) {
+        auto mapSignalToTrigger = [&](Value signal) -> bool {
+          if (!signal)
+            return false;
           if (auto it = triggerForSignal.find(signal);
               it != triggerForSignal.end()) {
             distinctValues.insert(it->second);
-            continue;
+            return true;
           }
-        }
+          return false;
+        };
+        if (mapSignalToTrigger(getSignalFromBoolified(value)))
+          continue;
+        if (mapSignalToTrigger(traceSignal(value)))
+          continue;
       }
       distinctValues.insert(value);
       continue;
@@ -451,6 +479,23 @@ Value Deseq::tracePastValue(Value pastValue) {
 
         if (seen.insert(operand).second)
           worklist.push_back(operand);
+      } else if (auto waitOp = dyn_cast<WaitOp>(op)) {
+        // Handle wait edges to the successor block.
+        if (waitOp.getDest() != arg.getOwner()) {
+          LLVM_DEBUG(llvm::dbgs() << "Skipping " << process.getLoc()
+                                  << ": malformed wait successor while tracing "
+                                     "past value\n");
+          return Value{};
+        }
+        if (argIdx >= waitOp.getDestOperands().size()) {
+          LLVM_DEBUG(llvm::dbgs() << "Skipping " << process.getLoc()
+                                  << ": wait successor operand index out of "
+                                     "range while tracing past value\n");
+          return Value{};
+        }
+        auto operand = waitOp.getDestOperands()[argIdx];
+        if (seen.insert(operand).second)
+          worklist.push_back(operand);
       } else {
         LLVM_DEBUG(llvm::dbgs() << "Skipping " << process.getLoc()
                                 << ": unsupported terminator " << op->getName()
@@ -460,8 +505,8 @@ Value Deseq::tracePastValue(Value pastValue) {
     }
   }
 
-  // Ensure that we have one distinct value being passed from the past into
-  // the present, and that the value is observed.
+  // Ensure that we have one distinct value being passed from the past into the
+  // present.
   if (distinctValues.size() != 1) {
     LLVM_DEBUG(
         llvm::dbgs()
@@ -469,13 +514,7 @@ Value Deseq::tracePastValue(Value pastValue) {
         << ": multiple past values passed for the same block argument\n");
     return Value{};
   }
-  auto distinctValue = *distinctValues.begin();
-  if (!triggers.contains(distinctValue)) {
-    LLVM_DEBUG(llvm::dbgs() << "Skipping " << process.getLoc()
-                            << ": unobserved past value\n");
-    return Value{};
-  }
-  return distinctValue;
+  return *distinctValues.begin();
 }
 
 Value Deseq::traceSignal(Value value) {
@@ -523,6 +562,16 @@ Value Deseq::traceSignal(Value value) {
             if (seen.insert(operand).second)
               worklist.push_back(operand);
           }
+          continue;
+        }
+        if (auto waitOp = dyn_cast<WaitOp>(term)) {
+          if (waitOp.getDest() != arg.getOwner())
+            continue;
+          if (argIdx >= waitOp.getDestOperands().size())
+            return Value();
+          auto operand = waitOp.getDestOperands()[argIdx];
+          if (seen.insert(operand).second)
+            worklist.push_back(operand);
           continue;
         }
         return Value();
@@ -674,6 +723,13 @@ TruthTable Deseq::computeBoolean(OpResult value) {
   // Handle constants.
   if (auto constOp = dyn_cast<hw::ConstantOp>(op))
     return getConstBoolean(constOp.getValue().isOne());
+
+  // Approximate direct i1 probes in terms of observed triggers.
+  if (auto probeOp = dyn_cast<llhd::ProbeOp>(op)) {
+    if (auto it = triggerForSignal.find(probeOp.getSignal());
+        it != triggerForSignal.end())
+      return computeBoolean(it->second);
+  }
 
   // Approximate 4-state clock values in terms of observed triggers.
   if (auto extractOp = dyn_cast<hw::StructExtractOp>(op)) {
@@ -1088,13 +1144,19 @@ bool Deseq::matchDriveClock(
     // the DNF's even bits represent positive terms and odd bits represent
     // inverted terms.
     uint32_t clockEdge = (negClock ? 0b1001 : 0b0110) << 2;
+    uint32_t clockEdgeImplicitPresent = (negClock ? 0b0001 : 0b0010) << 2;
     auto clockWithoutEnable = DNFTerm{clockEdge};
     auto clockWithEnable = DNFTerm{clockEdge | 0b01};
+    auto clockWithoutEnableImplicitPresent = DNFTerm{clockEdgeImplicitPresent};
+    auto clockWithEnableImplicitPresent =
+        DNFTerm{clockEdgeImplicitPresent | 0b01};
 
     // Check if the single value table entry matches this clock.
-    if (valueTable[0].first == clockWithEnable)
+    if (valueTable[0].first == clockWithEnable ||
+        valueTable[0].first == clockWithEnableImplicitPresent)
       drive.clock.enable = drive.op.getEnable();
-    else if (valueTable[0].first != clockWithoutEnable)
+    else if (valueTable[0].first != clockWithoutEnable &&
+             valueTable[0].first != clockWithoutEnableImplicitPresent)
       continue;
 
     // Populate the clock info and return.
@@ -1327,13 +1389,72 @@ void Deseq::implementRegister(DriveInfo &drive) {
   // Try to guess a name for the register.
   StringAttr name;
   IntegerAttr presetAttr;
+  SmallVector<llhd::DriveOp> initDrivesToErase;
+  DenseSet<Operation *> initProcessesToErase;
   if (auto sigOp = drive.op.getSignal().getDefiningOp<llhd::SignalOp>())
     name = sigOp.getNameAttr();
-  if (auto sigOp = drive.op.getSignal().getDefiningOp<llhd::SignalOp>())
-    if (auto preset = getPresetAttr(sigOp.getInit()))
+  if (auto sigOp = drive.op.getSignal().getDefiningOp<llhd::SignalOp>()) {
+    // Prefer explicit no-wait initialization drives (from sibling processes) as
+    // register presets. This avoids representing procedural init assignments as
+    // permanent competing drivers against the register state.
+    auto sourceIsNoWaitInit = [&](llhd::DriveOp initDrive) {
+      auto isNoWaitProcess = [](llhd::ProcessOp p) {
+        bool hasWait = false;
+        p.walk([&](llhd::WaitOp) { hasWait = true; });
+        return !hasWait;
+      };
+
+      if (auto parent = initDrive->getParentOfType<llhd::ProcessOp>())
+        return parent != process && isNoWaitProcess(parent);
+      if (auto result = dyn_cast<OpResult>(initDrive.getValue()))
+        if (auto valueProcess = dyn_cast<llhd::ProcessOp>(result.getOwner()))
+          return valueProcess != process && isNoWaitProcess(valueProcess);
+      return false;
+    };
+
+    std::optional<IntegerAttr> inferredPreset;
+    for (auto *user : sigOp->getUsers()) {
+      auto initDrive = dyn_cast<llhd::DriveOp>(user);
+      if (!initDrive || initDrive == drive.op)
+        continue;
+      if (initDrive.getEnable() || !isZeroTimeLikeDrive(initDrive))
+        continue;
+      if (!sourceIsNoWaitInit(initDrive))
+        continue;
+      auto candidatePreset = getPresetAttr(initDrive.getValue());
+      if (!candidatePreset)
+        continue;
+      if (!inferredPreset)
+        inferredPreset = *candidatePreset;
+      else if (candidatePreset->getValue() != inferredPreset->getValue()) {
+        inferredPreset = std::nullopt;
+        initDrivesToErase.clear();
+        initProcessesToErase.clear();
+        break;
+      }
+
+      initDrivesToErase.push_back(initDrive);
+      if (auto result = dyn_cast<OpResult>(initDrive.getValue()))
+        if (auto valueProcess = dyn_cast<llhd::ProcessOp>(result.getOwner()))
+          initProcessesToErase.insert(valueProcess);
+    }
+    if (inferredPreset)
+      presetAttr = *inferredPreset;
+    else if (auto preset = getPresetAttr(sigOp.getInit())) {
       presetAttr = *preset;
+    }
+  }
   if (!name)
     name = builder.getStringAttr("");
+
+  if (presetAttr) {
+    int64_t width = hw::getBitWidth(value.getType());
+    if (width > 0 &&
+        presetAttr.getValue().getBitWidth() != static_cast<unsigned>(width))
+      presetAttr = IntegerAttr::get(
+          IntegerType::get(builder.getContext(), width),
+          presetAttr.getValue().zextOrTrunc(width));
+  }
 
   // Create the register op.
   auto reg = seq::FirRegOp::create(builder, loc, value, clock, name,
@@ -1355,6 +1476,13 @@ void Deseq::implementRegister(DriveInfo &drive) {
   // Make the original `llhd.drv` drive the register value unconditionally.
   drive.op.getValueMutable().assign(reg);
   drive.op.getEnableMutable().clear();
+
+  for (auto initDrive : initDrivesToErase)
+    if (initDrive && initDrive != drive.op)
+      initDrive.erase();
+  for (auto *op : initProcessesToErase)
+    if (op->use_empty())
+      op->erase();
 
   // If the original `llhd.drv` had a delta delay, turn it into an immediate
   // drive since the delay behavior is now capture by the register op.
@@ -1557,9 +1685,15 @@ ValueRange Deseq::specializeProcess(FixedValues fixedValues) {
   if (wait.getDest()->hasOneUse()) {
     // Map the block arguments of the block after the wait op to the constant
     // fixed values.
+    auto mapPastValue = [&](Value pastValue) -> Value {
+      if (auto it = materializedFixedValues.find(pastValue);
+          it != materializedFixedValues.end())
+        return it->second.first;
+      return mapping.lookupOrDefault(pastValue);
+    };
     for (auto [arg, pastValue] :
          llvm::zip(wait.getDest()->getArguments(), pastValues))
-      mapping.map(arg, materializedFixedValues.lookup(pastValue).first);
+      mapping.map(arg, mapPastValue(pastValue));
 
     // Schedule the block after the wait for cloning into the entry block.
     mapping.map(wait.getDest(), builder.getBlock());
@@ -1572,8 +1706,13 @@ ValueRange Deseq::specializeProcess(FixedValues fixedValues) {
     // appropriate past values as block arguments.
     SmallVector<Value> destOperands;
     assert(pastValues.size() == wait.getDestOperands().size());
-    for (auto pastValue : pastValues)
-      destOperands.push_back(materializedFixedValues.lookup(pastValue).first);
+    for (auto pastValue : pastValues) {
+      if (auto it = materializedFixedValues.find(pastValue);
+          it != materializedFixedValues.end())
+        destOperands.push_back(it->second.first);
+      else
+        destOperands.push_back(mapping.lookupOrDefault(pastValue));
+    }
     cf::BranchOp::create(builder, wait.getLoc(), dest, destOperands);
   }
 

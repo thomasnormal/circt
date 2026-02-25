@@ -1,4 +1,4 @@
-// RUN: circt-verilog %s --ir-llhd -o %t.mlir 2>&1 && circt-sim %t.mlir --top top --max-time=500000000 2>&1 | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include %s --ir-llhd -o %t.mlir 2>&1 && circt-sim %t.mlir --top top --max-time=500000000 2>&1 | FileCheck %s
 // Test concurrent SVA assertion with implication and ##1 delay.
 // assert property (@(posedge clk) a |-> ##1 b)
 // When a is high, b must be high on the next posedge.

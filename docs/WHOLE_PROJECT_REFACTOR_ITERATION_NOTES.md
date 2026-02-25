@@ -319,9 +319,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused `circt-sim` memory-op lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='llvm-(assoc-native-ref-load-store|struct-load-store|load-unknown-native|alloca-ref-probe-drive)|store-load-address-fallback|native-store-oob-fallback|jit-process-thunk-(alloca-gep-load-store-halt|fork-branch-alloca-gep-load-store-terminator)|llhd-sig-extract-gep-backed'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='llvm-(assoc-native-ref-load-store|struct-load-store|load-unknown-native|alloca-ref-probe-drive)|store-load-address-fallback|native-store-oob-fallback|jit-process-thunk-(alloca-gep-load-store-halt|fork-branch-alloca-gep-load-store-terminator)|llhd-sig-extract-gep-backed'`
 
 <a id="entry-92-phase-4-drive-update-subsystem-extraction-slice-1"></a>
 ## Entry 92: Phase 4 Drive/Update Subsystem Extraction (Slice 1)
@@ -352,9 +352,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused drive/tri-state lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='interface-tristate-(passive-observe-vif|signalcopy-redirect|suppression-cond-false)|interface-inout-(shared-wire-bidirectional|tristate-propagation)|interface-intra-tristate-propagation|llhd-drv-(array-get-struct-field-offset|memory-backed-struct-array-func-arg|sig-extract-oob-noop)|llhd-prb-subfield-pending-epsilon|sig-extract-struct-array-bit-memory-layout|llhd-ref-cast-(array-subfield-store-func-arg|subfield-store-func-arg)'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='interface-tristate-(passive-observe-vif|signalcopy-redirect|suppression-cond-false)|interface-inout-(shared-wire-bidirectional|tristate-propagation)|interface-intra-tristate-propagation|llhd-drv-(array-get-struct-field-offset|memory-backed-struct-array-func-arg|sig-extract-oob-noop)|llhd-prb-subfield-pending-epsilon|sig-extract-struct-array-bit-memory-layout|llhd-ref-cast-(array-subfield-store-func-arg|subfield-store-func-arg)'`
 
 <a id="entry-93-phase-4-call-indirect-subsystem-extraction-slice-1"></a>
 ## Entry 93: Phase 4 Call/Call-Indirect Subsystem Extraction (Slice 1)
@@ -380,9 +380,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + config_db/vtable lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-94-phase-4-call-indirect-subsystem-extraction-slice-2"></a>
 ## Entry 94: Phase 4 Call/Call-Indirect Subsystem Extraction (Slice 2)
@@ -407,9 +407,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + config_db/vtable/uvm-port lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-95-phase-4-uvm-adapter-interceptor-extraction-slice-1"></a>
 ## Entry 95: Phase 4 UVM Adapter/Interceptor Extraction (Slice 1)
@@ -436,9 +436,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused UVM sequencer/port + config_db lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|uvm-printer-fast-path-call-indirect|config-db-(dual-top|native-call-indirect-writeback|native-call-indirect-writeback-offset)'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|uvm-printer-fast-path-call-indirect|config-db-(dual-top|native-call-indirect-writeback|native-call-indirect-writeback-offset)'`
 
 <a id="entry-96-phase-4-call-indirect-subsystem-extraction-slice-3"></a>
 ## Entry 96: Phase 4 Call/Call-Indirect Subsystem Extraction (Slice 3)
@@ -463,9 +463,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-102-phase-4-tracing-diagnostics-subsystem-extraction-slice-5"></a>
 ## Entry 102: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 5)
@@ -497,9 +497,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-103-phase-4-tracing-diagnostics-subsystem-extraction-slice-6"></a>
 ## Entry 103: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 6)
@@ -530,9 +530,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-104-phase-4-tracing-diagnostics-subsystem-extraction-slice-7"></a>
 ## Entry 104: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 7)
@@ -564,9 +564,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-105-phase-4-tracing-diagnostics-subsystem-extraction-slice-8"></a>
 ## Entry 105: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 8)
@@ -592,9 +592,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-106-phase-4-tracing-diagnostics-subsystem-extraction-slice-9"></a>
 ## Entry 106: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 9)
@@ -622,9 +622,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-107-phase-4-tracing-diagnostics-subsystem-extraction-slice-10"></a>
 ## Entry 107: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 10)
@@ -654,9 +654,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body'`
 
 <a id="entry-108-phase-4-tracing-diagnostics-subsystem-extraction-slice-11"></a>
 ## Entry 108: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 11)
@@ -683,9 +683,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call-indirect/vtable lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-printer-fast-path-call-indirect|config-db-native-call-indirect-writeback(-offset)?'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-printer-fast-path-call-indirect|config-db-native-call-indirect-writeback(-offset)?'`
 
 <a id="entry-109-phase-4-tracing-diagnostics-subsystem-extraction-slice-12"></a>
 ## Entry 109: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 12)
@@ -713,9 +713,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-110-phase-4-tracing-diagnostics-subsystem-extraction-slice-13"></a>
 ## Entry 110: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 13)
@@ -741,9 +741,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-111-phase-4-tracing-diagnostics-subsystem-extraction-slice-14"></a>
 ## Entry 111: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 14)
@@ -771,9 +771,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-112-phase-4-tracing-diagnostics-subsystem-extraction-slice-15"></a>
 ## Entry 112: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 15)
@@ -802,9 +802,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-113-phase-4-tracing-diagnostics-subsystem-extraction-slice-16"></a>
 ## Entry 113: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 16)
@@ -832,9 +832,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-114-phase-4-tracing-diagnostics-subsystem-extraction-slice-17"></a>
 ## Entry 114: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 17)
@@ -861,9 +861,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-115-phase-4-tracing-diagnostics-subsystem-extraction-slice-18"></a>
 ## Entry 115: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 18)
@@ -890,9 +890,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-116-phase-4-tracing-diagnostics-subsystem-extraction-slice-19"></a>
 ## Entry 116: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 19)
@@ -918,9 +918,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-117-phase-4-tracing-diagnostics-subsystem-extraction-slice-20"></a>
 ## Entry 117: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 20)
@@ -945,9 +945,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-118-phase-4-tracing-diagnostics-subsystem-extraction-slice-21"></a>
 ## Entry 118: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 21)
@@ -976,9 +976,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-119-phase-4-tracing-diagnostics-subsystem-extraction-slice-22"></a>
 ## Entry 119: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 22)
@@ -1006,9 +1006,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-120-phase-4-tracing-diagnostics-subsystem-extraction-slice-23"></a>
 ## Entry 120: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 23)
@@ -1033,9 +1033,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-121-phase-4-tracing-diagnostics-subsystem-extraction-slice-24"></a>
 ## Entry 121: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 24)
@@ -1060,9 +1060,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-122-phase-4-tracing-diagnostics-subsystem-extraction-slice-25"></a>
 ## Entry 122: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 25)
@@ -1087,9 +1087,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-123-phase-4-tracing-diagnostics-subsystem-extraction-slice-26"></a>
 ## Entry 123: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 26)
@@ -1114,9 +1114,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-124-phase-4-tracing-diagnostics-subsystem-extraction-slice-27"></a>
 ## Entry 124: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 27)
@@ -1141,9 +1141,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-125-phase-4-tracing-diagnostics-subsystem-extraction-slice-28"></a>
 ## Entry 125: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 28)
@@ -1169,9 +1169,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-126-phase-4-tracing-diagnostics-subsystem-extraction-slice-29"></a>
 ## Entry 126: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 29)
@@ -1198,9 +1198,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-127-phase-4-tracing-diagnostics-subsystem-extraction-slice-30"></a>
 ## Entry 127: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 30)
@@ -1226,9 +1226,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-128-phase-4-tracing-diagnostics-subsystem-extraction-slice-31"></a>
 ## Entry 128: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 31)
@@ -1254,9 +1254,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-129-phase-4-tracing-diagnostics-subsystem-extraction-slice-32"></a>
 ## Entry 129: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 32)
@@ -1283,9 +1283,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-130-phase-4-tracing-diagnostics-subsystem-extraction-slice-33"></a>
 ## Entry 130: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 33)
@@ -1316,9 +1316,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-131-phase-4-tracing-diagnostics-subsystem-extraction-slice-34"></a>
 ## Entry 131: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 34)
@@ -1347,9 +1347,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-132-phase-4-tracing-diagnostics-subsystem-extraction-slice-35"></a>
 ## Entry 132: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 35)
@@ -1380,9 +1380,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-133-phase-4-tracing-diagnostics-subsystem-extraction-slice-36"></a>
 ## Entry 133: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 36)
@@ -1409,9 +1409,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-134-phase-4-tracing-diagnostics-subsystem-extraction-slice-37"></a>
 ## Entry 134: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 37)
@@ -1442,9 +1442,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-135-phase-4-tracing-diagnostics-subsystem-extraction-slice-38"></a>
 ## Entry 135: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 38)
@@ -1476,9 +1476,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-136-phase-4-tracing-diagnostics-subsystem-extraction-slice-39"></a>
 ## Entry 136: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 39)
@@ -1510,9 +1510,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-137-phase-4-tracing-diagnostics-subsystem-extraction-slice-40"></a>
 ## Entry 137: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 40)
@@ -1538,9 +1538,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-138-phase-4-tracing-diagnostics-subsystem-extraction-slice-41"></a>
 ## Entry 138: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 41)
@@ -1566,9 +1566,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-139-phase-4-tracing-diagnostics-subsystem-extraction-slice-42"></a>
 ## Entry 139: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 42)
@@ -1596,9 +1596,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-140-phase-4-tracing-diagnostics-subsystem-extraction-slice-43"></a>
 ## Entry 140: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 43)
@@ -1625,9 +1625,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-141-phase-4-tracing-diagnostics-subsystem-extraction-slice-44"></a>
 ## Entry 141: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 44)
@@ -1656,9 +1656,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-142-phase-4-tracing-diagnostics-subsystem-extraction-slice-45"></a>
 ## Entry 142: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 45)
@@ -1684,9 +1684,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-143-phase-4-tracing-diagnostics-subsystem-extraction-slice-46"></a>
 ## Entry 143: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 46)
@@ -1715,9 +1715,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-144-phase-4-tracing-diagnostics-subsystem-extraction-slice-47"></a>
 ## Entry 144: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 47)
@@ -1750,9 +1750,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-145-phase-4-tracing-diagnostics-subsystem-extraction-slice-48"></a>
 ## Entry 145: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 48)
@@ -1783,9 +1783,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-146-phase-4-tracing-diagnostics-subsystem-extraction-slice-49"></a>
 ## Entry 146: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 49)
@@ -1818,9 +1818,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused wait-event/interface/fork lit slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
 
 <a id="entry-147-phase-4-tracing-diagnostics-subsystem-extraction-slice-50"></a>
 ## Entry 147: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 50)
@@ -1849,16 +1849,16 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Existing `.sv`-heavy focused slice: FAIL (unrelated parser/front-end breakage in current dirty tree)
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='moore-wait-event|wait-event-class-member|fork-wait-event|moore-wait-event-sensitivity-cache|disable-fork-halt|fork-disable-defer-poll|i3c-samplewrite-disable-fork-ordering|i3c-samplewrite-joinnone-disable-fork-ordering|fork-join-wait|fork-join-none-nested-join-body|interface-tristate-passive-observe-vif|interface-tristate-signalcopy-redirect|interface-inout-shared-wire-bidirectional|interface-tristate-suppression-cond-false|interface-inout-tristate-propagation|interface-intra-tristate-propagation'`
   - failing tests:
     - `CIRCT :: Tools/circt-sim/fork-disable-defer-poll.sv`
     - `CIRCT :: Tools/circt-sim/i3c-samplewrite-disable-fork-ordering.sv`
     - `CIRCT :: Tools/circt-sim/i3c-samplewrite-joinnone-disable-fork-ordering.sv`
   - observed failure mode: parse-stage errors from generated MLIR in `circt-sim` input (`custom op 'b123' is unknown`, parse failures), occurring before runtime execution.
 - Alternate runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-148-phase-4-tracing-diagnostics-subsystem-extraction-slice-51"></a>
 ## Entry 148: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 51)
@@ -1887,9 +1887,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-149-phase-4-tracing-diagnostics-subsystem-extraction-slice-52"></a>
 ## Entry 149: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 52)
@@ -1915,9 +1915,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-150-phase-4-tracing-diagnostics-subsystem-extraction-slice-53"></a>
 ## Entry 150: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 53)
@@ -1947,9 +1947,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-151-phase-4-tracing-diagnostics-subsystem-extraction-slice-54"></a>
 ## Entry 151: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 54)
@@ -1978,9 +1978,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-152-phase-4-tracing-diagnostics-subsystem-extraction-slice-55"></a>
 ## Entry 152: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 55)
@@ -2009,9 +2009,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-153-phase-4-tracing-diagnostics-subsystem-extraction-slice-56"></a>
 ## Entry 153: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 56)
@@ -2041,9 +2041,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-154-phase-4-tracing-diagnostics-subsystem-extraction-slice-57"></a>
 ## Entry 154: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 57)
@@ -2071,9 +2071,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-155-phase-4-tracing-diagnostics-subsystem-extraction-slice-58"></a>
 ## Entry 155: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 58)
@@ -2101,9 +2101,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-156-phase-4-tracing-diagnostics-subsystem-extraction-slice-59"></a>
 ## Entry 156: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 59)
@@ -2129,9 +2129,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Runtime-focused `.mlir` slice: PASS
-  - `python3 llvm/llvm/utils/lit/lit.py -sv build-test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools/circt-sim --filter='func-(tail-wrapper-generic-resume-fast-path|drive-to-bfm-resume-fast-path|start-monitoring-resume-fast-path|baud-clk-generator-fast-path(-delay-batch|-null-self|-count-visible)?|generate-baud-clk-resume-fast-path)|randomize-(bytes|basic|with-ranges)|jit-process-thunk-(llvm-call-randomize-(basic|with-range)-halt|multiblock-scf-if-randomize-range-halt)|uvm-phase-hopper-wait-for-waiters-backoff|phase-hopper-objection|mailbox-(dpi-(blocking|blocking-bounded|nonblocking)|hopper-pattern)'`
 
 <a id="entry-157-phase-4-tracing-diagnostics-subsystem-extraction-slice-60"></a>
 ## Entry 157: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 60)
@@ -2161,11 +2161,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-158-phase-4-tracing-diagnostics-subsystem-extraction-slice-61"></a>
 ## Entry 158: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 61)
@@ -2193,11 +2193,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-159-phase-4-tracing-diagnostics-subsystem-extraction-slice-62"></a>
 ## Entry 159: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 62)
@@ -2224,11 +2224,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-160-phase-4-tracing-diagnostics-subsystem-extraction-slice-63"></a>
 ## Entry 160: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 63)
@@ -2255,11 +2255,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-161-phase-4-tracing-diagnostics-subsystem-extraction-slice-64"></a>
 ## Entry 161: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 64)
@@ -2289,11 +2289,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-162-phase-4-tracing-diagnostics-subsystem-extraction-slice-65"></a>
 ## Entry 162: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 65)
@@ -2328,11 +2328,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-163-phase-4-tracing-diagnostics-subsystem-extraction-slice-66"></a>
 ## Entry 163: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 66)
@@ -2362,11 +2362,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-164-phase-4-tracing-diagnostics-subsystem-extraction-slice-67"></a>
 ## Entry 164: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 67)
@@ -2401,11 +2401,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-165-phase-4-tracing-diagnostics-subsystem-extraction-slice-68"></a>
 ## Entry 165: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 68)
@@ -2437,11 +2437,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-166-phase-4-tracing-diagnostics-subsystem-extraction-slice-69"></a>
 ## Entry 166: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 69)
@@ -2468,11 +2468,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-167-phase-4-tracing-diagnostics-subsystem-extraction-slice-70"></a>
 ## Entry 167: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 70)
@@ -2498,11 +2498,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-168-phase-4-tracing-diagnostics-subsystem-extraction-slice-71"></a>
 ## Entry 168: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 71)
@@ -2530,11 +2530,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-169-phase-4-tracing-diagnostics-subsystem-extraction-slice-72"></a>
 ## Entry 169: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 72)
@@ -2566,11 +2566,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-170-phase-4-tracing-diagnostics-subsystem-extraction-slice-73"></a>
 ## Entry 170: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 73)
@@ -2601,11 +2601,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-171-phase-4-tracing-diagnostics-subsystem-extraction-slice-74"></a>
 ## Entry 171: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 74)
@@ -2638,11 +2638,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-172-phase-4-tracing-diagnostics-subsystem-extraction-slice-75"></a>
 ## Entry 172: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 75)
@@ -2671,11 +2671,11 @@ Changes:
 
 Validation highlights:
 - Compile-only TU checks: PASS
-  - `LLHDProcessInterpreter.cpp` via `build-test/compile_commands.json`
-  - `LLHDProcessInterpreterTrace.cpp` via `build-test/compile_commands.json`
+  - `LLHDProcessInterpreter.cpp` via `build_test/compile_commands.json`
+  - `LLHDProcessInterpreterTrace.cpp` via `build_test/compile_commands.json`
 - Full build/lit status:
   - blocked by concurrent JIT integration errors in `tools/circt-sim/JITBlockCompiler.cpp`
-    during `ninja -C build-test circt-sim`.
+    during `ninja -C build_test circt-sim`.
 
 <a id="entry-97-phase-4-uvm-adapter-interceptor-extraction-slice-2"></a>
 ## Entry 97: Phase 4 UVM Adapter/Interceptor Extraction (Slice 2)
@@ -2700,9 +2700,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused UVM sequencer + call_indirect lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-98-phase-4-tracing-diagnostics-subsystem-extraction-slice-1"></a>
 ## Entry 98: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 1)
@@ -2733,9 +2733,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-99-phase-4-tracing-diagnostics-subsystem-extraction-slice-2"></a>
 ## Entry 99: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 2)
@@ -2756,9 +2756,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 
 <a id="entry-100-phase-4-tracing-diagnostics-subsystem-extraction-slice-3"></a>
 ## Entry 100: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 3)
@@ -2778,9 +2778,9 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
 <a id="entry-101-phase-4-tracing-diagnostics-subsystem-extraction-slice-4"></a>
 ## Entry 101: Phase 4 Tracing/Diagnostics Subsystem Extraction (Slice 4)
 
@@ -2805,6 +2805,6 @@ Changes:
 
 Validation highlights:
 - Build: PASS
-  - `ninja -C build-test circt-sim`
+  - `ninja -C build_test circt-sim`
 - Focused call/call_indirect + UVM lit slice: PASS
-  - `llvm/build/bin/llvm-lit -sv build-test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-sim --filter='uvm-port-size-fallback|finish-item-(blocks-until-item-done|port-specific-item-done-order|multiple-outstanding-item-done)|seq-get-next-item-(empty-waiter-event-isolation|event-wakeup|empty-fallback-backoff)|config-db-native-(call-indirect-writeback|call-indirect-writeback-offset|impl-direct-writeback|impl-direct-writeback-offset|wrapper-writeback|wrapper-writeback-offset)|call-indirect-runtime-(vtable-slot-cache|override-site-cache)|vtable-(indirect-call|fallback-dispatch|fallback-corrupt-ptr|dispatch|dispatch-global-store|dispatch-cross-func|dispatch-internal-failure)|uvm-(printer-fast-path-call-indirect|report-getters-fast-path|report-handler-set-severity-action-fast-path)|timeout-no-spurious-vtable-warning'`

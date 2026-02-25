@@ -1419,7 +1419,7 @@ Options:
                          Force OpenTitan E2E LEC to x-optimistic mode
   --opentitan-e2e-lec-strict-x
                          Force OpenTitan E2E LEC to strict non-optimistic mode
-  --circt-verilog PATH   Path to circt-verilog (default: <repo>/build-test/bin/circt-verilog)
+  --circt-verilog PATH   Path to circt-verilog (default: <repo>/build_test/bin/circt-verilog)
   --circt-verilog-avip PATH
                          Path override for AVIP runs (default: --circt-verilog value)
   --circt-verilog-opentitan PATH
@@ -2687,7 +2687,7 @@ OPENTITAN_DIR="${HOME}/opentitan"
 AVIP_GLOB="${HOME}/mbit/*avip*"
 OPENTITAN_UNRESOLVED_MODULES_FILE=""
 OPENTITAN_MISSING_RESULTS_DIAGNOSTICS_FILE=""
-CIRCT_VERILOG_BIN="$REPO_ROOT/build-test/bin/circt-verilog"
+CIRCT_VERILOG_BIN="$REPO_ROOT/build_test/bin/circt-verilog"
 CIRCT_VERILOG_BIN_AVIP=""
 CIRCT_VERILOG_BIN_OPENTITAN=""
 CIRCT_VERILOG_BIN_EXPLICIT=0

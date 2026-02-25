@@ -31,16 +31,16 @@ jobs:
 
       - name: Run wasm script contract checks
         run: |
-          utils/wasm_configure_behavior_check.sh
-          utils/wasm_configure_behavior_contract_check.sh
-          utils/wasm_configure_contract_check.sh
-          utils/wasm_cxx20_contract_check.sh
-          utils/wasm_cxx20_warning_contract_check.sh
-          utils/wasm_runtime_helpers_behavior_check.sh
-          utils/wasm_runtime_helpers_behavior_contract_check.sh
-          utils/wasm_runtime_helpers_contract_check.sh
-          utils/wasm_smoke_contract_check.sh
-          utils/wasm_ci_contract_check.sh
+          utils/internal/checks/wasm_configure_behavior_check.sh
+          utils/internal/checks/wasm_configure_behavior_contract_check.sh
+          utils/internal/checks/wasm_configure_contract_check.sh
+          utils/internal/checks/wasm_cxx20_contract_check.sh
+          utils/internal/checks/wasm_cxx20_warning_contract_check.sh
+          utils/internal/checks/wasm_runtime_helpers_behavior_check.sh
+          utils/internal/checks/wasm_runtime_helpers_behavior_contract_check.sh
+          utils/internal/checks/wasm_runtime_helpers_contract_check.sh
+          utils/internal/checks/wasm_smoke_contract_check.sh
+          utils/internal/checks/wasm_ci_contract_check.sh
 
       - name: Configure wasm build and run smoke checks
         run: |
@@ -51,7 +51,7 @@ jobs:
           source "$RUNNER_TEMP/emsdk/emsdk_env.sh"
 
           utils/configure_wasm_build.sh
-          utils/wasm_cxx20_warning_behavior_check.sh
+          utils/internal/checks/wasm_cxx20_warning_behavior_check.sh
           BUILD_DIR=build-wasm NINJA_JOBS=1 utils/wasm_cxx20_warning_check.sh
           WASM_REQUIRE_VERILOG=1 WASM_REQUIRE_CLEAN_CROSSCOMPILE=1 \
             WASM_CHECK_CXX20_WARNINGS=1 NINJA_JOBS=1 \

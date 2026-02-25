@@ -1,5 +1,5 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
-// RUN: circt-translate --import-verilog %s 2>&1 | FileCheck %s --check-prefix=DIAG
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=DIAG
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -14,7 +14,7 @@ module SVASequenceMatchItemFerrorLocalOutput(input logic clk, a);
   // value-returning match-item function calls.
   // CHECK-LABEL: moore.module @SVASequenceMatchItemFerrorLocalOutput
   // CHECK: moore.builtin.ferror
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) s);
 endmodule
 

@@ -28,8 +28,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CIRCT_ROOT="${CIRCT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 IBEX_ROOT="${IBEX_ROOT:-$HOME/ibex}"
-CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build-test/bin/circt-verilog}"
-CIRCT_SIM="${CIRCT_SIM:-$CIRCT_ROOT/build-test/bin/circt-sim}"
+CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build_test/bin/circt-verilog}"
+CIRCT_SIM="${CIRCT_SIM:-$CIRCT_ROOT/build_test/bin/circt-sim}"
 OUT_DIR="${1:-/tmp/ibex-uvm-circt-sim-$(date +%Y%m%d-%H%M%S)}"
 
 UVM_DIR="${UVM_DIR:-$CIRCT_ROOT/lib/Runtime/uvm-core/src}"

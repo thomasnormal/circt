@@ -124,11 +124,59 @@ def classify_result(ok: bool, passes: int, fails: int, output: str) -> str:
         return "SIM_TIMEOUT"
     if "resource guard triggered" in output:
         return "COCOTB_FAIL"
+    # Harness/test errors should count as functional mismatch, not infra failure.
+    if "IndentationError:" in output or "SyntaxError:" in output:
+        return "COCOTB_FAIL"
+    if "Traceback (most recent call last):" in output and (
+        "cocotb" in output or "pygpi" in output or "gpi" in output
+    ):
+        return "COCOTB_FAIL"
     if ok:
         return "COCOTB_PASS"
     if passes > 0 or fails > 0:
         return "COCOTB_FAIL"
     return "SIM_FAIL"
+
+
+def write_stub_sv(problem_dir: Path, top_module: str) -> Path:
+    """Materialize a minimal stub SV design for harness-only infra checks.
+
+    CVDP v1.0.2 public datasets often redact the referenced RTL sources but keep
+    the cocotb harness. For infra-level coverage, we compile/run a stub module
+    with common clock/reset names so cocotb can at least connect to a DUT.
+    """
+    stub = problem_dir / "_cvdp_stub.sv"
+    stub.write_text(
+        "\n".join(
+            [
+                "`timescale 1ns/1ps",
+                "",
+                f"module {top_module};",
+                "  logic clk = 0;",
+                "  logic rst = 1;",
+                "  logic reset = 1;",
+                "  logic rst_n = 0;",
+                "  logic valid = 0;",
+                "  logic ready = 1;",
+                "  logic [31:0] data = 32'h0;",
+                "",
+                "  // Provide a free-running clock and basic reset sequencing.",
+                "  always #5 clk = ~clk;",
+                "  initial begin",
+                "    #20;",
+                "    rst = 0;",
+                "    reset = 0;",
+                "    rst_n = 1;",
+                "    #20;",
+                "    valid = 1;",
+                "    data = 32'h1234_5678;",
+                "  end",
+                "endmodule",
+                "",
+            ]
+        )
+    )
+    return stub
 
 
 def infer_top_and_test_module(
@@ -194,6 +242,7 @@ def main() -> int:
         "compile_pass": [],
         "compile_fail": [],
         "no_sv": [],
+        "stub_sv": [],
         "sim_pass": [],
         "sim_fail": [],
         "sim_timeout": [],
@@ -214,10 +263,23 @@ def main() -> int:
         problem_dir.mkdir(parents=True, exist_ok=True)
 
         sv_files, py_files, env_vars = base.extract_files(p, problem_dir)
+        stubbed = False
         if not sv_files:
-            results["no_sv"].append(pid)
-            print(f"  [{i + 1}/{len(problems)}] [NO_SV] {pid}", flush=True)
-            continue
+            # Some CVDP datapoints keep the cocotb harness + .env but redact the
+            # referenced SV. For infra-level coverage, synthesize a stub SV
+            # module with the requested toplevel name.
+            top_module, test_module = infer_top_and_test_module(env_vars, py_files, sv_files)
+            if top_module and test_module:
+                stub_path = write_stub_sv(problem_dir, top_module=top_module)
+                sv_files = [stub_path]
+                stubbed = True
+                results["no_sv"].append(pid)
+                results["stub_sv"].append(pid)
+                print(f"  [{i + 1}/{len(problems)}] [STUB_SV] {pid}", flush=True)
+            else:
+                results["no_sv"].append(pid)
+                print(f"  [{i + 1}/{len(problems)}] [NO_SV] {pid}", flush=True)
+                continue
 
         output_mlir = problem_dir / "output.mlir"
         if output_mlir.exists() and output_mlir.stat().st_size > 100:
@@ -262,9 +324,32 @@ def main() -> int:
         if not test_dir.exists():
             test_dir = problem_dir
 
-        ok, passes, fails, output = base.run_cocotb_sim(
-            output_mlir, top_module, test_module, test_dir, sv_files=sv_files
-        )
+        # Keep stubbed harnesses bounded; these runs are infra-oriented.
+        max_time_fs = None
+        if stubbed:
+            try:
+                max_time_fs = int(os.environ.get("CVDP_STUB_MAX_TIME_FS", "2000000000"))
+            except ValueError:
+                max_time_fs = 2000000000
+        try:
+            if max_time_fs is None:
+                ok, passes, fails, output = base.run_cocotb_sim(
+                    output_mlir, top_module, test_module, test_dir, sv_files=sv_files
+                )
+            else:
+                ok, passes, fails, output = base.run_cocotb_sim(
+                    output_mlir,
+                    top_module,
+                    test_module,
+                    test_dir,
+                    sv_files=sv_files,
+                    max_time_fs=max_time_fs,
+                )
+        except TypeError:
+            # Older base runners may not accept max_time_fs; best-effort.
+            ok, passes, fails, output = base.run_cocotb_sim(
+                output_mlir, top_module, test_module, test_dir, sv_files=sv_files
+            )
         (problem_dir / "sim.log").write_text(output)
 
         status = classify_result(ok=ok, passes=passes, fails=fails, output=output)
@@ -288,6 +373,7 @@ def main() -> int:
     print(f"  COMPILE_OK:     {len(results['compile_pass'])}/{len(problems)}")
     print(f"  COMPILE_FAIL:   {len(results['compile_fail'])}/{len(problems)}")
     print(f"  NO_SV:          {len(results['no_sv'])}/{len(problems)}")
+    print(f"  STUB_SV:        {len(results['stub_sv'])}/{len(problems)}")
     if not args.compile_only:
         print(f"  COCOTB_PASS:    {len(results['cocotb_pass'])}")
         print(f"  COCOTB_FAIL:    {len(results['cocotb_fail'])}")

@@ -13,6 +13,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/Support/raw_ostream.h"
@@ -168,9 +169,18 @@ struct HWConstantOpConversion : OpConversionPattern<ConstantOp> {
   LogicalResult
   matchAndRewrite(ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getValue().getBitWidth() < 1)
+    if (adaptor.getValue().getBitWidth() < 1) {
+      // Constants of type i0 cannot be represented in SMT. They can still
+      // appear as singleton-array indices and become dead once the consumer is
+      // lowered.
+      if (op->use_empty()) {
+        rewriter.eraseOp(op);
+        return success();
+      }
       return rewriter.notifyMatchFailure(op.getLoc(),
-                                         "0-bit constants not supported");
+                                         "0-bit constants with uses not "
+                                         "supported");
+    }
     rewriter.replaceOpWithNewOp<mlir::smt::BVConstantOp>(op,
                                                          adaptor.getValue());
     return success();
@@ -356,6 +366,16 @@ struct ArrayGetOpConversion : OpConversionPattern<ArrayGetOp> {
       return rewriter.notifyMatchFailure(op.getLoc(),
                                          "unsupported array element type");
 
+    if (numElements == 1) {
+      // The only legal index value for a singleton array is zero. Keep the
+      // semantics by selecting element 0 directly and avoid carrying i0 index
+      // values into SMT lowering.
+      Value zeroIndex = mlir::smt::BVConstantOp::create(rewriter, loc, 0, 1);
+      rewriter.replaceOpWithNewOp<mlir::smt::ArraySelectOp>(
+          op, adaptor.getInput(), zeroIndex);
+      return success();
+    }
+
     Value oobVal = mlir::smt::DeclareFunOp::create(rewriter, loc, type);
     Value numElementsVal = mlir::smt::BVConstantOp::create(
         rewriter, loc, numElements - 1, indexWidth);
@@ -509,6 +529,67 @@ struct ReplaceWithInput : OpConversionPattern<OpTy> {
   matchAndRewrite(OpTy op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
     rewriter.replaceOp(op, adaptor.getOperands());
+    return success();
+  }
+};
+
+/// Lower seq.const_clock to a 1-bit SMT bit-vector constant.
+struct ConstClockOpConversion : OpConversionPattern<seq::ConstClockOp> {
+  using OpConversionPattern<seq::ConstClockOp>::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(seq::ConstClockOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    (void)adaptor;
+    uint64_t value = op.getValue() == seq::ClockConst::High ? 1 : 0;
+    rewriter.replaceOpWithNewOp<mlir::smt::BVConstantOp>(op, value, 1);
+    return success();
+  }
+};
+
+/// Normalize singleton array ops that use i0 indices to i1 zero indices.
+/// This avoids carrying zero-width index values into SMT conversion.
+struct NormalizeSingletonArrayGetIndex : OpRewritePattern<ArrayGetOp> {
+  using OpRewritePattern<ArrayGetOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ArrayGetOp op,
+                                PatternRewriter &rewriter) const override {
+    auto indexType = dyn_cast<IntegerType>(op.getIndex().getType());
+    if (!indexType || indexType.getWidth() != 0)
+      return failure();
+    if (cast<ArrayType>(op.getInput().getType()).getNumElements() != 1)
+      return failure();
+
+    auto oldConst = op.getIndex().getDefiningOp<ConstantOp>();
+    bool eraseOldConst = oldConst && oldConst->hasOneUse();
+    auto zero =
+        ConstantOp::create(rewriter, op.getLoc(), rewriter.getIntegerType(1), 0);
+    rewriter.replaceOpWithNewOp<ArrayGetOp>(op, op.getInput(), zero);
+    if (eraseOldConst)
+      rewriter.eraseOp(oldConst);
+    return success();
+  }
+};
+
+struct NormalizeSingletonArrayInjectIndex : OpRewritePattern<ArrayInjectOp> {
+  using OpRewritePattern<ArrayInjectOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ArrayInjectOp op,
+                                PatternRewriter &rewriter) const override {
+    auto indexType = dyn_cast<IntegerType>(op.getIndex().getType());
+    if (!indexType || indexType.getWidth() != 0)
+      return failure();
+    if (cast<ArrayType>(op.getInput().getType()).getNumElements() != 1)
+      return failure();
+
+    auto oldConst = op.getIndex().getDefiningOp<ConstantOp>();
+    bool eraseOldConst = oldConst && oldConst->hasOneUse();
+    auto zero =
+        ConstantOp::create(rewriter, op.getLoc(), rewriter.getIntegerType(1), 0);
+    rewriter.replaceOpWithNewOp<ArrayInjectOp>(op, op.getInput(), zero,
+                                               op.getElement());
+    if (eraseOldConst)
+      rewriter.eraseOp(oldConst);
     return success();
   }
 };
@@ -674,16 +755,24 @@ void circt::populateHWToSMTConversionPatterns(TypeConverter &converter,
   patterns.add<HWConstantOpConversion, HWAggregateConstantOpConversion,
                WireOpConversion, InstanceOpConversion,
                ReplaceWithInput<seq::ToClockOp>,
-               ReplaceWithInput<seq::FromClockOp>, ArrayCreateOpConversion,
-               ArrayGetOpConversion, ArrayInjectOpConversion,
-               StructCreateOpConversion, StructExtractOpConversion,
-               StructExplodeOpConversion>(
+               ReplaceWithInput<seq::FromClockOp>, ConstClockOpConversion,
+               ArrayCreateOpConversion, ArrayGetOpConversion,
+               ArrayInjectOpConversion, StructCreateOpConversion,
+               StructExtractOpConversion, StructExplodeOpConversion>(
       converter, patterns.getContext());
   patterns.add<OutputOpConversion, HWModuleOpConversion>(
       converter, patterns.getContext(), forSMTLIBExport);
 }
 
 void ConvertHWToSMTPass::runOnOperation() {
+  {
+    RewritePatternSet normalizePatterns(&getContext());
+    normalizePatterns
+        .add<NormalizeSingletonArrayGetIndex,
+             NormalizeSingletonArrayInjectIndex>(&getContext());
+    (void)applyPatternsGreedily(getOperation(), std::move(normalizePatterns));
+  }
+
   if (forSMTLIBExport) {
     auto numModules = 0;
     auto numInstances = 0;
@@ -712,6 +801,7 @@ void ConvertHWToSMTPass::runOnOperation() {
   target.addIllegalDialect<hw::HWDialect>();
   target.addIllegalOp<seq::FromClockOp>();
   target.addIllegalOp<seq::ToClockOp>();
+  target.addIllegalOp<seq::ConstClockOp>();
   target.addLegalDialect<mlir::smt::SMTDialect>();
   target.addLegalDialect<mlir::func::FuncDialect>();
 

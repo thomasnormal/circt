@@ -76,6 +76,32 @@ static Type getRefNestedType(Type type) {
   return cast<llhd::RefType>(type).getNestedType();
 }
 
+static unsigned getPortIndexForInputId(hw::ModuleType moduleType,
+                                       unsigned inputId) {
+  unsigned seenInputs = 0;
+  for (auto [portIndex, port] : llvm::enumerate(moduleType.getPorts())) {
+    if (port.dir == hw::ModulePort::Direction::Output)
+      continue;
+    if (seenInputs == inputId)
+      return portIndex;
+    ++seenInputs;
+  }
+  llvm_unreachable("input id out of range");
+}
+
+static unsigned getPortIndexForOutputId(hw::ModuleType moduleType,
+                                        unsigned outputId) {
+  unsigned seenOutputs = 0;
+  for (auto [portIndex, port] : llvm::enumerate(moduleType.getPorts())) {
+    if (port.dir != hw::ModulePort::Direction::Output)
+      continue;
+    if (seenOutputs == outputId)
+      return portIndex;
+    ++seenOutputs;
+  }
+  llvm_unreachable("output id out of range");
+}
+
 static Value createZeroValue(OpBuilder &builder, Location loc, Type type) {
   int64_t width = hw::getBitWidth(type);
   if (width <= 0)
@@ -148,7 +174,8 @@ void LowerLLHDRefPortsPass::runOnOperation() {
     Block *body = module.getBodyBlock();
     auto ports = info.oldType.getPorts();
     for (unsigned i = 0, e = info.oldType.getNumInputs(); i < e; ++i) {
-      if (!isRefType(ports[i].type))
+      unsigned portIndex = getPortIndexForInputId(info.oldType, i);
+      if (!isRefType(ports[portIndex].type))
         continue;
       info.hasRefPorts = true;
       if (hasInternalDrive(body->getArgument(i)))
@@ -249,18 +276,19 @@ void LowerLLHDRefPortsPass::runOnOperation() {
       continue;
 
     auto ports = info.oldType.getPorts();
-    unsigned numInputs = info.oldType.getNumInputs();
     unsigned numOutputs = info.oldType.getNumOutputs();
 
-    info.keptInputs.reserve(numInputs);
-    info.inputsToOutputs.reserve(numInputs);
-    for (unsigned inIdx = 0; inIdx < numInputs; ++inIdx) {
-      if (isRefType(ports[inIdx].type))
+    info.keptInputs.reserve(info.oldType.getNumInputs());
+    info.inputsToOutputs.reserve(info.oldType.getNumInputs());
+    for (unsigned inIdx = 0, e = info.oldType.getNumInputs(); inIdx < e;
+         ++inIdx) {
+      unsigned portIndex = getPortIndexForInputId(info.oldType, inIdx);
+      if (isRefType(ports[portIndex].type))
         info.hasRefPorts = true;
       if (inIdx < info.inputDrivePorts.size() && info.inputDrivePorts[inIdx]) {
         InputRefConversion conv;
         conv.oldInputIndex = inIdx;
-        conv.oldPortIndex = inIdx;
+        conv.oldPortIndex = portIndex;
         info.inputsToOutputs.push_back(conv);
       } else {
         info.keptInputs.push_back(inIdx);
@@ -269,7 +297,7 @@ void LowerLLHDRefPortsPass::runOnOperation() {
 
     info.keptOutputs.reserve(numOutputs);
     for (unsigned outIdx = 0; outIdx < numOutputs; ++outIdx) {
-      unsigned portIndex = numInputs + outIdx;
+      unsigned portIndex = getPortIndexForOutputId(info.oldType, outIdx);
       auto portType = ports[portIndex].type;
       if (!isRefType(portType)) {
         info.keptOutputs.push_back(outIdx);
@@ -319,15 +347,13 @@ void LowerLLHDRefPortsPass::runOnOperation() {
     auto module = info.module;
     auto oldType = info.oldType;
     auto ports = oldType.getPorts();
-    unsigned oldNumInputs = oldType.getNumInputs();
-
     SmallVector<hw::ModulePort> newInputs;
     SmallVector<hw::ModulePort> newOutputs;
     newInputs.reserve(info.keptInputs.size() + info.outputsToInputs.size());
     newOutputs.reserve(info.keptOutputs.size() + info.inputsToOutputs.size());
 
     for (unsigned inputIdx : info.keptInputs) {
-      auto port = ports[inputIdx];
+      auto port = ports[getPortIndexForInputId(info.oldType, inputIdx)];
       if (isRefType(port.type))
         port.type = getRefNestedType(port.type);
       port.dir = hw::ModulePort::Direction::Input;
@@ -342,7 +368,7 @@ void LowerLLHDRefPortsPass::runOnOperation() {
     }
 
     for (unsigned outIdx : info.keptOutputs) {
-      auto port = ports[oldNumInputs + outIdx];
+      auto port = ports[getPortIndexForOutputId(info.oldType, outIdx)];
       if (isRefType(port.type))
         port.type = getRefNestedType(port.type);
       port.dir = hw::ModulePort::Direction::Output;
@@ -474,7 +500,7 @@ void LowerLLHDRefPortsPass::runOnOperation() {
       OpBuilder builder(inst);
       for (unsigned idx : info.keptInputs) {
         Value operand = inst.getOperand(idx);
-        auto portType = ports[idx].type;
+        auto portType = ports[getPortIndexForInputId(info.oldType, idx)].type;
         if (!isRefType(portType)) {
           newInputs.push_back(operand);
           continue;

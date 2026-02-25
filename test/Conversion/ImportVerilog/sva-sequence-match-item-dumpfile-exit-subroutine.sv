@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -14,10 +14,10 @@ module SVASequenceMatchItemDumpfileExitSubroutine(input logic clk, a);
   // CHECK-LABEL: moore.module @SVASequenceMatchItemDumpfileExitSubroutine
   // CHECK: moore.builtin.display
   // CHECK: {circt.dumpfile = "trace.vcd"}
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) s_dump);
 
   // CHECK: moore.builtin.finish 0
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@(posedge clk) s_exit);
 endmodule

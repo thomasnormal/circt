@@ -217,10 +217,10 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
     if (!portBlock)
       portBlock = findBlockByAddress(queueAddr, portOff);
     if (portBlock && portBlock->initialized &&
-        portOff + 12 <= portBlock->data.size()) {
+        portOff + 12 <= portBlock->size) {
       for (unsigned i = 0; i < 8; ++i)
         vtableAddr |=
-            static_cast<uint64_t>(portBlock->data[portOff + 4 + i]) << (i * 8);
+            static_cast<uint64_t>(portBlock->bytes()[portOff + 4 + i]) << (i * 8);
       hasVtableAddr = true;
     }
     if (!hasVtableAddr) {
@@ -245,7 +245,7 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
             uint64_t methodAddr = 0;
             for (unsigned i = 0; i < 8; ++i)
               methodAddr |=
-                  static_cast<uint64_t>(vtableBlock.data[slotOffset + i])
+                  static_cast<uint64_t>(vtableBlock[slotOffset + i])
                   << (i * 8);
             auto fnIt = addressToFunction.find(methodAddr);
             if (fnIt == addressToFunction.end() || !rootModule)
@@ -457,13 +457,13 @@ static unsigned writeConfigDbBytesUvm(MemoryBlock *blk, uint64_t off,
                                       const std::vector<uint8_t> &data,
                                       unsigned innerBytes, bool zeroFill) {
   unsigned n = std::min(innerBytes, static_cast<unsigned>(data.size()));
-  if (off + n > blk->data.size())
+  if (off + n > blk->size)
     return 0;
   for (unsigned i = 0; i < n; ++i)
-    blk->data[off + i] = data[i];
+    blk->bytes()[off + i] = data[i];
   if (zeroFill) {
-    for (unsigned i = n; i < innerBytes && off + i < blk->data.size(); ++i)
-      blk->data[off + i] = 0;
+    for (unsigned i = n; i < innerBytes && off + i < blk->size; ++i)
+      blk->bytes()[off + i] = 0;
   }
   blk->initialized = true;
   return n;

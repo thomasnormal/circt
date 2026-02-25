@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -19,7 +19,7 @@ module SvaSequenceEventGlobalClocking(input logic clk, req, ack, c);
 
   // Sequence-valued assertion clocking events should also use global clocking.
   // CHECK: ltl.matched
-  // CHECK: verif.assert
+  // CHECK: verif.clocked_assert
   assert property (@s c);
 endmodule
 

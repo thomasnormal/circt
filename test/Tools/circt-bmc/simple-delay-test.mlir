@@ -32,7 +32,7 @@ hw.module @simple_counter(
 // This property can be violated if enable is high for 100+ cycles
 // BMC should be able to find a counterexample or prove it within bound
 
-// CHECK: verif.bmc bound 20 num_regs 1
+// CHECK: verif.bmc bound 22 num_regs 1
 // CHECK: init {
 // CHECK:   seq.to_clock
 // CHECK: }

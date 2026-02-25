@@ -1,4 +1,4 @@
-// RUN: circt-translate --import-verilog %s | FileCheck %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
 
@@ -8,7 +8,7 @@ module SvaGlobalClockIff(input logic clk, en, a, b);
   // CHECK-LABEL: moore.module @SvaGlobalClockIff
   // Outer iff on $global_clock must gate property clocking.
   // CHECK: ltl.and {{.*}}, {{.*}} : i1, !ltl.property
-  // CHECK: ltl.clock {{.*}} posedge
+  // CHECK: verif.clocked_assert {{.*}}, posedge {{.*}} : !ltl.property
   assert property (@($global_clock iff en) (a |-> b));
 
   // Explicit sampled-value clocking with $global_clock iff must propagate iff

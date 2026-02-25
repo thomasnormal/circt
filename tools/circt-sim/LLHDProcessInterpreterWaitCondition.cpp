@@ -441,7 +441,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
         if (block->initialized && offset + memoryWaitSize <= block->size) {
           for (unsigned i = 0; i < memoryWaitSize; ++i)
             waiter.lastValue |=
-                static_cast<uint64_t>(block->data[offset + i]) << (i * 8);
+                static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
         }
       }
       memoryEventWaiters[procId] = waiter;
