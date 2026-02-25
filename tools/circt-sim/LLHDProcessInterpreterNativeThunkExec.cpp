@@ -2345,12 +2345,45 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
 LLHDProcessInterpreter::CallStackResumeResult
 LLHDProcessInterpreter::resumeSavedCallStackFrames(
     ProcessId procId, ProcessExecutionState &state) {
+  static bool traceCallStackResume = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_CALLSTACK_RESUME");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  static int64_t traceCallStackResumeProc = []() -> int64_t {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_CALLSTACK_RESUME_PROC");
+    if (!env || env[0] == '\0')
+      return -1;
+    char *end = nullptr;
+    unsigned long long parsed = std::strtoull(env, &end, 10);
+    if (end == env)
+      return -1;
+    return static_cast<int64_t>(parsed);
+  }();
+  auto shouldTraceCallStackResume = [&](ProcessId id) {
+    if (!traceCallStackResume)
+      return false;
+    if (traceCallStackResumeProc < 0)
+      return true;
+    return id == static_cast<ProcessId>(traceCallStackResumeProc);
+  };
+  auto traceResumeReturn = [&](llvm::StringRef reason) {
+    if (!shouldTraceCallStackResume(procId))
+      return;
+    // Global tracing would be too noisy if we log every no-frame fast-path.
+    if (traceCallStackResumeProc < 0 && reason == "no_frames")
+      return;
+    llvm::errs() << "[CS-RESUME] proc=" << procId << " reason=" << reason
+                 << " waiting=" << state.waiting
+                 << " halted=" << state.halted
+                 << " callStack=" << state.callStack.size() << "\n";
+  };
   static bool traceI3CCallStack = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CALLSTACK");
     return env && env[0] != '\0' && env[0] != '0';
   }();
   if (state.callStack.empty()) {
     state.callStackOutermostCallOp = nullptr;
+    traceResumeReturn("no_frames");
     return CallStackResumeResult::NoFrames;
   }
 
@@ -2531,6 +2564,7 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     if ((!frame.isLLVM() && !frame.funcOp) || !frame.resumeBlock) {
       LLVM_DEBUG(llvm::dbgs()
                  << "    Invalid saved call stack frame, cannot resume\n");
+      traceResumeReturn("invalid_frame_failed");
       return CallStackResumeResult::Failed;
     }
 
@@ -2554,10 +2588,14 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
     FastResumeAction fastResumeAction =
         tryResumeGenerateBaudClkFrameFastPath(frame, oldFrameCount);
-    if (fastResumeAction == FastResumeAction::Failed)
+    if (fastResumeAction == FastResumeAction::Failed) {
+      traceResumeReturn("fast_path_failed");
       return CallStackResumeResult::Failed;
-    if (fastResumeAction == FastResumeAction::Suspended)
+    }
+    if (fastResumeAction == FastResumeAction::Suspended) {
+      traceResumeReturn("fast_path_suspended");
       return CallStackResumeResult::Suspended;
+    }
     if (fastResumeAction == FastResumeAction::Continue)
       continue;
 
@@ -2576,6 +2614,7 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
       LLVM_DEBUG(llvm::dbgs() << "    Function '" << frameName
                               << "' failed during resume\n");
       finalizeProcess(procId, /*killed=*/false);
+      traceResumeReturn("func_failed");
       return CallStackResumeResult::Failed;
     }
 
@@ -2619,6 +2658,7 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
             targetTime, SchedulingRegion::Active,
             Event([this, procId]() { resumeProcess(procId); }));
       }
+      traceResumeReturn("resuspended_waiting");
       return CallStackResumeResult::Suspended;
     }
 
@@ -2663,5 +2703,6 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
   LLVM_DEBUG(llvm::dbgs()
              << "  Call stack frames exhausted, continuing process\n");
+  traceResumeReturn("completed");
   return CallStackResumeResult::Completed;
 }

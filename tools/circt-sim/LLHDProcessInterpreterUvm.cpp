@@ -14,6 +14,7 @@
 #include "LLHDProcessInterpreter.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
+#include <algorithm>
 #include <cstring>
 
 using namespace mlir;
@@ -117,6 +118,131 @@ uint64_t LLHDProcessInterpreter::canonicalizeUvmObjectAddress(ProcessId procId,
       nativeOff != 0 && nativeOff < nativeSize)
     return addr - nativeOff;
   return addr;
+}
+
+void LLHDProcessInterpreter::cacheSequenceRuntimeVtableForObject(
+    ProcessId procId, uint64_t objectAddr, uint64_t vtableAddr) {
+  if (objectAddr == 0 || vtableAddr == 0)
+    return;
+
+  llvm::SmallVector<uint64_t, 8> candidates;
+  auto addCandidate = [&](uint64_t addr) {
+    if (addr == 0)
+      return;
+    if (std::find(candidates.begin(), candidates.end(), addr) !=
+        candidates.end())
+      return;
+    candidates.push_back(addr);
+  };
+
+  addCandidate(objectAddr);
+  addCandidate(canonicalizeUvmObjectAddress(procId, objectAddr));
+  const uint64_t maskedCandidates[] = {
+      objectAddr & ~uint64_t(1), objectAddr & ~uint64_t(3),
+      objectAddr & ~uint64_t(7)};
+  for (uint64_t masked : maskedCandidates) {
+    addCandidate(masked);
+    addCandidate(canonicalizeUvmObjectAddress(procId, masked));
+  }
+
+  for (uint64_t candidate : candidates)
+    sequenceRuntimeVtableByObjectAddr[candidate] = vtableAddr;
+}
+
+bool LLHDProcessInterpreter::lookupCachedSequenceRuntimeVtable(
+    ProcessId procId, uint64_t objectAddr, uint64_t &vtableAddr) {
+  vtableAddr = 0;
+  if (objectAddr == 0)
+    return false;
+
+  llvm::SmallVector<uint64_t, 8> candidates;
+  auto addCandidate = [&](uint64_t addr) {
+    if (addr == 0)
+      return;
+    if (std::find(candidates.begin(), candidates.end(), addr) !=
+        candidates.end())
+      return;
+    candidates.push_back(addr);
+  };
+
+  addCandidate(objectAddr);
+  addCandidate(canonicalizeUvmObjectAddress(procId, objectAddr));
+  const uint64_t maskedCandidates[] = {
+      objectAddr & ~uint64_t(1), objectAddr & ~uint64_t(3),
+      objectAddr & ~uint64_t(7)};
+  for (uint64_t masked : maskedCandidates) {
+    addCandidate(masked);
+    addCandidate(canonicalizeUvmObjectAddress(procId, masked));
+  }
+
+  for (uint64_t candidate : candidates) {
+    auto it = sequenceRuntimeVtableByObjectAddr.find(candidate);
+    if (it == sequenceRuntimeVtableByObjectAddr.end() || it->second == 0)
+      continue;
+    vtableAddr = it->second;
+    return true;
+  }
+
+  return false;
+}
+
+void LLHDProcessInterpreter::maybeSeedSequenceRuntimeVtableFromFunction(
+    ProcessId procId, llvm::StringRef funcName,
+    llvm::ArrayRef<InterpretedValue> args) {
+  if (args.empty() || args[0].isX())
+    return;
+  uint64_t objectAddr = args[0].getUInt64();
+  if (objectAddr == 0)
+    return;
+
+  // First prefer a real runtime-header read when available.
+  uint64_t runtimeVtableAddr = 0;
+  if (readObjectVTableAddress(objectAddr, runtimeVtableAddr, procId)) {
+    cacheSequenceRuntimeVtableForObject(procId, objectAddr, runtimeVtableAddr);
+    return;
+  }
+
+  // Otherwise infer from the statically-known class vtable symbol of the
+  // current method (Class::method -> Class::__vtable__). Restrict this to
+  // vtables whose slot 43 maps to a ::body method (sequence classes).
+  size_t scopeSep = funcName.rfind("::");
+  if (scopeSep == llvm::StringRef::npos)
+    return;
+  std::string className = funcName.substr(0, scopeSep).str();
+  std::string vtableName = className + "::__vtable__";
+
+  auto vtableBlockIt = globalMemoryBlocks.find(vtableName);
+  if (vtableBlockIt == globalMemoryBlocks.end())
+    return;
+
+  uint64_t inferredVtableAddr = 0;
+  for (const auto &entry : addressToGlobal) {
+    if (entry.second == vtableName) {
+      inferredVtableAddr = entry.first;
+      break;
+    }
+  }
+  if (inferredVtableAddr == 0)
+    return;
+
+  constexpr uint64_t kBodySlot = 43;
+  auto &vtableBlock = vtableBlockIt->second;
+  unsigned slotOffset = static_cast<unsigned>(kBodySlot * 8);
+  if (slotOffset + 8 > vtableBlock.size)
+    return;
+
+  uint64_t slotFuncAddr = 0;
+  for (unsigned i = 0; i < 8; ++i)
+    slotFuncAddr |= static_cast<uint64_t>(vtableBlock[slotOffset + i]) << (i * 8);
+  if (slotFuncAddr == 0)
+    return;
+
+  auto funcIt = addressToFunction.find(slotFuncAddr);
+  if (funcIt == addressToFunction.end() ||
+      funcIt->second.find("::body") == std::string::npos)
+    return;
+
+  cacheSequenceRuntimeVtableForObject(procId, objectAddr, inferredVtableAddr);
 }
 
 bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
@@ -648,8 +774,95 @@ bool LLHDProcessInterpreter::tryInterceptUvmPortCall(
   return false;
 }
 
-bool LLHDProcessInterpreter::readObjectVTableAddress(uint64_t /*objectAddr*/,
-                                                      uint64_t &/*vtableAddr*/) {
+bool LLHDProcessInterpreter::readObjectVTableAddress(uint64_t objectAddr,
+                                                      uint64_t &vtableAddr,
+                                                      ProcessId procId) {
+  vtableAddr = 0;
+  if (objectAddr == 0)
+    return false;
+
+  auto decodeVtableAt = [&](const uint8_t *bytes, size_t size,
+                            uint64_t baseOffset) -> bool {
+    // Runtime object header layout: [i32 class_id][ptr vtable_ptr]...
+    constexpr uint64_t kHeaderSize = 12; // 4-byte class id + 8-byte ptr
+    if (baseOffset + kHeaderSize > size)
+      return false;
+    uint64_t decoded = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      decoded |= static_cast<uint64_t>(bytes[baseOffset + 4 + i]) << (i * 8);
+    if (decoded == 0)
+      return false;
+    vtableAddr = decoded;
+    return true;
+  };
+
+  auto tryDecodeAtAddress = [&](uint64_t addr) -> bool {
+    // First try process-visible memory (stack allocas, parent frames, module
+    // allocas) when a process context is available.
+    if (procId != InvalidProcessId) {
+      uint64_t processOffset = 0;
+      if (MemoryBlock *block =
+              findMemoryBlockByAddress(addr, procId, &processOffset)) {
+        if (block->initialized &&
+            decodeVtableAt(block->bytes(), block->size, processOffset))
+          return true;
+      }
+    }
+
+    // Then try interpreter-managed global/malloc blocks.
+    uint64_t blockOffset = 0;
+    if (MemoryBlock *block = findBlockByAddress(addr, blockOffset)) {
+      if (block->initialized &&
+          decodeVtableAt(block->bytes(), block->size, blockOffset))
+        return true;
+    }
+
+    // Then try native memory-backed allocations tracked by the interpreter.
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
+      auto *nativeBytes = reinterpret_cast<const uint8_t *>(addr - nativeOffset);
+      if (decodeVtableAt(nativeBytes, nativeSize, nativeOffset))
+        return true;
+    }
+    return false;
+  };
+
+  auto tryDecodeObject = [&](uint64_t addr) -> bool {
+    // UVM methods are often called with base-subobject pointers; canonicalize
+    // to the allocation base before decoding the standard object header.
+    uint64_t canonicalAddr = addr;
+    if (procId != InvalidProcessId)
+      canonicalAddr = canonicalizeUvmObjectAddress(procId, addr);
+    if (tryDecodeAtAddress(canonicalAddr))
+      return true;
+    if (canonicalAddr != addr && tryDecodeAtAddress(addr))
+      return true;
+    return false;
+  };
+
+  // Some UVM callsites pass tagged object pointers (low bits set). Probe a
+  // small set of low-bit-cleared candidates before giving up.
+  const uint64_t candidates[] = {
+      objectAddr, objectAddr & ~uint64_t(1), objectAddr & ~uint64_t(3),
+      objectAddr & ~uint64_t(7)};
+  for (unsigned i = 0; i < 4; ++i) {
+    uint64_t candidate = candidates[i];
+    if (candidate == 0)
+      continue;
+    bool duplicate = false;
+    for (unsigned j = 0; j < i; ++j) {
+      if (candidates[j] == candidate) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate)
+      continue;
+    if (tryDecodeObject(candidate))
+      return true;
+  }
+
   return false;
 }
 

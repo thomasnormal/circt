@@ -124,9 +124,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
   unsigned elemSize = getLLVMTypeSize(elemType);
   size_t totalSize = elemSize * arraySize;
 
-  // Create a memory block
-  MemoryBlock block(totalSize, getTypeWidth(elemType));
-  block.initialized = true;  // Alloca memory is zero-initialized and readable
+  // Use real calloc so native AOT code can dereference these pointers.
+  void *ptr = std::calloc(1, totalSize);
+  uint64_t addr = reinterpret_cast<uint64_t>(ptr);
+
+  MemoryBlock block;
+  block.aliasedStorage = static_cast<uint8_t *>(ptr);
+  block.size = totalSize;
+  block.elementBitWidth = getTypeWidth(elemType);
+  block.initialized = true;
 
   // Check if this alloca is at module level (not inside an llhd.process,
   // func.func, or llvm.func). Allocas inside functions should be process-local
@@ -145,12 +151,6 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMAlloca(
     // Store in process-local memory
     state.memoryBlocks[allocaOp.getResult()] = std::move(block);
   }
-
-  // Assign a unique address to this pointer (for tracking purposes)
-  // Use globalNextAddress to ensure no overlap between module-level
-  // and process-level allocas.
-  uint64_t addr = globalNextAddress;
-  globalNextAddress += totalSize;
 
   // Store the pointer value (the address)
   setValue(procId, allocaOp.getResult(), InterpretedValue(addr, 64));
