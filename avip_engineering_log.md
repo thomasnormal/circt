@@ -298,6 +298,10 @@
 ### Fix approach
 - Resolve tools across `build-test/bin`, `build_test/bin`, and `build/bin`.
 - Snapshot tools using an atomic temp-copy + `--help` health probe before use.
+- Retry a sim attempt when `circt-sim` reports an internal virtual-dispatch
+  failure (`[circt-sim] WARNING: virtual method call ... failed`), since this
+  indicates simulator infra instability rather than a deterministic functional
+  mismatch.
 
 ## 2026-02-24 Session: randomize-with `this` lookup for element-selected class receivers
 
