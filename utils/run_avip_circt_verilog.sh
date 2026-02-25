@@ -54,8 +54,8 @@ CIRCT_VERILOG_IR="${CIRCT_VERILOG_IR:-moore}"
 FILELISTS_STR="$(printf "%s\n" "${FILELISTS_ARRAY[@]}")"
 export FILELISTS_STR
 
-if [[ ! -f "$CIRCT_VERILOG" ]]; then
-  echo "circt-verilog not found: $CIRCT_VERILOG" >&2
+if [[ ! -x "$CIRCT_VERILOG" ]]; then
+  echo "circt-verilog not found or not executable: $CIRCT_VERILOG" >&2
   exit 1
 fi
 
@@ -63,12 +63,32 @@ OUT_DIR="$(dirname "$OUT")"
 TOOL_SNAPSHOT_DIR="$OUT_DIR/.tool-snapshot"
 mkdir -p "$TOOL_SNAPSHOT_DIR"
 SNAPSHOT_CIRCT_VERILOG="$TOOL_SNAPSHOT_DIR/circt-verilog"
-if ! cp -f "$CIRCT_VERILOG" "$SNAPSHOT_CIRCT_VERILOG"; then
-  echo "failed to snapshot circt-verilog: $CIRCT_VERILOG -> $SNAPSHOT_CIRCT_VERILOG" >&2
-  exit 1
-fi
-if ! chmod +x "$SNAPSHOT_CIRCT_VERILOG"; then
-  echo "failed to make snapshot executable: $SNAPSHOT_CIRCT_VERILOG" >&2
+
+snapshot_tool_checked() {
+  local src="$1"
+  local dst="$2"
+  local tries="${3:-5}"
+  local i=1
+  while [[ $i -le $tries ]]; do
+    local tmp="${dst}.tmp.${$}.${i}"
+    if cp -f "$src" "$tmp" 2>/dev/null; then
+      chmod +x "$tmp" 2>/dev/null || true
+      # Validate that we didn't race a concurrent rebuild producing a truncated
+      # binary (seen as "Exec format error" on launch).
+      if "$tmp" --help >/dev/null 2>&1; then
+        mv -f "$tmp" "$dst"
+        return 0
+      fi
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+if ! snapshot_tool_checked "$CIRCT_VERILOG" "$SNAPSHOT_CIRCT_VERILOG"; then
+  echo "failed to snapshot a healthy circt-verilog: $CIRCT_VERILOG -> $SNAPSHOT_CIRCT_VERILOG" >&2
   exit 1
 fi
 CIRCT_VERILOG="$SNAPSHOT_CIRCT_VERILOG"

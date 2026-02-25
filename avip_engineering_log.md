@@ -282,6 +282,23 @@
   - `./utils/run_regression_unified.sh --profile smoke --engine circt --suite-regex '^avip_sim_smoke$'`
     -> exit 0.
 
+## 2026-02-24 Session: AVIP unified-smoke robustness (tool path + snapshot health)
+
+### What changed
+- Updated:
+  - `utils/run_avip_arcilator_sim.sh`
+  - `utils/run_avip_circt_verilog.sh`
+
+### Root causes
+- Unified smoke lanes can fail spuriously if tools are rebuilt concurrently:
+  - missing canonical tool paths (`build-test` vs `build_test`), or
+  - truncated snapshot copies (seen as `Exec format error` when launching a
+    copied binary).
+
+### Fix approach
+- Resolve tools across `build-test/bin`, `build_test/bin`, and `build/bin`.
+- Snapshot tools using an atomic temp-copy + `--help` health probe before use.
+
 ## 2026-02-24 Session: randomize-with `this` lookup for element-selected class receivers
 
 ### What changed
@@ -8006,3 +8023,57 @@ Based on these findings, the circt-sim compiled process architecture:
 - The ordered-predicate gap and bridge-cast leakage were coupled in practice:
   fixing one without the other still left SMT-LIB export fragile for real
   sampled paths.
+
+## 2026-02-25: MooreToCore packed bitcast parity (mixed 2/4-state + unions)
+
+### Gap identified (red-first)
+- Reproduced two frontend failures with `circt-verilog --ir-hw`:
+  - `/tmp/mixed_packed_struct_to_logic.sv`
+    - mixed packed struct (`logic [38:0]`, `bit [31:0]`, `logic`) assigned to
+      `logic [71:0]`
+    - failed with:
+      - `error: 'hw.bitcast' op Bitwidth of input must match result`
+      - source: `!hw.struct<vaddr: !hw.struct<value: i39, unknown: i39>, op: i32, spec: !hw.struct<value: i1, unknown: i1>>`
+      - target: `!hw.struct<value: i72, unknown: i72>`
+  - `/tmp/fourstate_to_union_bitcast.sv`
+    - `logic [3:0]` assigned to packed union with `logic [3:0]` members
+    - failed with:
+      - `error: 'hw.bitcast' op Bitwidth of input must match result`
+      - source: `i4`, target union members: `!hw.struct<value: i4, unknown: i4>`
+
+### Root cause
+- `BitcastConversion` still had a stale hardcoded path that always extracted
+  `value` for `FourStateStruct -> union`, which is only valid when the target
+  union storage is 2-state sized.
+- No reverse helper existed to flatten mixed structured values into packed
+  `(valueBits, unknownBits)` for conversion into flat four-state storage.
+
+### Implementation
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - added `flattenToFlatPacked(...)`:
+    - integer leaf -> unknown=`0`
+    - four-state leaf -> native value/unknown
+    - struct/union recursion support.
+  - extended `reconstructFromFlatPacked(...)` with union reconstruction.
+  - removed unconditional value-only `FourStateStruct -> union` bitcast path.
+  - added mixed-structure -> FourStateStruct bitcast lowering:
+    - flatten source
+    - width-adjust to destination packed width
+    - wrap via `createFourStateStruct(...)`.
+  - updated `convertTypeToPacked(...)` comment to match current semantics.
+
+### Validation
+- Build:
+  - `ninja -C build-test circt-verilog`
+- Focused regression tests:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv -j 8 build-test/test/Conversion/ImportVerilog/packed-union-fourstate-bitcast.sv build-test/test/Conversion/ImportVerilog/packed-mixed-struct-to-fourstate-bitcast.sv build-test/test/Conversion/ImportVerilog/packed-struct-dyn-element-select.sv build-test/test/Conversion/ImportVerilog/packed-struct-slice-output-port.sv`
+  - result: `4/4 PASS`
+- Direct red repro reruns:
+  - `build-test/bin/circt-verilog /tmp/mixed_packed_struct_to_logic.sv --ir-hw` -> `EXIT:0`
+  - `build-test/bin/circt-verilog /tmp/fourstate_to_union_bitcast.sv --ir-hw` -> `EXIT:0`
+
+### Realizations / surprises
+- The black-parrot failures were not from one bug: one path needed
+  `FourStateStruct -> union` width-aware behavior, another needed a new
+  structure-flattening primitive. Handling both in one conversion pass closed
+  both classes.

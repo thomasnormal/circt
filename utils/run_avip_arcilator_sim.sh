@@ -27,8 +27,11 @@ CIRCT_ROOT="${CIRCT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 OUT_DIR="${1:-/tmp/avip-arcilator-sim-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$OUT_DIR"
 
-CIRCT_VERILOG="${CIRCT_VERILOG:-$CIRCT_ROOT/build-test/bin/circt-verilog}"
-ARCILATOR="${ARCILATOR:-$CIRCT_ROOT/build-test/bin/arcilator}"
+CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build-test/bin/circt-verilog"
+CANONICAL_ARCILATOR="$CIRCT_ROOT/build-test/bin/arcilator"
+
+CIRCT_VERILOG="${CIRCT_VERILOG:-$CANONICAL_CIRCT_VERILOG}"
+ARCILATOR="${ARCILATOR:-$CANONICAL_ARCILATOR}"
 RUN_AVIP="${RUN_AVIP:-$SCRIPT_DIR/run_avip_circt_verilog.sh}"
 MBIT_DIR="${MBIT_DIR:-/home/thomas-ahle/mbit}"
 
@@ -49,6 +52,36 @@ MEMORY_LIMIT_KB=$((MEMORY_LIMIT_GB * 1024 * 1024))
 
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 ARCILATOR_ARGS="${ARCILATOR_ARGS:-}"
+
+resolve_tool_path() {
+  local requested="$1"
+  local tool_name="$2"
+  local candidates=("$requested")
+  if [[ "$requested" == *"/build-test/"* ]]; then
+    candidates+=("${requested/\/build-test\//\/build_test\/}")
+  fi
+  if [[ "$requested" == *"/build_test/"* ]]; then
+    candidates+=("${requested/\/build_test\//\/build-test\/}")
+  fi
+  candidates+=(
+    "$CIRCT_ROOT/build-test/bin/$tool_name"
+    "$CIRCT_ROOT/build_test/bin/$tool_name"
+    "$CIRCT_ROOT/build/bin/$tool_name"
+  )
+
+  local candidate=""
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  echo "$requested"
+  return 0
+}
+
+CIRCT_VERILOG="$(resolve_tool_path "$CIRCT_VERILOG" circt-verilog)"
+ARCILATOR="$(resolve_tool_path "$ARCILATOR" arcilator)"
 
 # name|avip_dir|filelist|tops|test_name
 AVIPS_CORE8=(
@@ -126,6 +159,45 @@ if [[ ! -x "$RUN_AVIP" ]]; then
   echo "error: helper runner not found or not executable: $RUN_AVIP" >&2
   exit 1
 fi
+
+# Snapshot tools once per run to avoid races with concurrent rebuilds.
+TOOL_SNAPSHOT_DIR="$OUT_DIR/.tool-snapshot"
+mkdir -p "$TOOL_SNAPSHOT_DIR"
+SNAPSHOT_CIRCT_VERILOG="$TOOL_SNAPSHOT_DIR/circt-verilog"
+SNAPSHOT_ARCILATOR="$TOOL_SNAPSHOT_DIR/arcilator"
+
+snapshot_tool_checked() {
+  local src="$1"
+  local dst="$2"
+  local tries="${3:-5}"
+  local i=1
+  while [[ $i -le $tries ]]; do
+    local tmp="${dst}.tmp.${$}.${i}"
+    if cp -f "$src" "$tmp" 2>/dev/null; then
+      chmod +x "$tmp" 2>/dev/null || true
+      if "$tmp" --help >/dev/null 2>&1; then
+        mv -f "$tmp" "$dst"
+        return 0
+      fi
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    sleep 0.1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+if ! snapshot_tool_checked "$CIRCT_VERILOG" "$SNAPSHOT_CIRCT_VERILOG"; then
+  echo "error: failed to snapshot a healthy circt-verilog: $CIRCT_VERILOG -> $SNAPSHOT_CIRCT_VERILOG" >&2
+  exit 1
+fi
+if ! snapshot_tool_checked "$ARCILATOR" "$SNAPSHOT_ARCILATOR"; then
+  echo "error: failed to snapshot a healthy arcilator: $ARCILATOR -> $SNAPSHOT_ARCILATOR" >&2
+  exit 1
+fi
+
+CIRCT_VERILOG="$SNAPSHOT_CIRCT_VERILOG"
+ARCILATOR="$SNAPSHOT_ARCILATOR"
 
 run_limited() {
   local timeout_secs="$1"
