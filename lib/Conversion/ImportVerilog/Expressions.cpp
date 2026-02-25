@@ -14,6 +14,7 @@
 #include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/LiteralExpressions.h"
 #include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/types/AllTypes.h"
 #include "slang/ast/symbols/MemberSymbols.h"
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/syntax/AllSyntax.h"
@@ -2458,6 +2459,16 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
       return value;
     }
+    if (auto *enumValue = expr.symbol.as_if<slang::ast::EnumValueSymbol>()) {
+      if (auto value = context.materializeConstant(enumValue->getValue(), *expr.type,
+                                                   hierLoc))
+        return value;
+    }
+    // Hierarchical references can legally name compile-time constants (e.g.,
+    // enum members). These should lower as constants, not as threaded refs.
+    if (auto value = context.materializeConstant(
+            context.evaluateConstant(expr), *expr.type, hierLoc))
+      return value;
     // Handle direct interface member access (e.g., intf.clk where intf is a
     // direct interface instance, not a virtual interface). Check if the
     // symbol's parent is an interface body. This applies to both VariableSymbol

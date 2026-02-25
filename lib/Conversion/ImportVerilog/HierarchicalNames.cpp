@@ -384,6 +384,12 @@ struct HierPathValueExprVisitor
     auto *exprValueSym = expr.symbol.as_if<slang::ast::ValueSymbol>();
     if (!exprValueSym)
       return;
+    // Only runtime values (variables / nets) should be threaded through module
+    // ports as hierarchical references. Enum members and other compile-time
+    // constants are resolved by slang and must not become hierarchical ports.
+    if (!exprValueSym->as_if<slang::ast::VariableSymbol>() &&
+        !exprValueSym->as_if<slang::ast::NetSymbol>())
+      return;
     auto addHierPath = [&](const slang::ast::InstanceBodySymbol *sym,
                            mlir::StringAttr nameAttr,
                            slang::ast::ArgumentDirection dir) {
@@ -554,6 +560,9 @@ struct HierPathValueExprVisitor
 
         auto *exprValueSym = expr.symbol.as_if<slang::ast::ValueSymbol>();
         if (!exprValueSym)
+          return;
+        if (!exprValueSym->as_if<slang::ast::VariableSymbol>() &&
+            !exprValueSym->as_if<slang::ast::NetSymbol>())
           return;
         auto addHierPath = [&](const slang::ast::InstanceBodySymbol *sym,
                                mlir::StringAttr nameAttr,
