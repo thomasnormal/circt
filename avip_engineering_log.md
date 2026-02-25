@@ -9143,13 +9143,15 @@ Based on these findings, the circt-sim compiled process architecture:
   parse FuseSoC-generated `.eda.yml` files.
 - OpenTitan FuseSoC setup for FPV targets invokes `regtool.py`, which requires
   `mako` in the active Python environment.
+- OpenTitan `csr_assert_gen` transitively requires `semantic_version` during
+  FuseSoC setup.
 - In this environment, default `python3` (3.11) was missing `hjson`, causing
   immediate manifest parsing failures before any formal run.
 
 ### Implementation
 - Added an explicit pinned dependency file:
   - `utils/python-requirements.txt` with `hjson==3.1.0` and
-    `pyyaml==6.0.3`, `mako==1.3.10`.
+    `pyyaml==6.0.3`, `mako==1.3.10`, `semantic-version==2.10.0`.
 - Updated `utils/README.md` to point utility users at the Python dependency
   list.
 
