@@ -109,7 +109,9 @@ if(EMSCRIPTEN)
   target_link_options(circt-sim PRIVATE
     "SHELL:--js-library=${CMAKE_CURRENT_SOURCE_DIR}/circt-sim-vpi-wasm.js"
     "SHELL:-sASYNCIFY=1"
-    "SHELL:-sASYNCIFY_IMPORTS=['circt_vpi_wasm_yield']"
+    # Emscripten lowers C symbol imports with a leading underscore in JS
+    # (`_circt_vpi_wasm_yield`). Keep both spellings for toolchain robustness.
+    "SHELL:-sASYNCIFY_IMPORTS=['_circt_vpi_wasm_yield','circt_vpi_wasm_yield']"
   )
 
   set(circt_sim_wasm_vpi_exports

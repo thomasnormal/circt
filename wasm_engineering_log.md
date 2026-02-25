@@ -2046,3 +2046,49 @@
     - `circt-sim.js --mode interpret --max-time=1000000` rc=0.
     - stdout includes `UVM_INFO ... [RNTST] Running test my_test...`.
     - VCD generated with `$enddefinitions`.
+
+## 2026-02-25 (post-merge validation: wasm UVM pass, VPI startup-yield still failing)
+- Repro-first checks run after pulling/merging upstream wasm changes:
+  - `node utils/repro_wasm_uvm_browser_assert.mjs --expect-pass`: PASS
+    - summary: `outMlirBytes=25034364`, `hasMalformed=false`, `hasAbort=false`.
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh`: FAIL
+    - failure signature: `yield hook did not execute async cbStart registration path`.
+- Realization:
+  - source-side pre-registration guard is present in `VPIRuntime.cpp`, but the
+    async startup path still does not complete through the first `await` in the
+    Node wasm harness, so async suspension/resume remains incomplete in this
+    validation path.
+- Build-system surprise during validation:
+  - wasm rebuilds are fragile in this dirty tree because
+    `tools/circt-sim-compile/CMakeLists.txt` references missing
+    `LowerTaggedIndirectCalls.cpp`, which breaks CMake regeneration for later
+    incremental rebuild attempts.
+
+## 2026-02-25 (async-yield follow-up: restore suspension path + harden node regression)
+- Repro-first:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh`
+    initially failed after `cbStartOfSimulation` pre-registration fix with:
+    - `yield hook did not execute async cbStart registration path`.
+- Key realization:
+  - in this Emscripten mode (`-sASYNCIFY=1`), a JSImport implemented as plain
+    `async function` did not suspend wasm; the callback resumed after simulation
+    had already progressed/completed.
+  - restoring `Asyncify.handleAsync(async () => ...)` for
+    `circt_vpi_wasm_yield` preserves suspension ordering in the startup path.
+  - `callMain()` can return before async rewind completion; node regression
+    checks must wait for post-await callback effects.
+- Fixes:
+  - `tools/circt-sim/circt-sim-vpi-wasm.js`
+    - use `Asyncify.handleAsync(async function() { ... })` for
+      `circt_vpi_wasm_yield`.
+  - `tools/circt-sim/CMakeLists.txt`
+    - expand asyncify import list to include both spellings:
+      `_circt_vpi_wasm_yield` and `circt_vpi_wasm_yield`.
+  - `utils/wasm_vpi_startup_yield_check.sh`
+    - after `callMain`, poll briefly to allow Asyncify rewind completion before
+      asserting `cbStart` async registration and `cbAfterDelay` firing.
+- Validation:
+  - `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_vpi_startup_yield_check.sh`:
+    PASS.
+  - `node utils/repro_wasm_uvm_browser_assert.mjs --expect-pass`:
+    PASS (`outMlirBytes=25034364`, `hasMalformed=false`, `hasAbort=false`).
