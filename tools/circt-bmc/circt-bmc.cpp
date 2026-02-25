@@ -1401,8 +1401,17 @@ int main(int argc, char **argv) {
   registerPassManagerCLOptions();
   registerDefaultTimingManagerCLOptions();
   registerAsmPrinterCLOptions();
+#if defined(__EMSCRIPTEN__)
+  static bool versionPrinterRegistered = false;
+  if (!versionPrinterRegistered) {
+    cl::AddExtraVersionPrinter(
+        [](llvm::raw_ostream &os) { os << circt::getCirctVersion() << '\n'; });
+    versionPrinterRegistered = true;
+  }
+#else
   cl::AddExtraVersionPrinter(
       [](llvm::raw_ostream &os) { os << circt::getCirctVersion() << '\n'; });
+#endif
 
 #if defined(__EMSCRIPTEN__)
   auto hasArg = [&](llvm::StringRef needle) {
