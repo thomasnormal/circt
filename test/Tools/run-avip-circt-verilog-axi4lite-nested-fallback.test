@@ -1,0 +1,1 @@
+// RUN: %S/../../utils/internal/checks/avip_circt_verilog_axi4lite_nested_fallback_check.sh

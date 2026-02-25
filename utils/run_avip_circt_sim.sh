@@ -35,12 +35,11 @@ FAIL_ON_FUNCTIONAL_GATE="${FAIL_ON_FUNCTIONAL_GATE:-0}"
 FAIL_ON_COVERAGE_BASELINE="${FAIL_ON_COVERAGE_BASELINE:-0}"
 COVERAGE_BASELINE_PCT="${COVERAGE_BASELINE_PCT:-10}"
 
-CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build-test/bin/circt-verilog"
-CANONICAL_CIRCT_SIM="$CIRCT_ROOT/build-test/bin/circt-sim"
+CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build_test/bin/circt-verilog"
+CANONICAL_CIRCT_SIM="$CIRCT_ROOT/build_test/bin/circt-sim"
 
 CIRCT_VERILOG="${CIRCT_VERILOG:-$CANONICAL_CIRCT_VERILOG}"
 CIRCT_SIM="${CIRCT_SIM:-$CANONICAL_CIRCT_SIM}"
-CIRCT_SIM_FALLBACK="${CIRCT_SIM_FALLBACK:-}"
 RUN_AVIP="${RUN_AVIP:-$SCRIPT_DIR/run_avip_circt_verilog.sh}"
 MBIT_DIR="${MBIT_DIR:-/home/thomas-ahle/mbit}"
 
@@ -80,46 +79,13 @@ fi
 
 if [[ "$CIRCT_ALLOW_NONCANONICAL_TOOLS" != "1" ]]; then
   if [[ -n "${CIRCT_VERILOG:-}" && "$CIRCT_VERILOG" != "$CANONICAL_CIRCT_VERILOG" ]]; then
-    echo "error: CIRCT_VERILOG must use canonical build-test path: $CANONICAL_CIRCT_VERILOG (got: $CIRCT_VERILOG)" >&2
+    echo "error: CIRCT_VERILOG must use canonical build_test path: $CANONICAL_CIRCT_VERILOG (got: $CIRCT_VERILOG)" >&2
     exit 1
   fi
   if [[ -n "${CIRCT_SIM:-}" && "$CIRCT_SIM" != "$CANONICAL_CIRCT_SIM" ]]; then
-    echo "error: CIRCT_SIM must use canonical build-test path: $CANONICAL_CIRCT_SIM (got: $CIRCT_SIM)" >&2
+    echo "error: CIRCT_SIM must use canonical build_test path: $CANONICAL_CIRCT_SIM (got: $CIRCT_SIM)" >&2
     exit 1
   fi
-fi
-
-resolve_tool_path() {
-  local requested="$1"
-  local tool_name="$2"
-  local candidates=("$requested")
-  if [[ "$requested" == *"/build-test/"* ]]; then
-    candidates+=("${requested/\/build-test\//\/build_test\/}")
-  fi
-  if [[ "$requested" == *"/build_test/"* ]]; then
-    candidates+=("${requested/\/build_test\//\/build-test\/}")
-  fi
-  candidates+=(
-    "$CIRCT_ROOT/build-test/bin/$tool_name"
-    "$CIRCT_ROOT/build_test/bin/$tool_name"
-    "$CIRCT_ROOT/build/bin/$tool_name"
-  )
-
-  local candidate=""
-  for candidate in "${candidates[@]}"; do
-    if [[ -x "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-  echo "$requested"
-  return 0
-}
-
-CIRCT_VERILOG="$(resolve_tool_path "$CIRCT_VERILOG" circt-verilog)"
-CIRCT_SIM="$(resolve_tool_path "$CIRCT_SIM" circt-sim)"
-if [[ -z "$CIRCT_SIM_FALLBACK" ]]; then
-  CIRCT_SIM_FALLBACK="$(resolve_tool_path "$CIRCT_ROOT/build-test/bin/circt-sim" circt-sim)"
 fi
 
 tool_help_healthy() {
@@ -130,15 +96,8 @@ tool_help_healthy() {
 
 if [[ "$CIRCT_ALLOW_NONCANONICAL_TOOLS" != "1" ]]; then
   if [[ -x "$CIRCT_SIM" ]] && ! tool_help_healthy "$CIRCT_SIM"; then
-    if [[ -n "$CIRCT_SIM_FALLBACK" ]] && \
-       [[ "$CIRCT_SIM_FALLBACK" != "$CIRCT_SIM" ]] && \
-       tool_help_healthy "$CIRCT_SIM_FALLBACK"; then
-      echo "warning: circt-sim probe failed for '$CIRCT_SIM'; falling back to '$CIRCT_SIM_FALLBACK'" >&2
-      CIRCT_SIM="$CIRCT_SIM_FALLBACK"
-    else
-      echo "error: circt-sim probe failed for '$CIRCT_SIM' (rebuild that binary or set CIRCT_SIM_FALLBACK)" >&2
-      exit 1
-    fi
+    echo "error: circt-sim probe failed for '$CIRCT_SIM' (rebuild that binary)" >&2
+    exit 1
   fi
 fi
 
@@ -274,6 +233,24 @@ run_limited() {
   )
 }
 
+resolve_compile_filelist() {
+  local avip_dir="$1"
+  local preferred="$2"
+  if [[ -n "$preferred" && -f "$preferred" ]]; then
+    printf '%s\n' "$preferred"
+    return 0
+  fi
+  if [[ -d "$avip_dir/sim" ]]; then
+    local candidate=""
+    candidate="$(find "$avip_dir/sim" -maxdepth 3 -type f \( -iname "*compile*.f" -o -iname "*project*.f" \) | head -n 1 || true)"
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+  printf '%s\n' ""
+}
+
 extract_uvm_count() {
   local key="$1"
   local log="$2"
@@ -285,7 +262,8 @@ extract_uvm_count() {
     return 0
   fi
 
-  # Fallback: count individual occurrences. Return 0 if none; '?' is reserved
+  # Secondary parse path: count individual occurrences. Return 0 if none; '?'
+  # is reserved
   # for truly unknown/parse failures.
   local count
   count=$(grep -Ec "^${key}([[:space:]]|$)" "$log" 2>/dev/null || true)
@@ -437,6 +415,8 @@ for row in "${selected_avips[@]}"; do
   avip_out="$OUT_DIR/$name"
   mkdir -p "$avip_out"
 
+  sim_tops="$tops"
+  sim_test_name="$test_name"
   compile_log="$avip_out/compile.log"
   mlir_file="$avip_out/${name}.mlir"
 
@@ -447,9 +427,20 @@ for row in "${selected_avips[@]}"; do
     echo "warning: missing AVIP directory: $avip_dir" >&2
   else
     start_compile=$(date +%s)
+    resolved_filelist="$(resolve_compile_filelist "$avip_dir" "$filelist")"
+    if [[ "$name" == "axi4Lite" ]] && [[ -n "$filelist" ]] && [[ ! -f "$filelist" ]]; then
+      # Some local AVIP trees do not ship sim/Axi4LiteProject.f. In that case
+      # run_avip_circt_verilog falls back to nested master/slave filelists,
+      # which provide the master tops/tests but not the combined Axi4LiteHdlTop.
+      sim_tops="${AXI4LITE_FALLBACK_TOPS:-Axi4LiteMasterHdlTop,Axi4LiteMasterHvlTop}"
+      sim_test_name="${AXI4LITE_FALLBACK_TESTNAME:-Axi4LiteMasterBaseTest}"
+      echo "[avip-circt-sim] info: using AXI4Lite fallback tops/test (missing $filelist): tops=$sim_tops test=$sim_test_name"
+    fi
     compile_cmd=("$RUN_AVIP" "$avip_dir")
-    if [[ -n "$filelist" ]]; then
-      compile_cmd+=("$filelist")
+    if [[ -n "$resolved_filelist" ]]; then
+      compile_cmd+=("$resolved_filelist")
+    else
+      echo "[avip-circt-sim] info: no explicit sim filelist for '$name'; using runner auto filelist resolution"
     fi
     if CIRCT_VERILOG="$CIRCT_VERILOG" \
        CIRCT_VERILOG_IR=llhd \
@@ -483,15 +474,15 @@ for row in "${selected_avips[@]}"; do
 
     if [[ "$compile_status" == "OK" ]]; then
       top_flags=()
-      IFS=',' read -ra top_modules <<< "$tops"
+      IFS=',' read -ra top_modules <<< "$sim_tops"
       for t in "${top_modules[@]}"; do
         t="${t//[[:space:]]/}"
         [[ -n "$t" ]] && top_flags+=(--top "$t")
       done
 
       uvm_args="+ntb_random_seed=$seed +UVM_VERBOSITY=$UVM_VERBOSITY"
-      if [[ -n "$test_name" ]]; then
-        uvm_args="+UVM_TESTNAME=$test_name $uvm_args"
+      if [[ -n "$sim_test_name" ]]; then
+        uvm_args="+UVM_TESTNAME=$sim_test_name $uvm_args"
       fi
 
       mode_flags=(--mode="$CIRCT_SIM_MODE")
