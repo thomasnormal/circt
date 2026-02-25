@@ -85,12 +85,10 @@ static void maybeRegisterNativeBlockFromPtrLenStruct(
   auto lenTy = dyn_cast<IntegerType>(body[1]);
   if (!lenTy || lenTy.getWidth() != 64)
     return;
-  if (loadedValue.isX() || loadedValue.getWidth() < 128)
+  uint64_t ptr = 0;
+  uint64_t len = 0;
+  if (!decodePackedPtrLenPayload(loadedValue, ptr, len))
     return;
-
-  APInt bits = loadedValue.getAPInt();
-  uint64_t ptr = bits.extractBits(64, 0).getZExtValue();
-  uint64_t len = bits.extractBits(64, 64).getZExtValue();
   if (ptr == 0 || len == 0)
     return;
   // Ignore clearly invalid pointer/length pairs from uninitialized payloads.

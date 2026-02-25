@@ -357,13 +357,14 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     if (failed(interpretFuncBody(
             procId, getTypeNameFunc, {InterpretedValue(wrapperAddr, 64)},
             typeNameResults, nullptr)) ||
-        typeNameResults.empty() || typeNameResults.front().isX() ||
-        typeNameResults.front().getWidth() < 128)
+        typeNameResults.empty())
       return false;
 
-    llvm::APInt packed = typeNameResults.front().getAPInt();
-    uint64_t strPtr = packed.extractBits(64, 0).getZExtValue();
-    int64_t strLen = packed.extractBits(64, 64).getSExtValue();
+    uint64_t strPtr = 0;
+    uint64_t strLenBits = 0;
+    if (!decodePackedPtrLenPayload(typeNameResults.front(), strPtr, strLenBits))
+      return false;
+    int64_t strLen = static_cast<int64_t>(strLenBits);
     std::string typeName;
     if (strPtr == 0 || strLen <= 0 || strLen > 1024 ||
         !tryReadStringKey(procId, strPtr, strLen, typeName) || typeName.empty())
@@ -377,12 +378,11 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
                                        const InterpretedValue &instNameArg,
                                        const InterpretedValue &parentArg,
                                        InterpretedValue &outValue) -> bool {
-    if (typeNameArg.isX() || typeNameArg.getWidth() < 128)
+    uint64_t strPtr = 0;
+    uint64_t strLenBits = 0;
+    if (!decodePackedPtrLenPayload(typeNameArg, strPtr, strLenBits))
       return false;
-
-    llvm::APInt packed = typeNameArg.getAPInt();
-    uint64_t strPtr = packed.extractBits(64, 0).getZExtValue();
-    int64_t strLen = packed.extractBits(64, 64).getSExtValue();
+    int64_t strLen = static_cast<int64_t>(strLenBits);
     std::string typeName;
     if (strPtr == 0 || strLen <= 0 || strLen > 1024 ||
         !tryReadStringKey(procId, strPtr, strLen, typeName) || typeName.empty())
@@ -726,11 +726,10 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
                                    int64_t &strLen) -> bool {
     strPtr = 0;
     strLen = 0;
-    if (strVal.isX() || strVal.getWidth() < 128)
+    uint64_t strLenBits = 0;
+    if (!decodePackedPtrLenPayload(strVal, strPtr, strLenBits))
       return false;
-    llvm::APInt bits = strVal.getAPInt();
-    strPtr = bits.extractBits(64, 0).getZExtValue();
-    strLen = bits.extractBits(64, 64).getSExtValue();
+    strLen = static_cast<int64_t>(strLenBits);
     if (strLen < 0 || strLen > 4096)
       return false;
     return true;
@@ -1368,11 +1367,10 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
                                    int64_t &strLen) -> bool {
     strPtr = 0;
     strLen = 0;
-    if (strVal.isX() || strVal.getWidth() < 128)
+    uint64_t strLenBits = 0;
+    if (!decodePackedPtrLenPayload(strVal, strPtr, strLenBits))
       return false;
-    llvm::APInt bits = strVal.getAPInt();
-    strPtr = bits.extractBits(64, 0).getZExtValue();
-    strLen = bits.extractBits(64, 64).getSExtValue();
+    strLen = static_cast<int64_t>(strLenBits);
     if (strLen < 0 || strLen > 4096)
       return false;
     return true;

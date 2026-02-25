@@ -10,6 +10,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
+#include <chrono>
 #include <cstring>
 
 #define DEBUG_TYPE "llhd-interpreter"
@@ -26,6 +27,24 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
   LLVM_DEBUG(llvm::dbgs()
              << "LLHDProcessInterpreter: finalizeInit - executing global "
                 "constructors after all modules initialized\n");
+  const bool traceInitTiming = std::getenv("CIRCT_SIM_TRACE_INIT") != nullptr;
+  auto finalizeStart = std::chrono::steady_clock::now();
+  auto lastFinalizeStage = finalizeStart;
+  auto reportFinalizeStage = [&](const char *stage) {
+    if (!traceInitTiming)
+      return;
+    auto now = std::chrono::steady_clock::now();
+    auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         now - lastFinalizeStage)
+                         .count();
+    auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       now - finalizeStart)
+                       .count();
+    llvm::errs() << "[circt-sim] finalize." << stage << " " << elapsedMs
+                 << "ms (total: " << totalMs << "ms)\n";
+    lastFinalizeStage = now;
+  };
+  reportFinalizeStage("begin");
 
   // Execute LLVM global constructors (e.g., __moore_global_init_uvm_pkg::uvm_top)
   // This triggers UVM run_test() → build_phase → config_db::get(), so it MUST
@@ -33,8 +52,10 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
   // includes hdl_top's initial blocks that call config_db::set()).
   if (failed(executeGlobalConstructors(cachedGlobalOps)))
     return failure();
+  reportFinalizeStage("executeGlobalConstructors");
 
   inGlobalInit = false;
+  reportFinalizeStage("clearGlobalInit");
 
   // Reset terminationRequested after global init. During UVM initialization,
   // m_uvm_get_root() triggers uvm_fatal → die() → sim.terminate, which sets
@@ -78,6 +99,7 @@ LogicalResult LLHDProcessInterpreter::finalizeInit() {
                             << signalDependentModuleDrives.size()
                             << " signal-dependent module drive mappings\n");
   }
+  reportFinalizeStage("installSignalChangeCallback");
 
   return success();
 }
@@ -239,8 +261,7 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         unsigned bitWidth = intValue.getBitWidth();
         unsigned byteWidth = (bitWidth + 7) / 8;
         for (unsigned j = 0; j < byteWidth && j < block.data.size(); ++j) {
-          block.data[j] = static_cast<uint8_t>(
-              intValue.extractBits(8, j * 8).getZExtValue());
+          block.data[j] = extractByteZExt(intValue, j);
         }
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with integer: 0x"
                                 << llvm::format_hex(intValue.getZExtValue(), 18)
@@ -251,8 +272,7 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
         const llvm::APInt &floatBits = floatValue.bitcastToAPInt();
         unsigned byteWidth = (floatBits.getBitWidth() + 7) / 8;
         for (unsigned j = 0; j < byteWidth && j < block.data.size(); ++j) {
-          block.data[j] = static_cast<uint8_t>(
-              floatBits.extractBits(8, j * 8).getZExtValue());
+          block.data[j] = extractByteZExt(floatBits, j);
         }
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with float\n");
       } else {
@@ -313,6 +333,7 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors(
     const DiscoveredGlobalOps &globalOps) {
   if (!rootModule)
     return success();
+  const bool traceInitTiming = std::getenv("CIRCT_SIM_TRACE_INIT") != nullptr;
 
   LLVM_DEBUG(llvm::dbgs()
              << "LLHDProcessInterpreter: Executing global constructors\n");
@@ -353,6 +374,9 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors(
 
   // Execute each constructor in priority order
   for (auto &[priority, ctorName] : ctorEntries) {
+    if (traceInitTiming)
+      llvm::errs() << "[circt-sim] finalize.ctor.begin priority=" << priority
+                   << " name=" << ctorName << "\n";
     LLVM_DEBUG(llvm::dbgs() << "  Calling constructor: " << ctorName
                             << " (priority " << priority << ")\n");
 
@@ -382,6 +406,9 @@ LogicalResult LLHDProcessInterpreter::executeGlobalConstructors(
                  << "'\n");
       // Continue with other constructors even if one fails
     }
+    if (traceInitTiming)
+      llvm::errs() << "[circt-sim] finalize.ctor.end priority=" << priority
+                   << " name=" << ctorName << "\n";
   }
 
   // Clean up the temporary process state

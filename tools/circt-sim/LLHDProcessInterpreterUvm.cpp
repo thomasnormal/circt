@@ -505,14 +505,11 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
 
       InterpretedValue valueArg = args[4];
       unsigned valueBits = valueArg.getWidth();
-      unsigned valueBytes = (valueBits + 7) / 8;
-      std::vector<uint8_t> valueData(valueBytes, 0);
-      if (!valueArg.isX()) {
-        llvm::APInt valBits = valueArg.getAPInt();
-        for (unsigned i = 0; i < valueBytes; ++i)
-          valueData[i] = static_cast<uint8_t>(
-              valBits.extractBits(8, i * 8).getZExtValue());
-      }
+      bool truncatedValue = false;
+      std::vector<uint8_t> valueData =
+          serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                         &truncatedValue);
+      unsigned valueBytes = static_cast<unsigned>(valueData.size());
       if (traceConfigDbEnabled) {
         llvm::errs() << "[CFG-CI-XFALLBACK-SET] callee=" << calleeName
                      << " key=\"" << key << "\" s1=\"" << str1
@@ -523,6 +520,11 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       if (traceConfigDbEnabled) {
         llvm::errs() << "[CFG-CI-XFALLBACK-SET] stored key=\"" << key
                      << "\" entries_after=" << configDbEntries.size() << "\n";
+        if (truncatedValue) {
+          llvm::errs() << "[CFG-CI-XFALLBACK-SET] truncated oversized value payload"
+                       << " key=\"" << key << "\" bitWidth=" << valueBits
+                       << "\n";
+        }
       }
     }
     return true;

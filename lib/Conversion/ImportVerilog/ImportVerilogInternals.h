@@ -745,6 +745,10 @@ struct Context {
   /// Guard condition for procedural concurrent assertions.
   Value currentAssertionGuard = {};
 
+  /// Label for the current concurrent assertion (set from a named begin block
+  /// wrapping a module-level assertion).
+  mlir::StringAttr currentConcurrentAssertionLabel = {};
+
   /// The current clocking event for assertions within a timed statement.
   const slang::ast::SignalEventControl *currentAssertionClock = nullptr;
 

@@ -1813,8 +1813,12 @@ uint32_t VPIRuntime::putValue(uint32_t objectId, struct t_vpi_value *value,
     return objectId;
   }
 
-  if (!obj->signalId || !scheduler)
+  if (!obj->signalId || !scheduler) {
+    fprintf(stderr, "[VPI-PUT-DBG] id=%u sigId=%u sched=%p val=%p fmt=%d\n",
+            objectId, obj ? obj->signalId : 0u, (void*)scheduler,
+            (void*)value, value ? value->format : -1);
     return 0;
+  }
 
   // Handle vpiReleaseFlag: release a previously forced signal.
   // No value is written; the signal becomes controlled by its HDL drivers.
