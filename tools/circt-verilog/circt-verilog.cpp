@@ -1063,7 +1063,7 @@ static LogicalResult execute(MLIRContext *context) {
     // Open diagnostic output file if specified.
     std::unique_ptr<llvm::ToolOutputFile> diagFile;
     llvm::raw_ostream *diagOS = &llvm::errs();
-    if (!opts.diagnosticOutput.empty()) {
+    if (!opts.diagnosticOutput.empty() && opts.diagnosticOutput != "-") {
       std::string errorMessage;
       diagFile = openOutputFile(opts.diagnosticOutput, &errorMessage);
       if (!diagFile) {
@@ -1071,6 +1071,8 @@ static LogicalResult execute(MLIRContext *context) {
         return failure();
       }
       diagOS = &diagFile->os();
+    } else if (opts.diagnosticOutput == "-") {
+      diagOS = &llvm::outs();
     }
 
     // Create the diagnostic printer.
@@ -1084,6 +1086,8 @@ static LogicalResult execute(MLIRContext *context) {
 
     // Flush the diagnostic output.
     printer.flush();
+    if (opts.diagnosticOutput == "-")
+      diagOS->flush();
 
     // Keep the diagnostic output file if we created one.
     if (diagFile)
