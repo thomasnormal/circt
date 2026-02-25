@@ -17,6 +17,7 @@ UVM_PKG_MEMFS_HELPER="utils/wasm_uvm_pkg_memfs_reentry_check.sh"
 UVM_PKG_SIM_HELPER="utils/wasm_uvm_pkg_sim_check.sh"
 VPI_STARTUP_YIELD_HELPER="utils/wasm_vpi_startup_yield_check.sh"
 VPI_REENTRY_ISOLATION_HELPER="utils/wasm_vpi_reentry_callback_isolation_check.sh"
+THREADED_OPTIONS_HELPER="utils/wasm_threaded_options_fallback_check.sh"
 SCRIPT_PID="${BASHPID:-$$}"
 REENTRY_VCD="/tmp/reentry-${SCRIPT_PID}.vcd"
 REENTRY_RUN1_VCD="/tmp/reentry-run1-${SCRIPT_PID}.vcd"
@@ -110,6 +111,10 @@ if [[ ! -x "$VPI_STARTUP_YIELD_HELPER" ]]; then
 fi
 if [[ ! -x "$VPI_REENTRY_ISOLATION_HELPER" ]]; then
   echo "[wasm-smoke] missing executable helper script: $VPI_REENTRY_ISOLATION_HELPER" >&2
+  exit 1
+fi
+if [[ ! -x "$THREADED_OPTIONS_HELPER" ]]; then
+  echo "[wasm-smoke] missing executable helper script: $THREADED_OPTIONS_HELPER" >&2
   exit 1
 fi
 
@@ -371,6 +376,9 @@ BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$VPI_STARTUP_YIELD_HELPER"
 
 echo "[wasm-smoke] VPI callback re-entry isolation"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$VPI_REENTRY_ISOLATION_HELPER"
+
+echo "[wasm-smoke] wasm threaded-option fallback checks"
+BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$THREADED_OPTIONS_HELPER"
 
 echo "[wasm-smoke] Default guard: no wasm runtime abort"
 BUILD_DIR="$BUILD_DIR" NODE_BIN="$NODE_BIN" "$RESOURCE_GUARD_HELPER"

@@ -1805,6 +1805,11 @@ void SimulationContext::handleAbort() {
 void SimulationContext::startWatchdogThread() {
   if (timeout == 0)
     return;
+#if defined(__EMSCRIPTEN__)
+  // Emscripten builds run without pthreads in our wasm runtime profiles.
+  // Keep timeout support via cooperative checks in the main loop only.
+  return;
+#endif
   if (watchdogThread.joinable())
     return;
   stopWatchdog.store(false);
@@ -1967,6 +1972,13 @@ LogicalResult SimulationContext::setupParallelSimulation() {
   // stable sequential execution unless explicitly opted in.
   const bool enableExperimentalParallel =
       isTruthyEnv(std::getenv("CIRCT_SIM_EXPERIMENTAL_PARALLEL"));
+#if defined(__EMSCRIPTEN__)
+  if (enableExperimentalParallel) {
+    llvm::errs() << "[circt-sim] Warning: parallel scheduler is unsupported "
+                    "on emscripten runtime; running sequentially.\n";
+    return success();
+  }
+#endif
   if (!enableExperimentalParallel) {
     llvm::errs()
         << "[circt-sim] Warning: parallel scheduler is temporarily disabled "
@@ -3199,6 +3211,11 @@ static LogicalResult processInput(MLIRContext &context,
   wallClockTimeoutTriggered.store(false);
   std::unique_ptr<WallClockTimeout> wallClockTimeout;
   if (timeout > 0) {
+#if defined(__EMSCRIPTEN__)
+    llvm::errs() << "[circt-sim] Warning: thread-based global wall-clock "
+                    "watchdog is unsupported on emscripten; using "
+                    "cooperative timeout checks.\n";
+#else
     wallClockTimeout = std::make_unique<WallClockTimeout>(
         std::chrono::seconds(timeout), []() {
           llvm::errs()
@@ -3208,6 +3225,7 @@ static LogicalResult processInput(MLIRContext &context,
           if (!simulationStarted.load())
             std::_Exit(1);
         });
+#endif
   }
 
   reportStage("parse");
