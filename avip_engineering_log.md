@@ -9199,3 +9199,43 @@ Based on these findings, the circt-sim compiled process architecture:
 - OpenTitan formal productivity depends on surfacing Python prerequisites next
   to `utils/` entrypoints, otherwise failures appear as tool bugs instead of
   environment setup gaps.
+
+## 2026-02-25 Session: CIRCT-only unified smoke closure (event-based, 4-state, interpreted; no arcilator)
+
+### Scope
+- User-requested focus:
+  - CIRCT-only
+  - event-based simulation
+  - 4-state interpreted mode
+  - arcilator excluded
+- Unified run profile:
+  - `smoke`
+  - suites: all smoke lanes except `avip_arcilator_smoke`.
+
+### Command
+- `utils/run_regression_unified.sh --engine circt --profile smoke --suite-regex '^(avip_sim_smoke|avip_verilog_smoke|sv_tests_sim_smoke|sv_tests_bmc_smoke|sv_tests_lec_smoke|verilator_bmc_smoke|verilator_lec_smoke|yosys_bmc_smoke|yosys_lec_smoke|opentitan_sim_smoke|opentitan_verilog_smoke)$' --out-dir /tmp/unified-circt-smoke-noarcilator-r2-20260225-175241 --jobs 1`
+
+### Unified result
+- Exit: `RC=0`
+- Summary: `11/11 PASS`
+- Retry summary: `attempts=1`, `retries_used=0` for every suite.
+- Artifacts:
+  - summary: `/tmp/unified-circt-smoke-noarcilator-r2-20260225-175241/summary.tsv`
+  - retries: `/tmp/unified-circt-smoke-noarcilator-r2-20260225-175241/retry-summary.tsv`
+
+### AVIP-specific result
+- Matrix: `/tmp/unified-circt-smoke-noarcilator-r2-20260225-175241/lanes/avip_sim_smoke/circt/matrix.tsv`
+- Functional status (`compile_status=OK`, `sim_status=OK`, `UVM_FATAL=0`, `UVM_ERROR=0`) for all 8 AVIPs:
+  - `apb, ahb, axi4, axi4Lite, i2s, i3c, jtag, spi`
+- No lane retries were needed in this closure run.
+
+### Coverage parity status vs Xcelium baseline
+- Still open.
+- AVIP smoke lane reported:
+  - `gate-summary functional_fail_rows=0 coverage_fail_rows=8`
+- Unified manifest currently enforces only functional gating for AVIP smoke:
+  - `FAIL_ON_FUNCTIONAL_GATE=1`
+  - no `FAIL_ON_COVERAGE_BASELINE=1` in `docs/unified_regression_manifest.tsv` for `avip_sim_smoke`.
+- Conclusion:
+  - functional smoke parity is green;
+  - coverage parity-to-Xcelium is not yet green and not yet enforced by default unified smoke policy.
