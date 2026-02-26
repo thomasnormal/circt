@@ -682,3 +682,41 @@
       build_test/test/Tools/circt-sim/aot-uvm-random-native-optin.mlir \
       build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir`
   - Result: 7/7 passed.
+
+- Additional audit finding in AOT tagged-indirect `invoke` lowering:
+  unwind-destination PHI repair used the wrong predecessor block on the tagged
+  exceptional edge.
+  - Deterministic repro (before fix):
+    - New unit test `LowerTaggedIndirectCallsTest.InvokeUnwindPhiUsesInvokeBlocks`
+      built from raw LLVM IR with:
+      - an indirect `invoke`, and
+      - an unwind block PHI (`%u = phi ... [ %tag, %entry ]`).
+    - After `runLowerTaggedIndirectCalls`, LLVM verifier failed with:
+      `PHI node entries do not match predecessors`.
+    - Observed bad PHI incoming blocks: `%tagged_call` and `%direct_call`
+      while unwind predecessors are `%tagged_invoke` and `%direct_call`.
+- Root cause:
+  - `tools/circt-sim-compile/LowerTaggedIndirectCalls.cpp` updated unwind PHIs
+    with `Phi.setIncomingBlock(Idx, taggedBB)`.
+  - `taggedBB` is only the pre-invoke dispatch block; the actual exceptional
+    edge comes from `taggedInvokeBB`.
+- Fix:
+  - Update unwind PHI rewrite to use `taggedInvokeBB` for the tagged incoming
+    edge.
+- Added unit test coverage:
+  - `unittests/Tools/circt-sim-compile/LowerTaggedIndirectCallsTest.cpp`
+  - plus unit-test target wiring:
+    - `unittests/Tools/CMakeLists.txt`
+    - `unittests/Tools/circt-sim-compile/CMakeLists.txt`
+- Verification:
+  - `ninja -C build_test CIRCTSimCompileToolTests`
+  - `build_test/unittests/Tools/circt-sim-compile/CIRCTSimCompileToolTests`
+  - `build_test/unittests/Tools/circt-sim-compile/CIRCTSimCompileToolTests --gtest_filter=LowerTaggedIndirectCallsTest.InvokeUnwindPhiUsesInvokeBlocks`
+  - Result: pass.
+- Surprise noted during minimization:
+  - A mixed-dialect repro (`func.func` calling `llvm.call @indirect_invoke`)
+    triggered a separate `circt-sim-compile --emit-llvm` segfault during
+    MLIR->LLVM translation (`llvm::ConstantExpr::getBitCast` from
+    `ModuleTranslation::convertOneFunction`).
+  - This appears independent of `LowerTaggedIndirectCalls` and should be
+    investigated separately.

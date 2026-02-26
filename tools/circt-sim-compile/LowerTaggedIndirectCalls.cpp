@@ -176,7 +176,9 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
       int Idx = Phi.getBasicBlockIndex(origBB);
       if (Idx >= 0) {
         llvm::Value *Val = Phi.getIncomingValue(Idx);
-        Phi.setIncomingBlock(Idx, taggedBB);
+        // The exceptional edge on the tagged path originates at the invoke
+        // block, not at the pre-invoke tagged dispatch block.
+        Phi.setIncomingBlock(Idx, taggedInvokeBB);
         Phi.addIncoming(Val, directBB);
       }
     }
