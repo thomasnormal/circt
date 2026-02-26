@@ -2249,21 +2249,29 @@ bool LLHDProcessInterpreter::executePeriodicToggleClockNativeThunk(
       uint32_t sigWidth = spec.signalWidth;
       uint64_t rawVal = scheduler.readSignalValueFast(sigId);
 
-      // Determine batch size. Batch only when this clock process is the ONLY
-      // active process in the entire simulation. This ensures no other process
-      // could become sensitive to the clock during the batch period.
+      // Determine batch size.
+      // Default to single-step toggles for correctness in complex UVM/AVIP
+      // environments where wakeups can be hidden behind deferred callback
+      // machinery (and therefore not reflected in active-process counts).
+      // Optional batching remains available behind an explicit opt-in.
       size_t batchCount = 1;
-      uint32_t apc = scheduler.getActiveProcessCount();
-      if (apc <= 1) {
-        // Only the clock process is alive. Safe to batch.
-        batchCount = 4096;
-        // Limit batch to not exceed max simulation time.
-        uint64_t maxSimTime = scheduler.getMaxSimTime();
-        if (maxSimTime > 0 && currentTime.realTime < maxSimTime) {
-          uint64_t remaining = maxSimTime - currentTime.realTime;
-          size_t maxBatch = remaining / spec.delayFs;
-          if (maxBatch < batchCount)
-            batchCount = std::max(maxBatch, (size_t)1);
+      static bool enableClockBatch = []() {
+        const char *env = std::getenv("CIRCT_SIM_ENABLE_PERIODIC_CLOCK_BATCH");
+        return env && env[0] != '\0' && env[0] != '0';
+      }();
+      if (enableClockBatch) {
+        uint32_t apc = scheduler.getActiveProcessCount();
+        if (apc <= 1) {
+          // Only the clock process is alive. Safe to batch.
+          batchCount = 4096;
+          // Limit batch to not exceed max simulation time.
+          uint64_t maxSimTime = scheduler.getMaxSimTime();
+          if (maxSimTime > 0 && currentTime.realTime < maxSimTime) {
+            uint64_t remaining = maxSimTime - currentTime.realTime;
+            size_t maxBatch = remaining / spec.delayFs;
+            if (maxBatch < batchCount)
+              batchCount = std::max(maxBatch, (size_t)1);
+          }
         }
       }
       // Execute N-1 toggles inline. Since no process is sensitive, we

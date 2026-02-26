@@ -1574,6 +1574,12 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       // initializeGlobals() writes directly to .so memory. This prevents
       // dangling inter-global pointers from post-init aliasing.
       if (compiledLoaderForPreAlias) {
+        // Set runtime context early so optional native module-init entrypoints
+        // can resolve __circt_sim_ctx before setCompiledModule() runs.
+        compiledLoaderForPreAlias->setRuntimeContext(
+            reinterpret_cast<void *>(this));
+        llhdInterpreter->setCompiledLoaderForModuleInit(
+            compiledLoaderForPreAlias);
         compiledLoaderForPreAlias->preAliasGlobals(
             llhdInterpreter->getGlobalMemoryBlocks());
       }
@@ -3597,10 +3603,11 @@ static LogicalResult processInput(MLIRContext &context,
                  << interp.getTrampolineEntryCallCount() << "\n";
     llvm::errs() << "[circt-sim] Entry-table skipped (depth):      "
                  << interp.getEntryTableSkippedDepthCount() << "\n";
-    llvm::errs() << "[circt-sim] Max native call depth:            "
-                 << interp.getMaxNativeCallDepth() << "\n";
+    llvm::errs() << "[circt-sim] Max AOT depth:                    "
+                 << interp.getMaxAotDepth() << "\n";
     llvm::errs() << "[circt-sim] func.call skipped (depth):        "
                  << interp.getNativeFuncSkippedDepth() << "\n";
+    interp.dumpAotHotUncompiledFuncs(llvm::errs(), /*topN=*/50);
   }
   // Use std::_Exit() here, before returning, to skip the expensive
   // SimulationContext destructor.  For UVM designs with millions of
@@ -3861,6 +3868,8 @@ int main(int argc, char **argv) {
   // where adding CLI flags is inconvenient (e.g., scripted benchmark harnesses).
   if (!aotStats && std::getenv("CIRCT_AOT_STATS"))
     aotStats = true;
+  if (aotStats)
+    ::setenv("CIRCT_AOT_STATS", "1", /*overwrite=*/0);
 
   // circt-sim-specific: apply tighter resource limits than the generic 10 GB
   // defaults.  Multiple circt-sim instances may be launched in parallel (e.g.

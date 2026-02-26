@@ -745,6 +745,72 @@ void writeIntKey(void *key, int64_t value, int32_t keySize) {
 
 } // anonymous namespace
 
+/// Thread-local simulation context pointer.  Set by the interpreter around
+/// native dispatch calls so that Moore runtime helpers can translate
+/// interpreter virtual addresses back to real host pointers.
+static thread_local void *circtSimTlsCtx = nullptr;
+
+extern "C" void __circt_sim_set_tls_ctx(void *ctx) { circtSimTlsCtx = ctx; }
+extern "C" void *__circt_sim_get_tls_ctx() { return circtSimTlsCtx; }
+
+/// Classify and optionally translate a pointer that might be an interpreter
+/// virtual address rather than a real host pointer.
+///
+/// Three ranges:
+///   1. Tagged FuncId (0xF0000000–0xFFFFFFFF): never a data pointer — trap.
+///   2. Interpreter virtual address (0x10000000–0x1FFFFFFF): attempt TLS
+///      context translation (TODO Phase 1.2); for now log and return as-is.
+///   3. Everything else: real host pointer — return unchanged.
+static void *normalizeHostPtr(void *ptr, const char *funcName) {
+  if (!ptr)
+    return nullptr;
+
+  auto addr = reinterpret_cast<uintptr_t>(ptr);
+
+  // Range 1: tagged FuncId — never a valid data pointer.
+  if (addr >= 0xF0000000ULL && addr < 0x100000000ULL) {
+    fprintf(stderr,
+            "[AOT] %s: tagged FuncId pointer %p — not a data pointer\n",
+            funcName, ptr);
+    __builtin_trap();
+  }
+
+  // Range 2: interpreter virtual address — try TLS context translation.
+  if (addr >= 0x10000000ULL && addr < 0x20000000ULL) {
+    // TODO (Phase 1.2): use circtSimTlsCtx + findMemoryBlockByAddress to
+    // translate the virtual address to a real host pointer.
+    static bool trace =
+        std::getenv("CIRCT_AOT_TRACE_PTR") != nullptr;
+    if (trace) {
+      fprintf(stderr,
+              "[AOT PTR] %s: virtual address %p — cannot normalize yet\n",
+              funcName, ptr);
+    }
+    return ptr;
+  }
+
+  return ptr;
+}
+
+static MooreAssocPtrResolver assocPtrResolver = nullptr;
+static void *assocPtrResolverUserData = nullptr;
+
+extern "C" void __moore_assoc_set_ptr_resolver(MooreAssocPtrResolver resolver,
+                                                void *userData) {
+  assocPtrResolver = resolver;
+  assocPtrResolverUserData = userData;
+}
+
+static void *assocNormalizePtr(void *ptr, const char *funcName) {
+  if (!ptr)
+    return nullptr;
+  if (assocPtrResolver) {
+    if (void *resolved = assocPtrResolver(ptr, assocPtrResolverUserData))
+      ptr = resolved;
+  }
+  return normalizeHostPtr(ptr, funcName);
+}
+
 extern "C" void *__moore_assoc_create(int32_t key_size, int32_t value_size) {
   auto *header = new AssocArrayHeader;
   if (key_size == 0) {
@@ -765,6 +831,7 @@ extern "C" void *__moore_assoc_create(int32_t key_size, int32_t value_size) {
 }
 
 extern "C" int64_t __moore_assoc_size(void *array) {
+  array = assocNormalizePtr(array, "__moore_assoc_size");
   if (!array)
     return 0;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -802,6 +869,7 @@ extern "C" bool __moore_array_contains(void *arr, int64_t numElems,
 }
 
 extern "C" void __moore_assoc_delete(void *array) {
+  array = assocNormalizePtr(array, "__moore_assoc_delete");
   if (!array)
     return;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -815,6 +883,7 @@ extern "C" void __moore_assoc_delete(void *array) {
 }
 
 extern "C" void __moore_assoc_delete_key(void *array, void *key) {
+  array = assocNormalizePtr(array, "__moore_assoc_delete_key");
   if (!array || !key)
     return;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -833,6 +902,7 @@ extern "C" void __moore_assoc_delete_key(void *array, void *key) {
 }
 
 extern "C" bool __moore_assoc_first(void *array, void *key_out) {
+  array = assocNormalizePtr(array, "__moore_assoc_first");
   if (!array || !key_out)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -864,6 +934,7 @@ extern "C" bool __moore_assoc_first(void *array, void *key_out) {
 }
 
 extern "C" bool __moore_assoc_next(void *array, void *key_ref) {
+  array = assocNormalizePtr(array, "__moore_assoc_next");
   if (!array || !key_ref)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -913,6 +984,7 @@ extern "C" bool __moore_assoc_next(void *array, void *key_ref) {
 }
 
 extern "C" bool __moore_assoc_last(void *array, void *key_out) {
+  array = assocNormalizePtr(array, "__moore_assoc_last");
   if (!array || !key_out)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -943,6 +1015,7 @@ extern "C" bool __moore_assoc_last(void *array, void *key_out) {
 }
 
 extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
+  array = assocNormalizePtr(array, "__moore_assoc_prev");
   if (!array || !key_ref)
     return false;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -988,6 +1061,7 @@ extern "C" bool __moore_assoc_prev(void *array, void *key_ref) {
 }
 
 extern "C" int32_t __moore_assoc_exists(void *array, void *key) {
+  array = assocNormalizePtr(array, "__moore_assoc_exists");
   if (!array || !key)
     return 0;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -1007,6 +1081,7 @@ extern "C" int32_t __moore_assoc_exists(void *array, void *key) {
 
 extern "C" void *__moore_assoc_get_ref(void *array, void *key,
                                        int32_t value_size) {
+  array = assocNormalizePtr(array, "__moore_assoc_get_ref");
   if (!array || !key)
     return nullptr;
   auto *header = static_cast<AssocArrayHeader *>(array);
@@ -1038,6 +1113,7 @@ extern "C" void *__moore_assoc_get_ref(void *array, void *key,
 /// Creates a new AssocArrayHeader with the same type and a full copy of
 /// the underlying map data.  Returns nullptr if the source is null.
 extern "C" void *__moore_assoc_copy(void *src) {
+  src = assocNormalizePtr(src, "__moore_assoc_copy");
   if (!src)
     return nullptr;
   auto *srcHeader = static_cast<AssocArrayHeader *>(src);
@@ -1064,6 +1140,8 @@ extern "C" void *__moore_assoc_copy(void *src) {
 /// Clears the destination first, then copies all entries from the source.
 /// Both arrays must already exist and have the same key/value types.
 extern "C" void __moore_assoc_copy_into(void *dst, void *src) {
+  dst = assocNormalizePtr(dst, "__moore_assoc_copy_into(dst)");
+  src = assocNormalizePtr(src, "__moore_assoc_copy_into(src)");
   if (!dst || !src)
     return;
   auto *dstHeader = static_cast<AssocArrayHeader *>(dst);
@@ -2502,9 +2580,10 @@ extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
   return static_cast<int64_t>(state.current);
 }
 
-extern "C" int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights,
-                                               int64_t *perRange,
-                                               int64_t numRanges) {
+extern "C" int64_t __moore_randomize_with_dist(
+    int64_t *ranges, int64_t *weights, int64_t *perRange, int64_t numRanges,
+    int64_t isSigned, int64_t bitWidth, int64_t hasDefaultWeight,
+    int64_t defaultWeight, int64_t defaultPerRange) {
   if (!ranges || !weights || !perRange || numRanges <= 0)
     return 0;
 
@@ -2513,10 +2592,15 @@ extern "C" int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights
   // For :/ (perRange=1), weight is divided among values in the range.
   int64_t totalWeight = 0;
   std::vector<int64_t> effectiveWeights(numRanges);
+  std::vector<std::pair<int64_t, int64_t>> normalizedRanges;
+  normalizedRanges.reserve(numRanges);
 
   for (int64_t i = 0; i < numRanges; ++i) {
     int64_t low = ranges[i * 2];
     int64_t high = ranges[i * 2 + 1];
+    if (high < low)
+      std::swap(low, high);
+    normalizedRanges.push_back({low, high});
     int64_t rangeSize = high - low + 1;
     int64_t weight = weights[i];
 
@@ -2528,6 +2612,86 @@ extern "C" int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights
       effectiveWeights[i] = weight;
     }
     totalWeight += effectiveWeights[i];
+  }
+
+  // Handle default dist weight by adding a synthetic bucket for values not
+  // covered by any explicit dist item.
+  int64_t defaultEffectiveWeight = 0;
+  std::vector<std::pair<int64_t, int64_t>> defaultRanges;
+  uint64_t defaultValueCount = 0;
+  if (hasDefaultWeight && defaultWeight > 0 && bitWidth > 0) {
+    int64_t domainLow = 0;
+    int64_t domainHigh = 0;
+    bool domainValid = true;
+    if (isSigned) {
+      if (bitWidth >= 64) {
+        domainLow = std::numeric_limits<int64_t>::min();
+        domainHigh = std::numeric_limits<int64_t>::max();
+      } else {
+        domainLow = -(1LL << (bitWidth - 1));
+        domainHigh = (1LL << (bitWidth - 1)) - 1;
+      }
+    } else {
+      // The dist runtime helper currently works with signed 64-bit values.
+      // Restrict unsigned defaults to widths representable in int64_t.
+      if (bitWidth >= 63) {
+        domainValid = false;
+      } else {
+        domainLow = 0;
+        domainHigh = (1LL << bitWidth) - 1;
+      }
+    }
+
+    if (domainValid) {
+      // Clip explicit ranges to domain, merge them, then build domain minus
+      // explicit as the default range set.
+      std::vector<std::pair<int64_t, int64_t>> clipped;
+      clipped.reserve(normalizedRanges.size());
+      for (auto [low, high] : normalizedRanges) {
+        low = std::max(low, domainLow);
+        high = std::min(high, domainHigh);
+        if (low <= high)
+          clipped.push_back({low, high});
+      }
+      std::sort(clipped.begin(), clipped.end(),
+                [](auto a, auto b) { return a.first < b.first; });
+
+      std::vector<std::pair<int64_t, int64_t>> merged;
+      for (auto [low, high] : clipped) {
+        if (merged.empty() || low > merged.back().second + 1) {
+          merged.push_back({low, high});
+        } else {
+          merged.back().second = std::max(merged.back().second, high);
+        }
+      }
+
+      int64_t cursor = domainLow;
+      for (auto [low, high] : merged) {
+        if (cursor < low)
+          defaultRanges.push_back({cursor, low - 1});
+        if (high == std::numeric_limits<int64_t>::max()) {
+          cursor = high;
+          break;
+        }
+        cursor = high + 1;
+      }
+      if (cursor <= domainHigh)
+        defaultRanges.push_back({cursor, domainHigh});
+
+      for (auto [low, high] : defaultRanges) {
+        defaultValueCount +=
+            static_cast<uint64_t>(high - low + static_cast<int64_t>(1));
+      }
+
+      if (defaultValueCount > 0) {
+        if (defaultPerRange == 0)
+          defaultEffectiveWeight =
+              defaultWeight * static_cast<int64_t>(defaultValueCount);
+        else
+          defaultEffectiveWeight = defaultWeight;
+        totalWeight += defaultEffectiveWeight;
+      }
+    }
   }
 
   if (totalWeight <= 0)
@@ -2543,8 +2707,8 @@ extern "C" int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights
     cumulativeWeight += effectiveWeights[i];
     if (randomWeight < cumulativeWeight) {
       // Select from this range
-      int64_t low = ranges[i * 2];
-      int64_t high = ranges[i * 2 + 1];
+      int64_t low = normalizedRanges[i].first;
+      int64_t high = normalizedRanges[i].second;
       int64_t rangeSize = high - low + 1;
 
       // Pick a random value within the range
@@ -2553,6 +2717,18 @@ extern "C" int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights
       } else {
         return low + static_cast<int64_t>(__moore_urandom()) % rangeSize;
       }
+    }
+  }
+
+  // If default weight is present and selected, pick uniformly from the
+  // complement set.
+  if (defaultEffectiveWeight > 0 && !defaultRanges.empty()) {
+    uint64_t pick = static_cast<uint64_t>(__moore_urandom()) % defaultValueCount;
+    for (auto [low, high] : defaultRanges) {
+      uint64_t span = static_cast<uint64_t>(high - low + static_cast<int64_t>(1));
+      if (pick < span)
+        return low + static_cast<int64_t>(pick);
+      pick -= span;
     }
   }
 

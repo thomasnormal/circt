@@ -57,6 +57,7 @@ class CompiledModuleLoader;
 #include <cstring>
 #include <random>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 // Forward declarations for SCF, Func, and LLVM dialects
@@ -1096,6 +1097,13 @@ public:
 
   void loadCompiledProcesses(CompiledModuleLoader &loader);
 
+  /// Provide an early-loaded compiled module for optional native module init
+  /// execution during initialize(). Non-owning pointer.
+  void
+  setCompiledLoaderForModuleInit(const CompiledModuleLoader *loader) {
+    compiledLoaderForModuleInit = loader;
+  }
+
   /// Dispatch a trampoline call from compiled code back to the interpreter.
   /// Called by __circt_sim_call_interpreted when a compiled function needs to
   /// invoke a function that was not compiled (contains non-LLVM ops).
@@ -1232,7 +1240,7 @@ public:
   uint64_t getEntryTableSkippedDepthCount() const {
     return entryTableSkippedDepthCount;
   }
-  uint32_t getMaxNativeCallDepth() const { return maxNativeCallDepth; }
+  uint32_t getMaxAotDepth() const { return maxAotDepth; }
   void dumpAotHotUncompiledFuncs(llvm::raw_ostream &os, size_t topN) const;
 
   /// Get the per-function interpreted call counts (for hottest-callee report).
@@ -2476,6 +2484,11 @@ private:
                                         ProcessId procId = static_cast<ProcessId>(-1),
                                         uint64_t *outOffset = nullptr);
 
+  /// Resolve a runtime assoc-array pointer to a host-dereferenceable address.
+  /// Used by MooreRuntime callback bridging when native code passes an
+  /// interpreter virtual address.
+  void *normalizeAssocRuntimePointer(const void *ptr);
+
   /// Find a native memory block by address (e.g., assoc array element refs).
   bool findNativeMemoryBlockByAddress(uint64_t addr, uint64_t *outOffset,
                                       size_t *outSize) const;
@@ -3171,6 +3184,7 @@ private:
   llvm::SmallVector<uint64_t> aotFuncIdCallCounts;
   llvm::SmallVector<std::string> aotFuncEntryNamesById;
   llvm::StringMap<uint32_t> aotFuncNameToCanonicalId;
+  const CompiledModuleLoader *compiledLoaderForModuleInit = nullptr;
   void noteAotFuncIdCall(uint32_t fid);
   void noteAotCalleeNameCall(llvm::StringRef calleeName);
 
@@ -4172,13 +4186,27 @@ private:
   uint64_t nativeEntryCallCount = 0;
   uint64_t trampolineEntryCallCount = 0;
   uint64_t entryTableSkippedDepthCount = 0;
-  uint32_t maxNativeCallDepth = 0;
+  uint32_t maxAotDepth = 0;
 
   /// Bitmap indicating which FuncId entries are natively compiled functions
-  /// (true) vs trampoline entries (false). The runtime dispatch path now allows
-  /// both through the entry table, guarded by nativeCallDepth to avoid
-  /// re-entrant native->interpreter->native recursion.
+  /// (true) vs trampoline entries (false). Used for stats counting only —
+  /// the dispatch gate uses aotDepth, not this vector.
   std::vector<bool> compiledFuncIsNative;
+
+  /// Deny list: skip native dispatch for these FuncIds (set via
+  /// CIRCT_AOT_DENY_FID=123,456,789). Allows bisecting which compiled function
+  /// causes a crash without recompiling.
+  std::unordered_set<uint32_t> aotDenyFids;
+
+  /// Trap FuncId: call __builtin_trap() just before native dispatch for this
+  /// FuncId (set via CIRCT_AOT_TRAP_FID=123). Produces a core dump at the exact
+  /// dispatch site for post-mortem analysis.
+  int32_t aotTrapFid = -1;
+
+  /// Reverse map: funcOp Operation* → entry-table FuncId. Used to apply
+  /// deny/trap checks on the func.call native dispatch path (which normally
+  /// has no FuncId).
+  llvm::DenseMap<mlir::Operation *, uint32_t> funcOpToFid;
 
   struct StrandedCallStackRescueStamp {
     uint64_t timeFs = 0;
@@ -4191,12 +4219,12 @@ private:
   llvm::DenseMap<ProcessId, StrandedCallStackRescueStamp>
       strandedCallStackRescueStamp;
 
-  /// Reentrance depth for native->interpreter callbacks.
-  /// When > 0, we're inside __circt_sim_call_interpreted (dispatchTrampoline)
-  /// and should NOT dispatch call_indirect through the entry table, as that
-  /// would create a native->interpreter->native->interpreter->... chain that
-  /// accumulates C++ stack frames until overflow.
-  unsigned nativeCallDepth = 0;
+  /// AOT re-entrancy depth. When > 0, we're inside a trampoline callback
+  /// (__circt_sim_call_interpreted) and must NOT dispatch call_indirect through
+  /// the entry table, as that would create native→interp→native→interp chains
+  /// that accumulate C++ stack frames until overflow. When == 0, we're at top
+  /// level and can dispatch ANY entry (native or trampoline).
+  unsigned aotDepth = 0;
 
   /// AOT invocation counters (for --stats reporting).
   uint64_t compiledCallbackInvocations = 0;

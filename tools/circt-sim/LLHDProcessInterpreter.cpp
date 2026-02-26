@@ -226,6 +226,63 @@ static void decrementRecursionDepthEntry(ProcessExecutionState &state,
     state.recursionVisited.erase(funcIt);
 }
 
+static llvm::SmallVector<std::string, 8>
+parseCommaPatternEnv(const char *envName) {
+  llvm::SmallVector<std::string, 8> patterns;
+  const char *raw = std::getenv(envName);
+  if (!raw || *raw == '\0')
+    return patterns;
+  llvm::StringRef text(raw);
+  llvm::SmallVector<llvm::StringRef, 16> parts;
+  text.split(parts, ',', /*MaxSplit=*/-1, /*KeepEmpty=*/false);
+  for (llvm::StringRef part : parts) {
+    part = part.trim();
+    if (!part.empty())
+      patterns.push_back(part.str());
+  }
+  return patterns;
+}
+
+static bool matchesUnmappedNamePattern(llvm::StringRef name,
+                                       llvm::StringRef pattern) {
+  if (pattern.empty())
+    return false;
+  if (pattern.ends_with("*"))
+    return name.starts_with(pattern.drop_back());
+  return name == pattern;
+}
+
+static bool shouldDenyUnmappedNativeCall(llvm::StringRef calleeName) {
+  static bool denyAllUnmappedNative =
+      std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL") != nullptr;
+  static bool allowUnmappedNative =
+      std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE") != nullptr;
+  static llvm::SmallVector<std::string, 8> denyPatterns =
+      parseCommaPatternEnv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES");
+  static llvm::SmallVector<std::string, 4> defaultDenyPatterns = []() {
+    llvm::SmallVector<std::string, 4> patterns;
+    // Generated short-name getter wrappers are a known parity risk in
+    // pre-run/build-phase setup when dispatched natively without FuncId mapping.
+    patterns.push_back("get_*");
+    return patterns;
+  }();
+
+  // Optional name-level deny list takes precedence over global allow.
+  for (const std::string &pattern : denyPatterns)
+    if (matchesUnmappedNamePattern(calleeName, pattern))
+      return true;
+
+  if (allowUnmappedNative)
+    return false;
+
+  for (const std::string &pattern : defaultDenyPatterns)
+    if (matchesUnmappedNamePattern(calleeName, pattern))
+      return true;
+
+  // Strict mode: deny all unmapped direct native calls.
+  return denyAllUnmappedNative;
+}
+
 // circt-sim evaluates clocked assertions/assumptions through the LTL runtime
 // evaluator. For sequence-typed assert-like properties, routing evaluation
 // through an implication form preserves established runtime behavior without
@@ -2024,7 +2081,19 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Execute module-level LLVM ops (alloca, call, store) that initialize
   // module-level variables like strings before processes start.
   // This includes hdl_top's initial blocks that call config_db::set().
-  if (failed(executeModuleLevelLLVMOps(hwModule)))
+  bool usedNativeModuleInit = false;
+  if (compiledLoaderForModuleInit &&
+      std::getenv("CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT")) {
+    if (void *initFn = compiledLoaderForModuleInit->lookupModuleInit(
+            hwModule.getName())) {
+      auto nativeInit = reinterpret_cast<void (*)()>(initFn);
+      nativeInit();
+      usedNativeModuleInit = true;
+      llvm::errs() << "[circt-sim] Native module init: " << hwModule.getName()
+                   << "\n";
+    }
+  }
+  if (!usedNativeModuleInit && failed(executeModuleLevelLLVMOps(hwModule)))
     return failure();
   reportInitStage("moduleLevelOps");
 
@@ -4235,6 +4304,15 @@ void LLHDProcessInterpreter::setupRegistryAccessors() {
       signalReleaseCallback, // Release callback
       &scheduler             // User data (ProcessScheduler pointer)
   );
+
+  __moore_assoc_set_ptr_resolver(
+      +[](const void *ptr, void *userData) -> void * {
+        auto *interpreter = static_cast<LLHDProcessInterpreter *>(userData);
+        if (!interpreter)
+          return nullptr;
+        return interpreter->normalizeAssocRuntimePointer(ptr);
+      },
+      this);
 
   LLVM_DEBUG(maybeTraceRegistryAccessorsConfigured(
       __moore_signal_registry_is_connected()));
@@ -11433,13 +11511,23 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
       return;
     }
     if (!state.callStack.empty()) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Process triggered while waiting with active call stack "
-                    "- ignoring spurious trigger\n");
-      if (shouldTraceProc(procId))
-        llvm::errs() << "[TRACE-PROC] proc=" << procId
-                     << " early-return waiting+callStack\n";
-      return;
+      bool hasMemoryEventWait = memoryEventWaiters.count(procId);
+      bool hasSignalWaitSensitivity = false;
+      if (const Process *schedProc = scheduler.getProcess(procId)) {
+        hasSignalWaitSensitivity =
+            !schedProc->getWaitingSensitivity().empty() ||
+            !schedProc->getSensitivityList().empty();
+      }
+
+      if (hasMemoryEventWait || !hasSignalWaitSensitivity) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Process triggered while waiting with active call stack "
+                      "- ignoring spurious trigger\n");
+        if (shouldTraceProc(procId))
+          llvm::errs() << "[TRACE-PROC] proc=" << procId
+                       << " early-return waiting+callStack\n";
+        return;
+      }
     }
     bool isPhaseHopperWaiter = llvm::any_of(
         phaseHopperWaiters, [&](const auto &entry) {
@@ -22833,7 +22921,30 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (!nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
-      if (nativeCallDepth == 0) {
+      auto fidIt = funcOpToFid.find(funcKey);
+      if (fidIt == funcOpToFid.end() &&
+          shouldDenyUnmappedNativeCall(funcOp.getName())) {
+        ++interpretedFuncCallCount;
+        goto func_call_interpreted_fallback;
+      }
+      // Deny/trap checks for func.call path (uses funcOpToFid reverse map).
+      if (!aotDenyFids.empty() || aotTrapFid >= 0) {
+        if (fidIt != funcOpToFid.end()) {
+          uint32_t fid = fidIt->second;
+          if (aotDenyFids.count(fid)) {
+            ++interpretedFuncCallCount;
+            goto func_call_interpreted_fallback;
+          }
+          if (static_cast<int32_t>(fid) == aotTrapFid) {
+            llvm::errs() << "[AOT TRAP] func.call fid=" << fid;
+            if (fid < aotFuncEntryNamesById.size())
+              llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
+            llvm::errs() << "\n";
+            __builtin_trap();
+          }
+        }
+      }
+      if (aotDepth == 0) {
         void *fptr = nativeIt->second;
         unsigned numArgs = args.size();
         unsigned numResults = callOp.getNumResults();
@@ -22855,7 +22966,30 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           }
           if (canDispatch) {
             ++nativeFuncCallCount;
+            static bool traceNativeCalls =
+                std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+            static uint64_t traceNativeCallLimit = []() -> uint64_t {
+              if (const char *s = std::getenv("CIRCT_AOT_TRACE_NATIVE_LIMIT"))
+                return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
+              return 200;
+            }();
+            static uint64_t traceNativeCallCount = 0;
+            if (traceNativeCalls && traceNativeCallCount < traceNativeCallLimit) {
+              auto fidIt = funcOpToFid.find(funcKey);
+              llvm::errs() << "[AOT TRACE] func.call native name="
+                           << funcOp.getName() << " fid=";
+              if (fidIt != funcOpToFid.end())
+                llvm::errs() << fidIt->second;
+              else
+                llvm::errs() << "<unmapped>";
+              llvm::errs() << " args=" << numArgs << " rets=" << numResults
+                           << "\n";
+              ++traceNativeCallCount;
+            }
             ++state.callDepth;
+            // Set TLS context so Moore runtime helpers can normalize ptrs.
+            void *prevTls = __circt_sim_get_tls_ctx();
+            __circt_sim_set_tls_ctx(static_cast<void *>(this));
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
             using F2 = uint64_t (*)(uint64_t, uint64_t);
@@ -22903,6 +23037,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                                   a[5], a[6], a[7]);
               break;
             }
+            __circt_sim_set_tls_ctx(prevTls);
             --state.callDepth;
             if (addedToVisited)
               decrementRecursionDepthEntry(state, funcKey, arg0Val);
@@ -22923,6 +23058,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
+func_call_interpreted_fallback:
   // Execute the function body with depth tracking
   ++interpretedCallCounts[funcOp.getOperation()];
   ++state.callDepth;
@@ -23061,8 +23197,34 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
     if (cacheIt != funcCallCache.end())
       nfp = cacheIt->second.nativeFuncPtr;
   }
+  auto fidIt = funcOpToFid.find(funcKey);
+  bool forcedInterpreter = false;
   if (nfp) {
-    if (nativeCallDepth == 0) {
+    if (fidIt == funcOpToFid.end() &&
+        shouldDenyUnmappedNativeCall(funcOp.getName())) {
+      nfp = nullptr;
+      forcedInterpreter = true;
+    }
+  }
+  // Keep cached path deny/trap behavior consistent with the slow path.
+  if (nfp && (!aotDenyFids.empty() || aotTrapFid >= 0) &&
+      fidIt != funcOpToFid.end()) {
+    uint32_t fid = fidIt->second;
+    if (aotDenyFids.count(fid)) {
+      nfp = nullptr;
+      forcedInterpreter = true;
+    } else if (static_cast<int32_t>(fid) == aotTrapFid) {
+      llvm::errs() << "[AOT TRAP] func.call fid=" << fid;
+      if (fid < aotFuncEntryNamesById.size())
+        llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
+      llvm::errs() << "\n";
+      __builtin_trap();
+    }
+  }
+  if (forcedInterpreter)
+    ++interpretedFuncCallCount;
+  if (nfp) {
+    if (aotDepth == 0) {
       unsigned numArgs = args.size();
       unsigned numResults = callOp.getNumResults();
       if (numArgs <= 8 && numResults <= 1) {
@@ -23083,7 +23245,29 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         }
         if (canDispatch) {
           ++nativeFuncCallCount;
+          static bool traceNativeCalls =
+              std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+          static uint64_t traceNativeCallLimit = []() -> uint64_t {
+            if (const char *s = std::getenv("CIRCT_AOT_TRACE_NATIVE_LIMIT"))
+              return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
+            return 200;
+          }();
+          static uint64_t traceNativeCallCount = 0;
+          if (traceNativeCalls && traceNativeCallCount < traceNativeCallLimit) {
+            llvm::errs() << "[AOT TRACE] func.call native(cached) name="
+                         << funcOp.getName() << " fid=";
+            if (fidIt != funcOpToFid.end())
+              llvm::errs() << fidIt->second;
+            else
+              llvm::errs() << "<unmapped>";
+            llvm::errs() << " args=" << numArgs << " rets=" << numResults
+                         << "\n";
+            ++traceNativeCallCount;
+          }
           ++state.callDepth;
+          // Set TLS context so Moore runtime helpers can normalize ptrs.
+          void *prevTls = __circt_sim_get_tls_ctx();
+          __circt_sim_set_tls_ctx(static_cast<void *>(this));
           using F0 = uint64_t (*)();
           using F1 = uint64_t (*)(uint64_t);
           using F2 = uint64_t (*)(uint64_t, uint64_t);
@@ -23131,6 +23315,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                                                 a[5], a[6], a[7]);
             break;
           }
+          __circt_sim_set_tls_ctx(prevTls);
           --state.callDepth;
           if (addedToVisited)
             decrementRecursionDepthEntry(state, funcKey, arg0Val);
@@ -27485,6 +27670,38 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
   }
   if (outOffset) *outOffset = 0;
   return nullptr;
+}
+
+void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
+  if (!ptr)
+    return nullptr;
+
+  uint64_t addr = reinterpret_cast<uint64_t>(ptr);
+  if (validAssocArrayAddresses.contains(addr))
+    return const_cast<void *>(ptr);
+
+  uint64_t offset = 0;
+  MemoryBlock *block =
+      findMemoryBlockByAddress(addr, static_cast<ProcessId>(-1), &offset);
+  if (!block || !block->initialized || offset >= block->size)
+    return const_cast<void *>(ptr);
+
+  // Some native call sites pass the virtual address of a pointer slot.
+  // For globals in the virtual-address range, recover the pointed-to host
+  // pointer when the slot value looks dereferenceable.
+  if (addr >= 0x10000000ULL && addr < 0x20000000ULL &&
+      offset + sizeof(uint64_t) <= block->size) {
+    uint64_t pointee = 0;
+    std::memcpy(&pointee, block->bytes() + offset, sizeof(pointee));
+    bool looksHostPtr =
+        pointee >= 0x10000ULL &&
+        !(pointee >= 0x10000000ULL && pointee < 0x20000000ULL) &&
+        !(pointee >= 0xF0000000ULL && pointee < 0x100000000ULL);
+    if (looksHostPtr)
+      return reinterpret_cast<void *>(pointee);
+  }
+
+  return static_cast<void *>(block->bytes() + offset);
 }
 
 bool LLHDProcessInterpreter::findNativeMemoryBlockByAddress(
@@ -38257,6 +38474,43 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
 
   // Safety valve: CIRCT_AOT_NO_FUNC_DISPATCH disables ALL native func dispatch.
   bool noFuncDispatch = std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr;
+  if (std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE")) {
+    llvm::errs() << "[circt-sim] Unmapped native func.call policy: allow-all";
+    if (const char *denyNames = std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES"))
+      llvm::errs() << " with deny list '" << denyNames << "'";
+    llvm::errs() << "\n";
+  } else if (std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL")) {
+    llvm::errs() << "[circt-sim] Unmapped native func.call policy: deny-all\n";
+  } else {
+    llvm::errs() << "[circt-sim] Unmapped native func.call policy: default deny get_*\n";
+  }
+
+  // Parse deny list: CIRCT_AOT_DENY_FID=123,456,789
+  // Denied FuncIds fall back to the interpreter, useful for bisecting crashes.
+  aotDenyFids.clear();
+  if (auto *denyStr = std::getenv("CIRCT_AOT_DENY_FID")) {
+    std::string s(denyStr);
+    size_t pos = 0;
+    while (pos < s.size()) {
+      size_t end = s.find(',', pos);
+      if (end == std::string::npos)
+        end = s.size();
+      aotDenyFids.insert(
+          static_cast<uint32_t>(std::stoul(s.substr(pos, end - pos))));
+      pos = end + 1;
+    }
+    llvm::errs() << "[circt-sim] AOT deny list: " << aotDenyFids.size()
+                 << " fids\n";
+  }
+
+  // Parse trap fid: CIRCT_AOT_TRAP_FID=123
+  // Triggers __builtin_trap() just before native dispatch for this FuncId,
+  // producing a core dump at the dispatch site.
+  aotTrapFid = -1;
+  if (auto *trapStr = std::getenv("CIRCT_AOT_TRAP_FID")) {
+    aotTrapFid = std::stoi(trapStr);
+    llvm::errs() << "[circt-sim] AOT trap on fid " << aotTrapFid << "\n";
+  }
 
   // Check whether a function has UVM/runtime interceptors in the interpreter.
   // Intercepted functions must NOT be dispatched natively because native callers
@@ -38277,11 +38531,24 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
       std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_TYPEINFO") != nullptr;
   bool allowNativeUvmAccessors = aggressiveNativeUvm ||
       std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ACCESSORS") != nullptr;
+  bool allowNativeUvmHierarchy = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_HIERARCHY") != nullptr;
+  bool allowNativeUvmFactory =
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_FACTORY") != nullptr;
+  bool allowNativeUvmReporting = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING") != nullptr;
+  bool allowNativeUvmRandom = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_RANDOM") != nullptr;
   bool allowNativeUvmSingletonGetters = aggressiveNativeUvm ||
       std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_SINGLETON_GETTERS") != nullptr;
+  bool allowNativeUvmPhaseGraph = aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_GRAPH") != nullptr;
   auto isInterceptedFunc = [interceptAllUvmByPrefix, allowNativeSeqBody,
                             allowNativeUvmAlloc, allowNativeUvmTypeInfo,
-                            allowNativeUvmAccessors,
+                            allowNativeUvmAccessors, allowNativeUvmHierarchy,
+                            allowNativeUvmPhaseGraph,
+                            allowNativeUvmFactory, allowNativeUvmReporting,
+                            allowNativeUvmRandom,
                             allowNativeUvmSingletonGetters](
                                llvm::StringRef name) -> bool {
     if (interceptAllUvmByPrefix && name.contains("uvm_"))
@@ -38293,7 +38560,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     if (name == "self" || name == "malloc")
       return true;
     if (!allowNativeUvmSingletonGetters &&
-        (name == "get_0" || name == "get_common_domain" ||
+        (name == "get" || name == "get_0" ||
+         name == "get_common_domain" ||
          name == "get_global_hopper"))
       return true;
     // String/class conversion
@@ -38342,6 +38610,26 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     // Type name string helpers (type_name_NNN)
     if (!allowNativeUvmTypeInfo && name.starts_with("type_name_"))
       return true;
+    // Factory override/creation paths are stateful and currently rely on
+    // interpreter-side behavior; keep native-disabled by default.
+    if (!allowNativeUvmFactory &&
+        (name.contains("::uvm_factory::") ||
+         name.contains("::uvm_default_factory::")))
+      return true;
+    // Reporting paths manage dynamic report handlers/messages and can crash
+    // under native dispatch before interpreter-level handling runs.
+    if (!allowNativeUvmReporting &&
+        (name.contains("::uvm_report_handler::") ||
+         name.contains("::uvm_report_object::") ||
+         name.contains("::uvm_report_message::get_severity") ||
+         name.contains("process_report_message")))
+      return true;
+    // Random-seeding paths build dynamic strings and rely on interpreter-side
+    // pointer lifetime behavior.
+    if (!allowNativeUvmRandom &&
+        (name.contains("create_random_seed") ||
+         name.contains("::reseed")))
+      return true;
     // Constructors (may allocate objects the interpreter tracks)
     if (!allowNativeUvmAlloc && name.ends_with("::new"))
       return true;
@@ -38356,6 +38644,20 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
           name.contains("get_print_config_matches") ||
           name.contains("get_root_blocks") ||
           name == "get_inst" || name.starts_with("get_inst_"))))
+      return true;
+    // Phase-graph/state mutators have interpreter-side cache/update logic.
+    if (!allowNativeUvmPhaseGraph &&
+        (name.contains("uvm_phase::") ||
+         name.contains("uvm_component::set_domain")))
+      return true;
+    // Component hierarchy mutators update Moore-assoc-backed name/child maps.
+    if (!allowNativeUvmHierarchy && name.contains("::m_add_child"))
+      return true;
+    // UVM objection methods — must go through interpreter interceptors.
+    if (name.contains("raise_objection") || name.contains("drop_objection"))
+      return true;
+    // UVM execute_phase — interpreter manages phase state machine.
+    if (name.ends_with("::execute_phase") || name == "execute_phase")
       return true;
     return false;
   };
@@ -38492,6 +38794,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     if (nativeIt == nativeFuncPtrs.end() || nativeIt->second != entryPtr)
       continue;
     compiledFuncIsNative[fid] = true;
+    // Build reverse map: Operation* → FuncId for func.call deny/trap checks.
+    funcOpToFid.try_emplace(cacheIt->second.op, fid);
     ++nativeCount;
   }
 
@@ -38688,11 +38992,11 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
     return;
   }
   ++callState.callDepth;
-  ++nativeCallDepth;
-  maxNativeCallDepth = std::max(maxNativeCallDepth, nativeCallDepth);
+  ++aotDepth;
+  maxAotDepth = std::max(maxAotDepth, aotDepth);
   (void)interpretFuncBody(procId, funcOp, interpArgs, interpResults,
                           /*callOp=*/nullptr);
-  --nativeCallDepth;
+  --aotDepth;
   --callState.callDepth;
 
   // Convert results back to uint64_t (handle structs consuming multiple slots).

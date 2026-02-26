@@ -172,6 +172,10 @@ public:
     return compiledModule ? compiledModule->all_func_entries : nullptr;
   }
 
+  /// Look up the optional native module-init entrypoint for a specific
+  /// hw.module symbol name. Returns nullptr if no native init is available.
+  void *lookupModuleInit(llvm::StringRef hwModuleName) const;
+
 private:
   CompiledModuleLoader() = default;
 

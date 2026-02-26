@@ -31,6 +31,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Sim/SimOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -42,10 +43,13 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Verifier.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Pass/PassManager.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -68,6 +72,8 @@
 #include "llvm/Target/TargetOptions.h"
 #include "llvm/TargetParser/Host.h"
 #include <chrono>
+#include <cctype>
+#include <cstdlib>
 
 using namespace mlir;
 using namespace circt;
@@ -124,17 +130,53 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
   bool compilable = true;
   funcOp.walk([&](Operation *op) {
     if (isa<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect,
-            func::FuncDialect>(op->getDialect()))
+            func::FuncDialect, scf::SCFDialect>(op->getDialect()))
       return WalkResult::advance();
     // Allow specific ops from other dialects that we can lower.
     if (isa<hw::ConstantOp, hw::BitcastOp, comb::ExtractOp, comb::AndOp,
             comb::OrOp, comb::XorOp, comb::ICmpOp, comb::AddOp, comb::SubOp,
-            comb::DivUOp, comb::MuxOp, comb::ConcatOp, comb::ReplicateOp>(op))
+            comb::DivUOp, comb::MulOp, comb::MuxOp, comb::ConcatOp,
+            comb::ReplicateOp,
+            comb::ShlOp, comb::ShrUOp, comb::ShrSOp,
+            hw::StructCreateOp, hw::StructExtractOp,
+            hw::AggregateConstantOp>(op))
       return WalkResult::advance();
+    if (isa<llhd::ConstantTimeOp, llhd::CurrentTimeOp>(op)) {
+      bool allResultsDead = true;
+      for (Value result : op->getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        return WalkResult::advance();
+    }
     // Allow unrealized_conversion_cast only when types match (foldable).
     if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
-      if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1 &&
-          castOp.getOperand(0).getType() == castOp.getResult(0).getType())
+      bool allResultsDead = true;
+      for (Value result : castOp.getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        return WalkResult::advance();
+      if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+        Type inTy = castOp.getOperand(0).getType();
+        Type outTy = castOp.getResult(0).getType();
+        if (inTy == outTy)
+          return WalkResult::advance();
+        // Accept ptr -> function casts used by func.call_indirect lowering.
+        if (isa<LLVM::LLVMPointerType>(inTy) && isa<FunctionType>(outTy))
+          return WalkResult::advance();
+        // Accept simple pointer/integer cast pairs.
+        if ((isa<LLVM::LLVMPointerType>(inTy) && isa<IntegerType>(outTy)) ||
+            (isa<IntegerType>(inTy) && isa<LLVM::LLVMPointerType>(outTy)) ||
+            (isa<LLVM::LLVMPointerType>(inTy) &&
+             isa<LLVM::LLVMPointerType>(outTy)) ||
+            (isa<IntegerType>(inTy) && isa<IntegerType>(outTy)))
+          return WalkResult::advance();
+      }
+    }
+    if (auto ciOp = dyn_cast<func::CallIndirectOp>(op)) {
+      // Accept call_indirect when callee is function-typed and result count is
+      // LLVM-call compatible. The lowering pass converts this to llvm.call.
+      if (isa<FunctionType>(ciOp.getCallee().getType()) &&
+          ciOp.getNumResults() <= 1)
         return WalkResult::advance();
     }
     if (rejectionReason)
@@ -143,6 +185,121 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
     return WalkResult::interrupt();
   });
   return compilable;
+}
+
+static bool isModuleInitSkippableOp(Operation *op) {
+  return isa<llhd::ProcessOp, seq::InitialOp, llhd::CombinationalOp,
+             llhd::SignalOp, hw::InstanceOp, hw::OutputOp, llhd::DriveOp,
+             llhd::ConstantTimeOp, llhd::CurrentTimeOp, sim::FormatLiteralOp,
+             sim::FormatHexOp, sim::FormatDecOp, sim::FormatBinOp,
+             sim::FormatOctOp, sim::FormatCharOp, sim::FormatGeneralOp,
+             sim::FormatFloatOp, sim::FormatScientificOp,
+             sim::FormatStringConcatOp, sim::FormatDynStringOp>(op);
+}
+
+static bool isNativeModuleInitOp(Operation *op) {
+  // Keep this intentionally conservative in the first step: only memory and
+  // constant/aggregate pointer plumbing ops that are known to be self-contained
+  // and safe to run before interpreter dispatch wiring.
+  return isa<LLVM::AllocaOp, LLVM::StoreOp, LLVM::ConstantOp, hw::ConstantOp,
+             LLVM::UndefOp, LLVM::ZeroOp, LLVM::AddressOfOp, LLVM::LoadOp,
+             LLVM::InsertValueOp, LLVM::ExtractValueOp, LLVM::GEPOp,
+             UnrealizedConversionCastOp>(op);
+}
+
+static std::string encodeModuleInitSymbol(llvm::StringRef moduleName) {
+  std::string out = "__circt_sim_module_init__";
+  out.reserve(out.size() + moduleName.size() * 3);
+  static constexpr char hex[] = "0123456789ABCDEF";
+  for (unsigned char c : moduleName.bytes()) {
+    if (std::isalnum(c) || c == '_') {
+      out.push_back(static_cast<char>(c));
+      continue;
+    }
+    out.push_back('_');
+    out.push_back(hex[(c >> 4) & 0xF]);
+    out.push_back(hex[c & 0xF]);
+  }
+  return out;
+}
+
+/// Synthesize optional native module-init functions from hw.module top-level
+/// LLVM-style init ops. Returns how many module init entrypoints were emitted.
+static unsigned synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
+                                                    ModuleOp microModule) {
+  unsigned emitted = 0;
+  OpBuilder moduleBuilder(microModule.getContext());
+
+  for (auto hwModule : sourceModule.getOps<hw::HWModuleOp>()) {
+    Block &body = hwModule.getBody().front();
+    llvm::SmallVector<Operation *> opsToClone;
+    bool unsupported = false;
+
+    for (Operation &op : body.getOperations()) {
+      Operation *opPtr = &op;
+      if (isModuleInitSkippableOp(opPtr))
+        continue;
+      if (!isNativeModuleInitOp(opPtr) || opPtr->getNumRegions() != 0) {
+        unsupported = true;
+        break;
+      }
+
+      // Reject dependencies on hw.module block arguments or skipped ops.
+      for (Value operand : opPtr->getOperands()) {
+        if (isa<BlockArgument>(operand)) {
+          unsupported = true;
+          break;
+        }
+        if (Operation *defOp = operand.getDefiningOp()) {
+          if (defOp->getBlock() == &body &&
+              (isModuleInitSkippableOp(defOp) || !isNativeModuleInitOp(defOp))) {
+            unsupported = true;
+            break;
+          }
+        }
+      }
+      if (unsupported)
+        break;
+      opsToClone.push_back(opPtr);
+    }
+
+    if (unsupported || opsToClone.empty())
+      continue;
+
+    std::string symName = encodeModuleInitSymbol(hwModule.getName());
+    moduleBuilder.setInsertionPointToEnd(microModule.getBody());
+    auto initType = moduleBuilder.getFunctionType({}, {});
+    auto initFunc =
+        func::FuncOp::create(moduleBuilder, hwModule.getLoc(), symName, initType);
+    Block *entry = initFunc.addEntryBlock();
+    OpBuilder initBuilder(entry, entry->begin());
+    IRMapping mapping;
+    for (Operation *op : opsToClone)
+      initBuilder.clone(*op, mapping);
+    initBuilder.create<func::ReturnOp>(hwModule.getLoc());
+    ++emitted;
+  }
+
+  return emitted;
+}
+
+/// Lower SCF control-flow ops (if/for/while/parallel/execute_region/...) to
+/// cf.* before custom arith/cf/func→LLVM rewriting.
+///
+/// Transactional semantics: conversion runs on a clone and only commits on
+/// success. On failure, the original module remains unchanged so later passes
+/// can safely continue with residual-op stripping.
+static bool lowerSCFToCF(ModuleOp &microModule) {
+  ModuleOp converted = cast<ModuleOp>(microModule->clone());
+  PassManager pm(microModule.getContext());
+  pm.addNestedPass<func::FuncOp>(createSCFToControlFlowPass());
+  if (failed(pm.run(converted))) {
+    converted.erase();
+    return false;
+  }
+  microModule->erase();
+  microModule = converted;
+  return true;
 }
 
 //===----------------------------------------------------------------------===//
@@ -194,8 +351,12 @@ static void cloneReferencedDeclarations(ModuleOp microModule,
       if (auto llvmFunc = dyn_cast<LLVM::LLVMFuncOp>(srcOp)) {
         auto cloned = builder.clone(*llvmFunc, mapping);
         if (auto clonedFunc = dyn_cast<LLVM::LLVMFuncOp>(cloned)) {
-          if (!clonedFunc.getBody().empty())
+          if (!clonedFunc.getBody().empty()) {
+            for (Block &block : clonedFunc.getBody())
+              block.dropAllDefinedValueUses();
+            clonedFunc.getBody().dropAllReferences();
             clonedFunc.getBody().getBlocks().clear();
+          }
           auto linkage = clonedFunc.getLinkage();
           if (linkage != LLVM::Linkage::External &&
               linkage != LLVM::Linkage::ExternWeak)
@@ -203,8 +364,12 @@ static void cloneReferencedDeclarations(ModuleOp microModule,
         }
         changed = true;
       } else if (auto funcFunc = dyn_cast<func::FuncOp>(srcOp)) {
-        func::FuncOp::create(builder, funcFunc.getLoc(), funcFunc.getSymName(),
-                             funcFunc.getFunctionType());
+        auto decl = func::FuncOp::create(builder, funcFunc.getLoc(),
+                                         funcFunc.getSymName(),
+                                         funcFunc.getFunctionType());
+        // External func.func declarations cannot be public; keep cloned
+        // declarations private to avoid verifier errors in large UVM modules.
+        decl.setPrivate();
         changed = true;
       } else if (auto globalOp = dyn_cast<LLVM::GlobalOp>(srcOp)) {
         builder.clone(*globalOp, mapping);
@@ -253,10 +418,15 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
   {
     llvm::SmallVector<Operation *> preOps;
     microModule.walk([&](Operation *op) {
-      if (isa<hw::ConstantOp, hw::BitcastOp, comb::ExtractOp, comb::AndOp,
-              comb::OrOp, comb::XorOp, comb::ICmpOp, comb::AddOp,
-              comb::SubOp, comb::DivUOp, comb::MuxOp, comb::ConcatOp,
-              comb::ReplicateOp, UnrealizedConversionCastOp>(op))
+      if (isa<hw::ConstantOp, hw::BitcastOp, hw::StructCreateOp,
+              hw::StructExtractOp, hw::AggregateConstantOp, comb::ExtractOp,
+              comb::AndOp, comb::OrOp, comb::XorOp, comb::ICmpOp,
+              comb::AddOp, comb::SubOp, comb::DivUOp, comb::MulOp,
+              comb::MuxOp,
+              comb::ConcatOp, comb::ReplicateOp, comb::ShlOp,
+              comb::ShrUOp, comb::ShrSOp, llhd::ConstantTimeOp,
+              llhd::CurrentTimeOp,
+              UnrealizedConversionCastOp>(op))
         preOps.push_back(op);
     });
     for (auto *op : preOps) {
@@ -269,6 +439,14 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                          hwConst.getValue()));
         hwConst.replaceAllUsesWith(arithConst.getResult());
         rewriter.eraseOp(hwConst);
+      } else if (isa<llhd::ConstantTimeOp, llhd::CurrentTimeOp>(op)) {
+        bool allResultsDead = true;
+        for (Value result : op->getResults())
+          allResultsDead &= result.use_empty();
+        if (allResultsDead) {
+          rewriter.eraseOp(op);
+          continue;
+        }
       } else if (auto extractOp = dyn_cast<comb::ExtractOp>(op)) {
         Value input = extractOp.getInput();
         unsigned lowBit = extractOp.getLowBit();
@@ -363,6 +541,28 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                                        divOp.getRhs());
         divOp.replaceAllUsesWith(result.getResult());
         rewriter.eraseOp(divOp);
+      } else if (auto mulOp = dyn_cast<comb::MulOp>(op)) {
+        auto inputs = mulOp.getInputs();
+        Value result = inputs[0];
+        for (unsigned i = 1; i < inputs.size(); ++i)
+          result = rewriter.create<arith::MulIOp>(loc, result, inputs[i]);
+        mulOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(mulOp);
+      } else if (auto shlOp = dyn_cast<comb::ShlOp>(op)) {
+        auto result =
+            rewriter.create<arith::ShLIOp>(loc, shlOp.getLhs(), shlOp.getRhs());
+        shlOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(shlOp);
+      } else if (auto shruOp = dyn_cast<comb::ShrUOp>(op)) {
+        auto result = rewriter.create<arith::ShRUIOp>(loc, shruOp.getLhs(),
+                                                       shruOp.getRhs());
+        shruOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(shruOp);
+      } else if (auto shrsOp = dyn_cast<comb::ShrSOp>(op)) {
+        auto result = rewriter.create<arith::ShRSIOp>(loc, shrsOp.getLhs(),
+                                                       shrsOp.getRhs());
+        shrsOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(shrsOp);
       } else if (auto muxOp = dyn_cast<comb::MuxOp>(op)) {
         auto result = rewriter.create<arith::SelectOp>(
             loc, muxOp.getCond(), muxOp.getTrueValue(),
@@ -430,7 +630,83 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
             rewriter.eraseOp(bitcastOp);
           }
         }
+      } else if (auto extractOp = dyn_cast<hw::StructExtractOp>(op)) {
+        auto lowerExtractFromFields = [&](Value lhs, Value rhs) {
+          StringRef fieldName = extractOp.getFieldName();
+          if (fieldName == "value")
+            extractOp.getResult().replaceAllUsesWith(lhs);
+          else if (fieldName == "unknown")
+            extractOp.getResult().replaceAllUsesWith(rhs);
+          else
+            return;
+          rewriter.eraseOp(extractOp);
+        };
+
+        // Generic fold: extract(struct_create(...), "field") -> operand.
+        if (auto createOp =
+                extractOp.getInput().getDefiningOp<hw::StructCreateOp>()) {
+          if (auto structTy = dyn_cast<hw::StructType>(createOp.getType())) {
+            if (auto fieldIndex = structTy.getFieldIndex(extractOp.getFieldName())) {
+              unsigned idx = *fieldIndex;
+              if (idx < createOp.getNumOperands()) {
+                extractOp.getResult().replaceAllUsesWith(createOp.getOperand(idx));
+                rewriter.eraseOp(extractOp);
+                continue;
+              }
+            }
+          }
+          if (getFourStateValueWidth(createOp.getType()) &&
+              createOp.getNumOperands() == 2) {
+            lowerExtractFromFields(createOp.getOperand(0), createOp.getOperand(1));
+            continue;
+          }
+        } else if (auto aggConst = extractOp.getInput()
+                                      .getDefiningOp<hw::AggregateConstantOp>()) {
+          // Generic fold: extract(aggregate_constant[...], "field") -> constant.
+          if (auto structTy = dyn_cast<hw::StructType>(aggConst.getType())) {
+            if (auto fieldIndex = structTy.getFieldIndex(extractOp.getFieldName())) {
+              auto fields = aggConst.getFields();
+              unsigned idx = *fieldIndex;
+              if (idx < fields.size()) {
+                auto intAttr = dyn_cast<IntegerAttr>(fields[idx]);
+                if (intAttr) {
+                  auto c = arith::ConstantOp::create(rewriter, loc, intAttr);
+                  extractOp.getResult().replaceAllUsesWith(c.getResult());
+                  rewriter.eraseOp(extractOp);
+                  continue;
+                }
+              }
+            }
+          }
+          if (getFourStateValueWidth(aggConst.getType())) {
+            auto fields = aggConst.getFields();
+            if (fields.size() == 2) {
+              auto mkConst = [&](Attribute attr) -> Value {
+                auto intAttr = dyn_cast<IntegerAttr>(attr);
+                if (!intAttr)
+                  return {};
+                return arith::ConstantOp::create(rewriter, loc, intAttr)
+                    .getResult();
+              };
+              Value valField = mkConst(fields[0]);
+              Value unknownField = mkConst(fields[1]);
+              if (valField && unknownField) {
+                lowerExtractFromFields(valField, unknownField);
+                continue;
+              }
+            }
+          }
+        }
       } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+        // Dead casts are no-ops; keep them from forcing whole-function
+        // rejection in the compilability filter.
+        bool allResultsDead = true;
+        for (Value result : castOp.getResults())
+          allResultsDead &= result.use_empty();
+        if (allResultsDead) {
+          rewriter.eraseOp(castOp);
+          continue;
+        }
         // If single input → single output with same type, fold away.
         if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1 &&
             castOp.getOperand(0).getType() == castOp.getResult(0).getType()) {
@@ -439,6 +715,17 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
         }
         // Otherwise leave in place — will be stripped later if unresolvable.
       }
+    }
+
+    // Drop dead 4-state helper ops after struct_extract folding.
+    llvm::SmallVector<Operation *> deadStructOps;
+    microModule.walk([&](Operation *op) {
+      if (op->use_empty() &&
+          isa<hw::StructCreateOp, hw::AggregateConstantOp>(op))
+        deadStructOps.push_back(op);
+    });
+    for (Operation *op : deadStructOps) {
+      op->erase();
     }
   }
 
@@ -449,7 +736,8 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     if (dialect && (isa<arith::ArithDialect>(dialect) ||
                     isa<cf::ControlFlowDialect>(dialect)))
       toRewrite.push_back(op);
-    else if (isa<func::ReturnOp, func::CallOp>(op))
+    else if (isa<func::ReturnOp, func::CallOp, func::CallIndirectOp,
+                 UnrealizedConversionCastOp>(op))
       toRewrite.push_back(op);
   });
 
@@ -539,6 +827,10 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
       auto r = rewriter.create<LLVM::TruncOp>(loc, o.getType(), o.getIn());
       o.replaceAllUsesWith(r.getResult());
       rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::BitcastOp>(op)) {
+      auto r = rewriter.create<LLVM::BitcastOp>(loc, o.getType(), o.getIn());
+      o.replaceAllUsesWith(r.getResult());
+      rewriter.eraseOp(o);
     } else if (auto o = dyn_cast<arith::CmpIOp>(op)) {
       auto r = rewriter.create<LLVM::ICmpOp>(
           loc, convertCmpPredicate(o.getPredicate()), o.getLhs(), o.getRhs());
@@ -566,6 +858,104 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     } else if (auto retOp = dyn_cast<func::ReturnOp>(op)) {
       rewriter.create<LLVM::ReturnOp>(loc, retOp.getOperands());
       rewriter.eraseOp(retOp);
+    } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+      if (castOp.getNumOperands() != 1 || castOp.getNumResults() != 1)
+        continue;
+      Value input = castOp.getOperand(0);
+      Type inTy = input.getType();
+      Type outTy = castOp.getResult(0).getType();
+      Value converted;
+
+      if (inTy == outTy) {
+        converted = input;
+      } else if (isa<LLVM::LLVMPointerType>(inTy) && isa<IntegerType>(outTy)) {
+        converted = rewriter.create<LLVM::PtrToIntOp>(loc, outTy, input);
+      } else if (isa<IntegerType>(inTy) && isa<LLVM::LLVMPointerType>(outTy)) {
+        converted = rewriter.create<LLVM::IntToPtrOp>(loc, outTy, input);
+      } else if (isa<LLVM::LLVMPointerType>(inTy) &&
+                 isa<LLVM::LLVMPointerType>(outTy)) {
+        converted = rewriter.create<LLVM::BitcastOp>(loc, outTy, input);
+      } else if (auto inIntTy = dyn_cast<IntegerType>(inTy)) {
+        auto outIntTy = dyn_cast<IntegerType>(outTy);
+        if (!outIntTy)
+          continue;
+        unsigned inWidth = inIntTy.getWidth();
+        unsigned outWidth = outIntTy.getWidth();
+        if (inWidth == outWidth)
+          converted = input;
+        else if (inWidth < outWidth)
+          converted = rewriter.create<LLVM::ZExtOp>(loc, outTy, input);
+        else
+          converted = rewriter.create<LLVM::TruncOp>(loc, outTy, input);
+      } else {
+        continue;
+      }
+
+      castOp.getResult(0).replaceAllUsesWith(converted);
+      rewriter.eraseOp(castOp);
+    } else if (auto callIndirectOp = dyn_cast<func::CallIndirectOp>(op)) {
+      // Lower:
+      //   %fn = unrealized_conversion_cast %ptr : !llvm.ptr to (...) -> ...
+      //   %r = func.call_indirect %fn(%args)
+      // to:
+      //   %r = llvm.call %ptr(%args) : !llvm.ptr, (...) -> ...
+      auto calleeTy = dyn_cast<FunctionType>(callIndirectOp.getCallee().getType());
+      if (!calleeTy || calleeTy.getNumResults() > 1)
+        continue;
+
+      Value calleePtr = callIndirectOp.getCallee();
+      auto calleeCast = calleePtr.getDefiningOp<UnrealizedConversionCastOp>();
+      if (calleeCast && calleeCast.getNumOperands() == 1 &&
+          calleeCast.getNumResults() == 1 &&
+          isa<LLVM::LLVMPointerType>(calleeCast.getOperand(0).getType()) &&
+          isa<FunctionType>(calleeCast.getResult(0).getType()))
+        calleePtr = calleeCast.getOperand(0);
+
+      if (!isa<LLVM::LLVMPointerType>(calleePtr.getType()))
+        continue;
+
+      SmallVector<Type> llvmArgTypes;
+      bool unsupported = false;
+      for (Type argTy : calleeTy.getInputs()) {
+        if (!LLVM::isCompatibleType(argTy)) {
+          unsupported = true;
+          break;
+        }
+        llvmArgTypes.push_back(argTy);
+      }
+      Type llvmRetTy = LLVM::LLVMVoidType::get(&mlirContext);
+      if (!unsupported && calleeTy.getNumResults() == 1) {
+        llvmRetTy = calleeTy.getResult(0);
+        if (!LLVM::isCompatibleType(llvmRetTy))
+          unsupported = true;
+      }
+      if (unsupported)
+        continue;
+
+      auto llvmFuncTy =
+          LLVM::LLVMFunctionType::get(llvmRetTy, llvmArgTypes,
+                                      /*isVarArg=*/false);
+
+      SmallVector<Value> callOperands;
+      callOperands.push_back(calleePtr);
+      for (auto [arg, expectedTy] :
+           llvm::zip(callIndirectOp.getArgOperands(), llvmArgTypes)) {
+        if (arg.getType() != expectedTy) {
+          unsupported = true;
+          break;
+        }
+        callOperands.push_back(arg);
+      }
+      if (unsupported)
+        continue;
+
+      auto newCall = rewriter.create<LLVM::CallOp>(loc, llvmFuncTy, callOperands);
+      callIndirectOp.replaceAllUsesWith(newCall.getResults());
+      rewriter.eraseOp(callIndirectOp);
+
+      // Cast becomes dead after lowering the only call_indirect use.
+      if (calleeCast && calleeCast->use_empty())
+        rewriter.eraseOp(calleeCast);
     } else if (auto callOp = dyn_cast<func::CallOp>(op)) {
       auto newCall = rewriter.create<LLVM::CallOp>(
           loc, callOp.getResultTypes(), callOp.getCallee(),
@@ -680,6 +1070,9 @@ stripNonLLVMFunctions(ModuleOp microModule) {
       // For defined functions whose body contains non-LLVM ops (but whose
       // signature is LLVM-compatible), demote to an external declaration so
       // that any remaining call sites see a valid (if unresolved) symbol.
+      for (Block &block : func.getBody())
+        block.dropAllDefinedValueUses();
+      func.getBody().dropAllReferences();
       func.getBody().getBlocks().clear();
       func.setLinkage(LLVM::Linkage::External);
     }
@@ -909,6 +1302,118 @@ collectVtableFuncIds(ModuleOp module) {
   }
 
   return allFuncNames;
+}
+
+struct TaggedVtableEntry {
+  uint32_t slot = 0;
+  uint32_t fid = 0;
+};
+
+using TaggedVtableAssignments =
+    llvm::StringMap<llvm::SmallVector<TaggedVtableEntry>>;
+
+/// Collect per-vtable tagged FuncId assignments.
+/// For each global with `circt.vtable_entries`, records:
+///   slot -> (0xF0000000 + fid)
+/// where fid is assigned in the same module-order walk used by
+/// collectVtableFuncIds()/interpreter vtable initialization.
+static TaggedVtableAssignments collectTaggedVtableAssignments(ModuleOp module) {
+  TaggedVtableAssignments assignments;
+  uint32_t nextFid = 0;
+
+  for (auto globalOp : module.getOps<LLVM::GlobalOp>()) {
+    auto entriesAttr =
+        dyn_cast_or_null<ArrayAttr>(globalOp->getAttr("circt.vtable_entries"));
+    if (!entriesAttr)
+      continue;
+
+    auto &entries = assignments[globalOp.getSymName()];
+    for (Attribute entryAttr : entriesAttr) {
+      auto entryArray = dyn_cast<ArrayAttr>(entryAttr);
+      if (!entryArray || entryArray.size() < 2)
+        continue;
+      auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+      auto funcSymbol = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+      if (!indexAttr || !funcSymbol)
+        continue;
+      entries.push_back(
+          TaggedVtableEntry{static_cast<uint32_t>(indexAttr.getInt()), nextFid});
+      ++nextFid;
+    }
+  }
+
+  return assignments;
+}
+
+/// Materialize tagged FuncId values (0xF0000000+fid) into vtable globals in
+/// the LLVM module so compiled code loading from __vtable__ globals dispatches
+/// through LowerTaggedIndirectCalls correctly.
+static unsigned initializeTaggedVtableGlobals(
+    llvm::Module &llvmModule,
+    const TaggedVtableAssignments &taggedVtablesByGlobal) {
+  const llvm::DataLayout &dl = llvmModule.getDataLayout();
+  llvm::LLVMContext &ctx = llvmModule.getContext();
+  unsigned ptrBytes = dl.getPointerSize();
+  if (ptrBytes == 0)
+    ptrBytes = 8;
+  auto *i64Ty = llvm::Type::getInt64Ty(ctx);
+
+  unsigned initialized = 0;
+  for (const auto &kv : taggedVtablesByGlobal) {
+    auto *gv = llvmModule.getGlobalVariable(kv.getKey(),
+                                            /*AllowInternal=*/true);
+    if (!gv) {
+      if (verbose)
+        llvm::errs() << "[circt-sim-compile] tagged-vtable: missing global '"
+                     << kv.getKey() << "' in LLVM module\n";
+      continue;
+    }
+    auto *arrayTy = dyn_cast<llvm::ArrayType>(gv->getValueType());
+    if (!arrayTy) {
+      if (verbose)
+        llvm::errs() << "[circt-sim-compile] tagged-vtable: global '"
+                     << kv.getKey() << "' has non-array type\n";
+      continue;
+    }
+
+    bool wroteInit = false;
+    if (arrayTy->getElementType()->isIntegerTy(8)) {
+      // Flattened form: [N x i8], write tagged pointers as little-endian bytes.
+      uint64_t numBytes = arrayTy->getNumElements();
+      llvm::SmallVector<uint8_t> bytes(numBytes, 0);
+      for (const auto &entry : kv.getValue()) {
+        uint64_t taggedAddr = 0xF0000000ULL + entry.fid;
+        uint64_t byteOffset = static_cast<uint64_t>(entry.slot) * ptrBytes;
+        if (byteOffset + ptrBytes > numBytes)
+          continue;
+        for (unsigned i = 0; i < ptrBytes; ++i)
+          bytes[byteOffset + i] =
+              static_cast<uint8_t>((taggedAddr >> (i * 8)) & 0xFF);
+      }
+      gv->setInitializer(llvm::ConstantDataArray::get(ctx, bytes));
+      wroteInit = true;
+    } else if (auto *elemPtrTy =
+                   dyn_cast<llvm::PointerType>(arrayTy->getElementType())) {
+      // Typed form: [N x ptr], write tagged addresses as inttoptr constants.
+      uint64_t numElems = arrayTy->getNumElements();
+      llvm::SmallVector<llvm::Constant *> elems(
+          numElems, llvm::ConstantPointerNull::get(elemPtrTy));
+      for (const auto &entry : kv.getValue()) {
+        if (entry.slot >= numElems)
+          continue;
+        uint64_t taggedAddr = 0xF0000000ULL + entry.fid;
+        auto *taggedInt = llvm::ConstantInt::get(i64Ty, taggedAddr);
+        elems[entry.slot] = llvm::ConstantExpr::getIntToPtr(taggedInt, elemPtrTy);
+      }
+      gv->setInitializer(llvm::ConstantArray::get(arrayTy, elems));
+      wroteInit = true;
+    }
+
+    if (wroteInit)
+      ++initialized;
+  }
+
+  return initialized;
 }
 
 /// Generate trampoline bodies for external function declarations in the
@@ -1351,6 +1856,33 @@ static bool isProcessCallbackEligible(
     if (isa<llhd::HaltOp, llhd::IntToTimeOp, llhd::ConstantTimeOp,
             llhd::ProcessOp>(op))
       return WalkResult::advance();
+    // Allow safe cast forms that the main lowering pipeline already resolves.
+    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+      bool allResultsDead = true;
+      for (Value result : castOp.getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        return WalkResult::advance();
+      if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+        Type inTy = castOp.getOperand(0).getType();
+        Type outTy = castOp.getResult(0).getType();
+        if (inTy == outTy)
+          return WalkResult::advance();
+        // func.call_indirect lowering uses ptr -> function casts.
+        if (isa<LLVM::LLVMPointerType>(inTy) && isa<FunctionType>(outTy))
+          return WalkResult::advance();
+        if ((isa<LLVM::LLVMPointerType>(inTy) && isa<IntegerType>(outTy)) ||
+            (isa<IntegerType>(inTy) && isa<LLVM::LLVMPointerType>(outTy)) ||
+            (isa<LLVM::LLVMPointerType>(inTy) &&
+             isa<LLVM::LLVMPointerType>(outTy)) ||
+            (isa<IntegerType>(inTy) && isa<IntegerType>(outTy)))
+          return WalkResult::advance();
+      }
+      if (rejectionReason)
+        *rejectionReason = op->getName().getStringRef().str();
+      eligible = false;
+      return WalkResult::interrupt();
+    }
     if (isa<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect,
             func::FuncDialect>(op->getDialect()))
       return WalkResult::advance();
@@ -1589,6 +2121,9 @@ static unsigned compileProcessBodies(
         break;
     }
     if (hasInvalidRef)
+      if (procRejectionReasons)
+        ++(*procRejectionReasons)["process_body_external_value"];
+    if (hasInvalidRef)
       continue;
 
     // Create function: void(ptr ctx, ptr frame).
@@ -1636,6 +2171,7 @@ static unsigned compileProcessBodies(
 
     // Pre-scan: clone external constants into entry block.
     bool extractionFailed = false;
+    std::string extractionFailKind;
     for (Block *srcBlock : bodyBlocks) {
       for (Operation &op : *srcBlock) {
         // Skip operands of ops that will be replaced entirely (wait/halt).
@@ -1651,6 +2187,10 @@ static unsigned compileProcessBodies(
             continue; // Handled during op lowering.
 
           builder.setInsertionPoint(entry->getTerminator());
+          auto failWith = [&](llvm::StringRef reason) {
+            extractionFailed = true;
+            extractionFailKind = reason.str();
+          };
           if (auto hwConst = operand.getDefiningOp<hw::ConstantOp>()) {
             auto c = arith::ConstantOp::create(
                 builder, loc,
@@ -1665,6 +2205,15 @@ static unsigned compileProcessBodies(
                          operand.getDefiningOp<LLVM::ConstantOp>()) {
             auto *cloned = builder.clone(*llvmConst);
             mapping.map(operand, cloned->getResult(0));
+          } else if (auto addrOf = operand.getDefiningOp<LLVM::AddressOfOp>()) {
+            auto *cloned = builder.clone(*addrOf);
+            mapping.map(operand, cloned->getResult(0));
+          } else if (auto zeroOp = operand.getDefiningOp<LLVM::ZeroOp>()) {
+            auto *cloned = builder.clone(*zeroOp);
+            mapping.map(operand, cloned->getResult(0));
+          } else if (auto undefOp = operand.getDefiningOp<LLVM::UndefOp>()) {
+            auto *cloned = builder.clone(*undefOp);
+            mapping.map(operand, cloned->getResult(0));
           } else if (auto aggConst =
                          operand.getDefiningOp<hw::AggregateConstantOp>()) {
             // Decompose 4-state aggregate constant into {value, unknown} pair.
@@ -1678,11 +2227,14 @@ static unsigned compileProcessBodies(
               // Map to a dummy — actual uses go through fourStateComponents.
               mapping.map(operand, valConst.getResult());
             } else {
-              extractionFailed = true;
+              failWith("hw.aggregate_constant(non-fourstate)");
               break;
             }
           } else {
-            extractionFailed = true;
+            if (Operation *def = operand.getDefiningOp())
+              failWith(def->getName().getStringRef());
+            else
+              failWith("block_argument");
             break;
           }
         }
@@ -1693,17 +2245,25 @@ static unsigned compileProcessBodies(
         break;
     }
     if (extractionFailed) {
+      if (procRejectionReasons) {
+        std::string reason = "process_extract_external_operand";
+        if (!extractionFailKind.empty())
+          reason += ":" + extractionFailKind;
+        ++(*procRejectionReasons)[reason];
+      }
       funcOp.erase();
       continue;
     }
 
     // Clone and lower ops from body blocks.
     bool loweringFailed = false;
+    std::string loweringFailOpName;
     for (Block *srcBlock : bodyBlocks) {
       Block *dstBlock = blockMap[srcBlock];
       builder.setInsertionPointToEnd(dstBlock);
 
       for (Operation &op : *srcBlock) {
+        loweringFailOpName = op.getName().getStringRef().str();
         auto opLoc = op.getLoc();
 
         // === LLHD ops ===
@@ -2414,6 +2974,12 @@ static unsigned compileProcessBodies(
         break;
     }
     if (loweringFailed) {
+      if (procRejectionReasons) {
+        std::string reason = "process_lowering_failed";
+        if (!loweringFailOpName.empty())
+          reason += ":" + loweringFailOpName;
+        ++(*procRejectionReasons)[reason];
+      }
       funcOp.erase();
       continue;
     }
@@ -2733,7 +3299,8 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
 static void setDefaultHiddenVisibility(llvm::Module &llvmModule) {
   for (auto &func : llvmModule.functions()) {
     if (func.getName() == "circt_sim_get_compiled_module" ||
-        func.getName() == "circt_sim_get_build_id")
+        func.getName() == "circt_sim_get_build_id" ||
+        func.getName().starts_with("__circt_sim_module_init__"))
       continue;
     // Don't hide external declarations (runtime API functions).
     if (func.isDeclaration())
@@ -3394,11 +3961,17 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       funcNames.push_back(funcOp.getSymName().str());
   }
 
+  unsigned nativeModuleInitCount =
+      synthesizeNativeModuleInitFunctions(*module, microModule);
+  if (nativeModuleInitCount > 0)
+    llvm::errs() << "[circt-sim-compile] Native module init functions: "
+                 << nativeModuleInitCount << "\n";
+
   cloneReferencedDeclarations(microModule, *module, mapping);
 
-  // Strip bodies of UVM-intercepted functions so they become external
+  // Strip bodies of intercepted functions so they become external
   // declarations → trampolines. This ensures compiled code calls back into
-  // the interpreter for these functions, where UVM interceptors can fire.
+  // the interpreter for these functions, where interceptors can fire.
   // Without this, compiled→compiled direct calls bypass interceptors and
   // cause crashes (e.g., factory returning null, config_db not firing).
   //
@@ -3407,16 +3980,53 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // mean the function goes through the interpreter (slower but correct).
   // False negatives cause crashes.
   {
-    auto isInterceptedFunc = [](llvm::StringRef name) -> bool {
-      // All uvm_ functions (factory, config_db, phasing, sequencer, etc.)
-      if (name.contains("uvm_"))
+    // Legacy compatibility mode: keep blanket demotion of all uvm_ symbols.
+    // Default is off so pure helpers with uvm_ prefixes can stay compiled.
+    bool demoteAllUvmByPrefix =
+        std::getenv("CIRCT_AOT_INTERCEPT_ALL_UVM") != nullptr;
+    bool aggressiveNativeUvm =
+        std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr;
+    bool allowNativeUvmAlloc = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC") != nullptr;
+    bool allowNativeUvmTypeInfo = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_TYPEINFO") != nullptr;
+    bool allowNativeUvmAccessors = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ACCESSORS") != nullptr;
+    bool allowNativeUvmHierarchy = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_HIERARCHY") != nullptr;
+    bool allowNativeUvmPhaseGraph = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_GRAPH") != nullptr;
+    bool allowNativeUvmFactory =
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_FACTORY") != nullptr;
+    bool allowNativeUvmReporting = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING") != nullptr;
+    bool allowNativeUvmRandom = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_RANDOM") != nullptr;
+    bool allowNativeMooreDelayCallers =
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_MOORE_DELAY_CALLERS") != nullptr;
+    bool allowNativeUvmSingletonGetters = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_SINGLETON_GETTERS") !=
+            nullptr;
+    auto isInterceptedFunc = [demoteAllUvmByPrefix, allowNativeUvmAlloc,
+                              allowNativeUvmTypeInfo,
+                              allowNativeUvmAccessors, allowNativeUvmHierarchy,
+                              allowNativeUvmPhaseGraph,
+                              allowNativeUvmFactory, allowNativeUvmReporting,
+                              allowNativeUvmRandom,
+                              allowNativeUvmSingletonGetters](
+                                 llvm::StringRef name) -> bool {
+      if (demoteAllUvmByPrefix && name.contains("uvm_"))
         return true;
       // Moore runtime support (__moore_delay, __moore_string_*, etc.)
       if (name.starts_with("__moore_"))
         return true;
       // Standalone intercepted functions (short names without uvm_ prefix)
-      if (name == "get_0" || name == "self" || name == "malloc" ||
-          name == "get_common_domain" || name == "get_global_hopper")
+      if (name == "self" || name == "malloc")
+        return true;
+      if (!allowNativeUvmSingletonGetters &&
+          (name == "get" || name == "get_0" ||
+           name == "get_common_domain" ||
+           name == "get_global_hopper"))
         return true;
       // String/class conversion
       if (name.starts_with("to_string_") || name == "to_class" ||
@@ -3438,45 +4048,111 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       // Die interceptor
       if (name.ends_with("::die"))
         return true;
+      // Phase-graph/state mutators have interpreter-side cache/update logic.
+      if (!allowNativeUvmPhaseGraph &&
+          (name.contains("uvm_phase::") ||
+           name.contains("uvm_component::set_domain")))
+        return true;
+      // Component hierarchy mutators update Moore-assoc-backed name/child maps.
+      if (!allowNativeUvmHierarchy && name.contains("::m_add_child"))
+        return true;
       // UVM-generated class methods with package-qualified names (no "uvm_"
       // prefix). Emitted by uvm_component_utils/uvm_object_utils macros.
-      if (name == "create" || name.starts_with("create_") ||
-          name.ends_with("::create"))
+      if (!allowNativeUvmAlloc &&
+          (name == "create" || name.starts_with("create_") ||
+           name.ends_with("::create")))
         return true;
-      if (name == "m_initialize" || name.starts_with("m_initialize_") ||
-          name.ends_with("::m_initialize"))
+      if (!allowNativeUvmTypeInfo &&
+          (name == "m_initialize" || name.starts_with("m_initialize_") ||
+           name.ends_with("::m_initialize")))
         return true;
-      if (name.starts_with("m_register_cb"))
+      if (!allowNativeUvmTypeInfo && name.starts_with("m_register_cb"))
         return true;
-      if (name.contains("get_object_type") || name.contains("get_type_name"))
+      if (!allowNativeUvmTypeInfo &&
+          (name.contains("get_object_type") || name.contains("get_type_name")))
         return true;
       // Type registry accessors (get_type_NNN mangled names)
-      if (name.starts_with("get_type_") || name.contains("::get_type_"))
+      if (!allowNativeUvmTypeInfo &&
+          (name.starts_with("get_type_") || name.contains("::get_type_")))
         return true;
       // TLM imp port accessors (get_imp_NNN mangled names)
-      if (name.starts_with("get_imp_") || name.contains("::get_imp_"))
+      if (!allowNativeUvmAccessors &&
+          (name.starts_with("get_imp_") || name.contains("::get_imp_")))
         return true;
       // Type name string helpers (type_name_NNN)
-      if (name.starts_with("type_name_"))
+      if (!allowNativeUvmTypeInfo && name.starts_with("type_name_"))
+        return true;
+      // Factory override/creation paths are stateful and currently rely on
+      // interpreter-side behavior; keep native-disabled by default.
+      if (!allowNativeUvmFactory &&
+          (name.contains("::uvm_factory::") ||
+           name.contains("::uvm_default_factory::")))
+        return true;
+      // Reporting paths manage dynamic report handlers/messages and can crash
+      // under native dispatch before interpreter-level handling runs.
+      if (!allowNativeUvmReporting &&
+          (name.contains("::uvm_report_handler::") ||
+           name.contains("::uvm_report_object::") ||
+           name.contains("::uvm_report_message::get_severity") ||
+           name.contains("process_report_message")))
+        return true;
+      // Random-seeding paths build dynamic strings and rely on interpreter-side
+      // pointer lifetime behavior.
+      if (!allowNativeUvmRandom &&
+          (name.contains("create_random_seed") ||
+           name.contains("::reseed")))
         return true;
       // Constructors (may allocate objects the interpreter tracks)
-      if (name.ends_with("::new"))
+      if (!allowNativeUvmAlloc && name.ends_with("::new"))
         return true;
       // UVM singleton/registry accessors
-      if (name.contains("::is_auditing") ||
-          name.contains("get_print_config_matches") ||
-          name.contains("get_root_blocks") ||
-          name == "get_inst" || name.starts_with("get_inst_"))
+      if (!allowNativeUvmAccessors &&
+          (name.contains("::is_auditing") ||
+           name.contains("get_print_config_matches") ||
+           name.contains("get_root_blocks") ||
+           name == "get_inst" || name.starts_with("get_inst_")))
+        return true;
+      // UVM objection methods
+      if (name.contains("raise_objection") || name.contains("drop_objection"))
+        return true;
+
+      // UVM execute_phase
+      if (name.ends_with("::execute_phase") || name == "execute_phase")
+        return true;
+
+      // Sequence body methods
+      if (name.ends_with("::body") && name.contains("_seq"))
         return true;
       return false;
     };
 
     unsigned demoted = 0;
     llvm::SmallVector<func::FuncOp> toDemote;
+    auto callsMooreDelay = [](func::FuncOp funcOp) {
+      bool found = false;
+      funcOp.walk([&](Operation *op) {
+        if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
+          if (auto callee = llvmCall.getCallee();
+              callee && *callee == "__moore_delay") {
+            found = true;
+            return WalkResult::interrupt();
+          }
+        }
+        if (auto funcCall = dyn_cast<func::CallOp>(op)) {
+          if (funcCall.getCallee() == "__moore_delay") {
+            found = true;
+            return WalkResult::interrupt();
+          }
+        }
+        return WalkResult::advance();
+      });
+      return found;
+    };
     microModule.walk([&](func::FuncOp funcOp) {
       if (funcOp.isExternal())
         return;
-      if (isInterceptedFunc(funcOp.getSymName()))
+      if (isInterceptedFunc(funcOp.getSymName()) ||
+          (!allowNativeMooreDelayCallers && callsMooreDelay(funcOp)))
         toDemote.push_back(funcOp);
     });
     for (auto funcOp : toDemote) {
@@ -3507,6 +4183,13 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     llvm::errs() << "[circt-sim-compile] clone: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
+
+  // Lower SCF structured control flow (if/for/while/...) to cf.* first.
+  // This is best-effort: if conversion fails for some function body, keep
+  // going and rely on later stripping of residual non-LLVM bodies.
+  if (!lowerSCFToCF(microModule))
+    llvm::errs() << "[circt-sim-compile] Warning: SCF->CF lowering failed; "
+                    "falling back to residual-op stripping\n";
 
   // Lower arith/cf/func → LLVM dialect.
   if (!lowerFuncArithCfToLLVM(microModule, mlirContext)) {
@@ -3550,8 +4233,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // This must happen BEFORE trampoline generation so we can ensure all
   // vtable functions have either compiled bodies or trampolines.
   auto allFuncEntryNames = collectVtableFuncIds(*module);
+  auto taggedVtableAssignments = collectTaggedVtableAssignments(*module);
   llvm::errs() << "[circt-sim-compile] Collected " << allFuncEntryNames.size()
                << " vtable FuncIds\n";
+  if (verbose && !taggedVtableAssignments.empty())
+    llvm::errs() << "[circt-sim-compile] Tagged vtable globals discovered: "
+                 << taggedVtableAssignments.size() << "\n";
 
   // Ensure all vtable functions have declarations in the micro-module so
   // that generateTrampolines() will create trampolines for uncompiled ones.
@@ -3694,20 +4381,9 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                         llvm::sys::getDefaultTargetTriple() + "-" +
                         contentHash;
 
-  // Collect vtable global names — these must NOT be in the patch table.
-  // Vtable globals use synthetic addresses (0xF0000000+N) that compiled code
-  // can't dereference as real pointers.
-  llvm::SmallDenseSet<llvm::StringRef> vtableGlobalNames;
-  for (auto globalOp : module->getOps<LLVM::GlobalOp>()) {
-    if (globalOp->hasAttr("circt.vtable_entries"))
-      vtableGlobalNames.insert(globalOp.getSymName());
-  }
-  if (!vtableGlobalNames.empty()) {
-    llvm::errs() << "[circt-sim-compile] Excluding " << vtableGlobalNames.size()
-                 << " vtable globals from patch table\n";
-  }
-
-  // Collect mutable globals for the patch table.
+  // Collect mutable globals for the patch table (including vtable globals).
+  // Vtable globals are included so their .so storage gets real addresses that
+  // native code can dereference when reading vtable_ptr from objects.
   llvm::SmallVector<std::string> globalPatchNames;
   llvm::SmallVector<llvm::GlobalVariable *> globalPatchVars;
   llvm::SmallVector<uint32_t> globalPatchSizes;
@@ -3718,8 +4394,6 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       continue;
     if (global.getName().starts_with("__circt_sim_"))
       continue;
-    if (vtableGlobalNames.count(global.getName()))
-      continue; // Skip vtable globals — they use synthetic addresses
     globalPatchNames.push_back(global.getName().str());
     globalPatchVars.push_back(&global);
     auto *type = global.getValueType();
@@ -3729,6 +4403,17 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   }
   llvm::errs() << "[circt-sim-compile] Global patches: "
                << globalPatchNames.size() << " mutable globals\n";
+
+  // Ensure compiled loads from vtable globals observe the same tagged FuncId
+  // addresses (0xF0000000+N) used by the interpreter.
+  {
+    unsigned initializedVtables = initializeTaggedVtableGlobals(
+        *llvmModule, taggedVtableAssignments);
+    if (initializedVtables > 0)
+      llvm::errs() << "[circt-sim-compile] Initialized "
+                   << initializedVtables
+                   << " vtable globals with tagged FuncIds\n";
+  }
 
   // Synthesize descriptor and entrypoints into the LLVM IR module.
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
