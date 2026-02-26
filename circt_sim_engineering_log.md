@@ -275,3 +275,31 @@
     - `test/Tools/circt-sim/call-indirect-direct-dispatch-cache.mlir`
     - `test/Tools/circt-sim/vtable-dispatch-internal-failure.mlir`
   - all produced expected outputs.
+
+## 2026-02-26
+- Additional audit finding in compiled->interpreter trampoline dispatch:
+  `dispatchTrampoline` ignored `interpretFuncBody` failure and still unpacked
+  return slots from the trampoline stack buffer.
+  - Root cause: `rets` buffer is stack-allocated in generated trampoline code
+    and uninitialized; on failure, no values are written, so compiled callers
+    receive garbage/stale data.
+  - Deterministic reproducer (AOT + demoted UVM function):
+    first call succeeds, second call fails via `llhd.drv` to unknown ref.
+    Before fix observed `r0=1 r1=20437424 sum=20437425`.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp` in `dispatchTrampoline`:
+    - zero-initialize `rets` upfront (`std::fill_n`),
+    - capture `LogicalResult` from `interpretFuncBody`,
+    - return early on failure/suspension (keep zeroed returns).
+- Added regression:
+  - `test/Tools/circt-sim/aot-trampoline-failure-zero-result.mlir`
+  - validates compiled run prints `r0=1 r1=0 sum=1`.
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `env CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-trampoline-failure-zero-result.mlir -o /tmp/aot-trampoline-failure-zero-result.so`
+  - `env CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim test/Tools/circt-sim/aot-trampoline-failure-zero-result.mlir --compiled=/tmp/aot-trampoline-failure-zero-result.so`
+    -> `r0=1 r1=0 sum=1`
+  - Spot non-regression:
+    - `env CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-entry-table-trampoline-counter.mlir -o /tmp/aot-entry-table-trampoline-counter.so`
+    - `env CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim test/Tools/circt-sim/aot-entry-table-trampoline-counter.mlir --compiled=/tmp/aot-entry-table-trampoline-counter.so --aot-stats`
+      -> expected trampoline counters + output observed.

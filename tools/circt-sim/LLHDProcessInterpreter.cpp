@@ -39153,13 +39153,23 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
                  << ", aborting call\n";
     return;
   }
+  // Initialize return slots to zero up-front so failed/suspended interpreted
+  // calls cannot leak stale stack values back into compiled code.
+  if (numRets > 0 && rets)
+    std::fill_n(rets, numRets, 0);
   ++callState.callDepth;
   ++aotDepth;
   maxAotDepth = std::max(maxAotDepth, aotDepth);
-  (void)interpretFuncBody(procId, funcOp, interpArgs, interpResults,
-                          /*callOp=*/nullptr);
+  LogicalResult interpResult =
+      interpretFuncBody(procId, funcOp, interpArgs, interpResults,
+                        /*callOp=*/nullptr);
   --aotDepth;
   --callState.callDepth;
+  if (failed(interpResult))
+    return;
+  auto &postCallState = processStates[procId];
+  if (postCallState.waiting)
+    return;
 
   // Convert results back to uint64_t (handle structs consuming multiple slots).
   if (!interpResults.empty() && numRets > 0) {
