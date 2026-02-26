@@ -1588,3 +1588,51 @@
     limited by `llhd.prb`/block-arg/signal-connectivity forms.
   - next ROI is broader telemetry-driven handling of remaining mutation-free
     `llhd.sig` dependency shapes beyond this sample pair.
+
+## 2026-02-26
+- Phase 4 follow-up: enabled conservative module-init extraction through
+  top-level `scf.if`.
+- Trigger:
+  - after landing probe/alias bridges, AVIP telemetry still had one unresolved
+    module-init miss (`i3c`), initially reported as `unsupported_op:scf.if`.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - `isNativeModuleInitOp(...)` now accepts `scf::IfOp`.
+  - region guard in synthesis now allows region-bearing `scf.if` while keeping
+    all other region-bearing ops rejected (`op_has_region:*` unchanged for
+    non-`scf.if`).
+- TDD/regression:
+  - added `test/Tools/circt-sim/aot-native-module-init-scf-if.mlir`.
+  - validates compile emission + interpreter/native parity (`out=111`) with
+    observed runtime native-init execution marker.
+- Focused validation:
+  - native-init probe regression pack (all pass):
+    - `aot-native-module-init-scf-if.mlir`
+    - `aot-native-module-init-llhd-prb-refcast.mlir`
+    - `aot-native-module-init-llhd-prb-block-arg.mlir`
+    - `aot-native-module-init-llhd-prb-signal-alias.mlir`
+    - `aot-native-module-init-llhd-prb-signal-instance-alias.mlir`
+- AVIP telemetry re-run (`--emit-llvm -v`, core8 snapshot):
+  - `ahb`: `4 emitted / 4 total`
+  - `apb`: `4 emitted / 4 total`
+  - `axi4`: `6 emitted / 6 total`
+  - `axi4Lite`: `9 emitted / 9 total`
+  - `i2s`: `4 emitted / 4 total`
+  - `jtag`: `4 emitted / 4 total`
+  - `spi`: `4 emitted / 4 total`
+  - `i3c`: `3 emitted / 4 total`
+    - skip reason: `1x unsupported_op:hw.struct_extract`
+- Large UVM sanity (native-init opt-in):
+  - `uvm_seq_body`: `COMPILE_EXIT=0`, `RUN_EXIT=0` (max-time endpoint)
+  - compiled stats unchanged:
+    `Functions: 5330 total, 16 external, 37 rejected, 5277 compilable`
+    `Wrote ... (1 processes, 3338 functions, 1914 trampolines, ~75s)`
+- Surprises / rollbacks:
+  - an attempted follow-up to also admit module-init `hw.struct_extract` in
+    struct-valued conditional chains caused instability:
+    - module-init functions were emitted but then stripped (residual non-LLVM)
+      in targeted regression shape.
+    - an attempted in-function SCF re-lowering workaround triggered a compiler
+      crash in `circt-sim-compile`.
+  - that experimental path was reverted before landing; current checkpoint keeps
+    only the stable `scf.if` support and leaves `hw.struct_extract` as the next
+    explicit target.
