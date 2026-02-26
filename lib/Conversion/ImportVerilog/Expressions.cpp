@@ -2562,6 +2562,40 @@ struct RvalueExprVisitor : public ExprVisitor {
       // Fallback: resolve by symbol through interface threading.
       if (auto ref = context.resolveInterfaceInstance(instSym, loc))
         return ref;
+
+      // Final fallback for interface array element references where slang can
+      // surface a synthesized/unnamed instance symbol that doesn't match the
+      // exact pointer/body identity used in the threading map. If there is a
+      // unique tracked instance with the same interface definition (and
+      // matching name when available), use it.
+      if (instSym->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface) {
+        Value namedCandidate;
+        bool namedAmbiguous = false;
+        Value defCandidate;
+        bool defAmbiguous = false;
+        for (const auto &[candidateSym, candidateValue] :
+             context.interfaceInstances) {
+          if (&candidateSym->getDefinition() != &instSym->getDefinition())
+            continue;
+
+          if (!instSym->name.empty() && candidateSym->name == instSym->name) {
+            if (namedCandidate && namedCandidate != candidateValue)
+              namedAmbiguous = true;
+            else
+              namedCandidate = candidateValue;
+          }
+
+          if (defCandidate && defCandidate != candidateValue)
+            defAmbiguous = true;
+          else
+            defCandidate = candidateValue;
+        }
+        if (namedCandidate && !namedAmbiguous)
+          return namedCandidate;
+        if (defCandidate && !defAmbiguous)
+          return defCandidate;
+      }
     }
 
     // Emit an error for other arbitrary symbol expressions we don't support
