@@ -3084,7 +3084,7 @@ LogicalResult SimulationContext::run() {
         break;
       if (maxTime > 0) {
         uint64_t nextWake = scheduler.peekNextWakeTime();
-        if (nextWake > maxTime) {
+        if (nextWake != UINT64_MAX && nextWake > maxTime) {
           stoppedByMaxTime = true;
           llvm::errs() << "[circt-sim] Main loop exit: maxTime reached ("
                        << currentTime.realTime << " >= " << maxTime
