@@ -4597,6 +4597,25 @@ Value Context::resolveInterfaceInstance(
     }
   }
 
+  if (!currentRef) {
+    Value defCandidate;
+    bool defAmbiguous = false;
+    for (const auto &entry : interfaceInstances) {
+      const auto *candidate = entry.first;
+      if (&candidate->getDefinition() != &instSym->getDefinition())
+        continue;
+      if (!instSym->name.empty() && candidate->name != instSym->name)
+        continue;
+      if (defCandidate && defCandidate != entry.second) {
+        defAmbiguous = true;
+        break;
+      }
+      defCandidate = entry.second;
+    }
+    if (!defAmbiguous)
+      currentRef = defCandidate;
+  }
+
   if (!currentRef)
     return {};
 

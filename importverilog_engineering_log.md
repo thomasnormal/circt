@@ -2147,3 +2147,71 @@ receiver paths:
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-task.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog gap closure for nested module-array hierarchical
+**interface signal** access:
+- writes: `m[idx].l[idx].ifs[idx].v = ...;`
+- reads:  `x = m[idx].l[idx].ifs[idx].v;`
+
+### Realizations
+- After closing nested task-call threading, signal member accesses uncovered a
+  separate path: `xrun` accepted the notation but ImportVerilog failed during
+  lvalue lowering (`unknown hierarchical name 'v'`).
+- The initial failure mode also exposed pointer-identity fragility in
+  interface-instance resolution for array-element symbols; unique
+  definition-based fallback is required when slang synthesizes unnamed element
+  symbols.
+- Hierarchical interface member collection needed a normalized receiver-path
+  fast-path for unnamed selected elements to avoid dropping into generic
+  hierarchical value threading.
+
+### TDD Baseline
+- Probe:
+  - `/tmp/iv_nested_signal_access.sv`
+- Baseline behavior before fix:
+  - `xrun -sv /tmp/iv_nested_signal_access.sv -elaborate -nolog` passed.
+  - `build_test/bin/circt-verilog /tmp/iv_nested_signal_access.sv --ir-moore`
+    failed (initially verifier error around `Leaf_1` outputs during debugging,
+    then stabilized to `unknown hierarchical name 'v'`).
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+  - in hierarchical interface-member handling for
+    `HierarchicalValueExpression`, added normalized receiver-path resolution via
+    `collectReceiverSegmentsFromHierRef(...)` + `resolveInstancePath(...)` and
+    direct threading with canonical path names.
+- `lib/Conversion/ImportVerilog/Structure.cpp`:
+  - in `resolveInterfaceInstance(const InstanceSymbol*, ...)`, added
+    unambiguous same-interface-definition fallback when exact pointer-based
+    lookup fails.
+- `lib/Conversion/ImportVerilog/Expressions.cpp`:
+  - in `resolveHierarchicalInterfaceSignalRef(...)`, added:
+    - direct hierarchical-reference resolution first
+      (`resolveInterfaceInstance(expr.ref, ...)`), and
+    - path-based fallback through `hierInterfacePaths` for unnamed
+      array-element-shaped references in current scope.
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv`
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- New regression:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv`
+- Focused re-validation:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-task.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv -elaborate -nolog` (PASS)
+  - `xrun -sv /tmp/iv_nested_signal_access.sv -elaborate -nolog` (PASS)

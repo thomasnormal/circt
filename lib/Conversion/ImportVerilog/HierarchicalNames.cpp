@@ -633,6 +633,30 @@ struct HierPathValueExprVisitor
     // Handle hierarchical interface member references by threading the
     // interface instance through module ports.
     if (auto *ifaceDefBody = getInterfaceDefBody(expr.symbol)) {
+      if (outermostInstBody && !expr.ref.path.empty()) {
+        SmallVector<ReceiverPathSegment, 8> receiverPath;
+        if (collectReceiverSegmentsFromHierRef(expr.ref, receiverPath)) {
+          if (auto *resolvedIfaceInst = resolveInstancePath(receiverPath)) {
+            if (resolvedIfaceInst->getDefinition().definitionKind ==
+                    slang::ast::DefinitionKind::Interface &&
+                &resolvedIfaceInst->getDefinition() ==
+                    &ifaceDefBody->getDefinition()) {
+              SmallString<64> pathName;
+              for (auto [idx, segment] : llvm::enumerate(receiverPath)) {
+                if (idx)
+                  pathName += ".";
+                pathName += segment.name;
+                if (segment.index)
+                  pathName += ("[" + llvm::Twine(*segment.index) + "]").str();
+              }
+              threadInterfaceInstance(resolvedIfaceInst,
+                                      builder.getStringAttr(pathName));
+              return;
+            }
+          }
+        }
+      }
+
       bool handledInterface = false;
       const slang::ast::InstanceSymbol *ifaceInst = nullptr;
       size_t ifaceInstIndex = 0;

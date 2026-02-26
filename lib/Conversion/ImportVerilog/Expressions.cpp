@@ -991,28 +991,127 @@ struct ExprVisitor {
     Value instRef;
     size_t baseIndex = 0;
 
-    for (size_t i = 0; i < expr.ref.path.size(); ++i) {
-      const auto &elem = expr.ref.path[i];
-      if (auto *instSym = elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
-        if (instSym->getDefinition().definitionKind ==
-            slang::ast::DefinitionKind::Interface) {
-          if (auto it = context.interfaceInstances.find(instSym);
-              it != context.interfaceInstances.end())
+    if (auto resolved = context.resolveInterfaceInstance(expr.ref, loc)) {
+      instRef = resolved;
+      baseIndex = expr.ref.path.size();
+    }
+
+    if (!instRef) {
+      for (size_t i = 0; i < expr.ref.path.size(); ++i) {
+        const auto &elem = expr.ref.path[i];
+        if (auto *instSym = elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
+          if (instSym->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface) {
+            if (auto it = context.interfaceInstances.find(instSym);
+                it != context.interfaceInstances.end())
+              instRef = it->second;
+            else
+              instRef = context.resolveInterfaceInstance(instSym, loc);
+            if (instRef) {
+              baseIndex = i;
+              break;
+            }
+          }
+        } else if (auto *ifacePort =
+                       elem.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
+          if (auto it = context.interfacePortValues.find(ifacePort);
+              it != context.interfacePortValues.end()) {
             instRef = it->second;
-          else
-            instRef = context.resolveInterfaceInstance(instSym, loc);
-          if (instRef) {
             baseIndex = i;
             break;
           }
         }
-      } else if (auto *ifacePort =
-                     elem.symbol->as_if<slang::ast::InterfacePortSymbol>()) {
-        if (auto it = context.interfacePortValues.find(ifacePort);
-            it != context.interfacePortValues.end()) {
-          instRef = it->second;
-          baseIndex = i;
+      }
+    }
+
+    if (!instRef && !expr.ref.path.empty() && context.currentScope) {
+      const slang::ast::DefinitionSymbol *expectedIfaceDef = nullptr;
+      if (auto *scope = expr.symbol.getParentScope())
+        if (auto *instBody =
+                scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>())
+          if (instBody->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface)
+            expectedIfaceDef = &instBody->getDefinition();
+
+      struct PathSegment {
+        std::string name;
+        std::optional<int64_t> index;
+      };
+      SmallVector<PathSegment, 8> path;
+      bool validPath = true;
+      for (const auto &elem : expr.ref.path) {
+        std::optional<int64_t> selectorIndex;
+        if (auto *index = std::get_if<int32_t>(&elem.selector))
+          selectorIndex = static_cast<int64_t>(*index);
+        else if (std::holds_alternative<std::pair<int32_t, int32_t>>(
+                     elem.selector)) {
+          validPath = false;
           break;
+        }
+
+        StringRef segmentName;
+        if (auto *inst = elem.symbol->as_if<slang::ast::InstanceSymbol>())
+          segmentName = inst->name;
+        else if (auto *array =
+                     elem.symbol->as_if<slang::ast::InstanceArraySymbol>())
+          segmentName = array->name;
+        else if (auto *ifacePort =
+                     elem.symbol->as_if<slang::ast::InterfacePortSymbol>())
+          segmentName = ifacePort->name;
+        else
+          continue;
+
+        if (segmentName.empty()) {
+          if (!selectorIndex || path.empty() || path.back().index) {
+            validPath = false;
+            break;
+          }
+          path.back().index = selectorIndex;
+          continue;
+        }
+        path.push_back({segmentName.str(), selectorIndex});
+      }
+
+      if (validPath && !path.empty()) {
+        SmallString<64> pathNameStorage;
+        for (auto [idx, segment] : llvm::enumerate(path)) {
+          if (idx)
+            pathNameStorage += ".";
+          pathNameStorage += segment.name;
+          if (segment.index)
+            pathNameStorage += ("[" + llvm::Twine(*segment.index) + "]").str();
+        }
+        auto pathName = context.builder.getStringAttr(pathNameStorage);
+
+        const slang::ast::InstanceBodySymbol *scopeBody =
+            context.currentScope->getContainingInstance();
+        if (!scopeBody)
+          scopeBody = context.currentScope->asSymbol()
+                          .as_if<slang::ast::InstanceBodySymbol>();
+        if (scopeBody) {
+          Value candidate;
+          bool ambiguous = false;
+          for (const auto &pathInfo : context.hierInterfacePaths[scopeBody]) {
+            if (!pathInfo.hierName || pathInfo.hierName != pathName ||
+                !pathInfo.ifaceInst)
+              continue;
+            if (expectedIfaceDef &&
+                &pathInfo.ifaceInst->getDefinition() != expectedIfaceDef)
+              continue;
+            auto resolved =
+                context.resolveInterfaceInstance(pathInfo.ifaceInst, loc);
+            if (!resolved)
+              continue;
+            if (candidate && candidate != resolved) {
+              ambiguous = true;
+              break;
+            }
+            candidate = resolved;
+          }
+          if (candidate && !ambiguous) {
+            instRef = candidate;
+            baseIndex = expr.ref.path.size();
+          }
         }
       }
     }
