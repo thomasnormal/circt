@@ -19234,30 +19234,20 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
                      << "\n";
       }
 
-      // Guard against infinite delta cycles: if this process+wait has already
-      // been through the empty-sensitivity fallback at least once, halt the
-      // process instead of re-scheduling.  This prevents processes that read
-      // from allocas (e.g. string-type always blocks) from spinning forever.
+      // Empty-sensitivity waits must re-arm at every encounter.
+      // One-shot resumption is incorrect for loops that make progress via
+      // delayed self-drives (e.g. llhd.drv after <0ns,1d,0e>).
+      // Keep scheduling next-delta resumptions and rely on global simulation
+      // guards (max delta / step limits) for runaway loops.
       auto fallbackKey = std::make_pair(procId, waitOp.getOperation());
-      if (emptySensitivityFallbackExecuted.count(fallbackKey)) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  Wait with no delay and no signals - already "
-                      "executed via fallback, halting process\n");
-        cacheWaitState(state, scheduler, nullptr, hadDelay);
-      } else {
-        emptySensitivityFallbackExecuted.insert(fallbackKey);
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  Wait with no delay and no signals - scheduling "
-                      "one-shot delta-step resumption (always @(*) "
-                      "fallback)\n");
-
-        // Schedule the process to resume on the next delta cycle.
-        // Only does this once; subsequent hits will halt the process.
-        scheduler.getEventScheduler().scheduleNextDelta(
-            SchedulingRegion::Active,
-            Event([this, procId]() { resumeProcess(procId); }));
-        cacheWaitState(state, scheduler, nullptr, hadDelay);
-      }
+      emptySensitivityFallbackExecuted.insert(fallbackKey);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  Wait with no delay and no signals - scheduling "
+                    "delta-step resumption (always @(*) fallback)\n");
+      scheduler.getEventScheduler().scheduleNextDelta(
+          SchedulingRegion::Active,
+          Event([this, procId]() { resumeProcess(procId); }));
+      cacheWaitState(state, scheduler, nullptr, hadDelay);
     }
   }
 
