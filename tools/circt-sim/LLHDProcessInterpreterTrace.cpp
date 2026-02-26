@@ -768,9 +768,9 @@ void LLHDProcessInterpreter::maybeTraceInterfaceAutoLinkSignalDumpHeader(
 void LLHDProcessInterpreter::maybeTraceInterfaceAutoLinkSignalDumpEntry(
     SignalId interfaceSignalId, llvm::ArrayRef<SignalId> fieldSignalIds) const {
   auto interfaceNameIt = signalIdToName.find(interfaceSignalId);
-  llvm::StringRef interfaceName = interfaceNameIt != signalIdToName.end()
-                                      ? interfaceNameIt->second
-                                      : "unnamed";
+  llvm::StringRef interfaceName = "unnamed";
+  if (interfaceNameIt != signalIdToName.end())
+    interfaceName = interfaceNameIt->second;
   llvm::errs() << "  Interface signal " << interfaceSignalId
                << " (" << interfaceName << "): "
                << fieldSignalIds.size() << " fields, widths=[";
@@ -844,7 +844,9 @@ void LLHDProcessInterpreter::maybeTraceInterfaceIntraLinkDetection(
 void LLHDProcessInterpreter::maybeTraceInterfaceIntraLinkReverseTarget(
     SignalId signalId, size_t childCount) const {
   auto it = signalIdToName.find(signalId);
-  llvm::StringRef name = it != signalIdToName.end() ? it->second : "?";
+  llvm::StringRef name = "?";
+  if (it != signalIdToName.end())
+    name = it->second;
   llvm::errs() << "  reverse target sig " << signalId << " (" << name
                << ") from " << childCount << " children\n";
 }
@@ -865,11 +867,13 @@ void LLHDProcessInterpreter::maybeTraceInterfaceIntraLinkMatch(
     SignalId danglingSignalId, SignalId publicSignalId,
     size_t publicChildCount) const {
   auto danglingIt = signalIdToName.find(danglingSignalId);
-  llvm::StringRef danglingName =
-      danglingIt != signalIdToName.end() ? danglingIt->second : "?";
+  llvm::StringRef danglingName = "?";
+  if (danglingIt != signalIdToName.end())
+    danglingName = danglingIt->second;
   auto publicIt = signalIdToName.find(publicSignalId);
-  llvm::StringRef publicName =
-      publicIt != signalIdToName.end() ? publicIt->second : "?";
+  llvm::StringRef publicName = "?";
+  if (publicIt != signalIdToName.end())
+    publicName = publicIt->second;
   llvm::errs() << "[circt-sim] Intra-interface link: " << danglingSignalId
                << " (" << danglingName << ") -> " << publicSignalId
                << " (" << publicName << ") + " << publicChildCount
