@@ -613,3 +613,37 @@
   failures in this dirty worktree (mostly output/expectation drift in AOT
   compile-report/stat lines and some interface-resume tracing expectations).
   Kept this audit scoped to the reproducible callback-classification bug above.
+
+- Additional audit finding in AOT tagged-indirect lowering:
+  `LowerTaggedIndirectCalls` decoded tagged function pointers and indexed
+  `@__circt_sim_func_entries[fid]` without a bounds check.
+  - Deterministic repro (before fix):
+    - `/tmp/tagged_indirect_oob.mlir` with constant tagged pointer `0xF0000082`
+      and only one valid tagged vtable entry.
+    - Interpreted run: `bad=0` with unresolved-call warning.
+    - Compiled run: `bad=47` (out-of-bounds entry-table read misdispatch).
+- Root cause:
+  - `tools/circt-sim-compile/LowerTaggedIndirectCalls.cpp` treated any pointer
+    in `[0xF0000000, 0x100000000)` as a valid tagged FuncId and performed
+    unchecked GEP/load from the entry table.
+- Fix:
+  - Add `fid < num_func_entries` guard in lowered IR.
+  - Introduce explicit invalid-tag path for both `call` and `invoke` rewrites
+    that returns zero (or no-op for void), matching interpreter fallback
+    behavior instead of reading out-of-bounds table slots.
+- Added regression:
+  - `test/Tools/circt-sim/aot-call-indirect-tagged-fid-oob-safe.mlir`
+  - checks:
+    - lowering pass still runs (`LowerTaggedIndirectCalls: lowered 1 indirect calls`)
+    - interpreted output `bad=0`
+    - compiled output `bad=0`
+- Verification:
+  - `ninja -C build_test circt-sim-compile circt-sim`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv \
+      build_test/test/Tools/circt-sim/aot-call-indirect-tagged-fid-oob-safe.mlir \
+      build_test/test/Tools/circt-sim/callback-classify-pointer-probe-dynamic.mlir \
+      build_test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir \
+      build_test/test/Tools/circt-sim/finish-item-multiple-outstanding-item-done.mlir \
+      build_test/test/Tools/circt-sim/aot-uvm-random-native-optin.mlir \
+      build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir`
+  - Result: 6/6 passed.
