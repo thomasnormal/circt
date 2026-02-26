@@ -531,9 +531,31 @@ Status update:
   - large-workload impact (`uvm_seq_body`):
     - stripped residual functions: `107 -> 100`
     - codegen-ready functions: `3338 -> 3345` (`+7`)
-    - prior `body_nonllvm_op:hw.bitcast` top reason was removed; dominant
+  - prior `body_nonllvm_op:hw.bitcast` top reason was removed; dominant
       residual blocker is now concentrated on `hw.struct_create` + 4-state
       hw-struct ABI signatures.
+- follow-up landed: canonical fold for non-LLVM aggregate casts
+  (`builtin.unrealized_conversion_cast`) when target is LLVM-compatible.
+  - specifically, pre-lowering now materializes LLVM values for cast sites
+    like `!hw.struct -> !llvm.struct` from `hw.struct_create` producers.
+  - regression added:
+    `aot-hw-struct-create-cast-llvm-lowering.mlir`
+  - large-workload impact (`uvm_seq_body`):
+    - stripped residual functions: `100 -> 98`
+    - codegen-ready functions: `3345 -> 3347` (`+2`)
+    - top reason trend:
+      - `body_nonllvm_op:hw.struct_create` now `34` (from `36` before
+        bitcast/extract + cast-materialize follow-ups).
+- robustness follow-up landed: tagged-indirect rewriting now requires a real
+  in-module `@__circt_sim_func_entries` definition and is skipped otherwise.
+  - avoids link failures in function-only/no-FuncId-table compiles where
+    lowering previously synthesized unresolved hidden references.
+  - regression added:
+    `aot-call-indirect-no-funcid-table.mlir`
+  - existing strip telemetry regression updated to remain deterministic under
+    the new cast-lowering behavior:
+    `aot-strip-non-llvm-telemetry.mlir` now checks
+    `sig_nonllvm_arg:!hw.struct<f: i8>`.
 
 ---
 

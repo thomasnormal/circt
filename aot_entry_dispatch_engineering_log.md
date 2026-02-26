@@ -1816,3 +1816,82 @@
     - stats shape unchanged (`Compiled function calls=5`,
       `Interpreted function calls=28`, `direct_calls_native=5`,
       `direct_calls_interpreted=28`).
+
+## 2026-02-26
+- Phase 5.2 follow-up: folded non-LLVM aggregate casts at `unrealized_conversion_cast`
+  boundaries when the destination is LLVM-compatible.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - in pre-lowering cast handling, added:
+    - for single-value casts with non-LLVM input and LLVM-compatible output,
+      attempt `materializeLLVMValue(...)` and replace cast result directly.
+  - this canonicalizes patterns like:
+    - `!hw.struct -> !llvm.struct` fed by `hw.struct_create`
+    - other materializable non-LLVM aggregate producers.
+- TDD/regression:
+  - added
+    `test/Tools/circt-sim/aot-hw-struct-create-cast-llvm-lowering.mlir`.
+  - validates:
+    - no residual strip for the function (`1 functions + 0 processes ready`)
+    - interpreter/compiled parity (`out=20`).
+- Validation:
+  - rebuilt `circt-sim-compile`.
+  - focused regressions pass (manual commands in this workspace):
+    - `aot-hw-struct-create-cast-llvm-lowering.mlir` (`out=20`)
+    - `aot-hw-bitcast-struct-extract-lowering.mlir` (`out=26796`)
+  - large workload (`uvm_seq_body`, `-v`) after this patch:
+    - `Stripped 98 functions with non-LLVM ops` (from `100`)
+    - `3347 functions + 1 processes ready for codegen` (from `3345 + 1`)
+    - top residual reasons:
+      - `34x body_nonllvm_op:hw.struct_create`
+      - `33x sig_nonllvm_arg:!hw.struct<value: i4096, unknown: i4096>`
+      - `9x sig_nonllvm_arg:!hw.struct<value: i64, unknown: i64>`
+      - `4x body_nonllvm_op:builtin.unrealized_conversion_cast`
+      - `4x sig_nonllvm_ret:!hw.struct<value: i4096, unknown: i4096>`
+  - runtime sanity (`uvm_seq_body` compiled, `CIRCT_AOT_STATS=1`) unchanged:
+    - `EXIT_CODE=0`
+    - `Compiled function calls=5`
+    - `Interpreted function calls=28`.
+- Realization:
+  - the remaining coverage ceiling is now sharply concentrated in:
+    - residual `hw.struct_create` in function bodies
+    - non-LLVM 4-state hw-struct function signatures.
+  - next high-ROI step is ABI canonicalization for
+    `!hw.struct<value: iN, unknown: iN>` at function boundaries.
+
+## 2026-02-26
+- Robustness follow-up: fixed a linker failure in function-only AOT compiles
+  after call-indirect coverage expansion.
+- Root cause:
+  - `runLowerTaggedIndirectCalls` unconditionally created/used
+    `@__circt_sim_func_entries` even when no FuncId entry table was emitted
+    by `synthesizeDescriptor` (`numAllFuncs == 0`).
+  - this produced unresolved hidden-symbol relocations at link time in
+    function-only modules that contained indirect calls.
+- Implementation:
+  - `tools/circt-sim-compile/LowerTaggedIndirectCalls.cpp`:
+    - stop synthesizing external declarations for
+      `@__circt_sim_func_entries`.
+    - only run tagged-indirect rewriting when a non-declaration definition is
+      present in-module.
+- TDD/regressions:
+  - added:
+    `test/Tools/circt-sim/aot-call-indirect-no-funcid-table.mlir`
+    - checks compile success in no-FuncId-table mode and verifies no tagged
+      rewrite/`Linking failed` line.
+  - updated:
+    `test/Tools/circt-sim/aot-strip-non-llvm-telemetry.mlir`
+    - previous strip pattern is now lowered by newer cast/call-indirect
+      coverage.
+    - switched to a deterministic signature-strip case and checks
+      `1x sig_nonllvm_arg:!hw.struct<f: i8>`.
+- Validation (focused, manual in this workspace):
+  - rebuilt: `ninja -C build_test circt-sim-compile`.
+  - pass:
+    - `aot-hw-bitcast-struct-extract-lowering.mlir`
+    - `aot-hw-struct-create-cast-llvm-lowering.mlir`
+    - `aot-call-indirect-hw-struct-arg-lowering.mlir`
+    - `aot-strip-non-llvm-telemetry.mlir`
+    - `aot-call-indirect-no-funcid-table.mlir`
+  - outcome:
+    - no-FuncId-table indirect-call compile now links successfully
+    - no `LowerTaggedIndirectCalls: lowered` emission in that regression path.

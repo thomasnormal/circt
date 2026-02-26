@@ -31,23 +31,12 @@
 
 using namespace llvm;
 
-/// Get or create the @__circt_sim_func_entries global declaration.
-/// The actual definition with initializer is emitted by synthesizeDescriptor.
-/// Here we just need a reference for GEP/load.
-static GlobalVariable *getOrCreateFuncEntriesGlobal(Module &M) {
-  auto *existing = M.getGlobalVariable("__circt_sim_func_entries");
-  if (existing)
-    return existing;
-
-  // Declare as external [0 x ptr] — the actual size comes from the definition
-  // emitted by synthesizeDescriptor. Using [0 x ptr] lets us GEP without
-  // knowing the exact size at this point.
-  auto *ptrTy = PointerType::get(M.getContext(), 0);
-  auto *arrayTy = ArrayType::get(ptrTy, 0);
-  auto *gv = new GlobalVariable(M, arrayTy, /*isConstant=*/false,
-                                GlobalValue::ExternalLinkage, nullptr,
-                                "__circt_sim_func_entries");
-  return gv;
+/// Look up the @__circt_sim_func_entries global.
+/// The definition with initializer is emitted by synthesizeDescriptor.
+/// If it is missing, tagged-indirect lowering must be skipped to avoid
+/// introducing unresolved references in modules that have no FuncId table.
+static GlobalVariable *getFuncEntriesGlobalIfPresent(Module &M) {
+  return M.getGlobalVariable("__circt_sim_func_entries");
 }
 
 /// Lower a single indirect call/invoke through the tagged dispatch check.
@@ -228,7 +217,9 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
 }
 
 void runLowerTaggedIndirectCalls(Module &M) {
-  auto *funcEntries = getOrCreateFuncEntriesGlobal(M);
+  auto *funcEntries = getFuncEntriesGlobalIfPresent(M);
+  if (!funcEntries || funcEntries->isDeclaration())
+    return;
 
   // Collect all indirect calls first (we'll modify the IR as we go).
   SmallVector<CallBase *, 64> indirectCalls;
