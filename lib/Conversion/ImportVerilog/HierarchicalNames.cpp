@@ -229,36 +229,44 @@ struct HierPathValueExprVisitor
     if (!outermostInstBody)
       return nullptr;
 
+    auto selectIndexedInstance =
+        [&](const slang::ast::Symbol *symbol,
+            int64_t index) -> const slang::ast::Symbol * {
+      if (!symbol)
+        return nullptr;
+      if (auto *arraySym = symbol->as_if<slang::ast::InstanceArraySymbol>())
+        return findArrayElement(*arraySym, index);
+      if (auto *instSym = symbol->as_if<slang::ast::InstanceSymbol>()) {
+        auto actualIndex = getArrayElementIndex(*instSym);
+        if (actualIndex && *actualIndex == index)
+          return instSym;
+      }
+      return nullptr;
+    };
+
     const slang::ast::Symbol *current = outermostInstBody->find(path.front().name);
     if (!current)
       return nullptr;
+    if (path.front().index) {
+      current = selectIndexedInstance(current, *path.front().index);
+      if (!current)
+        return nullptr;
+    }
 
     for (const auto &segment : path.drop_front()) {
       auto *instSym = current->as_if<slang::ast::InstanceSymbol>();
       if (!instSym)
         return nullptr;
-      if (!segment.index) {
-        current = instSym->body.find(segment.name);
-        if (!current)
-          return nullptr;
-        continue;
-      }
       auto *nextSym = instSym->body.find(segment.name);
       if (!nextSym)
         return nullptr;
-      if (auto *arraySym = nextSym->as_if<slang::ast::InstanceArraySymbol>()) {
-        current = findArrayElement(*arraySym, *segment.index);
+      if (segment.index) {
+        current = selectIndexedInstance(nextSym, *segment.index);
         if (!current)
           return nullptr;
         continue;
       }
-      auto *childInst = nextSym->as_if<slang::ast::InstanceSymbol>();
-      if (!childInst)
-        return nullptr;
-      auto actualIndex = getArrayElementIndex(*childInst);
-      if (!actualIndex || *actualIndex != *segment.index)
-        return nullptr;
-      current = childInst;
+      current = nextSym;
     }
 
     return current->as_if<slang::ast::InstanceSymbol>();
