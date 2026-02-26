@@ -592,6 +592,40 @@ TEST(ProcessScheduler, SuspendAndResume) {
   EXPECT_EQ(counter, 2);
 }
 
+TEST(ForkJoinManager, JoinResumesSuspendedParentOnChildComplete) {
+  ProcessScheduler scheduler;
+  ProcessId parent = scheduler.registerProcess("parent", []() {});
+  ProcessId child = scheduler.registerProcess("child", []() {});
+
+  Process *parentProc = scheduler.getProcess(parent);
+  ASSERT_NE(parentProc, nullptr);
+  parentProc->setState(ProcessState::Suspended);
+
+  ForkJoinManager manager(scheduler);
+  ForkId fork = manager.createFork(parent, ForkJoinType::Join);
+  manager.addChildToFork(fork, child);
+  manager.markChildComplete(child);
+
+  EXPECT_EQ(parentProc->getState(), ProcessState::Ready);
+}
+
+TEST(ForkJoinManager, JoinNoneDoesNotResumeSuspendedParentOnChildComplete) {
+  ProcessScheduler scheduler;
+  ProcessId parent = scheduler.registerProcess("parent", []() {});
+  ProcessId child = scheduler.registerProcess("child", []() {});
+
+  Process *parentProc = scheduler.getProcess(parent);
+  ASSERT_NE(parentProc, nullptr);
+  parentProc->setState(ProcessState::Suspended);
+
+  ForkJoinManager manager(scheduler);
+  ForkId fork = manager.createFork(parent, ForkJoinType::JoinNone);
+  manager.addChildToFork(fork, child);
+  manager.markChildComplete(child);
+
+  EXPECT_EQ(parentProc->getState(), ProcessState::Suspended);
+}
+
 TEST(ProcessScheduler, SuspendUntilTime) {
   ProcessScheduler scheduler;
   int counter = 0;
@@ -1088,6 +1122,78 @@ TEST(ProcessSchedulerIntegration, SuspendProcessForEventsPeristsMapping) {
 
   // Process should still be in Waiting state (re-registered each time)
   EXPECT_EQ(p->getState(), ProcessState::Waiting);
+}
+
+TEST(ProcessScheduler, ReRegisterDifferentEdgeOnSameSignal) {
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+  scheduler.updateSignal(sig, SignalValue(1, 1));
+
+  int executions = 0;
+  ProcessId proc = 0;
+  proc = scheduler.registerProcess("edge-switch", [&]() {
+    ++executions;
+    SensitivityList waitList;
+    if (executions == 1) {
+      waitList.addNegedge(sig);
+      scheduler.suspendProcessForEvents(proc, waitList);
+      return;
+    }
+    if (executions == 2) {
+      waitList.addPosedge(sig);
+      scheduler.suspendProcessForEvents(proc, waitList);
+      return;
+    }
+    scheduler.terminateProcess(proc);
+  });
+
+  scheduler.initialize();
+  scheduler.executeDeltaCycle();
+  EXPECT_EQ(executions, 1);
+
+  scheduler.updateSignal(sig, SignalValue(0, 1));
+  scheduler.executeDeltaCycle();
+  EXPECT_EQ(executions, 2);
+
+  scheduler.updateSignal(sig, SignalValue(1, 1));
+  scheduler.executeDeltaCycle();
+  EXPECT_EQ(executions, 3);
+}
+
+TEST(ProcessScheduler, RepairOrphanReadyProcessFromStaleQueueFlag) {
+  ProcessScheduler scheduler;
+  SignalId sig = scheduler.registerSignal("sig", 1);
+  int executions = 0;
+  ProcessId proc = 0;
+  proc = scheduler.registerProcess("orphan-ready", [&]() {
+    ++executions;
+    if (executions == 1) {
+      SensitivityList waitList;
+      waitList.addLevel(sig);
+      scheduler.suspendProcessForEvents(proc, waitList);
+      return;
+    }
+    scheduler.terminateProcess(proc);
+  });
+
+  scheduler.initialize();
+  scheduler.executeDeltaCycle();
+  ASSERT_EQ(executions, 1);
+
+  Process *p = scheduler.getProcess(proc);
+  ASSERT_NE(p, nullptr);
+  ASSERT_EQ(p->getState(), ProcessState::Waiting);
+
+  // Simulate stale queue metadata: process is marked enqueued, but it is not.
+  // Also force the orphan "Ready but not queued" state.
+  p->inReadyQueue = true;
+  p->clearWaiting();
+  ASSERT_EQ(p->getState(), ProcessState::Ready);
+
+  // advanceTime() should repair stale metadata and detect runnable work.
+  EXPECT_TRUE(scheduler.advanceTime());
+  scheduler.executeCurrentTime();
+  EXPECT_EQ(executions, 2);
 }
 
 //===----------------------------------------------------------------------===//

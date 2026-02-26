@@ -521,6 +521,10 @@ public:
   /// on the same signals every cycle).
   llvm::DenseSet<SignalId> registeredSignals;
 
+  /// Per-signal edge fanout mask already registered in signalEdgeFanout.
+  /// Bit 0 = posedge, bit 1 = negedge, bit 2 = anyedge/level.
+  llvm::DenseMap<SignalId, uint8_t> registeredSignalEdges;
+
   /// True when this process is currently in a ready queue. Used for O(1)
   /// dedup in scheduleProcess instead of O(n) std::find on the queue.
   bool inReadyQueue = false;
@@ -1433,6 +1437,13 @@ private:
 
   /// Execute processes in the ready queue for a specific region.
   size_t executeReadyProcesses(SchedulingRegion region);
+
+  /// Check whether a process pointer is physically present in any ready queue.
+  bool isProcessQueued(const Process *proc) const;
+
+  /// Re-enqueue processes that are in Ready state but not in any ready queue.
+  /// Returns true if at least one process was repaired and scheduled.
+  bool repairOrphanReadyProcesses();
 
   /// Generate the next process ID.
   ProcessId nextProcessId();

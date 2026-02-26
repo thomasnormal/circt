@@ -105,6 +105,18 @@ inline bool traceI1ValueRoot(mlir::Value value, mlir::BlockArgument &root) {
   }
   if (auto extract = value.getDefiningOp<hw::StructExtractOp>())
     return traceI1ValueRoot(extract.getInput(), root);
+  if (auto create = value.getDefiningOp<hw::StructCreateOp>()) {
+    for (auto operand : create.getInput())
+      if (!traceI1ValueRoot(operand, root))
+        return false;
+    return true;
+  }
+  if (auto create = value.getDefiningOp<hw::ArrayCreateOp>()) {
+    for (auto operand : create.getInputs())
+      if (!traceI1ValueRoot(operand, root))
+        return false;
+    return true;
+  }
   if (auto prb = value.getDefiningOp<llhd::ProbeOp>())
     return traceI1ValueRoot(prb.getSignal(), root);
   if (auto sig = value.getDefiningOp<llhd::SignalOp>())

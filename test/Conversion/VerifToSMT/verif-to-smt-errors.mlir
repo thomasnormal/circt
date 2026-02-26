@@ -188,8 +188,7 @@ func.func @multiple_clocks() -> (i1) {
 // -----
 
 func.func @multiple_clocks() -> (i1) {
-  // expected-error @below {{unsupported integer initial value in BMC conversion}}
-  // expected-error @below {{failed to legalize operation 'verif.bmc' that was explicitly marked illegal}}
+  // Integer initial values are now supported in BMC conversion.
   %bmc = verif.bmc bound 10 num_regs 1 initial_values [0]
   init {
     %c0_i1 = hw.constant 0 : i1

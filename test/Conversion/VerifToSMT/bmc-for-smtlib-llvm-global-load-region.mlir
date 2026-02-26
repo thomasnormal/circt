@@ -28,6 +28,6 @@ func.func @for_smtlib_allows_llvm_constant_global_load_from_initializer_region()
 
 // CHECK: func.func @for_smtlib_allows_llvm_constant_global_load_from_initializer_region
 // CHECK: smt.solver
-// CHECK: arith.constant true
+// CHECK: smt.constant false
 // CHECK-NOT: llvm.mlir.addressof
 // CHECK-NOT: llvm.load

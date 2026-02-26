@@ -4153,7 +4153,8 @@ def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
   }];
   let arguments = (ins SymbolRefAttr:$target,
                        OptionalAttr<ArrayAttr>:$intersect_values,
-                       UnitAttr:$negate);
+                       UnitAttr:$negate,
+                       OptionalAttr<I32Attr>:$group);
   let assemblyFormat = [{
     $target (`intersect` $intersect_values^)? (`negate` $negate^)? attr-dict
   }];
@@ -4464,6 +4465,8 @@ def ConstraintDistOp
                        DenseI64ArrayAttr:$values,
                        DenseI64ArrayAttr:$weights,
                        DenseI64ArrayAttr:$per_range,
+                       OptionalAttr<I64Attr>:$default_weight,
+                       OptionalAttr<I64Attr>:$default_per_range,
                        OptionalAttr<UnitAttr>:$isSigned);
   let results = (outs);
   let assemblyFormat = [{

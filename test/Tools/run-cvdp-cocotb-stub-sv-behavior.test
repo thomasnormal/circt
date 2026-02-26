@@ -1,0 +1,1 @@
+// RUN: bash %S/../../utils/internal/checks/cvdp_cocotb_stub_sv_behavior_check.sh

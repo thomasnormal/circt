@@ -430,6 +430,66 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     return funcName.ends_with(suffix);
   };
 
+  auto invokeVirtualNoArgMethodSlot = [&](uint64_t selfAddr,
+                                          uint64_t slot) -> bool {
+    mlir::func::FuncOp targetFunc;
+    if (!resolveVtableSlotFunc(selfAddr, slot, targetFunc))
+      return false;
+    llvm::SmallVector<InterpretedValue, 2> ignoredResults;
+    return succeeded(interpretFuncBody(
+        procId, targetFunc, {InterpretedValue(selfAddr, 64)}, ignoredResults,
+        callOp));
+  };
+
+  // Fast-path uvm_sequence_base::start for interpreted-mode UVM workloads.
+  // The lowered start() body uses deep fork/process-guard plumbing that can
+  // leave sub-sequences parked forever in interpreted mode. Execute the
+  // virtual sequence hooks directly through runtime vtable slots instead.
+  static bool enableSequenceStartFastPath = []() {
+    const char *env = std::getenv("CIRCT_SIM_ENABLE_UVM_SEQUENCE_START_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (enableSequenceStartFastPath &&
+      matchesMethod("uvm_sequence_base::start") && args.size() >= 1 &&
+      !args[0].isX()) {
+    uint64_t selfAddr = args[0].getUInt64();
+    if (selfAddr != 0) {
+      // Keep item context (self,parent,sequencer) consistent with normal
+      // start() setup before entering virtual hooks.
+      if (args.size() >= 3) {
+        if (auto setItemContextFunc =
+                rootModule.lookupSymbol<mlir::func::FuncOp>(
+                    "uvm_pkg::uvm_sequence_item::set_item_context")) {
+          llvm::SmallVector<InterpretedValue, 1> ignored;
+          (void)interpretFuncBody(procId, setItemContextFunc,
+                                  {args[0], args[2], args[1]}, ignored,
+                                  callOp);
+        }
+      }
+
+      // best-effort: clear stale response queue before running body.
+      (void)invokeVirtualNoArgMethodSlot(selfAddr, /*clear_response_queue=*/56);
+
+      bool callPrePost = args.size() >= 5 && !args[4].isX() &&
+                         args[4].getUInt64() != 0;
+      if (callPrePost) {
+        (void)invokeVirtualNoArgMethodSlot(selfAddr, /*pre_start=*/39);
+        (void)invokeVirtualNoArgMethodSlot(selfAddr, /*pre_body=*/40);
+      }
+
+      // Always execute the runtime-overridden body implementation.
+      (void)invokeVirtualNoArgMethodSlot(selfAddr, /*body=*/43);
+
+      if (callPrePost) {
+        (void)invokeVirtualNoArgMethodSlot(selfAddr, /*post_body=*/45);
+        (void)invokeVirtualNoArgMethodSlot(selfAddr, /*post_start=*/46);
+      }
+
+      noteUvmFastPathActionHit("func.body.sequence.start");
+      return true;
+    }
+  }
+
   // Dispatch-path agnostic sequencer handshake intercepts.
   // These mirror call_indirect intercepts but run at function entry so cache
   // fast paths and wrapper hops cannot bypass the rendezvous logic.

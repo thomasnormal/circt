@@ -28,6 +28,6 @@ func.func @for_smtlib_allows_llvm_constant_global_gep_with_dynamic_constant_indi
 
 // CHECK: func.func @for_smtlib_allows_llvm_constant_global_gep_with_dynamic_constant_indices
 // CHECK: smt.solver
-// CHECK: arith.constant true
+// CHECK: smt.constant false
 // CHECK-NOT: llvm.getelementptr
 // CHECK-NOT: llvm.load

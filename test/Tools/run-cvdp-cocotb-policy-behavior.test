@@ -1,0 +1,3 @@
+// RUN: %S/../../utils/internal/checks/cvdp_cocotb_policy_behavior_check.sh | FileCheck %s
+
+// CHECK: [cvdp-cocotb-policy-check] PASS

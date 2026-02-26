@@ -20,6 +20,8 @@
 #   CIRCT_SIM_MODE=interpret|compile   (default: interpret)
 #   CIRCT_SIM_EXTRA_ARGS="..."         (default: empty)
 #   CIRCT_SIM_WRITE_JIT_REPORT=0|1     (default: 0)
+#   FAIL_ON_ACTIVITY_LIVENESS=0|1       (default: 0)
+#   ACTIVITY_MIN_COVERAGE_PCT=0.01      (default: 0.01)
 
 set -euo pipefail
 
@@ -34,6 +36,8 @@ CIRCT_ALLOW_NONCANONICAL_TOOLS="${CIRCT_ALLOW_NONCANONICAL_TOOLS:-0}"
 FAIL_ON_FUNCTIONAL_GATE="${FAIL_ON_FUNCTIONAL_GATE:-0}"
 FAIL_ON_COVERAGE_BASELINE="${FAIL_ON_COVERAGE_BASELINE:-0}"
 COVERAGE_BASELINE_PCT="${COVERAGE_BASELINE_PCT:-10}"
+FAIL_ON_ACTIVITY_LIVENESS="${FAIL_ON_ACTIVITY_LIVENESS:-0}"
+ACTIVITY_MIN_COVERAGE_PCT="${ACTIVITY_MIN_COVERAGE_PCT:-0.01}"
 
 CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build_test/bin/circt-verilog"
 CANONICAL_CIRCT_SIM="$CIRCT_ROOT/build_test/bin/circt-sim"
@@ -54,6 +58,17 @@ CIRCT_SIM_MODE="${CIRCT_SIM_MODE:-interpret}"
 # Callers can override if desired.
 CIRCT_SIM_EXTRA_ARGS="${CIRCT_SIM_EXTRA_ARGS:---parallel=1 --mlir-disable-threading}"
 CIRCT_SIM_WRITE_JIT_REPORT="${CIRCT_SIM_WRITE_JIT_REPORT:-0}"
+# AVIP monitor diagnostic rewrites are useful for bring-up but very noisy in
+# interpreted regressions. Keep them opt-in and strip heavy per-cycle display
+# spam by default in interpreted mode.
+AVIP_ENABLE_MONITOR_DIAG_REWRITES="${AVIP_ENABLE_MONITOR_DIAG_REWRITES:-0}"
+if [[ -z "${AVIP_STRIP_MONITOR_DISPLAYS+x}" ]]; then
+  if [[ "$CIRCT_SIM_MODE" == "interpret" ]]; then
+    AVIP_STRIP_MONITOR_DISPLAYS=1
+  else
+    AVIP_STRIP_MONITOR_DISPLAYS=0
+  fi
+fi
 
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-20}"
 COMPILE_TIMEOUT="${COMPILE_TIMEOUT:-240}"
@@ -215,6 +230,11 @@ esac
 
 if [[ ! "$SIM_RETRIES" =~ ^[0-9]+$ ]]; then
   echo "error: SIM_RETRIES must be a non-negative integer (got '$SIM_RETRIES')" >&2
+  exit 1
+fi
+
+if ! [[ "$ACTIVITY_MIN_COVERAGE_PCT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  echo "error: ACTIVITY_MIN_COVERAGE_PCT must be a non-negative number (got '$ACTIVITY_MIN_COVERAGE_PCT')" >&2
   exit 1
 fi
 
@@ -404,6 +424,8 @@ meta="$OUT_DIR/meta.txt"
   echo "fail_on_functional_gate=$FAIL_ON_FUNCTIONAL_GATE"
   echo "fail_on_coverage_baseline=$FAIL_ON_COVERAGE_BASELINE"
   echo "coverage_baseline_pct=$COVERAGE_BASELINE_PCT"
+  echo "fail_on_activity_liveness=$FAIL_ON_ACTIVITY_LIVENESS"
+  echo "activity_min_coverage_pct=$ACTIVITY_MIN_COVERAGE_PCT"
   echo "time_tool=${TIME_TOOL:-<none>}"
 } > "$meta"
 
@@ -433,7 +455,7 @@ for row in "${selected_avips[@]}"; do
       # run_avip_circt_verilog falls back to nested master/slave filelists,
       # which provide the master tops/tests but not the combined Axi4LiteHdlTop.
       sim_tops="${AXI4LITE_FALLBACK_TOPS:-Axi4LiteMasterHdlTop,Axi4LiteMasterHvlTop}"
-      sim_test_name="${AXI4LITE_FALLBACK_TESTNAME:-Axi4LiteMasterBaseTest}"
+      sim_test_name="${AXI4LITE_FALLBACK_TESTNAME:-Axi4LiteMasterRandomWriteReadTransferTest}"
       echo "[avip-circt-sim] info: using AXI4Lite fallback tops/test (missing $filelist): tops=$sim_tops test=$sim_test_name"
     fi
     compile_cmd=("$RUN_AVIP" "$avip_dir")
@@ -444,6 +466,8 @@ for row in "${selected_avips[@]}"; do
     fi
     if CIRCT_VERILOG="$CIRCT_VERILOG" \
        CIRCT_VERILOG_IR=llhd \
+       AVIP_ENABLE_MONITOR_DIAG_REWRITES="$AVIP_ENABLE_MONITOR_DIAG_REWRITES" \
+       AVIP_STRIP_MONITOR_DISPLAYS="$AVIP_STRIP_MONITOR_DISPLAYS" \
        OUT="$mlir_file" \
        run_limited "$COMPILE_TIMEOUT" "${compile_cmd[@]}" > "$compile_log" 2>&1; then
       compile_status="OK"
@@ -649,12 +673,64 @@ coverage_fail_rows="$(
   ' "$matrix" || true
 )"
 
-echo "[avip-circt-sim] gate-summary functional_fail_rows=$functional_fail_rows coverage_fail_rows=$coverage_fail_rows"
+activity_fail_rows="$(
+  awk -F'\t' -v min="$ACTIVITY_MIN_COVERAGE_PCT" '
+    NR == 1 { next }
+    {
+      compile = $3
+      sim_status = $5
+      sim_exit = $6
+      uvm_fatal = $9
+      uvm_error = $10
+      sim_log = $15
+
+      functional_pass = 1
+      if (compile != "OK") functional_pass = 0
+      else if (sim_status != "OK") functional_pass = 0
+      else if (sim_exit != "0") functional_pass = 0
+      else if (uvm_fatal == "-" || uvm_fatal == "?" || uvm_fatal == "") functional_pass = 0
+      else if (uvm_error == "-" || uvm_error == "?" || uvm_error == "") functional_pass = 0
+      else if (uvm_fatal + 0 != 0) functional_pass = 0
+      else if (uvm_error + 0 != 0) functional_pass = 0
+
+      if (!functional_pass) next
+
+      live = 0
+      if (sim_log != "" && sim_log != "-") {
+        while ((getline line < sim_log) > 0) {
+          if (line ~ /[1-9][0-9]*[[:space:]]+hits([,[:space:]]|$)/) {
+            live = 1
+            break
+          }
+
+          if (match(line, /Overall coverage:[[:space:]]*[0-9]+(\.[0-9]+)?%/)) {
+            cov_line = substr(line, RSTART, RLENGTH)
+            gsub(/[^0-9.]/, "", cov_line)
+            if ((cov_line + 0) > min) {
+              live = 1
+              break
+            }
+          }
+        }
+        close(sim_log)
+      }
+
+      if (!live) n += 1
+    }
+    END { print n + 0 }
+  ' "$matrix" || true
+)"
+
+echo "[avip-circt-sim] gate-summary functional_fail_rows=$functional_fail_rows coverage_fail_rows=$coverage_fail_rows activity_fail_rows=$activity_fail_rows"
 if [[ "$FAIL_ON_FUNCTIONAL_GATE" == "1" && "$functional_fail_rows" -gt 0 ]]; then
   echo "error: functional gate failed: $functional_fail_rows row(s)" >&2
   exit 1
 fi
 if [[ "$FAIL_ON_COVERAGE_BASELINE" == "1" && "$coverage_fail_rows" -gt 0 ]]; then
   echo "error: coverage baseline gate failed: $coverage_fail_rows row(s)" >&2
+  exit 1
+fi
+if [[ "$FAIL_ON_ACTIVITY_LIVENESS" == "1" && "$activity_fail_rows" -gt 0 ]]; then
+  echo "error: activity liveness gate failed: $activity_fail_rows row(s)" >&2
   exit 1
 fi

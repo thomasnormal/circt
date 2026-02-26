@@ -6260,9 +6260,10 @@ struct VerifBoundedModelCheckingOpConversion
         return failure();
     }
 
+    auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
     if (auto regClockSourcesAttr =
             op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
-      for (auto attr : regClockSourcesAttr) {
+      for (auto [regIndex, attr] : llvm::enumerate(regClockSourcesAttr)) {
         auto dict = dyn_cast<DictionaryAttr>(attr);
         if (!dict)
           continue;
@@ -6279,15 +6280,38 @@ struct VerifBoundedModelCheckingOpConversion
           if (it != clockKeyToPos.end())
             mappedPos = it->second.pos;
         }
+        if (!mappedPos && regClocksAttr && regIndex < regClocksAttr.size()) {
+          auto regClockNameAttr =
+              dyn_cast_or_null<StringAttr>(regClocksAttr[regIndex]);
+          if (regClockNameAttr && !regClockNameAttr.getValue().empty()) {
+            if (auto itName = clockNameToPos.find(regClockNameAttr.getValue());
+                itName != clockNameToPos.end()) {
+              mappedPos = itName->second;
+            } else if (auto itArg =
+                           inputNameToArgIndex.find(regClockNameAttr.getValue());
+                       itArg != inputNameToArgIndex.end()) {
+              mappedPos = mapArgIndexToClockPos(itArg->second);
+            }
+          }
+        }
         if (!mappedPos)
           continue;
 
-        bool invert = false;
-        if (auto invertAttr = dict.getAs<BoolAttr>("invert"))
-          invert = invertAttr.getValue();
+        ClockPosInfo keyInfo{*mappedPos,
+                             keyAttr.getValue().ends_with(":inv")};
+        if (auto existing = clockKeyToPos.find(keyAttr.getValue());
+            existing != clockKeyToPos.end()) {
+          if (existing->second.pos != *mappedPos) {
+            op.emitError(
+                "bmc_reg_clock_sources key maps to multiple BMC clock "
+                "inputs");
+            return failure();
+          }
+          keyInfo.invert = existing->second.invert;
+        }
 
         if (failed(addClockKeyAlias(
-                keyAttr.getValue(), ClockPosInfo{*mappedPos, invert},
+                keyAttr.getValue(), keyInfo,
                 "bmc_reg_clock_sources key maps to multiple BMC clock "
                 "inputs")))
           return failure();
@@ -6298,14 +6322,14 @@ struct VerifBoundedModelCheckingOpConversion
         if (key.ends_with(":inv")) {
           auto base = key.drop_back(4);
           if (failed(addClockKeyAlias(
-                  base, ClockPosInfo{*mappedPos, !invert},
+                  base, ClockPosInfo{*mappedPos, !keyInfo.invert},
                   "bmc_reg_clock_sources key maps to multiple BMC clock "
                   "inputs")))
             return failure();
         } else {
           std::string invKey = (key + ":inv").str();
           if (failed(addClockKeyAlias(
-                  invKey, ClockPosInfo{*mappedPos, !invert},
+                  invKey, ClockPosInfo{*mappedPos, !keyInfo.invert},
                   "bmc_reg_clock_sources key maps to multiple BMC clock "
                   "inputs")))
             return failure();
@@ -6316,7 +6340,7 @@ struct VerifBoundedModelCheckingOpConversion
     // LowerToBMC may preserve check clock names in bmc_reg_clocks even when the
     // corresponding BMC clock input is unnamed or remapped. Accept those names
     // by resolving through bmc_reg_clock_sources / bmc_clock_sources metadata.
-    if (auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+    if (regClocksAttr) {
       if (auto regClockSourcesAttr =
               op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
         unsigned count =
@@ -6622,7 +6646,13 @@ struct VerifBoundedModelCheckingOpConversion
       return result;
     };
 
+    struct PendingRegClockInfo {
+      StringAttr key;
+      bool invert = false;
+    };
     SmallVector<std::optional<ClockPosInfo>> regClockPosByIndex(numRegs);
+    SmallVector<std::optional<PendingRegClockInfo>> pendingRegClockByIndex(
+        numRegs);
     if (numRegs > 0) {
       auto regClocksAttr = op->getAttrOfType<ArrayAttr>("bmc_reg_clocks");
       auto regClockSourcesAttr =
@@ -6646,6 +6676,9 @@ struct VerifBoundedModelCheckingOpConversion
                   info = ClockPosInfo{it->second.pos,
                                       static_cast<bool>(invert ^
                                                         it->second.invert)};
+                else
+                  pendingRegClockByIndex[regIndex] =
+                      PendingRegClockInfo{keyAttr, invert};
               }
               if (!info) {
                 if (auto argAttr = dict.getAs<IntegerAttr>("arg_index")) {
@@ -6667,14 +6700,115 @@ struct VerifBoundedModelCheckingOpConversion
             }
           }
           regClockPosByIndex[regIndex] = info;
+          if (info)
+            pendingRegClockByIndex[regIndex].reset();
+        }
+
+        // Recover clock positions for unresolved expression keys by borrowing
+        // the nearest known register-clock positions when they agree.
+        DenseMap<StringRef, SmallVector<ClockPosInfo>> pendingNeighborInfos;
+        for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
+          auto pending = pendingRegClockByIndex[regIndex];
+          if (!pending)
+            continue;
+
+          auto addNeighbor = [&](int64_t start, int64_t step) {
+            for (int64_t i = start; i >= 0 && i < static_cast<int64_t>(numRegs);
+                 i += step) {
+              if (!regClockPosByIndex[i])
+                continue;
+              ClockPosInfo info = *regClockPosByIndex[i];
+              info.invert = static_cast<bool>(info.invert ^ pending->invert);
+              pendingNeighborInfos[pending->key.getValue()].push_back(info);
+              break;
+            }
+          };
+          addNeighbor(static_cast<int64_t>(regIndex) - 1, -1);
+          addNeighbor(static_cast<int64_t>(regIndex) + 1, 1);
+        }
+
+        DenseMap<StringRef, ClockPosInfo> resolvedPendingClockByKey;
+        for (auto &entry : pendingNeighborInfos) {
+          auto &infos = entry.second;
+          if (infos.empty())
+            continue;
+          ClockPosInfo first = infos.front();
+          bool consistent = llvm::all_of(infos, [&](const ClockPosInfo &info) {
+            return info.pos == first.pos && info.invert == first.invert;
+          });
+          if (consistent)
+            resolvedPendingClockByKey.try_emplace(entry.first, first);
+        }
+
+        for (unsigned regIndex = 0; regIndex < numRegs; ++regIndex) {
+          auto pending = pendingRegClockByIndex[regIndex];
+          if (!pending)
+            continue;
+          auto it = resolvedPendingClockByKey.find(pending->key.getValue());
+          if (it == resolvedPendingClockByKey.end())
+            continue;
+          regClockPosByIndex[regIndex] = it->second;
+          if (failed(addClockKeyAlias(
+                  pending->key.getValue(), it->second,
+                  "bmc_reg_clock_sources unresolved key maps to multiple BMC "
+                  "clock inputs")))
+            return failure();
         }
       }
     }
 
+    SmallVector<std::optional<ClockPosInfo>> delayClockPosBySlot(totalDelaySlots);
+    auto assignDelayClockSlot = [&](size_t slotIndex, ClockPosInfo info) {
+      if (slotIndex >= delayClockPosBySlot.size())
+        return;
+      auto &slot = delayClockPosBySlot[slotIndex];
+      if (!slot) {
+        slot = info;
+        return;
+      }
+      if (slot->pos == info.pos && slot->invert == info.invert)
+        return;
+      slot.reset();
+    };
+    auto resolveSlotClockPos = [&](StringAttr clockName, Value clockValue)
+        -> std::optional<ClockPosInfo> {
+      if (clockName && !clockName.getValue().empty()) {
+        auto it = clockNameToPos.find(clockName.getValue());
+        if (it != clockNameToPos.end())
+          return ClockPosInfo{it->second, false};
+      } else if (clockValue) {
+        if (auto info = resolveClockPosInfo(clockValue))
+          return *info;
+      }
+      return std::nullopt;
+    };
+    for (const auto &info : delayInfos) {
+      auto slotInfo = resolveSlotClockPos(info.clockName, info.clockValue);
+      if (!slotInfo)
+        continue;
+      for (size_t i = 0; i < info.bufferSize; ++i)
+        assignDelayClockSlot(info.bufferStartIndex + i, *slotInfo);
+    }
+    for (const auto &info : pastInfos) {
+      auto slotInfo = resolveSlotClockPos(info.clockName, info.clockValue);
+      if (!slotInfo)
+        continue;
+      size_t base = delaySlots + info.bufferStartIndex;
+      for (size_t i = 0; i < info.bufferSize; ++i)
+        assignDelayClockSlot(base + i, *slotInfo);
+    }
+
     auto inferClockFromRegDependencies =
         [&](Value prop) -> std::optional<ClockPosInfo> {
-      if (!prop || numRegs == 0 || regClockPosByIndex.empty())
+      if (!prop)
         return std::nullopt;
+      bool hasRegClockInfo = numRegs > 0 && !regClockPosByIndex.empty();
+      bool hasDelayClockInfo =
+          totalDelaySlots > 0 && !delayClockPosBySlot.empty();
+      if (!hasRegClockInfo && !hasDelayClockInfo)
+        return std::nullopt;
+      size_t registerStartIndex =
+          origCircuitArgsSize >= numRegs ? origCircuitArgsSize - numRegs : 0;
       std::optional<ClockPosInfo> inferred;
       SmallVector<Value> worklist{prop};
       DenseSet<Value> visited;
@@ -6683,10 +6817,10 @@ struct VerifBoundedModelCheckingOpConversion
         if (!current || !visited.insert(current).second)
           continue;
         if (auto arg = dyn_cast<BlockArgument>(current)) {
-          if (arg.getOwner() == &circuitBlock &&
-              arg.getArgNumber() >= originalNumNonStateInputs &&
-              arg.getArgNumber() < originalArgCount) {
-            unsigned regIndex = arg.getArgNumber() - originalNumNonStateInputs;
+          if (hasRegClockInfo && arg.getOwner() == &circuitBlock &&
+              arg.getArgNumber() >= registerStartIndex &&
+              arg.getArgNumber() < origCircuitArgsSize) {
+            unsigned regIndex = arg.getArgNumber() - registerStartIndex;
             if (regIndex < regClockPosByIndex.size()) {
               auto info = regClockPosByIndex[regIndex];
               if (!info)
@@ -6696,6 +6830,21 @@ struct VerifBoundedModelCheckingOpConversion
               } else if (inferred->pos != info->pos ||
                          inferred->invert != info->invert) {
                 return std::nullopt;
+              }
+            }
+          }
+          if (hasDelayClockInfo && arg.getOwner() == &circuitBlock &&
+              arg.getArgNumber() >= origCircuitArgsSize &&
+              arg.getArgNumber() < origCircuitArgsSize + totalDelaySlots) {
+            size_t slot = arg.getArgNumber() - origCircuitArgsSize;
+            if (slot < delayClockPosBySlot.size()) {
+              auto info = delayClockPosBySlot[slot];
+              if (info) {
+                if (!inferred)
+                  inferred = info;
+                else if (inferred->pos != info->pos ||
+                         inferred->invert != info->invert)
+                  return std::nullopt;
               }
             }
           }
@@ -6820,7 +6969,18 @@ struct VerifBoundedModelCheckingOpConversion
                   (info.clockKey && !info.clockKey.getValue().empty()) ||
                   (info.clockName && !info.clockName.getValue().empty()) ||
                   inferred.sawClock;
+              bool hasConstClockKey =
+                  info.clockKey &&
+                  (info.clockKey.getValue() == "const0" ||
+                   info.clockKey.getValue() == "const1");
               if (explicitClock) {
+                // Constant clock keys never produce edges; keep the check
+                // unsampled instead of rejecting the design for lacking BMC
+                // clock inputs.
+                if (hasConstClockKey) {
+                  out.push_back(pos);
+                  continue;
+                }
                 std::string detail =
                     "clocked property uses a clock that is not a BMC clock input";
                 detail.append(" (num_bmc_clocks=");

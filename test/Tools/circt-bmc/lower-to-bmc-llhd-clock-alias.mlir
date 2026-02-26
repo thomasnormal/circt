@@ -32,5 +32,5 @@ hw.module @top(in %clk: !hw.struct<value: i1, unknown: i1>) {
 }
 
 // CHECK: verif.bmc
-// CHECK: bmc_input_names = ["bmc_clock",
+// CHECK: bmc_input_names = ["clk_0", "clk",
 // CHECK-NOT: bmc_clock_1

@@ -26,6 +26,7 @@
 #include "circt/Dialect/Emit/EmitDialect.h"
 #include "circt/Dialect/Emit/EmitPasses.h"
 #include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/HW/HWPasses.h"
 #include "circt/Dialect/LTL/LTLOps.h"
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
@@ -61,6 +62,7 @@
 #include "mlir/IR/BuiltinDialect.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/PassInstrumentation.h"
 #include "mlir/Pass/PassManager.h"
@@ -341,6 +343,48 @@ parseAndMergeModules(MLIRContext &context, TimingScope &ts) {
   return module;
 }
 
+static LogicalResult verifySelectedCircuitsExist(ModuleOp module) {
+  SmallVector<StringRef> availableHWModules;
+  for (auto hwModule : module.getOps<hw::HWModuleOp>())
+    availableHWModules.push_back(hwModule.getModuleName());
+
+  auto emitAvailableHWModules = [&]() {
+    if (availableHWModules.empty()) {
+      llvm::errs()
+          << "error: no hw.module symbols were found in the input. This "
+             "usually means frontend parsing failed upstream.\n";
+      return;
+    }
+    llvm::errs() << "note: available hw.module symbols:";
+    for (StringRef name : availableHWModules)
+      llvm::errs() << " " << name;
+    llvm::errs() << "\n";
+  };
+
+  auto verifyOne = [&](StringRef option, StringRef requested) {
+    Operation *symbol = SymbolTable::lookupSymbolIn(module, requested);
+    if (!symbol) {
+      llvm::errs() << "error: circuit '" << requested
+                   << "' selected by " << option << " was not found\n";
+      emitAvailableHWModules();
+      return failure();
+    }
+    if (!isa<hw::HWModuleOp>(symbol)) {
+      llvm::errs() << "error: symbol '" << requested << "' selected by "
+                   << option << " is not an hw.module\n";
+      emitAvailableHWModules();
+      return failure();
+    }
+    return success();
+  };
+
+  if (failed(verifyOne("-c1", firstModuleName)))
+    return failure();
+  if (failed(verifyOne("-c2", secondModuleName)))
+    return failure();
+  return success();
+}
+
 static void skipWhitespace(StringRef text, size_t &pos) {
   while (pos < text.size() &&
          isspace(static_cast<unsigned char>(text[pos])))
@@ -601,6 +645,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
     return failure();
 
   OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
+  if (failed(verifySelectedCircuitsExist(module.get())))
+    return failure();
 
   SmallVector<std::string> lecInputNames;
   SmallVector<std::string> lecOutputNames;
@@ -736,6 +782,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.nest<hw::HWModuleOp>().addPass(createLowerClockedAssertLikePass());
   pm.nest<hw::HWModuleOp>().addPass(createLowerLTLToCorePass());
   ExternalizeRegistersOptions externalizeOptions;
+  externalizeOptions.allowMultiClock = true;
   pm.addPass(createExternalizeRegisters(externalizeOptions));
   pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
   pm.addPass(hw::createHWConvertBitcasts());

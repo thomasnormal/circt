@@ -1,0 +1,3 @@
+// RUN: %S/../../utils/internal/checks/cvdp_golden_runner_snapshot_behavior_check.sh | FileCheck %s
+
+// CHECK: [cvdp-golden-runner-check] PASS

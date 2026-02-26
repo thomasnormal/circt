@@ -271,6 +271,15 @@ ir_mode = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] else "moore"
 avip_dir = pathlib.Path(sys.argv[9]) if len(sys.argv) > 9 and sys.argv[9] else None
 filelists = [pathlib.Path(p) for p in os.environ.get("FILELISTS_STR", "").split("\n") if p]
 
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "y", "on")
+
+enable_monitor_diag_rewrites = env_flag("AVIP_ENABLE_MONITOR_DIAG_REWRITES", False)
+strip_monitor_displays = env_flag("AVIP_STRIP_MONITOR_DISPLAYS", False)
+
 if not filelists:
     raise SystemExit("no filelists provided")
 
@@ -464,7 +473,7 @@ def rewrite_spi_text(path: pathlib.Path, text: str):
         if new_text != text:
             text = new_text
             changed = True
-    if path.name == "SpiMasterMonitorProxy.sv":
+    if enable_monitor_diag_rewrites and path.name == "SpiMasterMonitorProxy.sv":
         anchor = "    spiMasterMonitorBFM.sampleData(masterPacketStruct, masterConfigStruct);"
         block = """
     if ((masterPacketStruct.noOfMosiBitsTransfer == 0) ||
@@ -480,7 +489,7 @@ def rewrite_spi_text(path: pathlib.Path, text: str):
         if did_change:
             text = new_text
             changed = True
-    if path.name == "SpiSlaveMonitorProxy.sv":
+    if enable_monitor_diag_rewrites and path.name == "SpiSlaveMonitorProxy.sv":
         anchor = "    spiSlaveMonitorBFM.sampleData(slavePacketStruct, slaveConfigStruct);"
         block = """
     if ((slavePacketStruct.noOfMosiBitsTransfer == 0) ||
@@ -528,7 +537,7 @@ def rewrite_ahb_text(path: pathlib.Path, text: str):
             text = "\n".join(out) + "\n"
             changed = True
 
-    if path.name == "AhbMasterMonitorProxy.sv":
+    if enable_monitor_diag_rewrites and path.name == "AhbMasterMonitorProxy.sv":
         anchor = "    ahbMasterMonitorBFM.sampleData (structDataPacket,  structConfigPacket);"
         block = """
     if ((structDataPacket.htrans == 2'b00) || (structDataPacket.hready != 1'b1)) begin
@@ -549,7 +558,7 @@ def rewrite_ahb_text(path: pathlib.Path, text: str):
             text = new_text
             changed = True
 
-    if path.name == "AhbSlaveMonitorProxy.sv":
+    if enable_monitor_diag_rewrites and path.name == "AhbSlaveMonitorProxy.sv":
         anchor = "    ahbSlaveMonitorBFM.slaveSampleData (structDataPacket, structConfigPacket);"
         block = """
     if ((structDataPacket.htrans == 2'b00) || (structDataPacket.hreadyout != 1'b1)) begin
@@ -569,11 +578,22 @@ def rewrite_ahb_text(path: pathlib.Path, text: str):
         if did_change:
             text = new_text
             changed = True
+    if strip_monitor_displays and path.name in ("AhbMasterMonitorProxy.sv", "AhbSlaveMonitorProxy.sv"):
+        # These debug displays are very expensive in interpreted regressions.
+        new_text, dropped = re.subn(
+            r'^\s*\$display\("&&&&values inside[^;]*;\s*$\n?',
+            "",
+            text,
+            flags=re.M,
+        )
+        if dropped:
+            text = new_text
+            changed = True
     return text, changed
 
 def rewrite_i3c_text(path: pathlib.Path, text: str):
     changed = False
-    if path.name == "i3c_controller_monitor_proxy.sv":
+    if enable_monitor_diag_rewrites and path.name == "i3c_controller_monitor_proxy.sv":
         anchor = "    i3c_controller_mon_bfm_h.sample_data(struct_packet,struct_cfg);"
         block = """
     if ((struct_packet.operation == 1'b0) &&
@@ -589,7 +609,7 @@ def rewrite_i3c_text(path: pathlib.Path, text: str):
             text = new_text
             changed = True
 
-    if path.name == "i3c_target_monitor_proxy.sv":
+    if enable_monitor_diag_rewrites and path.name == "i3c_target_monitor_proxy.sv":
         anchor = "    i3c_target_mon_bfm_h.sample_data(struct_packet,struct_cfg);"
         block = """
     if ((struct_packet.operation == 1'b0) &&

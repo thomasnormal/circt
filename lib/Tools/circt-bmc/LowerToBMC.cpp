@@ -32,6 +32,7 @@
 #include "mlir/IR/OperationSupport.h"
 #include "mlir/IR/SymbolTable.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cctype>
@@ -56,6 +57,11 @@ struct LowerToBMCPass : public circt::impl::LowerToBMCBase<LowerToBMCPass> {
   void runOnOperation() override;
 };
 } // namespace
+
+static bool moduleContainsStatefulBehavior(Operation *moduleLikeOp,
+                                           SymbolTableCollection &symbolTables,
+                                           DenseMap<Operation *, bool> &cache,
+                                           DenseSet<Operation *> &active);
 
 static LogicalResult
 inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
@@ -93,8 +99,87 @@ inlineLlhdCombinationalOps(verif::BoundedModelCheckingOp bmcOp) {
     op.erase();
   }
 
+  auto isLlhdEdge = [](Operation *op) {
+    if (!op)
+      return false;
+    if (op->getName().getStringRef().starts_with("llhd."))
+      return true;
+    return op->getDialect() && op->getDialect()->getNamespace() == "llhd";
+  };
+
+  SymbolTableCollection symbolTables;
+  DenseMap<Operation *, bool> statefulModuleCache;
+  DenseSet<Operation *> statefulModuleActive;
+  DenseMap<Operation *, bool> statefulInstanceCache;
+  DenseMap<Operation *, DenseMap<Value, bool>> instanceFeedbackCache;
+  DenseMap<Operation *, DenseSet<Value>> instanceFeedbackActive;
+
+  auto isStatefulInstance = [&](hw::InstanceOp instanceOp) {
+    if (auto it = statefulInstanceCache.find(instanceOp.getOperation());
+        it != statefulInstanceCache.end())
+      return it->second;
+    bool stateful = false;
+    if (auto *referenced =
+            symbolTables.lookupNearestSymbolFrom(instanceOp,
+                                                 instanceOp.getModuleNameAttr()))
+      stateful = moduleContainsStatefulBehavior(referenced, symbolTables,
+                                                statefulModuleCache,
+                                                statefulModuleActive);
+    statefulInstanceCache[instanceOp.getOperation()] = stateful;
+    return stateful;
+  };
+
+  auto operandDependsOnInstanceResult =
+      [&](Value operand, hw::InstanceOp instanceOp, auto &&self) -> bool {
+    auto *instance = instanceOp.getOperation();
+    auto &cache = instanceFeedbackCache[instance];
+    if (auto it = cache.find(operand); it != cache.end())
+      return it->second;
+
+    auto &active = instanceFeedbackActive[instance];
+    if (!active.insert(operand).second)
+      return false;
+
+    bool depends = false;
+    for (Value result : instanceOp.getResults()) {
+      if (operand == result) {
+        depends = true;
+        break;
+      }
+    }
+    if (!depends) {
+      if (auto *def = operand.getDefiningOp()) {
+        if (def == instance)
+          depends = true;
+        else
+          for (Value nested : def->getOperands())
+            if (self(nested, instanceOp, self)) {
+              depends = true;
+              break;
+            }
+      }
+    }
+
+    active.erase(operand);
+    cache[operand] = depends;
+    return depends;
+  };
+
+  auto shouldBreakCycleEdge = [&](Value operand, Operation *user) {
+    Operation *def = operand.getDefiningOp();
+    if (isLlhdEdge(def) || isLlhdEdge(user))
+      return true;
+
+    auto instanceOp = dyn_cast_or_null<hw::InstanceOp>(user);
+    if (!instanceOp || !isStatefulInstance(instanceOp))
+      return false;
+
+    return operandDependsOnInstanceResult(operand, instanceOp,
+                                          operandDependsOnInstanceResult);
+  };
+
   for (Block &block : bmcOp.getCircuit()) {
-    if (!sortTopologically(&block)) {
+    if (!sortTopologically(&block, shouldBreakCycleEdge)) {
       bmcOp.emitError(
           "could not resolve cycles after inlining llhd.combinational");
       return failure();
@@ -311,6 +396,180 @@ static bool breakSelfPreservingOrCycles(hw::HWModuleOp hwModule,
     extract.getResult().replaceAllUsesWith(inputArg);
     if (extract->use_empty())
       extract.erase();
+  }
+
+  return true;
+}
+
+static bool moduleContainsStatefulBehavior(Operation *moduleLikeOp,
+                                           SymbolTableCollection &symbolTables,
+                                           DenseMap<Operation *, bool> &cache,
+                                           DenseSet<Operation *> &active) {
+  if (!moduleLikeOp)
+    return false;
+  if (auto it = cache.find(moduleLikeOp); it != cache.end())
+    return it->second;
+  if (!active.insert(moduleLikeOp).second)
+    return true;
+
+  bool hasState = false;
+  if (isa<hw::HWModuleExternOp>(moduleLikeOp))
+    hasState = true;
+  if (auto hwModule = dyn_cast<hw::HWModuleOp>(moduleLikeOp)) {
+    hwModule.walk([&](Operation *op) {
+      if (op == hwModule.getOperation())
+        return WalkResult::advance();
+      if (isa<seq::CompRegOp, seq::FirRegOp, llhd::WaitOp, llhd::ProcessOp>(
+              op)) {
+        hasState = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+
+    if (!hasState) {
+      for (auto inst : hwModule.getBodyBlock()->getOps<hw::InstanceOp>()) {
+        if (auto *referenced = symbolTables.lookupNearestSymbolFrom(
+                inst, inst.getModuleNameAttr())) {
+          if (moduleContainsStatefulBehavior(referenced, symbolTables, cache,
+                                             active)) {
+            hasState = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  active.erase(moduleLikeOp);
+  cache[moduleLikeOp] = hasState;
+  return hasState;
+}
+
+static bool breakStatefulInstanceFeedbackCycles(hw::HWModuleOp hwModule,
+                                                Namespace &names) {
+  if (hwModule.getBody().empty())
+    return false;
+
+  SymbolTableCollection symbolTables;
+  DenseMap<Operation *, bool> statefulModuleCache;
+  DenseSet<Operation *> statefulModuleActive;
+  DenseMap<Operation *, bool> statefulInstanceCache;
+  DenseMap<Operation *, DenseMap<Value, bool>> instanceFeedbackCache;
+  DenseMap<Operation *, DenseSet<Value>> instanceFeedbackActive;
+
+  auto isStatefulInstance = [&](hw::InstanceOp instanceOp) {
+    if (auto it = statefulInstanceCache.find(instanceOp.getOperation());
+        it != statefulInstanceCache.end())
+      return it->second;
+    bool stateful = false;
+    if (auto *referenced =
+            symbolTables.lookupNearestSymbolFrom(instanceOp,
+                                                 instanceOp.getModuleNameAttr()))
+      stateful = moduleContainsStatefulBehavior(referenced, symbolTables,
+                                                statefulModuleCache,
+                                                statefulModuleActive);
+    statefulInstanceCache[instanceOp.getOperation()] = stateful;
+    return stateful;
+  };
+
+  auto operandDependsOnInstanceResult =
+      [&](Value operand, hw::InstanceOp instanceOp, auto &&self) -> bool {
+    auto *instance = instanceOp.getOperation();
+    auto &cache = instanceFeedbackCache[instance];
+    if (auto it = cache.find(operand); it != cache.end())
+      return it->second;
+
+    auto &active = instanceFeedbackActive[instance];
+    if (!active.insert(operand).second)
+      return false;
+
+    bool depends = false;
+    for (Value result : instanceOp.getResults()) {
+      if (operand == result) {
+        depends = true;
+        break;
+      }
+    }
+    if (!depends) {
+      if (auto *def = operand.getDefiningOp()) {
+        if (def == instance)
+          depends = true;
+        else
+          for (Value nested : def->getOperands())
+            if (self(nested, instanceOp, self)) {
+              depends = true;
+              break;
+            }
+      }
+    }
+
+    active.erase(operand);
+    cache[operand] = depends;
+    return depends;
+  };
+
+  struct FeedbackEdge {
+    hw::InstanceOp instance;
+    unsigned operandIndex;
+    Type operandType;
+  };
+  SmallVector<FeedbackEdge> edgesToBreak;
+  for (auto instanceOp : hwModule.getBodyBlock()->getOps<hw::InstanceOp>()) {
+    if (!isStatefulInstance(instanceOp))
+      continue;
+    for (auto [idx, operand] : llvm::enumerate(instanceOp->getOperands())) {
+      if (operandDependsOnInstanceResult(operand, instanceOp,
+                                         operandDependsOnInstanceResult))
+        edgesToBreak.push_back(
+            {instanceOp, static_cast<unsigned>(idx), operand.getType()});
+    }
+  }
+
+  if (edgesToBreak.empty())
+    return false;
+
+  unsigned insertPos = hwModule.getNumInputPorts();
+  if (auto numRegsAttr = hwModule->getAttrOfType<IntegerAttr>("num_regs")) {
+    int64_t numRegs = numRegsAttr.getInt();
+    if (numRegs > 0 && numRegs <= static_cast<int64_t>(insertPos))
+      insertPos -= static_cast<unsigned>(numRegs);
+  }
+
+  for (auto &edge : edgesToBreak) {
+    std::string name = names.newName("bmc_stateful_cycle_break").str();
+    auto inputName = StringAttr::get(hwModule.getContext(), name);
+    auto inputArg = hwModule.insertInput(insertPos, inputName,
+                                         edge.operandType).second;
+    ++insertPos;
+    edge.instance->setOperand(edge.operandIndex, inputArg);
+  }
+
+  return true;
+}
+
+static bool lowerSymbolicValuesToInputs(hw::HWModuleOp hwModule,
+                                        Namespace &names) {
+  SmallVector<verif::SymbolicValueOp> symbolicOps;
+  hwModule.walk([&](verif::SymbolicValueOp op) { symbolicOps.push_back(op); });
+  if (symbolicOps.empty())
+    return false;
+
+  unsigned insertPos = hwModule.getNumInputPorts();
+  if (auto numRegsAttr = hwModule->getAttrOfType<IntegerAttr>("num_regs")) {
+    int64_t numRegs = numRegsAttr.getInt();
+    if (numRegs > 0 && numRegs <= static_cast<int64_t>(insertPos))
+      insertPos -= static_cast<unsigned>(numRegs);
+  }
+
+  for (auto symbolicOp : symbolicOps) {
+    std::string name = names.newName("bmc_symbolic_value").str();
+    auto inputName = StringAttr::get(hwModule.getContext(), name);
+    auto inputArg =
+        hwModule.insertInput(insertPos, inputName, symbolicOp.getType()).second;
+    ++insertPos;
+    symbolicOp.getResult().replaceAllUsesWith(inputArg);
+    symbolicOp.erase();
   }
 
   return true;
@@ -683,6 +942,23 @@ void LowerToBMCPass::runOnOperation() {
   // form `x = or(concat(extract x, 0), y)`. Preserve these high bits as fresh
   // unconstrained inputs so strict cycle checks can still reject other cycles.
   (void)breakSelfPreservingOrCycles(hwModule, names);
+  // Stateful instance feedback can appear cyclic in graph regions even when the
+  // cycle crosses sequential state within the callee. Break those edges by
+  // introducing unconstrained inputs at the feedback points.
+  unsigned statefulCycleBreakIterations = 0;
+  while (breakStatefulInstanceFeedbackCycles(hwModule, names)) {
+    ++statefulCycleBreakIterations;
+    // Defensive guard: each iteration must strictly cut at least one instance
+    // feedback edge, so non-convergence indicates malformed feedback analysis.
+    if (statefulCycleBreakIterations > 4096) {
+      hwModule.emitError(
+          "stateful instance feedback cycle breaking did not converge");
+      return signalPassFailure();
+    }
+  }
+  // `verif.symbolic_value` is only valid under `hw.module` / `verif.formal`.
+  // Lower these to fresh module inputs before moving the body into `verif.bmc`.
+  (void)lowerSymbolicValuesToInputs(hwModule, names);
 
   auto isLlhdEdge = [](Operation *op) {
     if (!op)
@@ -694,12 +970,78 @@ void LowerToBMCPass::runOnOperation() {
       return true;
     return op->getDialect() && op->getDialect()->getNamespace() == "llhd";
   };
+  SymbolTableCollection symbolTables;
+  DenseMap<Operation *, bool> statefulModuleCache;
+  DenseSet<Operation *> statefulModuleActive;
+  DenseMap<Operation *, bool> statefulInstanceCache;
+  DenseMap<Operation *, DenseMap<Value, bool>> instanceFeedbackCache;
+  DenseMap<Operation *, DenseSet<Value>> instanceFeedbackActive;
+
+  auto isStatefulInstance = [&](hw::InstanceOp instanceOp) {
+    if (auto it = statefulInstanceCache.find(instanceOp.getOperation());
+        it != statefulInstanceCache.end())
+      return it->second;
+    bool stateful = false;
+    if (auto *referenced =
+            symbolTables.lookupNearestSymbolFrom(instanceOp,
+                                                 instanceOp.getModuleNameAttr()))
+      stateful = moduleContainsStatefulBehavior(referenced, symbolTables,
+                                                statefulModuleCache,
+                                                statefulModuleActive);
+    statefulInstanceCache[instanceOp.getOperation()] = stateful;
+    return stateful;
+  };
+
+  auto operandDependsOnInstanceResult =
+      [&](Value operand, hw::InstanceOp instanceOp, auto &&self) -> bool {
+    auto *instance = instanceOp.getOperation();
+    auto &cache = instanceFeedbackCache[instance];
+    if (auto it = cache.find(operand); it != cache.end())
+      return it->second;
+
+    auto &active = instanceFeedbackActive[instance];
+    if (!active.insert(operand).second)
+      return false;
+
+    bool depends = false;
+    for (Value result : instanceOp.getResults()) {
+      if (operand == result) {
+        depends = true;
+        break;
+      }
+    }
+    if (!depends) {
+      if (auto *def = operand.getDefiningOp()) {
+        if (def == instance)
+          depends = true;
+        else
+          for (Value nested : def->getOperands())
+            if (self(nested, instanceOp, self)) {
+              depends = true;
+              break;
+            }
+      }
+    }
+
+    active.erase(operand);
+    cache[operand] = depends;
+    return depends;
+  };
+
   auto shouldBreakLlhdCycleEdge = [&](Value operand, Operation *user) {
     Operation *def = operand.getDefiningOp();
     // LLHD lowering rewrites signal/probe/drive semantics later in this pass.
     // Treat LLHD-related edges as ready for this initial ordering step so mixed
     // LLHD/dataflow feedback does not fail before that rewrite runs.
-    return isLlhdEdge(def) || isLlhdEdge(user);
+    if (isLlhdEdge(def) || isLlhdEdge(user))
+      return true;
+
+    auto instanceOp = dyn_cast_or_null<hw::InstanceOp>(user);
+    if (!instanceOp || !isStatefulInstance(instanceOp))
+      return false;
+
+    return operandDependsOnInstanceResult(operand, instanceOp,
+                                          operandDependsOnInstanceResult);
   };
   if (!sortTopologically(&hwModule.getBodyRegion().front(),
                          shouldBreakLlhdCycleEdge)) {
@@ -2035,7 +2377,7 @@ void LowerToBMCPass::runOnOperation() {
       for (const auto &input : clockInputs)
         clockNames.push_back(resolveClockInputName(input));
 
-      DenseSet<StringRef> usedClockNames;
+      llvm::StringSet<> usedClockNames;
       auto chooseClockName = [&](size_t idx) -> std::string {
         std::string name;
         if (idx < clockNames.size())
@@ -2204,6 +2546,23 @@ void LowerToBMCPass::runOnOperation() {
         toClockOp.erase();
       }
 
+      DenseMap<StringAttr, StringAttr> clockKeyRemap;
+      for (auto [idx, input] : llvm::enumerate(clockInputs)) {
+        if (!input.inputKey || idx >= clockKeyAttrs.size())
+          continue;
+        auto mappedKeyAttr = dyn_cast_or_null<StringAttr>(clockKeyAttrs[idx]);
+        if (!mappedKeyAttr || mappedKeyAttr.getValue().empty())
+          continue;
+        auto oldKeyAttr = builder.getStringAttr(*input.inputKey);
+        if (oldKeyAttr == mappedKeyAttr)
+          continue;
+        auto it = clockKeyRemap.find(oldKeyAttr);
+        if (it != clockKeyRemap.end() && it->second != mappedKeyAttr) {
+          hwModule.emitError("clock key remaps to multiple BMC clock inputs");
+          return signalPassFailure();
+        }
+        clockKeyRemap.try_emplace(oldKeyAttr, mappedKeyAttr);
+      }
       // Rewrite ltl.clock operands to reference the corresponding BMC clock
       // input. This avoids treating structurally equivalent clock expressions
       // as unrelated to the inserted clock ports.
@@ -2211,6 +2570,7 @@ void LowerToBMCPass::runOnOperation() {
         if (auto key = getI1ValueKeyWithBlockArgNames(clockOp.getClock(),
                                                       getBlockArgName))
           clockOp->setAttr("bmc.clock_key", builder.getStringAttr(*key));
+        auto oldKeyAttr = clockOp->getAttrOfType<StringAttr>("bmc.clock_key");
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {
           if (clockOp.use_empty()) {
@@ -2229,10 +2589,37 @@ void LowerToBMCPass::runOnOperation() {
             seq::FromClockOp::create(builder, loc, newClocks[*idx]);
         auto rebuilt = ltl::ClockOp::create(builder, loc, clockOp.getInput(),
                                             clockOp.getEdge(), fromClk);
-        if (auto keyAttr = clockOp->getAttr("bmc.clock_key"))
-          rebuilt->setAttr("bmc.clock_key", keyAttr);
+        StringAttr mappedKeyAttr = oldKeyAttr;
+        if (*idx < clockKeyAttrs.size()) {
+          if (auto keyAttr = dyn_cast_or_null<StringAttr>(clockKeyAttrs[*idx]);
+              keyAttr && !keyAttr.getValue().empty())
+            mappedKeyAttr = keyAttr;
+        }
+        if (mappedKeyAttr && !mappedKeyAttr.getValue().empty())
+          rebuilt->setAttr("bmc.clock_key", mappedKeyAttr);
+        if (oldKeyAttr && mappedKeyAttr && oldKeyAttr != mappedKeyAttr) {
+          auto it = clockKeyRemap.find(oldKeyAttr);
+          if (it != clockKeyRemap.end() && it->second != mappedKeyAttr) {
+            clockOp.emitError("clock key remaps to multiple BMC clock inputs");
+            return signalPassFailure();
+          }
+          clockKeyRemap.try_emplace(oldKeyAttr, mappedKeyAttr);
+        }
         clockOp.replaceAllUsesWith(rebuilt.getResult());
         clockOp.erase();
+      }
+      if (!clockKeyRemap.empty()) {
+        hwModule.walk([&](Operation *op) {
+          if (!isa<verif::AssertOp, verif::AssumeOp, verif::CoverOp>(op))
+            return;
+          auto keyAttr = op->getAttrOfType<StringAttr>("bmc.clock_key");
+          if (!keyAttr || keyAttr.getValue().empty())
+            return;
+          auto mappedIt = clockKeyRemap.find(keyAttr);
+          if (mappedIt == clockKeyRemap.end())
+            return;
+          op->setAttr("bmc.clock_key", mappedIt->second);
+        });
       }
       if (!clockNameRemap.empty()) {
         if (auto regClocks =
@@ -2265,6 +2652,126 @@ void LowerToBMCPass::runOnOperation() {
             return;
           op->setAttr("bmc.clock", it->second);
         });
+      }
+      DenseMap<int64_t, StringAttr> clockNameByArgIndex;
+      DenseMap<int64_t, StringAttr> clockKeyByArgIndex;
+      for (auto attr : clockSourceAttrs) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+        auto argIndexAttr = dict.getAs<IntegerAttr>("arg_index");
+        auto clockPosAttr = dict.getAs<IntegerAttr>("clock_pos");
+        if (!argIndexAttr || !clockPosAttr)
+          continue;
+        int64_t argIndex = argIndexAttr.getInt();
+        int64_t clockPos = clockPosAttr.getInt();
+        if (clockPos < 0)
+          continue;
+        unsigned pos = static_cast<unsigned>(clockPos);
+        if (pos < actualClockNames.size())
+          if (auto nameAttr = dyn_cast<StringAttr>(actualClockNames[pos]);
+              nameAttr && !nameAttr.getValue().empty())
+            clockNameByArgIndex[argIndex] = nameAttr;
+        if (pos < clockKeyAttrs.size())
+          if (auto keyAttr = dyn_cast<StringAttr>(clockKeyAttrs[pos]);
+              keyAttr && !keyAttr.getValue().empty())
+            clockKeyByArgIndex[argIndex] = keyAttr;
+      }
+
+      SmallVector<Attribute> regClockSourceAttrs;
+      if (auto regClockSources =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+        regClockSourceAttrs.assign(regClockSources.begin(),
+                                   regClockSources.end());
+        bool changedRegClockSources = false;
+        for (auto &attr : regClockSourceAttrs) {
+          auto dict = dyn_cast<DictionaryAttr>(attr);
+          if (!dict)
+            continue;
+          auto argIndexAttr = dict.getAs<IntegerAttr>("arg_index");
+          auto keyAttr = dict.getAs<StringAttr>("clock_key");
+          StringAttr updatedKey = keyAttr;
+          if (updatedKey && !updatedKey.getValue().empty()) {
+            if (auto remappedIt = clockKeyRemap.find(updatedKey);
+                remappedIt != clockKeyRemap.end())
+              updatedKey = remappedIt->second;
+          }
+          if (!updatedKey || updatedKey.getValue().empty()) {
+            if (argIndexAttr) {
+              auto mappedIt = clockKeyByArgIndex.find(argIndexAttr.getInt());
+              if (mappedIt != clockKeyByArgIndex.end())
+                updatedKey = mappedIt->second;
+            }
+          }
+          if (!updatedKey || updatedKey.getValue().empty())
+            continue;
+          if (keyAttr && keyAttr == updatedKey)
+            continue;
+          SmallVector<NamedAttribute> fields;
+          fields.reserve(dict.size() + (keyAttr ? 0 : 1));
+          bool replaced = false;
+          for (auto named : dict) {
+            if (named.getName().strref() == "clock_key") {
+              fields.push_back(
+                  builder.getNamedAttr("clock_key", updatedKey));
+              replaced = true;
+            } else {
+              fields.push_back(named);
+            }
+          }
+          if (!replaced)
+            fields.push_back(
+                builder.getNamedAttr("clock_key", updatedKey));
+          attr = builder.getDictionaryAttr(fields);
+          changedRegClockSources = true;
+        }
+        if (changedRegClockSources)
+          hwModule->setAttr("bmc_reg_clock_sources",
+                            ArrayAttr::get(ctx, regClockSourceAttrs));
+      }
+
+      if (auto regClocks =
+              hwModule->getAttrOfType<ArrayAttr>("bmc_reg_clocks")) {
+        SmallVector<Attribute> remapped;
+        remapped.reserve(regClocks.size());
+        bool changedRegClocks = false;
+        for (auto [idx, attr] : llvm::enumerate(regClocks)) {
+          auto nameAttr = dyn_cast<StringAttr>(attr);
+          if (!nameAttr || !nameAttr.getValue().empty()) {
+            remapped.push_back(attr);
+            continue;
+          }
+
+          StringAttr replacement;
+          if (idx < regClockSourceAttrs.size()) {
+            if (auto dict = dyn_cast<DictionaryAttr>(regClockSourceAttrs[idx])) {
+              if (auto argIndexAttr = dict.getAs<IntegerAttr>("arg_index")) {
+                if (auto mapped = clockNameByArgIndex.find(argIndexAttr.getInt());
+                    mapped != clockNameByArgIndex.end())
+                  replacement = mapped->second;
+              }
+              if ((!replacement || replacement.getValue().empty()) &&
+                  dict.getAs<StringAttr>("clock_key"))
+                replacement = dict.getAs<StringAttr>("clock_key");
+            }
+          }
+          if ((!replacement || replacement.getValue().empty()) &&
+              !actualClockNames.empty()) {
+            auto firstClock = dyn_cast<StringAttr>(actualClockNames.front());
+            if (firstClock && !firstClock.getValue().empty())
+              replacement = firstClock;
+          }
+
+          if (replacement && !replacement.getValue().empty()) {
+            remapped.push_back(replacement);
+            changedRegClocks = true;
+          } else {
+            remapped.push_back(attr);
+          }
+        }
+        if (changedRegClocks)
+          hwModule->setAttr("bmc_reg_clocks",
+                            ArrayAttr::get(ctx, remapped));
       }
       // If there is a single derived BMC clock input, remap any explicit
       // bmc.clock attributes that don't match an inserted clock name to the

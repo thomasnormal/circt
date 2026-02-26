@@ -25,5 +25,5 @@ func.func @for_smtlib_allows_llvm_insert_extract_projection() -> (i1) {
 
 // CHECK: func.func @for_smtlib_allows_llvm_insert_extract_projection
 // CHECK: smt.solver
-// CHECK: arith.constant true
+// CHECK: smt.constant false
 // CHECK-NOT: llvm.extractvalue

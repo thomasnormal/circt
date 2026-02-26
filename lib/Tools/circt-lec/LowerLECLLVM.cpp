@@ -34,6 +34,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/STLExtras.h"
+#include <optional>
 
 using namespace mlir;
 using namespace circt;
@@ -48,6 +49,162 @@ struct LowerLECLLVMPass
     : public circt::impl::LowerLECLLVMBase<LowerLECLLVMPass> {
   void runOnOperation() override;
 };
+
+static bool isSupportedScalarType(Type type) {
+  return isa<IntegerType, FloatType>(type);
+}
+
+static std::optional<TypedAttr> coerceToTypedScalarAttr(Attribute attr,
+                                                        Type targetType) {
+  if (!attr)
+    return std::nullopt;
+  if (!isSupportedScalarType(targetType))
+    return std::nullopt;
+
+  if (auto typedAttr = dyn_cast<TypedAttr>(attr)) {
+    if (typedAttr.getType() == targetType)
+      return typedAttr;
+  }
+
+  if (auto intTy = dyn_cast<IntegerType>(targetType)) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return IntegerAttr::get(intTy, intAttr.getValue().zextOrTrunc(intTy.getWidth()));
+    if (auto boolAttr = dyn_cast<BoolAttr>(attr))
+      return IntegerAttr::get(intTy, boolAttr.getValue() ? 1 : 0);
+    if (isa<LLVM::ZeroAttr>(attr))
+      return IntegerAttr::get(intTy, 0);
+    return std::nullopt;
+  }
+
+  if (auto floatTy = dyn_cast<FloatType>(targetType)) {
+    if (auto floatAttr = dyn_cast<FloatAttr>(attr))
+      return FloatAttr::get(floatTy, floatAttr.getValue());
+    if (auto intAttr = dyn_cast<IntegerAttr>(attr))
+      return FloatAttr::get(floatTy, intAttr.getValue().isZero() ? 0.0 : 1.0);
+    if (isa<LLVM::ZeroAttr>(attr))
+      return FloatAttr::get(floatTy, 0.0);
+  }
+  return std::nullopt;
+}
+
+struct GlobalLoadAccess {
+  LLVM::AddressOfOp addrOf;
+  SmallVector<LLVM::GEPOp, 4> geps;
+};
+
+static std::optional<GlobalLoadAccess> resolveGlobalLoadAccess(Value ptr) {
+  GlobalLoadAccess access;
+  while (true) {
+    if (auto addrOf = ptr.getDefiningOp<LLVM::AddressOfOp>()) {
+      access.addrOf = addrOf;
+      return access;
+    }
+    if (auto gep = ptr.getDefiningOp<LLVM::GEPOp>()) {
+      access.geps.push_back(gep);
+      ptr = gep.getBase();
+      continue;
+    }
+    if (auto bitcast = ptr.getDefiningOp<LLVM::BitcastOp>()) {
+      ptr = bitcast.getArg();
+      continue;
+    }
+    if (auto addrCast = ptr.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+      ptr = addrCast.getArg();
+      continue;
+    }
+    if (auto cast = ptr.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+        return std::nullopt;
+      ptr = cast.getOperand(0);
+      continue;
+    }
+    return std::nullopt;
+  }
+}
+
+static std::optional<StringAttr> getRootGlobalName(Value ptr) {
+  auto access = resolveGlobalLoadAccess(ptr);
+  if (!access)
+    return std::nullopt;
+  return access->addrOf.getGlobalNameAttr().getAttr();
+}
+
+static bool hasAnyStoreToGlobal(ModuleOp module, StringAttr globalName,
+                                DenseMap<StringAttr, bool> &cache) {
+  auto it = cache.find(globalName);
+  if (it != cache.end())
+    return it->second;
+
+  bool hasStore = false;
+  module.walk([&](LLVM::StoreOp store) -> WalkResult {
+    auto rootName = getRootGlobalName(store.getAddr());
+    if (!rootName || *rootName != globalName)
+      return WalkResult::advance();
+    hasStore = true;
+    return WalkResult::interrupt();
+  });
+  cache.try_emplace(globalName, hasStore);
+  return hasStore;
+}
+
+static std::optional<TypedAttr> extractGlobalScalarLoadConstant(
+    LLVM::GlobalOp global, Type loadType, ArrayRef<LLVM::GEPOp> geps) {
+  // Keep this targeted to direct scalar globals used by proc-assert guards.
+  if (!geps.empty())
+    return std::nullopt;
+  if (global.getGlobalType() != loadType)
+    return std::nullopt;
+  if (!isSupportedScalarType(loadType))
+    return std::nullopt;
+
+  if (auto typedAttr = coerceToTypedScalarAttr(global.getValueOrNull(), loadType))
+    return typedAttr;
+
+  auto *initializerBlock = global.getInitializerBlock();
+  if (!initializerBlock)
+    return std::nullopt;
+  auto initRet = dyn_cast<LLVM::ReturnOp>(initializerBlock->getTerminator());
+  if (!initRet || initRet.getNumOperands() != 1)
+    return std::nullopt;
+
+  Value initValue = initRet.getOperand(0);
+  if (auto cst = initValue.getDefiningOp<LLVM::ConstantOp>())
+    return coerceToTypedScalarAttr(cst.getValue(), loadType);
+  if (initValue.getDefiningOp<LLVM::ZeroOp>()) {
+    if (auto intTy = dyn_cast<IntegerType>(loadType))
+      return IntegerAttr::get(intTy, 0);
+    if (auto floatTy = dyn_cast<FloatType>(loadType))
+      return FloatAttr::get(floatTy, 0.0);
+  }
+  return std::nullopt;
+}
+
+static void eraseUnusedAddressChain(Value value) {
+  auto *def = value.getDefiningOp();
+  if (!def || !def->use_empty())
+    return;
+
+  Value next;
+  if (auto gep = dyn_cast<LLVM::GEPOp>(def)) {
+    next = gep.getBase();
+  } else if (auto bitcast = dyn_cast<LLVM::BitcastOp>(def)) {
+    next = bitcast.getArg();
+  } else if (auto addrCast = dyn_cast<LLVM::AddrSpaceCastOp>(def)) {
+    next = addrCast.getArg();
+  } else if (auto cast = dyn_cast<UnrealizedConversionCastOp>(def)) {
+    if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+      return;
+    next = cast.getOperand(0);
+  } else if (isa<LLVM::AddressOfOp>(def)) {
+    def->erase();
+    return;
+  } else {
+    return;
+  }
+
+  def->erase();
+  eraseUnusedAddressChain(next);
+}
 
 static bool foldSingleBlockAlloca(LLVM::AllocaOp alloca) {
   Value ptr = alloca.getResult();
@@ -1531,6 +1688,64 @@ void LowerLECLLVMPass::runOnOperation() {
   };
 
   runCleanup();
+
+  // Fold immutable scalar llvm.global loads to constants, then drop dead LLVM
+  // declarations/symbols so strict unsupported-op checks only trigger on real
+  // residual lowering gaps.
+  DenseMap<StringAttr, bool> globalHasStoreCache;
+  SmallVector<LLVM::LoadOp, 16> globalLoads;
+  module.walk([&](LLVM::LoadOp load) { globalLoads.push_back(load); });
+  for (LLVM::LoadOp load : globalLoads) {
+    if (!load || !load->getParentOp())
+      continue;
+    auto access = resolveGlobalLoadAccess(load.getAddr());
+    if (!access)
+      continue;
+    StringAttr globalName = access->addrOf.getGlobalNameAttr().getAttr();
+    auto global = module.lookupSymbol<LLVM::GlobalOp>(globalName.getValue());
+    if (!global)
+      continue;
+
+    bool isImmutable = static_cast<bool>(global.getConstant());
+    if (!isImmutable)
+      isImmutable = !hasAnyStoreToGlobal(module, globalName, globalHasStoreCache);
+    if (!isImmutable)
+      continue;
+
+    auto typedAttr =
+        extractGlobalScalarLoadConstant(global, load.getType(), access->geps);
+    if (!typedAttr)
+      continue;
+    auto intAttr = dyn_cast<IntegerAttr>(*typedAttr);
+    if (!intAttr)
+      continue;
+
+    OpBuilder builder(load);
+    auto constOp = hw::ConstantOp::create(builder, load.getLoc(), intAttr);
+    load.replaceAllUsesWith(constOp.getResult());
+    Value loadAddr = load.getAddr();
+    load.erase();
+
+    eraseUnusedAddressChain(loadAddr);
+  }
+
+  runCleanup();
+
+  SmallVector<LLVM::GlobalOp, 8> deadGlobals;
+  module.walk([&](LLVM::GlobalOp global) {
+    if (global->use_empty())
+      deadGlobals.push_back(global);
+  });
+  for (auto global : deadGlobals)
+    global.erase();
+
+  SmallVector<LLVM::LLVMFuncOp, 8> deadDecls;
+  module.walk([&](LLVM::LLVMFuncOp func) {
+    if (func.isExternal() && func->use_empty())
+      deadDecls.push_back(func);
+  });
+  for (auto decl : deadDecls)
+    decl.erase();
 
   bool erasedAllocaFinal = true;
   while (erasedAllocaFinal) {

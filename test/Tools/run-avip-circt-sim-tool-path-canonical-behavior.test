@@ -1,0 +1,3 @@
+// RUN: %S/../../utils/internal/checks/avip_circt_sim_tool_path_canonical_behavior_check.sh | FileCheck %s
+
+// CHECK: [avip-circt-sim-tool-canonical-check] PASS

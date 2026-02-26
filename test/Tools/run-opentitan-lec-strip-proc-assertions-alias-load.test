@@ -1,0 +1,19 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl %t/ot/hw/ip/prim/rtl %t/ot/hw/ip/prim_xilinx/rtl %t/bin %t/work
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_pkg.sv %t/ot/hw/ip/aes/rtl/aes_reg_pkg.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright_pkg.sv
+// RUN: touch %t/ot/hw/ip/prim/rtl/prim_util_pkg.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_buf.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_xor2.sv
+// RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\n[ -n \"$out\" ] && : > \"$out\"\nexit 0\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\nout=\"\"\nwhile [ \"$1\" != \"\" ]; do if [ \"$1\" = \"-o\" ]; then shift; out=\"$1\"; fi; shift; done\ncat > \"$out\" <<\"MLIR\"\nmodule {\n  llvm.mlir.global internal @__circt_proc_assertions_enabled(false) {addr_space = 0 : i32} : i1\n  hw.module @aes_sbox_lut_wrapper() {\n    hw.output\n  }\n  hw.module @aes_sbox_canright_wrapper() {\n    __P__q0 = llvm.mlir.addressof @__circt_proc_assertions_enabled : !llvm.ptr\n    __P__q1 = builtin.unrealized_conversion_cast __P__q0 : !llvm.ptr to !llvm.ptr\n    __P__enabled = llvm.load __P__q1 : !llvm.ptr -> i1\n    hw.output\n  }\n}\nMLIR\nexit 0\n' > %t/bin/circt-opt
+// RUN: sed -i 's/__P__/%/g' %t/bin/circt-opt
+// RUN: chmod +x %t/bin/circt-opt
+// RUN: printf '#!/bin/sh\nmlir=\"$1\"\nif rg -q \"llvm\\.load .*q1\" \"$mlir\"; then\n  echo \"unexpected remaining proc-assert alias load\" >&2\n  exit 1\nfi\nif rg -q \"__circt_proc_assertions_enabled\" \"$mlir\"; then\n  echo \"unexpected remaining proc-assert global\" >&2\n  exit 1\nfi\nexit 0\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/bin/circt-lec
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_SMOKE_ONLY=1 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir | FileCheck %s
+// RUN: FileCheck %s --check-prefix=RESULTPASS < %t/results.tsv
+//
+// CHECK: Running LEC on 1 AES S-Box implementation(s)...
+// CHECK: aes_sbox_canright OK
+// CHECK: LEC completed successfully.
+// RESULTPASS: PASS{{[[:space:]]+}}aes_sbox_canright{{[[:space:]]+}}{{.*}}aes_sbox_canright{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}SMOKE_ONLY

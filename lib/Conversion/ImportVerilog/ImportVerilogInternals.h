@@ -31,6 +31,8 @@ namespace ast {
 class LocalAssertionVarSymbol;
 class AssertionExpr;
 class AssertionPortSymbol;
+class BinsSelectExpr;
+class CoverpointSymbol;
 class Expression;
 class Pattern;
 class InstanceSymbol;
@@ -804,6 +806,15 @@ mlir::StringAttr fullyQualifiedClassName(Context &ctx,
 /// Construct a fully qualified symbol name for generic class definitions
 mlir::StringAttr fullyQualifiedSymbolName(Context &ctx,
                                           const slang::ast::Symbol &sym);
+
+LogicalResult convertBinsSelectExpr(
+    const slang::ast::BinsSelectExpr &expr,
+    std::span<const slang::ast::CoverpointSymbol *const> crossTargets,
+    const llvm::StringMap<mlir::FlatSymbolRefAttr> &coverpointSymbols,
+    slang::ast::Compilation &compilation, OpBuilder &builder, Location loc,
+    const std::function<slang::ConstantValue(const slang::ast::Expression &)>
+        &evaluateConstant,
+    bool negate = false);
 
 } // namespace ImportVerilog
 } // namespace circt

@@ -4806,6 +4806,10 @@ struct CovergroupDeclOpConversion
             ValueRange{cgNamePtr, numCpConst});
         Value cgHandle = createCall.getResult();
 
+        // Track runtime bin indices for each coverpoint/bin symbol pair so
+        // cross bin filters that target @cp::@bin can populate bin_indices.
+        llvm::StringMap<SmallVector<int32_t, 4>> cpBinNameToIndices;
+
         // Initialize each coverpoint and its illegal/ignore bins
         int32_t cpIndex = 0;
         for (auto cp : coverpoints) {
@@ -4821,6 +4825,8 @@ struct CovergroupDeclOpConversion
           LLVM::CallOp::create(rewriter, loc, TypeRange{},
                                SymbolRefAttr::get(initCpFn),
                                ValueRange{cgHandle, idxConst, cpNamePtr});
+
+          int32_t cpBinIndex = 0;
 
           // Process illegal_bins and ignore_bins for this coverpoint
           for (auto &binOp : cp.getBody().front()) {
@@ -4877,6 +4883,8 @@ struct CovergroupDeclOpConversion
                                      SymbolRefAttr::get(addBinFn),
                                      ValueRange{cgHandle, idxConst, binNamePtr,
                                                 binTypeConst, lowConst, highConst});
+                std::string key = (cpName + "::" + binName).str();
+                cpBinNameToIndices[key].push_back(cpBinIndex++);
               } else if (kind == CoverageBinKind::IllegalBins) {
                 LLVM::CallOp::create(rewriter, loc, TypeRange{},
                                      SymbolRefAttr::get(addIllegalBinFn),
@@ -5003,14 +5011,36 @@ struct CovergroupDeclOpConversion
               auto kindConst = LLVM::ConstantOp::create(
                   rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(kindVal));
 
-              // Collect binsof filters from the cross bin body
+              // Collect binsof filters from the cross bin body.
               SmallVector<BinsOfOp> binsofOps;
               for (auto &binBodyOp : crossBin.getBody().front()) {
                 if (auto binsof = dyn_cast<BinsOfOp>(&binBodyOp))
                   binsofOps.push_back(binsof);
               }
 
-              int32_t numFilters = binsofOps.size();
+              struct CrossFilterEntry {
+                BinsOfOp op;
+                bool isSeparator = false;
+              };
+              SmallVector<CrossFilterEntry> filterEntries;
+              if (!binsofOps.empty()) {
+                auto getGroup = [](BinsOfOp op) -> int64_t {
+                  if (auto group = op.getGroupAttr())
+                    return group.getInt();
+                  return 0;
+                };
+                int64_t prevGroup = getGroup(binsofOps.front());
+                filterEntries.push_back({binsofOps.front(), false});
+                for (size_t i = 1; i < binsofOps.size(); ++i) {
+                  int64_t group = getGroup(binsofOps[i]);
+                  if (group != prevGroup)
+                    filterEntries.push_back({BinsOfOp(), true});
+                  filterEntries.push_back({binsofOps[i], false});
+                  prevGroup = group;
+                }
+              }
+
+              int32_t numFilters = filterEntries.size();
               Value filtersPtr;
               Value numFiltersConst = LLVM::ConstantOp::create(
                   rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numFilters));
@@ -5024,59 +5054,119 @@ struct CovergroupDeclOpConversion
                     LLVM::ConstantOp::create(rewriter, loc, i32Ty,
                                              rewriter.getI32IntegerAttr(1)));
 
-                // Fill in each filter
+                // Fill in each filter.
                 for (int32_t fi = 0; fi < numFilters; ++fi) {
-                  auto binsof = binsofOps[fi];
-                  auto targetRef = binsof.getTarget();
+                  const auto &entry = filterEntries[fi];
 
-                  // Get the coverpoint index from the target symbol
-                  // The target is either a coverpoint (@cp) or a bin (@cp::@bin)
-                  StringRef cpSymName = targetRef.getRootReference().getValue();
-                  int32_t cpIdxVal = 0;
-                  auto cpIt = cpNameToIndex.find(
-                      StringAttr::get(ctx, cpSymName));
-                  if (cpIt != cpNameToIndex.end())
-                    cpIdxVal = cpIt->second;
-
-                  // GEP to the filter struct at index fi
+                  // GEP to the filter struct at index fi.
                   SmallVector<LLVM::GEPArg> filterGepIndices = {0, fi};
                   auto filterPtr = LLVM::GEPOp::create(
                       rewriter, loc, ptrTy, filtersArrayTy, filtersAlloca,
                       filterGepIndices);
 
-                  // Store cp_index (field 0)
-                  auto cpIdxConst = LLVM::ConstantOp::create(
-                      rewriter, loc, i32Ty,
-                      rewriter.getI32IntegerAttr(cpIdxVal));
+                  auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+                  auto zeroI32 = LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
+
                   SmallVector<LLVM::GEPArg> field0Indices = {0, 0};
                   auto field0Ptr = LLVM::GEPOp::create(
                       rewriter, loc, ptrTy, filterStructTy, filterPtr,
                       field0Indices);
-                  LLVM::StoreOp::create(rewriter, loc, cpIdxConst, field0Ptr);
-
-                  // Store bin_indices = nullptr (field 1)
-                  auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
                   SmallVector<LLVM::GEPArg> field1Indices = {0, 1};
                   auto field1Ptr = LLVM::GEPOp::create(
                       rewriter, loc, ptrTy, filterStructTy, filterPtr,
                       field1Indices);
-                  LLVM::StoreOp::create(rewriter, loc, nullPtr, field1Ptr);
-
-                  // Store num_bins = 0 (field 2)
-                  auto zeroI32 = LLVM::ConstantOp::create(
-                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(0));
                   SmallVector<LLVM::GEPArg> field2Indices = {0, 2};
                   auto field2Ptr = LLVM::GEPOp::create(
                       rewriter, loc, ptrTy, filterStructTy, filterPtr,
                       field2Indices);
-                  LLVM::StoreOp::create(rewriter, loc, zeroI32, field2Ptr);
+                  SmallVector<LLVM::GEPArg> field3Indices = {0, 3};
+                  auto field3Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field3Indices);
+                  SmallVector<LLVM::GEPArg> field4Indices = {0, 4};
+                  auto field4Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field4Indices);
+                  SmallVector<LLVM::GEPArg> field5Indices = {0, 5};
+                  auto field5Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field5Indices);
 
-                  // Handle intersect values (field 3 and 4)
+                  // Group separator entries encode OR between conjunction groups.
+                  if (entry.isSeparator) {
+                    auto sepConst = LLVM::ConstantOp::create(
+                        rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(-1));
+                    auto falseI1 = LLVM::ConstantOp::create(
+                        rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+                    LLVM::StoreOp::create(rewriter, loc, sepConst, field0Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, nullPtr, field1Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, zeroI32, field2Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, nullPtr, field3Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, zeroI32, field4Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, falseI1, field5Ptr);
+                    continue;
+                  }
+
+                  auto binsof = entry.op;
+                  auto targetRef = binsof.getTarget();
+
+                  // Get the coverpoint index from the target symbol.
+                  // The target is either a coverpoint (@cp) or a bin (@cp::@bin).
+                  StringRef cpSymName = targetRef.getRootReference().getValue();
+                  int32_t cpIdxVal = 0;
+                  auto cpIt = cpNameToIndex.find(StringAttr::get(ctx, cpSymName));
+                  if (cpIt != cpNameToIndex.end())
+                    cpIdxVal = cpIt->second;
+                  auto cpIdxConst = LLVM::ConstantOp::create(
+                      rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIdxVal));
+                  LLVM::StoreOp::create(rewriter, loc, cpIdxConst, field0Ptr);
+
+                  // Populate bin_indices/num_bins when the target references a
+                  // specific coverpoint bin (@cp::@bin). Leave null/0 for plain
+                  // coverpoint targets.
+                  LLVM::StoreOp::create(rewriter, loc, nullPtr, field1Ptr);
+                  LLVM::StoreOp::create(rewriter, loc, zeroI32, field2Ptr);
+                  StringRef binSymName = targetRef.getLeafReference();
+                  if (!binSymName.empty() && binSymName != cpSymName) {
+                    std::string key = (cpSymName + "::" + binSymName).str();
+                    auto binIt = cpBinNameToIndices.find(key);
+                    if (binIt != cpBinNameToIndices.end() &&
+                        !binIt->second.empty()) {
+                      int32_t numBins =
+                          static_cast<int32_t>(binIt->second.size());
+                      auto binsArrayTy = LLVM::LLVMArrayType::get(i32Ty, numBins);
+                      auto binsAlloca = LLVM::AllocaOp::create(
+                          rewriter, loc, ptrTy, binsArrayTy,
+                          LLVM::ConstantOp::create(
+                              rewriter, loc, i32Ty,
+                              rewriter.getI32IntegerAttr(1)));
+
+                      for (int32_t bi = 0; bi < numBins; ++bi) {
+                        auto binIdxConst = LLVM::ConstantOp::create(
+                            rewriter, loc, i32Ty,
+                            rewriter.getI32IntegerAttr(binIt->second[bi]));
+                        SmallVector<LLVM::GEPArg> binGepIndices = {0, bi};
+                        auto binPtr = LLVM::GEPOp::create(
+                            rewriter, loc, ptrTy, binsArrayTy, binsAlloca,
+                            binGepIndices);
+                        LLVM::StoreOp::create(rewriter, loc, binIdxConst, binPtr);
+                      }
+
+                      LLVM::StoreOp::create(rewriter, loc, binsAlloca, field1Ptr);
+                      auto numBinsConst = LLVM::ConstantOp::create(
+                          rewriter, loc, i32Ty,
+                          rewriter.getI32IntegerAttr(numBins));
+                      LLVM::StoreOp::create(rewriter, loc, numBinsConst, field2Ptr);
+                    }
+                  }
+
+                  // Handle intersect values (field 3 and 4).
                   auto intersectValues = binsof.getIntersectValues();
                   if (intersectValues && !intersectValues->empty()) {
                     int32_t numValues = intersectValues->size();
 
-                    // Allocate array for intersect values
+                    // Allocate array for intersect values.
                     auto valuesArrayTy =
                         LLVM::LLVMArrayType::get(i64Ty, numValues);
                     auto valuesAlloca = LLVM::AllocaOp::create(
@@ -5085,7 +5175,7 @@ struct CovergroupDeclOpConversion
                             rewriter, loc, i32Ty,
                             rewriter.getI32IntegerAttr(1)));
 
-                    // Store each value
+                    // Store each value.
                     for (int32_t vi = 0; vi < numValues; ++vi) {
                       int64_t val = 0;
                       if (auto intAttr =
@@ -5102,47 +5192,20 @@ struct CovergroupDeclOpConversion
                       LLVM::StoreOp::create(rewriter, loc, valConst, valPtr);
                     }
 
-                    // Store values pointer (field 3)
-                    SmallVector<LLVM::GEPArg> field3Indices = {0, 3};
-                    auto field3Ptr = LLVM::GEPOp::create(
-                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
-                        field3Indices);
-                    LLVM::StoreOp::create(rewriter, loc, valuesAlloca,
-                                          field3Ptr);
-
-                    // Store num_values (field 4)
+                    LLVM::StoreOp::create(rewriter, loc, valuesAlloca, field3Ptr);
                     auto numValuesConst = LLVM::ConstantOp::create(
                         rewriter, loc, i32Ty,
                         rewriter.getI32IntegerAttr(numValues));
-                    SmallVector<LLVM::GEPArg> field4Indices = {0, 4};
-                    auto field4Ptr = LLVM::GEPOp::create(
-                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
-                        field4Indices);
-                    LLVM::StoreOp::create(rewriter, loc, numValuesConst,
-                                          field4Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, numValuesConst, field4Ptr);
                   } else {
-                    // No intersect values: null pointer and 0 count
-                    SmallVector<LLVM::GEPArg> field3Indices = {0, 3};
-                    auto field3Ptr = LLVM::GEPOp::create(
-                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
-                        field3Indices);
                     LLVM::StoreOp::create(rewriter, loc, nullPtr, field3Ptr);
-
-                    SmallVector<LLVM::GEPArg> field4Indices = {0, 4};
-                    auto field4Ptr = LLVM::GEPOp::create(
-                        rewriter, loc, ptrTy, filterStructTy, filterPtr,
-                        field4Indices);
                     LLVM::StoreOp::create(rewriter, loc, zeroI32, field4Ptr);
                   }
 
-                  // Store negate field (field 5) - get from BinsOfOp attribute
+                  // Store negate field (field 5).
                   bool isNegated = binsof.getNegate();
                   auto negateBool = LLVM::ConstantOp::create(
                       rewriter, loc, i1Ty, rewriter.getBoolAttr(isNegated));
-                  SmallVector<LLVM::GEPArg> field5Indices = {0, 5};
-                  auto field5Ptr = LLVM::GEPOp::create(
-                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
-                      field5Indices);
                   LLVM::StoreOp::create(rewriter, loc, negateBool, field5Ptr);
                 }
 
@@ -24379,6 +24442,9 @@ struct DistConstraintInfo {
   SmallVector<std::pair<int64_t, int64_t>> ranges; // Ranges as [low, high] pairs
   SmallVector<int64_t> weights;   // Weight for each range
   SmallVector<int64_t> perRange;  // 0 = := (per-value), 1 = :/ (per-range)
+  bool hasDefaultWeight = false;
+  int64_t defaultWeight = 0;
+  int64_t defaultPerRange = 0; // 0 = := (per-value), 1 = :/ (per-range)
   unsigned fieldIndex;      // Index of the field in the struct
   unsigned bitWidth;        // Bit width of the property
   bool isSigned = false;    // Signedness of the property
@@ -25702,10 +25768,10 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 /// Extract distribution constraints from a class declaration.
 /// Distribution constraints specify weighted probability distributions using
 /// the `dist` keyword. Pattern: `x dist { 0 := 10, [1:5] :/ 50, 6 := 40 }`
-static SmallVector<DistConstraintInfo>
+static SmallVector<DistConstraintInfo, 1>
 extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
                        SymbolRefAttr classSym) {
-  SmallVector<DistConstraintInfo> distConstraints;
+  SmallVector<DistConstraintInfo, 1> distConstraints;
 
   // Build a map from property names to their indices and types
   DenseMap<StringRef, std::pair<unsigned, Type>> propertyMap;
@@ -25777,6 +25843,13 @@ extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         info.fieldIndex = fieldIdx;
         info.bitWidth = bitWidth;
         info.isSigned = distOp.getIsSignedAttr() != nullptr;
+        if (auto defaultWeight = distOp.getDefaultWeightAttr()) {
+          info.hasDefaultWeight = true;
+          info.defaultWeight = defaultWeight.getInt();
+          auto defaultPerRange = distOp.getDefaultPerRangeAttr();
+          info.defaultPerRange =
+              defaultPerRange ? defaultPerRange.getInt() : 0;
+        }
 
         // Convert values array to ranges vector
         for (size_t i = 0; i < values.size(); i += 2) {
@@ -25851,7 +25924,7 @@ struct PreExtractedConstraints {
   SmallVector<RangeConstraintInfo> rangeConstraints;
   SmallVector<ForeachRangeConstraintInfo> foreachRangeConstraints;
   SmallVector<SoftConstraintInfo> softConstraints;
-  SmallVector<DistConstraintInfo> distConstraints;
+  SmallVector<DistConstraintInfo, 1> distConstraints;
   SmallVector<SolveBeforeInfo> solveBeforeOrdering;
   SmallVector<ConditionalConstraintInfo, 4> conditionalConstraints;
 };
@@ -25945,7 +26018,7 @@ computeSolveOrder(const SmallVector<SolveBeforeInfo> &ordering,
 /// Constraints for properties with lower priority are placed first.
 template <typename T>
 static void sortConstraintsBySolveOrder(
-    SmallVector<T> &constraints,
+    SmallVectorImpl<T> &constraints,
     const llvm::DenseMap<StringRef, unsigned> &solveOrder) {
   llvm::stable_sort(constraints, [&](const T &a, const T &b) {
     unsigned prioA = solveOrder.lookup(a.propertyName);
@@ -26414,12 +26487,12 @@ extractInlineRangeConstraints(Region &inlineRegion,
 }
 
 /// Extract distribution constraints from an inline constraint region.
-static SmallVector<DistConstraintInfo>
+static SmallVector<DistConstraintInfo, 1>
 extractInlineDistConstraints(Region &inlineRegion,
                              ClassDeclOp classDecl,
                              ClassTypeCache &cache,
                              SymbolRefAttr classSym) {
-  SmallVector<DistConstraintInfo> distConstraints;
+  SmallVector<DistConstraintInfo, 1> distConstraints;
 
   if (inlineRegion.empty())
     return distConstraints;
@@ -26509,6 +26582,12 @@ extractInlineDistConstraints(Region &inlineRegion,
       info.fieldIndex = fieldIdx;
       info.bitWidth = bitWidth;
       info.isSigned = distOp.getIsSignedAttr() != nullptr;
+      if (auto defaultWeight = distOp.getDefaultWeightAttr()) {
+        info.hasDefaultWeight = true;
+        info.defaultWeight = defaultWeight.getInt();
+        auto defaultPerRange = distOp.getDefaultPerRangeAttr();
+        info.defaultPerRange = defaultPerRange ? defaultPerRange.getInt() : 0;
+      }
 
       // Convert values array to ranges vector
       for (size_t i = 0; i < values.size(); i += 2)
@@ -26884,7 +26963,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     SmallVector<RangeConstraintInfo> rangeConstraints;
     SmallVector<ForeachRangeConstraintInfo> foreachRangeConstraints;
     SmallVector<SoftConstraintInfo> softConstraints;
-    SmallVector<DistConstraintInfo> distConstraints;
+    SmallVector<DistConstraintInfo, 1> distConstraints;
     SmallVector<SolveBeforeInfo> solveBeforeOrdering;
     if (classDecl) {
       rangeConstraints = extractRangeConstraints(classDecl, cache, classSym);
@@ -28811,11 +28890,13 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
 
       // Apply distribution constraints - generate weighted random values
-      // using __moore_randomize_with_dist(ranges, weights, perRange, numRanges)
+      // using __moore_randomize_with_dist.
       if (!distConstraints.empty()) {
-        // Function type: __moore_randomize_with_dist(ptr, ptr, ptr, i64, i64) -> i64
+        // Function type:
+        // __moore_randomize_with_dist(ptr, ptr, ptr, i64, i64, i64, i64, i64, i64) -> i64
         auto distFnTy = LLVM::LLVMFunctionType::get(
-            i64Ty, {ptrTy, ptrTy, ptrTy, i64Ty, i64Ty});
+            i64Ty,
+            {ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty});
         auto distFn = getOrCreateRuntimeFunc(mod, rewriter,
                                              "__moore_randomize_with_dist",
                                              distFnTy);
@@ -28899,17 +28980,30 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             LLVM::StoreOp::create(rewriter, loc, perRangeVal, perRangePtr);
           }
 
-          // Call __moore_randomize_with_dist(ranges, weights, perRange, numRanges, isSigned)
+          // Call __moore_randomize_with_dist.
           auto numRangesConst = LLVM::ConstantOp::create(
               rewriter, loc, i64Ty,
               rewriter.getI64IntegerAttr(static_cast<int64_t>(numRanges)));
           auto isSignedConst = LLVM::ConstantOp::create(
               rewriter, loc, i64Ty,
               rewriter.getI64IntegerAttr(dist.isSigned ? 1 : 0));
+          auto bitWidthConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(dist.bitWidth));
+          auto hasDefaultWeightConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(dist.hasDefaultWeight ? 1 : 0));
+          auto defaultWeightConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(dist.defaultWeight));
+          auto defaultPerRangeConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(dist.defaultPerRange));
           auto distResult = LLVM::CallOp::create(
               rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(distFn),
               ValueRange{rangesAlloca, weightsAlloca, perRangeAlloca,
-                         numRangesConst, isSignedConst});
+                         numRangesConst, isSignedConst, bitWidthConst,
+                         hasDefaultWeightConst, defaultWeightConst,
+                         defaultPerRangeConst});
 
           // Truncate to the field's bit width if needed
           Type fieldIntTy = IntegerType::get(ctx, dist.bitWidth);

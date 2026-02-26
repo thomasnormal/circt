@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.15--no-property-stdout.sv <<\"EOF\"\n/*\n:name: no_property_stdout\n:description: no-property warning emitted on circt-bmc stdout\n:type: simulation\n:tags: 16.15\n*/\nmodule top(input logic clk, input logic a);\n  assert property (@(posedge clk) a);\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\ncat <<\"MLIR\"\nmodule {\n  hw.module @top(%clk : i1, %a : i1) {\n    verif.assert %a : i1\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-bmc.sh <<\"EOF\"\n#!/usr/bin/env bash\necho \"warning: no property provided to check in module top\"\necho \"BMC_RESULT=UNSAT\"\nexit 0\nEOF\nchmod +x %t/fake-bmc.sh\n'
+// RUN: env OUT=%t/results.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh Z3_LIB=/dev/null DISABLE_UVM_AUTO_INCLUDE=1 NO_PROPERTY_AS_SKIP=1 TAG_REGEX="(^| )16\\.15( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s
+// RUN: cat %t/results.tsv | FileCheck %s --check-prefix=OUT
+
+// CHECK: sv-tests SVA summary: total=1 pass=0 fail=0 xfail=0 xpass=0 error=0 skip=1 unknown=0 timeout=0
+// OUT: SKIP{{[[:space:]]+}}16.15--no-property-stdout{{[[:space:]]+}}

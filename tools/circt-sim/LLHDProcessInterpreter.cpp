@@ -2241,7 +2241,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
         continue;
       }
 
-      interfaceFieldPropagation[parentSigId].push_back(childSigId);
+      auto &children = interfaceFieldPropagation[parentSigId];
+      if (!llvm::is_contained(children, childSigId))
+        children.push_back(childSigId);
       childToParentFieldAddr[destAddr] = srcAddr;
       ++resolvedPairs;
       if (traceInterfacePropagation) {
@@ -2478,7 +2480,9 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
         if (!fieldsCompatibleForAutoLink(childFSig, parentFSig))
           continue;
 
-        interfaceFieldPropagation[parentFSig].push_back(childFSig);
+        auto &children = interfaceFieldPropagation[parentFSig];
+        if (!llvm::is_contained(children, childFSig))
+          children.push_back(childFSig);
 
         auto childAddrIt = fieldSignalToAddr.find(childFSig);
         auto parentAddrIt = fieldSignalToAddr.find(parentFSig);
@@ -11545,14 +11549,7 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     }
     if (!state.callStack.empty()) {
       bool hasMemoryEventWait = memoryEventWaiters.count(procId);
-      bool hasSignalWaitSensitivity = false;
-      if (const Process *schedProc = scheduler.getProcess(procId)) {
-        hasSignalWaitSensitivity =
-            !schedProc->getWaitingSensitivity().empty() ||
-            !schedProc->getSensitivityList().empty();
-      }
-
-      if (hasMemoryEventWait || !hasSignalWaitSensitivity) {
+      if (hasMemoryEventWait) {
         LLVM_DEBUG(llvm::dbgs()
                    << "  Process triggered while waiting with active call stack "
                       "- ignoring spurious trigger\n");
@@ -32173,11 +32170,34 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             auto *block =
                 findMemoryBlockByAddress(classAddr, procId, &objOff);
             if (block && block->initialized) {
+              constexpr size_t kLargeClassHeaderPreserveThreshold = 64;
+              // UVM sequence/control fields (e.g. sequence state mutex/state,
+              // process bookkeeping, sequencer references) can live beyond the
+              // first 128 bytes in larger class layouts. Keep a larger header
+              // window intact to avoid corrupting those non-rand control
+              // fields when randomize() lowering misses explicit restores.
+              constexpr size_t kLargeClassHeaderPreserveBytes = 256;
+              size_t fillStart = static_cast<size_t>(objOff);
               size_t fillEnd = std::min(
-                  static_cast<size_t>(objOff) +
-                      static_cast<size_t>(classSize),
-                  block->size);
-              for (size_t i = static_cast<size_t>(objOff); i < fillEnd;
+                  fillStart + static_cast<size_t>(classSize), block->size);
+
+              llvm::SmallVector<uint8_t, kLargeClassHeaderPreserveBytes>
+                  preservedHeader;
+              size_t preservedHeaderOffset = fillStart;
+              if (fillEnd > fillStart &&
+                  static_cast<size_t>(classSize) >=
+                      kLargeClassHeaderPreserveThreshold) {
+                size_t preservedBytes =
+                    std::min(fillEnd - fillStart,
+                             kLargeClassHeaderPreserveBytes);
+                if (preservedBytes > 0) {
+                  preservedHeader.resize(preservedBytes);
+                  std::memcpy(preservedHeader.data(),
+                              block->bytes() + fillStart, preservedBytes);
+                }
+              }
+
+              for (size_t i = fillStart; i < fillEnd;
                    i += 4) {
                 uint32_t r = fillRng();
                 size_t bytesLeft = fillEnd - i;
@@ -32185,6 +32205,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 for (size_t b = 0; b < toWrite; ++b)
                   block->bytes()[i + b] =
                       static_cast<uint8_t>(r >> (b * 8));
+              }
+
+              // UVM-heavy objects keep control state (including handle identity)
+              // near the beginning of class storage. Preserve a prefix for
+              // larger classes so randomize_basic cannot corrupt sequencer,
+              // phase, or factory bookkeeping when lowering misses restores.
+              if (!preservedHeader.empty()) {
+                std::memcpy(block->bytes() + preservedHeaderOffset,
+                            preservedHeader.data(), preservedHeader.size());
               }
             }
           }
@@ -32250,10 +32279,38 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           // Allocate 1-element arrays for empty dynamic array fields
           if (!dynArrayOffsets.empty()) {
+            constexpr uint64_t kRandomizedDynArrayLenSanityLimit = 4096;
             uint64_t objOff = 0;
             auto *block =
                 findMemoryBlockByAddress(classAddr, procId, &objOff);
             if (block && block->initialized) {
+              auto descriptorLooksValid = [&](uint64_t ptrField,
+                                              uint64_t lenField) -> bool {
+                // Empty descriptor is valid and means "no allocation yet".
+                if (ptrField == 0 || lenField == 0)
+                  return ptrField == 0 && lenField == 0;
+
+                // Guard against garbage lengths from raw byte randomization.
+                if (lenField > kRandomizedDynArrayLenSanityLimit)
+                  return false;
+
+                uint64_t nativeOff = 0;
+                size_t nativeSize = 0;
+                if (findNativeMemoryBlockByAddress(ptrField, &nativeOff,
+                                                   &nativeSize))
+                  return nativeOff == 0 && lenField <= nativeSize;
+
+                uint64_t memOff = 0;
+                if (MemoryBlock *mem =
+                        findMemoryBlockByAddress(ptrField, procId, &memOff))
+                  return memOff == 0 && lenField <= mem->size;
+
+                memOff = 0;
+                if (MemoryBlock *mem = findBlockByAddress(ptrField, memOff))
+                  return memOff == 0 && lenField <= mem->size;
+
+                return false;
+              };
               for (uint64_t fOff : dynArrayOffsets) {
                 size_t dataOff = static_cast<size_t>(objOff) +
                                  static_cast<size_t>(fOff);
@@ -32271,6 +32328,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   lenField |=
                       static_cast<uint64_t>(block->bytes()[dataOff + 8 + i])
                       << (i * 8);
+                // randomize_basic byte-fills the whole object. For dynamic
+                // array descriptors that means ptr/len can become arbitrary
+                // garbage, which later explodes foreach loops at time 0.
+                // Treat non-plausible descriptors as empty and rebuild them
+                // with a small deterministic allocation below.
+                if (!descriptorLooksValid(ptrField, lenField)) {
+                  ptrField = 0;
+                  lenField = 0;
+                  for (int i = 0; i < 8; ++i)
+                    block->bytes()[dataOff + i] = 0;
+                  for (int i = 0; i < 8; ++i)
+                    block->bytes()[dataOff + 8 + i] = 0;
+                }
                 if (ptrField == 0 && lenField == 0) {
                   // Allocate 1-byte array (1 element for bit[7:0] types)
                   MooreQueue result = __moore_dyn_array_new(1);

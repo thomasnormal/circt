@@ -1,0 +1,10 @@
+// RUN: rg '^yosys_bmc\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=BMC
+// RUN: rg '^yosys_lec\t' %S/../../docs/unified_regression_manifest.tsv | FileCheck %s --check-prefix=LEC
+
+// BMC: yosys_bmc
+// BMC-SAME: TEST_FILTER='.'
+// BMC-SAME: utils/run_yosys_sva_circt_bmc.sh
+
+// LEC: yosys_lec
+// LEC-SAME: TEST_FILTER='.'
+// LEC-SAME: utils/run_yosys_sva_circt_lec.sh

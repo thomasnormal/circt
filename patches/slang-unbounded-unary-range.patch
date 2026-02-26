@@ -1,0 +1,43 @@
+From: CIRCT Team <circt@llvm.org>
+Subject: [PATCH] Allow unbounded '$' in unary property ranges incl. nexttime
+
+Permit open upper bounds for `eventually [m:$]`, `s_always [m:$]`,
+`nexttime [m:$]`, and `s_nexttime [m:$]`.
+
+For `nexttime` / `s_nexttime`, also allow simple range selectors in the parser
+(in addition to single-cycle selectors), enabling extension-style forms used by
+commercial tool flows.
+
+diff --git a/source/ast/expressions/AssertionExpr.cpp b/source/ast/expressions/AssertionExpr.cpp
+index 9b5fd50..2f33472 100644
+--- a/source/ast/expressions/AssertionExpr.cpp
++++ b/source/ast/expressions/AssertionExpr.cpp
+@@ -1053,7 +1053,11 @@ AssertionExpr& UnaryAssertionExpr::fromSyntax(const UnarySelectPropertyExprSynta
+     std::optional<SequenceRange> range;
+     if (syntax.selector) {
+         bool allowUnbounded = op == UnaryAssertionOperator::Always ||
+-                              op == UnaryAssertionOperator::SEventually;
++                              op == UnaryAssertionOperator::Eventually ||
++                              op == UnaryAssertionOperator::SEventually ||
++                              op == UnaryAssertionOperator::SAlways ||
++                              op == UnaryAssertionOperator::NextTime ||
++                              op == UnaryAssertionOperator::SNextTime;
+         range = SequenceRange::fromSyntax(*syntax.selector, context, allowUnbounded);
+     }
+
+diff --git a/source/parsing/Parser_expressions.cpp b/source/parsing/Parser_expressions.cpp
+index 99cc6df..439f803 100644
+--- a/source/parsing/Parser_expressions.cpp
++++ b/source/parsing/Parser_expressions.cpp
+@@ -1686,8 +1702,9 @@ PropertyExprSyntax& Parser::parsePropertyPrimary() {
+                 auto closeBracket = expect(TokenKind::CloseBracket);
+                 auto& expr = parsePropertyPrimary();
+
+-                if (selector && selector->kind != SyntaxKind::BitSelect) {
+-                    addDiag(diag::InvalidPropertyIndex, selector->sourceRange())
++                if (selector && selector->kind != SyntaxKind::BitSelect &&
++                    selector->kind != SyntaxKind::SimpleRangeSelect) {
++                    addDiag(diag::InvalidPropertyRange, selector->sourceRange())
+                         << op.valueText() << op.range();
+                 }
+

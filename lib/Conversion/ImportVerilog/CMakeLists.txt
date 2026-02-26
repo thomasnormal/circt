@@ -2,6 +2,7 @@ include(SlangCompilerOptions)
 
 add_circt_translation_library(CIRCTImportVerilog
   AssertionExpr.cpp
+  CrossSelect.cpp
   Expressions.cpp
   FormatStrings.cpp
   HierarchicalNames.cpp

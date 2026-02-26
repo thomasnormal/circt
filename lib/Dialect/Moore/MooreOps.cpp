@@ -2286,6 +2286,18 @@ LogicalResult ConstraintDistOp::verify() {
                            << "] must be 0 (:=) or 1 (:/); got " << perRange[i];
   }
 
+  auto defaultWeight = getDefaultWeightAttr();
+  auto defaultPerRange = getDefaultPerRangeAttr();
+  if (defaultWeight && defaultPerRange) {
+    int64_t mode = defaultPerRange.getInt();
+    if (mode != 0 && mode != 1)
+      return emitOpError()
+             << "default_per_range must be 0 (:=) or 1 (:/); got " << mode;
+  } else if (defaultWeight || defaultPerRange) {
+    return emitOpError()
+           << "default_weight and default_per_range must both be present";
+  }
+
   return success();
 }
 

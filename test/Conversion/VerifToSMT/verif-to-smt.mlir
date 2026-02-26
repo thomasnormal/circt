@@ -213,10 +213,8 @@ func.func @test_bmc() -> (i1) {
 // CHECK-LABEL:  func.func @bmc_init() -> (!smt.bv<1>, !smt.bv<1>) {
 // CHECK:    seq.const_clock{{ *}}low
 // CHECK:    builtin.unrealized_conversion_cast
-// CHECK:    builtin.unrealized_conversion_cast
 // CHECK:    return
-// CHECK:  }
-// CHECK:  func.func @bmc_loop({{%.+}}: !smt.bv<1>, {{%.+}}: !smt.bv<1>)
+// CHECK-LABEL:  func.func @bmc_loop({{%.+}}: !smt.bv<1>, {{%.+}}: !smt.bv<1>) -> (!smt.bv<1>, !smt.bv<1>) {
 // CHECK:    hw.constant true
 // CHECK:    builtin.unrealized_conversion_cast
 // CHECK:    builtin.unrealized_conversion_cast
@@ -227,14 +225,11 @@ func.func @test_bmc() -> (i1) {
 // CHECK:    builtin.unrealized_conversion_cast
 // CHECK:    builtin.unrealized_conversion_cast
 // CHECK:    return
-// CHECK:  }
-// CHECK:  func.func @bmc_circuit({{%.+}}: !smt.bv<1>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.array<[!smt.bv<1> -> !smt.bv<32>]>) -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
-// CHECK-DAG:    hw.constant true
+// CHECK-LABEL:  func.func @bmc_circuit({{%.+}}: !smt.bv<1>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.bv<32>, {{%.+}}: !smt.array<[!smt.bv<1> -> !smt.bv<32>]>) -> (!smt.bv<32>, !smt.bv<32>, !smt.bv<32>, !smt.array<[!smt.bv<1> -> !smt.bv<32>]>, !smt.bv<1>)
 // CHECK-DAG:    hw.constant -1 : i32
 // CHECK:    comb.add
 // CHECK:    comb.xor
 // CHECK:    return
-// CHECK:  }
 
 // -----
 

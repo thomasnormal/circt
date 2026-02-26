@@ -26,5 +26,5 @@ func.func @for_smtlib_allows_llvm_global_load_extractvalue() -> (i1) {
 
 // CHECK: func.func @for_smtlib_allows_llvm_global_load_extractvalue
 // CHECK: smt.solver
-// CHECK: arith.constant false
+// CHECK: smt.constant false
 // CHECK-NOT: llvm.extractvalue

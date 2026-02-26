@@ -20,8 +20,8 @@ module {
   }
 }
 
-// The pass flattens CF and creates a mux chain with enables.
-// The result is functionally correct: sel ? a : b, though suboptimal.
+// The pass flattens control-flow and resolves mutually-exclusive drives to a
+// concrete mux chain.
 // CHECK: comb.mux
-// CHECK: comb.mux
+// CHECK-NOT: sig_unknown
 // CHECK-NOT: llhd.

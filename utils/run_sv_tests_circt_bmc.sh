@@ -239,6 +239,26 @@ append_bmc_check_attribution() {
   )
 }
 
+has_no_property_warning() {
+  local bmc_log="$1"
+  local bmc_stdout="$2"
+  if [[ -s "$bmc_log" ]] && \
+      grep -Eiq "no property provided to check in module" "$bmc_log"; then
+    return 0
+  fi
+  grep -Eiq "no property provided to check in module" <<<"$bmc_stdout"
+}
+
+has_multiclock_retryable_bmc_failure() {
+  local bmc_log="$1"
+  local bmc_stdout="$2"
+  local pattern='modules with multiple clocks not yet supported|multi-clock BMC requires bmc_reg_clocks|multi-clock BMC requires bmc_input_names'
+  if [[ -s "$bmc_log" ]] && grep -Eiq "$pattern" "$bmc_log"; then
+    return 0
+  fi
+  grep -Eiq "$pattern" <<<"$bmc_stdout"
+}
+
 UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
 
 is_nonneg_int() {
@@ -1110,9 +1130,7 @@ top_module=${top_module}
   fi
   if [[ "$bmc_status" -ne 0 && "$ALLOW_MULTI_CLOCK" != "1" && \
         "$AUTO_ALLOW_MULTI_CLOCK" == "1" && "$RISING_CLOCKS_ONLY" != "1" ]] && \
-      grep -Eiq \
-        "modules with multiple clocks not yet supported|multi-clock BMC requires bmc_reg_clocks|multi-clock BMC requires bmc_input_names" \
-        "$bmc_log"; then
+      has_multiclock_retryable_bmc_failure "$bmc_log" "$out"; then
     echo "BMC auto-retry($base): retrying with --allow-multi-clock for multi-clock module" >&2
     {
       echo "[run_sv_tests_circt_bmc] BMC auto-retry($base): retrying with --allow-multi-clock for multi-clock module"
@@ -1175,7 +1193,7 @@ top_module=${top_module}
   # verif.assert (i1), which is properly checked. This skip logic is disabled
   # by default (NO_PROPERTY_AS_SKIP=0) to avoid false SKIP results.
   if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \
-      grep -q "no property provided to check in module" "$bmc_log"; then
+      has_no_property_warning "$bmc_log" "$out"; then
     result="SKIP"
     skip=$((skip + 1))
     emit_result_row "$result" "$base" "$sv"
