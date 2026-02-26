@@ -486,6 +486,14 @@ Track and report at shutdown:
 - `direct_calls_interpreted`
 - `aotDepth_max`
 
+Status:
+
+- Landed in `circt-sim` AOT stats output (`CIRCT_AOT_STATS=1`) as canonical
+  shutdown telemetry lines, alongside legacy AOT counters.
+- Regressions updated/validated:
+  - `aot-basic-func.mlir`
+  - `aot-unmapped-native-get-policy.mlir`
+
 ### 5.2 Address highest-impact rejection patterns first
 
 Current priority:
