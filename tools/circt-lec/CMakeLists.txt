@@ -36,7 +36,13 @@ target_link_libraries(circt-lec
   CIRCTHWToSMT
   ${CIRCT_LEC_IMPORT_VERILOG_DEPS}
   CIRCTLECTransforms
+  CIRCTLLHDTransforms
+  CIRCTLTL
   CIRCTOMTransforms
+  CIRCTMoore
+  CIRCTMooreToCore
+  CIRCTSeq
+  CIRCTSeqTransforms
   CIRCTSim
   CIRCTSimTransforms
   CIRCTSMTToZ3LLVM
@@ -47,6 +53,7 @@ target_link_libraries(circt-lec
   CIRCTSupport
   CIRCTVerif
   CIRCTVerifToSMT
+  CIRCTVerifTransforms
   LLVMSupport
   MLIRArithDialect
   MLIRBuiltinToLLVMIRTranslation

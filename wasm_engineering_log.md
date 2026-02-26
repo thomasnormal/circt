@@ -2494,3 +2494,132 @@
     failed (`missing expected token`).
   - post-fix:
     `BUILD_DIR=build-wasm-mergecheck NODE_BIN=node utils/wasm_help_text_check.sh`: PASS.
+
+## 2026-02-26 (repro: LLHD interpreter case-arm mismatch with binary literals)
+- Goal:
+  - Reproduce reported `circt-sim --mode interpret` bug where middle `case`
+    arms map to the last arm when using binary literals.
+- Notes:
+  - Current in-tree `build_test/bin/circt-verilog` segfaulted (`rc=139`) on the
+    mux reproducer, so reproduction used known-good ELF tool snapshots under
+    `out/.../.tool-snapshot`.
+  - Reproduction was validated on two snapshot versions:
+    - `circt-verilog` `CIRCT 76fdfcebc` + `circt-sim` `CIRCT 76fdfcebc`
+    - `circt-verilog` `CIRCT 40bed929a` + `circt-sim` `CIRCT 4a658c029`
+- Reproducer SV:
+  - `always_comb` 4-way `case (sel)` with labels `2'b00`, `2'b01`, `2'b10`, `2'b11`
+    and displays after driving `sel=0,1,2,3`.
+- Command shape:
+  - Frontend: `circt-verilog --resource-guard=false --ir-llhd --top tb -o design.llhd.mlir mux.sv`
+  - Sim: `circt-sim --resource-guard=false --mode interpret --top tb --trace-all design.llhd.mlir`
+- Observed output (binary labels):
+  - `sel=0 y=aa`
+  - `sel=1 y=dd`
+  - `sel=2 y=dd`
+  - `sel=3 y=dd`
+- Additional observation:
+  - Decimal-label variant (`0,1,2,3`) on these snapshots produced:
+    - `sel=0 y=aa`
+    - `sel=1 y=aa`
+    - `sel=2 y=aa`
+    - `sel=3 y=aa`
+- Artifacts:
+  - `/tmp/case_repro_pair_1772116261`
+  - `/tmp/case_repro_triplet_1772116376`
+
+## 2026-02-26 (HEAD validation after LLVM/MLIR link consistency fixes)
+- Context:
+  - Rebuilt `build_test/bin/circt-sim` at `CIRCT 6f649f63b` (LLVM 23.0.0git)
+    after linker consistency fixes.
+  - `build_test/bin/circt-verilog` is also `CIRCT 6f649f63b`, but still crashes
+    with `SIGSEGV` (`rc=139`) on the mux reproducer for both binary and decimal
+    case-label variants, preventing fresh SV->LLHD generation in this tree.
+- Isolation run:
+  - Ran `build_test/bin/circt-sim --mode interpret` on previously generated LLHD
+    artifacts from `/tmp/case_repro_pair_1772116261` and
+    `/tmp/case_repro_triplet_1772116376`.
+- Result on HEAD `circt-sim`:
+  - Binary-label LLHD still reproduces:
+    - `sel=0 y=aa`
+    - `sel=1 y=dd`
+    - `sel=2 y=dd`
+    - `sel=3 y=dd`
+  - Decimal-label LLHD still produces:
+    - `sel=0 y=aa`
+    - `sel=1 y=aa`
+    - `sel=2 y=aa`
+    - `sel=3 y=aa`
+- Conclusion:
+  - The observed case-evaluation malfunction persists in the latest local
+    interpreter build (`build_test/bin/circt-sim` at `6f649f63b`) for the known
+    LLHD repro inputs.
+
+## 2026-02-26 (ImportVerilog: hierarchical interface task call support)
+- Goal:
+  - Enable `module.interface.task()` style hierarchical interface method calls
+    in ImportVerilog and convert the regression from expected-fail to pass.
+- Realizations:
+  - `build_test` had `CIRCT_SLANG_FRONTEND_ENABLED=OFF`, leaving `circt-verilog`
+    stale and masking real progress; re-enabling the frontend was required to
+    get trustworthy test results.
+  - A controlled A/B rebuild with `Expressions.cpp` and `HierarchicalNames.cpp`
+    reverted to `HEAD` was useful to separate implementation bugs from build
+    consistency issues.
+- Changes:
+  - Added hierarchical call receiver collection in
+    `lib/Conversion/ImportVerilog/HierarchicalNames.cpp` for call expressions.
+  - Threaded resolved interface instances for hierarchical receivers into the
+    existing interface instance machinery.
+  - Extended interface instance resolution in
+    `lib/Conversion/ImportVerilog/Expressions.cpp` to use hierarchical refs and
+    symbol-based fallbacks for interface method call receivers.
+  - Removed temporary `[hier-call-debug]` / `[iface-call-debug]` tracing.
+  - Updated `test/Conversion/ImportVerilog/hierarchical-interface-task.sv` to a
+    passing regression with positive IR checks.
+- Validation:
+  - `circt-verilog ... --ir-moore | FileCheck` passes for:
+    - `hierarchical-interface-task.sv`
+    - `virtual-interface-task.sv`
+  - Cadence `xrun` elaboration passes for both tops in
+    `hierarchical-interface-task.sv`:
+    - `-top TopLevel`
+    - `-top DirectTest`
+
+## 2026-02-26 (Clang/X86 rebuild + LEC toolchain stabilization)
+- Goal:
+  - Validate the clang-default toolchain switch and restore a stable formal/LEC
+    build + test flow after compiler / target-set changes.
+- Realizations:
+  - Reconfiguring `llvm/build` to `-DLLVM_TARGETS_TO_BUILD=X86` is necessary to
+    avoid spending cycles on non-host backends.
+  - Partial rebuilds after changing compiler/target config can leave hard ABI
+    skew symptoms:
+    - `circt-tblgen` crashing inside `llvm::cl::AddLiteralOption`
+    - link-time undefined references in `circt-opt`
+    - runtime crashes in stale `circt-verilog`
+  - A full `llvm/build` libraries rebuild (`llvm-libraries mlir-libraries`)
+    under the new config is required to re-establish consistency.
+  - `tools/circt-lec/CMakeLists.txt` was missing explicit LLHD/Moore deps used
+    by `circt-lec.cpp`; this caused unresolved symbols at link time.
+  - `circt-verilog` rebuild with high parallelism hit `clang-scan-deps`/`slang`
+    `.ddi.tmp` races; serial rebuild (`-j1`) avoided the scan race.
+- Changes:
+  - Reconfigured LLVM: clang toolchain + `LLVM_TARGETS_TO_BUILD=X86`.
+  - Rebuilt LLVM/MLIR libraries in `llvm/build` for consistency.
+  - Patched `tools/circt-lec/CMakeLists.txt` to add missing link deps:
+    - `CIRCTLLHDTransforms`, `CIRCTLTL`, `CIRCTMoore`, `CIRCTMooreToCore`,
+      `CIRCTSeq`, `CIRCTSeqTransforms`, `CIRCTVerifTransforms`.
+  - Rebuilt tools:
+    - `circt-opt`, `circt-bmc`, `circt-lec`, `circt-translate`,
+      `circt-sim-compile`, `circt-verilog`.
+- Validation:
+  - Binary sanity checks pass for:
+    - `build_test/bin/circt-opt --version`
+    - `build_test/bin/circt-bmc --help`
+    - `build_test/bin/circt-lec --help`
+    - `build_test/bin/circt-translate --help`
+    - `build_test/bin/circt-sim-compile --help`
+    - `build_test/bin/circt-verilog --help`
+  - Focused LEC regressions pass:
+    - `build_test/test/Tools/circt-lec/sv-tests-lec-smoke.mlir`
+    - `build_test/test/Tools/circt-lec/sv-tests-lec-keep-logs.mlir`
