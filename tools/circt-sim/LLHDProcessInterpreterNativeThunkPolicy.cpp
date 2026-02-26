@@ -760,7 +760,9 @@ LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
     Region *bodyRegion = resolveNativeThunkProcessRegion(state);
     Region &body = bodyRegion ? *bodyRegion : processOp.getBody();
     auto *proc = scheduler.getProcess(procId);
-    StringRef procName = proc ? proc->getName() : "<unknown>";
+    StringRef procName = "<unknown>";
+    if (proc)
+      procName = proc->getName();
     llvm::errs() << "[JIT-UNSUPPORTED] proc=" << procId << " name=" << procName
                  << " detail=" << detail
                  << " blocks=" << static_cast<unsigned>(body.getBlocks().size())

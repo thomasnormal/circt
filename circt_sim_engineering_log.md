@@ -1,6 +1,33 @@
 # CIRCT Sim Engineering Log
 
 ## 2026-02-26
+- Added `utils/run_sv_tests_waveform_diff.sh` to run `sv-tests` simulation cases
+  across four lanes with waveform artifacts:
+  - `interpret_off` (`--mode=interpret`, `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=0`)
+  - `interpret_on` (`--mode=interpret`, `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1`)
+  - `compile_aot` (`--mode=compile`)
+  - `xcelium` (`xrun -input wave.tcl` with VCD database/probe)
+- Runner emits lane matrices in AVIP-compatible schema and auto-generates
+  pairwise waveform parity TSVs via `utils/check_avip_waveform_matrix_parity.py`:
+  - interpret_off vs interpret_on
+  - interpret_off vs compile_aot
+  - interpret_off vs xcelium
+- Hardened against concurrent tool rebuild races by snapshotting
+  `build_test/bin/circt-verilog` and `build_test/bin/circt-sim` into the run
+  output directory before test execution.
+- Fixed arg forwarding bug in `utils/run_avip_circt_fastpath_ab.sh` where
+  `--compare-arg` values starting with `--` were parsed as missing arguments;
+  now passed as `--compare-arg=<value>`.
+- Smoke validation:
+  - `sv_tests_sim_smoke`-style 3-case run produced:
+    - `interpret_off` vs `interpret_on`: 3/3 waveform matches
+    - `interpret_off` vs `compile_aot`: 3/3 waveform matches
+    - `interpret_off` vs `xcelium`: 3/3 mismatches
+- Realization: cross-engine mismatch reports were initially dominated by
+  timescale formatting (`1fs` vs `1ns`) rather than behavior; default compare
+  args now include `--ignore-timescale` to focus on signal/event differences.
+
+## 2026-02-26
 - Reproduced two deterministic `circt-sim` regressions before code changes:
   - `llhd-process-wait-no-delay-no-signals.mlir` executed `2` processes instead of expected `3`.
   - `llhd-process-wait-condition-func.mlir` completed at `1000000000 fs` instead of `1000000 fs`.
@@ -12,3 +39,194 @@
   - Direct runs for both reproducer tests now match expected process counts/timestamps.
   - FileCheck invocations for both tests pass.
   - Focused lit sweep `--filter='llhd-process-.*wait'` passed 7/7.
+
+- Additional similarity sweep found another stale-timed-poll bug in queue-backed
+  `wait(condition)`:
+  - Reproducer: queue wakeup at `5 fs` completed process logic, but final sim
+    time still advanced to `10000000000 fs` due an old fallback poll event.
+- Fix: queue-backed wait_condition now relies on event-style queue wakeups
+  (`timedPoll=0`) instead of scheduling a timed watchdog poll that can become
+  stale.
+- Added regression: `test/Tools/circt-sim/wait-condition-queue-no-stale-time.mlir`
+  asserting completion remains at the real wakeup time (`5 fs`).
+- Updated queue fallback trace test:
+  `test/Tools/circt-sim/wait-condition-queue-fallback-backoff.mlir` now checks
+  `timedPoll=0`.
+- Verification after this fix:
+  - Targeted wait-condition lit subset passed.
+  - Broader wait/wait-condition lit filter passed (20/20).
+- Additional similarity sweep found stale timed-poll final-time drift in
+  execute-phase objection waits:
+  - Reproducer: `uvm_phase_hopper::execute_phase` waiter woke at `5 fs`, but
+    final time advanced to `10000000000 fs` from a stale fallback poll event.
+- Fix: for execute-phase wait_condition with active objections (`count > 0`),
+  use objection event wake only (`timedPoll=0`); keep sparse timed fallback
+  when count is zero.
+- Added regression:
+  `test/Tools/circt-sim/wait-condition-execute-phase-objection-no-stale-time.mlir`
+  checking completion at `5 fs`.
+
+- Found another similar stale-time case for non-UVM single-load memory waits:
+  - Reproducer completed logic at `5 fs` but ended simulation at `1000000 fs`
+    due stale memory poll callback.
+- Fix: single-load memory waits now run event-only wakeups by default;
+  `uvm_phase::wait_for_state` remains on timed polling fallback for unchanged
+  memory polling semantics.
+- Added regression:
+  `test/Tools/circt-sim/wait-condition-memory-no-stale-time.mlir`
+  checking completion at `5 fs`.
+- Verification after both fixes:
+  - `ninja -C build_test circt-sim`
+  - `llvm/build/bin/llvm-lit -a --filter='wait-condition-memory-no-stale-time|wait-condition-memory-poll-recheck|wait-condition-execute-phase-objection-no-stale-time|wait-condition-execute-phase-objection-fallback-backoff|wait-condition-queue-no-stale-time|wait-condition-queue-fallback-backoff' build_test/test/Tools/circt-sim`
+  - Result: 6/6 targeted tests passed.
+- Follow-up similarity sweep (after waiting for concurrent workspace activity)
+  on wait/poll paths:
+  - Ran: `llvm/build/bin/llvm-lit -s --filter='wait_for_waiters|wait_for_self_and_siblings_to_drop|wait-condition|wait-event|wait-queue|objection|seq-get-next-item|phase-hopper' build_test/test/Tools/circt-sim`
+  - Result: 30/30 passed.
+- Transient surprise observed before the settled rerun: many lit failures with
+  `Permission denied` launching `build_test/bin/circt-sim`; this disappeared
+  after waiting and rerunning, consistent with concurrent binary replacement.
+- No additional deterministic stale-timed-poll/final-time-drift bug was
+  reproduced beyond the queue, execute-phase objection, and non-UVM memory
+  wait-condition cases already fixed.
+- Audit finding (new): mixed wait-condition modes can still leave stale timed
+  callbacks that advance final simulation time.
+  - Reproducer shape: process first executes `uvm_phase::wait_for_state`
+    (timed memory poll armed), then later executes queue-backed
+    `wait(__moore_queue_size(...) > 0)` (event-only path).
+  - Observed with `--skip-passes`: process logic completes and prints `done`,
+    but simulation finishes at `1000000 fs` from the stale earlier timed poll.
+  - Root cause: prior timed callback remains in EventScheduler with no
+    cancellation path; switching to event-only waiting does not remove it.
+- Fix for mixed-mode stale timed polls:
+  - Added event tagging + cancellation APIs to scheduler internals:
+    `DeltaCycleQueue::cancelByTag`, `TimeWheel::cancelByTag`,
+    `EventScheduler::cancelEventsByTag`.
+  - Tagged `wait_condition` timed poll callbacks by process and cancel tagged
+    callbacks when:
+    - `__moore_wait_condition` observes `condition=true`
+    - wait strategy chooses event-only wakeup (`timedPoll=0`)
+  - This physically removes stale callbacks from the queue (not just logical
+    token invalidation), so final simulation time cannot drift to stale
+    watchdog timestamps.
+- Added regression:
+  - `test/Tools/circt-sim/wait-condition-mixed-mode-no-stale-time.mlir`
+    (`wait_for_state` timed poll followed by queue-backed event wake),
+    asserting completion at `7 fs`.
+- TDD verification:
+  - Baseline before fix:
+    `build_test/bin/circt-sim --skip-passes --top=top --sim-stats /tmp/waitcond_mixed_stale_time.mlir`
+    completed logic but ended at `1000000 fs`.
+  - After fix, same reproducer ends at `7 fs`.
+  - Targeted lit run:
+    `llvm/build/bin/llvm-lit -sv --filter='wait-condition-mixed-mode-no-stale-time|wait-condition-memory-no-stale-time|wait-condition-memory-poll-recheck|wait-condition-queue-no-stale-time|wait-condition-queue-fallback-backoff|wait-condition-execute-phase-objection-no-stale-time|wait-condition-execute-phase-objection-fallback-backoff' build_test/test/Tools/circt-sim`
+    passed 7/7.
+- Similarity audit follow-up:
+  - Reviewed other wait/poll scheduling sites (`LLHDProcessInterpreter.cpp`,
+    `LLHDProcessInterpreterNativeThunkExec.cpp`) for mixed-mode
+    wait-condition-like state transitions.
+  - No additional deterministic stale-final-time regression reproduced in this
+    pass beyond the mixed wait_condition mode fixed above.
+- Post-fix test updates:
+  - Focused regression subset passed:
+    `llvm/build/bin/llvm-lit -sv --filter='wait_for_waiters|wait_for_self_and_siblings_to_drop|seq-get-next-item|wait-condition-mixed-mode-no-stale-time' build_test/test/Tools/circt-sim`
+    -> 4/4 passed.
+  - A broader 31-test wait/objection sweep was started but did not produce
+    timely output in this workspace state; switched to focused subsets to keep
+    feedback deterministic.
+
+## 2026-02-26
+- Audit finding: `EventScheduler::runUntil(maxTime)` advanced simulation time
+  to the next event even when that event was beyond `maxTime`.
+  - Repro via new unit test:
+    `EventScheduler.RunUntilDoesNotAdvanceBeyondLimit`.
+  - Before fix: scheduling an event at `100 fs` and calling `runUntil(50)`
+    returned `end.realTime == 100` (unexpected overshoot), with event still
+    unprocessed.
+- Fix: gate `advanceToNextEvent()` in `EventScheduler::runUntil` using
+  `findNextEventTime()` and stop when `nextTime.realTime > maxTime`.
+  Also only increment `realTimeAdvances` when real time actually increases.
+- Added/updated unit coverage in
+  `unittests/Dialect/Sim/EventQueueTest.cpp`:
+  - `EventScheduler.RunUntilDoesNotAdvanceBeyondLimit` (new regression)
+  - `EventScheduler.CancelEventsByTagRemovesTaggedOnly`
+  - `EventScheduler.CancelByTagInsideExtraDeltaCallback`
+  - `EventScheduler.CancelByTagInsideExtraDeltaSameDeltaReschedule`
+- Verification:
+  - `ninja -C build_test CIRCTSimTests`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='EventScheduler.RunUntilDoesNotAdvanceBeyondLimit:EventScheduler.DelayedScheduling:EventScheduler.Statistics:EventScheduler.Reset:EventScheduler.CancelEventsByTagRemovesTaggedOnly:EventScheduler.CancelByTagInsideExtraDeltaCallback:EventScheduler.CancelByTagInsideExtraDeltaSameDeltaReschedule'`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='EventScheduler.*:TimeWheel.*:DeltaCycleQueue.*:Event.*:SimTime.*:SchedulingRegion.*'`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='ProcessScheduler.SuspendUntilTime:ProcessSchedulerIntegration.DelayedEventAdvancesTime:ProcessSchedulerIntegration.MultipleDelayedEvents:ProcessSchedulerIntegration.DelayedWaitPattern:ProcessSchedulerIntegration.EventSchedulerIntegrationCheck'`
+  - All selected tests passed.
+
+## 2026-02-26
+- Additional audit finding: `ProcessScheduler::runUntil(maxTime)` also advanced
+  to future wakeups beyond `maxTime`, mirroring the EventScheduler horizon bug.
+  - Reproducer unit test:
+    `ProcessSchedulerIntegration.RunUntilDoesNotAdvanceBeyondLimit`.
+  - Before fix: scheduling an event at `100 fs` and calling `runUntil(50)`
+    returned `end.realTime == 100` and executed the callback.
+- Fix: in `ProcessScheduler::runUntil`, compute the next wake source across:
+  - event scheduler (`peekNextRealTime`)
+  - active clock domains (`nextWakeFs`)
+  - active minnows (`nextWakeFs`)
+  and stop if that minimum wake is beyond `maxTime`.
+- Added regression:
+  - `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`
+    `ProcessSchedulerIntegration.RunUntilDoesNotAdvanceBeyondLimit`.
+- Verification:
+  - `ninja -C build_test CIRCTSimTests`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='ProcessSchedulerIntegration.RunUntilDoesNotAdvanceBeyondLimit:ProcessScheduler.SuspendUntilTime:ProcessSchedulerIntegration.DelayedEventAdvancesTime:ProcessSchedulerIntegration.MultipleDelayedEvents:ProcessSchedulerIntegration.DelayedWaitPattern:ProcessSchedulerIntegration.EventSchedulerIntegrationCheck'`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='EventScheduler.*:ProcessScheduler.*:ProcessSchedulerIntegration.*'`
+  - All selected tests passed.
+
+## 2026-02-26
+- Additional audit finding in parallel mode:
+  `ParallelScheduler::runParallel(maxTime)` advanced beyond `maxTime`.
+  - Reproducer unit test:
+    `ParallelSchedulerTest.RunParallelDoesNotAdvanceBeyondLimit`.
+  - Before fix: event at `100 fs` with `runParallel(50)` returned
+    `end.realTime == 100`.
+- Follow-up audit finding:
+  `runParallel(0)` failed to process events already scheduled at time 0 due
+  strict `< maxTime` loop guard.
+  - Reproducer unit test:
+    `ParallelSchedulerTest.RunParallelProcessesCurrentTimeAtLimit`.
+  - Before fix: time-0 callback did not fire.
+- Fixes:
+  - Added `ProcessScheduler::peekNextWakeTime()` to expose the earliest pending
+    wake across EventScheduler, clock domains, and minnows.
+  - `ParallelScheduler::runParallel` now:
+    - checks `peekNextWakeTime()` before advancing, and
+    - runs with `currentTime <= maxTime` so time-0 work is included.
+- Added regression tests in
+  `unittests/Dialect/Sim/ParallelSchedulerTest.cpp`:
+  - `RunParallelDoesNotAdvanceBeyondLimit`
+  - `RunParallelProcessesCurrentTimeAtLimit`
+- Verification:
+  - `ninja -C build_test CIRCTSimTests`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='ParallelSchedulerTest.*'`
+  - `build_test/unittests/Dialect/Sim/CIRCTSimTests --gtest_filter='EventScheduler.*:ProcessScheduler.*:ProcessSchedulerIntegration.*:ParallelSchedulerTest.*'`
+  - All selected tests passed.
+
+## 2026-02-26
+- Additional audit finding (runtime UB risk in diagnostics/tracing):
+  several `llvm::StringRef` variables were initialized from ternaries that mixed
+  `std::string` and string literals, e.g. `cond ? mapIt->second : "?"`.
+  - In this shape the conditional expression materializes a temporary
+    `std::string` in the literal branch; binding `StringRef` to it can dangle.
+  - Clang warning seen during rebuild before fix:
+    `object backing the pointer will be destroyed at the end of the full-expression`.
+- Fix: replaced those ternary initializers with stable two-step initialization:
+  initialize `StringRef` to a literal, then overwrite from map lookup when found.
+- Files touched:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - `tools/circt-sim/LLHDProcessInterpreterTrace.cpp`
+  - `tools/circt-sim/LLHDProcessInterpreterMemory.cpp`
+  - `tools/circt-sim/LLHDProcessInterpreterNativeThunkPolicy.cpp`
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `rg -n "dangling-gsl|object backing the pointer will be destroyed" /tmp/circt_sim_rebuild_after_stringref_fix.log`
+    -> no matches
+  - `build_clang_test/bin/llvm-lit -sv build_test/test/Tools/circt-sim/max-time-no-false-hit-on-idle.mlir build_test/test/Tools/circt-sim/max-time-inclusive-current-time.mlir build_test/test/Tools/circt-sim/interface-pullup-distinct-driver-sensitivity.sv`
+    -> 3/3 passed

@@ -1701,10 +1701,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMStore(
             formatBits(newVal, newBits);
             auto srcNameIt = signalIdToName.find(srcSigId);
             auto dstNameIt = signalIdToName.find(dstSigId);
-            llvm::StringRef srcName =
-                srcNameIt != signalIdToName.end() ? srcNameIt->second : "?";
-            llvm::StringRef dstName =
-                dstNameIt != signalIdToName.end() ? dstNameIt->second : "?";
+            llvm::StringRef srcName = "?";
+            if (srcNameIt != signalIdToName.end())
+              srcName = srcNameIt->second;
+            llvm::StringRef dstName = "?";
+            if (dstNameIt != signalIdToName.end())
+              dstName = dstNameIt->second;
             SimTime now = scheduler.getCurrentTime();
             llvm::errs() << "[I3C-IFACE-PROP] " << tag << " proc=" << procId
                          << " t=" << now.realTime << " d=" << now.deltaStep

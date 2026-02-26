@@ -25033,10 +25033,10 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
       if (fieldIt != interfaceFieldSignals.end()) {
         SignalId fieldSigId = fieldIt->second;
         if (traceOnDemandLoad) {
+          llvm::StringRef sigName = "<unknown>";
           auto nameIt = signalIdToName.find(fieldSigId);
-          llvm::StringRef sigName = nameIt != signalIdToName.end()
-                                        ? nameIt->second
-                                        : "<unknown>";
+          if (nameIt != signalIdToName.end())
+            sigName = nameIt->second;
           maybeTraceOnDemandLoadSignal(addr, fieldSigId, sigName);
         }
         InterpretedValue signalVal;
