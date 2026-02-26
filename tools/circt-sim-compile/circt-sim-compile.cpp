@@ -611,11 +611,12 @@ static bool isSupportedNativeModuleInitSignalProbe(llhd::ProbeOp probeOp,
   if (!signalOp || signalOp->getBlock() != &moduleBody)
     return false;
 
-  // Keep this conservative: only allow module-level users that are probes.
+  // Keep this conservative: allow probe-only module-level reads plus
+  // non-mutating connectivity uses through hw.instance operands.
   for (Operation *user : signalOp->getUsers()) {
     if (user->getBlock() != &moduleBody)
       continue;
-    if (!isa<llhd::ProbeOp>(user))
+    if (!isa<llhd::ProbeOp, hw::InstanceOp>(user))
       return false;
   }
   return true;

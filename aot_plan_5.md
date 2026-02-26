@@ -404,14 +404,27 @@ Status update (incremental):
   - interpretation: module-arg probe ABI gap is resolved on these samples;
     remaining work is selective handling of mutable/complex `llhd.sig`
     dependency chains.
+- Follow-up landed: allow conservative module-init signal-probe aliasing when
+  the same `llhd.sig` is also connected via module-body `hw.instance` users
+  (non-mutating connectivity).
+  - implementation keeps the same safety intent: module-body users must remain
+    read-only forms (`llhd.prb` and/or `hw.instance`), with no module-body
+    mutation users.
+  - new regression:
+    `aot-native-module-init-llhd-prb-signal-instance-alias.mlir`
+- AVIP spot telemetry after this follow-up (`--emit-llvm -v`):
+  - `ahb`: `4 emitted / 4 total` (was `3 / 4`)
+  - `axi4Lite`: unchanged at `9 emitted / 9 total`
+  - interpretation: the prior residual `ahb` skip due
+    `operand_dep_skipped:llhd.sig` is now closed for this sample.
 - UVM sanity after this expansion remains stable:
   - `uvm_seq_body` with `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1`:
     `COMPILE_EXIT=0`, `RUN_EXIT=0` (max-time reached)
   - `uvm_run_phase` with native-init opt-in:
     preserves known parity endpoint `UVM_FATAL FCTTYP`, `RUN_EXIT=1`.
-- Next expansion target: reduce residual `operand_dep_skipped:llhd.sig`
-  rejections in multi-module workloads without weakening correctness guards,
-  then re-run AVIP/OpenTitan telemetry.
+- Next expansion target: survey remaining multi-module workloads for residual
+  `operand_dep_skipped:llhd.sig` patterns beyond this AVIP spot set and widen
+  safely where mutation-free.
 - Current OpenTitan telemetry constraint in this workspace:
   - probe set mostly fails during MLIR generation (`gpio`, `spi_device`,
     `usbdev`, `i2c`, `spi_host`, `uart_*`, `tlul_adapter_reg`).

@@ -1541,6 +1541,50 @@
       preserves parity endpoint (`UVM_FATAL FCTTYP`, `RUN_EXIT=1`).
 - Realization:
   - module-arg probe ABI support is no longer the limiting factor on the tested
-    AVIP workloads.
+  AVIP workloads.
   - remaining native-init extraction misses are now concentrated in mutable
-    `llhd.sig` dependency chains rather than missing op coverage.
+  `llhd.sig` dependency chains rather than missing op coverage.
+
+## 2026-02-26
+- Phase 4 follow-up: closed the remaining `ahb` native module-init miss by
+  accepting conservative `llhd.sig` probe aliasing when the same signal also
+  appears as a module-body `hw.instance` operand (connectivity-only use).
+- Trigger:
+  - after block-arg bridge + signal alias, AVIP spot telemetry still showed
+    `ahb` at `3 emitted / 4 total` with `1x operand_dep_skipped:llhd.sig`
+    while `axi4Lite` was already `9 / 9`.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - widened `isSupportedNativeModuleInitSignalProbe(...)` module-body user
+    check from probe-only to read-only probe/connectivity users:
+    - allowed users: `llhd.prb`, `hw.instance`
+  - this keeps mutation guards intact: any other module-body user still rejects
+    module native-init synthesis for that module.
+- TDD/regression:
+  - added
+    `test/Tools/circt-sim/aot-native-module-init-llhd-prb-signal-instance-alias.mlir`.
+  - focused native-init probe suite passes sequentially:
+    - `aot-native-module-init-llhd-prb-refcast.mlir`
+    - `aot-native-module-init-llhd-prb-block-arg.mlir`
+    - `aot-native-module-init-llhd-prb-signal-alias.mlir`
+    - `aot-native-module-init-llhd-prb-signal-instance-alias.mlir`
+- Validation:
+  - AVIP spot telemetry rerun (`--emit-llvm -v`) on
+    `out/avip_core8_interpret_20260226_110735`:
+    - `ahb`:
+      - `Native module init functions: 4`
+      - `Native module init modules: 4 emitted / 4 total`
+      - (previous step was `3 / 4`, `1x operand_dep_skipped:llhd.sig`)
+    - `axi4Lite`:
+      - `Native module init functions: 9`
+      - `Native module init modules: 9 emitted / 9 total` (unchanged)
+  - large UVM sanity after patch:
+    - `uvm_seq_body` with native-init opt-in:
+      `COMPILE_EXIT=0`, `RUN_EXIT=0`, reaches max-time endpoint.
+    - `uvm_run_phase` with native-init opt-in:
+      preserves known parity endpoint
+      (`UVM_FATAL FCTTYP`, `RUN_EXIT=1`).
+- Realization:
+  - for this AVIP spot set, native module-init extraction is now no longer
+    limited by `llhd.prb`/block-arg/signal-connectivity forms.
+  - next ROI is broader telemetry-driven handling of remaining mutation-free
+    `llhd.sig` dependency shapes beyond this sample pair.
