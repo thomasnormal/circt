@@ -220,6 +220,42 @@ struct HierPathValueExprVisitor
     return true;
   }
 
+  bool collectReceiverSegmentsFromHierRef(
+      const slang::ast::HierarchicalReference &ref,
+      SmallVectorImpl<ReceiverPathSegment> &segments) {
+    segments.clear();
+    for (const auto &elem : ref.path) {
+      std::optional<int64_t> selectorIndex;
+      if (auto *index = std::get_if<int32_t>(&elem.selector))
+        selectorIndex = static_cast<int64_t>(*index);
+      else if (std::holds_alternative<std::pair<int32_t, int32_t>>(
+                   elem.selector))
+        return false;
+
+      StringRef segmentName;
+      if (auto *inst = elem.symbol->as_if<slang::ast::InstanceSymbol>())
+        segmentName = inst->name;
+      else if (auto *array =
+                   elem.symbol->as_if<slang::ast::InstanceArraySymbol>())
+        segmentName = array->name;
+      else if (auto *ifacePort =
+                   elem.symbol->as_if<slang::ast::InterfacePortSymbol>())
+        segmentName = ifacePort->name;
+      else
+        continue;
+
+      if (segmentName.empty()) {
+        if (!selectorIndex || segments.empty() || segments.back().index)
+          return false;
+        segments.back().index = selectorIndex;
+        continue;
+      }
+
+      segments.push_back({segmentName.str(), selectorIndex});
+    }
+    return !segments.empty();
+  }
+
   const slang::ast::InstanceSymbol *
   resolveInstancePath(ArrayRef<ReceiverPathSegment> path) {
     if (path.empty())
@@ -905,6 +941,26 @@ struct HierPathValueExprVisitor
   void handle(const slang::ast::ArbitrarySymbolExpression &expr) {
     if (failed(result))
       return;
+    if (!expr.hierRef.path.empty()) {
+      SmallVector<ReceiverPathSegment, 8> path;
+      if (collectReceiverSegmentsFromHierRef(expr.hierRef, path)) {
+        if (auto *ifaceInst = resolveInstancePath(path)) {
+          if (ifaceInst->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface) {
+            SmallString<64> pathName;
+            for (auto [idx, segment] : llvm::enumerate(path)) {
+              if (idx)
+                pathName += ".";
+              pathName += segment.name;
+              if (segment.index)
+                pathName += ("[" + llvm::Twine(*segment.index) + "]").str();
+            }
+            threadInterfaceInstance(ifaceInst, builder.getStringAttr(pathName));
+            return;
+          }
+        }
+      }
+    }
     if (auto *ifaceInst = expr.symbol->as_if<slang::ast::InstanceSymbol>()) {
       if (ifaceInst->getDefinition().definitionKind ==
           slang::ast::DefinitionKind::Interface) {

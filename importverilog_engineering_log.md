@@ -2026,3 +2026,61 @@ module-instance arrays with indexed first path segments:
 - xrun notation checks:
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog hierarchical interface gap closure for virtual interface
+binding through module-instance arrays:
+- `vif = a[idx].ifs[idx];`
+
+### Realizations
+- `xrun` elaborates module-array hierarchical interface assignment forms, but
+  ImportVerilog still failed with:
+  `unsupported arbitrary symbol reference ''`.
+- In this shape, Slang provides `ArbitrarySymbolExpression` with a non-empty
+  hierarchical path (`hierRef`) but a synthesized/unnamed interface element
+  symbol, so definition-only fallback is ambiguous.
+- `hierRef` encodes selectors as alternating array symbols and unnamed instance
+  hops (e.g., `a`, unnamed `[1]`, `ifs`, unnamed `[1]`), so we need path
+  normalization that folds unnamed selector hops into the preceding named
+  segment.
+
+### TDD Baseline
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv`
+- Baseline behavior before fix:
+  - `build_test/bin/circt-verilog /tmp/iv_hier_probe6_assign_modarr.sv --ir-moore`
+    failed with `unsupported arbitrary symbol reference ''`.
+  - `xrun -sv /tmp/iv_hier_probe6_assign_modarr.sv -elaborate -nolog`
+    passed.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+  - added hierarchical-reference path normalization for arbitrary symbol
+    receivers (`collectReceiverSegmentsFromHierRef(...)`) that folds unnamed
+    selected elements into named path segments.
+  - updated `handle(ArbitrarySymbolExpression)` to resolve and thread concrete
+    interface instances (with full path names) via normalized hierarchical
+    paths.
+- `lib/Conversion/ImportVerilog/Expressions.cpp`:
+  - in `visit(ArbitrarySymbolExpression)`, added path-based fallback that maps
+    normalized hierarchical path names to threaded interface paths in the
+    current instance body, then resolves the concrete interface instance.
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv`
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- New regression:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv`
+- Re-validation:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`
+- Focused lit sweep:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-assign.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv -elaborate -nolog` (PASS)
