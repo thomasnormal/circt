@@ -1776,3 +1776,27 @@ active regression coverage for `string.itoa` argument typing.
   - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/queues.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/queues.sv`
 - xrun notation check:
   - `xrun -sv test/Conversion/ImportVerilog/queues.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue closing stale covergroup gap tracking by enabling explicit cross-target
+regression coverage in `covergroups.sv`.
+
+### Realizations
+- Plain covergroup cross declarations (`cross a_cp, b_cp;`) are already imported
+  as `moore.covercross.decl` with target symbol references.
+- The old note in `covergroups.sv` claiming cross targets were not fully
+  supported was stale for this baseline pattern.
+
+### Changes Landed In This Slice
+- Updated `test/Conversion/ImportVerilog/covergroups.sv`:
+  - named coverpoints (`data_cp`, `addr_cp`) to stabilize symbol checks.
+  - enabled `cross data_cp, addr_cp;` inside the covergroup.
+  - added FileCheck expectation for `moore.covercross.decl` target list.
+
+### Validation
+- CIRCT regression:
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/covergroups.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/covergroups.sv`
+- xrun notation check:
+  - `xrun -sv test/Conversion/ImportVerilog/covergroups.sv -elaborate -nolog` (PASS)

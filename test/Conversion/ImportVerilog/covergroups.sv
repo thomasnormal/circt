@@ -13,11 +13,11 @@ module CovergroupTest;
   // CHECK: moore.covergroup.decl @cg
   // CHECK:   moore.coverpoint.decl @data_cp
   // CHECK:   moore.coverpoint.decl @addr_cp
+  // CHECK:   moore.covercross.decl @data_cp_x_addr_cp targets [@data_cp, @addr_cp]
   covergroup cg @(posedge clk);
-    coverpoint data;
-    coverpoint addr;
-    // Cross coverage targets are not yet fully supported
-    // cross data, addr;
+    data_cp: coverpoint data;
+    addr_cp: coverpoint addr;
+    cross data_cp, addr_cp;
   endgroup
 
   cg cg_inst = new();
