@@ -1,0 +1,15 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/utils %t/src %t/work
+// RUN: cp %S/../../utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_opentitan_fpv_circt_bmc.py
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib,sys\ncases=\"\"\nout=\"\"\ntimeout_reasons=\"\"\nassertion_granular=False\nargs=sys.argv[1:]\ni=0\nwhile i < len(args):\n  if args[i]==\"--cases-file\":\n    cases=args[i+1]; i+=2; continue\n  if args[i]==\"--results-file\":\n    out=args[i+1]; i+=2; continue\n  if args[i]==\"--timeout-reasons-file\":\n    timeout_reasons=args[i+1]; i+=2; continue\n  if args[i]==\"--assertion-granular\":\n    assertion_granular=True; i+=1; continue\n  i+=1\nif not cases or not out:\n  raise SystemExit(10)\nline=pathlib.Path(cases).read_text(encoding=\"utf-8\").splitlines()[0]\nparts=line.split(\"\\t\")\ncase_id=parts[0]\ncase_path=parts[4]\nif assertion_granular:\n  pathlib.Path(out).write_text(f\"PASS\\t{case_id}\\t{case_path}\\topentitan\\tFPV_BMC\\tUNSAT\\n\", encoding=\"utf-8\")\n  if timeout_reasons:\n    pathlib.Path(timeout_reasons).write_text(\"\", encoding=\"utf-8\")\n  raise SystemExit(0)\npathlib.Path(out).write_text(f\"TIMEOUT\\t{case_id}\\t{case_path}\\topentitan\\tFPV_BMC\\tBMC_TIMEOUT\\tsolver_command_timeout\\n\", encoding=\"utf-8\")\nif timeout_reasons:\n  pathlib.Path(timeout_reasons).write_text(f\"{case_id}\\t{case_path}\\tsolver_command_timeout\\n\", encoding=\"utf-8\")\nraise SystemExit(1)\n' > %t/utils/run_pairwise_circt_bmc.py
+// RUN: chmod +x %t/utils/run_opentitan_fpv_circt_bmc.py %t/utils/run_pairwise_circt_bmc.py
+// RUN: touch %t/src/foo.sv
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\ttoplevel\tsetup_status\tfile_count\tinclude_dir_count\tdefine_count\tfiles_fingerprint\tinclude_dirs_fingerprint\tdefines_fingerprint\tcontract_fingerprint\tstopat_count\tstopats_fingerprint\tstopats\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tfiles\tinclude_dirs\tdefines\teda_yml_path\tsetup_log_path\tworkdir\nfoo_fpv\tlowrisc:fpv:foo_fpv\tFpvDefault\tformal\tfpv\thw/top_earlgrey/formal/ip/foo\tfoo_tb\tok\t1\t0\t0\tf\ti\td\tc\t0\ts\t\tfpv_default\t1\tnone\tnone\tp\t%t/src/foo.sv\t\t\t/tmp/foo.eda.yml\t/tmp/foo.log\t/tmp/foo.work\n' > %t/contracts.tsv
+// RUN: env BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR=1 sh -c '%t/utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --workdir %t/work --results-file %t/results.tsv --timeout-reasons-file %t/timeout-reasons.tsv' 2>&1 | FileCheck %s --check-prefix=LOG
+// RUN: FileCheck %s --check-prefix=ROWS < %t/results.tsv
+// RUN: test ! -s %t/timeout-reasons.tsv
+//
+// LOG: opentitan FPV BMC: timeout fallback via --assertion-granular cases=1
+// LOG: opentitan FPV BMC: timeout fallback recovered cases=1
+// LOG: opentitan FPV BMC summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// ROWS: PASS{{[[:space:]]+}}foo_fpv::foo_tb{{[[:space:]]+}}hw/top_earlgrey/formal/ip/foo/foo_tb{{[[:space:]]+}}opentitan{{[[:space:]]+}}FPV_BMC{{[[:space:]]+}}UNSAT

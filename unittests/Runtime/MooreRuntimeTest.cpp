@@ -25,6 +25,7 @@ TEST(MooreRuntimeTest, DisabledOnEmscripten) {
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -40,6 +41,20 @@ MooreString makeMooreString(const char *cstr) {
     return {nullptr, 0};
   return {const_cast<char *>(cstr), static_cast<int64_t>(std::strlen(cstr))};
 }
+
+void *resolveAssocPtrFromMap(const void *ptr, void *userData) {
+  auto *map = static_cast<std::map<uintptr_t, void *> *>(userData);
+  if (!ptr || !map)
+    return nullptr;
+  auto it = map->find(reinterpret_cast<uintptr_t>(ptr));
+  if (it == map->end())
+    return nullptr;
+  return it->second;
+}
+
+struct AssocResolverGuard {
+  ~AssocResolverGuard() { __moore_assoc_set_ptr_resolver(nullptr, nullptr); }
+};
 
 //===----------------------------------------------------------------------===//
 // String Length Tests
@@ -73,6 +88,39 @@ TEST(MooreRuntimeStringTest, StringToUpper) {
   EXPECT_EQ(std::string(result.data, result.len), "HELLO WORLD");
 
   __moore_free(result.data);
+}
+
+TEST(MooreRuntimeAssocTest, ResolverMapsVirtualPointer) {
+  AssocResolverGuard guard;
+  void *array = __moore_assoc_create(/*key_size=*/4, /*value_size=*/4);
+  ASSERT_NE(array, nullptr);
+
+  int32_t key = 7;
+  void *value = __moore_assoc_get_ref(array, &key, /*value_size=*/4);
+  ASSERT_NE(value, nullptr);
+  EXPECT_EQ(__moore_assoc_exists(array, &key), 1);
+
+  constexpr uintptr_t virtualArrayPtr = 0x10264760ULL;
+  std::map<uintptr_t, void *> map;
+  map[virtualArrayPtr] = array;
+  __moore_assoc_set_ptr_resolver(resolveAssocPtrFromMap, &map);
+
+  EXPECT_EQ(__moore_assoc_exists(reinterpret_cast<void *>(virtualArrayPtr), &key),
+            1);
+  EXPECT_EQ(__moore_assoc_size(reinterpret_cast<void *>(virtualArrayPtr)), 1);
+}
+
+TEST(MooreRuntimeAssocTest, ResolverFallbackUsesOriginalPointer) {
+  AssocResolverGuard guard;
+  void *array = __moore_assoc_create(/*key_size=*/4, /*value_size=*/4);
+  ASSERT_NE(array, nullptr);
+
+  int32_t key = 13;
+  ASSERT_NE(__moore_assoc_get_ref(array, &key, /*value_size=*/4), nullptr);
+
+  std::map<uintptr_t, void *> emptyMap;
+  __moore_assoc_set_ptr_resolver(resolveAssocPtrFromMap, &emptyMap);
+  EXPECT_EQ(__moore_assoc_exists(array, &key), 1);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1287,6 +1335,24 @@ TEST(MooreRuntimeQueueTest, QueuePopFrontPtr) {
   EXPECT_EQ(queue.data, nullptr);
 }
 
+TEST(MooreRuntimeQueueTest, QueuePopFrontPtrInvalidLengthGuard) {
+  int32_t value = 7;
+  int32_t result = 0;
+  MooreQueue queue = {&value, 100001};
+  __moore_queue_pop_front_ptr(&queue, &result, sizeof(int32_t));
+  EXPECT_EQ(queue.len, 100001);
+  EXPECT_EQ(result, 0);
+}
+
+TEST(MooreRuntimeQueueTest, QueuePopBackPtrInvalidLengthGuard) {
+  int32_t value = 9;
+  int32_t result = 0;
+  MooreQueue queue = {&value, 100001};
+  __moore_queue_pop_back_ptr(&queue, &result, sizeof(int32_t));
+  EXPECT_EQ(queue.len, 100001);
+  EXPECT_EQ(result, 0);
+}
+
 TEST(MooreRuntimeQueueTest, QueuePopPtrWithStructs) {
   // Test with struct elements
   struct TestStruct {
@@ -1346,6 +1412,12 @@ TEST(MooreRuntimeQueueTest, QueueSize) {
 TEST(MooreRuntimeQueueTest, QueueSizeNull) {
   // Null pointer should return 0
   EXPECT_EQ(__moore_queue_size(nullptr), 0);
+}
+
+TEST(MooreRuntimeQueueTest, QueueSizeInvalidLengthGuard) {
+  int32_t value = 11;
+  MooreQueue queue = {&value, 100001};
+  EXPECT_EQ(__moore_queue_size(&queue), 0);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1746,6 +1818,16 @@ TEST(MooreRuntimeRandomizeTest, RandomizeBasicSeededConsistency) {
 // Distribution Constraint Tests
 //===----------------------------------------------------------------------===//
 
+static int64_t
+randomizeWithDist(int64_t *ranges, int64_t *weights, int64_t *perRange,
+                  int64_t numRanges, int64_t isSigned = 0,
+                  int64_t bitWidth = 32, int64_t hasDefaultWeight = 0,
+                  int64_t defaultWeight = 0, int64_t defaultPerRange = 0) {
+  return __moore_randomize_with_dist(ranges, weights, perRange, numRanges,
+                                     isSigned, bitWidth, hasDefaultWeight,
+                                     defaultWeight, defaultPerRange);
+}
+
 TEST(MooreRuntimeDistTest, RandomizeWithDistSingleValue) {
   // Test distribution with single values using := weight
   // x dist { 0 := 10, 1 := 20, 2 := 30 }
@@ -1756,7 +1838,7 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistSingleValue) {
   // Run multiple times and count occurrences
   std::map<int64_t, int> counts;
   for (int i = 0; i < 600; ++i) {
-    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 3);
+    int64_t result = randomizeWithDist(ranges, weights, perRange, 3);
     EXPECT_GE(result, 0);
     EXPECT_LE(result, 2);
     counts[result]++;
@@ -1780,7 +1862,7 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistRange) {
   // All values 0-4 should appear
   std::map<int64_t, int> counts;
   for (int i = 0; i < 500; ++i) {
-    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 1);
+    int64_t result = randomizeWithDist(ranges, weights, perRange, 1);
     EXPECT_GE(result, 0);
     EXPECT_LE(result, 4);
     counts[result]++;
@@ -1802,7 +1884,7 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistPerRange) {
   // All values 0-4 should appear with equal probability
   std::map<int64_t, int> counts;
   for (int i = 0; i < 500; ++i) {
-    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 1);
+    int64_t result = randomizeWithDist(ranges, weights, perRange, 1);
     EXPECT_GE(result, 0);
     EXPECT_LE(result, 4);
     counts[result]++;
@@ -1825,7 +1907,7 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistMixed) {
   // Total effective weight: 1 (for 0) + 4 (for range [1,10])
   std::map<int64_t, int> counts;
   for (int i = 0; i < 500; ++i) {
-    int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 2);
+    int64_t result = randomizeWithDist(ranges, weights, perRange, 2);
     EXPECT_GE(result, 0);
     EXPECT_LE(result, 10);
     counts[result]++;
@@ -1847,19 +1929,19 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistNullInputs) {
   int64_t perRange[] = {0};
 
   // Null ranges
-  int64_t result1 = __moore_randomize_with_dist(nullptr, weights, perRange, 1);
+  int64_t result1 = randomizeWithDist(nullptr, weights, perRange, 1);
   EXPECT_EQ(result1, 0);
 
   // Null weights
-  int64_t result2 = __moore_randomize_with_dist(ranges, nullptr, perRange, 1);
+  int64_t result2 = randomizeWithDist(ranges, nullptr, perRange, 1);
   EXPECT_EQ(result2, 0);
 
   // Null perRange
-  int64_t result3 = __moore_randomize_with_dist(ranges, weights, nullptr, 1);
+  int64_t result3 = randomizeWithDist(ranges, weights, nullptr, 1);
   EXPECT_EQ(result3, 0);
 
   // Zero numRanges
-  int64_t result4 = __moore_randomize_with_dist(ranges, weights, perRange, 0);
+  int64_t result4 = randomizeWithDist(ranges, weights, perRange, 0);
   EXPECT_EQ(result4, 0);
 }
 
@@ -1869,7 +1951,7 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistZeroWeights) {
   int64_t weights[] = {0, 0};
   int64_t perRange[] = {0, 0};
 
-  int64_t result = __moore_randomize_with_dist(ranges, weights, perRange, 2);
+  int64_t result = randomizeWithDist(ranges, weights, perRange, 2);
   // With zero weights, should return first range's low value
   EXPECT_EQ(result, 5);
 }
@@ -1881,12 +1963,67 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistSeededConsistency) {
   int64_t perRange[] = {0, 0, 0};
 
   __moore_urandom_seeded(54321);
-  int64_t result1 = __moore_randomize_with_dist(ranges, weights, perRange, 3);
+  int64_t result1 = randomizeWithDist(ranges, weights, perRange, 3);
 
   __moore_urandom_seeded(54321);
-  int64_t result2 = __moore_randomize_with_dist(ranges, weights, perRange, 3);
+  int64_t result2 = randomizeWithDist(ranges, weights, perRange, 3);
 
   EXPECT_EQ(result1, result2);
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistDefaultPerRange) {
+  // Domain for 4-bit unsigned is [0,15].
+  // Explicit [1,3] with := 1 has effective weight 3.
+  // Default with :/ 100 has effective weight 100.
+  int64_t ranges[] = {1, 3};
+  int64_t weights[] = {1};
+  int64_t perRange[] = {0};
+
+  int insideCount = 0;
+  int outsideCount = 0;
+  for (int i = 0; i < 400; ++i) {
+    int64_t result = randomizeWithDist(ranges, weights, perRange,
+                                       /*numRanges=*/1,
+                                       /*isSigned=*/0,
+                                       /*bitWidth=*/4,
+                                       /*hasDefaultWeight=*/1,
+                                       /*defaultWeight=*/100,
+                                       /*defaultPerRange=*/1);
+    EXPECT_GE(result, 0);
+    EXPECT_LE(result, 15);
+    if (result >= 1 && result <= 3)
+      insideCount++;
+    else
+      outsideCount++;
+  }
+
+  EXPECT_GT(outsideCount, insideCount);
+}
+
+TEST(MooreRuntimeDistTest, RandomizeWithDistDefaultPerValue) {
+  // Domain for 4-bit unsigned is [0,15].
+  // Explicit [1,3] with :/ 1 has effective weight 1.
+  // Default with := 1 has effective weight 13.
+  int64_t ranges[] = {1, 3};
+  int64_t weights[] = {1};
+  int64_t perRange[] = {1};
+
+  int outsideCount = 0;
+  for (int i = 0; i < 300; ++i) {
+    int64_t result = randomizeWithDist(ranges, weights, perRange,
+                                       /*numRanges=*/1,
+                                       /*isSigned=*/0,
+                                       /*bitWidth=*/4,
+                                       /*hasDefaultWeight=*/1,
+                                       /*defaultWeight=*/1,
+                                       /*defaultPerRange=*/0);
+    EXPECT_GE(result, 0);
+    EXPECT_LE(result, 15);
+    if (result == 0 || result >= 4)
+      outsideCount++;
+  }
+
+  EXPECT_GT(outsideCount, 0);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3595,6 +3732,62 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBins) {
   EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, normalVals1));
   EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, normalVals2));
   EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, normalVals3));
+
+  __moore_covergroup_destroy(cg);
+}
+
+TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBinsOrGroups) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // Encodes:
+  //   illegal_bins bad = binsof(cp0) intersect {100} || binsof(cp1) intersect {200};
+  // using a separator entry (cp_index = -1) between conjunction groups.
+  MooreCrossBinsofFilter filters[3];
+
+  int64_t cp0Values[] = {100};
+  filters[0].cp_index = 0;
+  filters[0].bin_indices = nullptr;
+  filters[0].num_bins = 0;
+  filters[0].values = cp0Values;
+  filters[0].num_values = 1;
+  filters[0].negate = false;
+
+  filters[1].cp_index = -1; // Group separator.
+  filters[1].bin_indices = nullptr;
+  filters[1].num_bins = 0;
+  filters[1].values = nullptr;
+  filters[1].num_values = 0;
+  filters[1].negate = false;
+
+  int64_t cp1Values[] = {200};
+  filters[2].cp_index = 1;
+  filters[2].bin_indices = nullptr;
+  filters[2].num_bins = 0;
+  filters[2].values = cp1Values;
+  filters[2].num_values = 1;
+  filters[2].negate = false;
+
+  int32_t illegalBinIdx = __moore_cross_add_illegal_bin(cg, crossIdx,
+                                                         "bad_or", filters, 3);
+  EXPECT_GE(illegalBinIdx, 0);
+
+  int64_t cp0Match[] = {100, 7};
+  int64_t cp1Match[] = {9, 200};
+  int64_t bothMatch[] = {100, 200};
+  int64_t noMatch[] = {1, 2};
+
+  EXPECT_TRUE(__moore_cross_is_illegal(cg, crossIdx, cp0Match));
+  EXPECT_TRUE(__moore_cross_is_illegal(cg, crossIdx, cp1Match));
+  EXPECT_TRUE(__moore_cross_is_illegal(cg, crossIdx, bothMatch));
+  EXPECT_FALSE(__moore_cross_is_illegal(cg, crossIdx, noMatch));
 
   __moore_covergroup_destroy(cg);
 }

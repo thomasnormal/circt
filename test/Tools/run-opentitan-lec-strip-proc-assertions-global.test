@@ -1,0 +1,5 @@
+// RUN: rg 'def strip_proc_assertions_global_for_lec' %S/../../utils/run_opentitan_circt_lec.py | FileCheck %s --check-prefix=DEF
+// RUN: rg -F 'strip_proc_assertions_global_for_lec(out_mlir)' %S/../../utils/run_opentitan_circt_lec.py | FileCheck %s --check-prefix=CALL
+
+// DEF: def strip_proc_assertions_global_for_lec
+// CALL: strip_proc_assertions_global_for_lec(out_mlir)

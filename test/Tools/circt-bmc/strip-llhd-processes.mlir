@@ -61,9 +61,7 @@ module {
   // CHECK-DAG: observable_signal_use_resolution_unknown
   // CHECK-DAG: signal = "sig"
   // CHECK-NOT: circt.bmc_abstracted_llhd_process_results
-  // CHECK: llhd.prb
-  // CHECK: hw.struct_extract
-  // CHECK: verif.assert
+  // CHECK-NOT: verif.assert
   // CHECK-NOT: llhd.process
   hw.module @assert_proc() {
     %t0 = llhd.constant_time <0ns, 0d, 1e>

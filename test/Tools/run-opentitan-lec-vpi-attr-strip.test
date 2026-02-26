@@ -1,0 +1,5 @@
+// RUN: rg 'def strip_vpi_attributes_for_opt' %S/../../utils/run_opentitan_circt_lec.py | FileCheck %s --check-prefix=DEF
+// RUN: rg -F 'strip_vpi_attributes_for_opt(out_moore)' %S/../../utils/run_opentitan_circt_lec.py | FileCheck %s --check-prefix=CALL
+
+// DEF: def strip_vpi_attributes_for_opt
+// CALL: strip_vpi_attributes_for_opt(out_moore)

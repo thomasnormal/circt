@@ -45,7 +45,6 @@ hw.module @init_emitter(out out: !seq.immutable<i32>) {
 
 hw.module @reg_with_instance_initial(in %clk: !seq.clock, in %in: i32, out out: i32) {
   %init = hw.instance "foo" @init_emitter () -> (out: !seq.immutable<i32>)
-  // expected-error @below {{registers with initial values not directly defined by a seq.initial op not yet supported}}
   %1 = seq.compreg %in, %clk initial %init : i32
   hw.output %1 : i32
 }

@@ -11,8 +11,14 @@
 #include "slang/ast/Constraints.h"
 #include "slang/ast/EvalContext.h"
 #include "slang/ast/TimingControl.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
 #include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
 #include "slang/ast/expressions/SelectExpressions.h"
+#include "slang/ast/statements/ConditionalStatements.h"
+#include "slang/ast/statements/LoopStatements.h"
+#include "slang/ast/statements/MiscStatements.h"
 #include "slang/ast/symbols/ClassSymbols.h"
 #include "slang/ast/symbols/CoverSymbols.h"
 #include "slang/ast/symbols/InstanceSymbols.h"
@@ -99,6 +105,19 @@ getInterfaceArrayIndices(const slang::ast::InstanceSymbol &instSym,
 
 static constexpr unsigned kContinuousAssignmentBit = 1u << 0;
 static constexpr unsigned kProceduralAssignmentBit = 1u << 1;
+
+static moore::CoverageBinKind
+convertCoverageBinKind(slang::ast::CoverageBinSymbol::BinKind kind) {
+  switch (kind) {
+  case slang::ast::CoverageBinSymbol::Bins:
+    return moore::CoverageBinKind::Bins;
+  case slang::ast::CoverageBinSymbol::IllegalBins:
+    return moore::CoverageBinKind::IllegalBins;
+  case slang::ast::CoverageBinSymbol::IgnoreBins:
+    return moore::CoverageBinKind::IgnoreBins;
+  }
+  llvm_unreachable("unknown coverage bin kind");
+}
 
 static const slang::ast::VariableSymbol *
 getDirectAssignedVariable(const slang::ast::Expression &lhs) {
@@ -1198,26 +1217,38 @@ struct ModuleVisitor : public BaseVisitor {
     // Match the module's ports up with the port values determined above.
     SmallVector<Value> inputValues;
     SmallVector<Value> outputValues;
+    SmallVector<bool> inputSignedness;
+    SmallVector<bool> outputSignedness;
     inputValues.reserve(moduleType.getNumInputs());
     outputValues.reserve(moduleType.getNumOutputs());
+    inputSignedness.reserve(moduleType.getNumInputs());
+    outputSignedness.reserve(moduleType.getNumOutputs());
 
     for (auto &port : moduleLowering->ports) {
       auto value = portValues.lookup(port.symbol);
       if (auto *portSym = port.symbol->as_if<PortSymbol>()) {
-        if (portSym->direction == ArgumentDirection::Out)
+        bool isSigned = portSym->getType().isSigned();
+        if (portSym->direction == ArgumentDirection::Out) {
           outputValues.push_back(value);
-        else
+          outputSignedness.push_back(isSigned);
+        } else {
           inputValues.push_back(value);
+          inputSignedness.push_back(isSigned);
+        }
       } else {
         inputValues.push_back(value);
+        inputSignedness.push_back(false);
       }
     }
 
     // Insert conversions for input ports.
-    for (auto [value, type] :
-         llvm::zip(inputValues, moduleType.getInputTypes()))
-      // TODO: This should honor signedness in the conversion.
-      value = context.materializeConversion(type, value, false, value.getLoc());
+    for (auto [i, type] : llvm::enumerate(moduleType.getInputTypes())) {
+      if (i >= inputValues.size())
+        break;
+      bool isSigned = i < inputSignedness.size() ? inputSignedness[i] : false;
+      inputValues[i] =
+          context.materializeConversion(type, inputValues[i], isSigned, loc);
+    }
 
     // Here we use the hierarchical value recorded in `Context::valueSymbols`.
     // Then we pass it as the input port with the ref<T> type of the instance.
@@ -1326,13 +1357,13 @@ struct ModuleVisitor : public BaseVisitor {
     }
 
     // Assign output values from the instance to the connected expression.
-    for (auto [lvalue, output] : llvm::zip(outputValues, inst.getOutputs())) {
+    for (auto [lvalue, output, isSigned] :
+         llvm::zip(outputValues, inst.getOutputs(), outputSignedness)) {
       if (!lvalue)
         continue;
       Value rvalue = output;
       auto dstType = cast<moore::RefType>(lvalue.getType()).getNestedType();
-      // TODO: This should honor signedness in the conversion.
-      rvalue = context.materializeConversion(dstType, rvalue, false, loc);
+      rvalue = context.materializeConversion(dstType, rvalue, isSigned, loc);
       moore::ContinuousAssignOp::create(builder, loc, lvalue, rvalue);
     }
 
@@ -6450,134 +6481,7 @@ void Context::captureRef(Value ref) {
 // Covergroup Conversion
 //===----------------------------------------------------------------------===//
 
-/// Helper to convert a BinsSelectExpr (binsof/intersect) to Moore IR.
-/// This handles the recursive structure of bins select expressions used in
-/// cross coverage bins.
-static void convertBinsSelectExpr(
-    const slang::ast::BinsSelectExpr &expr,
-    const llvm::StringMap<mlir::FlatSymbolRefAttr> &coverpointSymbols,
-    OpBuilder &builder, Location loc,
-    const std::function<slang::ConstantValue(const slang::ast::Expression &)>
-        &evaluateConstant) {
-
-  switch (expr.kind) {
-  case slang::ast::BinsSelectExprKind::Condition: {
-    // binsof(coverpoint) intersect {values}
-    auto &condExpr = static_cast<const slang::ast::ConditionBinsSelectExpr &>(expr);
-    auto &target = condExpr.target;
-
-    // Get the target symbol reference
-    mlir::SymbolRefAttr targetRef;
-    if (target.kind == slang::ast::SymbolKind::Coverpoint) {
-      // Direct coverpoint reference
-      auto it = coverpointSymbols.find(target.name);
-      if (it != coverpointSymbols.end()) {
-        targetRef = it->second;
-      } else {
-        // Create a reference using the target name
-        targetRef = mlir::FlatSymbolRefAttr::get(
-            builder.getContext(), target.name);
-      }
-    } else if (target.kind == slang::ast::SymbolKind::CoverageBin) {
-      // Reference to a specific bin within a coverpoint (cp.bin_name)
-      auto *parentScope = target.getParentScope();
-      if (parentScope) {
-        auto &parentSym = parentScope->asSymbol();
-        if (parentSym.kind == slang::ast::SymbolKind::Coverpoint) {
-          auto it = coverpointSymbols.find(parentSym.name);
-          if (it != coverpointSymbols.end()) {
-            // Create nested ref: @coverpoint::@bin
-            targetRef = mlir::SymbolRefAttr::get(
-                builder.getContext(), it->second.getValue(),
-                {mlir::FlatSymbolRefAttr::get(builder.getContext(),
-                                              target.name)});
-          }
-        }
-      }
-    }
-
-    if (!targetRef) {
-      // Fallback: use the target name directly
-      targetRef =
-          mlir::FlatSymbolRefAttr::get(builder.getContext(), target.name);
-    }
-
-    // Collect intersect values if present
-    mlir::ArrayAttr intersectValuesAttr;
-    if (!condExpr.intersects.empty()) {
-      SmallVector<mlir::Attribute> intersectValues;
-      for (const auto *intersectExpr : condExpr.intersects) {
-        // Check if it's a value range expression (e.g., [0:10])
-        if (intersectExpr->kind == slang::ast::ExpressionKind::ValueRange) {
-          auto &rangeExpr =
-              intersectExpr->as<slang::ast::ValueRangeExpression>();
-          auto leftVal = evaluateConstant(rangeExpr.left());
-          auto rightVal = evaluateConstant(rangeExpr.right());
-          if (leftVal.isInteger() && rightVal.isInteger()) {
-            auto leftInt = leftVal.integer().as<int64_t>();
-            auto rightInt = rightVal.integer().as<int64_t>();
-            if (leftInt && rightInt) {
-              // Expand the range into individual values
-              for (int64_t v = leftInt.value(); v <= rightInt.value(); ++v) {
-                intersectValues.push_back(builder.getI64IntegerAttr(v));
-              }
-            }
-          }
-        } else {
-          // Single value
-          auto result = evaluateConstant(*intersectExpr);
-          if (result.isInteger()) {
-            auto intVal = result.integer().as<int64_t>();
-            if (intVal)
-              intersectValues.push_back(
-                  builder.getI64IntegerAttr(intVal.value()));
-          }
-        }
-      }
-      if (!intersectValues.empty())
-        intersectValuesAttr = builder.getArrayAttr(intersectValues);
-    }
-
-    moore::BinsOfOp::create(builder, loc, targetRef, intersectValuesAttr);
-    break;
-  }
-
-  case slang::ast::BinsSelectExprKind::Unary: {
-    // !binsof(coverpoint) - negation
-    // For now, we recursively convert the inner expression.
-    // A more complete implementation would track the negation.
-    auto &unaryExpr = static_cast<const slang::ast::UnaryBinsSelectExpr &>(expr);
-    convertBinsSelectExpr(unaryExpr.expr, coverpointSymbols, builder, loc,
-                          evaluateConstant);
-    break;
-  }
-
-  case slang::ast::BinsSelectExprKind::Binary: {
-    // binsof(a) && binsof(b) or binsof(a) || binsof(b)
-    auto &binaryExpr = static_cast<const slang::ast::BinaryBinsSelectExpr &>(expr);
-    convertBinsSelectExpr(binaryExpr.left, coverpointSymbols, builder, loc,
-                          evaluateConstant);
-    convertBinsSelectExpr(binaryExpr.right, coverpointSymbols, builder, loc,
-                          evaluateConstant);
-    break;
-  }
-
-  case slang::ast::BinsSelectExprKind::WithFilter: {
-    // binsof(a) with (filter_expr)
-    auto &filterExpr =
-        static_cast<const slang::ast::BinSelectWithFilterExpr &>(expr);
-    convertBinsSelectExpr(filterExpr.expr, coverpointSymbols, builder, loc,
-                          evaluateConstant);
-    break;
-  }
-
-  case slang::ast::BinsSelectExprKind::SetExpr:
-  case slang::ast::BinsSelectExprKind::CrossId:
-  case slang::ast::BinsSelectExprKind::Invalid:
-    // These are less common or error cases - skip for now
-    break;
-  }
-}
+// Cross-select lowering helpers live in CrossSelect.cpp.
 
 /// Helper struct to hold extracted coverage options.
 struct CoverageOptions {
@@ -6858,19 +6762,7 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
           if (auto *bin = cpMember.as_if<slang::ast::CoverageBinSymbol>()) {
             auto binLoc = convertLocation(bin->location);
 
-            // Determine bin kind
-            moore::CoverageBinKind binKind;
-            switch (bin->binsKind) {
-            case slang::ast::CoverageBinSymbol::Bins:
-              binKind = moore::CoverageBinKind::Bins;
-              break;
-            case slang::ast::CoverageBinSymbol::IllegalBins:
-              binKind = moore::CoverageBinKind::IllegalBins;
-              break;
-            case slang::ast::CoverageBinSymbol::IgnoreBins:
-              binKind = moore::CoverageBinKind::IgnoreBins;
-              break;
-            }
+            auto binKind = convertCoverageBinKind(bin->binsKind);
 
             // Collect bin values.
             // Single values are stored as i64 attrs.
@@ -7088,19 +6980,7 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
                       bodyMember.as_if<slang::ast::CoverageBinSymbol>()) {
                 auto binLoc = convertLocation(bin->location);
 
-                // Determine bin kind
-                moore::CoverageBinKind binKind;
-                switch (bin->binsKind) {
-                case slang::ast::CoverageBinSymbol::Bins:
-                  binKind = moore::CoverageBinKind::Bins;
-                  break;
-                case slang::ast::CoverageBinSymbol::IllegalBins:
-                  binKind = moore::CoverageBinKind::IllegalBins;
-                  break;
-                case slang::ast::CoverageBinSymbol::IgnoreBins:
-                  binKind = moore::CoverageBinKind::IgnoreBins;
-                  break;
-                }
+                auto binKind = convertCoverageBinKind(bin->binsKind);
 
                 // Create the cross bin declaration
                 auto crossBinOp = moore::CrossBinDeclOp::create(
@@ -7120,8 +7000,10 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
                           -> slang::ConstantValue {
                     return this->evaluateConstant(e);
                   };
-                  convertBinsSelectExpr(*selectExpr, coverpointSymbols, builder,
-                                        binLoc, evalConst);
+                  if (failed(convertBinsSelectExpr(*selectExpr, cross->targets,
+                                                   coverpointSymbols, compilation,
+                                                   builder, binLoc, evalConst)))
+                    return failure();
                 }
               }
             }

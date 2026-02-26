@@ -12,7 +12,7 @@
 //
 // COMPILED: Loaded 3 compiled functions: 3 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // COMPILED: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
-// COMPILED: Entry-table native calls:         0
+// COMPILED: Entry-table native calls:         1
 // COMPILED: Entry-table trampoline calls:     0
 // COMPILED: caller_indirect(5) = 47
 

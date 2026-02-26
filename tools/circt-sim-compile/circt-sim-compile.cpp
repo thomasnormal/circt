@@ -49,6 +49,7 @@
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -115,6 +116,10 @@ static llvm::cl::opt<bool> emitSnapshot(
 // Lowering: func compilability check
 //===----------------------------------------------------------------------===//
 
+static Value unwrapPointerFromRefCast(Value value);
+static Type convertToLLVMCompatibleType(Type type, MLIRContext *ctx);
+static bool isLLVMCompatibleRefValue(Value value, MLIRContext *ctx);
+
 /// Check whether a func.func body contains only ops that can be lowered to
 /// LLVM dialect. Only arith/cf/func/LLVM ops are accepted. Aggregate types
 /// in signatures are allowed — they will be flattened by
@@ -135,17 +140,353 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
     // Allow specific ops from other dialects that we can lower.
     if (isa<hw::ConstantOp, hw::BitcastOp, comb::ExtractOp, comb::AndOp,
             comb::OrOp, comb::XorOp, comb::ICmpOp, comb::AddOp, comb::SubOp,
-            comb::DivUOp, comb::MulOp, comb::MuxOp, comb::ConcatOp,
+            comb::DivUOp, comb::DivSOp, comb::ModUOp, comb::ModSOp,
+            comb::MulOp, comb::MuxOp, comb::ConcatOp,
             comb::ReplicateOp,
             comb::ShlOp, comb::ShrUOp, comb::ShrSOp,
             hw::StructCreateOp, hw::StructExtractOp,
             hw::AggregateConstantOp>(op))
       return WalkResult::advance();
-    if (isa<llhd::ConstantTimeOp, llhd::CurrentTimeOp>(op)) {
+    if (auto sigOp = dyn_cast<llhd::SignalOp>(op)) {
+      auto refTy = dyn_cast<llhd::RefType>(sigOp.getResult().getType());
+      Type nestedTy = refTy ? refTy.getNestedType() : Type();
+      Type llvmTy = nestedTy ? convertToLLVMCompatibleType(nestedTy, funcOp.getContext())
+                             : Type();
+      if (llvmTy && LLVM::isCompatibleType(llvmTy))
+        return WalkResult::advance();
+      if (rejectionReason)
+        *rejectionReason = "llhd.sig";
+      compilable = false;
+      return WalkResult::interrupt();
+    }
+    if (auto arrayCreateOp = dyn_cast<hw::ArrayCreateOp>(op)) {
+      bool allArrayGetUsers = true;
+      for (Operation *user : arrayCreateOp->getUsers()) {
+        auto getOp = dyn_cast<hw::ArrayGetOp>(user);
+        if (!getOp || getOp.getInput() != arrayCreateOp.getResult()) {
+          allArrayGetUsers = false;
+          break;
+        }
+      }
+      if (allArrayGetUsers)
+        return WalkResult::advance();
+    }
+    if (auto arrayGetOp = dyn_cast<hw::ArrayGetOp>(op)) {
+      if (arrayGetOp.getInput().getDefiningOp<hw::ArrayCreateOp>() &&
+          isa<IntegerType>(arrayGetOp.getIndex().getType()) &&
+          LLVM::isCompatibleType(arrayGetOp.getResult().getType()))
+        return WalkResult::advance();
+    }
+    if (auto currentTimeOp = dyn_cast<llhd::CurrentTimeOp>(op)) {
       bool allResultsDead = true;
-      for (Value result : op->getResults())
+      for (Value result : currentTimeOp->getResults())
         allResultsDead &= result.use_empty();
       if (allResultsDead)
+        return WalkResult::advance();
+      bool onlyTimeToIntUsers = true;
+      for (Operation *user : currentTimeOp->getUsers())
+        onlyTimeToIntUsers &= isa<llhd::TimeToIntOp>(user);
+      if (onlyTimeToIntUsers)
+        return WalkResult::advance();
+    }
+    if (auto constTimeOp = dyn_cast<llhd::ConstantTimeOp>(op)) {
+      bool allResultsDead = true;
+      for (Value result : constTimeOp->getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        return WalkResult::advance();
+      bool onlyTimeToIntUsers = true;
+      for (Operation *user : constTimeOp->getUsers())
+        onlyTimeToIntUsers &= isa<llhd::TimeToIntOp>(user);
+      if (onlyTimeToIntUsers)
+        return WalkResult::advance();
+      bool onlyDriveUsers = true;
+      for (Operation *user : constTimeOp->getUsers())
+        onlyDriveUsers &= isa<llhd::DriveOp>(user);
+      if (onlyDriveUsers)
+        return WalkResult::advance();
+    }
+    if (isa<llhd::DriveOp>(op))
+      return WalkResult::advance();
+    if (auto sigExtractOp = dyn_cast<llhd::SigExtractOp>(op)) {
+      auto rejectSigExtract = [&]() {
+        if (rejectionReason)
+          *rejectionReason = "llhd.sig.extract";
+        compilable = false;
+        return WalkResult::interrupt();
+      };
+      bool supportedInput = false;
+      if (unwrapPointerFromRefCast(sigExtractOp.getInput())) {
+        supportedInput = true;
+      } else if (auto sigStructExtract =
+                     sigExtractOp.getInput().getDefiningOp<llhd::SigStructExtractOp>()) {
+        if (unwrapPointerFromRefCast(sigStructExtract.getInput())) {
+          supportedInput = true;
+        } else if (auto sigOp =
+                       sigStructExtract.getInput().getDefiningOp<llhd::SignalOp>()) {
+          auto sigRefTy = dyn_cast<llhd::RefType>(sigOp.getResult().getType());
+          Type sigNestedTy = sigRefTy ? sigRefTy.getNestedType() : Type();
+          Type sigLLVMTy =
+              sigNestedTy
+                  ? convertToLLVMCompatibleType(sigNestedTy, funcOp.getContext())
+                  : Type();
+          supportedInput = sigLLVMTy && LLVM::isCompatibleType(sigLLVMTy);
+        } else if (isLLVMCompatibleRefValue(sigStructExtract.getInput(),
+                                            funcOp.getContext())) {
+          supportedInput = true;
+        }
+      }
+      if (!supportedInput)
+        return rejectSigExtract();
+      auto inRefTy = dyn_cast<llhd::RefType>(sigExtractOp.getInput().getType());
+      auto outRefTy = dyn_cast<llhd::RefType>(sigExtractOp.getResult().getType());
+      auto inIntTy = inRefTy ? dyn_cast<IntegerType>(inRefTy.getNestedType())
+                             : IntegerType();
+      auto outIntTy = outRefTy ? dyn_cast<IntegerType>(outRefTy.getNestedType())
+                               : IntegerType();
+      if (!inIntTy || !outIntTy)
+        return rejectSigExtract();
+      bool allSupportedUsers = true;
+      for (Operation *user : sigExtractOp->getUsers()) {
+        auto drvOp = dyn_cast<llhd::DriveOp>(user);
+        if (!drvOp || drvOp.getSignal() != sigExtractOp.getResult() ||
+            drvOp.getEnable()) {
+          allSupportedUsers = false;
+          break;
+        }
+        auto delayConst = drvOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+        if (!delayConst) {
+          allSupportedUsers = false;
+          break;
+        }
+        auto delayAttr = dyn_cast<llhd::TimeAttr>(delayConst.getValueAttr());
+        if (!delayAttr || delayAttr.getTime() != 0 || delayAttr.getDelta() != 0 ||
+            delayAttr.getEpsilon() > 1) {
+          allSupportedUsers = false;
+          break;
+        }
+        auto valueIntTy = dyn_cast<IntegerType>(drvOp.getValue().getType());
+        if (!valueIntTy || valueIntTy.getWidth() != outIntTy.getWidth()) {
+          allSupportedUsers = false;
+          break;
+        }
+      }
+      if (allSupportedUsers)
+        return WalkResult::advance();
+      return rejectSigExtract();
+    }
+    if (auto sigStructExtractOp = dyn_cast<llhd::SigStructExtractOp>(op)) {
+      auto rejectSigStructExtract = [&]() {
+        if (rejectionReason)
+          *rejectionReason = "llhd.sig.struct_extract";
+        compilable = false;
+        return WalkResult::interrupt();
+      };
+      Value basePtr = unwrapPointerFromRefCast(sigStructExtractOp.getInput());
+      if (!basePtr) {
+        auto sigOp =
+            sigStructExtractOp.getInput().getDefiningOp<llhd::SignalOp>();
+        bool compatibleRefInput = false;
+        if (sigOp) {
+          auto sigRefTy = dyn_cast<llhd::RefType>(sigOp.getResult().getType());
+          Type sigNestedTy = sigRefTy ? sigRefTy.getNestedType() : Type();
+          Type sigLLVMTy = sigNestedTy
+                               ? convertToLLVMCompatibleType(sigNestedTy,
+                                                             funcOp.getContext())
+                               : Type();
+          compatibleRefInput = sigLLVMTy && LLVM::isCompatibleType(sigLLVMTy);
+        } else {
+          compatibleRefInput =
+              isLLVMCompatibleRefValue(sigStructExtractOp.getInput(),
+                                       funcOp.getContext());
+        }
+        if (!compatibleRefInput)
+          return rejectSigStructExtract();
+      }
+      auto inRefTy =
+          dyn_cast<llhd::RefType>(sigStructExtractOp.getInput().getType());
+      auto outRefTy =
+          dyn_cast<llhd::RefType>(sigStructExtractOp.getResult().getType());
+      auto inStructTy =
+          inRefTy ? dyn_cast<hw::StructType>(inRefTy.getNestedType())
+                  : hw::StructType();
+      auto outIntTy =
+          outRefTy ? dyn_cast<IntegerType>(outRefTy.getNestedType())
+                   : IntegerType();
+      if (!inStructTy || !outIntTy)
+        return rejectSigStructExtract();
+      auto fieldTy =
+          dyn_cast_or_null<IntegerType>(inStructTy.getFieldType(
+              sigStructExtractOp.getFieldAttr()));
+      if (!fieldTy || fieldTy.getWidth() != outIntTy.getWidth())
+        return rejectSigStructExtract();
+      bool allSupportedUsers = true;
+      for (Operation *user : sigStructExtractOp->getUsers()) {
+        if (auto sigExtract = dyn_cast<llhd::SigExtractOp>(user)) {
+          if (sigExtract.getInput() != sigStructExtractOp.getResult()) {
+            allSupportedUsers = false;
+            break;
+          }
+          auto nestedOutRefTy =
+              dyn_cast<llhd::RefType>(sigExtract.getResult().getType());
+          auto nestedOutIntTy = nestedOutRefTy
+                                    ? dyn_cast<IntegerType>(
+                                          nestedOutRefTy.getNestedType())
+                                    : IntegerType();
+          if (!nestedOutIntTy) {
+            allSupportedUsers = false;
+            break;
+          }
+          for (Operation *nestedUser : sigExtract->getUsers()) {
+            auto drvOp = dyn_cast<llhd::DriveOp>(nestedUser);
+            if (!drvOp || drvOp.getSignal() != sigExtract.getResult() ||
+                drvOp.getEnable()) {
+              allSupportedUsers = false;
+              break;
+            }
+            auto delayConst =
+                drvOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+            if (!delayConst) {
+              allSupportedUsers = false;
+              break;
+            }
+            auto delayAttr = dyn_cast<llhd::TimeAttr>(delayConst.getValueAttr());
+            if (!delayAttr || delayAttr.getTime() != 0 ||
+                delayAttr.getDelta() != 0 || delayAttr.getEpsilon() > 1) {
+              allSupportedUsers = false;
+              break;
+            }
+            auto valueIntTy = dyn_cast<IntegerType>(drvOp.getValue().getType());
+            if (!valueIntTy ||
+                valueIntTy.getWidth() != nestedOutIntTy.getWidth()) {
+              allSupportedUsers = false;
+              break;
+            }
+          }
+          if (!allSupportedUsers)
+            break;
+          continue;
+        }
+        if (auto prbOp = dyn_cast<llhd::ProbeOp>(user)) {
+          if (prbOp.getSignal() != sigStructExtractOp.getResult() ||
+              !isa<IntegerType>(prbOp.getResult().getType())) {
+            allSupportedUsers = false;
+            break;
+          }
+          continue;
+        }
+        auto drvOp = dyn_cast<llhd::DriveOp>(user);
+        if (!drvOp || drvOp.getSignal() != sigStructExtractOp.getResult() ||
+            drvOp.getEnable()) {
+          allSupportedUsers = false;
+          break;
+        }
+        auto delayConst = drvOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+        if (!delayConst) {
+          allSupportedUsers = false;
+          break;
+        }
+        auto delayAttr = dyn_cast<llhd::TimeAttr>(delayConst.getValueAttr());
+        if (!delayAttr || delayAttr.getTime() != 0 || delayAttr.getDelta() != 0 ||
+            delayAttr.getEpsilon() > 1) {
+          allSupportedUsers = false;
+          break;
+        }
+        auto valueIntTy = dyn_cast<IntegerType>(drvOp.getValue().getType());
+        if (!valueIntTy || valueIntTy.getWidth() != outIntTy.getWidth()) {
+          allSupportedUsers = false;
+          break;
+        }
+      }
+      if (allSupportedUsers)
+        return WalkResult::advance();
+      return rejectSigStructExtract();
+    }
+    if (auto prbOp = dyn_cast<llhd::ProbeOp>(op)) {
+      Value signalPtr = prbOp.getSignal();
+      if (!isa<LLVM::LLVMPointerType>(signalPtr.getType())) {
+        signalPtr = unwrapPointerFromRefCast(signalPtr);
+        if (!signalPtr) {
+          if (auto sigOp = prbOp.getSignal().getDefiningOp<llhd::SignalOp>()) {
+            auto sigRefTy = dyn_cast<llhd::RefType>(sigOp.getResult().getType());
+            Type sigNestedTy = sigRefTy ? sigRefTy.getNestedType() : Type();
+            Type sigLLVMTy =
+                sigNestedTy ? convertToLLVMCompatibleType(sigNestedTy,
+                                                          funcOp.getContext())
+                            : Type();
+            if (!sigLLVMTy || !LLVM::isCompatibleType(sigLLVMTy)) {
+              if (rejectionReason)
+                *rejectionReason = "llhd.prb";
+              compilable = false;
+              return WalkResult::interrupt();
+            }
+          } else
+          if (auto sigStructExtract =
+                  prbOp.getSignal().getDefiningOp<llhd::SigStructExtractOp>()) {
+            auto inRefTy =
+                dyn_cast<llhd::RefType>(sigStructExtract.getInput().getType());
+            auto outRefTy =
+                dyn_cast<llhd::RefType>(sigStructExtract.getResult().getType());
+            auto inStructTy =
+                inRefTy ? dyn_cast<hw::StructType>(inRefTy.getNestedType())
+                        : hw::StructType();
+            auto outIntTy =
+                outRefTy ? dyn_cast<IntegerType>(outRefTy.getNestedType())
+                         : IntegerType();
+            Value basePtr = unwrapPointerFromRefCast(sigStructExtract.getInput());
+            auto fieldTy = inStructTy ? dyn_cast_or_null<IntegerType>(
+                                            inStructTy.getFieldType(
+                                                sigStructExtract.getFieldAttr()))
+                                      : IntegerType();
+            bool compatibleRefInput =
+                basePtr ||
+                isLLVMCompatibleRefValue(sigStructExtract.getInput(),
+                                         funcOp.getContext());
+            if (!compatibleRefInput || !inStructTy || !outIntTy || !fieldTy ||
+                fieldTy.getWidth() != outIntTy.getWidth()) {
+              if (rejectionReason)
+                *rejectionReason = "llhd.prb";
+              compilable = false;
+              return WalkResult::interrupt();
+            }
+          } else {
+            if (rejectionReason)
+              *rejectionReason = "llhd.prb";
+            compilable = false;
+            return WalkResult::interrupt();
+          }
+        }
+      }
+      Type prbLLVMTy =
+          convertToLLVMCompatibleType(prbOp.getResult().getType(),
+                                      funcOp.getContext());
+      if (!prbLLVMTy || !LLVM::isCompatibleType(prbLLVMTy)) {
+        if (rejectionReason)
+          *rejectionReason = "llhd.prb";
+        compilable = false;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    }
+    if (auto timeToIntOp = dyn_cast<llhd::TimeToIntOp>(op)) {
+      Value input = timeToIntOp.getOperand();
+      if (isa<IntegerType>(input.getType()))
+        return WalkResult::advance();
+      if (auto *defOp = input.getDefiningOp();
+          defOp && isa<llhd::CurrentTimeOp, llhd::ConstantTimeOp,
+                        llhd::IntToTimeOp>(defOp))
+        return WalkResult::advance();
+    }
+    if (auto intToTimeOp = dyn_cast<llhd::IntToTimeOp>(op)) {
+      bool allResultsDead = true;
+      for (Value result : intToTimeOp->getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        return WalkResult::advance();
+      bool onlyTimeToIntUsers = true;
+      for (Operation *user : intToTimeOp->getUsers())
+        onlyTimeToIntUsers &= isa<llhd::TimeToIntOp>(user);
+      if (onlyTimeToIntUsers)
         return WalkResult::advance();
     }
     // Allow unrealized_conversion_cast only when types match (foldable).
@@ -163,6 +504,16 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
         // Accept ptr -> function casts used by func.call_indirect lowering.
         if (isa<LLVM::LLVMPointerType>(inTy) && isa<FunctionType>(outTy))
           return WalkResult::advance();
+        // Accept llvm.struct <-> hw.struct casts when field extraction
+        // patterns can be folded before LLVM translation.
+        if ((isa<LLVM::LLVMStructType>(inTy) && isa<hw::StructType>(outTy)) ||
+            (isa<hw::StructType>(inTy) && isa<LLVM::LLVMStructType>(outTy)))
+          return WalkResult::advance();
+        // Accept llhd.ref <-> ptr casts; micro-module ABI canonicalization
+        // rewrites function ref arguments to !llvm.ptr and lets these fold.
+        if ((isa<LLVM::LLVMPointerType>(inTy) && isa<llhd::RefType>(outTy)) ||
+            (isa<llhd::RefType>(inTy) && isa<LLVM::LLVMPointerType>(outTy)))
+          return WalkResult::advance();
         // Accept simple pointer/integer cast pairs.
         if ((isa<LLVM::LLVMPointerType>(inTy) && isa<IntegerType>(outTy)) ||
             (isa<IntegerType>(inTy) && isa<LLVM::LLVMPointerType>(outTy)) ||
@@ -170,7 +521,22 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
              isa<LLVM::LLVMPointerType>(outTy)) ||
             (isa<IntegerType>(inTy) && isa<IntegerType>(outTy)))
           return WalkResult::advance();
+        if (rejectionReason) {
+          std::string inTyStr, outTyStr;
+          llvm::raw_string_ostream inOS(inTyStr), outOS(outTyStr);
+          inTy.print(inOS);
+          outTy.print(outOS);
+          *rejectionReason =
+              ("builtin.unrealized_conversion_cast:" + inOS.str() + "->" +
+               outOS.str());
+        }
+        compilable = false;
+        return WalkResult::interrupt();
       }
+      if (rejectionReason)
+        *rejectionReason = "builtin.unrealized_conversion_cast:unsupported_arity";
+      compilable = false;
+      return WalkResult::interrupt();
     }
     if (auto ciOp = dyn_cast<func::CallIndirectOp>(op)) {
       // Accept call_indirect when callee is function-typed and result count is
@@ -197,14 +563,28 @@ static bool isModuleInitSkippableOp(Operation *op) {
              sim::FormatStringConcatOp, sim::FormatDynStringOp>(op);
 }
 
+static bool isNativeModuleInitAllowedCall(LLVM::CallOp callOp) {
+  auto callee = callOp.getCallee();
+  if (!callee)
+    return false;
+  llvm::StringRef name = *callee;
+  return name == "memset" || name == "memcpy" || name == "memmove" ||
+         name == "malloc" || name == "calloc" ||
+         name.starts_with("llvm.memset.") ||
+         name.starts_with("llvm.memcpy.") || name.starts_with("llvm.memmove.");
+}
+
 static bool isNativeModuleInitOp(Operation *op) {
+  if (auto callOp = dyn_cast<LLVM::CallOp>(op))
+    return isNativeModuleInitAllowedCall(callOp);
   // Keep this intentionally conservative in the first step: only memory and
   // constant/aggregate pointer plumbing ops that are known to be self-contained
   // and safe to run before interpreter dispatch wiring.
-  return isa<LLVM::AllocaOp, LLVM::StoreOp, LLVM::ConstantOp, hw::ConstantOp,
+  return isa<LLVM::AllocaOp, LLVM::StoreOp, LLVM::ConstantOp,
+             arith::ConstantOp, hw::ConstantOp, hw::AggregateConstantOp,
              LLVM::UndefOp, LLVM::ZeroOp, LLVM::AddressOfOp, LLVM::LoadOp,
              LLVM::InsertValueOp, LLVM::ExtractValueOp, LLVM::GEPOp,
-             UnrealizedConversionCastOp>(op);
+             llhd::ProbeOp, UnrealizedConversionCastOp>(op);
 }
 
 static std::string encodeModuleInitSymbol(llvm::StringRef moduleName) {
@@ -223,23 +603,323 @@ static std::string encodeModuleInitSymbol(llvm::StringRef moduleName) {
   return out;
 }
 
+struct NativeModuleInitSynthesisStats {
+  unsigned totalModules = 0;
+  unsigned emittedModules = 0;
+  llvm::StringMap<unsigned> skipReasons;
+};
+
+static uint64_t toFemtoseconds(llhd::TimeAttr timeAttr) {
+  uint64_t realFs = timeAttr.getTime();
+  llvm::StringRef unit = timeAttr.getTimeUnit();
+  if (unit == "ps")
+    realFs *= 1000;
+  else if (unit == "ns")
+    realFs *= 1000000;
+  else if (unit == "us")
+    realFs *= 1000000000ULL;
+  else if (unit == "ms")
+    realFs *= 1000000000000ULL;
+  else if (unit == "s")
+    realFs *= 1000000000000000ULL;
+  return realFs;
+}
+
+static Value unwrapPointerFromRefCast(Value value) {
+  if (isa<LLVM::LLVMPointerType>(value.getType()))
+    return value;
+  auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>();
+  if (!castOp || castOp.getNumOperands() != 1 || castOp.getNumResults() != 1)
+    return {};
+  Value src = castOp.getOperand(0);
+  if (isa<LLVM::LLVMPointerType>(src.getType()))
+    return src;
+  return {};
+}
+
+static Type convertToLLVMCompatibleType(Type type, MLIRContext *ctx) {
+  if (isa<IntegerType, LLVM::LLVMPointerType, LLVM::LLVMStructType,
+          LLVM::LLVMArrayType>(type))
+    return type;
+  if (auto hwStructTy = dyn_cast<hw::StructType>(type)) {
+    SmallVector<Type> fieldTypes;
+    fieldTypes.reserve(hwStructTy.getElements().size());
+    for (auto field : hwStructTy.getElements()) {
+      Type converted = convertToLLVMCompatibleType(field.type, ctx);
+      if (!converted || !LLVM::isCompatibleType(converted))
+        return {};
+      fieldTypes.push_back(converted);
+    }
+    return LLVM::LLVMStructType::getLiteral(ctx, fieldTypes);
+  }
+  if (auto hwArrayTy = dyn_cast<hw::ArrayType>(type)) {
+    Type convertedElem =
+        convertToLLVMCompatibleType(hwArrayTy.getElementType(), ctx);
+    if (!convertedElem || !LLVM::isCompatibleType(convertedElem))
+      return {};
+    return LLVM::LLVMArrayType::get(convertedElem, hwArrayTy.getNumElements());
+  }
+  return {};
+}
+
+static bool isLLVMCompatibleRefValue(Value value, MLIRContext *ctx) {
+  auto refTy = dyn_cast<llhd::RefType>(value.getType());
+  if (!refTy)
+    return false;
+  Type llvmTy = convertToLLVMCompatibleType(refTy.getNestedType(), ctx);
+  return llvmTy && LLVM::isCompatibleType(llvmTy);
+}
+
+/// Canonicalize func.func argument ABIs by replacing !llhd.ref<...> arguments
+/// with !llvm.ptr in the compilable micro-module. This removes common
+/// ptr<->ref cast wrappers around helper calls.
+static void canonicalizeLLHDRefArgumentABIs(ModuleOp moduleOp) {
+  MLIRContext *ctx = moduleOp.getContext();
+  Type ptrTy = LLVM::LLVMPointerType::get(ctx);
+
+  struct FuncRewriteInfo {
+    FunctionType newType;
+  };
+  llvm::StringMap<FuncRewriteInfo> rewriteMap;
+
+  moduleOp.walk([&](func::FuncOp funcOp) {
+    auto oldType = funcOp.getFunctionType();
+    bool changed = false;
+    SmallVector<Type> newInputs;
+    newInputs.reserve(oldType.getNumInputs());
+    for (Type inputTy : oldType.getInputs()) {
+      if (isa<llhd::RefType>(inputTy)) {
+        newInputs.push_back(ptrTy);
+        changed = true;
+      } else {
+        newInputs.push_back(inputTy);
+      }
+    }
+    if (!changed)
+      return;
+    auto newType = FunctionType::get(ctx, newInputs, oldType.getResults());
+    rewriteMap[funcOp.getSymName()] = {newType};
+  });
+
+  if (rewriteMap.empty())
+    return;
+
+  auto requiresRefOperand = [&](OpOperand &use) -> bool {
+    Operation *owner = use.getOwner();
+    unsigned operandNo = use.getOperandNumber();
+    if (isa<llhd::ProbeOp>(owner))
+      return operandNo == 0;
+    if (isa<llhd::DriveOp>(owner))
+      return operandNo == 0;
+    if (isa<llhd::SigExtractOp>(owner))
+      return operandNo == 0;
+    if (isa<llhd::SigStructExtractOp>(owner))
+      return operandNo == 0;
+    if (isa<llhd::SigArraySliceOp>(owner))
+      return operandNo == 0;
+    return false;
+  };
+
+  // Rewrite function signatures and entry block argument types.
+  for (auto &kv : rewriteMap) {
+    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(kv.first());
+    if (!funcOp)
+      continue;
+    auto oldType = funcOp.getFunctionType();
+    auto newType = kv.second.newType;
+    funcOp.setFunctionType(newType);
+    if (funcOp.isExternal())
+      continue;
+    Block &entry = funcOp.getBody().front();
+    for (unsigned i = 0, e = entry.getNumArguments(); i < e; ++i) {
+      Type oldInputTy = oldType.getInput(i);
+      Type newInputTy = newType.getInput(i);
+      if (entry.getArgument(i).getType() != newInputTy)
+        entry.getArgument(i).setType(newInputTy);
+      if (!isa<llhd::RefType>(oldInputTy) || !isa<LLVM::LLVMPointerType>(newInputTy))
+        continue;
+      BlockArgument arg = entry.getArgument(i);
+      SmallVector<OpOperand *> llhdRefUses;
+      for (OpOperand &use : arg.getUses())
+        if (requiresRefOperand(use))
+          llhdRefUses.push_back(&use);
+      if (llhdRefUses.empty())
+        continue;
+      OpBuilder entryBuilder = OpBuilder::atBlockBegin(&entry);
+      auto refCast = entryBuilder.create<UnrealizedConversionCastOp>(
+          funcOp.getLoc(), TypeRange{oldInputTy}, ValueRange{arg});
+      Value refView = refCast.getResult(0);
+      for (OpOperand *use : llhdRefUses)
+        use->set(refView);
+    }
+  }
+
+  // Rewrite direct call sites to match updated signatures.
+  SmallVector<func::CallOp> callsToRewrite;
+  moduleOp.walk([&](func::CallOp callOp) {
+    if (rewriteMap.count(callOp.getCallee()))
+      callsToRewrite.push_back(callOp);
+  });
+
+  for (auto callOp : callsToRewrite) {
+    auto it = rewriteMap.find(callOp.getCallee());
+    if (it == rewriteMap.end())
+      continue;
+    auto newType = it->second.newType;
+
+    bool needsRewrite = false;
+    for (unsigned i = 0, e = callOp.getNumOperands(); i < e; ++i) {
+      if (callOp.getOperand(i).getType() != newType.getInput(i)) {
+        needsRewrite = true;
+        break;
+      }
+    }
+    if (!needsRewrite)
+      continue;
+
+    OpBuilder builder(callOp);
+    SmallVector<Value> newOperands;
+    newOperands.reserve(callOp.getNumOperands());
+    for (unsigned i = 0, e = callOp.getNumOperands(); i < e; ++i) {
+      Value operand = callOp.getOperand(i);
+      Type targetTy = newType.getInput(i);
+      if (operand.getType() == targetTy) {
+        newOperands.push_back(operand);
+        continue;
+      }
+      if (isa<LLVM::LLVMPointerType>(targetTy)) {
+        if (Value ptr = unwrapPointerFromRefCast(operand)) {
+          newOperands.push_back(ptr);
+          continue;
+        }
+      }
+      auto bridgeCast = builder.create<UnrealizedConversionCastOp>(
+          callOp.getLoc(), TypeRange{targetTy}, ValueRange{operand});
+      newOperands.push_back(bridgeCast.getResult(0));
+    }
+
+    auto newCall = builder.create<func::CallOp>(callOp.getLoc(),
+                                                callOp.getCallee(),
+                                                callOp.getResultTypes(),
+                                                newOperands);
+    callOp.replaceAllUsesWith(newCall.getResults());
+    callOp.erase();
+  }
+
+  // Rewrite call_indirect sites whose function type still carries !llhd.ref
+  // argument types. This keeps verifier invariants after operand rewriting.
+  SmallVector<func::CallIndirectOp> indirectCallsToRewrite;
+  moduleOp.walk([&](func::CallIndirectOp callOp) {
+    auto calleeTy = dyn_cast<FunctionType>(callOp.getCallee().getType());
+    if (!calleeTy)
+      return;
+    bool needsRewrite = false;
+    for (Type inputTy : calleeTy.getInputs())
+      needsRewrite |= isa<llhd::RefType>(inputTy);
+    if (needsRewrite)
+      indirectCallsToRewrite.push_back(callOp);
+  });
+
+  for (auto callOp : indirectCallsToRewrite) {
+    auto oldTy = dyn_cast<FunctionType>(callOp.getCallee().getType());
+    if (!oldTy)
+      continue;
+
+    SmallVector<Type> newInputs;
+    bool changed = false;
+    newInputs.reserve(oldTy.getNumInputs());
+    for (Type inputTy : oldTy.getInputs()) {
+      if (isa<llhd::RefType>(inputTy)) {
+        newInputs.push_back(ptrTy);
+        changed = true;
+      } else {
+        newInputs.push_back(inputTy);
+      }
+    }
+    if (!changed)
+      continue;
+
+    auto newTy = FunctionType::get(ctx, newInputs, oldTy.getResults());
+    OpBuilder builder(callOp);
+
+    Value oldCallee = callOp.getCallee();
+    Value newCallee = oldCallee;
+    if (oldCallee.getType() != newTy) {
+      if (auto oldCast = oldCallee.getDefiningOp<UnrealizedConversionCastOp>();
+          oldCast && oldCast.getNumOperands() == 1 && oldCast.getNumResults() == 1 &&
+          isa<LLVM::LLVMPointerType>(oldCast.getOperand(0).getType())) {
+        auto newCast = builder.create<UnrealizedConversionCastOp>(
+            callOp.getLoc(), TypeRange{newTy},
+            ValueRange{oldCast.getOperand(0)});
+        newCallee = newCast.getResult(0);
+      } else {
+        auto newCast = builder.create<UnrealizedConversionCastOp>(
+            callOp.getLoc(), TypeRange{newTy}, ValueRange{oldCallee});
+        newCallee = newCast.getResult(0);
+      }
+    }
+
+    SmallVector<Value> newOperands;
+    newOperands.reserve(callOp.getArgOperands().size());
+    for (unsigned i = 0, e = callOp.getArgOperands().size(); i < e; ++i) {
+      Value operand = callOp.getArgOperands()[i];
+      Type targetTy = newTy.getInput(i);
+      if (operand.getType() == targetTy) {
+        newOperands.push_back(operand);
+        continue;
+      }
+      if (isa<LLVM::LLVMPointerType>(targetTy)) {
+        if (Value ptr = unwrapPointerFromRefCast(operand)) {
+          newOperands.push_back(ptr);
+          continue;
+        }
+      }
+      auto bridgeCast = builder.create<UnrealizedConversionCastOp>(
+          callOp.getLoc(), TypeRange{targetTy}, ValueRange{operand});
+      newOperands.push_back(bridgeCast.getResult(0));
+    }
+
+    auto newCall = builder.create<func::CallIndirectOp>(
+        callOp.getLoc(), newCallee, ValueRange{newOperands});
+    callOp.replaceAllUsesWith(newCall.getResults());
+    callOp.erase();
+  }
+}
+
 /// Synthesize optional native module-init functions from hw.module top-level
-/// LLVM-style init ops. Returns how many module init entrypoints were emitted.
-static unsigned synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
-                                                    ModuleOp microModule) {
-  unsigned emitted = 0;
+/// LLVM-style init ops. Returns synthesis stats including skip reasons.
+static NativeModuleInitSynthesisStats
+synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
+                                    ModuleOp microModule) {
+  NativeModuleInitSynthesisStats stats;
   OpBuilder moduleBuilder(microModule.getContext());
 
   for (auto hwModule : sourceModule.getOps<hw::HWModuleOp>()) {
+    ++stats.totalModules;
     Block &body = hwModule.getBody().front();
     llvm::SmallVector<Operation *> opsToClone;
     bool unsupported = false;
+    std::string skipReason;
 
     for (Operation &op : body.getOperations()) {
       Operation *opPtr = &op;
       if (isModuleInitSkippableOp(opPtr))
         continue;
-      if (!isNativeModuleInitOp(opPtr) || opPtr->getNumRegions() != 0) {
+      if (!isNativeModuleInitOp(opPtr)) {
+        if (auto callOp = dyn_cast<LLVM::CallOp>(opPtr)) {
+          if (auto callee = callOp.getCallee())
+            skipReason = ("unsupported_call:" + callee->str());
+          else
+            skipReason = "unsupported_call:indirect";
+        } else {
+          skipReason = ("unsupported_op:" +
+                        opPtr->getName().getStringRef().str());
+        }
+        unsupported = true;
+        break;
+      }
+      if (opPtr->getNumRegions() != 0) {
+        skipReason = ("op_has_region:" + opPtr->getName().getStringRef().str());
         unsupported = true;
         break;
       }
@@ -247,14 +927,25 @@ static unsigned synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
       // Reject dependencies on hw.module block arguments or skipped ops.
       for (Value operand : opPtr->getOperands()) {
         if (isa<BlockArgument>(operand)) {
+          skipReason = ("operand_block_arg:" +
+                        opPtr->getName().getStringRef().str());
           unsupported = true;
           break;
         }
         if (Operation *defOp = operand.getDefiningOp()) {
-          if (defOp->getBlock() == &body &&
-              (isModuleInitSkippableOp(defOp) || !isNativeModuleInitOp(defOp))) {
-            unsupported = true;
-            break;
+          if (defOp->getBlock() == &body) {
+            if (isModuleInitSkippableOp(defOp)) {
+              skipReason = ("operand_dep_skipped:" +
+                            defOp->getName().getStringRef().str());
+              unsupported = true;
+              break;
+            }
+            if (!isNativeModuleInitOp(defOp)) {
+              skipReason = ("operand_dep_unsupported:" +
+                            defOp->getName().getStringRef().str());
+              unsupported = true;
+              break;
+            }
           }
         }
       }
@@ -263,8 +954,14 @@ static unsigned synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
       opsToClone.push_back(opPtr);
     }
 
-    if (unsupported || opsToClone.empty())
+    if (unsupported || opsToClone.empty()) {
+      if (unsupported) {
+        if (skipReason.empty())
+          skipReason = "unsupported:unknown";
+        ++stats.skipReasons[skipReason];
+      }
       continue;
+    }
 
     std::string symName = encodeModuleInitSymbol(hwModule.getName());
     moduleBuilder.setInsertionPointToEnd(microModule.getBody());
@@ -277,10 +974,10 @@ static unsigned synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
     for (Operation *op : opsToClone)
       initBuilder.clone(*op, mapping);
     initBuilder.create<func::ReturnOp>(hwModule.getLoc());
-    ++emitted;
+    ++stats.emittedModules;
   }
 
-  return emitted;
+  return stats;
 }
 
 /// Lower SCF control-flow ops (if/for/while/parallel/execute_region/...) to
@@ -412,6 +1109,167 @@ static LLVM::ICmpPredicate convertCmpPredicate(arith::CmpIPredicate pred) {
 static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                     MLIRContext &mlirContext) {
   IRRewriter rewriter(&mlirContext);
+  auto ensurePrivateFuncDecl = [&](llvm::StringRef name, FunctionType type) {
+    if (microModule.lookupSymbol<func::FuncOp>(name) ||
+        microModule.lookupSymbol<LLVM::LLVMFuncOp>(name))
+      return;
+    OpBuilder builder(microModule.getContext());
+    builder.setInsertionPointToEnd(microModule.getBody());
+    auto decl = func::FuncOp::create(builder, UnknownLoc::get(&mlirContext),
+                                     name, type);
+    decl.setPrivate();
+  };
+  auto convertIntegerWidth = [&](Location loc, Value value,
+                                 Type targetType) -> Value {
+    if (value.getType() == targetType)
+      return value;
+    auto srcIntTy = dyn_cast<IntegerType>(value.getType());
+    auto dstIntTy = dyn_cast<IntegerType>(targetType);
+    if (!srcIntTy || !dstIntTy)
+      return {};
+    if (srcIntTy.getWidth() < dstIntTy.getWidth())
+      return rewriter.create<arith::ExtUIOp>(loc, targetType, value);
+    if (srcIntTy.getWidth() > dstIntTy.getWidth())
+      return rewriter.create<arith::TruncIOp>(loc, targetType, value);
+    return value;
+  };
+  auto materializeLLVMValue = [&](Location loc, Value value, Type targetType,
+                                  const auto &self) -> Value {
+    if (value.getType() == targetType)
+      return value;
+    if (!targetType || !LLVM::isCompatibleType(targetType))
+      return {};
+
+    if (auto castOp = value.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+        if (Value peeled = self(loc, castOp.getOperand(0), targetType, self))
+          return peeled;
+      }
+    }
+
+    if (auto targetIntTy = dyn_cast<IntegerType>(targetType)) {
+      if (isa<IntegerType>(value.getType()))
+        return convertIntegerWidth(loc, value, targetIntTy);
+    }
+
+    if (auto targetStructTy = dyn_cast<LLVM::LLVMStructType>(targetType)) {
+      if (targetStructTy.isOpaque())
+        return {};
+      auto hwStructTy = dyn_cast<hw::StructType>(value.getType());
+      if (!hwStructTy)
+        return {};
+      auto targetFields = targetStructTy.getBody();
+      auto hwFields = hwStructTy.getElements();
+      if (targetFields.size() != hwFields.size())
+        return {};
+
+      if (auto createOp = value.getDefiningOp<hw::StructCreateOp>()) {
+        if (createOp.getNumOperands() != hwFields.size())
+          return {};
+        Value agg = LLVM::UndefOp::create(rewriter, loc, targetStructTy);
+        for (unsigned i = 0; i < hwFields.size(); ++i) {
+          Value field =
+              self(loc, createOp.getOperand(i), targetFields[i], self);
+          if (!field)
+            return {};
+          agg = LLVM::InsertValueOp::create(
+              rewriter, loc, agg, field, ArrayRef<int64_t>{(int64_t)i});
+        }
+        return agg;
+      }
+
+      if (auto aggConst = value.getDefiningOp<hw::AggregateConstantOp>()) {
+        auto fields = aggConst.getFields();
+        if (fields.size() != hwFields.size())
+          return {};
+        Value agg = LLVM::UndefOp::create(rewriter, loc, targetStructTy);
+        for (unsigned i = 0; i < fields.size(); ++i) {
+          auto intAttr = dyn_cast<IntegerAttr>(fields[i]);
+          auto intTy = dyn_cast<IntegerType>(targetFields[i]);
+          if (!intAttr || !intTy)
+            return {};
+          Value c = arith::ConstantOp::create(rewriter, loc, intAttr);
+          Value field = self(loc, c, targetFields[i], self);
+          if (!field)
+            return {};
+          agg = LLVM::InsertValueOp::create(
+              rewriter, loc, agg, field, ArrayRef<int64_t>{(int64_t)i});
+        }
+        return agg;
+      }
+
+      if (auto bitcastOp = value.getDefiningOp<hw::BitcastOp>()) {
+        auto inIntTy = dyn_cast<IntegerType>(bitcastOp.getInput().getType());
+        if (!inIntTy)
+          return {};
+        unsigned totalWidth = 0;
+        SmallVector<IntegerType> targetIntFields;
+        targetIntFields.reserve(targetFields.size());
+        for (Type fieldTy : targetFields) {
+          auto intTy = dyn_cast<IntegerType>(fieldTy);
+          if (!intTy)
+            return {};
+          targetIntFields.push_back(intTy);
+          totalWidth += intTy.getWidth();
+        }
+        if (inIntTy.getWidth() != totalWidth)
+          return {};
+        Value raw = bitcastOp.getInput();
+        Value agg = LLVM::UndefOp::create(rewriter, loc, targetStructTy);
+        unsigned consumedHigh = 0;
+        for (unsigned i = 0; i < targetIntFields.size(); ++i) {
+          unsigned width = targetIntFields[i].getWidth();
+          unsigned lowBit = totalWidth - consumedHigh - width;
+          Value slice;
+          if (lowBit == 0 && width == inIntTy.getWidth()) {
+            slice = raw;
+          } else {
+            slice = raw;
+            if (lowBit != 0) {
+              Value shiftAmt = arith::ConstantOp::create(
+                  rewriter, loc,
+                  rewriter.getIntegerAttr(inIntTy, lowBit));
+              slice = arith::ShRUIOp::create(rewriter, loc, slice, shiftAmt);
+            }
+            if (width < inIntTy.getWidth())
+              slice = arith::TruncIOp::create(rewriter, loc, targetIntFields[i],
+                                              slice);
+          }
+          Value field = self(loc, slice, targetFields[i], self);
+          if (!field)
+            return {};
+          agg = LLVM::InsertValueOp::create(
+              rewriter, loc, agg, field, ArrayRef<int64_t>{(int64_t)i});
+          consumedHigh += width;
+        }
+        return agg;
+      }
+      return {};
+    }
+
+    if (auto targetArrayTy = dyn_cast<LLVM::LLVMArrayType>(targetType)) {
+      auto hwArrayTy = dyn_cast<hw::ArrayType>(value.getType());
+      if (!hwArrayTy || hwArrayTy.getNumElements() != targetArrayTy.getNumElements())
+        return {};
+      auto createOp = value.getDefiningOp<hw::ArrayCreateOp>();
+      if (!createOp || createOp.getNumOperands() != hwArrayTy.getNumElements())
+        return {};
+      Value agg = LLVM::UndefOp::create(rewriter, loc, targetArrayTy);
+      for (unsigned logicalIdx = 0, e = hwArrayTy.getNumElements();
+           logicalIdx < e; ++logicalIdx) {
+        unsigned opIdx = e - 1 - logicalIdx;
+        Value elem = self(loc, createOp.getOperand(opIdx),
+                          targetArrayTy.getElementType(), self);
+        if (!elem)
+          return {};
+        agg = LLVM::InsertValueOp::create(
+            rewriter, loc, agg, elem, ArrayRef<int64_t>{(int64_t)logicalIdx});
+      }
+      return agg;
+    }
+
+    return {};
+  };
 
   // Phase 0: Lower hw.constant → arith.constant, comb ops → arith ops,
   // and resolve unrealized_conversion_cast before the main arith→LLVM pass.
@@ -419,13 +1277,17 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     llvm::SmallVector<Operation *> preOps;
     microModule.walk([&](Operation *op) {
       if (isa<hw::ConstantOp, hw::BitcastOp, hw::StructCreateOp,
-              hw::StructExtractOp, hw::AggregateConstantOp, comb::ExtractOp,
+              hw::StructExtractOp, hw::AggregateConstantOp, hw::ArrayCreateOp,
+              hw::ArrayGetOp, comb::ExtractOp,
               comb::AndOp, comb::OrOp, comb::XorOp, comb::ICmpOp,
-              comb::AddOp, comb::SubOp, comb::DivUOp, comb::MulOp,
+              comb::AddOp, comb::SubOp, comb::DivUOp, comb::DivSOp,
+              comb::ModUOp, comb::ModSOp, comb::MulOp,
               comb::MuxOp,
               comb::ConcatOp, comb::ReplicateOp, comb::ShlOp,
               comb::ShrUOp, comb::ShrSOp, llhd::ConstantTimeOp,
-              llhd::CurrentTimeOp,
+              llhd::CurrentTimeOp, llhd::TimeToIntOp, llhd::IntToTimeOp,
+              llhd::SignalOp, llhd::DriveOp, llhd::ProbeOp, llhd::SigExtractOp,
+              llhd::SigStructExtractOp,
               UnrealizedConversionCastOp>(op))
         preOps.push_back(op);
     });
@@ -439,6 +1301,253 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                          hwConst.getValue()));
         hwConst.replaceAllUsesWith(arithConst.getResult());
         rewriter.eraseOp(hwConst);
+      } else if (auto timeToIntOp = dyn_cast<llhd::TimeToIntOp>(op)) {
+        Value input = timeToIntOp.getOperand();
+        Value replacement;
+        Type resultTy = timeToIntOp.getResult().getType();
+        if (auto currentTimeOp = input.getDefiningOp<llhd::CurrentTimeOp>()) {
+          auto getTimeTy = rewriter.getFunctionType({}, {rewriter.getI64Type()});
+          ensurePrivateFuncDecl("__circt_sim_current_time_fs", getTimeTy);
+          auto call = rewriter.create<func::CallOp>(
+              loc, "__circt_sim_current_time_fs",
+              TypeRange{rewriter.getI64Type()},
+              ValueRange{});
+          replacement = call.getResult(0);
+          replacement = convertIntegerWidth(loc, replacement, resultTy);
+          if (!replacement)
+            continue;
+          timeToIntOp.replaceAllUsesWith(replacement);
+          rewriter.eraseOp(timeToIntOp);
+          if (currentTimeOp->use_empty())
+            rewriter.eraseOp(currentTimeOp);
+          continue;
+        }
+        if (auto constTimeOp = input.getDefiningOp<llhd::ConstantTimeOp>()) {
+          auto timeAttr = llvm::dyn_cast<llhd::TimeAttr>(constTimeOp.getValueAttr());
+          if (!timeAttr)
+            continue;
+          uint64_t fs = toFemtoseconds(timeAttr);
+          replacement = arith::ConstantOp::create(
+              rewriter, loc, rewriter.getIntegerAttr(rewriter.getI64Type(), fs))
+                            .getResult();
+          replacement = convertIntegerWidth(loc, replacement, resultTy);
+          if (!replacement)
+            continue;
+          timeToIntOp.replaceAllUsesWith(replacement);
+          rewriter.eraseOp(timeToIntOp);
+          if (constTimeOp->use_empty())
+            rewriter.eraseOp(constTimeOp);
+          continue;
+        }
+        if (auto intToTimeOp = input.getDefiningOp<llhd::IntToTimeOp>()) {
+          Value raw = intToTimeOp.getOperand();
+          if (raw.getType() != resultTy) {
+            auto rawIntTy = dyn_cast<IntegerType>(raw.getType());
+            auto resIntTy = dyn_cast<IntegerType>(resultTy);
+            if (rawIntTy && resIntTy) {
+              if (rawIntTy.getWidth() < resIntTy.getWidth())
+                raw = rewriter.create<arith::ExtUIOp>(loc, resultTy, raw);
+              else if (rawIntTy.getWidth() > resIntTy.getWidth())
+                raw = rewriter.create<arith::TruncIOp>(loc, resultTy, raw);
+            }
+          }
+          if (raw.getType() == resultTy) {
+            timeToIntOp.replaceAllUsesWith(raw);
+            rewriter.eraseOp(timeToIntOp);
+            if (intToTimeOp->use_empty())
+              rewriter.eraseOp(intToTimeOp);
+            continue;
+          }
+        }
+      } else if (auto intToTimeOp = dyn_cast<llhd::IntToTimeOp>(op)) {
+        bool allResultsDead = true;
+        for (Value result : intToTimeOp->getResults())
+          allResultsDead &= result.use_empty();
+        if (allResultsDead) {
+          rewriter.eraseOp(intToTimeOp);
+          continue;
+        }
+      } else if (auto sigOp = dyn_cast<llhd::SignalOp>(op)) {
+        auto refTy = dyn_cast<llhd::RefType>(sigOp.getResult().getType());
+        Type nestedTy = refTy ? refTy.getNestedType() : Type();
+        Type llvmNestedTy =
+            nestedTy ? convertToLLVMCompatibleType(nestedTy, &mlirContext)
+                     : Type();
+        if (!llvmNestedTy || !LLVM::isCompatibleType(llvmNestedTy))
+          continue;
+        Value initVal =
+            materializeLLVMValue(loc, sigOp.getInit(), llvmNestedTy,
+                                 materializeLLVMValue);
+        if (!initVal)
+          continue;
+        auto one = arith::ConstantOp::create(
+            rewriter, loc, rewriter.getIntegerAttr(rewriter.getI64Type(), 1));
+        auto alloca = LLVM::AllocaOp::create(
+            rewriter, loc, LLVM::LLVMPointerType::get(&mlirContext),
+            llvmNestedTy, one);
+        rewriter.create<LLVM::StoreOp>(loc, initVal, alloca);
+        auto refCast = rewriter.create<UnrealizedConversionCastOp>(
+            loc, TypeRange{sigOp.getResult().getType()}, ValueRange{alloca});
+        sigOp.getResult().replaceAllUsesWith(refCast.getResult(0));
+        rewriter.eraseOp(sigOp);
+        continue;
+      } else if (auto sigStructExtractOp = dyn_cast<llhd::SigStructExtractOp>(op)) {
+        Value basePtr = unwrapPointerFromRefCast(sigStructExtractOp.getInput());
+        if (!basePtr)
+          continue;
+        auto inRefTy =
+            dyn_cast<llhd::RefType>(sigStructExtractOp.getInput().getType());
+        auto outRefTy =
+            dyn_cast<llhd::RefType>(sigStructExtractOp.getResult().getType());
+        auto inStructTy =
+            inRefTy ? dyn_cast<hw::StructType>(inRefTy.getNestedType())
+                    : hw::StructType();
+        auto outIntTy =
+            outRefTy ? dyn_cast<IntegerType>(outRefTy.getNestedType())
+                     : IntegerType();
+        if (!inStructTy || !outIntTy)
+          continue;
+        auto fieldIndex = inStructTy.getFieldIndex(sigStructExtractOp.getFieldAttr());
+        Type fieldType = inStructTy.getFieldType(sigStructExtractOp.getFieldAttr());
+        if (!fieldIndex || fieldType != outIntTy)
+          continue;
+        Type llvmStructTy =
+            convertToLLVMCompatibleType(inStructTy, &mlirContext);
+        if (!llvmStructTy || !isa<LLVM::LLVMStructType>(llvmStructTy))
+          continue;
+        SmallVector<LLVM::GEPArg> gepIndices;
+        gepIndices.push_back(0);
+        gepIndices.push_back(static_cast<int32_t>(*fieldIndex));
+        auto fieldPtr = LLVM::GEPOp::create(
+            rewriter, loc, LLVM::LLVMPointerType::get(&mlirContext),
+            llvmStructTy, basePtr, gepIndices);
+        auto fieldRef = rewriter.create<UnrealizedConversionCastOp>(
+            loc, TypeRange{sigStructExtractOp.getResult().getType()},
+            ValueRange{fieldPtr});
+        sigStructExtractOp.getResult().replaceAllUsesWith(fieldRef.getResult(0));
+        rewriter.eraseOp(sigStructExtractOp);
+        continue;
+      } else if (auto prbOp = dyn_cast<llhd::ProbeOp>(op)) {
+        Type loadTy =
+            convertToLLVMCompatibleType(prbOp.getResult().getType(),
+                                        &mlirContext);
+        if (!loadTy || !LLVM::isCompatibleType(loadTy))
+          continue;
+        Value signalPtr = prbOp.getSignal();
+        if (!isa<LLVM::LLVMPointerType>(signalPtr.getType())) {
+          signalPtr = unwrapPointerFromRefCast(signalPtr);
+          if (!signalPtr)
+            continue;
+        }
+        Value loaded = rewriter.create<LLVM::LoadOp>(loc, loadTy, signalPtr);
+        if (prbOp.getResult().getType() == loadTy) {
+          prbOp.replaceAllUsesWith(loaded);
+        } else {
+          auto cast = rewriter.create<UnrealizedConversionCastOp>(
+              loc, TypeRange{prbOp.getResult().getType()}, ValueRange{loaded});
+          prbOp.replaceAllUsesWith(cast.getResult(0));
+        }
+        rewriter.eraseOp(prbOp);
+        continue;
+      } else if (auto drvOp = dyn_cast<llhd::DriveOp>(op)) {
+        // Lower pointer-backed immediate/delta drives to a plain store.
+        if (drvOp.getEnable())
+          continue;
+        auto delayConst = drvOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+        if (!delayConst)
+          continue;
+        auto delayAttr = dyn_cast<llhd::TimeAttr>(delayConst.getValueAttr());
+        if (!delayAttr)
+          continue;
+        bool isNearImmediate = toFemtoseconds(delayAttr) == 0 &&
+                               delayAttr.getDelta() == 0 &&
+                               delayAttr.getEpsilon() <= 1;
+        if (!isNearImmediate)
+          continue;
+
+        // Lower drives to extracted refs as read-modify-write on the base
+        // integer signal: drv(sig.extract(base, low), val) =>
+        //   old = load base; new = insertbits(old, val, low); store new.
+        if (auto sigExtract = drvOp.getSignal().getDefiningOp<llhd::SigExtractOp>()) {
+          Value basePtr = unwrapPointerFromRefCast(sigExtract.getInput());
+          if (!basePtr)
+            continue;
+          auto inRefTy = dyn_cast<llhd::RefType>(sigExtract.getInput().getType());
+          auto outRefTy = dyn_cast<llhd::RefType>(sigExtract.getResult().getType());
+          auto inIntTy = inRefTy ? dyn_cast<IntegerType>(inRefTy.getNestedType())
+                                 : IntegerType();
+          auto outIntTy = outRefTy ? dyn_cast<IntegerType>(outRefTy.getNestedType())
+                                   : IntegerType();
+          auto valIntTy = dyn_cast<IntegerType>(drvOp.getValue().getType());
+          if (!inIntTy || !outIntTy || !valIntTy ||
+              valIntTy.getWidth() != outIntTy.getWidth())
+            continue;
+
+          Value lowBit = sigExtract.getLowBit();
+          auto lowTy = dyn_cast<IntegerType>(lowBit.getType());
+          if (!lowTy)
+            continue;
+          unsigned baseWidth = inIntTy.getWidth();
+          if (lowTy.getWidth() < baseWidth)
+            lowBit = rewriter.create<arith::ExtUIOp>(loc, inIntTy, lowBit);
+          else if (lowTy.getWidth() > baseWidth)
+            lowBit = rewriter.create<arith::TruncIOp>(loc, inIntTy, lowBit);
+          if (lowBit.getType() != inIntTy)
+            continue;
+
+          Value oldValue = rewriter.create<LLVM::LoadOp>(loc, inIntTy, basePtr);
+          Value extValue = drvOp.getValue();
+          if (extValue.getType() != inIntTy)
+            extValue = rewriter.create<arith::ExtUIOp>(loc, inIntTy, extValue);
+          Value shiftedValue =
+              rewriter.create<arith::ShLIOp>(loc, extValue, lowBit);
+
+          APInt maskBits = APInt::getLowBitsSet(baseWidth, outIntTy.getWidth());
+          Value mask = arith::ConstantOp::create(
+                           rewriter, loc,
+                           rewriter.getIntegerAttr(inIntTy, maskBits))
+                           .getResult();
+          Value shiftedMask = rewriter.create<arith::ShLIOp>(loc, mask, lowBit);
+          Value allOnes = arith::ConstantOp::create(
+                              rewriter, loc,
+                              rewriter.getIntegerAttr(inIntTy, APInt::getAllOnes(baseWidth)))
+                              .getResult();
+          Value invMask = rewriter.create<arith::XOrIOp>(loc, shiftedMask, allOnes);
+          Value cleared = rewriter.create<arith::AndIOp>(loc, oldValue, invMask);
+          Value inserted = rewriter.create<arith::AndIOp>(loc, shiftedValue, shiftedMask);
+          Value merged = rewriter.create<arith::OrIOp>(loc, cleared, inserted);
+          rewriter.create<LLVM::StoreOp>(loc, merged, basePtr);
+          rewriter.eraseOp(drvOp);
+          if (sigExtract->use_empty())
+            rewriter.eraseOp(sigExtract);
+          if (delayConst->use_empty())
+            rewriter.eraseOp(delayConst);
+          continue;
+        }
+
+        Value signalPtr = drvOp.getSignal();
+        if (!isa<LLVM::LLVMPointerType>(signalPtr.getType())) {
+          signalPtr = unwrapPointerFromRefCast(signalPtr);
+          if (!signalPtr)
+            continue;
+        }
+        Type storeTy = drvOp.getValue().getType();
+        if (auto refTy = dyn_cast<llhd::RefType>(drvOp.getSignal().getType())) {
+          Type converted = convertToLLVMCompatibleType(refTy.getNestedType(),
+                                                       &mlirContext);
+          if (converted && LLVM::isCompatibleType(converted))
+            storeTy = converted;
+        }
+        Value storeVal = drvOp.getValue();
+        if (storeVal.getType() != storeTy) {
+          storeVal = materializeLLVMValue(loc, storeVal, storeTy,
+                                          materializeLLVMValue);
+          if (!storeVal)
+            continue;
+        }
+        rewriter.create<LLVM::StoreOp>(loc, storeVal, signalPtr);
+        rewriter.eraseOp(drvOp);
+        continue;
       } else if (isa<llhd::ConstantTimeOp, llhd::CurrentTimeOp>(op)) {
         bool allResultsDead = true;
         for (Value result : op->getResults())
@@ -447,6 +1556,35 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
           rewriter.eraseOp(op);
           continue;
         }
+      } else if (auto arrayGetOp = dyn_cast<hw::ArrayGetOp>(op)) {
+        auto arrayCreateOp =
+            arrayGetOp.getInput().getDefiningOp<hw::ArrayCreateOp>();
+        auto idxTy = dyn_cast<IntegerType>(arrayGetOp.getIndex().getType());
+        if (!arrayCreateOp || !idxTy ||
+            !LLVM::isCompatibleType(arrayGetOp.getResult().getType()))
+          continue;
+        unsigned numElems = arrayCreateOp.getNumOperands();
+        if (numElems == 0)
+          continue;
+        auto getElemForLogicalIndex = [&](unsigned idx) -> Value {
+          unsigned opIdx = numElems - 1 - idx;
+          return arrayCreateOp.getOperand(opIdx);
+        };
+        Value result = getElemForLogicalIndex(0);
+        for (unsigned idx = 1; idx < numElems; ++idx) {
+          auto idxConst = arith::ConstantOp::create(
+              rewriter, loc, rewriter.getIntegerAttr(idxTy, idx));
+          auto cmp = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::eq, arrayGetOp.getIndex(),
+              idxConst);
+          Value candidate = getElemForLogicalIndex(idx);
+          result = LLVM::SelectOp::create(
+              rewriter, loc, arrayGetOp.getResult().getType(), cmp, candidate,
+              result);
+        }
+        arrayGetOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(arrayGetOp);
+        continue;
       } else if (auto extractOp = dyn_cast<comb::ExtractOp>(op)) {
         Value input = extractOp.getInput();
         unsigned lowBit = extractOp.getLowBit();
@@ -541,6 +1679,21 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                                        divOp.getRhs());
         divOp.replaceAllUsesWith(result.getResult());
         rewriter.eraseOp(divOp);
+      } else if (auto divOp = dyn_cast<comb::DivSOp>(op)) {
+        auto result = rewriter.create<arith::DivSIOp>(loc, divOp.getLhs(),
+                                                      divOp.getRhs());
+        divOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(divOp);
+      } else if (auto modOp = dyn_cast<comb::ModUOp>(op)) {
+        auto result = rewriter.create<arith::RemUIOp>(loc, modOp.getLhs(),
+                                                      modOp.getRhs());
+        modOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(modOp);
+      } else if (auto modOp = dyn_cast<comb::ModSOp>(op)) {
+        auto result = rewriter.create<arith::RemSIOp>(loc, modOp.getLhs(),
+                                                      modOp.getRhs());
+        modOp.replaceAllUsesWith(result.getResult());
+        rewriter.eraseOp(modOp);
       } else if (auto mulOp = dyn_cast<comb::MulOp>(op)) {
         auto inputs = mulOp.getInputs();
         Value result = inputs[0];
@@ -642,6 +1795,40 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
           rewriter.eraseOp(extractOp);
         };
 
+        // Fold extract(cast(llvm.struct -> hw.struct), "field") to
+        // llvm.extractvalue on the original llvm struct value.
+        if (auto castOp = extractOp.getInput()
+                              .getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+            auto srcTy =
+                dyn_cast<LLVM::LLVMStructType>(castOp.getOperand(0).getType());
+            auto dstTy =
+                dyn_cast<hw::StructType>(castOp.getResult(0).getType());
+            if (srcTy && dstTy && !srcTy.isOpaque()) {
+              if (auto fieldIndex =
+                      dstTy.getFieldIndex(extractOp.getFieldName())) {
+                unsigned idx = *fieldIndex;
+                auto body = srcTy.getBody();
+                if (idx < body.size()) {
+                  Type srcFieldTy = body[idx];
+                  if (srcFieldTy == extractOp.getResult().getType()) {
+                    llvm::SmallVector<int64_t, 1> positions{
+                        static_cast<int64_t>(idx)};
+                    auto llvmExtract = rewriter.create<LLVM::ExtractValueOp>(
+                        loc, srcFieldTy, castOp.getOperand(0), positions);
+                    extractOp.getResult().replaceAllUsesWith(
+                        llvmExtract.getResult());
+                    rewriter.eraseOp(extractOp);
+                    if (castOp->use_empty())
+                      rewriter.eraseOp(castOp);
+                    continue;
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Generic fold: extract(struct_create(...), "field") -> operand.
         if (auto createOp =
                 extractOp.getInput().getDefiningOp<hw::StructCreateOp>()) {
@@ -698,6 +1885,22 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
           }
         }
       } else if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
+        // Cancel chained casts when they round-trip through an intermediate
+        // type (e.g. ptr -> !llhd.ref<T> -> ptr).
+        if (castOp.getNumOperands() == 1 && castOp.getNumResults() == 1) {
+          Value in = castOp.getOperand(0);
+          Type outTy = castOp.getResult(0).getType();
+          if (auto prevCast = in.getDefiningOp<UnrealizedConversionCastOp>()) {
+            if (prevCast.getNumOperands() == 1 && prevCast.getNumResults() == 1 &&
+                prevCast.getOperand(0).getType() == outTy) {
+              castOp.getResult(0).replaceAllUsesWith(prevCast.getOperand(0));
+              rewriter.eraseOp(castOp);
+              if (prevCast->use_empty())
+                rewriter.eraseOp(prevCast);
+              continue;
+            }
+          }
+        }
         // Dead casts are no-ops; keep them from forcing whole-function
         // rejection in the compilability filter.
         bool allResultsDead = true;
@@ -721,12 +1924,60 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     llvm::SmallVector<Operation *> deadStructOps;
     microModule.walk([&](Operation *op) {
       if (op->use_empty() &&
-          isa<hw::StructCreateOp, hw::AggregateConstantOp>(op))
+          isa<hw::StructCreateOp, hw::AggregateConstantOp, hw::BitcastOp>(op))
         deadStructOps.push_back(op);
     });
     for (Operation *op : deadStructOps) {
       op->erase();
     }
+
+    llvm::SmallVector<Operation *> deadCasts;
+    microModule.walk([&](UnrealizedConversionCastOp castOp) {
+      bool allResultsDead = true;
+      for (Value result : castOp.getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        deadCasts.push_back(castOp.getOperation());
+    });
+    for (Operation *op : deadCasts)
+      op->erase();
+
+    llvm::SmallVector<Operation *> deadTimeOps;
+    microModule.walk([&](Operation *op) {
+      if (!isa<llhd::ConstantTimeOp, llhd::CurrentTimeOp>(op))
+        return;
+      bool allResultsDead = true;
+      for (Value result : op->getResults())
+        allResultsDead &= result.use_empty();
+      if (allResultsDead)
+        deadTimeOps.push_back(op);
+    });
+    for (Operation *op : deadTimeOps)
+      op->erase();
+
+    llvm::SmallVector<Operation *> deadSigExtractOps;
+    microModule.walk([&](llhd::SigExtractOp sigExtractOp) {
+      if (sigExtractOp->use_empty())
+        deadSigExtractOps.push_back(sigExtractOp.getOperation());
+    });
+    for (Operation *op : deadSigExtractOps)
+      op->erase();
+
+    llvm::SmallVector<Operation *> deadSigStructExtractOps;
+    microModule.walk([&](llhd::SigStructExtractOp sigStructExtractOp) {
+      if (sigStructExtractOp->use_empty())
+        deadSigStructExtractOps.push_back(sigStructExtractOp.getOperation());
+    });
+    for (Operation *op : deadSigStructExtractOps)
+      op->erase();
+
+    llvm::SmallVector<Operation *> deadArrayCreateOps;
+    microModule.walk([&](hw::ArrayCreateOp arrayCreateOp) {
+      if (arrayCreateOp->use_empty())
+        deadArrayCreateOps.push_back(arrayCreateOp.getOperation());
+    });
+    for (Operation *op : deadArrayCreateOps)
+      op->erase();
   }
 
   // Phase 1: Rewrite arith/cf/func ops to LLVM equivalents.
@@ -3961,13 +5212,35 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       funcNames.push_back(funcOp.getSymName().str());
   }
 
-  unsigned nativeModuleInitCount =
+  NativeModuleInitSynthesisStats nativeModuleInitStats =
       synthesizeNativeModuleInitFunctions(*module, microModule);
-  if (nativeModuleInitCount > 0)
+  if (nativeModuleInitStats.emittedModules > 0)
     llvm::errs() << "[circt-sim-compile] Native module init functions: "
-                 << nativeModuleInitCount << "\n";
+                 << nativeModuleInitStats.emittedModules << "\n";
+  if (verbose && nativeModuleInitStats.totalModules > 0) {
+    llvm::errs() << "[circt-sim-compile] Native module init modules: "
+                 << nativeModuleInitStats.emittedModules << " emitted / "
+                 << nativeModuleInitStats.totalModules << " total\n";
+    if (!nativeModuleInitStats.skipReasons.empty()) {
+      llvm::SmallVector<std::pair<llvm::StringRef, unsigned>> sorted;
+      for (auto &kv : nativeModuleInitStats.skipReasons)
+        sorted.push_back({kv.first(), kv.second});
+      llvm::sort(sorted, [](const auto &a, const auto &b) {
+        return a.second > b.second;
+      });
+      llvm::errs()
+          << "[circt-sim-compile] Top native module init skip reasons:\n";
+      for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
+        llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
+                     << "\n";
+    }
+  }
 
   cloneReferencedDeclarations(microModule, *module, mapping);
+
+  // Normalize ref-like func argument ABIs in the micro-module to keep helper
+  // call wrappers pointer-typed for LLVM lowering.
+  canonicalizeLLHDRefArgumentABIs(microModule);
 
   // Strip bodies of intercepted functions so they become external
   // declarations → trampolines. This ensures compiled code calls back into

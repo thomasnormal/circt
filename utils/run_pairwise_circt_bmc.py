@@ -58,6 +58,19 @@ General launch retry tuning:
 - BMC_LAUNCH_COPY_FALLBACK (default: 0)
 - BMC_LAUNCH_EVENTS_OUT (optional TSV output)
 
+BMC resource-guard auto-relax retry tuning:
+- BMC_AUTO_RELAX_RESOURCE_GUARD (default: 1)
+  Values:
+  - 1: on BMC RSS resource-guard failures, retry with explicit
+    `--max-rss-mb` budgets unless the case already specifies resource-guard
+    policy via CLI/env.
+  - 0: disable automatic RSS guard retry.
+- BMC_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB (default: 24576)
+  Legacy single-step RSS budget (MB). Used when no ladder is specified.
+- BMC_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB (optional)
+  Comma-separated RSS retry ladder in MB (for example: `24576,32768`).
+  Runner picks the next larger budget after each RSS guard failure.
+
 Verilog frontend mode:
 - BMC_VERILOG_SINGLE_UNIT_MODE (default: auto)
   Values:
@@ -253,6 +266,19 @@ def parse_exit_codes(raw: str, name: str) -> set[int]:
     return out
 
 
+def parse_nonnegative_int_list(raw: str, name: str) -> list[int]:
+    text = raw.strip()
+    if not text:
+        return []
+    out: list[int] = []
+    for token in text.split(","):
+        piece = token.strip()
+        if not piece:
+            continue
+        out.append(parse_nonnegative_int(piece, name))
+    return out
+
+
 def is_retryable_launch_failure_output(stdout: str, stderr: str) -> bool:
     lowered = f"{stdout}\n{stderr}".lower()
     return any(pattern in lowered for pattern in RETRYABLE_LAUNCH_PATTERNS)
@@ -268,15 +294,25 @@ def classify_retryable_launch_failure_reason_from_output(
     return f"retryable_exit_code_{exit_code}"
 
 
-def write_log(path: Path, stdout: str, stderr: str) -> None:
+def normalize_subprocess_text(data: str | bytes | None) -> str:
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data
+
+
+def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    stdout_text = normalize_subprocess_text(stdout)
+    stderr_text = normalize_subprocess_text(stderr)
     data = ""
-    if stdout:
-        data += stdout
+    if stdout_text:
+        data += stdout_text
         if not data.endswith("\n"):
             data += "\n"
-    if stderr:
-        data += stderr
-    path.write_text(data)
+    if stderr_text:
+        data += stderr_text
+    path.write_text(data, encoding="utf-8")
 
 
 def parse_bmc_result(text: str) -> str | None:
@@ -293,13 +329,17 @@ def parse_assertion_status(text: str) -> str | None:
     return match.group(1)
 
 
+def has_no_property_warning(text: str) -> bool:
+    return "no property provided to check in module" in text.lower()
+
+
 def collect_candidate_assertion_sites(lines: list[str]) -> list[AssertionSite]:
     sites: list[AssertionSite] = []
     for idx, line in enumerate(lines):
         stripped = line.strip()
         if not stripped or stripped.startswith("//"):
             continue
-        if "verif.assert" not in stripped:
+        if "verif.clocked_assert" not in stripped and "verif.assert" not in stripped:
             continue
         if "{bmc.final}" in stripped:
             continue
@@ -338,6 +378,11 @@ def build_isolated_assertion_mlir(
     for site in sites:
         if site.ordinal == keep_ordinal:
             continue
+        if "verif.clocked_assert" in isolated[site.line_index]:
+            isolated[site.line_index] = isolated[site.line_index].replace(
+                "verif.clocked_assert", "verif.clocked_assume", 1
+            )
+            continue
         isolated[site.line_index] = isolated[site.line_index].replace(
             "verif.assert", "verif.assume", 1
         )
@@ -352,6 +397,11 @@ def build_isolated_cover_mlir(
 ) -> str:
     isolated = list(lines)
     for site in assertion_sites:
+        if "verif.clocked_assert" in isolated[site.line_index]:
+            isolated[site.line_index] = isolated[site.line_index].replace(
+                "verif.clocked_assert", "verif.clocked_assume", 1
+            )
+            continue
         isolated[site.line_index] = isolated[site.line_index].replace(
             "verif.assert", "verif.assume", 1
         )
@@ -429,7 +479,72 @@ def is_multiclock_retryable_bmc_failure(log_text: str) -> bool:
         or "designs with multiple clocks not yet supported" in low
         or "multi-clock bmc requires bmc_reg_clocks" in low
         or "multi-clock bmc requires bmc_input_names" in low
+        or "clocked property uses a clock that is not a bmc clock input" in low
     )
+
+
+def is_resource_guard_rss_retryable_bmc_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return "resource guard triggered: rss" in low and "exceeded limit" in low
+
+
+def has_command_option(args: list[str], option: str) -> bool:
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
+def has_explicit_resource_guard_policy(args: list[str]) -> bool:
+    explicit_options = (
+        "--resource-guard",
+        "--no-resource-guard",
+        "--max-rss-mb",
+        "--max-vmem-mb",
+        "--max-malloc-mb",
+        "--max-wall-ms",
+    )
+    if any(has_command_option(args, option) for option in explicit_options):
+        return True
+    explicit_env_vars = (
+        "CIRCT_MAX_RSS_MB",
+        "CIRCT_MAX_VMEM_MB",
+        "CIRCT_MAX_MALLOC_MB",
+        "CIRCT_MAX_WALL_MS",
+    )
+    return any(os.environ.get(name, "").strip() for name in explicit_env_vars)
+
+
+def parse_long_option_int(args: list[str], option: str) -> int | None:
+    prefix = f"{option}="
+    for idx, arg in enumerate(args):
+        if arg.startswith(prefix):
+            value = arg[len(prefix) :]
+            try:
+                return int(value)
+            except ValueError:
+                return None
+        if arg == option and idx + 1 < len(args):
+            try:
+                return int(args[idx + 1])
+            except ValueError:
+                return None
+    return None
+
+
+def set_long_option_int(args: list[str], option: str, value: int) -> list[str]:
+    prefix = f"{option}="
+    out: list[str] = []
+    idx = 0
+    while idx < len(args):
+        arg = args[idx]
+        if arg == option:
+            idx += 2
+            continue
+        if arg.startswith(prefix):
+            idx += 1
+            continue
+        out.append(arg)
+        idx += 1
+    out.append(f"{option}={value}")
+    return out
 
 
 def extract_unknown_modules(log_text: str) -> set[str]:
@@ -865,11 +980,11 @@ def run_and_log(
                 timeout=timeout_secs if timeout_secs > 0 else None,
             )
         except subprocess.TimeoutExpired as exc:
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
+            stdout = normalize_subprocess_text(exc.stdout)
+            stderr = normalize_subprocess_text(exc.stderr)
             write_log(log_path, stdout, stderr)
             if out_path is not None:
-                out_path.write_text(stdout)
+                out_path.write_text(stdout, encoding="utf-8")
             raise
         except OSError as exc:
             if exc.errno == errno.ETXTBSY:
@@ -1055,7 +1170,9 @@ def run_and_log(
                 handle.write(note)
                 handle.write("\n")
     if out_path is not None:
-        out_path.write_text(result.stdout)
+        out_path.write_text(
+            normalize_subprocess_text(result.stdout), encoding="utf-8"
+        )
     return result
 
 
@@ -1412,7 +1529,8 @@ def main() -> int:
         action="store_true",
         default=os.environ.get("BMC_ASSERTION_GRANULAR", "0") == "1",
         help=(
-            "Run BMC per assertion by isolating each verif.assert in prepared MLIR "
+            "Run BMC per assertion by isolating each "
+            "verif.assert/verif.clocked_assert in prepared MLIR "
             "(default: env BMC_ASSERTION_GRANULAR or off)."
         ),
     )
@@ -1619,6 +1737,41 @@ def main() -> int:
         )
         return 1
     bmc_auto_allow_multi_clock = bmc_auto_allow_multi_clock_raw == "1"
+    bmc_auto_relax_resource_guard_raw = os.environ.get(
+        "BMC_AUTO_RELAX_RESOURCE_GUARD", "1"
+    )
+    if bmc_auto_relax_resource_guard_raw not in {"0", "1"}:
+        print(
+            (
+                f"invalid BMC_AUTO_RELAX_RESOURCE_GUARD: "
+                f"{bmc_auto_relax_resource_guard_raw} (expected 0 or 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    bmc_auto_relax_resource_guard = bmc_auto_relax_resource_guard_raw == "1"
+    bmc_auto_relax_resource_guard_max_rss_mb = parse_nonnegative_int(
+        os.environ.get("BMC_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB", "24576"),
+        "BMC_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB",
+    )
+    bmc_auto_relax_resource_guard_rss_ladder_mb = parse_nonnegative_int_list(
+        os.environ.get("BMC_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB", ""),
+        "BMC_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB",
+    )
+    if (
+        not bmc_auto_relax_resource_guard_rss_ladder_mb
+        and bmc_auto_relax_resource_guard_max_rss_mb > 0
+    ):
+        bmc_auto_relax_resource_guard_rss_ladder_mb = [
+            bmc_auto_relax_resource_guard_max_rss_mb
+        ]
+    # Canonicalize ladder: positive-only, stable order, no duplicates.
+    rss_ladder_seen: set[int] = set()
+    bmc_auto_relax_resource_guard_rss_ladder_mb = [
+        value
+        for value in bmc_auto_relax_resource_guard_rss_ladder_mb
+        if value > 0 and not (value in rss_ladder_seen or rss_ladder_seen.add(value))
+    ]
     bmc_prepare_core_with_circt_opt = (
         os.environ.get("BMC_PREPARE_CORE_WITH_CIRCT_OPT", "1") == "1"
     )
@@ -2161,6 +2314,135 @@ def main() -> int:
             bmc_cmd += case.bmc_extra_args
             bmc_cmd += circt_bmc_args
 
+            def run_bmc_with_optional_multi_clock_retry(
+                cmd: list[str],
+                log_path: Path,
+                out_path: Path,
+                stage_name: str,
+            ) -> tuple[subprocess.CompletedProcess[str], str]:
+                active_cmd = list(cmd)
+                run_result = run_and_log(
+                    active_cmd,
+                    log_path,
+                    out_path,
+                    case_timeout_secs,
+                    etxtbsy_retries,
+                    etxtbsy_backoff_secs,
+                    launch_retry_attempts,
+                    launch_retry_backoff_secs,
+                    launch_retryable_exit_codes,
+                    launch_copy_fallback,
+                    launch_event_rows,
+                    case.case_id,
+                    case_path,
+                    stage_name,
+                )
+                combined_local = log_path.read_text() + "\n" + out_path.read_text()
+                if (
+                    run_result.returncode != 0
+                    and bmc_auto_allow_multi_clock
+                    and "--allow-multi-clock" not in active_cmd
+                    and case.allow_multi_clock_mode != "off"
+                    and is_multiclock_retryable_bmc_failure(combined_local)
+                ):
+                    if launch_event_rows is not None:
+                        launch_event_rows.append(
+                            (
+                                "RETRY",
+                                case.case_id,
+                                case_path,
+                                stage_name,
+                                circt_bmc,
+                                "auto_allow_multi_clock",
+                                "1",
+                                "0.000",
+                                str(run_result.returncode),
+                                "",
+                            )
+                        )
+                    retry_cmd = list(active_cmd)
+                    retry_cmd.append("--allow-multi-clock")
+                    run_result = run_and_log(
+                        retry_cmd,
+                        log_path,
+                        out_path,
+                        case_timeout_secs,
+                        etxtbsy_retries,
+                        etxtbsy_backoff_secs,
+                        launch_retry_attempts,
+                        launch_retry_backoff_secs,
+                        launch_retryable_exit_codes,
+                        launch_copy_fallback,
+                        launch_event_rows,
+                        case.case_id,
+                        case_path,
+                        stage_name,
+                    )
+                    active_cmd = retry_cmd
+                    combined_local = log_path.read_text() + "\n" + out_path.read_text()
+                if (
+                    run_result.returncode != 0
+                    and bmc_auto_relax_resource_guard
+                    and bmc_auto_relax_resource_guard_rss_ladder_mb
+                    and not has_explicit_resource_guard_policy(active_cmd)
+                    and is_resource_guard_rss_retryable_bmc_failure(combined_local)
+                ):
+                    rss_retry_attempt = 0
+                    while (
+                        run_result.returncode != 0
+                        and is_resource_guard_rss_retryable_bmc_failure(combined_local)
+                    ):
+                        current_rss_mb = parse_long_option_int(
+                            active_cmd, "--max-rss-mb"
+                        )
+                        next_rss_mb: int | None = None
+                        for candidate in bmc_auto_relax_resource_guard_rss_ladder_mb:
+                            if current_rss_mb is None or candidate > current_rss_mb:
+                                next_rss_mb = candidate
+                                break
+                        if next_rss_mb is None:
+                            break
+                        rss_retry_attempt += 1
+                        if launch_event_rows is not None:
+                            launch_event_rows.append(
+                                (
+                                    "RETRY",
+                                    case.case_id,
+                                    case_path,
+                                    stage_name,
+                                    circt_bmc,
+                                    "auto_relax_resource_guard_rss",
+                                    str(rss_retry_attempt),
+                                    "0.000",
+                                    str(run_result.returncode),
+                                    "",
+                                )
+                            )
+                        retry_cmd = set_long_option_int(
+                            active_cmd, "--max-rss-mb", next_rss_mb
+                        )
+                        run_result = run_and_log(
+                            retry_cmd,
+                            log_path,
+                            out_path,
+                            case_timeout_secs,
+                            etxtbsy_retries,
+                            etxtbsy_backoff_secs,
+                            launch_retry_attempts,
+                            launch_retry_backoff_secs,
+                            launch_retryable_exit_codes,
+                            launch_copy_fallback,
+                            launch_event_rows,
+                            case.case_id,
+                            case_path,
+                            stage_name,
+                        )
+                        active_cmd = retry_cmd
+                        combined_local = (
+                            log_path.read_text() + "\n" + out_path.read_text()
+                        )
+                return run_result, combined_local
+
             stage = "verilog"
             try:
                 verilog_result = run_verilog_with_cache(stage)
@@ -2528,24 +2810,10 @@ def main() -> int:
                             cover_cmd[1] = str(cover_mlir)
                             stage = f"bmc.cover.{site.ordinal}"
                             try:
-                                cover_run = run_and_log(
-                                    cover_cmd,
-                                    cover_log,
-                                    cover_out,
-                                    case_timeout_secs,
-                                    etxtbsy_retries,
-                                    etxtbsy_backoff_secs,
-                                    launch_retry_attempts,
-                                    launch_retry_backoff_secs,
-                                    launch_retryable_exit_codes,
-                                    launch_copy_fallback,
-                                    launch_event_rows,
-                                    case.case_id,
-                                    case_path,
-                                    stage,
-                                )
-                                combined = (
-                                    cover_log.read_text() + "\n" + cover_out.read_text()
+                                cover_run, combined = (
+                                    run_bmc_with_optional_multi_clock_retry(
+                                        cover_cmd, cover_log, cover_out, stage
+                                    )
                                 )
                                 bmc_tag = parse_bmc_result(combined)
                                 if bmc_tag == "SAT":
@@ -2561,17 +2829,30 @@ def main() -> int:
                                         )
                                     )
                                 elif bmc_tag == "UNSAT":
-                                    cover_result_rows.append(
-                                        (
-                                            "UNREACHABLE",
-                                            case.case_id,
-                                            case_path,
-                                            cover_id,
-                                            cover_label,
-                                            "UNSAT",
-                                            "unsat",
+                                    if has_no_property_warning(combined):
+                                        cover_result_rows.append(
+                                            (
+                                                "SKIP",
+                                                case.case_id,
+                                                case_path,
+                                                cover_id,
+                                                cover_label,
+                                                "BMC_NOT_RUN",
+                                                "cover_no_property_after_lowering",
+                                            )
                                         )
-                                    )
+                                    else:
+                                        cover_result_rows.append(
+                                            (
+                                                "UNREACHABLE",
+                                                case.case_id,
+                                                case_path,
+                                                cover_id,
+                                                cover_label,
+                                                "UNSAT",
+                                                "unsat",
+                                            )
+                                        )
                                 elif bmc_tag == "UNKNOWN":
                                     cover_result_rows.append(
                                         (
@@ -2726,24 +3007,13 @@ def main() -> int:
                             assertion_cmd[1] = str(assertion_mlir)
                             stage = f"bmc.assertion.{site.ordinal}"
                             try:
-                                assertion_run = run_and_log(
-                                    assertion_cmd,
-                                    assertion_log,
-                                    assertion_out,
-                                    case_timeout_secs,
-                                    etxtbsy_retries,
-                                    etxtbsy_backoff_secs,
-                                    launch_retry_attempts,
-                                    launch_retry_backoff_secs,
-                                    launch_retryable_exit_codes,
-                                    launch_copy_fallback,
-                                    launch_event_rows,
-                                    case.case_id,
-                                    case_path,
-                                    stage,
-                                )
-                                combined = (
-                                    assertion_log.read_text() + "\n" + assertion_out.read_text()
+                                assertion_run, combined = (
+                                    run_bmc_with_optional_multi_clock_retry(
+                                        assertion_cmd,
+                                        assertion_log,
+                                        assertion_out,
+                                        stage,
+                                    )
                                 )
                                 assertion_tag = parse_assertion_status(combined)
                                 bmc_tag = parse_bmc_result(combined)
@@ -2800,18 +3070,37 @@ def main() -> int:
                                     )
                                     assertion_statuses.append(("UNKNOWN", "unknown"))
                                 elif bmc_tag == "UNSAT":
-                                    assertion_result_rows.append(
-                                        (
-                                            "PROVEN",
-                                            case.case_id,
-                                            case_path,
-                                            assertion_id,
-                                            assertion_label,
-                                            "UNSAT",
-                                            "unsat",
+                                    if has_no_property_warning(combined):
+                                        assertion_result_rows.append(
+                                            (
+                                                "SKIP",
+                                                case.case_id,
+                                                case_path,
+                                                assertion_id,
+                                                assertion_label,
+                                                "BMC_NOT_RUN",
+                                                "assertion_no_property_after_lowering",
+                                            )
                                         )
-                                    )
-                                    assertion_statuses.append(("PROVEN", "unsat"))
+                                        assertion_statuses.append(
+                                            (
+                                                "SKIP",
+                                                "assertion_no_property_after_lowering",
+                                            )
+                                        )
+                                    else:
+                                        assertion_result_rows.append(
+                                            (
+                                                "PROVEN",
+                                                case.case_id,
+                                                case_path,
+                                                assertion_id,
+                                                assertion_label,
+                                                "UNSAT",
+                                                "unsat",
+                                            )
+                                        )
+                                        assertion_statuses.append(("PROVEN", "unsat"))
                                 elif bmc_tag == "SAT":
                                     assertion_result_rows.append(
                                         (
@@ -2976,6 +3265,26 @@ def main() -> int:
                             )
                             unknown += 1
                             print(f"{case.case_id:32} UNKNOWN", flush=True)
+                        elif status_set == {"SKIP"}:
+                            rows.append(
+                                (
+                                    "SKIP",
+                                    case.case_id,
+                                    case_path,
+                                    suite_name,
+                                    mode_label,
+                                    "BMC_NOT_RUN",
+                                    "assertion_no_property_after_lowering",
+                                )
+                            )
+                            skipped += 1
+                            print(
+                                (
+                                    f"{case.case_id:32} SKIP "
+                                    "(assertion_no_property_after_lowering)"
+                                ),
+                                flush=True,
+                            )
                         else:
                             rows.append(
                                 (
@@ -2992,64 +3301,12 @@ def main() -> int:
                         continue
 
                 stage = "bmc"
-                bmc_result = run_and_log(
+                bmc_result, combined = run_bmc_with_optional_multi_clock_retry(
                     bmc_cmd,
                     bmc_log_path,
                     bmc_out_path,
-                    case_timeout_secs,
-                    etxtbsy_retries,
-                    etxtbsy_backoff_secs,
-                    launch_retry_attempts,
-                    launch_retry_backoff_secs,
-                    launch_retryable_exit_codes,
-                    launch_copy_fallback,
-                    launch_event_rows,
-                    case.case_id,
-                    case_path,
                     stage,
                 )
-                combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
-                if (
-                    bmc_result.returncode != 0
-                    and bmc_auto_allow_multi_clock
-                    and not case_allow_multi_clock
-                    and case.allow_multi_clock_mode != "off"
-                    and is_multiclock_retryable_bmc_failure(combined)
-                ):
-                    if launch_event_rows is not None:
-                        launch_event_rows.append(
-                            (
-                                "RETRY",
-                                case.case_id,
-                                case_path,
-                                stage,
-                                circt_bmc,
-                                "auto_allow_multi_clock",
-                                "1",
-                                "0.000",
-                                str(bmc_result.returncode),
-                                "",
-                            )
-                        )
-                    bmc_cmd_retry = list(bmc_cmd)
-                    bmc_cmd_retry.append("--allow-multi-clock")
-                    bmc_result = run_and_log(
-                        bmc_cmd_retry,
-                        bmc_log_path,
-                        bmc_out_path,
-                        case_timeout_secs,
-                        etxtbsy_retries,
-                        etxtbsy_backoff_secs,
-                        launch_retry_attempts,
-                        launch_retry_backoff_secs,
-                        launch_retryable_exit_codes,
-                        launch_copy_fallback,
-                        launch_event_rows,
-                        case.case_id,
-                        case_path,
-                        stage,
-                    )
-                    combined = bmc_log_path.read_text() + "\n" + bmc_out_path.read_text()
                 bmc_tag = parse_bmc_result(combined)
 
                 if case_smoke_only:

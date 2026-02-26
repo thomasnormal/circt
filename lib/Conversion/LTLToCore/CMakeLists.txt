@@ -11,6 +11,7 @@ add_circt_conversion_library(CIRCTLTLToCore
   CIRCTHW
   CIRCTSV
   CIRCTComb
+  CIRCTLLHD
   CIRCTSeq
   CIRCTLTL
   CIRCTVerif

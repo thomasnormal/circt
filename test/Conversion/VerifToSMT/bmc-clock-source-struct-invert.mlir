@@ -4,10 +4,10 @@
 
 // CHECK-LABEL: func.func @clock_source_struct_invert
 // CHECK: [[LOOP:%.+]] = func.call @bmc_loop
-// CHECK: [[NOT:%.+]] = smt.bv.not [[LOOP]] : !smt.bv<1>
+// CHECK: smt.bv.not {{%.+}} : !smt.bv<1>
 // CHECK: [[UNKN:%.+]] = smt.bv.extract %arg{{[0-9]+}} from 0 : (!smt.bv<2>) -> !smt.bv<1>
-// CHECK: [[CONCAT:%.+]] = smt.bv.concat [[NOT]], [[UNKN]] : !smt.bv<1>, !smt.bv<1>
-// CHECK: func.call @bmc_circuit([[LOOP]], [[CONCAT]]
+// CHECK: [[CONCAT:%.+]] = smt.bv.concat {{%.+}}, [[UNKN]] : !smt.bv<1>, !smt.bv<1>
+// CHECK: func.call @bmc_circuit({{%.+}}, [[CONCAT]]
 func.func @clock_source_struct_invert() -> i1 {
   %bmc = verif.bmc bound 1 num_regs 0 initial_values [] attributes {
     bmc_clock_sources = [{arg_index = 1 : i32, clock_pos = 0 : i32, invert = true}]

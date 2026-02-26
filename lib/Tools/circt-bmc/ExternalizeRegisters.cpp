@@ -27,6 +27,7 @@
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "llvm/ADT/PostOrderIterator.h"
@@ -128,6 +129,68 @@ foldValueToConstantAttr(Value value, DenseMap<Value, Attribute> &cache,
   clearActive();
   cache[value] = foldedAttr;
   return foldedAttr;
+}
+
+// Resolve an immutable register initial value to the yielded SSA value from a
+// seq.initial op, traversing through simple immutable passthrough wrappers.
+static FailureOr<Value>
+resolveCompRegInitialValue(TypedValue<seq::ImmutableType> initValue,
+                           SymbolTableCollection &symbolTables) {
+  DenseSet<Value> visited;
+  Value current = initValue;
+
+  constexpr unsigned kMaxResolveSteps = 1024;
+  for (unsigned step = 0; step < kMaxResolveSteps; ++step) {
+    if (!visited.insert(current).second)
+      return failure();
+
+    if (auto initialOp = current.getDefiningOp<seq::InitialOp>()) {
+      auto result = dyn_cast<OpResult>(current);
+      if (!result)
+        return failure();
+      auto resultNum = result.getResultNumber();
+      auto yieldOp = dyn_cast<seq::YieldOp>(initialOp.getBodyBlock()->getTerminator());
+      if (!yieldOp || resultNum >= yieldOp.getNumOperands())
+        return failure();
+      return yieldOp.getOperand(resultNum);
+    }
+
+    if (auto castOp = current.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getNumOperands() != 1)
+        return failure();
+      current = castOp.getOperand(0);
+      continue;
+    }
+
+    auto result = dyn_cast<OpResult>(current);
+    if (!result)
+      return failure();
+    auto instance = dyn_cast<hw::InstanceOp>(result.getDefiningOp());
+    if (!instance)
+      return failure();
+
+    auto *target = symbolTables.lookupNearestSymbolFrom(
+        instance, instance.getModuleNameAttr());
+    auto callee = dyn_cast_or_null<HWModuleOp>(target);
+    if (!callee || callee.getBody().empty())
+      return failure();
+    auto outputOp = dyn_cast<hw::OutputOp>(callee.getBodyBlock()->getTerminator());
+    if (!outputOp || result.getResultNumber() >= outputOp.getNumOperands())
+      return failure();
+
+    Value calleeValue = outputOp.getOperand(result.getResultNumber());
+    if (auto arg = dyn_cast<BlockArgument>(calleeValue)) {
+      if (arg.getOwner() != callee.getBodyBlock() ||
+          arg.getArgNumber() >= instance.getInputs().size())
+        return failure();
+      current = instance.getInputs()[arg.getArgNumber()];
+      continue;
+    }
+
+    current = calleeValue;
+  }
+
+  return failure();
 }
 
 static bool traceClockRoot(Value value, Value &root);
@@ -611,6 +674,7 @@ private:
 
 void ExternalizeRegistersPass::runOnOperation() {
   auto &instanceGraph = getAnalysis<hw::InstanceGraph>();
+  SymbolTableCollection symbolTables;
   DenseSet<Operation *> handled;
 
   // Iterate over all instances in the instance graph. This ensures we visit
@@ -636,9 +700,12 @@ void ExternalizeRegistersPass::runOnOperation() {
         if (auto regOp = dyn_cast<seq::CompRegOp>(op)) {
           mlir::Attribute initState = {};
           if (auto initVal = regOp.getInitialValue()) {
-            // Find the constant op that defines the reset value in an initial
-            // block (if it exists)
-            if (!initVal.getDefiningOp<seq::InitialOp>()) {
+            // Resolve immutable initial values through simple wrappers (for
+            // example, immutable values returned by helper instances) and fold
+            // the resolved initial SSA value to a constant.
+            auto resolvedInitValue =
+                resolveCompRegInitialValue(initVal, symbolTables);
+            if (failed(resolvedInitValue)) {
               regOp.emitError("registers with initial values not directly "
                               "defined by a seq.initial op not yet supported");
               return signalPassFailure();
@@ -646,8 +713,7 @@ void ExternalizeRegistersPass::runOnOperation() {
             DenseMap<Value, Attribute> foldedValues;
             DenseSet<Value> activeValues;
             auto initConstant = foldValueToConstantAttr(
-                circt::seq::unwrapImmutableValue(initVal), foldedValues,
-                activeValues);
+                *resolvedInitValue, foldedValues, activeValues);
             if (failed(initConstant)) {
               regOp.emitError("registers with initial values in a seq.initial "
                               "op must fold to constants");

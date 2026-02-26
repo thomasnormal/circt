@@ -1,6 +1,6 @@
 // REQUIRES: slang
 // REQUIRES: z3
-// RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm --ir-hw %s | \
+// RUN: circt-verilog --uvm-path=%S/../../../lib/Runtime/uvm-core/src --ir-hw %s | \
 // RUN:   circt-opt --lower-clocked-assert-like --lower-ltl-to-core | \
 // RUN:   circt-lec --emit-smtlib -c1=modA -c2=modB - | %z3 -in | FileCheck %s
 
@@ -23,7 +23,9 @@ module modA(
   property p;
     @(posedge clk) a ##1 b;
   endproperty
-  expect property (p);
+  initial begin
+    expect (p);
+  end
 endmodule
 
 module modB(
@@ -33,7 +35,9 @@ module modB(
   property p;
     @(posedge clk) a ##1 b;
   endproperty
-  expect property (p);
+  initial begin
+    expect (p);
+  end
 endmodule
 
 // CHECK: unsat

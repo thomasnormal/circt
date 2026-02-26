@@ -73,6 +73,8 @@ if(EMSCRIPTEN)
   endif()
   target_link_options(circt-verilog PRIVATE
     "SHELL:-sSTACK_SIZE=${CIRCT_VERILOG_WASM_STACK_SIZE}")
+  target_link_options(circt-verilog PRIVATE
+    "SHELL:-sEXPORTED_RUNTIME_METHODS=['callMain']")
 endif()
 
 llvm_update_compile_flags(circt-verilog)

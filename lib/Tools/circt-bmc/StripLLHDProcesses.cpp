@@ -261,11 +261,23 @@ struct StripLLHDProcessesPass
             [&](ProcessOp process) { processes.push_back(process); });
         DenseMap<Operation *, bool> processContainsAssertLike;
         DenseMap<Operation *, bool> processHasWait;
+        DenseMap<Operation *, bool> processAllowsEventOnlyImmediateAssertLike;
         DenseSet<Value> signalsWithDynamicDrives;
         for (auto process : processes) {
           bool hasWait = false;
           process.walk([&](WaitOp) { hasWait = true; });
           processHasWait[process.getOperation()] = hasWait;
+
+          bool eventOnlyWaits = hasWait;
+          process.walk([&](WaitOp waitOp) {
+            if (waitOp.getDelay() || waitOp.getObserved().empty() ||
+                !waitOp.getYieldOperands().empty())
+              eventOnlyWaits = false;
+          });
+          bool hasAnyDrive = false;
+          process.walk([&](DriveOp) { hasAnyDrive = true; });
+          processAllowsEventOnlyImmediateAssertLike[process.getOperation()] =
+              eventOnlyWaits && !hasAnyDrive;
         }
         hwModule.walk([&](DriveOp drvOp) {
           if (auto process = drvOp->getParentOfType<ProcessOp>()) {
@@ -379,6 +391,23 @@ struct StripLLHDProcessesPass
           });
 
           for (Operation *op : assertLikeOps) {
+            bool isClockedAssertLike =
+                isa<verif::ClockedAssertOp, verif::ClockedAssumeOp,
+                    verif::ClockedCoverOp>(op);
+            // Preserve clocked properties. Immediate assert-like ops in
+            // wait-containing processes are only preserved for event-only
+            // (sensitivity-list) waits with no delay/yield and no drives,
+            // where hoisting keeps combinational intent without introducing
+            // process-scheduling artifacts.
+            bool allowImmediateAssertLikeInWaitProcess =
+                processAllowsEventOnlyImmediateAssertLike.lookup(
+                    process.getOperation());
+            if (hasWait && !isClockedAssertLike &&
+                !allowImmediateAssertLikeInWaitProcess) {
+              op->erase();
+              continue;
+            }
+
             auto *block = op->getBlock();
             auto mappingValues = findBlockArgMapping(block, process);
             if (!mappingValues)

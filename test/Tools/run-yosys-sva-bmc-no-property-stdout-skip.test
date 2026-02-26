@@ -1,0 +1,17 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule\n' > %t/simple.sv
+// RUN: printf '#!/usr/bin/env bash\necho \"// dummy mlir\"\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\necho \"no property provided to check in module - will trivially find no violations\"\nexit 0\n' > %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null EXPECT_FILE=/dev/null XFAIL_FILE=/dev/null \
+// RUN:   BMC_SMOKE_ONLY=1 NO_PROPERTY_AS_SKIP=1 DISABLE_UVM_AUTO_INCLUDE=1 \
+// RUN:   SKIP_VHDL=0 SKIP_FAIL_WITHOUT_MACRO=1 TEST_FILTER='.*' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t > %t/out.log
+// RUN: FileCheck %s < %t/out.log
+//
+// CHECK-NOT: PASS(pass): simple
+// CHECK: SKIP(no-property): simple
+// CHECK: SKIP(fail-no-macro): simple
+// CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=1
+// CHECK: yosys SVA mode summary: total=2{{.*}}skipped=2{{.*}}skip_reason_fail-no-macro=1{{.*}}skip_reason_no-property=1

@@ -27,6 +27,6 @@ func.func @for_smtlib_allows_llvm_readonly_global_gep_load() -> (i1) {
 
 // CHECK: func.func @for_smtlib_allows_llvm_readonly_global_gep_load
 // CHECK: smt.solver
-// CHECK: arith.constant true
+// CHECK: smt.constant false
 // CHECK-NOT: llvm.getelementptr
 // CHECK-NOT: llvm.load

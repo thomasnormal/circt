@@ -2436,13 +2436,6 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   }
 
   if (canInline && singleBlock) {
-    // In strict mode, reject multiple unconditional drives as requiring
-    // abstraction since simultaneous drives have undefined priority.
-    if (strictMode && !isLocalSignal && drives.size() > 1 &&
-        hasEnabledDrive(drives))
-      return sigOp.emitError(
-          "LLHD signal requires abstraction; rerun without --strict-llhd");
-
     if (!isLocalSignal && drives.size() > 1 && !allDrivesSameValue(drives)) {
       bool probesAfterDrives = true;
       Operation *firstProbe = nullptr;
@@ -2514,6 +2507,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         Value enable = drive.getEnable();
         return enable && !matchPattern(enable, m_One());
       });
+      bool hasComplementaryDriveEnables = hasComplementaryEnables(drives);
+      bool hasExclusiveDriveEnables = hasExclusiveEnables(drives, builder);
       bool hasAbstractedProcessResultDrive =
           llvm::any_of(drives, [&](llhd::DriveOp drive) {
             return usesAbstractedProcessResultInput(drive.getValue());
@@ -2524,7 +2519,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       // clock paths and produce vacuous UNSAT outcomes.
       bool preferOrderedDriveSemantics =
           (hasUnconditionalDrive && hasConditionalDrive) ||
-          hasAbstractedProcessResultDrive;
+          hasAbstractedProcessResultDrive || hasComplementaryDriveEnables ||
+          hasExclusiveDriveEnables;
 
       if ((probesAfterDrives || inputsDominateProbe) && firstProbe) {
         if (preferOrderedDriveSemantics) {

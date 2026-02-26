@@ -121,6 +121,10 @@ std::string convertGlobToRegex(const std::string &pattern, bool withBrackets) {
 
 } // anonymous namespace
 
+// Helpers declared early for queue ops and defined in AOT pointer section.
+static void *normalizeHostPtr(void *ptr, const char *funcName);
+static bool isInterpreterVirtualAddress(const void *ptr);
+
 //===----------------------------------------------------------------------===//
 // Queue Operations
 //===----------------------------------------------------------------------===//
@@ -524,12 +528,22 @@ extern "C" void __moore_queue_reverse(MooreQueue *queue, int64_t elem_size) {
 
 extern "C" void __moore_queue_pop_back_ptr(MooreQueue *queue, void *result_ptr,
                                             int64_t element_size) {
-  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0 ||
-      !result_ptr)
+  // Guard against non-queue pointers misrouted to queue helpers.
+  constexpr int64_t kQueueLenSanityLimit = 100000;
+  queue = static_cast<MooreQueue *>(normalizeHostPtr(
+      static_cast<void *>(queue), "__moore_queue_pop_back_ptr:queue"));
+  result_ptr =
+      normalizeHostPtr(result_ptr, "__moore_queue_pop_back_ptr:result");
+  if (!queue || queue->len <= 0 || queue->len > kQueueLenSanityLimit ||
+      element_size <= 0 || !result_ptr)
+    return;
+  void *rawDataPtr = queue->data;
+  void *dataPtr = normalizeHostPtr(rawDataPtr, "__moore_queue_pop_back_ptr:data");
+  if (!dataPtr)
     return;
 
   // Copy the last element to the result buffer
-  void *lastElem = static_cast<char *>(queue->data) +
+  void *lastElem = static_cast<char *>(dataPtr) +
                    (queue->len - 1) * element_size;
   std::memcpy(result_ptr, lastElem, element_size);
 
@@ -538,37 +552,53 @@ extern "C" void __moore_queue_pop_back_ptr(MooreQueue *queue, void *result_ptr,
 
   // If queue is now empty, free the data
   if (queue->len == 0) {
-    std::free(queue->data);
+    if (!isInterpreterVirtualAddress(rawDataPtr))
+      std::free(dataPtr);
     queue->data = nullptr;
   }
 }
 
 extern "C" void __moore_queue_pop_front_ptr(MooreQueue *queue, void *result_ptr,
                                              int64_t element_size) {
-  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0 ||
-      !result_ptr)
+  // Guard against non-queue pointers misrouted to queue helpers.
+  constexpr int64_t kQueueLenSanityLimit = 100000;
+  queue = static_cast<MooreQueue *>(normalizeHostPtr(
+      static_cast<void *>(queue), "__moore_queue_pop_front_ptr:queue"));
+  result_ptr =
+      normalizeHostPtr(result_ptr, "__moore_queue_pop_front_ptr:result");
+  if (!queue || queue->len <= 0 || queue->len > kQueueLenSanityLimit ||
+      element_size <= 0 || !result_ptr)
+    return;
+  void *rawDataPtr = queue->data;
+  void *dataPtr =
+      normalizeHostPtr(rawDataPtr, "__moore_queue_pop_front_ptr:data");
+  if (!dataPtr)
     return;
 
   // Copy the first element to the result buffer
-  std::memcpy(result_ptr, queue->data, element_size);
+  std::memcpy(result_ptr, dataPtr, element_size);
 
   // Reduce the queue size and shift elements
   queue->len--;
 
   if (queue->len == 0) {
     // Queue is now empty
-    std::free(queue->data);
+    if (!isInterpreterVirtualAddress(rawDataPtr))
+      std::free(dataPtr);
     queue->data = nullptr;
   } else {
     // Shift remaining elements to the front
-    std::memmove(queue->data,
-                 static_cast<char *>(queue->data) + element_size,
+    std::memmove(dataPtr,
+                 static_cast<char *>(dataPtr) + element_size,
                  queue->len * element_size);
   }
 }
 
 extern "C" int64_t __moore_queue_size(MooreQueue *queue) {
-  if (!queue)
+  constexpr int64_t kQueueLenSanityLimit = 100000;
+  queue = static_cast<MooreQueue *>(
+      normalizeHostPtr(static_cast<void *>(queue), "__moore_queue_size:queue"));
+  if (!queue || queue->len < 0 || queue->len > kQueueLenSanityLimit)
     return 0;
   return queue->len;
 }
@@ -802,6 +832,13 @@ static void *normalizeHostPtr(void *ptr, const char *funcName) {
   }
 
   return ptr;
+}
+
+static bool isInterpreterVirtualAddress(const void *ptr) {
+  if (!ptr)
+    return false;
+  auto addr = reinterpret_cast<uintptr_t>(ptr);
+  return addr >= 0x10000000ULL && addr < 0x20000000ULL;
 }
 
 static MooreAssocPtrResolver assocPtrResolver = nullptr;

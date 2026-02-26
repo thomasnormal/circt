@@ -1,0 +1,23 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/mbit/apb_avip/sim
+// RUN: : > %t/mbit/apb_avip/sim/apb_compile.f
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\n: > "${OUT:?OUT is required}"\n' > %t/fake-run-avip.sh
+// RUN: chmod +x %t/fake-run-avip.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ "${1:-}" == "--help" ]]; then\n  exit 0\nfi\necho "[circt-sim] Simulation completed at time 42 fs"\necho "UVM_FATAL : 0"\necho "UVM_ERROR : 0"\nif [[ "${NONZERO_ACTIVITY:-0}" == "1" ]]; then\n  echo "Coverage = 12.5 %%%%"\n  echo "Coverage = 88.0 %%%%"\n  echo "    - TXN_CP: 5 hits, 100.0%%%% coverage"\nelse\n  echo "Coverage = 0 %%%%"\n  echo "Coverage = 0 %%%%"\n  echo "    - TXN_CP: 0 hits, 0.0%%%% coverage"\nfi\n' > %t/fake-circt-sim
+// RUN: chmod +x %t/fake-circt-sim
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nexit 0\n' > %t/fake-circt-verilog
+// RUN: chmod +x %t/fake-circt-verilog
+// RUN: not env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim CIRCT_ALLOW_NONCANONICAL_TOOLS=1 RUN_AVIP=%t/fake-run-avip.sh FAIL_ON_ACTIVITY_LIVENESS=1 ACTIVITY_MIN_COVERAGE_PCT=0.01 COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out-fail > %t/log-fail.txt 2>&1
+// RUN: FileCheck %s --check-prefix=FAIL < %t/log-fail.txt
+// RUN: env MBIT_DIR=%t/mbit AVIPS=apb SEEDS=1 CIRCT_VERILOG=%t/fake-circt-verilog CIRCT_SIM=%t/fake-circt-sim CIRCT_ALLOW_NONCANONICAL_TOOLS=1 RUN_AVIP=%t/fake-run-avip.sh NONZERO_ACTIVITY=1 FAIL_ON_ACTIVITY_LIVENESS=1 ACTIVITY_MIN_COVERAGE_PCT=0.01 COMPILE_TIMEOUT=10 SIM_TIMEOUT=10 MAX_WALL_MS=1000 %S/../../utils/run_avip_circt_sim.sh %t/out-pass > %t/log-pass.txt 2>&1
+// RUN: FileCheck %s --check-prefix=PASS < %t/log-pass.txt
+// RUN: FileCheck %s --check-prefix=MATRIX < %t/out-pass/matrix.tsv
+//
+// FAIL: [avip-circt-sim] gate-summary functional_fail_rows=0
+// FAIL: activity_fail_rows=1
+// FAIL: error: activity liveness gate failed: 1 row(s)
+//
+// PASS: [avip-circt-sim] gate-summary functional_fail_rows=0
+// PASS: activity_fail_rows=0
+// PASS-NOT: error: activity liveness gate failed
+// MATRIX: apb{{[[:space:]]+}}1{{[[:space:]]+}}OK{{[[:space:]]+}}[[COMPILE_SEC:[0-9]+]]{{[[:space:]]+}}OK{{[[:space:]]+}}0{{[[:space:]]+}}[[SIM_SEC:[0-9]+]]{{[[:space:]]+}}42{{[[:space:]]+}}0{{[[:space:]]+}}0{{[[:space:]]+}}12.5{{[[:space:]]+}}88.0

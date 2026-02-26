@@ -8805,18 +8805,36 @@ struct RvalueExprVisitor : public ExprVisitor {
       perRange.push_back(isPerRange);
     }
 
-    // Handle default weight if specified
-    if (expr.defaultWeight()) {
-      // Default weight applies to any value not explicitly listed
-      // For now, we don't have a mechanism to represent this in the IR
-      mlir::emitWarning(loc) << "default dist weight not yet supported";
+    std::optional<int64_t> defaultWeight;
+    std::optional<int64_t> defaultPerRange;
+    if (auto *defaultWeightSpec = expr.defaultWeight()) {
+      if (defaultWeightSpec->expr) {
+        auto weightVal = context.evaluateConstant(*defaultWeightSpec->expr);
+        if (!weightVal.bad()) {
+          auto maybeWeight = weightVal.integer().as<int64_t>();
+          if (maybeWeight)
+            defaultWeight = *maybeWeight;
+        }
+      }
+      if (!defaultWeight) {
+        mlir::emitError(loc) << "default dist weight must be a constant integer";
+        return {};
+      }
+      defaultPerRange =
+          defaultWeightSpec->kind == slang::ast::DistExpression::DistWeight::PerRange ? 1 : 0;
     }
 
     // Create the distribution constraint op.
     auto isSignedAttr =
         expr.left().type->isSigned() ? builder.getUnitAttr() : nullptr;
+    IntegerAttr defaultWeightAttr =
+        defaultWeight ? builder.getI64IntegerAttr(*defaultWeight) : IntegerAttr();
+    IntegerAttr defaultPerRangeAttr =
+        defaultPerRange ? builder.getI64IntegerAttr(*defaultPerRange)
+                        : IntegerAttr();
     moore::ConstraintDistOp::create(builder, loc, variable, values, weights,
-                                    perRange, isSignedAttr);
+                                    perRange, defaultWeightAttr,
+                                    defaultPerRangeAttr, isSignedAttr);
 
     // DistExpression has void type in slang, but we need to return something
     // for the expression visitor. Return a constant 1 (true) as a placeholder

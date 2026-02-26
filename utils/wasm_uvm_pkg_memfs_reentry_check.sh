@@ -183,25 +183,29 @@ if [[ "$node_rc" -ne 0 ]]; then
   exit 1
 fi
 
-if ! grep -q '^RUN1 rc=0 out_bytes=' "$log"; then
+clean_log="$tmpdir/uvm-pkg-reentry.clean.log"
+# Strip ANSI color escapes emitted by clang diagnostics before grep checks.
+sed -E 's/\x1B\[[0-9;]*[[:alpha:]]//g' "$log" >"$clean_log"
+
+if ! grep -q '^RUN1 rc=0 out_bytes=' "$clean_log"; then
   echo "[wasm-uvm-pkg-memfs] run1 did not complete successfully" >&2
   cat "$log" >&2
   exit 1
 fi
 
-if ! grep -q '^RUN2 rc=0 out_bytes=' "$log"; then
+if ! grep -q '^RUN2 rc=0 out_bytes=' "$clean_log"; then
   echo "[wasm-uvm-pkg-memfs] run2 did not complete successfully" >&2
   cat "$log" >&2
   exit 1
 fi
 
-if grep -q 'Malformed attribute storage object' "$log"; then
+if grep -q 'Malformed attribute storage object' "$clean_log"; then
   echo "[wasm-uvm-pkg-memfs] detected malformed attribute assert during UVM compile" >&2
   cat "$log" >&2
   exit 1
 fi
 
-if grep -q 'Aborted(' "$log"; then
+if grep -q 'Aborted(' "$clean_log"; then
   echo "[wasm-uvm-pkg-memfs] detected wasm abort during UVM compile" >&2
   cat "$log" >&2
   exit 1

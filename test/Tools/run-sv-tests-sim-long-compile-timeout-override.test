@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/generated/black-parrot
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/generated/black-parrot/bp_default.sv <<\"EOF\"\n/*\n:type: simulation\n*/\nmodule top;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\nsleep 2\ncat <<\"MLIR\"\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-sim.sh <<\"EOF\"\n#!/usr/bin/env bash\nexit 0\nEOF\nchmod +x %t/fake-sim.sh\n'
+// RUN: env OUT=%t/no-override.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_SIM=%t/fake-sim.sh DISABLE_UVM_AUTO_INCLUDE=1 TEST_FILTER='^bp_default$' CIRCT_TIMEOUT_SECS=1 CIRCT_LONG_COMPILE_REGEX='^no_match$' %S/../../utils/run_sv_tests_circt_sim.sh %t/sv-tests | FileCheck %s --check-prefix=NOOVR-SUMMARY
+// RUN: cat %t/no-override.tsv | FileCheck %s --check-prefix=NOOVR-RESULT
+// RUN: env OUT=%t/override.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_SIM=%t/fake-sim.sh DISABLE_UVM_AUTO_INCLUDE=1 TEST_FILTER='^bp_default$' CIRCT_TIMEOUT_SECS=1 CIRCT_LONG_COMPILE_REGEX='^bp_' CIRCT_LONG_COMPILE_TIMEOUT_SECS=3 %S/../../utils/run_sv_tests_circt_sim.sh %t/sv-tests | FileCheck %s --check-prefix=OVR-SUMMARY
+// RUN: cat %t/override.tsv | FileCheck %s --check-prefix=OVR-RESULT
+
+// NOOVR-SUMMARY: total=1 pass=0 fail=0 xfail=0 xpass=0
+// NOOVR-SUMMARY: compile_fail=1
+// NOOVR-RESULT: COMPILE_FAIL{{[[:space:]]+}}bp_default
+
+// OVR-SUMMARY: total=1 pass=1 fail=0 xfail=0 xpass=0
+// OVR-SUMMARY: compile_fail=0
+// OVR-RESULT: PASS{{[[:space:]]+}}bp_default

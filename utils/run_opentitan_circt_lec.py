@@ -33,6 +33,16 @@ def fail(msg: str) -> None:
     raise SystemExit(1)
 
 
+def parse_nonnegative_int(raw: str, name: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        fail(f"invalid {name}: {raw}")
+    if value < 0:
+        fail(f"invalid {name}: {raw}")
+    return value
+
+
 def replace_text(src: Path, dst: Path, replacements: list[tuple[str, str]]) -> None:
     data = src.read_text()
     for old, new in replacements:
@@ -85,15 +95,31 @@ def strip_proc_assertions_global_for_lec(path: Path) -> bool:
     proc_assert_addr_vars: set[str] = set()
     addressof_re = re.compile(
         r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.mlir\.addressof\s+"
-        r"@__circt_proc_assertions_enabled\s*:\s*!llvm\.ptr\s*$"
+        r"@__circt_proc_assertions_enabled\s*:\s*!llvm\.ptr(?:<[^>]+>)?\s*$"
     )
     cast_re = re.compile(
-        r"^\s*%[A-Za-z0-9._$-]+\s*=\s*builtin\.unrealized_conversion_cast\s+"
-        r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr to !llhd\.ref<i1>\s*$"
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*builtin\.unrealized_conversion_cast\s+"
+        r"(%[A-Za-z0-9._$-]+)\s*:\s*.+\s+to\s+.+\s*$"
+    )
+    bitcast_re = re.compile(
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.bitcast\s+"
+        r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr(?:<[^>]+>)?\s+to\s+"
+        r"!llvm\.ptr(?:<[^>]+>)?\s*$"
+    )
+    addrspacecast_re = re.compile(
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.addrspacecast\s+"
+        r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr(?:<[^>]+>)?\s+to\s+"
+        r"!llvm\.ptr(?:<[^>]+>)?\s*$"
+    )
+    gep_re = re.compile(
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.(?:getelementptr|gep)"
+        r"(?:\s+inbounds)?\s+(%[A-Za-z0-9._$-]+)\s*\[[^\]]*\]\s*:\s*"
+        r"\([^)]+\)\s*->\s*!llvm\.ptr(?:<[^>]+>)?\s*$"
     )
     load_re = re.compile(
-        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.load\s+"
-        r"(%[A-Za-z0-9._$-]+)\s*:\s*!llvm\.ptr -> i1\s*$"
+        r"^(\s*%[A-Za-z0-9._$-]+)\s*=\s*llvm\.load(?:\s+volatile)?\s+"
+        r"(%[A-Za-z0-9._$-]+)\s*(?:\{[^}]*\}\s*)?:\s*"
+        r"!llvm\.ptr(?:<[^>]+>)?\s*->\s*i1(?:\s+\{[^}]*\})?\s*$"
     )
     for line in lines:
         if "llvm.mlir.global" in line and "__circt_proc_assertions_enabled" in line:
@@ -105,7 +131,26 @@ def strip_proc_assertions_global_for_lec(path: Path) -> bool:
             changed = True
             continue
         m_cast = cast_re.match(line)
-        if m_cast and m_cast.group(1) in proc_assert_addr_vars:
+        if m_cast and m_cast.group(2).strip() in proc_assert_addr_vars:
+            proc_assert_addr_vars.add(m_cast.group(1).strip())
+            changed = True
+            continue
+        m_bitcast = bitcast_re.match(line)
+        if m_bitcast and m_bitcast.group(2).strip() in proc_assert_addr_vars:
+            proc_assert_addr_vars.add(m_bitcast.group(1).strip())
+            changed = True
+            continue
+        m_addrspacecast = addrspacecast_re.match(line)
+        if (
+            m_addrspacecast
+            and m_addrspacecast.group(2).strip() in proc_assert_addr_vars
+        ):
+            proc_assert_addr_vars.add(m_addrspacecast.group(1).strip())
+            changed = True
+            continue
+        m_gep = gep_re.match(line)
+        if m_gep and m_gep.group(2).strip() in proc_assert_addr_vars:
+            proc_assert_addr_vars.add(m_gep.group(1).strip())
             changed = True
             continue
         m_load = load_re.match(line)
@@ -193,9 +238,26 @@ def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
 
 
 def run_and_log(
-    cmd: list[str], log_path: Path, out_path: Path | None = None
+    cmd: list[str],
+    log_path: Path,
+    out_path: Path | None = None,
+    timeout_secs: int = 0,
 ) -> str:
-    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs if timeout_secs > 0 else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        write_log(log_path, stdout, stderr)
+        if out_path is not None:
+            out_path.write_text(stdout)
+        raise
     write_log(log_path, result.stdout, result.stderr)
     if out_path is not None:
         out_path.write_text(result.stdout)
@@ -225,7 +287,10 @@ if _HAS_SHARED_FORMAL_HELPERS:
         _shared_write_log(path, stdout, stderr)
 
     def run_and_log(
-        cmd: list[str], log_path: Path, out_path: Path | None = None
+        cmd: list[str],
+        log_path: Path,
+        out_path: Path | None = None,
+        timeout_secs: int = 0,
     ) -> str:
         retry_attempts = _shared_parse_nonnegative_int(
             os.environ.get("FORMAL_LAUNCH_RETRY_ATTEMPTS", "1"),
@@ -254,6 +319,7 @@ if _HAS_SHARED_FORMAL_HELPERS:
         return _shared_run_command_logged(
             cmd,
             log_path,
+            timeout_secs=timeout_secs,
             out_path=out_path,
             retry_attempts=retry_attempts,
             retry_backoff_secs=retry_backoff_secs,
@@ -384,6 +450,10 @@ def main() -> int:
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     lec_mode_label = os.environ.get("LEC_MODE_LABEL", "LEC").strip() or "LEC"
+    lec_timeout_secs = parse_nonnegative_int(
+        os.environ.get("LEC_TIMEOUT_SECS", "0"),
+        "LEC_TIMEOUT_SECS",
+    )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -591,7 +661,11 @@ def main() -> int:
             stage = "verilog"
             try:
                 stage = "verilog"
-                run_and_log(verilog_cmd, verilog_log_path)
+                run_and_log(
+                    verilog_cmd,
+                    verilog_log_path,
+                    timeout_secs=lec_timeout_secs,
+                )
                 strip_vpi_attributes_for_opt(out_moore)
                 if verilog_log_path.exists():
                     reasons = extract_drop_reasons(
@@ -610,13 +684,18 @@ def main() -> int:
                                 (impl, str(impl_dir), reason)
                             )
                 stage = "opt"
-                run_and_log(opt_cmd, impl_dir / "circt-opt.log")
+                run_and_log(
+                    opt_cmd,
+                    impl_dir / "circt-opt.log",
+                    timeout_secs=lec_timeout_secs,
+                )
                 strip_proc_assertions_global_for_lec(out_mlir)
                 stage = "lec"
                 lec_stdout = run_and_log(
                     lec_cmd,
                     impl_dir / "circt-lec.log",
                     out_path=impl_dir / "circt-lec.out",
+                    timeout_secs=lec_timeout_secs,
                 )
                 if not lec_smoke_only:
                     lec_log_text = (impl_dir / "circt-lec.log").read_text()
@@ -626,6 +705,14 @@ def main() -> int:
                     assume_known_result = parse_lec_diag_assume_known_result(combined)
                     if diag == "XPROP_ONLY":
                         summary_counts = parse_xprop_summary_counts(combined)
+                    # Fail closed: non-smoke LEC must provide an explicit
+                    # equivalence result token, otherwise the run is
+                    # non-actionable and must not be counted as PASS.
+                    if result is None:
+                        diag = "LEC_RESULT_MISSING"
+                        raise subprocess.CalledProcessError(
+                            1, lec_cmd, output=lec_stdout, stderr=lec_log_text
+                        )
                     if result in ("NEQ", "UNKNOWN"):
                         if diag == "XPROP_ONLY" and lec_accept_xprop_only:
                             print(
@@ -668,6 +755,27 @@ def main() -> int:
                 print(f"{impl:24} OK", flush=True)
                 case_rows.append(
                     ("PASS", impl, str(impl_dir), "opentitan", lec_mode_label, diag)
+                )
+            except subprocess.TimeoutExpired:
+                failures += 1
+                if stage == "verilog":
+                    diag = "CIRCT_VERILOG_TIMEOUT"
+                elif stage == "opt":
+                    diag = "CIRCT_OPT_TIMEOUT"
+                elif stage == "lec":
+                    diag = "CIRCT_LEC_TIMEOUT"
+                else:
+                    diag = "TIMEOUT"
+                print(f"{impl:24} TIMEOUT ({diag}) (logs in {impl_dir})", flush=True)
+                case_rows.append(
+                    (
+                        "TIMEOUT",
+                        impl,
+                        f"{impl_dir}#{diag}",
+                        "opentitan",
+                        lec_mode_label,
+                        diag,
+                    )
                 )
             except subprocess.CalledProcessError:
                 failures += 1

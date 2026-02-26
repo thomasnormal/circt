@@ -99,7 +99,7 @@ def FooWires : Pass<"hw-foo-wires", "hw::HWModuleOp"> {
   }];
 }
 
-def HWAggregateToComb : Pass<"hw-aggregate-to-comb", "hw::HWModuleOp"> {
+def HWAggregateToComb : Pass<"hw-aggregate-to-comb"> {
   let summary = "Lower aggregate operations to comb operations";
   let description = [{
     This pass lowers aggregate *operations* to comb operations within modules.

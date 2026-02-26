@@ -9667,3 +9667,1592 @@ Based on these findings, the circt-sim compiled process architecture:
 - This was a structural robustness issue in formal lowering, not a solver-limit issue.
   Once fixed, OpenTitan runs move from hard frontend/lowering failure into actual
   formal reasoning outcomes, which is exactly the parity progression we need.
+
+## 2026-02-26 circt-sim: function-scope wait_event stalled by waiting+callStack guard
+
+### Goal
+- Fix `moore.wait_event` resumes in `func.func` call-stack context when the
+  wait is signal-based (e.g. `@(posedge ...)`), which was stalling AVIP/UVM
+  traffic despite signal activity.
+
+### Findings
+- Minimal repro showed:
+  - `CALL_WAIT_BEGIN` printed,
+  - process left `state=Suspended waiting=1 callStack=1`,
+  - never resumed on signal edge.
+- `CIRCT_SIM_TRACE_PROC` showed repeated:
+  - `early-return waiting+callStack`.
+- Root cause:
+  - in `executeProcess`, the `state.waiting && !state.callStack.empty()`
+    guard treated signal-triggered wakeups as spurious and returned before
+    clearing `state.waiting`.
+
+### Implementation
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - refined the guard so call-stack waiters are only suppressed when they are
+    true non-signal waits (or active memory-event waiters).
+  - signal-backed waits now resume through the normal path.
+- Added regression:
+  - `test/Tools/circt-sim/moore-wait-event-callstack-signal-resume.mlir`.
+  - asserts both `CALL_WAIT_BEGIN` and `CALL_WAIT_END` are observed.
+
+### Validation
+- Rebuild:
+  - `ninja -C build_test circt-sim`
+- Regression:
+  - `build_test/bin/circt-sim test/Tools/circt-sim/moore-wait-event-callstack-signal-resume.mlir --max-time=1000000000 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/moore-wait-event-callstack-signal-resume.mlir`
+- Nearby checks:
+  - `build_test/bin/circt-sim test/Tools/circt-sim/moore-wait-event-func-context.mlir --max-time=10000000000 --sim-stats 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/moore-wait-event-func-context.mlir`
+  - `env CIRCT_SIM_TRACE_DRIVE_SAMPLE_FASTPATH=1 build_test/bin/circt-sim test/Tools/circt-sim/func-drive-to-bfm-resume-fast-path.mlir --max-time=1000000 --max-process-steps=260 2>&1 | llvm/build/bin/FileCheck test/Tools/circt-sim/func-drive-to-bfm-resume-fast-path.mlir`
+
+### Realization
+- The call-stack wake suppression was too coarse. Signal-armed waits inside
+  function contexts need to be treated as real wake events, not as generic
+  spurious triggers.
+
+## 2026-02-26 - OpenTitan FPV multiclock clock-key recovery
+
+### Goal
+- Unblock `rstmgr_sec_cm::rstmgr` conversion failures in `circt-bmc` caused by
+  unmapped `bmc.clock_key=expr:*` on clocked checks.
+
+### Findings
+- The failing OpenTitan check key (`expr:...`) was not present in
+  `bmc_reg_clock_sources` for that exact assertion.
+- Its property cone depended on registers whose clock metadata formed a small
+  unresolved island (`bmc_reg_clocks` and `bmc_reg_clock_sources` both carried
+  `expr:*` with no `arg_index`) between consistent `scan_rst_ni`-mapped
+  registers.
+- Existing VerifToSMT mapping logic handled:
+  - direct `bmc_clock_keys`,
+  - `bmc_reg_clock_sources` entries with `arg_index`, and
+  - some name fallbacks,
+  but did not recover these unresolved reg-clock islands.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - Added fallback aliasing from `bmc_reg_clock_sources` unresolved keys via
+    paired `bmc_reg_clocks` names.
+  - Added conservative neighbor-based recovery for unresolved register clock
+    islands: if nearest known reg-clock positions on both sides agree, use that
+    clock position for the unresolved key/regs.
+  - Propagated recovered key aliases into `clockKeyToPos` for downstream check
+    resolution.
+- Added regressions:
+  - `test/Conversion/VerifToSMT/bmc-multiclock-check-key-reg-clock-name-fallback.mlir`
+  - `test/Conversion/VerifToSMT/bmc-multiclock-reg-clock-neighbor-fallback.mlir`
+
+### Validation
+- Rebuilt tools:
+  - `ninja -C build_test circt-opt circt-bmc`
+- Focused regressions:
+  - `bmc-multiclock-check-key-reg-clock-name-fallback.mlir`
+  - `bmc-multiclock-reg-clock-neighbor-fallback.mlir`
+  - `bmc-multiclock-delay-buffer-check-key-fallback.mlir`
+  - `bmc-multiclock-delay-buffer-clocked.mlir`
+  - `bmc-multiclock-past-buffer-clocked.mlir`
+  - `bmc-reg-clock-sources-unresolved-expr-fallback.mlir`
+- OpenTitan rerun:
+  - previous status: `CIRCT_BMC_ERROR` (unmapped clock key)
+  - new status: `FAIL (SAT)`
+
+### Realization
+- The unresolved-clock-key issue was not only a check-key remap problem; a
+  small subset of register clock metadata can become disconnected from clock
+  ports, and recovering those islands is enough to unblock conversion.
+
+## 2026-02-26 post-fix AVIP interpreted matrix recheck (core8, seed=1)
+
+### Goal
+- Re-run AVIP interpreted matrix after the `wait_event` call-stack resume fix to
+  measure:
+  - how many AVIPs are functionally working,
+  - how many working AVIPs moved off `0.00` coverage.
+
+### Command
+- `AVIP_SET=core8 SEEDS=1 CIRCT_SIM_MODE=interpret FAIL_ON_FUNCTIONAL_GATE=0 FAIL_ON_COVERAGE_BASELINE=0 utils/run_avip_circt_sim.sh /tmp/avip_postfix_interpret_20260226_061122`
+
+### Artifacts
+- matrix: `/tmp/avip_postfix_interpret_20260226_061122/matrix.tsv`
+- meta: `/tmp/avip_postfix_interpret_20260226_061122/meta.txt`
+
+### Results
+- Gate summary:
+  - `functional_fail_rows=3`
+  - `coverage_fail_rows=5`
+- Functional working AVIPs (`compile=OK`, `sim=OK`, `exit=0`, `UVM_FATAL/UVM_ERROR=0/0`):
+  - `5/8`: `apb`, `ahb`, `axi4`, `axi4Lite`, `spi`
+- Functional failures:
+  - `i2s`: timeout (`sim_sec=240`, `sim_time_fs=0`), coverage `0.00/0.00`
+  - `i3c`: aborted by resource guard (`RSS 4450 MB > 4096 MB`), coverage `-/-`
+  - `jtag`: timeout (`sim_sec=240`, `sim_time_fs=357386300000`), coverage `47.92/47.92`
+
+### Coverage snapshot
+- Working AVIPs coverage:
+  - `apb`: `0.00/0.00`
+  - `ahb`: `0.00/0.00`
+  - `axi4`: `0.00/0.00`
+  - `axi4Lite`: `0.00/0.00`
+  - `spi`: `0.00/0.00`
+- Working AVIPs with non-zero coverage: `0/5`
+- Any AVIP row with non-zero coverage (including failed rows): `1/8` (`jtag`)
+
+### Realization
+- The `wait_event` fix did not by itself lift coverage for currently working AVIPs
+  in this seed/lane configuration; they remain functionally green with `0.00/0.00`.
+- Non-zero coverage can appear even on failing rows (e.g. `jtag` timeout with
+  partial progress), so coverage movement should be reported alongside functional
+  status, not in isolation.
+
+## 2026-02-26 AVIP liveness policy gate: require real activity for green status
+
+### Goal
+- Align AVIP "green" status with actual end-to-end TB activity, not only
+  compile/sim/UVM-error accounting.
+- Enforce that functionally passing rows show transaction/coverage liveness.
+
+### Problem statement
+- We observed rows with:
+  - `compile_status=OK`, `sim_status=OK`, `sim_exit=0`, `UVM_FATAL=0`,
+    `UVM_ERROR=0`,
+  - but coverage reports with `Overall coverage: 0.00%` and `0 hits`.
+- Existing unified AVIP lanes gated functional status only.
+
+### Implementation
+- `utils/run_avip_circt_sim.sh`
+  - Added new policy env vars:
+    - `FAIL_ON_ACTIVITY_LIVENESS` (default `0`)
+    - `ACTIVITY_MIN_COVERAGE_PCT` (default `0.01`)
+  - Added `activity_fail_rows` computation for functionally passing rows only:
+    - scan each row's `sim_log`,
+    - pass if any `Overall coverage` is above threshold OR any coverpoint shows
+      non-zero `hits`.
+  - Extended gate summary line with `activity_fail_rows`.
+  - Added hard gate:
+    - if `FAIL_ON_ACTIVITY_LIVENESS=1` and `activity_fail_rows>0`, exit non-zero.
+  - Added meta output fields:
+    - `fail_on_activity_liveness`, `activity_min_coverage_pct`.
+- `docs/unified_regression_manifest.tsv`
+  - Enabled `FAIL_ON_ACTIVITY_LIVENESS=1` for:
+    - `avip_sim_smoke`
+    - `avip_sim_nightly`
+- `utils/internal/checks/avip_sim_nightly_timeout_policy_behavior_check.sh`
+  - Extended policy check to require `FAIL_ON_ACTIVITY_LIVENESS=1` in both
+    `avip_sim_smoke` and `avip_sim_nightly` manifest rows.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-avip-circt-sim-liveness-gate.test`
+    - verifies zero-activity logs fail when `FAIL_ON_ACTIVITY_LIVENESS=1`.
+    - verifies non-zero activity logs pass.
+- Focused lit run:
+  - `run-avip-circt-sim-liveness-gate.test`
+  - `run-avip-circt-sim-strict-gates.test`
+  - `run-avip-circt-sim-parse-output-behavior.test`
+  - `run-avip-circt-sim-retry-behavior.test`
+  - `run-avip-sim-nightly-timeout-policy-behavior.test`
+  - result: all passed.
+
+### Real-lane validation
+- Command:
+  - `AVIPS=apb SEEDS=1 CIRCT_SIM_MODE=interpret FAIL_ON_FUNCTIONAL_GATE=0 FAIL_ON_COVERAGE_BASELINE=0 FAIL_ON_ACTIVITY_LIVENESS=1 ACTIVITY_MIN_COVERAGE_PCT=0.01 utils/run_avip_circt_sim.sh /tmp/avip_apb_liveness_gate_20260226_064527`
+- Result:
+  - `sim_status=OK`, `sim_exit=0` (functional pass),
+  - `activity_fail_rows=1`,
+  - runner exits non-zero with:
+    - `error: activity liveness gate failed: 1 row(s)`.
+
+### Realization
+- Functional-green and activity-green must be separate checks. Encoding
+  liveness as a first-class gate prevents false-green AVIP smoke closure where
+  UVM boots but traffic/coverage never materializes.
+
+## 2026-02-26 FPV assertion-granular isolation: include clocked assertions
+
+### Goal
+- Make `--assertion-granular` isolate a single assertion objective, including
+  `verif.clocked_assert`, so per-assertion results are not contaminated by
+  non-selected clocked properties.
+
+### Problem statement
+- The runner only collected/replaced `verif.assert` sites.
+- OpenTitan `rstmgr` prepared MLIR had `45` assertion sites (`41` clocked,
+  `4` immediate), but assertion-granular runs reported only the `4` immediate
+  lines and could still fail due remaining non-selected clocked assertions.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - `collect_candidate_assertion_sites` now includes both
+    `verif.assert` and `verif.clocked_assert`.
+  - `build_isolated_assertion_mlir` now rewrites non-selected:
+    - `verif.assert -> verif.assume`
+    - `verif.clocked_assert -> verif.clocked_assume`
+  - `build_isolated_cover_mlir` now neutralizes both immediate and clocked
+    assertions before cover isolation.
+  - Updated `--assertion-granular` help text to mention both assertion forms.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-assertion-granular-clocked-assert.test`
+- Confirmed failure before patch (case failed SAT because non-selected
+  `verif.clocked_assert` remained).
+- After patch:
+  - new regression passes,
+  - `run-pairwise-circt-bmc-basic.test` still passes.
+
+### Realization
+- Prior OpenTitan “4 failing immediate assertions” signal was incomplete:
+  assertion-granular isolation had been ignoring clocked assertions, so line-tagged
+  failures could be caused by unrelated clocked properties left active.
+
+### OpenTitan sanity checks
+- `rstmgr_sec_cm` assertion-sharded with updated runner:
+  - `assertion=2/45` (`line_3098`, immediate) -> `PROVEN/UNSAT` and target `PASS`.
+  - `assertion=0/45` (`line_2850`, clocked) -> `UNKNOWN` (not mislabeled as `line_3098`).
+- This confirms assertion-granular row labeling now tracks the actual selected
+  clocked/immediate site instead of collapsing to only immediate-assert lines.
+
+## 2026-02-26 FPV assertion-granular no-property classification
+
+### Goal
+- Avoid false `PROVEN` in assertion-granular mode when the selected assertion
+  is eliminated during lowering and `circt-bmc` reports no property to check.
+
+### Problem statement
+- In assertion-granular runs, `BMC_RESULT=UNSAT` was always mapped to
+  `PROVEN`, even when solver output included:
+  - `no property provided to check in module - will trivially find no violations`.
+- This caused dropped assertions (e.g. process-stripped immediates) to be
+  counted as real proofs.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - Added `has_no_property_warning` detector.
+  - In assertion-granular classification:
+    - `UNSAT + no-property-warning` -> assertion row `SKIP` with
+      `BMC_NOT_RUN / assertion_no_property_after_lowering`.
+  - Case-level aggregation:
+    - if all selected assertions are `SKIP`, emit case `SKIP` with same reason
+      (instead of `PASS`).
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-assertion-granular-no-property-skip.test`
+- Focused lit checks passed:
+  - `run-pairwise-circt-bmc-assertion-granular-no-property-skip.test`
+  - `run-pairwise-circt-bmc-assertion-granular-clocked-assert.test`
+  - `run-pairwise-circt-bmc-basic.test`
+
+### OpenTitan sanity checks
+- `rstmgr_sec_cm`, shard `assertion=2/45` (`line_3098`) now reports:
+  - assertion row: `SKIP ... BMC_NOT_RUN assertion_no_property_after_lowering`
+  - case row: `SKIP ... BMC_NOT_RUN assertion_no_property_after_lowering`
+- `rstmgr_sec_cm`, shard `assertion=0/45` (`line_2850`) remains:
+  - assertion row: `UNKNOWN ... line_2850`
+  - case row: `UNKNOWN`.
+
+### Realization
+- For parity metrics, “no property left” is not a proof. Treating these as
+  explicit skips prevents optimistic accounting and makes dropped-check debt
+  visible.
+
+## 2026-02-26 OpenTitan LEC sanitizer parity: addrspacecast proc-assert alias stripping
+
+### Goal
+- Extend OpenTitan LEC pre-sanitization so proc-assertion helper globals are
+  removed even when the pointer alias chain uses non-default LLVM pointer
+  spellings and `llvm.addrspacecast`.
+
+### Gap identified (red-first)
+- New regression added first:
+  - `test/Tools/run-opentitan-lec-strip-proc-assertions-addrspacecast.test`
+- Pre-fix behavior:
+  - sanitizer removed direct `addressof`/`bitcast` aliases only,
+  - `llvm.addrspacecast` alias load remained,
+  - fake `circt-lec` guard reported:
+    - `unexpected remaining proc-assert addrspacecast load`.
+
+### Implementation
+- `utils/run_opentitan_circt_lec.py`
+  - `strip_proc_assertions_global_for_lec` now:
+    - accepts `!llvm.ptr<...>` in addressof/load patterns,
+    - tracks `llvm.addrspacecast` aliases the same way as bitcast aliases,
+    - keeps replacing tracked `llvm.load ... -> i1` with `hw.constant true`.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-lec-strip-proc-assertions-addrspacecast.test`
+- Focused lit checks after patch:
+  - `run-opentitan-lec-strip-proc-assertions-addrspacecast.test`
+  - `run-opentitan-lec-strip-proc-assertions-alias-load.test`
+  - `run-opentitan-lec-strip-proc-assertions-global.test`
+  - `run-opentitan-lec-vpi-attr-strip.test`
+- Result: all passed.
+
+### Realization
+- LEC pre-sanitization cannot assume a single LLVM pointer spelling.
+  Alias chasing must be representation-robust (`bitcast`, `addrspacecast`,
+  typed pointer variants) or helper globals leak through and cause avoidable
+  false tool failures.
+
+### OpenTitan smoke validation
+- Command:
+  - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_OPT=build_test/bin/circt-opt CIRCT_LEC=build_test/bin/circt-lec LEC_SMOKE_ONLY=1 python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright --workdir /tmp/ot-lec-smoke-1772090482 --keep-workdir`
+- Result:
+  - `aes_sbox_canright OK`
+  - result row: `PASS ... opentitan LEC SMOKE_ONLY`.
+
+## 2026-02-26 Yosys SVA BMC parity: no-property skip detection from stdout
+
+### Goal
+- Make `NO_PROPERTY_AS_SKIP=1` robust regardless of whether
+  `circt-bmc` emits "no property provided to check in module" on stderr or
+  stdout.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-yosys-sva-bmc-no-property-stdout-skip.test`
+- Pre-fix behavior:
+  - fake `circt-bmc` emitted no-property warning on stdout only,
+  - harness looked only at `circt-bmc` stderr log file,
+  - case was misclassified as `PASS(pass)` instead of `SKIP(no-property)`.
+
+### Implementation
+- `utils/run_yosys_sva_circt_bmc.sh`
+  - added helper `has_no_property_warning` to inspect both:
+    - captured stderr log (`$bmc_log`), and
+    - captured stdout (`$out`).
+  - replaced direct stderr-only grep in `NO_PROPERTY_AS_SKIP` gate with helper.
+
+### Tests (TDD)
+- New regression:
+  - `test/Tools/run-yosys-sva-bmc-no-property-stdout-skip.test`
+- Focused non-regression runs:
+  - `run-yosys-sva-bmc-drop-remarks.test`
+  - `run-yosys-sva-bmc-unsupported-sva-policy.test`
+  - `run-yosys-sva-bmc-smoke-xfail-no-xpass.test`
+  - `run-yosys-sva-bmc-sim-only-skip.test`
+- Result: all passed.
+
+### Realization
+- Tool-output channel assumptions leak into classification semantics.
+  For parity/stability, runner policy checks must inspect combined diagnostics,
+  not just one stream.
+
+## 2026-02-26 OpenTitan LEC parity: proc-assertion alias stripping through llvm.getelementptr
+
+### Goal
+- Extend OpenTitan LEC pre-sanitization so proc-assertion helper globals are
+  removed even when pointer aliases pass through `llvm.getelementptr`/`llvm.gep`.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-opentitan-lec-strip-proc-assertions-gep.test`
+- Pre-fix behavior:
+  - sanitizer tracked `addressof`, `unrealized_conversion_cast`, `bitcast`,
+    and `addrspacecast`, but not GEP aliases,
+  - a tracked proc-assert pointer routed via GEP left
+    `llvm.load ... -> i1` intact,
+  - fake `circt-lec` guard failed with:
+    - `unexpected remaining proc-assert gep load`.
+
+### Implementation
+- `utils/run_opentitan_circt_lec.py`
+  - `strip_proc_assertions_global_for_lec` now recognizes
+    `llvm.getelementptr` / `llvm.gep` alias hops for tracked proc-assertion
+    pointers and propagates the alias set through those lines.
+
+### Tests (TDD)
+- New regression:
+  - `run-opentitan-lec-strip-proc-assertions-gep.test`
+- Focused non-regression rerun:
+  - `run-opentitan-lec-strip-proc-assertions-global.test`
+  - `run-opentitan-lec-strip-proc-assertions-alias-load.test`
+  - `run-opentitan-lec-strip-proc-assertions-addrspacecast.test`
+  - `run-opentitan-lec-vpi-attr-strip.test`
+- Result: all passed.
+
+### Realization
+- The proc-assertion sanitizer needs full pointer-alias closure across common
+  LLVM address-shaping ops; missing a single alias step causes avoidable LEC
+  false failures in otherwise valid smoke flows.
+
+## 2026-02-26 sv-tests BMC parity: no-property skip detection from stdout
+
+### Goal
+- Keep `NO_PROPERTY_AS_SKIP=1` behavior consistent across BMC runners by
+  detecting no-property diagnostics regardless of output stream.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-sv-tests-bmc-no-property-stdout-skip.test`
+- Pre-fix behavior:
+  - `run_sv_tests_circt_bmc.sh` only checked `circt-bmc` stderr log for
+    `no property provided to check in module`,
+  - if the warning appeared on stdout, the case could be classified as `PASS`
+    (from `BMC_RESULT=UNSAT`) instead of `SKIP`.
+
+### Implementation
+- `utils/run_sv_tests_circt_bmc.sh`
+  - added `has_no_property_warning(bmc_log, bmc_stdout)` helper,
+  - updated `NO_PROPERTY_AS_SKIP` gate to use helper so both stderr and stdout
+    are considered.
+
+### Tests (TDD)
+- New regression:
+  - `run-sv-tests-bmc-no-property-stdout-skip.test`
+- Non-regression sweeps:
+  - `run-sv-tests-bmc-*.test` (26 tests)
+  - combined formal runner sweep:
+    - `(run-yosys-sva-bmc|run-opentitan-lec|run-sv-tests-bmc)-*.test`
+      (110 tests)
+- Result: all passed.
+
+### Realization
+- Stream-sensitive diagnostics are a recurring parity risk. Runner policy
+  checks should generally treat stdout/stderr as a combined diagnostic channel
+  unless a tool contract guarantees one stream.
+
+## 2026-02-26 verilator-verification BMC parity: no-property skip detection from stdout
+
+### Goal
+- Align no-property skip behavior with other BMC runners so
+  `NO_PROPERTY_AS_SKIP=1` does not depend on which stream `circt-bmc` uses.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-verilator-verification-circt-bmc-no-property-stdout-skip.test`
+- Pre-fix behavior:
+  - `run_verilator_verification_circt_bmc.sh` only checked stderr log for
+    `no property provided to check in module`,
+  - stdout-only diagnostics could still classify as `PASS` via
+    `BMC_RESULT=UNSAT`.
+
+### Implementation
+- `utils/run_verilator_verification_circt_bmc.sh`
+  - added `has_no_property_warning(bmc_log, bmc_stdout)` helper,
+  - switched `NO_PROPERTY_AS_SKIP` gate to helper (stderr + stdout).
+
+### Tests (TDD)
+- New regression:
+  - `run-verilator-verification-circt-bmc-no-property-stdout-skip.test`
+- Non-regression:
+  - `run-verilator-verification-circt-bmc-*.test` (10 tests)
+  - combined runner sweep:
+    - `(run-yosys-sva-bmc|run-opentitan-lec|run-sv-tests-bmc|run-verilator-verification-circt-bmc)-*.test`
+      (120 tests)
+- Result: all passed.
+
+### Realization
+- The same diagnostic channel asymmetry existed in multiple runners.
+  Standardizing on combined stdout/stderr checks removes a recurring source of
+  policy drift between lanes.
+
+## 2026-02-26 sv-tests BMC parity: auto multi-clock retry from stdout diagnostics
+
+### Goal
+- Ensure auto-retry with `--allow-multi-clock` triggers even when
+  multi-clock diagnostics are emitted on stdout instead of stderr.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-sv-tests-bmc-auto-allow-multi-clock-stdout.test`
+- Pre-fix behavior:
+  - `run_sv_tests_circt_bmc.sh` only scanned `circt-bmc` stderr log for
+    multi-clock retry triggers,
+  - stdout-only diagnostics (`modules with multiple clocks not yet supported`)
+    prevented retry and caused erroneous failure/error outcomes.
+
+### Implementation
+- `utils/run_sv_tests_circt_bmc.sh`
+  - added `has_multiclock_retryable_bmc_failure(bmc_log, bmc_stdout)`,
+  - switched auto-retry gate to helper so both streams are considered.
+
+### Tests (TDD)
+- New regression:
+  - `run-sv-tests-bmc-auto-allow-multi-clock-stdout.test`
+- Non-regression:
+  - `run-sv-tests-bmc-*.test` (27 tests)
+  - combined runner sweep:
+    - `(run-yosys-sva-bmc|run-opentitan-lec|run-sv-tests-bmc|run-verilator-verification-circt-bmc)-*.test`
+      (121 tests)
+- Result: all passed.
+
+### Realization
+- Multi-clock retry policy had the same stream-coupling fragility as
+  no-property skip handling. Consolidating stream handling removes another
+  source of lane-to-lane behavior drift.
+
+## 2026-02-26 verilator-verification BMC parity: auto multi-clock retry from stdout diagnostics
+
+### Goal
+- Bring verilator-verification BMC runner multi-clock behavior in line with
+  other lanes by auto-retrying with `--allow-multi-clock` on recognized
+  multi-clock diagnostics.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-verilator-verification-circt-bmc-auto-allow-multi-clock-stdout.test`
+- Pre-fix behavior:
+  - runner only supported static `ALLOW_MULTI_CLOCK=1`,
+  - no automatic retry path,
+  - multi-clock diagnostics on first attempt (including stdout-only wrappers)
+    caused failures that other lanes would auto-recover from.
+
+### Implementation
+- `utils/run_verilator_verification_circt_bmc.sh`
+  - added `AUTO_ALLOW_MULTI_CLOCK` (default `1`, validated as bool),
+  - added `has_multiclock_retryable_bmc_failure(bmc_log, bmc_stdout)`,
+  - on retryable multi-clock failure, reruns `circt-bmc` once with
+    `--allow-multi-clock` and appends provenance to log.
+
+### Tests (TDD)
+- New regression:
+  - `run-verilator-verification-circt-bmc-auto-allow-multi-clock-stdout.test`
+- Non-regression:
+  - `run-verilator-verification-circt-bmc-*.test` (11 tests)
+  - combined runner sweep:
+    - `(run-yosys-sva-bmc|run-opentitan-lec|run-sv-tests-bmc|run-verilator-verification-circt-bmc)-*.test`
+      (122 tests)
+- Result: all passed.
+
+### Realization
+- Commercial-parity behavior requires lane-consistent recovery policies.
+  Auto-retrying recognized multi-clock failures removes avoidable lane-specific
+  flakiness and closes a policy gap vs other BMC runners.
+
+## 2026-02-26 yosys-sva BMC parity: auto multi-clock retry from stdout diagnostics
+
+### Goal
+- Align `run_yosys_sva_circt_bmc.sh` multi-clock handling with other BMC lanes
+  by auto-retrying with `--allow-multi-clock` when the first `circt-bmc` run
+  fails for recognized multi-clock diagnostics.
+
+### Gap identified (red-first)
+- Added regressions:
+  - `test/Tools/run-yosys-sva-bmc-auto-allow-multi-clock-stdout.test`
+  - `test/Tools/run-yosys-sva-bmc-auto-allow-multi-clock-metadata-stdout.test`
+- Pre-fix behavior:
+  - Yosys runner only honored static `ALLOW_MULTI_CLOCK=1`,
+  - no automatic recovery path on multi-clock failures,
+  - retry trigger pattern was narrower than sibling runners and missed
+    `multi-clock BMC requires bmc_reg_clocks|bmc_input_names`,
+  - stdout-only diagnostics caused false failures instead of retrying once
+    with multi-clock enabled.
+
+### Implementation
+- `utils/run_yosys_sva_circt_bmc.sh`
+  - added `AUTO_ALLOW_MULTI_CLOCK` (default `1`, validated `0|1`),
+  - added `has_multiclock_retryable_bmc_failure(bmc_log, bmc_stdout)`,
+  - added one-shot retry path:
+    - trigger: non-zero first run + multi-clock diagnostic + auto policy on,
+    - action: append `--allow-multi-clock`, re-run, append provenance to log.
+
+### Tests (TDD)
+- New regressions:
+  - `run-yosys-sva-bmc-auto-allow-multi-clock-stdout.test`
+  - `run-yosys-sva-bmc-auto-allow-multi-clock-metadata-stdout.test`
+- Non-regression:
+  - `run-yosys-sva-bmc-*.test` (69 tests)
+- Result: all passed.
+
+### Realization
+- The multi-clock retry policy should be lane-uniform; drift between Yosys,
+  sv-tests, and verilator-verification runners creates avoidable parity noise
+  in large matrix runs.
+
+## 2026-02-26 OpenTitan LEC sanitizer parity: volatile proc-assert alias loads
+
+### Goal
+- Extend OpenTitan LEC pre-sanitization so proc-assertion helper loads are
+  removed when emitted as `llvm.load volatile ... -> i1`.
+
+### Gap identified (red-first)
+- Added regression:
+  - `test/Tools/run-opentitan-lec-strip-proc-assertions-volatile-load.test`
+- Pre-fix behavior:
+  - `strip_proc_assertions_global_for_lec` matched only plain `llvm.load`,
+  - `llvm.load volatile` from a tracked proc-assert alias remained in the
+    post-opt MLIR,
+  - fake `circt-lec` guard failed with
+    `unexpected remaining proc-assert volatile alias load`.
+
+### Implementation
+- `utils/run_opentitan_circt_lec.py`
+  - widened `load_re` in `strip_proc_assertions_global_for_lec` to accept:
+    - optional `volatile` on `llvm.load`,
+    - optional load attribute dictionaries,
+    - while still requiring `-> i1` and tracked alias pointer source.
+
+### Tests (TDD)
+- New regression:
+  - `run-opentitan-lec-strip-proc-assertions-volatile-load.test`
+- Non-regression:
+  - `run-opentitan-lec-strip-proc-assertions-(global|alias-load|addrspacecast|gep|volatile-load).test`
+- Result: all passed.
+
+### Realization
+- Sanitizers that rely on exact textual op spellings are brittle. For
+  commercial-parity robustness, alias cleanup should tolerate equivalent LLVM
+  load variants (`volatile`, attrs) instead of assuming one canonical form.
+
+## 2026-02-26 pairwise BMC parity: multi-clock auto-retry in granular lanes
+
+### Goal
+- Apply `BMC_AUTO_ALLOW_MULTI_CLOCK` consistently to per-objective granular
+  execution (`--assertion-granular`, `--cover-granular`), not only the
+  case-level BMC run.
+
+### Gap identified (red-first)
+- Added regressions:
+  - `test/Tools/run-pairwise-circt-bmc-assertion-granular-auto-allow-multi-clock.test`
+  - `test/Tools/run-pairwise-circt-bmc-cover-granular-auto-allow-multi-clock.test`
+- Pre-fix behavior:
+  - case-level `bmc` stage retried multi-clock failures with
+    `--allow-multi-clock`,
+  - per-assertion and per-cover runs did not retry,
+  - granular artifacts could report `CIRCT_BMC_ERROR` on the same
+    retryable multi-clock diagnostics that case-level execution auto-recovered.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - added local helper `run_bmc_with_optional_multi_clock_retry(...)` for a
+    single BMC invocation + optional one-shot multi-clock retry,
+  - switched three call sites to helper:
+    - cover-granular runs,
+    - assertion-granular runs,
+    - main case-level run (logic-preserving dedup).
+
+### Tests (TDD)
+- New regressions:
+  - `run-pairwise-circt-bmc-assertion-granular-auto-allow-multi-clock.test`
+  - `run-pairwise-circt-bmc-cover-granular-auto-allow-multi-clock.test`
+- Non-regression:
+  - `run-pairwise-circt-bmc-*.test` (41 tests)
+  - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+- Result: all passed.
+
+### Realization
+- Commercial-parity runner policy must be objective-lane invariant. If recovery
+  is enabled for case-level BMC, it must also apply to assertion/cover shards
+  to avoid false granular drift and misleading debug artifacts.
+
+## 2026-02-26 interpreted AVIP liveness: orphan Ready processes
+
+### Goal
+- Stabilize interpreted-mode AVIP runs where simulation exits with
+  `advanceTime() returned false` while process snapshots still include
+  `state=Ready`.
+
+### Gap identified (red-first)
+- Observed in failing interpreted AVIPs (`ahb`, `axi4`, `i3c`, `i2s`, `jtag`)
+  that process snapshots contain `state=Ready` entries at termination, but the
+  scheduler has no queued work and returns no-progress.
+- Added regression:
+  - `unittests/Dialect/Sim/ProcessSchedulerTest.cpp`:
+    `ProcessScheduler.RepairOrphanReadyProcessFromStaleQueueFlag`
+- Pre-fix behavior in test:
+  - a stale `inReadyQueue` flag can block `scheduleProcess`,
+  - process becomes `Ready` but is not physically present in any ready queue,
+  - `advanceTime()` reports no work.
+
+### Implementation
+- `lib/Dialect/Sim/ProcessScheduler.cpp`
+  - added queue-membership verifier `isProcessQueued(...)`,
+  - added orphan repair pass `repairOrphanReadyProcesses()`,
+  - hardened `scheduleProcess(...)`:
+    - if `inReadyQueue` is set but process is not in any queue, clear stale
+      flag and enqueue,
+  - in `advanceTime()`, before declaring no work, run orphan repair and
+    continue if any process was re-enqueued.
+- `include/circt/Dialect/Sim/ProcessScheduler.h`
+  - declared helper methods.
+
+### Realization
+- A process `state` and queue membership are independent pieces of scheduler
+  metadata. If they drift out of sync, liveness can fail silently even with
+  runnable work. A lightweight consistency repair at no-work boundaries is a
+  pragmatic safety net.
+
+## 2026-02-26 BMC parity: preserve unresolved expr-clock checks through LTL lowering
+
+### Goal
+- Remove a multi-clock BMC conversion failure where checks with
+  `bmc.clock_key = "expr:*"` are rejected as unmapped clock inputs.
+
+### Gap identified (red-first)
+- Reproducer (now regression): a check clocked on an unresolved expression in a
+  multi-clock design failed during `convert-verif-to-smt` with:
+  - `clocked property uses a clock that is not a BMC clock input`
+- Pass trace showed the key transition point:
+  - after `LowerLTLToCore`, one `verif.assert` retained only
+    `bmc.clock_key = "expr:*"` (no `bmc.clock`),
+  - `LowerToBMC` then had no surviving explicit clock SSA to materialize a
+    derived BMC clock for that check.
+
+### Implementation
+- `lib/Conversion/LTLToCore/LTLToCore.cpp`
+  - centralized block-arg naming + clock-key helper lambdas,
+  - for `verif.assert` / `verif.assume` / `verif.cover` lowering with top-level
+    `ltl.clock`:
+    - if the top clock resolves to an unresolved expression key (`expr:*`) and
+      has no resolvable input clock name, skip the eager property lowering so
+      the explicit clocked LTL form survives to `LowerToBMC`.
+- `lib/Conversion/LTLToCore/CMakeLists.txt`
+  - added `CIRCTLLHD` link dependency for `CIRCTLTLToCore`.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/circt-bmc/circt-bmc-multiclock-unresolved-expr-check-clock.mlir`
+- Targeted validations:
+  - new test run via `circt-bmc --emit-mlir` exits clean and emits `smt.solver`,
+  - existing multiclock clock-alias/struct-clock tool tests still run clean,
+  - existing VerifToSMT unresolved-key fallback conversion tests continue to pass.
+
+### Realization
+- Eagerly lowering away `ltl.clock` is only safe when clock metadata can be
+  resolved to stable BMC mapping anchors. For unresolved expression clocks,
+  preserving explicit clock SSA longer is necessary so downstream passes can
+  synthesize derived BMC clocks instead of failing on opaque `expr:*` keys.
+
+### OpenTitan spot-check
+- Re-ran `rstmgr_sec_cm::rstmgr` FPV-BMC lane with patched `circt-bmc`.
+- Prior hard failure signature (`clocked property uses a clock that is not a BMC
+  clock input`) did not reappear.
+- Current blocker moved to resource limits on this host:
+  - `resource guard triggered: RSS ... exceeded limit ...`.
+
+## 2026-02-26 BMC runner parity: resource-guard RSS auto-relax retry
+
+### Goal
+- Avoid immediate hard failure when BMC trips the default RSS resource-guard cap.
+
+### Gap identified (red-first)
+- Pairwise/OpenTitan BMC runs that hit:
+  - `error: resource guard triggered: RSS ... exceeded limit ...`
+  were classified as `CIRCT_BMC_ERROR` with no recovery attempt.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - added automatic retry policy for BMC-stage RSS guard failures:
+    - `BMC_AUTO_RELAX_RESOURCE_GUARD` (default `1`)
+    - `BMC_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB` (default `24576`)
+  - retry appends `--max-rss-mb=<limit>` once, unless explicit resource-guard
+    policy is already present via CLI/env.
+  - emits launch-event reason `auto_relax_resource_guard_rss`.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-resource-guard-rss-auto-relax.test`
+- Verified nearby retry tests remain green.
+
+### Realization
+- Default guard caps are a sane safety default, but parity requires controlled
+  recovery paths for large industrial proofs.
+
+## 2026-02-26 LowerToBMC stability: fix dangling clock-name refs in multi-clock naming
+
+### Gap identified
+- OpenTitan `rstmgr_sec_cm::rstmgr` BMC run hit an LLVM assertion in
+  `DenseMap<StringRef,...>::moveFrom` during pass pipeline execution.
+
+### Root cause
+- `lib/Tools/circt-bmc/LowerToBMC.cpp` used `DenseSet<StringRef>` for
+  `usedClockNames` while inserting temporary `std::string` values in
+  `chooseClockName(...)`.
+- This creates dangling `StringRef` keys and can corrupt set invariants.
+
+### Implementation
+- Switched `usedClockNames` to owning storage:
+  - `llvm::StringSet<> usedClockNames`
+- Added `#include "llvm/ADT/StringSet.h"`.
+
+### Validation
+- Rebuilt `circt-bmc`/`circt-opt` successfully.
+- Multiclock `circt-bmc`/`lower-to-bmc` targeted tests still pass.
+
+### Realization
+- In pass code, `StringRef` keys are only safe when backing storage lifetime is
+  explicitly stable. Generated temporary names must use owning containers.
+
+## 2026-02-26 Runner robustness: timeout path must decode bytes safely
+
+### Gap identified (red-first)
+- On BMC timeout, runner could crash with:
+  - `TypeError: can only concatenate str (not "bytes") to str`
+- Cause: `subprocess.TimeoutExpired.stdout/stderr` may be bytes, even though
+  normal completed-process output is text.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - added `normalize_subprocess_text(...)` for `str|bytes|None`.
+  - hardened `write_log(...)` and timeout handling to decode bytes with
+    UTF-8 replacement.
+  - normalized `out_path` writes on timeout and normal completion.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-timeout-bytes-handling.test`
+- Verified existing pairwise timeout/retry tests remain green.
+
+### OpenTitan spot-check
+- Re-ran `rstmgr_sec_cm::rstmgr` with `CIRCT_TIMEOUT_SECS=90`.
+- No Python runner exception; outcome is now correctly:
+  - `TIMEOUT ... BMC_TIMEOUT solver_command_timeout`.
+
+### Realization
+- Production runners need defensive decoding on timeout paths; otherwise the
+  error-reporting path can fail harder than the underlying tool.
+
+## 2026-02-26 OpenTitan FPV reporting parity: classify UNKNOWN/TIMEOUT explicitly
+
+### Gap identified (red-first)
+- `run_opentitan_fpv_circt_bmc.py` top-level summary folded case statuses
+  `UNKNOWN` and `TIMEOUT` into `error`.
+- Real OpenTitan spot-checks showed timeout-heavy runs reported as generic
+  errors, obscuring solver behavior and making parity triage harder.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - extended `summarize(...)` to count `unknown` and `timeout` separately.
+  - updated zero-case and normal summary log lines to print:
+    - `unknown=<n> timeout=<n>`
+  - updated final failing-status gate to treat unknown/timeout explicitly:
+    - `if failed or errored or xpassed or unknown or timeout`.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-summary-classification.test`
+- Ran all `run-opentitan-fpv-circt-bmc-*.test` tool tests after patch.
+
+### OpenTitan spot-check
+- Re-ran `rstmgr_sec_cm::rstmgr` shard (`CIRCT_TIMEOUT_SECS=60`):
+  - row status: `TIMEOUT ... BMC_TIMEOUT solver_command_timeout`
+  - summary now reports:
+    - `error=0 ... unknown=0 timeout=1`
+
+### Realization
+- For large industrial FPV suites, timeout/unknown are first-class outcomes,
+  not generic errors; reporting them directly is required for actionable parity
+  dashboards and policy decisions.
+
+## 2026-02-26 OpenTitan FPV timeout recovery: auto assertion-granular fallback
+
+### Gap identified (red-first)
+- Monolithic OpenTitan FPV BMC case timeouts were terminal for that case even
+  when assertion-granular mode could recover useful progress/status.
+- Wrapper had no automatic second-stage strategy; users had to rerun manually
+  with `--assertion-granular`.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - added env-driven timeout fallback policy:
+    - `BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR=0|1` (default `0`)
+    - `BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_MAX_CASES` (default `0`, unlimited)
+  - per target-group:
+    1. run normal pairwise BMC,
+    2. detect `TIMEOUT` case IDs from group results,
+    3. optionally rerun timed-out cases with `--assertion-granular`
+       (and existing `--assertion-granular-max` policy),
+    4. replace original timed-out rows when fallback returns non-timeout status.
+  - added robust command/path row read-write helpers and infra-failure handling
+    when result artifacts are missing.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular.test`
+- Ran all `run-opentitan-fpv-circt-bmc-*.test` cases after patch.
+
+### OpenTitan spot-check
+- `rstmgr_sec_cm::rstmgr` run now shows second-stage fallback trigger in logs:
+  - `timeout fallback via --assertion-granular cases=1`
+- On this host/config, fallback did not complete to recovery before resource/time
+  limits (result remained timeout), but orchestration path is now wired and
+  test-covered.
+
+### Realization
+- Commercial parity requires adaptive orchestration, not just solver correctness.
+  Automatic objective fallback is a necessary control-plane feature for large,
+  timeout-prone FPV targets.
+
+## 2026-02-26 Timeout fallback artifact integrity: avoid primary-file overwrite
+
+### Gap identified (red-first)
+- In timeout->assertion-granular fallback, fallback runs reused primary per-group
+  artifact paths (`--launch-events-file`, timeout reasons, drop reasons, etc.).
+- This could overwrite primary-run artifacts, losing evidence from the first
+  stage. Red test showed launch file retaining only fallback events.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - for fallback invocations, route optional per-group artifact outputs to
+    dedicated `pairwise-timeout-*` files.
+  - add explicit append/merge helpers:
+    - `append_plain_file(...)`
+    - `append_resolved_contract_file(...)`
+  - merge fallback artifacts back into primary group artifacts after fallback.
+  - added `get_cmd_path_arg(...)` helper for safe command-path extraction.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-launch-events.test`
+- Red->green result confirms both primary and fallback launch events are
+  preserved in final merged output.
+- Re-ran all `run-opentitan-fpv-circt-bmc-*.test` tests.
+
+### Realization
+- Multi-stage orchestration must preserve provenance across stages. Recovery is
+  only trustworthy if first-stage and fallback-stage diagnostics coexist.
+
+## 2026-02-26 Timeout fallback sharding: inherited shard-arg bug and fix
+
+### Gap identified (red-first)
+- Added new regression for timeout fallback sharding and found a control-plane
+  bug in `run_opentitan_fpv_circt_bmc.py`:
+  - the first-stage timeout fallback command inherited
+    `--assertion-shard-count/--assertion-shard-index` from the primary command
+    (default `1/0`), so the supposed "unsharded" fallback could run only shard 0.
+- This can produce false recovery and incomplete assertion coverage.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - added `remove_cmd_path_arg(...)` helper.
+  - in timeout fallback setup, explicitly remove inherited
+    `--assertion-shard-count` and `--assertion-shard-index` before running the
+    initial assertion-granular fallback pass.
+  - keep second-stage shard retries (`BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_SHARD_COUNT`)
+    for unresolved timeout cases only.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-shards.test`
+- Scenario:
+  - primary run -> `TIMEOUT`
+  - unsharded fallback -> `TIMEOUT`
+  - shard retries -> mixed `PASS` + `FAIL`
+  - aggregate status chooses conservative non-timeout replacement (`FAIL`).
+- Validation commands:
+  - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-shards\.test'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-timeout-.*\.test'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-fpv-circt-bmc-.*\.test'`
+
+### Realization
+- Fallback orchestration needs explicit argument hygiene between stages.
+  Reusing a command vector without stripping stage-specific flags can silently
+  under-verify large designs.
+
+## 2026-02-26 Multi-clock auto-retry diagnostic coverage: clock-input error class
+
+### Gap identified (red-first)
+- `run_pairwise_circt_bmc.py` auto multi-clock retry was keyed to a narrow set of
+  diagnostics and did not include:
+  - `clocked property uses a clock that is not a BMC clock input`
+- This message appears on OpenTitan-style multiclock/property-clock mismatches,
+  so auto-retry could fail to trigger even when `--allow-multi-clock` is the
+  right recovery action.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - extended `is_multiclock_retryable_bmc_failure(...)` to classify the
+    clock-input diagnostic as retryable for automatic `--allow-multi-clock`.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-auto-allow-multi-clock-clock-input-diagnostic.test`
+- Red->green flow:
+  - before fix: default auto mode stayed `ERROR`
+  - after fix: auto mode retries and reaches `PASS`
+  - explicit `BMC_AUTO_ALLOW_MULTI_CLOCK=0` remains `ERROR` (policy respected)
+- Validation commands:
+  - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-pairwise-circt-bmc-auto-allow-multi-clock-clock-input-diagnostic\.test'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-pairwise-circt-bmc-.*auto-allow-multi-clock.*\.test'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-pairwise-circt-bmc-.*\.test'`
+
+### Realization
+- For commercial-parity wrappers, recovery classifiers need to track evolving
+  core-tool diagnostics, not just historical strings, or retries silently stop
+  firing on real designs.
+
+## 2026-02-26 OpenTitan LEC result-contract hardening: fail closed on missing result
+
+### Gap identified (red-first)
+- `run_opentitan_circt_lec.py` could report `PASS` in non-smoke mode when
+  `circt-lec` exited 0 but emitted no parseable equivalence result marker.
+- This is a fail-open control-plane bug: missing `EQ/NEQ/UNKNOWN` evidence can
+  silently count as success.
+
+### Implementation
+- `utils/run_opentitan_circt_lec.py`
+  - in non-smoke runs, require explicit parsed result (`EQ|NEQ|UNKNOWN`).
+  - if missing, mark diagnostic `LEC_RESULT_MISSING` and fail the case.
+- This preserves deterministic contracts for dashboards/policies and prevents
+  false positive parity signals.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-lec-missing-result-fails.test`
+- Updated behavior-only test fixture:
+  - `test/Tools/run-opentitan-lec-dump-unknown-sources.test`
+  - fixture now emits `c1 == c2` so the test still validates
+    `--dump-unknown-sources` forwarding under strict result contracts.
+- Validation commands:
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-lec-missing-result-fails\.test'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-lec-.*\.test'`
+
+### Realization
+- Commercial-parity orchestration must fail closed on missing proof outcomes.
+  Exit status alone is insufficient for formal signoff quality.
+
+## 2026-02-26 OpenTitan LEC launch-retry contract coverage
+
+### Gap identified
+- OpenTitan LEC launch retry (`FORMAL_LAUNCH_RETRY_*`) was implemented via
+  shared `runner_common` helpers but not covered by OpenTitan LEC tool tests.
+- This left transient-launch reliability unproven at the wrapper level.
+
+### Implementation
+- Added regression:
+  - `test/Tools/run-opentitan-lec-launch-retry-transient.test`
+- Test models a transient `circt-lec` launch failure (`exit 126` with retryable
+  diagnostic), then success on retry, and asserts:
+  - overall LEC pass result
+  - exactly two `circt-lec` invocations for the case.
+
+### Validation
+- `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-lec-launch-retry-transient\.test'`
+- `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-lec-.*\.test'`
+
+### Realization
+- Commercial parity requires explicit reliability contracts in orchestrators,
+  not only semantic-equivalence checks.
+
+## 2026-02-26 OpenTitan LEC timeout contract: deterministic TIMEOUT rows
+
+### Gap identified (red-first)
+- OpenTitan LEC wrapper lacked an explicit timeout policy/contract.
+- Long or hung stage execution could either run unbounded or raise exceptions
+  without deterministic per-implementation result rows.
+
+### Implementation
+- `utils/run_opentitan_circt_lec.py`
+  - added `LEC_TIMEOUT_SECS` env (default `0`, disabled).
+  - threaded timeout through both local and shared `run_and_log(...)` paths.
+  - added per-implementation timeout handling in main loop with explicit stage
+    diagnostics:
+    - `CIRCT_VERILOG_TIMEOUT`
+    - `CIRCT_OPT_TIMEOUT`
+    - `CIRCT_LEC_TIMEOUT`
+  - timeout cases now emit `TIMEOUT` result rows instead of crashing.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-lec-timeout-classification.test`
+- Validation commands:
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-lec-timeout-classification\.test'`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/test/Tools --filter 'run-opentitan-lec-.*\.test'`
+
+### Realization
+- Commercial-parity formal runners need bounded-execution contracts and
+  structured timeout outcomes for scheduling, dashboards, and triage.
+
+## 2026-02-26 OpenTitan timeout-fallback merge policy: preserve TIMEOUT on granular-limit errors
+
+### Gap identified (red-first)
+- In `run_opentitan_fpv_circt_bmc.py`, timeout fallback treated any non-`TIMEOUT`
+  fallback row as recovered, including:
+  - `ERROR ... assertion_granular_limit_exceeded`
+- This can incorrectly replace a primary `TIMEOUT` with `ERROR` when
+  `BMC_ASSERTION_GRANULAR_MAX` caps fallback work.
+- Real replay signal: `rstmgr_sec_cm::rstmgr` primary run timed out; fallback
+  launched and returned a granular-limit error.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - added `fallback_row_resolves_timeout(row)` helper.
+  - fallback replacement now rejects:
+    - `TIMEOUT` rows
+    - `ERROR` rows with `assertion_granular_limit_exceeded` in diag/reason.
+  - shard aggregation now filters to only timeout-resolving candidate rows
+    before picking a best replacement.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-limit-preserves-timeout.test`
+- Red->green:
+  - before fix: summary `error=1 timeout=0`, and fallback marked recovered.
+  - after fix: summary `error=0 timeout=1`, timeout row preserved.
+- Revalidated existing fallback behavior:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular.test`
+
+### Validation
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+- Direct FileCheck replay of new limit-preservation test fixture.
+- Direct FileCheck replay of existing timeout auto-assertion-granular fixture.
+
+### Realization
+- Auto-recovery control planes need a strict definition of what constitutes
+  recovery; otherwise fallback infrastructure can regress classification
+  fidelity even when core solving behavior is unchanged.
+
+## 2026-02-26 Pairwise BMC RSS guard auto-relax ladder
+
+### Gap identified
+- Single-step `BMC_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB` retry was too rigid for
+  large designs that need multiple RSS budget escalations.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - added `BMC_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB` (comma-separated MB list).
+  - canonicalizes ladder (positive values, stable order, de-dup).
+  - keeps legacy single-step env as fallback when ladder is unset.
+  - on RSS guard failures, iterates to the next larger ladder budget and logs
+    retry attempts as `auto_relax_resource_guard_rss` (`attempt=1,2,...`).
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-resource-guard-rss-auto-relax-ladder.test`
+- Revalidated existing single-step behavior:
+  - `test/Tools/run-pairwise-circt-bmc-resource-guard-rss-auto-relax.test`
+
+### Validation
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+- Direct FileCheck replay of ladder test fixture.
+- Direct FileCheck replay of existing single-step RSS auto-relax fixture.
+
+### Realization
+- Resource-guard retry policy needs to be modeled as a progression, not a
+  single jump, to keep recovery deterministic across very different design
+  scales.
+
+## 2026-02-26 OpenTitan timeout fallback: skip futile shard retries on granular-limit errors
+
+### Gap identified (red-first)
+- Even after preserving TIMEOUT rows, timeout fallback still launched second-stage
+  assertion-shard retries when first fallback failed with
+  `assertion_granular_limit_exceeded`.
+- Those retries are non-productive and add latency/noise.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - added `is_assertion_granular_limit_exceeded_row(...)` helper.
+  - tracks non-shardable unresolved timeout cases from first fallback.
+  - only runs shard fallback for unresolved cases that are still potentially
+    recoverable; skips shard retries for granular-limit failures.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-limit-no-shard-retry.test`
+- Red->green:
+  - before fix: emitted shard fallback log and invoked pairwise 4 times.
+  - after fix: no shard fallback log; invocation count remains 2.
+
+### Validation
+- Direct FileCheck replay of the new no-shard-retry fixture.
+- Direct FileCheck replay of existing fallback fixtures:
+  - `run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-limit-preserves-timeout.test`
+  - `run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular.test`
+- Real OpenTitan replay (`rstmgr_sec_cm`, `CIRCT_TIMEOUT_SECS=60`,
+  `BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_SHARD_COUNT=2`) confirms:
+  - primary timeout,
+  - single fallback attempt,
+  - no shard-fallback phase,
+  - final target classification remains `TIMEOUT`.
+
+## 2026-02-26 Pairwise BMC cover-granular no-property classification
+
+### Gap identified (red-first)
+- In cover-granular mode, `circt-bmc` warning
+  `no property provided to check in module` was classified as:
+  - `UNREACHABLE ... UNSAT`
+- This is a classification mismatch; no-property means the objective was dropped
+  and should be treated as not-run/skip, not a proven unreachable cover.
+
+### Implementation
+- `utils/run_pairwise_circt_bmc.py`
+  - in cover-granular result mapping, `bmc_tag == UNSAT` now checks
+    `has_no_property_warning(...)`.
+  - when present, emits:
+    - status `SKIP`
+    - solver_result `BMC_NOT_RUN`
+    - reason `cover_no_property_after_lowering`
+  - otherwise retains existing `UNREACHABLE/UNSAT` behavior.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-pairwise-circt-bmc-cover-granular-no-property-skip.test`
+- Red->green:
+  - before fix: produced `UNREACHABLE` cover row.
+  - after fix: produces `SKIP ... cover_no_property_after_lowering`.
+- Revalidated existing cover-granular behavior with targeted fixture replays:
+  - `run-pairwise-circt-bmc-cover-granular.test`
+  - `run-pairwise-circt-bmc-cover-shard-selection.test`
+
+### Validation
+- `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+- Direct FileCheck fixture replays for new and existing cover-granular tests.
+
+### Realization
+- Control-plane parity needs to distinguish semantic UNSAT from objective-elided
+  UNSAT to keep coverage metrics/signoff reports trustworthy.
+
+## 2026-02-26 OpenTitan timeout-reasons filtering after fallback recovery
+
+### Gap identified (red-first)
+- OpenTitan FPV timeout fallback could recover a case from `TIMEOUT` to
+  `PASS/FAIL/UNKNOWN`, while `--timeout-reasons-file` still retained primary
+  timeout rows.
+- This produced stale timeout diagnostics inconsistent with final case status.
+
+### Implementation
+- `utils/run_opentitan_fpv_circt_bmc.py`
+  - after merged final rows are computed, derives final timeout case IDs.
+  - filters `--timeout-reasons-file` to include only rows whose `case_id`
+    remains `TIMEOUT` in final merged results.
+  - de-duplicates kept timeout rows by `(case_id, case_path, reason)`.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular-timeout-reasons-filter.test`
+- Red->green:
+  - before fix: recovered PASS still left non-empty timeout-reasons file.
+  - after fix: timeout-reasons file is empty after recovery.
+- Revalidated existing timeout fallback behavior:
+  - `run-opentitan-fpv-circt-bmc-timeout-auto-assertion-granular.test`
+
+### Validation
+- `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py utils/run_pairwise_circt_bmc.py`
+- Direct FileCheck fixture replay for the new timeout-reasons filter test.
+- Direct FileCheck fixture replay for existing timeout fallback test.
+
+### Realization
+- Recovery pipelines must reconcile auxiliary diagnostics with final status,
+  otherwise dashboards can drift from the actual adjudicated result.
+
+## 2026-02-26 BMC externalize-registers: support immutable init via instance passthrough
+
+### Gap identified (red-first)
+- `--externalize-registers` rejected `seq.compreg` initial values unless the
+  immutable operand was defined directly by a local `seq.initial` op.
+- This blocked a common wrapper pattern where initial values come from a helper
+  module output (still ultimately from `seq.initial` and constant-foldable).
+- Red repro:
+  - `test/Tools/circt-bmc/externalize-registers-instance-initial.mlir`
+  - pre-fix diagnostic:
+    - `registers with initial values not directly defined by a seq.initial op not yet supported`
+
+### Implementation
+- `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
+  - added `resolveCompRegInitialValue(...)` to resolve immutable init operands
+    through:
+    - direct `seq.initial` results,
+    - `builtin.unrealized_conversion_cast` passthrough,
+    - `hw.instance` result passthrough to callee `hw.output` (including
+      callee block-arg passthrough back to instance inputs).
+  - kept strict fallback behavior for unresolved/non-localizable immutable
+    sources (existing diagnostic unchanged).
+  - constant folding remains required; unresolved dynamic/non-constant initial
+    values still fail.
+
+### Tests (TDD)
+- Added regression:
+  - `test/Tools/circt-bmc/externalize-registers-instance-initial.mlir`
+- Updated diagnostics regression expectations:
+  - `test/Tools/circt-bmc/externalize-registers-errors.mlir`
+    - removed stale expected-error for instance-passthrough init case.
+- Red->green:
+  - before fix: new regression failed with unsupported direct-seq.initial
+    diagnostic.
+  - after fix: new regression passes with `initial_values = [7 : i32]`.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-opt`
+- Targeted tests:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/externalize-registers-instance-initial.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/externalize-registers.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/externalize-registers-errors.mlir`
+
+### Realization
+- For parity, immutable initial values should be judged by resolvability and
+  foldability, not by strict syntactic adjacency to a local `seq.initial` op.
+
+### Addendum (same slice)
+- Added companion regression for immutable cast passthrough:
+  - `test/Tools/circt-bmc/externalize-registers-initial-cast.mlir`
+- Validation:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/externalize-registers-initial-cast.mlir`
+
+## 2026-02-26 VerifToSMT clock-key aliasing: avoid double-counted invert from reg-clock metadata
+
+### Gap identified (red-first)
+- `circt-bmc-equivalent-derived-clock-property.mlir` failed during
+  `convert-verif-to-smt` with:
+  - `bmc_reg_clock_sources key maps to multiple BMC clock inputs`
+- Root cause: `bmc_reg_clock_sources.invert` was being folded into
+  `clockKeyToPos` aliases for `clock_key`, while `clockKeyToPos` already
+  encoded key-orientation from `bmc_clock_sources`. This caused conflicting
+  aliases and effectively double-counted inversion.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - in `bmc_reg_clock_sources` alias import path:
+    - preserve existing key-orientation in `clockKeyToPos` when present,
+    - only validate/merge `pos` consistency,
+    - stop using per-register `dict.invert` to define key alias orientation,
+    - derive inverse-key alias from the key alias orientation itself.
+- Inversion for register clocks remains applied later via the existing
+  `dictInvert ^ keyInfo.invert` resolution path.
+
+### Tests (TDD)
+- Red repro:
+  - `test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-property.mlir`
+- Revalidated related multiclock fallback tests:
+  - `test/Conversion/VerifToSMT/bmc-multiclock-check-key-reg-clock-name-fallback.mlir`
+  - `test/Conversion/VerifToSMT/bmc-multiclock-delay-buffer-check-key-fallback.mlir`
+  - `test/Conversion/VerifToSMT/bmc-multiclock-reg-clock-neighbor-fallback.mlir`
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-bmc circt-opt`
+- Targeted lit:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/circt-bmc-equivalent-derived-clock-property.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-check-key-reg-clock-name-fallback.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-delay-buffer-check-key-fallback.mlir`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/VerifToSMT/bmc-multiclock-reg-clock-neighbor-fallback.mlir`
+
+## 2026-02-26 VerifToSMT constant clock-key handling: treat const clocks as unsampled
+
+### Gap identified (red-first)
+- `clocked-assert-constant-false-clock-unsat.mlir` failed with:
+  - `clocked property uses a clock that is not a BMC clock input`
+  - `(bmc.clock_key=const0)`
+- Constant clock keys (`const0`/`const1`) do not correspond to BMC clock
+  inputs and should be treated as unsampled clocks, not hard errors.
+
+### Implementation
+- `lib/Conversion/VerifToSMT/VerifToSMT.cpp`
+  - in `resolveCheckClockPos`, when no clock position is found:
+    - detect explicit constant clock keys (`const0` / `const1`),
+    - suppress unmapped-clock error and keep `pos` unresolved.
+- Downstream gate logic already treats unresolved explicit clocked checks with
+  no BMC clocks as unsampled (`constFalse` gate), yielding vacuous-safe assert
+  behavior.
+
+### Tests (TDD)
+- Red repro fixed:
+  - `test/Tools/circt-bmc/clocked-assert-constant-false-clock-unsat.mlir`
+- Revalidated together with multiclock key regressions above.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-bmc`
+- Targeted lit:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Tools/circt-bmc/clocked-assert-constant-false-clock-unsat.mlir`
+  - plus the 3 multiclock `VerifToSMT` regressions and
+    `circt-bmc-equivalent-derived-clock-property.mlir` in one run.
+
+### Realization
+- Clock-key metadata must separate two concerns:
+  - key orientation vs BMC clock input (`clockKeyToPos`), and
+  - per-register/per-check inversion relative to that key.
+  Mixing them causes non-deterministic alias conflicts.
+
+## 2026-02-26 LLHD process parity: preserve event-only immediate assertions
+
+### Gap identified (red-first)
+- `llhd-extnets.mlir` and `sva-yosys-extnets-parity.sv` regressed to
+  no-property behavior after `--strip-llhd-processes` dropped immediate
+  assert-like ops from wait-containing LLHD processes.
+- Added red regression first:
+  - `test/Tools/circt-bmc/strip-llhd-processes-event-immediate-assert.mlir`
+  - pre-fix result: `verif.assert` missing after strip.
+
+### Implementation
+- `lib/Tools/circt-bmc/StripLLHDProcesses.cpp`
+  - Added per-process classification:
+    - `processAllowsEventOnlyImmediateAssertLike`
+  - Preserve immediate `verif.assert/assume/cover` in wait-containing process
+    only when all of these hold:
+    - waits are event-only (`observed` non-empty),
+    - no wait `delay`,
+    - no wait `yield` operands,
+    - process has no `llhd.drv`.
+  - Keep previous drop behavior for all other wait-containing processes.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-opt circt-bmc`
+- Targeted lit:
+  - `strip-llhd-processes-event-immediate-assert.mlir` (red->green)
+  - `llhd-extnets.mlir` (green)
+  - `sva-yosys-extnets-parity.sv` (green)
+
+### Realization
+- Blanket-dropping immediate assert-like ops in wait processes over-prunes
+  event-driven combinational checks and creates false no-property UNSAT.
+  A constrained preservation rule recovers useful checks without re-enabling
+  delay/yield scheduling-unsound cases.
+
+## 2026-02-26 Follow-up deterministic parity cleanups
+
+### lower-to-bmc metadata expectation drift
+- Updated checks to match current multiclock metadata shape:
+  - `test/Tools/circt-bmc/lower-to-bmc-llhd-clock-alias.mlir`
+    - expected `bmc_input_names` now starts with `"clk_0", "clk"`.
+  - `test/Tools/circt-bmc/lower-to-bmc-reg-clock-sources-shift.mlir`
+    - expected `bmc_reg_clock_sources` now includes `clock_key` fields.
+
+### Invalid SV testcase fix
+- `test/Tools/circt-bmc/sva-xprop-array-inject-sat-e2e.sv`
+  - removed illegal mixed continuous/procedural drive to `arr[0]`.
+  - kept SAT intent by using a legal `always_comb` default + overwrite.
+
+### Validation
+- `llvm/build/bin/llvm-lit -sv` on:
+  - `lower-to-bmc-llhd-clock-alias.mlir`
+  - `lower-to-bmc-reg-clock-sources-shift.mlir`
+  - `sva-xprop-array-inject-sat-e2e.sv`
+  - plus extnets regressions above.
+
+## 2026-02-26 LEC robustness: avoid InstanceGraph assert on empty/invalid frontend output
+
+### Gap identified (red-first)
+- `circt-lec` asserted in `InstanceGraph::getInferredTopLevelNodes` when the
+  upstream frontend emitted no `hw.module` symbols (e.g. parse errors in
+  `expect property` tests).
+- Added red regression first:
+  - `test/Tools/circt-lec/lec-missing-circuit-modules.mlir`
+  - pre-fix result: process abort with stack trace instead of diagnostic.
+
+### Implementation
+- `tools/circt-lec/circt-lec.cpp`
+  - Added early validation `verifySelectedCircuitsExist` after parse/merge and
+    before pass pipeline construction.
+  - Validates `-c1` and `-c2` resolve to `hw.module` symbols.
+  - Emits actionable diagnostics:
+    - missing requested circuit by option name,
+    - no `hw.module` symbols present (likely frontend parse/import failure),
+    - selected symbol exists but is not an `hw.module`.
+  - Returns `failure()` early to avoid pass pipeline entering InstanceGraph on
+    invalid module sets.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-lec`
+- Targeted lit:
+  - `llvm/build/bin/llvm-lit -sv -j1 build_test/test/Tools/circt-lec/lec-missing-circuit-modules.mlir`
+- Manual repro path (`lec-expect.sv` pipeline) now reports parser diagnostics
+  + clean missing-circuit error, with no abort.
+
+### Realization
+- Frontend parse/import failures can still yield a syntactically valid MLIR
+  container with zero usable circuit symbols; tool-level guardrails must check
+  semantic preconditions before graph/pipeline construction.
+
+## 2026-02-26 LEC parity follow-up: strict LLHD enables, UVM pathing, multiclock
+
+### Gap identified
+- After the crash fix, `Tools/circt-lec` failures clustered around:
+  - strict LLHD signal multi-drive enable tests unexpectedly aborting with
+    `LLHD signal requires abstraction`;
+  - stale non-strict CF expectation (`lec-strip-llhd-signal-cf.mlir`);
+  - UVM LEC tests pointing to removed runtime path (`lib/Runtime/uvm`);
+  - multiclock UVM LEC failing in `ExternalizeRegisters` (`modules with
+    multiple clocks not yet supported`);
+  - `expect property` tests still failing frontend parse and previously
+    expecting SAT checks.
+
+### Implementation
+- `lib/Tools/circt-lec/StripLLHDInterfaceSignals.cpp`
+  - Removed an over-eager strict-mode early reject that blocked all enabled
+    multi-drive signal handling before resolver logic.
+  - Added ordered-drive preference trigger for complementary/exclusive
+    enable cases in the inlined multi-drive path.
+- `tools/circt-lec/circt-lec.cpp`
+  - Enabled multiclock register externalization in LEC:
+    `externalizeOptions.allowMultiClock = true`.
+- `test/Tools/circt-lec/lec-strip-llhd-signal-cf.mlir`
+  - Updated expectation to current non-strict conservative abstraction
+    behavior (`sig_unknown`, `multi_driver_unknown_resolution`, no LLHD).
+- UVM test path fixes (8 files):
+  - switched `--uvm-path` from `lib/Runtime/uvm` to
+    `lib/Runtime/uvm-core/src`.
+- `expect property` tests converted to negative robustness regressions:
+  - `test/Tools/circt-lec/lec-expect.sv`
+  - `test/Tools/circt-lec/lec-uvm-expect.sv`
+  - now check parse failure + clean missing-circuit diagnostics and ensure no
+    crash backtrace.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-lec`
+- Targeted lit clusters:
+  - strict LLHD enable tests (complementary/conflict/conflict-4state),
+  - `lec-strip-llhd-signal-cf.mlir`,
+  - `lec-missing-circuit-modules.mlir`,
+  - `lec-assert-final.sv`, `lec-interface-property.sv`,
+  - UVM LEC suite subset (8 tests),
+  - `lec-expect.sv` + `lec-uvm-expect.sv`.
+- Consolidated run:
+  - 16-test targeted bundle covering all edited LEC files passed (16/16).
+
+### Realizations
+- LEC multiclock support was already available in shared BMC transforms;
+  parity required wiring that capability through the LEC driver pipeline.
+- UVM failures were largely path drift, not lowering correctness.
+- For unsupported frontend constructs (`expect property`), robust diagnostics
+  are preferable to asserting deep in analysis/pipeline passes.
+
+## 2026-02-26 LEC expect support follow-up: restore positive expect regressions
+
+### Gap identified
+- `lec-expect.sv` and `lec-uvm-expect.sv` had been temporarily converted to
+  negative diagnostics because they used unsupported syntax/context:
+  - `expect property (p);` at module scope.
+- Slang diagnostics confirm this is not a valid concurrent assertion form in
+  this context; supported lowering path is procedural `expect (...)`.
+
+### Implementation
+- Restored both tests to positive equivalence checks by using valid procedural
+  expect statements:
+  - `initial begin expect (p); end`
+- Files:
+  - `test/Tools/circt-lec/lec-expect.sv`
+  - `test/Tools/circt-lec/lec-uvm-expect.sv`
+
+### Validation
+- Focused lit:
+  - `lec-expect.sv`, `lec-uvm-expect.sv`,
+    `lec-missing-circuit-modules.mlir`, `lec-uvm-multiclock.sv`
+- Consolidated 16-test LEC bundle (same regression set used in previous slice)
+  passed `16/16`.
+
+### Realization
+- The missing capability was not `expect` lowering; it was invalid test syntax.
+  Existing frontend+LEC pipeline already handles procedural `expect(...)`
+  correctly and proves equivalence (`unsat`) for matching designs.
+
+## 2026-02-26 Interpreted AXI4 follow-up: duplicate interface propagation edges
+
+### Observation
+- Interpreted AXI4 analysis trace (`CIRCT_SIM_TRACE_ANALYSIS=1`) showed
+  duplicated `interfaceFieldPropagation` children for the same `(src,dst)`
+  signal pair (fanout lists repeated entries like `... -> 172,65,127,172,65,127`).
+- Duplicates originate from static link installation paths that can resolve
+  multiple address pairs to the same signal pair, then append without signal-level
+  dedup.
+
+### Change
+- Added signal-level dedup (`llvm::is_contained`) at two edge-install sites in
+  `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+  - `childModuleCopyPairs` -> `interfaceFieldPropagation`
+  - heuristic auto-link parent->child insertion
+- Scope is interpreter runtime only (`circt-sim` LLHD interpreter path).
+
+### Expected impact
+- Reduce redundant propagation work and repeated wakeups in interpreted AVIP runs.
+- Preserve functional link set while lowering fanout duplication.

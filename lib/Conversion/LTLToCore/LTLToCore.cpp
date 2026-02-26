@@ -21,6 +21,7 @@
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Support/BackedgeBuilder.h"
+#include "circt/Support/I1ValueSimplifier.h"
 #include "circt/Support/LTLSequenceNFA.h"
 #include "circt/Support/Namespace.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -1717,12 +1718,43 @@ void LowerLTLToCorePass::runOnOperation() {
   getOperation().walk([&](verif::AssumeOp op) { assumes.push_back(op); });
   getOperation().walk([&](verif::CoverOp op) { covers.push_back(op); });
 
+  auto inputNames = hwModule.getInputNames();
+  auto getBlockArgName = [&](BlockArgument arg) -> StringRef {
+    if (!arg || arg.getOwner() != hwModule.getBodyBlock())
+      return {};
+    if (arg.getArgNumber() >= inputNames.size())
+      return {};
+    auto nameAttr = dyn_cast_or_null<StringAttr>(inputNames[arg.getArgNumber()]);
+    if (!nameAttr || nameAttr.getValue().empty())
+      return {};
+    return nameAttr.getValue();
+  };
+  auto getClockKey = [&](Value clock) -> std::optional<std::string> {
+    if (!clock)
+      return std::nullopt;
+    return getI1ValueKeyWithBlockArgNames(clock, getBlockArgName);
+  };
+  auto isUnresolvedExprClock = [&](Value clock) {
+    auto clockKey = getClockKey(clock);
+    if (!clockKey)
+      return false;
+    return StringRef(*clockKey).starts_with("expr:");
+  };
+  auto shouldPreserveClockedProperty = [&](ltl::ClockOp clockOp) {
+    if (!clockOp)
+      return false;
+    // Keep unresolved expression clocks in explicit LTL form so LowerToBMC can
+    // still discover/materialize derived BMC clocks from SSA clock operands.
+    if (resolveClockInputName(clockOp.getClock()))
+      return false;
+    return isUnresolvedExprClock(clockOp.getClock());
+  };
+
   auto setDisableIffInputMetadata = [&](Operation *checkOp,
                                         const LTLPropertyLowerer &lowerer) {
     auto indices = lowerer.getDisableIffInputArgIndices(hwModule.getBodyBlock());
     if (indices.empty())
       return;
-    auto inputNames = hwModule.getInputNames();
     SmallVector<Attribute> names;
     names.reserve(indices.size());
     for (unsigned idx : indices) {
@@ -1744,9 +1776,20 @@ void LowerLTLToCorePass::runOnOperation() {
       return;
     if (auto clockName = resolveClockInputName(clockOp.getClock()))
       checkOp->setAttr("bmc.clock", clockName);
+    if (auto clockKey = getClockKey(clockOp.getClock()))
+      checkOp->setAttr("bmc.clock_key",
+                       StringAttr::get(checkOp->getContext(), *clockKey));
     auto edgeAttr =
         ltl::ClockEdgeAttr::get(checkOp->getContext(), clockOp.getEdge());
     checkOp->setAttr("bmc.clock_edge", edgeAttr);
+  };
+
+  auto setClockKeyMetadata = [&](Operation *checkOp, Value clock) {
+    if (!checkOp || !clock)
+      return;
+    if (auto clockKey = getClockKey(clock))
+      checkOp->setAttr("bmc.clock_key",
+                       StringAttr::get(checkOp->getContext(), *clockKey));
   };
 
   auto isUnloweredPropertyResult =
@@ -1762,6 +1805,8 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     auto topClockOp = op.getProperty().getDefiningOp<ltl::ClockOp>();
+    if (shouldPreserveClockedProperty(topClockOp))
+      continue;
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
     lowerer.setSamplingEnable(op.getEnable());
     auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
@@ -1786,6 +1831,8 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     auto topClockOp = op.getProperty().getDefiningOp<ltl::ClockOp>();
+    if (shouldPreserveClockedProperty(topClockOp))
+      continue;
     // skipWarmup=true: Assumes should constrain from cycle 0, not wait for
     // sequence warmup. This matches Yosys behavior with `-early -assume`.
     LTLPropertyLowerer lowerer{builder, op.getLoc(), /*skipWarmup=*/true};
@@ -1812,6 +1859,8 @@ void LowerLTLToCorePass::runOnOperation() {
       continue;
     OpBuilder builder(op);
     auto topClockOp = op.getProperty().getDefiningOp<ltl::ClockOp>();
+    if (shouldPreserveClockedProperty(topClockOp))
+      continue;
     LTLPropertyLowerer lowerer{builder, op.getLoc()};
     lowerer.setSamplingEnable(op.getEnable());
     auto result = lowerer.lowerProperty(op.getProperty(), getDefaultClock(),
@@ -1882,6 +1931,7 @@ void LowerLTLToCorePass::runOnOperation() {
     auto edgeAttr = ltl::ClockEdgeAttr::get(builder.getContext(), ltlEdge);
     if (clockName)
       assertOp->setAttr("bmc.clock", clockName);
+    setClockKeyMetadata(assertOp.getOperation(), op.getClock());
     assertOp->setAttr("bmc.clock_edge", edgeAttr);
     setDisableIffInputMetadata(assertOp.getOperation(), lowerer);
     auto finalAssert = verif::AssertOp::create(
@@ -1889,6 +1939,7 @@ void LowerLTLToCorePass::runOnOperation() {
         StringAttr{});
     if (clockName)
       finalAssert->setAttr("bmc.clock", clockName);
+    setClockKeyMetadata(finalAssert.getOperation(), op.getClock());
     finalAssert->setAttr("bmc.clock_edge", edgeAttr);
     finalAssert->setAttr("bmc.final", builder.getUnitAttr());
     setDisableIffInputMetadata(finalAssert.getOperation(), lowerer);
@@ -1932,6 +1983,7 @@ void LowerLTLToCorePass::runOnOperation() {
     auto edgeAttr = ltl::ClockEdgeAttr::get(builder.getContext(), ltlEdge);
     if (clockName)
       assumeOp->setAttr("bmc.clock", clockName);
+    setClockKeyMetadata(assumeOp.getOperation(), op.getClock());
     assumeOp->setAttr("bmc.clock_edge", edgeAttr);
     setDisableIffInputMetadata(assumeOp.getOperation(), lowerer);
     auto finalAssume = verif::AssumeOp::create(
@@ -1939,6 +1991,7 @@ void LowerLTLToCorePass::runOnOperation() {
         StringAttr{});
     if (clockName)
       finalAssume->setAttr("bmc.clock", clockName);
+    setClockKeyMetadata(finalAssume.getOperation(), op.getClock());
     finalAssume->setAttr("bmc.clock_edge", edgeAttr);
     finalAssume->setAttr("bmc.final", builder.getUnitAttr());
     setDisableIffInputMetadata(finalAssume.getOperation(), lowerer);
@@ -1975,6 +2028,7 @@ void LowerLTLToCorePass::runOnOperation() {
     auto edgeAttr = ltl::ClockEdgeAttr::get(builder.getContext(), ltlEdge);
     if (clockName)
       coverOp->setAttr("bmc.clock", clockName);
+    setClockKeyMetadata(coverOp.getOperation(), op.getClock());
     coverOp->setAttr("bmc.clock_edge", edgeAttr);
     setDisableIffInputMetadata(coverOp.getOperation(), lowerer);
     if (!lowerer.getI1Constant(result.finalCheck).value_or(false)) {
@@ -1983,6 +2037,7 @@ void LowerLTLToCorePass::runOnOperation() {
           StringAttr{});
       if (clockName)
         finalCover->setAttr("bmc.clock", clockName);
+      setClockKeyMetadata(finalCover.getOperation(), op.getClock());
       finalCover->setAttr("bmc.clock_edge", edgeAttr);
       finalCover->setAttr("bmc.final", builder.getUnitAttr());
       setDisableIffInputMetadata(finalCover.getOperation(), lowerer);

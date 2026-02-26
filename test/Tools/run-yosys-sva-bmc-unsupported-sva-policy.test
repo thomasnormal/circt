@@ -1,0 +1,45 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule\n' > %t/simple.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ " $* " != *" --sva-continue-on-unsupported "* ]]; then\n  echo "missing --sva-continue-on-unsupported" >&2\n  exit 9\nfi\necho "// dummy mlir"\n' > %t/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ " $* " != *" --drop-unsupported-sva "* ]]; then\n  echo "missing --drop-unsupported-sva" >&2\n  exit 9\nfi\nexit 0\n' > %t/fake-bmc.sh
+// RUN: chmod +x %t/fake-verilog.sh %t/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_BMC=%t/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 \
+// RUN:   SKIP_VHDL=0 SKIP_FAIL_WITHOUT_MACRO=1 UNSUPPORTED_SVA_POLICY=lenient \
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t \
+// RUN:   | FileCheck %s
+
+// CHECK: PASS(pass): simple
+// CHECK: SKIP(fail-no-macro): simple
+// CHECK: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// RUN: rm -rf %t.strict && mkdir -p %t.strict
+// RUN: printf 'module top(input logic clk); logic a; assign a = 1'\''b1; assert property (@(posedge clk) a); endmodule\n' > %t.strict/simple.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ " $* " == *" --sva-continue-on-unsupported "* ]]; then\n  echo "unexpected --sva-continue-on-unsupported in strict mode" >&2\n  exit 9\nfi\necho "// dummy mlir"\n' > %t.strict/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ " $* " == *" --drop-unsupported-sva "* ]]; then\n  echo "unexpected --drop-unsupported-sva in strict mode" >&2\n  exit 9\nfi\nexit 0\n' > %t.strict/fake-bmc.sh
+// RUN: chmod +x %t.strict/fake-verilog.sh %t.strict/fake-bmc.sh
+// RUN: env CIRCT_VERILOG=%t.strict/fake-verilog.sh CIRCT_BMC=%t.strict/fake-bmc.sh \
+// RUN:   Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 \
+// RUN:   SKIP_VHDL=0 SKIP_FAIL_WITHOUT_MACRO=1 \
+// RUN:   TEST_FILTER='.*' %S/../../utils/run_yosys_sva_circt_bmc.sh %t.strict \
+// RUN:   | FileCheck %s --check-prefix=STRICT
+//
+// STRICT: PASS(pass): simple
+// STRICT: SKIP(fail-no-macro): simple
+// STRICT: yosys SVA summary: 1 tests, failures=0, xfail=0, xpass=0, skipped=0
+
+// RUN: rm -rf %t.sim && mkdir -p %t.sim
+// RUN: printf 'module top(input logic clk);\nendmodule\n' > %t.sim/simonly.sv
+// RUN: printf 'sim -clock clk\n' > %t.sim/simonly.ys
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nif [[ " $* " != *" --sva-continue-on-unsupported "* ]]; then\n  echo "missing --sva-continue-on-unsupported (sim-only)" >&2\n  exit 9\nfi\necho "module {}"\n' > %t.sim/fake-verilog.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 9\n' > %t.sim/fake-bmc.sh
+// RUN: printf '#!/usr/bin/env bash\nexit 0\n' > %t.sim/fake-sim.sh
+// RUN: chmod +x %t.sim/fake-verilog.sh %t.sim/fake-bmc.sh %t.sim/fake-sim.sh
+// RUN: env CIRCT_VERILOG=%t.sim/fake-verilog.sh CIRCT_BMC=%t.sim/fake-bmc.sh \
+// RUN:   CIRCT_SIM=%t.sim/fake-sim.sh Z3_LIB=/dev/null SKIP_VHDL=0 DISABLE_UVM_AUTO_INCLUDE=1 \
+// RUN:   UNSUPPORTED_SVA_POLICY=lenient TEST_FILTER='.*' \
+// RUN:   %S/../../utils/run_yosys_sva_circt_bmc.sh %t.sim \
+// RUN:   | FileCheck %s --check-prefix=SIMONLY
+//
+// SIMONLY: PASS(pass): simonly
+// SIMONLY: SKIP(sim-only): simonly

@@ -307,7 +307,9 @@ def read_compile_contracts(path: Path) -> list[ContractRow]:
     return out
 
 
-def summarize(rows: list[tuple[str, ...]]) -> tuple[int, int, int, int, int, int, int]:
+def summarize(
+    rows: list[tuple[str, ...]],
+) -> tuple[int, int, int, int, int, int, int, int, int]:
     total = len(rows)
     passed = 0
     failed = 0
@@ -315,6 +317,8 @@ def summarize(rows: list[tuple[str, ...]]) -> tuple[int, int, int, int, int, int
     xpassed = 0
     errored = 0
     skipped = 0
+    unknown = 0
+    timeout = 0
     for row in rows:
         status = row[0].strip().upper() if row else ""
         if status == "PASS":
@@ -327,9 +331,13 @@ def summarize(rows: list[tuple[str, ...]]) -> tuple[int, int, int, int, int, int
             xpassed += 1
         elif status == "SKIP":
             skipped += 1
+        elif status == "UNKNOWN":
+            unknown += 1
+        elif status == "TIMEOUT":
+            timeout += 1
         else:
             errored += 1
-    return total, passed, failed, xfailed, xpassed, errored, skipped
+    return total, passed, failed, xfailed, xpassed, errored, skipped, unknown, timeout
 
 
 def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
@@ -1504,7 +1512,7 @@ def main() -> int:
             print(f"fpv summary: {fpv_summary_path}", flush=True)
         print(
             "opentitan FPV BMC summary: total=0 pass=0 fail=0 xfail=0 xpass=0 "
-            "error=0 skip=0",
+            "error=0 skip=0 unknown=0 timeout=0",
             flush=True,
         )
         return 0
@@ -1520,6 +1528,23 @@ def main() -> int:
     )
     assertion_granular_max = parse_nonnegative_int(
         args.assertion_granular_max, "--assertion-granular-max"
+    )
+    auto_timeout_assertion_granular_raw = os.environ.get(
+        "BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR", "0"
+    ).strip()
+    if auto_timeout_assertion_granular_raw not in {"0", "1"}:
+        fail(
+            "invalid BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR: "
+            f"{auto_timeout_assertion_granular_raw} (expected 0 or 1)"
+        )
+    auto_timeout_assertion_granular = auto_timeout_assertion_granular_raw == "1"
+    auto_timeout_assertion_granular_max_cases = parse_nonnegative_int(
+        os.environ.get("BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_MAX_CASES", "0"),
+        "BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_MAX_CASES",
+    )
+    auto_timeout_assertion_granular_shard_count = parse_nonnegative_int(
+        os.environ.get("BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_SHARD_COUNT", "0"),
+        "BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR_SHARD_COUNT",
     )
 
     if args.workdir:
@@ -1677,6 +1702,117 @@ def main() -> int:
                             continue
                         marker_seen = True
                     out_handle.write(line + "\n")
+
+    def append_plain_file(primary: Path, extra: Path) -> None:
+        if not extra.exists():
+            return
+        extra_content = extra.read_text(encoding="utf-8")
+        if not extra_content:
+            return
+        merged = ""
+        if primary.exists():
+            merged = primary.read_text(encoding="utf-8")
+        if merged and not merged.endswith("\n"):
+            merged += "\n"
+        merged += extra_content
+        if merged and not merged.endswith("\n"):
+            merged += "\n"
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        primary.write_text(merged, encoding="utf-8")
+
+    def append_resolved_contract_file(primary: Path, extra: Path) -> None:
+        if not extra.exists():
+            return
+        marker_seen = False
+        merged_lines: list[str] = []
+        for src in (primary, extra):
+            if not src.exists():
+                continue
+            for line in src.read_text(encoding="utf-8").splitlines():
+                if not line:
+                    continue
+                if line.startswith("#resolved_contract_schema_version="):
+                    if marker_seen:
+                        continue
+                    marker_seen = True
+                merged_lines.append(line)
+        if not merged_lines:
+            return
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        primary.write_text("\n".join(merged_lines) + "\n", encoding="utf-8")
+
+    def read_result_rows(path: Path) -> list[tuple[str, ...]]:
+        rows: list[tuple[str, ...]] = []
+        if not path.exists():
+            return rows
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(tuple(line.split("\t")))
+        return rows
+
+    def write_result_rows(path: Path, rows: list[tuple[str, ...]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write("\t".join(row) + "\n")
+
+    def replace_cmd_path_arg(cmd: list[str], flag: str, value: str) -> None:
+        try:
+            index = cmd.index(flag)
+        except ValueError:
+            fail(f"internal error: missing command option {flag}")
+        if index + 1 >= len(cmd):
+            fail(f"internal error: missing value for command option {flag}")
+        cmd[index + 1] = value
+
+    def get_cmd_path_arg(cmd: list[str], flag: str) -> str | None:
+        try:
+            index = cmd.index(flag)
+        except ValueError:
+            return None
+        if index + 1 >= len(cmd):
+            fail(f"internal error: missing value for command option {flag}")
+        return cmd[index + 1]
+
+    def set_cmd_path_arg(cmd: list[str], flag: str, value: str) -> None:
+        try:
+            index = cmd.index(flag)
+        except ValueError:
+            cmd.extend([flag, value])
+            return
+        if index + 1 >= len(cmd):
+            fail(f"internal error: missing value for command option {flag}")
+        cmd[index + 1] = value
+
+    def remove_cmd_path_arg(cmd: list[str], flag: str) -> None:
+        try:
+            index = cmd.index(flag)
+        except ValueError:
+            return
+        if index + 1 >= len(cmd):
+            fail(f"internal error: missing value for command option {flag}")
+        del cmd[index : index + 2]
+
+    def is_assertion_granular_limit_exceeded_row(row: tuple[str, ...]) -> bool:
+        status = row[0].strip().upper() if row else ""
+        if status != "ERROR":
+            return False
+        diag = row[5].strip().lower() if len(row) > 5 else ""
+        reason = row[6].strip().lower() if len(row) > 6 else ""
+        return (
+            "assertion_granular_limit_exceeded" in diag
+            or "assertion_granular_limit_exceeded" in reason
+        )
+
+    def fallback_row_resolves_timeout(row: tuple[str, ...]) -> bool:
+        status = row[0].strip().upper() if row else ""
+        if status == "TIMEOUT":
+            return False
+        if is_assertion_granular_limit_exceeded_row(row):
+            return False
+        return True
 
     pairwise_rc = 0
     try:
@@ -1857,9 +1993,315 @@ def main() -> int:
                         group_cache_dir = verilog_cache_base_dir / group_cache_suffix
                         group_cache_dir.mkdir(parents=True, exist_ok=True)
                         cmd_env["BMC_VERILOG_CACHE_DIR"] = str(group_cache_dir)
-                pairwise_rc = max(
-                    pairwise_rc, subprocess.run(cmd, check=False, env=cmd_env).returncode
-                )
+                primary_rc = subprocess.run(cmd, check=False, env=cmd_env).returncode
+                if not group_results_path.exists():
+                    pairwise_rc = max(pairwise_rc, primary_rc if primary_rc else 1)
+                    continue
+
+                primary_rows = read_result_rows(group_results_path)
+                effective_rows = list(primary_rows)
+
+                if (
+                    auto_timeout_assertion_granular
+                    and not args.assertion_granular
+                    and primary_rows
+                ):
+                    timeout_case_ids: list[str] = []
+                    seen_timeout_ids: set[str] = set()
+                    for row in primary_rows:
+                        status = row[0].strip().upper() if row else ""
+                        case_id = row[1].strip() if len(row) > 1 else ""
+                        if status != "TIMEOUT" or not case_id:
+                            continue
+                        if case_id in seen_timeout_ids:
+                            continue
+                        seen_timeout_ids.add(case_id)
+                        timeout_case_ids.append(case_id)
+                    if (
+                        auto_timeout_assertion_granular_max_cases > 0
+                        and len(timeout_case_ids)
+                        > auto_timeout_assertion_granular_max_cases
+                    ):
+                        timeout_case_ids = timeout_case_ids[
+                            :auto_timeout_assertion_granular_max_cases
+                        ]
+
+                    if timeout_case_ids:
+                        timeout_case_id_set = set(timeout_case_ids)
+                        timeout_case_lines: list[str] = []
+                        for line in group_cases:
+                            case_id = line.split("\t", 1)[0].strip()
+                            if case_id in timeout_case_id_set:
+                                timeout_case_lines.append(line)
+                        if timeout_case_lines:
+                            fallback_cases_path = (
+                                workdir
+                                / f"pairwise-timeout-cases-{group_index}.tsv"
+                            )
+                            fallback_cases_path.write_text(
+                                "\n".join(timeout_case_lines) + "\n",
+                                encoding="utf-8",
+                            )
+                            fallback_results_path = (
+                                workdir
+                                / f"pairwise-timeout-results-{group_index}.tsv"
+                            )
+                            fallback_workdir = (
+                                workdir
+                                / f"pairwise-timeout-work-{group_index}"
+                            )
+                            fallback_cmd = list(cmd)
+                            replace_cmd_path_arg(
+                                fallback_cmd, "--cases-file", str(fallback_cases_path)
+                            )
+                            replace_cmd_path_arg(
+                                fallback_cmd, "--workdir", str(fallback_workdir)
+                            )
+                            replace_cmd_path_arg(
+                                fallback_cmd, "--results-file", str(fallback_results_path)
+                            )
+                            fallback_artifact_flags = (
+                                "--drop-remark-cases-file",
+                                "--drop-remark-reasons-file",
+                                "--timeout-reasons-file",
+                                "--resolved-contracts-file",
+                                "--assertion-results-file",
+                                "--cover-results-file",
+                                "--launch-events-file",
+                            )
+                            fallback_artifacts: dict[str, Path] = {}
+                            primary_artifact_paths: dict[str, Path] = {}
+                            for flag in fallback_artifact_flags:
+                                primary_path = get_cmd_path_arg(fallback_cmd, flag)
+                                if not primary_path:
+                                    continue
+                                primary_artifact_paths[flag] = Path(primary_path)
+                                fallback_path = (
+                                    workdir
+                                    / f"pairwise-timeout-{flag.lstrip('-').replace('-', '_')}-{group_index}.tsv"
+                                )
+                                fallback_artifacts[flag] = fallback_path
+                                replace_cmd_path_arg(
+                                    fallback_cmd, flag, str(fallback_path)
+                                )
+                            if "--assertion-granular" not in fallback_cmd:
+                                fallback_cmd.append("--assertion-granular")
+                            if (
+                                assertion_granular_max > 0
+                                and "--assertion-granular-max" not in fallback_cmd
+                            ):
+                                fallback_cmd += [
+                                    "--assertion-granular-max",
+                                    str(assertion_granular_max),
+                                ]
+                            # The first timeout fallback should run full assertion-granular
+                            # mode for each timed-out case. Strip any inherited shard args
+                            # from the primary invocation before optional second-stage sharding.
+                            remove_cmd_path_arg(
+                                fallback_cmd, "--assertion-shard-count"
+                            )
+                            remove_cmd_path_arg(
+                                fallback_cmd, "--assertion-shard-index"
+                            )
+
+                            print(
+                                "opentitan FPV BMC: timeout fallback via "
+                                "--assertion-granular "
+                                f"cases={len(timeout_case_lines)}",
+                                flush=True,
+                            )
+                            fallback_rc = subprocess.run(
+                                fallback_cmd, check=False, env=cmd_env
+                            ).returncode
+
+                            for flag, fallback_path in fallback_artifacts.items():
+                                if not fallback_path.exists():
+                                    continue
+                                primary_path = primary_artifact_paths.get(flag)
+                                if primary_path is None:
+                                    continue
+                                if flag == "--resolved-contracts-file":
+                                    append_resolved_contract_file(
+                                        primary_path, fallback_path
+                                    )
+                                else:
+                                    append_plain_file(primary_path, fallback_path)
+
+                            if not fallback_results_path.exists():
+                                pairwise_rc = max(
+                                    pairwise_rc, fallback_rc if fallback_rc else 1
+                                )
+                                continue
+                            fallback_rows = read_result_rows(fallback_results_path)
+                            fallback_by_case: dict[str, tuple[str, ...]] = {}
+                            for row in fallback_rows:
+                                case_id = row[1].strip() if len(row) > 1 else ""
+                                if not case_id:
+                                    continue
+                                fallback_by_case[case_id] = row
+
+                            replacement_by_case: dict[str, tuple[str, ...]] = {}
+                            unresolved_timeout_case_ids: list[str] = []
+                            nonshardable_timeout_case_ids: set[str] = set()
+                            for case_id in timeout_case_ids:
+                                row = fallback_by_case.get(case_id)
+                                if not row:
+                                    unresolved_timeout_case_ids.append(case_id)
+                                    continue
+                                if not fallback_row_resolves_timeout(row):
+                                    unresolved_timeout_case_ids.append(case_id)
+                                    if is_assertion_granular_limit_exceeded_row(row):
+                                        nonshardable_timeout_case_ids.add(case_id)
+                                    continue
+                                replacement_by_case[case_id] = row
+
+                            shard_timeout_case_ids = [
+                                case_id
+                                for case_id in unresolved_timeout_case_ids
+                                if case_id not in nonshardable_timeout_case_ids
+                            ]
+                            if (
+                                shard_timeout_case_ids
+                                and auto_timeout_assertion_granular_shard_count > 1
+                            ):
+                                shard_count = auto_timeout_assertion_granular_shard_count
+                                print(
+                                    "opentitan FPV BMC: timeout fallback via "
+                                    f"assertion shards count={shard_count} "
+                                    f"cases={len(shard_timeout_case_ids)}",
+                                    flush=True,
+                                )
+                                unresolved_case_set = set(shard_timeout_case_ids)
+                                shard_rows_by_case: dict[str, list[tuple[str, ...]]] = {
+                                    case_id: [] for case_id in shard_timeout_case_ids
+                                }
+                                shard_seen_by_case: dict[str, set[int]] = {
+                                    case_id: set() for case_id in shard_timeout_case_ids
+                                }
+                                for shard_index in range(shard_count):
+                                    shard_results_path = (
+                                        workdir
+                                        / f"pairwise-timeout-shard-results-{group_index}-{shard_index}.tsv"
+                                    )
+                                    shard_workdir = (
+                                        workdir
+                                        / f"pairwise-timeout-shard-work-{group_index}-{shard_index}"
+                                    )
+                                    shard_cmd = list(fallback_cmd)
+                                    set_cmd_path_arg(
+                                        shard_cmd, "--workdir", str(shard_workdir)
+                                    )
+                                    set_cmd_path_arg(
+                                        shard_cmd,
+                                        "--results-file",
+                                        str(shard_results_path),
+                                    )
+                                    set_cmd_path_arg(
+                                        shard_cmd,
+                                        "--assertion-shard-count",
+                                        str(shard_count),
+                                    )
+                                    set_cmd_path_arg(
+                                        shard_cmd,
+                                        "--assertion-shard-index",
+                                        str(shard_index),
+                                    )
+                                    shard_artifacts: dict[str, Path] = {}
+                                    for flag in fallback_artifact_flags:
+                                        primary_path = primary_artifact_paths.get(flag)
+                                        if primary_path is None:
+                                            continue
+                                        shard_artifact_path = (
+                                            workdir
+                                            / (
+                                                f"pairwise-timeout-shard-{flag.lstrip('-').replace('-', '_')}"
+                                                f"-{group_index}-{shard_index}.tsv"
+                                            )
+                                        )
+                                        shard_artifacts[flag] = shard_artifact_path
+                                        set_cmd_path_arg(
+                                            shard_cmd, flag, str(shard_artifact_path)
+                                        )
+
+                                    shard_rc = subprocess.run(
+                                        shard_cmd, check=False, env=cmd_env
+                                    ).returncode
+                                    for flag, shard_artifact_path in shard_artifacts.items():
+                                        if not shard_artifact_path.exists():
+                                            continue
+                                        primary_path = primary_artifact_paths.get(flag)
+                                        if primary_path is None:
+                                            continue
+                                        if flag == "--resolved-contracts-file":
+                                            append_resolved_contract_file(
+                                                primary_path, shard_artifact_path
+                                            )
+                                        else:
+                                            append_plain_file(
+                                                primary_path, shard_artifact_path
+                                            )
+                                    if not shard_results_path.exists():
+                                        pairwise_rc = max(
+                                            pairwise_rc, shard_rc if shard_rc else 1
+                                        )
+                                        continue
+                                    for row in read_result_rows(shard_results_path):
+                                        case_id = row[1].strip() if len(row) > 1 else ""
+                                        if not case_id or case_id not in unresolved_case_set:
+                                            continue
+                                        shard_rows_by_case[case_id].append(row)
+                                        shard_seen_by_case[case_id].add(shard_index)
+
+                                def status_priority(status: str) -> int:
+                                    table = {
+                                        "ERROR": 6,
+                                        "TIMEOUT": 5,
+                                        "FAIL": 4,
+                                        "UNKNOWN": 3,
+                                        "SKIP": 2,
+                                        "PASS": 1,
+                                    }
+                                    return table.get(status, 6)
+
+                                for case_id in shard_timeout_case_ids:
+                                    if len(shard_seen_by_case[case_id]) != shard_count:
+                                        continue
+                                    candidates = shard_rows_by_case[case_id]
+                                    if not candidates:
+                                        continue
+                                    resolving_candidates = [
+                                        row
+                                        for row in candidates
+                                        if fallback_row_resolves_timeout(row)
+                                    ]
+                                    if not resolving_candidates:
+                                        continue
+                                    best = max(
+                                        resolving_candidates,
+                                        key=lambda row: status_priority(
+                                            row[0].strip().upper() if row else ""
+                                        ),
+                                    )
+                                    replacement_by_case[case_id] = best
+
+                            recovered_case_ids = set(replacement_by_case)
+                            if recovered_case_ids:
+                                merged_group_rows: list[tuple[str, ...]] = []
+                                for row in primary_rows:
+                                    case_id = row[1].strip() if len(row) > 1 else ""
+                                    if case_id and case_id in recovered_case_ids:
+                                        merged_group_rows.append(
+                                            replacement_by_case.get(case_id, row)
+                                        )
+                                    else:
+                                        merged_group_rows.append(row)
+                                effective_rows = merged_group_rows
+                                write_result_rows(group_results_path, effective_rows)
+                                print(
+                                    "opentitan FPV BMC: timeout fallback recovered "
+                                    f"cases={len(recovered_case_ids)}",
+                                    flush=True,
+                                )
 
         merge_plain_files(drop_case_files, args.drop_remark_cases_file)
         merge_plain_files(drop_reason_files, args.drop_remark_reasons_file)
@@ -1884,6 +2326,37 @@ def main() -> int:
             return 1
 
         merged_rows.sort(key=lambda row: (row[1] if len(row) > 1 else "", row[0]))
+        final_timeout_case_ids = {
+            row[1].strip()
+            for row in merged_rows
+            if len(row) > 1 and row[0].strip().upper() == "TIMEOUT"
+        }
+        if args.timeout_reasons_file:
+            timeout_path = Path(args.timeout_reasons_file)
+            if timeout_path.exists():
+                filtered_rows: list[str] = []
+                filtered_seen: set[tuple[str, str, str]] = set()
+                for line in timeout_path.read_text(encoding="utf-8").splitlines():
+                    text = line.strip()
+                    if not text:
+                        continue
+                    parts = text.split("\t")
+                    case_id = parts[0].strip() if parts else ""
+                    if case_id not in final_timeout_case_ids:
+                        continue
+                    case_path = parts[1].strip() if len(parts) > 1 else ""
+                    reason = parts[2].strip() if len(parts) > 2 else ""
+                    key = (case_id, case_path, reason)
+                    if key in filtered_seen:
+                        continue
+                    filtered_seen.add(key)
+                    filtered_rows.append("\t".join(parts))
+                timeout_path.parent.mkdir(parents=True, exist_ok=True)
+                timeout_path.write_text(
+                    "\n".join(filtered_rows) + ("\n" if filtered_rows else ""),
+                    encoding="utf-8",
+                )
+
         if args.results_file:
             out_path = Path(args.results_file)
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2379,19 +2852,28 @@ def main() -> int:
                         file=sys.stderr,
                     )
 
-        total, passed, failed, xfailed, xpassed, errored, skipped = summarize(
-            merged_rows
-        )
+        (
+            total,
+            passed,
+            failed,
+            xfailed,
+            xpassed,
+            errored,
+            skipped,
+            unknown,
+            timeout,
+        ) = summarize(merged_rows)
         print(
             "opentitan FPV BMC summary: "
             f"total={total} pass={passed} fail={failed} xfail={xfailed} "
-            f"xpass={xpassed} error={errored} skip={skipped}",
+            f"xpass={xpassed} error={errored} skip={skipped} "
+            f"unknown={unknown} timeout={timeout}",
             flush=True,
         )
 
         if pairwise_rc != 0:
             return pairwise_rc
-        if failed or errored or xpassed:
+        if failed or errored or xpassed or unknown or timeout:
             return 1
         return 0
     finally:

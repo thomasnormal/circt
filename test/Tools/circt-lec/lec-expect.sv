@@ -8,14 +8,18 @@ module modA(input logic clk, input logic a, input logic b);
   property p;
     @(posedge clk) a ##1 b;
   endproperty
-  expect property (p);
+  initial begin
+    expect (p);
+  end
 endmodule
 
 module modB(input logic clk, input logic a, input logic b);
   property p;
     @(posedge clk) a ##1 b;
   endproperty
-  expect property (p);
+  initial begin
+    expect (p);
+  end
 endmodule
 
 // CHECK: unsat

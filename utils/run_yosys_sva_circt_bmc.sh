@@ -20,6 +20,27 @@ run_limited() {
   )
 }
 
+has_no_property_warning() {
+  local bmc_log="$1"
+  local bmc_stdout="$2"
+  if [[ -s "$bmc_log" ]] && \
+      grep -qi "no property provided to check in module" "$bmc_log"; then
+    return 0
+  fi
+  grep -qi "no property provided to check in module" <<<"$bmc_stdout"
+}
+
+has_multiclock_retryable_bmc_failure() {
+  local bmc_log="$1"
+  local bmc_stdout="$2"
+  local pattern='modules with multiple clocks not yet supported|designs with multiple clocks not yet supported|multi-clock BMC requires bmc_reg_clocks|multi-clock BMC requires bmc_input_names'
+  if [[ -s "$bmc_log" ]] && \
+      grep -Eiq "$pattern" "$bmc_log"; then
+    return 0
+  fi
+  grep -Eiq "$pattern" <<<"$bmc_stdout"
+}
+
 is_retryable_launch_failure_log() {
   local log_file="$1"
   if [[ ! -s "$log_file" ]]; then
@@ -113,6 +134,7 @@ BOUND="${BOUND:-10}"
 IGNORE_ASSERTS_UNTIL="${IGNORE_ASSERTS_UNTIL:-1}"
 RISING_CLOCKS_ONLY="${RISING_CLOCKS_ONLY:-0}"
 ALLOW_MULTI_CLOCK="${ALLOW_MULTI_CLOCK:-0}"
+AUTO_ALLOW_MULTI_CLOCK="${AUTO_ALLOW_MULTI_CLOCK:-1}"
 TOP="${TOP:-top}"
 TEST_FILTER="${TEST_FILTER:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
@@ -249,6 +271,10 @@ if ! [[ "$BMC_LAUNCH_RETRY_BACKOFF_SECS" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 fi
 if [[ "$BMC_LAUNCH_COPY_FALLBACK" != "0" && "$BMC_LAUNCH_COPY_FALLBACK" != "1" ]]; then
   echo "invalid BMC_LAUNCH_COPY_FALLBACK: $BMC_LAUNCH_COPY_FALLBACK" >&2
+  exit 1
+fi
+if [[ "$AUTO_ALLOW_MULTI_CLOCK" != "0" && "$AUTO_ALLOW_MULTI_CLOCK" != "1" ]]; then
+  echo "invalid AUTO_ALLOW_MULTI_CLOCK: $AUTO_ALLOW_MULTI_CLOCK" >&2
   exit 1
 fi
 if [[ "$BMC_SMOKE_ONLY" != "1" ]]; then
@@ -8747,6 +8773,21 @@ EOF
   else
     bmc_status=$?
   fi
+  if [[ "$bmc_status" -ne 0 && "$ALLOW_MULTI_CLOCK" != "1" && \
+        "$AUTO_ALLOW_MULTI_CLOCK" == "1" && "$RISING_CLOCKS_ONLY" != "1" ]] && \
+      has_multiclock_retryable_bmc_failure "$bmc_log" "$out"; then
+    echo "BMC auto-retry($base/$mode): retrying with --allow-multi-clock for multi-clock module" >&2
+    {
+      echo "[run_yosys_sva_circt_bmc] BMC auto-retry($base/$mode): retrying with --allow-multi-clock for multi-clock module"
+    } >> "$bmc_log"
+    bmc_args+=("--allow-multi-clock")
+    if out="$(run_limited "$CIRCT_BMC" "${bmc_args[@]}" "$mlir" \
+        2>> "$bmc_log")"; then
+      bmc_status=0
+    else
+      bmc_status=$?
+    fi
+  fi
   if [[ "$bmc_status" -ne 0 && "$BMC_SMOKE_ONLY" != "1" ]] && \
       grep -Fq "for-smtlib-export does not support LLVM dialect operations inside verif.bmc regions" "$bmc_log"; then
     echo "SMT-LIB export failed($base/$mode): no native fallback available after JIT removal" >&2
@@ -8756,7 +8797,7 @@ EOF
   fi
   append_bmc_abstraction_provenance "$base" "$mode" "$sv" "$bmc_log"
   if [[ "$NO_PROPERTY_AS_SKIP" == "1" ]] && \
-      grep -q "no property provided to check in module" "$bmc_log"; then
+      has_no_property_warning "$bmc_log" "$out"; then
     report_skipped_case "$base" "$mode" "$(case_profile)" "no-property" 1 "$sv"
     skipped=$((skipped + 1))
     return

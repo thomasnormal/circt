@@ -697,6 +697,42 @@ void ProcessScheduler::updateSignalWithStrength(SignalId signalId,
   }
 }
 
+bool ProcessScheduler::isProcessQueued(const Process *proc) const {
+  if (!proc)
+    return false;
+  for (const auto &queue : readyQueues) {
+    for (Process *queued = queue.head; queued; queued = queued->readyNext)
+      if (queued == proc)
+        return true;
+  }
+  return false;
+}
+
+bool ProcessScheduler::repairOrphanReadyProcesses() {
+  bool repairedAny = false;
+  for (auto &[id, procOwner] : processes) {
+    (void)id;
+    Process *proc = procOwner.get();
+    if (!proc || proc->getState() != ProcessState::Ready)
+      continue;
+
+    if (proc->inReadyQueue && isProcessQueued(proc))
+      continue;
+
+    if (proc->inReadyQueue) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "repairOrphanReadyProcesses: clearing stale inReadyQueue "
+                 << "for process " << proc->getId() << " ('" << proc->getName()
+                 << "')\n");
+      proc->inReadyQueue = false;
+    }
+
+    scheduleProcess(proc->getId(), proc->getPreferredRegion());
+    repairedAny = true;
+  }
+  return repairedAny;
+}
+
 void ProcessScheduler::recordSignalChange(SignalId signalId) {
   if (signalId < signalsChangedThisDeltaBits.size()) {
     if (!signalsChangedThisDeltaBits[signalId]) {
@@ -966,10 +1002,17 @@ void ProcessScheduler::scheduleProcess(ProcessId id, SchedulingRegion region) {
     return;
   }
 
-  // Skip if already in a ready queue — O(1) flag check.
+  // Skip if already in a ready queue — O(1) flag check in steady-state.
+  // If metadata got out of sync, clear stale membership and continue.
   if (proc->inReadyQueue) {
-    LLVM_DEBUG(llvm::dbgs() << "Process " << id << " already in queue\n");
-    return;
+    if (isProcessQueued(proc)) {
+      LLVM_DEBUG(llvm::dbgs() << "Process " << id << " already in queue\n");
+      return;
+    }
+    LLVM_DEBUG(llvm::dbgs()
+               << "scheduleProcess(" << id
+               << "): stale inReadyQueue flag detected, repairing\n");
+    proc->inReadyQueue = false;
   }
 
   auto &queue = readyQueues[static_cast<size_t>(region)];
@@ -1029,18 +1072,43 @@ void ProcessScheduler::suspendProcessForEvents(ProcessId id,
   // redundant O(N) linear scans in signalToProcesses on every cycle.
   // RTL always blocks re-suspend on the same signals every cycle, making
   // the original std::find always return true after the first registration.
+  auto getEdgeMaskBit = [](EdgeType edge) -> uint8_t {
+    switch (edge) {
+    case EdgeType::Posedge:
+      return 1u << 0;
+    case EdgeType::Negedge:
+      return 1u << 1;
+    case EdgeType::AnyEdge:
+    case EdgeType::None:
+      return 1u << 2;
+    }
+    return 0;
+  };
   for (const auto &entry : waitList.getEntries()) {
     if (proc->registeredSignals.insert(entry.signalId).second) {
-      // First time this process registers for this signal.
+      // First time this process registers for this signal ID.
       signalToProcesses[entry.signalId].push_back(proc);
-      // E4: edge-specific fanout.
+    }
+
+    // Keep edge fanout registration up to date even when the same signal ID is
+    // re-registered with a different edge mode (e.g., negedge -> posedge).
+    uint8_t bit = getEdgeMaskBit(entry.edge);
+    uint8_t &edgeMask = proc->registeredSignalEdges[entry.signalId];
+    if ((edgeMask & bit) == 0) {
       auto &fanout = signalEdgeFanout[entry.signalId];
       switch (entry.edge) {
-      case EdgeType::Posedge: fanout.posedge.push_back(proc); break;
-      case EdgeType::Negedge: fanout.negedge.push_back(proc); break;
+      case EdgeType::Posedge:
+        fanout.posedge.push_back(proc);
+        break;
+      case EdgeType::Negedge:
+        fanout.negedge.push_back(proc);
+        break;
       case EdgeType::AnyEdge:
-      case EdgeType::None: fanout.anyedge.push_back(proc); break;
+      case EdgeType::None:
+        fanout.anyedge.push_back(proc);
+        break;
       }
+      edgeMask |= bit;
     }
   }
 
@@ -1502,6 +1570,8 @@ bool ProcessScheduler::advanceTime() {
       if (!queue.empty())
         return true;
     }
+    if (repairOrphanReadyProcesses())
+      return true;
     return false;
   }
 
@@ -1632,11 +1702,16 @@ bool ProcessScheduler::advanceTime() {
         didWork = true;
         continue;
       }
-      if (eventScheduler->isComplete() && !hasClockWork && !hasMinnowWork)
+      if (eventScheduler->isComplete() && !hasClockWork && !hasMinnowWork) {
+        if (repairOrphanReadyProcesses())
+          return true;
         break;
+      }
       // Neither stepDelta nor advanceToNextTime made progress, but
       // isComplete is false. This means orphaned events exist at past
       // delta steps that are unreachable. Break to avoid spinning.
+      if (repairOrphanReadyProcesses())
+        return true;
       LLVM_DEBUG(llvm::dbgs()
                  << "advanceTime: stuck — no delta events, no time advance, "
                  << "but EventScheduler not complete. Breaking.\n");
@@ -1650,6 +1725,11 @@ bool ProcessScheduler::advanceTime() {
     // scheduling-region callbacks and simulation control checks.
     return true;
   }
+
+  // Last-chance repair for rare metadata drift where processes are marked
+  // Ready but not physically enqueued.
+  if (repairOrphanReadyProcesses())
+    return true;
 
   // Return true if we did any work or if there's still work to do
   return didWork || !isComplete();
@@ -1892,15 +1972,32 @@ void ForkJoinManager::markChildComplete(ProcessId childProcess) {
                           << " (" << group->completedCount << "/"
                           << group->childProcesses.size() << ")\n");
 
-  // Check if the fork is now complete and should resume parent
+  // Check if the fork is now complete and should resume parent.
+  //
+  // For join/join_any forks, the parent can be represented as either
+  // Waiting or Suspended when nested UVM waits temporarily remap scheduler
+  // state. Resume both states so completion cannot strand the parent.
+  //
+  // Keep join_none conservative here: those parents are not blocked on the
+  // fork itself, and forcing Suspended -> Ready can spuriously wake processes
+  // that are waiting on unrelated events.
   if (group->isComplete() && !group->joined) {
     group->joined = true;
-    // Resume the parent process if it was waiting
+    // Resume the parent process if it was blocked on this fork.
     Process *parent = scheduler.getProcess(group->parentProcess);
-    if (parent && parent->getState() == ProcessState::Waiting) {
-      scheduler.resumeProcess(group->parentProcess);
-      LLVM_DEBUG(llvm::dbgs() << "Resuming parent process "
-                              << group->parentProcess << " after fork complete\n");
+    if (parent) {
+      ProcessState parentState = parent->getState();
+      bool isBlockingJoin = group->joinType == ForkJoinType::Join ||
+                            group->joinType == ForkJoinType::JoinAny;
+      bool shouldResume =
+          (parentState == ProcessState::Waiting) ||
+          (isBlockingJoin && parentState == ProcessState::Suspended);
+      if (shouldResume) {
+        scheduler.resumeProcess(group->parentProcess);
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Resuming parent process " << group->parentProcess
+                   << " after fork complete\n");
+      }
     }
   }
 
