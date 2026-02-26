@@ -430,18 +430,27 @@ Status update (incremental):
     - `axi4` `6/6`
     - `axi4Lite` `9/9`
     - `i2s` `4/4`
+    - `i3c` `4/4`
     - `jtag` `4/4`
     - `spi` `4/4`
-  - remaining miss:
-    - `i3c` `3/4`, skip: `1x unsupported_op:hw.struct_extract`
 - UVM sanity after this expansion remains stable:
   - `uvm_seq_body` with `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1`:
     `COMPILE_EXIT=0`, `RUN_EXIT=0` (max-time reached)
   - `uvm_run_phase` with native-init opt-in:
     preserves known parity endpoint `UVM_FATAL FCTTYP`, `RUN_EXIT=1`.
-- Next expansion target: close the remaining `i3c` module-init gap by adding a
-  safe `hw.struct_extract` lowering path for module-level init code (especially
-  struct-valued conditionals), then re-run core8 telemetry.
+- Follow-up landed for the former `i3c` gap:
+  - added safe native module-init handling for:
+    - `hw.struct_extract` from 4-state `scf.if`/`hw.struct_create`/
+      `hw.aggregate_constant` producers.
+    - top-level 4-state `hw.struct_create` (`value`/`unknown`) in module init.
+  - module-init-only rewrite lowers `hw.struct_extract(scf.if(...))` to
+    field-typed `scf.if` before SCF->CF to avoid residual non-LLVM forms.
+  - regressions:
+    - `aot-native-module-init-scf-if-struct-extract.mlir`
+    - `aot-native-module-init-hw-struct-create-fourstate.mlir`
+- Next expansion target: move from op-coverage closure to init wall-time
+  reduction (Phase 4.2 snapshot/native-init integration) and broader telemetry
+  beyond the current AVIP core8 set.
 - Current OpenTitan telemetry constraint in this workspace:
   - probe set mostly fails during MLIR generation (`gpio`, `spi_device`,
     `usbdev`, `i2c`, `spi_host`, `uart_*`, `tlul_adapter_reg`).

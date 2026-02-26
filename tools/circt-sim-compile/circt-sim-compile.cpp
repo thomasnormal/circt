@@ -582,9 +582,11 @@ static bool isNativeModuleInitOp(Operation *op) {
   // and safe to run before interpreter dispatch wiring.
   return isa<LLVM::AllocaOp, LLVM::StoreOp, LLVM::ConstantOp,
              arith::ConstantOp, hw::ConstantOp, hw::AggregateConstantOp,
-             LLVM::UndefOp, LLVM::ZeroOp, LLVM::AddressOfOp, LLVM::LoadOp,
-             LLVM::InsertValueOp, LLVM::ExtractValueOp, LLVM::GEPOp,
-             llhd::ProbeOp, scf::IfOp, UnrealizedConversionCastOp>(op);
+             hw::StructCreateOp, hw::StructExtractOp, LLVM::UndefOp,
+             LLVM::ZeroOp,
+             LLVM::AddressOfOp, LLVM::LoadOp, LLVM::InsertValueOp,
+             LLVM::ExtractValueOp, LLVM::GEPOp, llhd::ProbeOp, scf::IfOp,
+             UnrealizedConversionCastOp>(op);
 }
 
 /// Return true when a module-level llhd.prb from a hw.module block argument
@@ -620,6 +622,41 @@ static bool isSupportedNativeModuleInitSignalProbe(llhd::ProbeOp probeOp,
       return false;
   }
   return true;
+}
+
+/// Return true when module-init hw.struct_create is a known-safe 4-state
+/// `{value, unknown}` assembly.
+static bool isSupportedNativeModuleInitStructCreate(
+    hw::StructCreateOp createOp) {
+  return getFourStateValueWidth(createOp.getType()) &&
+         createOp.getNumOperands() == 2;
+}
+
+/// Return true when module-init hw.struct_extract is a known-safe shape.
+/// Current support is intentionally narrow and only admits 4-state field
+/// extraction (`value`/`unknown`) from a struct-producing `scf.if` result.
+static bool isSupportedNativeModuleInitStructExtract(
+    hw::StructExtractOp extractOp) {
+  auto inputTy = dyn_cast<hw::StructType>(extractOp.getInput().getType());
+  if (!inputTy || !getFourStateValueWidth(inputTy))
+    return false;
+
+  llvm::StringRef fieldName = extractOp.getFieldName();
+  if (fieldName != "value" && fieldName != "unknown")
+    return false;
+
+  if (inputTy.getFieldType(extractOp.getFieldName()) != extractOp.getType())
+    return false;
+
+  if (auto inputResult = dyn_cast<OpResult>(extractOp.getInput())) {
+    if (auto ifOp = dyn_cast<scf::IfOp>(inputResult.getOwner()))
+      return inputResult.getResultNumber() < ifOp.getNumResults();
+  }
+  if (auto createOp = extractOp.getInput().getDefiningOp<hw::StructCreateOp>())
+    return isSupportedNativeModuleInitStructCreate(createOp);
+  if (extractOp.getInput().getDefiningOp<hw::AggregateConstantOp>())
+    return true;
+  return false;
 }
 
 static std::string encodeModuleInitSymbol(llvm::StringRef moduleName) {
@@ -968,6 +1005,20 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
         unsupported = true;
         break;
       }
+      if (auto extractOp = dyn_cast<hw::StructExtractOp>(opPtr)) {
+        if (!isSupportedNativeModuleInitStructExtract(extractOp)) {
+          skipReason = "unsupported_op:hw.struct_extract";
+          unsupported = true;
+          break;
+        }
+      }
+      if (auto createOp = dyn_cast<hw::StructCreateOp>(opPtr)) {
+        if (!isSupportedNativeModuleInitStructCreate(createOp)) {
+          skipReason = "unsupported_op:hw.struct_create";
+          unsupported = true;
+          break;
+        }
+      }
       if (opPtr->getNumRegions() != 0 && !isa<scf::IfOp>(opPtr)) {
         skipReason = ("op_has_region:" + opPtr->getName().getStringRef().str());
         unsupported = true;
@@ -1104,6 +1155,84 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
   }
 
   return stats;
+}
+
+/// Rewrite `hw.struct_extract(scf.if(...))` in synthesized native module-init
+/// functions to `scf.if` directly yielding the extracted field.
+///
+/// This keeps the module-init pipeline conservative while avoiding unsupported
+/// post-SCF block-argument struct_extract forms.
+static void rewriteNativeModuleInitStructExtractFromSCFIf(ModuleOp microModule) {
+  IRRewriter rewriter(microModule.getContext());
+  llvm::SmallVector<hw::StructExtractOp> worklist;
+
+  microModule.walk([&](hw::StructExtractOp extractOp) {
+    auto funcOp = extractOp->getParentOfType<func::FuncOp>();
+    if (!funcOp)
+      return;
+    if (!funcOp.getSymName().starts_with("__circt_sim_module_init__"))
+      return;
+    if (!isSupportedNativeModuleInitStructExtract(extractOp))
+      return;
+    worklist.push_back(extractOp);
+  });
+
+  for (auto extractOp : worklist) {
+    auto inputResult = dyn_cast<OpResult>(extractOp.getInput());
+    if (!inputResult)
+      continue;
+    auto ifOp = dyn_cast<scf::IfOp>(inputResult.getOwner());
+    if (!ifOp)
+      continue;
+    if (inputResult.getResultNumber() >= ifOp.getNumResults())
+      continue;
+
+    unsigned resultIdx = inputResult.getResultNumber();
+    llvm::StringRef fieldName = extractOp.getFieldName();
+
+    rewriter.setInsertionPoint(extractOp);
+    auto rewrittenIf = scf::IfOp::create(rewriter, extractOp.getLoc(),
+                                         TypeRange{extractOp.getType()},
+                                         ifOp.getCondition(),
+                                         /*withElseRegion=*/ifOp.elseBlock() !=
+                                             nullptr);
+
+    auto rewriteRegion = [&](Region &src, Region &dst) -> LogicalResult {
+      if (!dst.empty())
+        rewriter.eraseBlock(&dst.front());
+      IRMapping mapper;
+      src.cloneInto(&dst, mapper);
+      for (Block &block : dst) {
+        auto yieldOp = dyn_cast<scf::YieldOp>(block.getTerminator());
+        if (!yieldOp || yieldOp.getNumOperands() <= resultIdx)
+          return failure();
+        Value yielded = yieldOp.getOperand(resultIdx);
+        auto yieldedStructTy = dyn_cast<hw::StructType>(yielded.getType());
+        if (!yieldedStructTy)
+          return failure();
+        if (yieldedStructTy.getFieldType(extractOp.getFieldName()) !=
+            extractOp.getType())
+          return failure();
+        OpBuilder b(yieldOp);
+        Value field =
+            hw::StructExtractOp::create(b, yieldOp.getLoc(), yielded, fieldName);
+        scf::YieldOp::create(b, yieldOp.getLoc(), ValueRange{field});
+        rewriter.eraseOp(yieldOp);
+      }
+      return success();
+    };
+
+    if (failed(rewriteRegion(ifOp.getThenRegion(), rewrittenIf.getThenRegion())) ||
+        (ifOp.elseBlock() &&
+         failed(rewriteRegion(ifOp.getElseRegion(),
+                             rewrittenIf.getElseRegion())))) {
+      rewriter.eraseOp(rewrittenIf);
+      continue;
+    }
+
+    extractOp.getResult().replaceAllUsesWith(rewrittenIf.getResult(0));
+    rewriter.eraseOp(extractOp);
+  }
 }
 
 /// Lower SCF control-flow ops (if/for/while/parallel/execute_region/...) to
@@ -5361,6 +5490,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                      << "\n";
     }
   }
+
+  // Keep native module-init extraction conservative by rewriting the supported
+  // `hw.struct_extract(scf.if(...))` shape before global SCF->CF lowering.
+  rewriteNativeModuleInitStructExtractFromSCFIf(microModule);
 
   cloneReferencedDeclarations(microModule, *module, mapping);
 

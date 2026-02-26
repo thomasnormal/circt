@@ -1636,3 +1636,58 @@
   - that experimental path was reverted before landing; current checkpoint keeps
     only the stable `scf.if` support and leaves `hw.struct_extract` as the next
     explicit target.
+
+## 2026-02-26
+- Phase 4 follow-up: closed the remaining `i3c` native module-init miss by
+  adding conservative support for 4-state struct plumbing in module init.
+- Trigger:
+  - `i3c` stayed at `3 emitted / 4 total` after `scf.if` support with
+    `1x unsupported_op:hw.struct_extract`.
+  - after landing safe extract support, the remaining skip shifted to
+    `1x unsupported_op:hw.struct_create`.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - native-init allowlist now admits `hw.struct_extract` and
+    `hw.struct_create`, but only with explicit shape guards:
+    - `hw.struct_extract`: 4-state (`value`/`unknown`) fields only, with
+      supported producers (`scf.if` result, 4-state `hw.struct_create`, or
+      `hw.aggregate_constant`).
+    - `hw.struct_create`: 4-state `{value, unknown}` only.
+  - added module-init-only canonicalization:
+    - rewrites `hw.struct_extract(scf.if(...))` into field-typed `scf.if`
+      before global SCF->CF lowering.
+    - keeps scope narrow by only touching
+      `__circt_sim_module_init__*` functions.
+- TDD/regressions:
+  - added `test/Tools/circt-sim/aot-native-module-init-scf-if-struct-extract.mlir`
+    (red before patch: `0 emitted / 1 total`, skip
+    `unsupported_op:hw.struct_extract`).
+  - added
+    `test/Tools/circt-sim/aot-native-module-init-hw-struct-create-fourstate.mlir`
+    (red before patch: `0 emitted / 1 total`, skip
+    `unsupported_op:hw.struct_create`).
+  - both regressions now pass compile/interpreter/native-init runs.
+- Focused validation:
+  - native-init regression pack passes:
+    - `aot-native-module-init-hw-struct-create-fourstate.mlir`
+    - `aot-native-module-init-scf-if-struct-extract.mlir`
+    - `aot-native-module-init-scf-if.mlir`
+    - `aot-native-module-init-llhd-prb-refcast.mlir`
+    - `aot-native-module-init-llhd-prb-block-arg.mlir`
+    - `aot-native-module-init-llhd-prb-signal-alias.mlir`
+    - `aot-native-module-init-llhd-prb-signal-instance-alias.mlir`
+  - AVIP i3c telemetry re-run (`--emit-llvm -v`) on
+    `out/avip_core8_interpret_20260226_110735/i3c/i3c.mlir`:
+    - `Native module init functions: 4`
+    - `Native module init modules: 4 emitted / 4 total`
+    - no remaining top skip reason emitted.
+  - large UVM sanity after patch:
+    - `uvm_seq_body` with native-init opt-in:
+      `COMPILE_EXIT=0`, `RUN_EXIT=0` (reaches max-time endpoint).
+    - `uvm_run_phase` with native-init opt-in:
+      preserves known parity endpoint
+      (`UVM_FATAL FCTTYP`, `RUN_EXIT=1`).
+- Realization:
+  - the previous instability came from broad/late handling; early
+    module-init-only canonicalization plus strict shape gating is stable.
+  - AVIP core8 module-init op-coverage is now closed; next ROI shifts to init
+    wall-time reductions and broader benchmark telemetry.
