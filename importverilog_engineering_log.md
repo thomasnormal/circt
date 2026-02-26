@@ -1855,3 +1855,51 @@ supporting indexed interface-instance receivers in module hierarchy paths:
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)
   - `xrun -sv -elaborate -top TopLevel test/Conversion/ImportVerilog/hierarchical-interface-task.sv -nolog` (PASS)
   - `xrun -sv -elaborate -top DirectTest test/Conversion/ImportVerilog/hierarchical-interface-task.sv -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog hierarchical interface-array support by closing the
+assignment gap for `virtual interface` binding from indexed hierarchical
+receivers: `vif = module.if_array[idx];`.
+
+### Realizations
+- The failure was not just receiver resolution in expression lowering; the
+  hierarchical collector for statements did not visit
+  `ArbitrarySymbolExpression`, so interface threading state was missing at
+  assignment lowering time.
+- Slang can surface interface-array element references as unnamed instance
+  symbols (`name == ""`), requiring definition-based fallback when exact pointer
+  identity lookup fails.
+
+### TDD Baseline
+- Added regression: `test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv`.
+- Baseline behavior before fix:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv --ir-moore`
+    failed with `unsupported arbitrary symbol reference ''`.
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv -elaborate -nolog`
+    passed.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+  - Added statement-visitor handling for `ArbitrarySymbolExpression` so
+    hierarchical interface references in assignment RHS participate in
+    interface-threading collection.
+- `lib/Conversion/ImportVerilog/Expressions.cpp`:
+  - In `visit(ArbitrarySymbolExpression)`, added final unambiguous fallback
+    resolution by interface definition (and by matching name when available)
+    for array-element shaped interface instance symbols.
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv`.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Regression checks:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-task.sv`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-task.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)

@@ -998,6 +998,13 @@ struct HierPathValueStmtVisitor
       result = failure();
   }
 
+  void handle(const slang::ast::ArbitrarySymbolExpression &expr) {
+    if (failed(result))
+      return;
+    if (failed(context.collectHierarchicalValues(expr, outermostModule)))
+      result = failure();
+  }
+
   void handle(const slang::ast::InvalidExpression &expr) {
     // InvalidExpression can appear in dead generate blocks (e.g., assertions
     // referencing instances that don't exist in this elaboration). Skip without
