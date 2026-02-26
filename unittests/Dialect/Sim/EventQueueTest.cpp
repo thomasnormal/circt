@@ -367,6 +367,22 @@ TEST(EventScheduler, DelayedScheduling) {
   EXPECT_GE(scheduler.getCurrentTime().realTime, 1000u);
 }
 
+TEST(EventScheduler, RunUntilDoesNotAdvanceBeyondLimit) {
+  EventScheduler scheduler;
+  int counter = 0;
+
+  scheduler.scheduleDelay(100, SchedulingRegion::Active,
+                          Event([&counter]() { counter++; }));
+
+  SimTime end = scheduler.runUntil(50);
+
+  // runUntil should stop at the requested horizon and leave future events
+  // pending for a later call.
+  EXPECT_EQ(end.realTime, 0u);
+  EXPECT_EQ(counter, 0);
+  EXPECT_FALSE(scheduler.isComplete());
+}
+
 TEST(EventScheduler, NextDeltaScheduling) {
   EventScheduler scheduler;
   int value = 0;
@@ -441,6 +457,73 @@ TEST(EventScheduler, RunDeltas) {
 
   EXPECT_EQ(deltas, 2u);
   EXPECT_EQ(counter, 2);
+}
+
+TEST(EventScheduler, CancelEventsByTagRemovesTaggedOnly) {
+  EventScheduler scheduler;
+  int executed = 0;
+
+  Event taggedA([&executed]() { executed += 1; });
+  taggedA.setTag(0xA5A5);
+  Event taggedB([&executed]() { executed += 10; });
+  taggedB.setTag(0xA5A5);
+  Event untagged([&executed]() { executed += 100; });
+
+  scheduler.scheduleDelay(5, SchedulingRegion::Active, std::move(taggedA));
+  scheduler.scheduleDelay(5, SchedulingRegion::Active, std::move(taggedB));
+  scheduler.scheduleDelay(5, SchedulingRegion::Active, std::move(untagged));
+
+  EXPECT_EQ(scheduler.cancelEventsByTag(0xA5A5), 2u);
+  scheduler.runUntil(10);
+  EXPECT_EQ(executed, 100);
+}
+
+TEST(EventScheduler, CancelByTagInsideExtraDeltaCallback) {
+  EventScheduler scheduler;
+  int executed = 0;
+
+  // Schedule in an extra-delta slot (>= 4) so TimeWheel uses
+  // Slot::extraDeltaQueues.
+  scheduler.schedule(
+      SimTime(0, 5, static_cast<uint8_t>(SchedulingRegion::Active)),
+      SchedulingRegion::Active, Event([&]() {
+        ++executed;
+        // Cancel a tag that doesn't exist, then allocate more extra-delta
+        // events to stress map churn while the current callback is active.
+        EXPECT_EQ(scheduler.cancelEventsByTag(0xDEADBEEF), 0u);
+        for (uint32_t d = 6; d < 24; ++d)
+          scheduler.schedule(
+              SimTime(0, d, static_cast<uint8_t>(SchedulingRegion::Active)),
+              SchedulingRegion::Active, Event([&executed]() { ++executed; }));
+      }));
+
+  // Add one later real-time event to ensure scheduler continues correctly.
+  scheduler.schedule(SimTime(1), SchedulingRegion::Active,
+                     Event([&executed]() { ++executed; }));
+
+  scheduler.runUntil(2);
+  EXPECT_EQ(executed, 1 + (24 - 6) + 1);
+  EXPECT_TRUE(scheduler.isComplete());
+}
+
+TEST(EventScheduler, CancelByTagInsideExtraDeltaSameDeltaReschedule) {
+  EventScheduler scheduler;
+  int executed = 0;
+
+  scheduler.schedule(
+      SimTime(0, 5, static_cast<uint8_t>(SchedulingRegion::Active)),
+      SchedulingRegion::Active, Event([&]() {
+        ++executed;
+        EXPECT_EQ(scheduler.cancelEventsByTag(0xBADF00D), 0u);
+        // Re-schedule at the same extra-delta step being processed.
+        scheduler.schedule(
+            SimTime(0, 5, static_cast<uint8_t>(SchedulingRegion::Active)),
+            SchedulingRegion::Active, Event([&executed]() { executed += 100; }));
+      }));
+
+  scheduler.runUntil(0);
+  EXPECT_EQ(executed, 101);
+  EXPECT_TRUE(scheduler.isComplete());
 }
 
 } // namespace

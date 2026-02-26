@@ -1,12 +1,12 @@
 // RUN: env CIRCT_SIM_TRACE_WAIT_CONDITION=1 circt-sim %s --max-time=2000000 --max-deltas=8 2>&1 | FileCheck %s
 //
-// Verify queue-backed wait(condition) uses sparse fallback polling.
-// Queue mutation wakeups are the primary mechanism; timed polling is only
-// a watchdog and should schedule at 10 us intervals.
+// Verify queue-backed wait(condition) relies on event-style queue wakeups
+// without scheduling a timed watchdog poll. A timed fallback poll can become
+// stale and distort final simulation time.
 //
 // CHECK: [WAITCOND]
 // CHECK-SAME: queueWait=0x
-// CHECK-SAME: targetTimeFs=10000000000
+// CHECK-SAME: timedPoll=0
 
 module {
   llvm.func @__moore_wait_condition(i32)

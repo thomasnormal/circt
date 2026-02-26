@@ -59,6 +59,13 @@ static bool hasSingleFieldIndex(ArrayRef<int64_t> pos, unsigned idx) {
   return pos.size() == 1 && pos.front() == static_cast<int64_t>(idx);
 }
 
+// Tag all wait_condition timed poll callbacks for a process so we can
+// physically remove stale polls from the scheduler queue when switching to
+// event-only wakeups or when the condition becomes true.
+static uint64_t getWaitConditionPollEventTag(ProcessId procId) {
+  return static_cast<uint64_t>(procId) ^ 0x5754434F4E44504FULL;
+}
+
 } // namespace
 
 LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
@@ -71,6 +78,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
       if (auto *proc = scheduler.getProcess(procId))
         waitProcName = proc->getName();
     }
+    uint64_t waitConditionPollEventTag =
+        getWaitConditionPollEventTag(procId);
     InterpretedValue condArg = getValue(procId, callOp.getOperand(0));
     bool conditionTrue = !condArg.isX() && condArg.getUInt64() != 0;
 
@@ -83,6 +92,9 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
       // Condition is already true, continue immediately.
       // Clear the restart block and delta poll counter since we're done.
       auto &state = processStates[procId];
+      size_t canceledTimedPolls =
+          scheduler.getEventScheduler().cancelEventsByTag(
+              waitConditionPollEventTag);
       ++state.waitConditionPollToken;
       memoryEventWaiters.erase(procId);
       removeObjectionZeroWaiter(procId);
@@ -95,7 +107,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
         llvm::errs() << "[WAITCOND] proc=" << procId;
         if (!waitProcName.empty())
           llvm::errs() << " name=" << waitProcName;
-        llvm::errs() << " condition=true\n";
+        llvm::errs() << " condition=true canceledTimedPolls="
+                     << canceledTimedPolls << "\n";
       }
       return success();
     }
@@ -317,9 +330,6 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     SimTime currentTime = scheduler.getCurrentTime();
     constexpr uint32_t kMaxDeltaPolls = 1000;
     constexpr int64_t kFallbackPollDelayFs = 10000000; // 10 ns
-    // Queue-backed waits register explicit queue-not-empty wakeups; use a
-    // very sparse timed poll only as a watchdog for missed wake edge cases.
-    constexpr int64_t kQueueFallbackPollDelayFs = 10000000000; // 10 us
     // execute_phase wait(condition) loops already register objection-zero
     // waiters. Keep timed polling as a very sparse safety fallback to avoid
     // high-frequency churn while objections remain raised.
@@ -327,6 +337,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
         10000000000; // 10 us
     constexpr int64_t kMemoryPollDelayFs = 1000000; // 1 ps
     SimTime targetTime;
+    bool scheduleTimedPoll = true;
     uint64_t memoryWaitAddr = 0;
     int64_t objectionWaitHandle = MOORE_OBJECTION_INVALID_HANDLE;
     uint64_t waitConditionPhaseAddr = 0;
@@ -415,24 +426,42 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
 
     if (objectionWaitHandle != MOORE_OBJECTION_INVALID_HANDLE) {
       // execute_phase wait loops are objection-driven in UVM. Register an
-      // objection-zero waiter and use a sparse timed poll as fallback.
+      // objection-zero waiter.
+      //
+      // If objections are currently active, rely on the objection wake path
+      // directly to avoid leaving stale far-future watchdog polls that can
+      // incorrectly advance final simulation time after an early wakeup.
+      // Keep sparse polling only for the zero-count case as a safety fallback.
       enqueueObjectionZeroWaiter(objectionWaitHandle, procId,
                                  callOp.getOperation());
-      targetTime =
-          currentTime.advanceTime(kExecutePhaseObjectionFallbackPollDelayFs);
+      int64_t objectionCount = __moore_objection_get_count(objectionWaitHandle);
+      if (objectionCount > 0) {
+        targetTime = currentTime;
+        scheduleTimedPoll = false;
+      } else {
+        targetTime =
+            currentTime.advanceTime(kExecutePhaseObjectionFallbackPollDelayFs);
+      }
     } else if (queueWaitAddr != 0) {
       // Queue wait conditions (`wait(__moore_queue_size(...) > 0)`) are
       // common in UVM hot loops. Register an event-style wakeup on queue
-      // mutation and keep a low-frequency timed poll as a safety net.
+      // mutation and rely on that wake path directly.
+      //
+      // A timed watchdog poll here can become stale (queue wakes earlier),
+      // then keep the EventScheduler non-empty and incorrectly advance final
+      // simulation time to the watchdog timestamp.
       state.waitConditionQueueAddr = queueWaitAddr;
       enqueueQueueNotEmptyWaiter(queueWaitAddr, procId, callOp.getOperation());
-      targetTime = currentTime.advanceTime(kQueueFallbackPollDelayFs);
+      targetTime = currentTime;
+      scheduleTimedPoll = false;
     } else if (waitConditionLoadAddrs.size() == 1) {
       // For memory-backed waits that depend on a single load, register a
       // direct memory waiter so stores wake the process quickly.
-      // Also keep a fixed 1 ps timed poll cadence. Avoid same-time delta
-      // churn here: it can starve unrelated earlier real-time events and
-      // leave very-sparse fallback polls pending far in the future.
+      //
+      // Keep timed polling only for known wait_for_state loops that need
+      // periodic re-checks even when memory is unchanged. For other memory
+      // waits, prefer event-style wakeups only to avoid stale timed polls
+      // advancing final simulation time after early wakeups.
       auto onlyLoad = *waitConditionLoadAddrs.begin();
       memoryWaitAddr = onlyLoad.getFirst();
       unsigned memoryWaitSize = onlyLoad.getSecond();
@@ -452,8 +481,12 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
         }
       }
       memoryEventWaiters[procId] = waiter;
-      (void)isPhaseWaitForState;
-      targetTime = currentTime.advanceTime(kMemoryPollDelayFs);
+      if (isPhaseWaitForState) {
+        targetTime = currentTime.advanceTime(kMemoryPollDelayFs);
+      } else {
+        targetTime = currentTime;
+        scheduleTimedPoll = false;
+      }
     } else {
       if (currentTime.deltaStep < kMaxDeltaPolls) {
         targetTime = currentTime.nextDelta();
@@ -492,18 +525,36 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
                    << " restart="
                    << (restartOp ? restartOp->getName().getStringRef()
                                  : StringRef("llvm.call"))
-                   << " targetTimeFs=" << targetTime.realTime
-                   << " targetDelta=" << targetTime.deltaStep << "\n";
+                   << " timedPoll=" << (scheduleTimedPoll ? 1 : 0);
+      if (scheduleTimedPoll)
+        llvm::errs() << " targetTimeFs=" << targetTime.realTime
+                     << " targetDelta=" << targetTime.deltaStep;
+      llvm::errs() << "\n";
+    }
+
+    if (!scheduleTimedPoll) {
+      size_t canceledTimedPolls =
+          scheduler.getEventScheduler().cancelEventsByTag(
+              waitConditionPollEventTag);
+      if (traceWaitCondition && canceledTimedPolls > 0) {
+        llvm::errs() << "[WAITCOND] proc=" << procId;
+        if (!waitProcName.empty())
+          llvm::errs() << " name=" << waitProcName;
+        llvm::errs() << " canceledTimedPolls=" << canceledTimedPolls
+                     << " reason=event-only-wakeup\n";
+      }
+      LLVM_DEBUG(llvm::dbgs()
+                 << "    Waiting via event-style wakeup only (queueWait=0x"
+                 << llvm::format_hex(queueWaitAddr, 16) << ")\n");
+      return success();
     }
 
     LLVM_DEBUG(llvm::dbgs() << "    Scheduling wait_condition poll (time="
                             << targetTime.realTime << " fs, delta="
-                            << targetTime.deltaStep
-                            << ", queueWait=0x"
+                            << targetTime.deltaStep << ", queueWait=0x"
                             << llvm::format_hex(queueWaitAddr, 16)
                             << ", memoryWait=0x"
-                            << llvm::format_hex(memoryWaitAddr, 16)
-                            << ")\n");
+                            << llvm::format_hex(memoryWaitAddr, 16) << ")\n");
 
     uint64_t pollToken = ++state.waitConditionPollToken;
     uint64_t scheduledQueueWaitAddr = state.waitConditionQueueAddr;
@@ -511,13 +562,11 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     auto scheduledExternalProbeOps = externalProbeOps;
     bool scheduledTraceWaitCondition = traceWaitCondition;
 
-    // Schedule the process to resume after the delay
-    scheduler.getEventScheduler().schedule(
-        targetTime, SchedulingRegion::Active,
-        Event([this, procId, pollToken, scheduledQueueWaitAddr,
-               scheduledObjectionWaitHandle,
-               scheduledExternalProbeOps,
-               scheduledTraceWaitCondition]() {
+    // Schedule the process to resume after the delay.
+    Event timedPollEvent(
+        [this, procId, pollToken, scheduledQueueWaitAddr,
+         scheduledObjectionWaitHandle, scheduledExternalProbeOps,
+         scheduledTraceWaitCondition]() {
           auto stIt = processStates.find(procId);
           if (stIt == processStates.end())
             return;
@@ -559,7 +608,11 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
             removeObjectionZeroWaiter(procId);
           st.waiting = false;
           scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-        }));
+        });
+    timedPollEvent.setTag(waitConditionPollEventTag);
+    scheduler.getEventScheduler().schedule(
+        targetTime, SchedulingRegion::Active,
+        std::move(timedPollEvent));
   }
   return success();
 }

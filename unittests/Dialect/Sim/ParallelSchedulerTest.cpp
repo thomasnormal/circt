@@ -412,3 +412,71 @@ TEST(ParallelSchedulerTest, AbortStopsExecution) {
   EXPECT_EQ(deltas, 0u);
   EXPECT_EQ(counter, 0);
 }
+
+TEST(ParallelSchedulerTest, RunParallelDoesNotAdvanceBeyondLimit) {
+  ProcessScheduler scheduler;
+  bool fired = false;
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(100, 0, 0), SchedulingRegion::Active,
+      Event([&fired]() { fired = true; }));
+
+  ParallelScheduler::Config config;
+  config.numThreads = 1;
+  ParallelScheduler parallel(scheduler, config);
+
+  SimTime end = parallel.runParallel(50);
+  EXPECT_EQ(end.realTime, 0u);
+  EXPECT_FALSE(fired);
+  EXPECT_FALSE(scheduler.getEventScheduler().isComplete());
+
+  parallel.runParallel(200);
+  EXPECT_TRUE(fired);
+}
+
+TEST(ParallelSchedulerTest, RunParallelProcessesCurrentTimeAtLimit) {
+  ProcessScheduler scheduler;
+  bool fired = false;
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(0, 0, 0), SchedulingRegion::Active,
+      Event([&fired]() { fired = true; }));
+
+  ParallelScheduler::Config config;
+  config.numThreads = 1;
+  ParallelScheduler parallel(scheduler, config);
+
+  parallel.runParallel(0);
+  EXPECT_TRUE(fired);
+}
+
+TEST(ParallelSchedulerTest, RunParallelNoDuplicateAtDelayedWake) {
+  ProcessScheduler scheduler;
+  int counter = 0;
+  int phase = 0;
+  ProcessId pid = 0;
+
+  pid = scheduler.registerProcess("delayed_proc", [&]() {
+    ++counter;
+    if (phase == 0) {
+      phase = 1;
+      scheduler.getEventScheduler().schedule(
+          SimTime(10, 0, 0), SchedulingRegion::Active,
+          Event([&scheduler, &pid]() { scheduler.resumeProcess(pid); }));
+    }
+  });
+  (void)pid;
+
+  scheduler.initialize();
+
+  ParallelScheduler::Config config;
+  config.numThreads = 1;
+  ParallelScheduler parallel(scheduler, config);
+  parallel.autoPartition();
+
+  parallel.runParallel(20);
+
+  // Expected executions: once at t=0, once after delayed wake at t=10.
+  EXPECT_EQ(counter, 2);
+  EXPECT_EQ(scheduler.getCurrentTime().realTime, 10u);
+}

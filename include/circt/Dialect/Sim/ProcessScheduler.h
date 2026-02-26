@@ -1314,6 +1314,11 @@ public:
   /// Run the simulation until completion or time limit.
   SimTime runUntil(uint64_t maxTimeFemtoseconds);
 
+  /// Peek the earliest next wake time (fs) across all wake sources:
+  /// EventScheduler, clock domains, and minnows.
+  /// Returns UINT64_MAX if no future wake is pending.
+  uint64_t peekNextWakeTime() const;
+
   /// Check if the simulation is complete.
   bool isComplete() const;
 

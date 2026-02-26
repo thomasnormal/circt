@@ -417,9 +417,14 @@ SimTime ParallelScheduler::runParallel(uint64_t maxTimeFemtoseconds) {
   auto &eventScheduler = baseScheduler.getEventScheduler();
   const SimTime &currentTime = eventScheduler.getCurrentTime();
 
-  while (currentTime.realTime < maxTimeFemtoseconds) {
+  while (currentTime.realTime <= maxTimeFemtoseconds) {
     // Execute all delta cycles at current time
     executeCurrentTimeParallel();
+
+    // Do not advance to a wake beyond caller's time horizon.
+    uint64_t nextWakeFs = baseScheduler.peekNextWakeTime();
+    if (nextWakeFs > maxTimeFemtoseconds)
+      break;
 
     // Advance to next event time
     if (!baseScheduler.advanceTime()) {
