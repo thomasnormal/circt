@@ -1,5 +1,89 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-26 Session: Bytecode fast-path case-arm constant materialization fix
+
+### What changed
+- Updated:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - `tools/circt-sim/LLHDProcessInterpreterBytecode.h`
+  - `tools/circt-sim/LLHDProcessInterpreterBytecode.cpp`
+  - `test/circt-sim/llhd-process-case-external-consts.mlir`
+
+### Red-first debugging path
+- Re-enabled direct process fast paths behind explicit opt-in
+  `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1` (default remains off).
+- Added fast-path lit coverage by running the case-constant regression with and
+  without fast-path opt-in.
+- Confirmed red failure in fast-path mode:
+  - expected `sel=0/1/2/3 -> 170/187/204/221`
+  - observed `sel=0/1/2/3 -> 0/0/0/0`
+- Root cause:
+  - bytecode registers are re-zeroed each activation, but values defined
+    outside the process body (e.g., module-scope `hw.constant`) were assigned
+    registers without materialized initial values.
+
+### Fix
+- Added per-program bytecode register initializers (`registerInits`) and
+  applied them on every bytecode process activation before micro-op execution.
+- Bytecode compile now:
+  - records register initializers for in-process integer constants,
+  - scans values defined outside the process body and materializes integer
+    constants into register initializers,
+  - rejects unsupported external non-constant values to force fallback.
+- Added support for integer `arith.constant` materialization in bytecode.
+
+### Validation snapshot
+- Reproducer (fast-path opt-in):
+  - `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1 circt-sim --mode interpret ...mux4_case_bug_repro...`
+  - before: `aa dd dd dd`
+  - after: `aa bb cc dd`
+- Lit:
+  - `llvm-lit --filter=llhd-process-case-external-consts build_test/test/circt-sim`
+  - now passes both runs in the test:
+    - default interpreter path
+    - opt-in direct fast-path path
+
+## 2026-02-26 Session: LLHD interpret-mode case-arm correctness over external constants
+
+### What changed
+- Updated:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+- Added:
+  - `test/circt-sim/llhd-process-case-external-consts.mlir`
+
+### Red-first debugging path
+- Reproduced wrong case-arm behavior in `circt-sim --mode interpret` with
+  binary-literal style matching lowered to `cf.cond_br` chains:
+  - first/last arms correct, middle arms wrong.
+- Minimized to an LLHD/MLIR reproducer that compares against module-scope
+  `hw.constant` values and prints all four selected results.
+- Root cause:
+  - direct process fast-path execution used bytecode state that did not
+    materialize module-scope non-zero constants for comparisons, so equality
+    checks against `%c1/%c2/%c3` collapsed to incorrect behavior.
+- Fix:
+  - temporary mitigation at the time: disabled direct process fast-path
+    dispatch in interpreted mode to restore correctness immediately.
+  - superseded in a follow-up session (same day) by bytecode constant
+    materialization, then restored as explicit opt-in via
+    `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1`.
+
+### Realizations / surprises
+- This was not a Verilog `case` lowering bug; it was an execution-engine mode
+  bug in interpret-mode direct process dispatch.
+- "Fast but optional" paths in interpret mode can silently violate correctness
+  guarantees when they diverge from the interpreter's value initialization
+  model.
+
+### Validation snapshot
+- Focused runtime regression:
+  - `build_test/bin/circt-sim test/circt-sim/llhd-process-case-external-consts.mlir --top=test_case_external_consts`
+  - output after fix:
+    - `sel=0 y=170`
+    - `sel=1 y=187`
+    - `sel=2 y=204`
+    - `sel=3 y=221`
+
 ## 2026-02-25 Session: BMC symbolic-value legalization across flattened helper modules
 
 ### What changed

@@ -22,6 +22,7 @@
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
 #include <map>
@@ -77,6 +78,17 @@ private:
   /// Try to compile a single operation. Returns false if unsupported.
   bool compileOp(Operation *op, BytecodeProgram &program);
 
+  /// Record a constant register initialization that must hold on activation.
+  void recordRegisterInitializer(uint8_t reg, uint64_t value);
+
+  /// Resolve whether a value is an integer constant that can be represented
+  /// in the bytecode register file.
+  bool tryGetConstantValue(Value value, uint64_t &constantValue) const;
+
+  /// Materialize initial values for registers backed by constants defined
+  /// outside the process body.
+  bool materializeExternalValueInitializers(llhd::ProcessOp processOp);
+
   /// Try to compile a probe operation.
   bool compileProbe(llhd::ProbeOp probeOp, BytecodeProgram &program);
 
@@ -101,12 +113,85 @@ private:
   ProcessScheduler &scheduler;
   llvm::DenseMap<Value, uint8_t> valueToReg;
   llvm::DenseMap<Block *, uint32_t> blockToIndex;
+  llvm::SmallDenseMap<uint8_t, uint64_t, 16> registerInitializers;
   llvm::SmallVector<DeferredAuxBlock> deferredAuxBlocks;
   unsigned waitOpCount = 0;
   uint32_t nextAuxBlockIndex = 0;
   uint8_t nextReg = 0;
   bool tooManyRegs = false;
 };
+
+void BytecodeCompiler::recordRegisterInitializer(uint8_t reg, uint64_t value) {
+  auto it = registerInitializers.find(reg);
+  if (it != registerInitializers.end()) {
+    assert(it->second == value &&
+           "same bytecode register initialized with conflicting constants");
+    return;
+  }
+  registerInitializers.try_emplace(reg, value);
+}
+
+bool BytecodeCompiler::tryGetConstantValue(Value value,
+                                           uint64_t &constantValue) const {
+  Operation *defOp = value.getDefiningOp();
+  if (!defOp)
+    return false;
+
+  if (auto constOp = dyn_cast<hw::ConstantOp>(defOp)) {
+    APInt val = constOp.getValue();
+    if (val.getBitWidth() > 64)
+      return false;
+    constantValue = val.getZExtValue();
+    return true;
+  }
+
+  if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+    auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue());
+    if (!intAttr)
+      return false;
+    APInt val = intAttr.getValue();
+    if (val.getBitWidth() > 64)
+      return false;
+    constantValue = val.getZExtValue();
+    return true;
+  }
+
+  return false;
+}
+
+bool BytecodeCompiler::materializeExternalValueInitializers(
+    llhd::ProcessOp processOp) {
+  Region &body = processOp.getBody();
+
+  for (auto &entry : valueToReg) {
+    Value value = entry.getFirst();
+    uint8_t reg = entry.getSecond();
+
+    Operation *defOp = value.getDefiningOp();
+    if (!defOp) {
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        if (blockArg.getOwner()->getParent() != &body) {
+          failedOpName = "external-block-arg";
+          return false;
+        }
+      }
+      continue;
+    }
+
+    if (defOp->getParentRegion() == &body)
+      continue;
+
+    uint64_t constantValue = 0;
+    if (!tryGetConstantValue(value, constantValue)) {
+      failedOpName = ("external:" + defOp->getName().getStringRef()).str();
+      return false;
+    }
+
+    recordRegisterInitializer(reg, constantValue);
+  }
+
+  return true;
+}
 
 void BytecodeCompiler::emitParallelCopies(
     llvm::ArrayRef<std::pair<uint8_t, uint8_t>> copies,
@@ -226,12 +311,33 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
     APInt val = constOp.getValue();
     if (val.getBitWidth() > 64)
       return false;
+    uint8_t destReg = getOrAssignReg(constOp.getResult());
     MicroOp mop;
     mop.kind = MicroOpKind::Const;
-    mop.destReg = getOrAssignReg(constOp.getResult());
+    mop.destReg = destReg;
     mop.immediate = val.getZExtValue();
     mop.width = val.getBitWidth();
     program.ops.push_back(mop);
+    recordRegisterInitializer(destReg, mop.immediate);
+    return !tooManyRegs;
+  }
+
+  // arith.constant (integer only)
+  if (auto constOp = dyn_cast<arith::ConstantOp>(op)) {
+    auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue());
+    if (!intAttr)
+      return false;
+    APInt val = intAttr.getValue();
+    if (val.getBitWidth() > 64)
+      return false;
+    uint8_t destReg = getOrAssignReg(constOp.getResult());
+    MicroOp mop;
+    mop.kind = MicroOpKind::Const;
+    mop.destReg = destReg;
+    mop.immediate = val.getZExtValue();
+    mop.width = val.getBitWidth();
+    program.ops.push_back(mop);
+    recordRegisterInitializer(destReg, mop.immediate);
     return !tooManyRegs;
   }
 
@@ -719,6 +825,22 @@ BytecodeCompiler::compile(llhd::ProcessOp processOp) {
   program.blockOffsets.push_back(program.ops.size());
   program.numRegs = nextReg;
 
+  // Values defined outside the process body are not visited by block-local
+  // bytecode generation. Materialize constant-backed register initializers
+  // explicitly so resumed activations observe correct operands.
+  if (!materializeExternalValueInitializers(processOp))
+    return std::nullopt;
+
+  for (unsigned reg = 0; reg < 255; ++reg) {
+    auto it = registerInitializers.find(static_cast<uint8_t>(reg));
+    if (it == registerInitializers.end())
+      continue;
+    BytecodeProgram::RegisterInit init;
+    init.reg = static_cast<uint8_t>(reg);
+    init.value = it->second;
+    program.registerInits.push_back(init);
+  }
+
   // Validate: must have at least one wait and some signals to observe.
   if (program.waitSignals.empty()) {
     failedOpName = "llhd.wait(no-observed)";
@@ -762,6 +884,8 @@ bool executeBytecodeProgram(const BytecodeProgram &program,
                             uint32_t startBlock) {
   uint64_t regs[256];
   std::memset(regs, 0, sizeof(regs));
+  for (const auto &init : program.registerInits)
+    regs[init.reg] = init.value;
 
   // Collect drives to batch into a single Event at the end.
   llvm::SmallVector<PendingDrive, 4> pendingDrives;

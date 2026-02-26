@@ -11328,17 +11328,30 @@ void LLHDProcessInterpreter::executeProcess(ProcessId procId) {
     }
   }
 
-  // Direct fast paths for known hot process loop shapes. These execute
-  // without compile-budgeted thunk installation and avoid repeated
-  // compile-mode missing-thunk deopts for common AVIP clock loops.
-  if (tryExecuteDirectProcessFastPath(procId, state)) {
-    // Direct fast paths return before the generic post-activation invariant
-    // recovery below. Keep unresolved call-stack / sequencer-retry processes
-    // runnable so phase/sequencer wait chains cannot stall permanently.
-    if (!state.halted && !state.waiting &&
-        (!state.callStack.empty() || state.sequencerGetRetryCallOp))
-      scheduler.scheduleProcess(procId, SchedulingRegion::Active);
-    return;
+  // Interpreted mode prioritizes semantic fidelity over speed. Keep direct
+  // process fast paths disabled by default; allow explicit opt-in for local
+  // experimentation/debug via CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1.
+  static const bool enableDirectFastPaths = []() {
+    if (const char *env = std::getenv("CIRCT_SIM_ENABLE_DIRECT_FASTPATHS")) {
+      char c = env[0];
+      return c == '1' || c == 'y' || c == 'Y' || c == 't' || c == 'T';
+    }
+    return false;
+  }();
+  if (enableDirectFastPaths) {
+    // Direct fast paths for known hot process loop shapes. These execute
+    // without compile-budgeted thunk installation and avoid repeated
+    // compile-mode missing-thunk deopts for common AVIP clock loops.
+    if (tryExecuteDirectProcessFastPath(procId, state)) {
+      // Direct fast paths return before the generic post-activation invariant
+      // recovery below. Keep unresolved call-stack / sequencer-retry
+      // processes runnable so phase/sequencer wait chains cannot stall
+      // permanently.
+      if (!state.halted && !state.waiting &&
+          (!state.callStack.empty() || state.sequencerGetRetryCallOp))
+        scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+      return;
+    }
   }
 
   // Compile-mode entry hook: try native process thunk first, then attempt
