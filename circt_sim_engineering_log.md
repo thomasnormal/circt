@@ -230,3 +230,48 @@
     -> no matches
   - `build_clang_test/bin/llvm-lit -sv build_test/test/Tools/circt-sim/max-time-no-false-hit-on-idle.mlir build_test/test/Tools/circt-sim/max-time-inclusive-current-time.mlir build_test/test/Tools/circt-sim/interface-pullup-distinct-driver-sensitivity.sv`
     -> 3/3 passed
+
+## 2026-02-26
+- Additional audit finding in `func.call_indirect` site-cache interpreted path:
+  `interpretFuncBody(...)` return value was ignored in `ci_cache_interpreted`.
+  - Behavioral consequence: on callee failure, no result overwrite occurred,
+    so the call op could reuse a stale result value from a previous iteration.
+  - Deterministic reproducer built: first iteration succeeds, second iteration
+    fails in callee (`llhd.drv` to unknown ref), same call site executes twice;
+    before fix observed `sum=2` (stale), expected `sum=1`.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+  - In `ci_cache_interpreted`, capture `LogicalResult` from
+    `interpretFuncBody`, handle `failed()` by propagating suspension
+    (`waiting`) or writing zero results, and skip result assignment when
+    suspended.
+- Added regression:
+  - `test/Tools/circt-sim/call-indirect-direct-dispatch-cache-failure-result.mlir`
+  - Checks `sum=1` and `CHECK-NOT: sum=2`.
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/call-indirect-direct-dispatch-cache-failure-result.mlir`
+    -> `sum=1`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/call-indirect-direct-dispatch-cache.mlir`
+    -> `sum=85`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/vtable-dispatch-internal-failure.mlir`
+    -> expected warnings + prints observed
+  - `ninja -C build_test check-circt-tools-circt-sim`
+    -> failed for unrelated pre-existing workspace issues in unittests
+       (`unittests/Support/CIRCTSupportTests` link error and
+       `unittests/Tools/circt-sim/LLHDProcessInterpreterTest.cpp` compile error).
+- Follow-up audit finding in `ci_main_interpreted` recursion bookkeeping:
+  failure paths decremented recursion depth twice (once unconditionally after
+  return from `interpretFuncBody`, and again in failure/suspension branches).
+  - Risk: undercounted recursion depth for failing virtual calls.
+- Fix:
+  - removed duplicate `decrementRecursionDepthEntry(...)` calls in the
+    `failed(funcResult)` branches of
+    `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`.
+- Spot verification after fix:
+  - `ninja -C build_test circt-sim`
+  - reran:
+    - `test/Tools/circt-sim/call-indirect-direct-dispatch-cache-failure-result.mlir`
+    - `test/Tools/circt-sim/call-indirect-direct-dispatch-cache.mlir`
+    - `test/Tools/circt-sim/vtable-dispatch-internal-failure.mlir`
+  - all produced expected outputs.
