@@ -39,6 +39,7 @@
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include <chrono>
+#include <functional>
 
 #ifdef CIRCT_SIM_JIT_ENABLED
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
@@ -1166,42 +1167,14 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
     return plan;
   }
 
-  // Step C: SCC sink verification — verify that waitBlock is reachable from
-  // all paths starting at resumeBlock. Concretely: every block reachable from
-  // resumeBlock must have a path to waitBlock.
+  // Step C: SCC sink verification — ensure callback resumption cannot enter
+  // an infinite loop that bypasses the wait block.
   //
-  // We verify a simpler sufficient condition: there exists at least one
-  // back-edge from a body block to waitBlock, AND there are no infinite loops
-  // (blocks unreachable from waitBlock in the reverse CFG).
+  // Any block reachable from resumeBlock that can reach waitBlock is safe.
+  // For blocks that do not reach waitBlock, allow only finite acyclic tails
+  // (e.g. wait delay -> terminate). Reject cycles in that non-reentering tail.
   {
-    // First check: at least one back-edge to waitBlock exists.
-    bool hasBackEdge = false;
-    for (Block &block : processOp.getBody()) {
-      if (&block == plan.waitBlock)
-        continue;
-      if (auto *terminator = block.getTerminator()) {
-        for (Block *succ : terminator->getSuccessors()) {
-          if (succ == plan.waitBlock) {
-            hasBackEdge = true;
-            break;
-          }
-        }
-      }
-      if (hasBackEdge)
-        break;
-    }
-
-    if (!hasBackEdge) {
-      plan.model = ExecModel::Coroutine;
-      LLVM_DEBUG(
-          llvm::dbgs()
-          << "[classify] → Coroutine: no back-edge to wait block\n");
-      return plan;
-    }
-
-    // Second check: verify no infinite loops that bypass the wait.
-    // Do a reverse reachability analysis from waitBlock: all blocks reachable
-    // from resumeBlock must be reverse-reachable from waitBlock.
+    // Reverse reachability from waitBlock.
     llvm::DenseSet<Block *> reverseReachable;
     llvm::SmallVector<Block *, 8> worklist;
     reverseReachable.insert(plan.waitBlock);
@@ -1228,16 +1201,50 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
       }
     }
 
-    // Every block forward-reachable from resumeBlock must be reverse-reachable
-    // from waitBlock. If not, there's a path that never reaches the wait.
+    // Fast path: all resume-reachable blocks can re-enter wait.
+    bool allReachWait = true;
     for (Block *fwd : forwardReachable) {
       if (!reverseReachable.count(fwd)) {
-        plan.model = ExecModel::Coroutine;
-        LLVM_DEBUG(
-            llvm::dbgs()
-            << "[classify] → Coroutine: block reachable from resume but "
-               "not reaching wait (possible infinite loop)\n");
-        return plan;
+        allReachWait = false;
+        break;
+      }
+    }
+
+    if (!allReachWait) {
+      llvm::DenseSet<Block *> nonReenterTail;
+      for (Block *fwd : forwardReachable)
+        if (!reverseReachable.count(fwd))
+          nonReenterTail.insert(fwd);
+
+      // Reject only if the non-reentering tail has a cycle.
+      llvm::DenseMap<Block *, uint8_t> color;
+      std::function<bool(Block *)> hasTailCycle = [&](Block *block) -> bool {
+        color[block] = 1; // visiting
+        if (auto *terminator = block->getTerminator()) {
+          for (Block *succ : terminator->getSuccessors()) {
+            if (!nonReenterTail.count(succ))
+              continue;
+            uint8_t succColor = color.lookup(succ);
+            if (succColor == 1)
+              return true;
+            if (succColor == 0 && hasTailCycle(succ))
+              return true;
+          }
+        }
+        color[block] = 2; // done
+        return false;
+      };
+
+      for (Block *tailBlock : nonReenterTail) {
+        if (color.lookup(tailBlock) != 0)
+          continue;
+        if (hasTailCycle(tailBlock)) {
+          plan.model = ExecModel::Coroutine;
+          LLVM_DEBUG(llvm::dbgs()
+                     << "[classify] → Coroutine: infinite loop reachable from "
+                        "resume without re-entering wait\n");
+          return plan;
+        }
       }
     }
   }

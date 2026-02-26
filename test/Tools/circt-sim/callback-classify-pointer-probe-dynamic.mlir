@@ -1,4 +1,4 @@
-// RUN: env CIRCT_SIM_COMPILE_REPORT=1 circt-sim %s --max-time=2000000 2>&1 | FileCheck %s
+// RUN: env CIRCT_SIM_COMPILE_REPORT=1 circt-sim %s --skip-passes --max-time=2000000 2>&1 | FileCheck %s
 
 // Pointer-backed probe-only waits must not become CallbackStaticObserved.
 // The pointer handle is stable while pointee fields may change; these waits

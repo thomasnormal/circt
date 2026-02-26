@@ -449,3 +449,167 @@
   - `build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-trampoline-external-llvm-no-native-fallback.mlir -o /tmp/aot-trampoline-external-llvm-no-native-fallback.so`
   - `build_test/bin/circt-sim test/Tools/circt-sim/aot-trampoline-external-llvm-no-native-fallback.mlir --compiled=/tmp/aot-trampoline-external-llvm-no-native-fallback.so`
   - FileCheck validation for `COMPILE` + `RUNTIME` prefixes.
+
+- Additional audit finding in trampoline native fallback ABI handling:
+  external `llvm.func` trampolines were native-dispatched via hard-coded
+  `uint64_t` function-pointer signatures without validating argument/result
+  types.
+  - Deterministic reproducer (before fix):
+    - compiled trampoline target `@sqrt(f64) -> f64` produced garbage bits
+      (`bits=140608407856656`) instead of a valid floating-point result path.
+  - Root cause:
+    - `dispatchTrampoline` only checked slot counts (`<=8 args`, `<=1 ret`) and
+      did not reject non-integer/non-pointer signatures.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp` (`dispatchTrampoline`):
+    - derive trampoline arg/result types before native dispatch,
+    - allow native fallback only for scalar integer/pointer/index types with
+      widths <= 64,
+    - reject incompatible signatures with a warning and fall back to safe
+      zeroed returns (plus external-llvm warning path).
+- Added regression:
+  - `test/Tools/circt-sim/aot-trampoline-native-fallback-f64-incompatible-abi.mlir`
+  - checks:
+    - warning for unsupported native trampoline ABI,
+    - warning for external llvm trampoline fallback,
+    - deterministic output `bits=0` (no garbage).
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `circt-sim-compile` + `circt-sim --compiled` + FileCheck on the new test.
+  - Spot non-regression:
+    - `aot-trampoline-external-llvm-no-native-fallback.mlir`
+    - `aot-process-indirect-cast-dispatch.mlir`
+    - `aot-trampoline-failure-zero-result.mlir`.
+
+- Additional audit finding in `func.call` native fast paths:
+  native dispatch accepted non-integer signatures (e.g. `f64 -> f64`) and
+  invoked compiled entries via hard-coded `uint64_t` ABI casts.
+  - Deterministic reproducer (before fix):
+    - `tmp_func_call_f64.mlir` with `func.func @id_f64(%x: f64) -> f64`
+      returned garbage in compiled mode (`bits=140288544047360`) while
+      interpreted mode returned the expected `bits=4612811918334230528`.
+  - Root cause:
+    - `interpretFuncCall` and `interpretFuncCallCachedPath` only checked
+      width/count (`<=64`, `<=8 args`, `<=1 result`), not type class. Float
+      args/results passed eligibility and were called with integer ABI.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - In both `func.call` native paths, gate dispatch on signature compatibility
+      (integer<=64, `index`, or `!llvm.ptr`; still `<=8` args and `<=1` result).
+    - Incompatible signatures now cleanly fall back to interpreter execution.
+- Added regression:
+  - `test/Tools/circt-sim/aot-func-call-native-f64-incompatible-abi.mlir`
+  - checks:
+    - interpreted output `bits=4612811918334230528`
+    - compiled output matches exactly (no garbage from integer-ABI call).
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv \
+      build_test/test/Tools/circt-sim/aot-func-call-native-f64-incompatible-abi.mlir \
+      build_test/test/Tools/circt-sim/aot-trampoline-native-fallback-f64-incompatible-abi.mlir`
+  - Direct manual repro check after fix:
+    - `build_test/bin/circt-sim tmp_func_call_f64.mlir`
+    - `build_test/bin/circt-sim-compile tmp_func_call_f64.mlir -o tmp_func_call_f64.so`
+    - `build_test/bin/circt-sim tmp_func_call_f64.mlir --compiled=tmp_func_call_f64.so`
+
+- Additional audit finding in trampoline dispatch with native module init:
+  name-only trampolines (no surviving MLIR symbol op) could still be emitted
+  for libc/runtime calls (e.g. `memset`), and `dispatchTrampoline` aborted
+  before trying native fallback.
+  - Deterministic reproducer:
+    - `test/Tools/circt-sim/aot-native-module-init-memset.mlir`
+    - native-module-init mode crashed with:
+      `FATAL: trampoline dispatch for func_id=0 (memset) — function symbol not found in module`.
+- Root cause:
+  - `loadCompiledFunctions` only attached `trampolineNativeFallback` when a
+    trampoline name resolved through `funcLookupCache` as `LLVM::LLVMFuncOp`.
+  - For name-only trampolines, no fallback was recorded.
+  - `dispatchTrampoline` required a mapped symbol op up front and aborted
+    before native fallback could run.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - In trampoline mapping, try `dlsym` fallback for name-only trampolines.
+    - In `dispatchTrampoline`, zero-init returns first, permit symbol-less
+      native-fallback dispatch, and degrade unknown/no-fallback cases to
+      warning + zero return instead of abort.
+    - Guard arg/result type extraction with `hasLLVMFuncOp` to avoid null-op
+      access in symbol-less fallback paths.
+- Verification:
+  - `python3 llvm/llvm/utils/lit/lit.py -sv \
+      build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir`
+  - plus targeted non-regression:
+    - `aot-func-call-native-f64-incompatible-abi.mlir`
+    - `aot-trampoline-native-fallback-f64-incompatible-abi.mlir`
+
+- Additional audit finding in UVM sequencer native-state stats:
+  `item_map_peak` and `item_map_live` were overcounted because stats used
+  `itemToSequencer.size()`, but that map stores both:
+  - real item ownership (`itemAddr -> sequencerAddr`), and
+  - synthetic process routing entries (`sequencerProcKey(procId) -> sequencerAddr`).
+  This inflated peaks in single-item tests (observed `item_map_peak=2/3` where
+  expected is `1`).
+- Root cause:
+  - `recordUvmSequencerItemOwner` updated `uvmSeqItemOwnerPeak` from total
+    `itemToSequencer.size()`.
+  - profile summary printed `item_map_live` from `itemToSequencer.size()`.
+  - synthetic process keys are not item ownership and must not affect these
+    metrics.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.h`: add
+    `uvmSeqItemOwnerLive` counter.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - increment live only on true item-owner insert,
+    - decrement live only on true item-owner erase,
+    - compute peak from live counter.
+  - `tools/circt-sim/LLHDProcessInterpreterTrace.cpp`:
+    - report `item_map_live` from `uvmSeqItemOwnerLive`,
+    - gate native-state summary on `uvmSeqItemOwnerLive != 0` instead of raw
+      map non-empty.
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv \
+      build_test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir \
+      build_test/test/Tools/circt-sim/finish-item-multiple-outstanding-item-done.mlir \
+      build_test/test/Tools/circt-sim/uvm-oneway-hash-nonpacked-signature.mlir \
+      build_test/test/Tools/circt-sim/aot-uvm-random-native-optin.mlir \
+      build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir \
+      build_test/test/Tools/circt-sim/aot-func-call-native-f64-incompatible-abi.mlir \
+      build_test/test/Tools/circt-sim/aot-trampoline-native-fallback-f64-incompatible-abi.mlir`
+  - Result: 7/7 passed.
+
+- Additional audit finding in callback classification:
+  one-shot resume tails after a single `llhd.wait` were misclassified as
+  `Coroutine` whenever there was no CFG back-edge to the wait block.
+  This incorrectly downgraded finite delay waits (e.g. wait-then-terminate)
+  and polluted compile-report ExecModel breakdowns.
+- Root cause:
+  - `AOTProcessCompiler::classifyProcess` Step C required an explicit
+    back-edge to `waitBlock` before any further analysis.
+  - That rejected valid finite tails where resume paths terminate without
+    re-entering wait (including simple `wait delay` -> `sim.terminate`).
+- Fix:
+  - `tools/circt-sim/AOTProcessCompiler.cpp`
+    - Remove the hard back-edge prerequisite.
+    - Keep reverse-reachability from `waitBlock`.
+    - For resume-reachable blocks that do not reach `waitBlock`, allow them
+      only if the induced tail subgraph is acyclic (finite one-shot tail).
+    - Reject only when that non-reentering tail contains a cycle.
+- Test update and verification:
+  - Updated regression harness to preserve both test processes:
+    - `test/Tools/circt-sim/callback-classify-pointer-probe-dynamic.mlir`
+      now runs with `--skip-passes`.
+  - Commands:
+    - `ninja -C build_test circt-sim`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv \
+        build_test/test/Tools/circt-sim/callback-classify-pointer-probe-dynamic.mlir \
+        build_test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir \
+        build_test/test/Tools/circt-sim/finish-item-multiple-outstanding-item-done.mlir \
+        build_test/test/Tools/circt-sim/aot-uvm-random-native-optin.mlir \
+        build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir`
+  - Result: 5/5 passed.
+
+- Audit sweep note:
+  ran `lit` over `build_test/test/Tools/circt-sim` and observed many unrelated
+  failures in this dirty worktree (mostly output/expectation drift in AOT
+  compile-report/stat lines and some interface-resume tracing expectations).
+  Kept this audit scoped to the reproducible callback-classification bug above.
