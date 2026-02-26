@@ -421,3 +421,31 @@
     - `aot-call-indirect-result-arity-mismatch.mlir` (COMPILE+RUNTIME)
   - Spot non-regression:
     - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK).
+
+- Additional audit finding in trampoline dispatch for external `llvm.func` symbols:
+  when a compiled trampoline targeted an external `llvm.func` with no native
+  fallback symbol, `dispatchTrampoline` attempted `interpretLLVMFuncBody` on an
+  external declaration and crashed.
+  - Deterministic reproducer (before fix):
+    - compiled run of external trampoline target `@missing_fn(i64,i64) -> !llvm.struct<(i64,i64)>`
+      aborted with stack dump from `interpretLLVMFuncBody`.
+  - Related surprise found during repro:
+    - native trampoline fallback path also accepted unsupported ABI shapes
+      (`numArgs > 8` or `numRets > 1`), which could leak garbage return slots.
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp` (`dispatchTrampoline`):
+    - zero-initialize return slots at function entry for all paths,
+    - guard native fallback to supported ABI subset (`args <= 8`, `rets <= 1`),
+    - for external `llvm.func` trampolines without compatible native fallback,
+      return zeroed outputs with a warning instead of trying to interpret a
+      declaration.
+- Added regression:
+  - `test/Tools/circt-sim/aot-trampoline-external-llvm-no-native-fallback.mlir`
+  - checks:
+    - no crash/stack dump,
+    - warning about missing native fallback,
+    - deterministic output `r=0`.
+- Verification:
+  - `build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-trampoline-external-llvm-no-native-fallback.mlir -o /tmp/aot-trampoline-external-llvm-no-native-fallback.so`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/aot-trampoline-external-llvm-no-native-fallback.mlir --compiled=/tmp/aot-trampoline-external-llvm-no-native-fallback.so`
+  - FileCheck validation for `COMPILE` + `RUNTIME` prefixes.
