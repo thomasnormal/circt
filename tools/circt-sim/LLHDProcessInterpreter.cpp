@@ -39099,9 +39099,42 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
                          << " numArgs=" << numArgs << " numRets=" << numRets
                          << " activeProcessId=" << activeProcessId << "\n");
 
+  bool hasFuncOp = funcId < trampolineFuncOps.size() && trampolineFuncOps[funcId];
+  bool hasLLVMFuncOp =
+      funcId < trampolineLLVMFuncOps.size() && trampolineLLVMFuncOps[funcId];
+  // Look up the function symbol for this trampoline.
+  if (!hasFuncOp && !hasLLVMFuncOp) {
+    llvm::errs() << "[circt-sim] FATAL: trampoline dispatch for func_id="
+                 << funcId;
+    if (funcName)
+      llvm::errs() << " (" << funcName << ")";
+    llvm::errs() << " — function symbol not found in module\n";
+    abort();
+  }
+
+  mlir::func::FuncOp funcOp = hasFuncOp ? trampolineFuncOps[funcId]
+                                        : mlir::func::FuncOp();
+  mlir::LLVM::LLVMFuncOp llvmFuncOp =
+      hasLLVMFuncOp ? trampolineLLVMFuncOps[funcId] : mlir::LLVM::LLVMFuncOp();
+
+  // Initialize return slots up-front so unsupported/failed paths never leak
+  // stale stack values back into compiled code.
+  if (numRets > 0 && rets)
+    std::fill_n(rets, numRets, 0);
+
   // Check for native fallback first (LLVM functions like malloc).
   if (funcId < trampolineNativeFallback.size() &&
       trampolineNativeFallback[funcId]) {
+    if (numArgs > 8 || numRets > 1) {
+      static bool warnedUnsupportedTrampolineNativeAbi = false;
+      if (!warnedUnsupportedTrampolineNativeAbi) {
+        llvm::errs()
+            << "[circt-sim] WARNING: unsupported trampoline native fallback ABI"
+            << " (args=" << numArgs << ", rets=" << numRets
+            << "); falling back\n";
+        warnedUnsupportedTrampolineNativeAbi = true;
+      }
+    } else {
     void *fptr = trampolineNativeFallback[funcId];
     using F0 = uint64_t (*)();
     using F1 = uint64_t (*)(uint64_t);
@@ -39131,25 +39164,21 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
     if (numRets > 0)
       rets[0] = result;
     return;
+    }
   }
 
-  bool hasFuncOp = funcId < trampolineFuncOps.size() && trampolineFuncOps[funcId];
-  bool hasLLVMFuncOp =
-      funcId < trampolineLLVMFuncOps.size() && trampolineLLVMFuncOps[funcId];
-  // Look up the function symbol for this trampoline.
-  if (!hasFuncOp && !hasLLVMFuncOp) {
-    llvm::errs() << "[circt-sim] FATAL: trampoline dispatch for func_id="
-                 << funcId;
-    if (funcName)
-      llvm::errs() << " (" << funcName << ")";
-    llvm::errs() << " — function symbol not found in module\n";
-    abort();
+  // External llvm.func declarations have no body to interpret. If there is no
+  // compatible native fallback path above, return zero-initialized outputs.
+  if (hasLLVMFuncOp && llvmFuncOp.isExternal()) {
+    static bool warnedExternalLLVMTrampolineNoFallback = false;
+    if (!warnedExternalLLVMTrampolineNoFallback) {
+      llvm::errs() << "[circt-sim] WARNING: external llvm.func trampoline "
+                   << (funcName ? funcName : "<null>")
+                   << " has no compatible native fallback; returning zeros\n";
+      warnedExternalLLVMTrampolineNoFallback = true;
+    }
+    return;
   }
-
-  mlir::func::FuncOp funcOp = hasFuncOp ? trampolineFuncOps[funcId]
-                                        : mlir::func::FuncOp();
-  mlir::LLVM::LLVMFuncOp llvmFuncOp =
-      hasLLVMFuncOp ? trampolineLLVMFuncOps[funcId] : mlir::LLVM::LLVMFuncOp();
 
   // Use the currently active process ID. The trampoline is called from
   // within the interpreter's call chain (interpreter → native func →
@@ -39190,10 +39219,6 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
                  << ", aborting call\n";
     return;
   }
-  // Initialize return slots to zero up-front so failed/suspended interpreted
-  // calls cannot leak stale stack values back into compiled code.
-  if (numRets > 0 && rets)
-    std::fill_n(rets, numRets, 0);
   ++callState.callDepth;
   ++aotDepth;
   maxAotDepth = std::max(maxAotDepth, aotDepth);
