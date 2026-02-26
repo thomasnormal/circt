@@ -292,9 +292,20 @@ bool BytecodeCompiler::compileDrive(llhd::DriveOp driveOp,
   if (sigVal.getWidth() > 64)
     return false;
 
-  // Only support epsilon delay (0ns, 1d, 0e).
-  // We'll check the delay value at runtime via the interpreter's
-  // constant_time resolution, but for now just accept it.
+  // Bytecode drive lowering only supports near-immediate scheduling
+  // (<0 time, 0 delta, epsilon <= 1>). Non-trivial delays must stay on the
+  // generic interpreter path to preserve drive timing semantics.
+  auto constTimeOp = driveOp.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+  if (!constTimeOp) {
+    failedOpName = "llhd.drv(dynamic-time)";
+    return false;
+  }
+  auto delayAttr = constTimeOp.getValueAttr();
+  if (delayAttr.getTime() != 0 || delayAttr.getDelta() != 0 ||
+      delayAttr.getEpsilon() > 1) {
+    failedOpName = "llhd.drv(delay)";
+    return false;
+  }
 
   MicroOp op;
   op.kind = MicroOpKind::Drive;

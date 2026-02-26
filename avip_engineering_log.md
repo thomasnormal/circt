@@ -1,5 +1,43 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-26 Session: Bytecode fast-path drive-delay timing guard
+
+### Red-first repro
+- Added `test/circt-sim/llhd-process-bytecode-drive-delay.mlir` with two runs:
+  - default interpreter path
+  - `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1` opt-in direct fast-path path
+- Observed red failure under fast-path opt-in:
+  - expected `early=0`, observed `early=1`
+  - indicates non-trivial `llhd.drv` delay collapsed to same-slot update timing.
+
+### Root cause
+- Bytecode `llhd.drv` lowering accepted arbitrary drive delays but encoded only
+  `(signalId, value, width)` and executed via `queueSignalUpdateFast`, which
+  has no real-time/delta delay payload.
+- Result: non-immediate drive delays could be executed too early in direct
+  fast-path mode.
+
+### Fix
+- Tightened bytecode drive eligibility in
+  `tools/circt-sim/LLHDProcessInterpreterBytecode.cpp`:
+  - require `llhd.constant_time` drive time
+  - require near-immediate delay only:
+    - `time == 0`
+    - `delta == 0`
+    - `epsilon <= 1`
+  - otherwise reject bytecode compile with explicit fallback reason:
+    `llhd.drv(delay)` / `llhd.drv(dynamic-time)`.
+
+### Validation
+- New regression now passes in both modes.
+- Existing fast-path regression
+  `test/circt-sim/llhd-process-case-external-consts.mlir` still passes.
+- Differential sweep (`--filter=llhd-process`) with fast-path off vs on shows
+  no extra fast-path-only failures; both modes report the same two existing
+  baseline failures:
+  - `llhd-process-wait-condition-func.mlir`
+  - `llhd-process-wait-no-delay-no-signals.mlir`
+
 ## 2026-02-26 Session: Bytecode fast-path case-arm constant materialization fix
 
 ### What changed
