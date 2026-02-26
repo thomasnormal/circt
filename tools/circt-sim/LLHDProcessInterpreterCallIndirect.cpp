@@ -336,6 +336,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     };
 
+    auto setCallIndirectResults =
+        [&](llvm::ArrayRef<InterpretedValue> values) {
+          auto opResults = callIndirectOp.getResults();
+          unsigned i = 0;
+          for (; i < opResults.size() && i < values.size(); ++i)
+            setValue(procId, opResults[i], values[i]);
+          // Mismatched call_indirect signatures can request more results than
+          // the resolved callee produces (e.g. via unrealized casts). Zero-fill
+          // the tail to avoid stale values and out-of-bounds reads.
+          for (; i < opResults.size(); ++i) {
+            unsigned width = getTypeWidth(opResults[i].getType());
+            setValue(procId, opResults[i],
+                     InterpretedValue(llvm::APInt(width, 0)));
+          }
+        };
+
     if (funcPtrVal.isX()) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
@@ -738,8 +754,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                     bits = intTy.getWidth();
                   nativeResults.push_back(InterpretedValue(
                       llvm::APInt(64, result).zextOrTrunc(bits)));
-                  for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-                    setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
+                  setCallIndirectResults(nativeResults);
                 }
                 if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
                   ++nativeEntryCallCount;
@@ -765,10 +780,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break;
         }
 
-        // Set return values
-        for (auto [result, val] :
-             llvm::zip(callIndirectOp.getResults(), results))
-          setValue(procId, result, val);
+        // Set return values.
+        setCallIndirectResults(results);
 
         resolved = true;
       } while (false);
@@ -1526,8 +1539,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                     bits = intTy.getWidth();
                   nativeResults.push_back(InterpretedValue(
                       llvm::APInt(64, result).zextOrTrunc(bits)));
-                  for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-                    setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
+                  setCallIndirectResults(nativeResults);
                 }
                 if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
                   ++nativeEntryCallCount;
@@ -1550,9 +1562,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         --cs2.callDepth;
         if (failed(callRes))
           break;
-        for (auto [result, val] :
-             llvm::zip(callIndirectOp.getResults(), sResults))
-          setValue(procId, result, val);
+        setCallIndirectResults(sResults);
         staticResolved = true;
       } while (false);
       if (!staticResolved) {
@@ -2016,8 +2026,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 bits = intTy.getWidth();
               nativeResults.push_back(
                   InterpretedValue(llvm::APInt(64, result).zextOrTrunc(bits)));
-              for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-                setValue(procId, callIndirectOp.getResult(i), nativeResults[i]);
+              setCallIndirectResults(nativeResults);
             }
             if (entry.cachedFid < compiledFuncIsNative.size() &&
                 compiledFuncIsNative[entry.cachedFid])
@@ -2056,8 +2065,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
         if (processStates[procId].waiting)
           return success();
-        for (auto [res, val] : llvm::zip(callIndirectOp.getResults(), fastResults))
-          setValue(procId, res, val);
+        setCallIndirectResults(fastResults);
         return success();
       }
       ++ciSiteCacheMisses;
@@ -4321,8 +4329,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               results.push_back(InterpretedValue(
                   llvm::APInt(64, result).zextOrTrunc(bits)));
             }
-            for (unsigned i = 0; i < callIndirectOp.getNumResults(); ++i)
-              setValue(procId, callIndirectOp.getResult(i), results[i]);
+            setCallIndirectResults(results);
             // Decrement depth counter after returning.
             if (indAddedToVisited)
               decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
@@ -4429,10 +4436,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return success();
     }
 
-    // Set results
-    for (auto [result, retVal] : llvm::zip(callIndirectOp.getResults(), results)) {
-      setValue(procId, result, retVal);
-    }
+    // Set results.
+    setCallIndirectResults(results);
 
     if (!disableTypeNameCache && calleeName.contains("get_type_name") &&
         !calleeName.contains("get_type_name_enabled") &&
