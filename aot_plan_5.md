@@ -582,6 +582,12 @@ Status update:
     - codegen-ready functions: `3425 -> 3426` (`+1`)
     - only remaining residual strip reason:
       - `1x body_nonllvm_op:hw.struct_create`.
+- type-compat follow-up landed: treat `FloatType` as LLVM-compatible in
+  boundary/aggregate conversion (`convertToLLVMCompatibleType`).
+  - regression added:
+    - `aot-hw-struct-float-field-cast-lowering.mlir`
+  - status on `uvm_seq_body` unchanged after this patch:
+    - still `1x body_nonllvm_op:hw.struct_create` residual.
 
 ---
 
