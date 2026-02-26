@@ -96,6 +96,26 @@ size_t DeltaCycleQueue::getEventCount(SchedulingRegion region) const {
   return regionQueues[static_cast<size_t>(region)].size();
 }
 
+size_t DeltaCycleQueue::cancelByTag(uint64_t tag) {
+  size_t removed = 0;
+  uint16_t mask = activeRegionMask;
+  while (mask) {
+    unsigned idx = __builtin_ctz(mask);
+    auto &queue = regionQueues[idx];
+    size_t before = queue.size();
+    queue.erase(std::remove_if(queue.begin(), queue.end(),
+                               [tag](const Event &event) {
+                                 return event.getTag() == tag;
+                               }),
+                queue.end());
+    removed += before - queue.size();
+    if (queue.empty())
+      activeRegionMask &= ~(1u << idx);
+    mask &= mask - 1; // Clear lowest set bit
+  }
+  return removed;
+}
+
 void DeltaCycleQueue::clear() {
   // Only clear regions that have events (avoids touching cold cache lines).
   uint16_t mask = activeRegionMask;
@@ -495,6 +515,52 @@ bool TimeWheel::hasEvents() const { return totalEvents > 0; }
 
 size_t TimeWheel::getEventCount() const { return totalEvents; }
 
+size_t TimeWheel::cancelByTag(uint64_t tag) {
+  size_t removed = 0;
+
+  for (size_t levelIdx = 0; levelIdx < levels.size(); ++levelIdx) {
+    auto &level = levels[levelIdx];
+
+    // Scan all slots for this level by reading the slot bitmask.
+    for (size_t word = 0; word < Level::kBitmaskWords; ++word) {
+      uint64_t bits = level.slotBitmask[word];
+      while (bits) {
+        unsigned bit = __builtin_ctzll(bits);
+        size_t slotIdx = word * 64 + bit;
+        auto &slot = level.slots[slotIdx];
+
+        for (uint32_t d = 0; d < TimeWheel::Slot::kInlineDeltaSlots; ++d)
+          removed += slot.deltaQueues[d].cancelByTag(tag);
+
+        for (auto it = slot.extraDeltaQueues.begin();
+             it != slot.extraDeltaQueues.end();) {
+          removed += it->second.cancelByTag(tag);
+          if (!it->second.hasAnyEvents())
+            it = slot.extraDeltaQueues.erase(it);
+          else
+            ++it;
+        }
+
+        slot.hasEvents = slot.hasAnyEvents();
+        updateSlotBit(levelIdx, slotIdx, slot.hasEvents);
+        bits &= bits - 1; // Clear lowest set bit
+      }
+    }
+  }
+
+  for (auto it = overflow.begin(); it != overflow.end();) {
+    removed += it->second.cancelByTag(tag);
+    if (!it->second.hasAnyEvents())
+      it = overflow.erase(it);
+    else
+      ++it;
+  }
+
+  assert(totalEvents >= removed && "cancel removed more events than total");
+  totalEvents -= removed;
+  return removed;
+}
+
 void TimeWheel::clear() {
   for (auto &level : levels) {
     for (auto &slot : level.slots) {
@@ -542,10 +608,18 @@ const SimTime &EventScheduler::getCurrentTime() const {
 SimTime EventScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
   while (!isComplete() && wheel->getCurrentTime().realTime <= maxTimeFemtoseconds) {
     if (!stepDelta()) {
-      // Try to advance to next event
+      // Try to advance to next event, but do not move beyond the caller's
+      // requested time horizon.
+      SimTime nextTime;
+      if (!wheel->findNextEventTime(nextTime))
+        break;
+      if (nextTime.realTime > maxTimeFemtoseconds)
+        break;
+      SimTime before = wheel->getCurrentTime();
       if (!wheel->advanceToNextEvent())
         break;
-      ++stats.realTimeAdvances;
+      if (wheel->getCurrentTime().realTime > before.realTime)
+        ++stats.realTimeAdvances;
     }
   }
   return wheel->getCurrentTime();
@@ -616,6 +690,10 @@ void EventScheduler::advanceTimeTo(uint64_t timeFs) {
 }
 
 bool EventScheduler::isComplete() const { return !wheel->hasEvents(); }
+
+size_t EventScheduler::cancelEventsByTag(uint64_t tag) {
+  return wheel->cancelByTag(tag);
+}
 
 void EventScheduler::reset() {
   wheel->clear();

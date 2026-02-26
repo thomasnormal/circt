@@ -192,11 +192,12 @@ public:
   // callable. This is safe for all lambdas capturing pointers, integers,
   // APInt (inline mode), and SignalValue.
   Event(Event &&other) noexcept
-      : invoker(other.invoker), destroyer(other.destroyer) {
+      : invoker(other.invoker), destroyer(other.destroyer), tag(other.tag) {
     if (invoker) {
       std::memcpy(storage, other.storage, kInlineSize);
       other.invoker = nullptr;
       other.destroyer = nullptr;
+      other.tag = 0;
     }
   }
 
@@ -206,10 +207,12 @@ public:
         destroyer(storage);
       invoker = other.invoker;
       destroyer = other.destroyer;
+      tag = other.tag;
       if (invoker) {
         std::memcpy(storage, other.storage, kInlineSize);
         other.invoker = nullptr;
         other.destroyer = nullptr;
+        other.tag = 0;
       }
     }
     return *this;
@@ -230,6 +233,9 @@ public:
   }
 
   bool isValid() const { return invoker != nullptr; }
+
+  uint64_t getTag() const { return tag; }
+  void setTag(uint64_t newTag) { tag = newTag; }
 
 private:
   /// 64 bytes is enough for the common hot-path event lambdas
@@ -265,6 +271,7 @@ private:
   using FnPtr = void (*)(void *);
   FnPtr invoker = nullptr;
   FnPtr destroyer = nullptr;
+  uint64_t tag = 0;
   alignas(std::max_align_t) char storage[kInlineSize];
 };
 
@@ -302,6 +309,10 @@ public:
 
   /// Get the number of events in a specific region.
   size_t getEventCount(SchedulingRegion region) const;
+
+  /// Remove all events with the given tag.
+  /// Returns the number of removed events.
+  size_t cancelByTag(uint64_t tag);
 
   /// Clear all events from all regions.
   void clear();
@@ -391,6 +402,10 @@ public:
 
   /// Clear all pending events.
   void clear();
+
+  /// Remove all events with the given tag across all levels/overflow.
+  /// Returns the number of removed events.
+  size_t cancelByTag(uint64_t tag);
 
   /// Find the next time with scheduled events.
   bool findNextEventTime(SimTime &nextTime);
@@ -578,6 +593,10 @@ public:
 
   /// Reset the scheduler to initial state.
   void reset();
+
+  /// Remove all pending events with the given tag.
+  /// Returns the number of removed events.
+  size_t cancelEventsByTag(uint64_t tag);
 
 private:
   std::unique_ptr<TimeWheel> wheel;

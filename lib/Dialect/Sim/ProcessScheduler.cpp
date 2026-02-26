@@ -1749,12 +1749,30 @@ SimTime ProcessScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
     if (getCurrentTime().realTime >= maxTimeFemtoseconds)
       break;
 
+    // Do not advance to a future wake beyond the caller's requested horizon.
+    uint64_t nextWakeFs = peekNextWakeTime();
+    if (nextWakeFs > maxTimeFemtoseconds)
+      break;
+
     // Advance to next event
     if (!advanceTime())
       break;
   }
 
   return getCurrentTime();
+}
+
+uint64_t ProcessScheduler::peekNextWakeTime() const {
+  uint64_t nextWakeFs = UINT64_MAX;
+  if (!eventScheduler->isComplete())
+    nextWakeFs = std::min(nextWakeFs, eventScheduler->peekNextRealTime());
+  for (const auto &cd : clockDomains)
+    if (cd.active)
+      nextWakeFs = std::min(nextWakeFs, cd.nextWakeFs);
+  for (const auto &m : minnows)
+    if (m.active)
+      nextWakeFs = std::min(nextWakeFs, m.nextWakeFs);
+  return nextWakeFs;
 }
 
 bool ProcessScheduler::hasReadyProcesses() const {
