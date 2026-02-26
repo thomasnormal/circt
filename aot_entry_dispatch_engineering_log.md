@@ -1680,6 +1680,9 @@
     - `Native module init functions: 4`
     - `Native module init modules: 4 emitted / 4 total`
     - no remaining top skip reason emitted.
+  - AVIP core8 full re-run (`--emit-llvm -v`) after this change:
+    - `ahb 4/4`, `apb 4/4`, `axi4 6/6`, `axi4Lite 9/9`,
+      `i2s 4/4`, `i3c 4/4`, `jtag 4/4`, `spi 4/4`.
   - large UVM sanity after patch:
     - `uvm_seq_body` with native-init opt-in:
       `COMPILE_EXIT=0`, `RUN_EXIT=0` (reaches max-time endpoint).
