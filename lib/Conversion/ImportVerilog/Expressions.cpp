@@ -2552,6 +2552,16 @@ struct RvalueExprVisitor : public ExprVisitor {
         // The caller will use this to assign to a virtual interface variable
         return it->second;
       }
+
+      // Resolve hierarchical interface references via their recorded path.
+      if (!expr.hierRef.path.empty()) {
+        if (auto ref = context.resolveInterfaceInstance(expr.hierRef, loc))
+          return ref;
+      }
+
+      // Fallback: resolve by symbol through interface threading.
+      if (auto ref = context.resolveInterfaceInstance(instSym, loc))
+        return ref;
     }
 
     // Emit an error for other arbitrary symbol expressions we don't support
@@ -5499,8 +5509,24 @@ struct RvalueExprVisitor : public ExprVisitor {
               // Use the general expression binding method
               const auto &viExpr = slang::ast::Expression::bind(
                   *viExprSyntax, astContext);
-              if (!viExpr.bad() && viExpr.type->isVirtualInterface()) {
-                interfaceInstance = context.convertRvalueExpression(viExpr);
+              if (!viExpr.bad()) {
+                if (viExpr.type->isVirtualInterface()) {
+                  interfaceInstance = context.convertRvalueExpression(viExpr);
+                } else if (auto *arb =
+                               viExpr.as_if<slang::ast::ArbitrarySymbolExpression>()) {
+                  if (auto *instSym =
+                          arb->symbol->as_if<slang::ast::InstanceSymbol>()) {
+                    if (instSym->getDefinition().definitionKind ==
+                        slang::ast::DefinitionKind::Interface) {
+                      if (!arb->hierRef.path.empty())
+                        interfaceInstance =
+                            context.resolveInterfaceInstance(arb->hierRef, loc);
+                      if (!interfaceInstance)
+                        interfaceInstance =
+                            context.resolveInterfaceInstance(instSym, loc);
+                    }
+                  }
+                }
               }
             }
           }
@@ -5526,6 +5552,50 @@ struct RvalueExprVisitor : public ExprVisitor {
                 break;
               }
             }
+          }
+
+          // Resolve hierarchical interface instances through the existing
+          // threading infrastructure (e.g., agent.iface.task()).
+          if (!interfaceInstance && instBody->parentInstance)
+            interfaceInstance =
+                context.resolveInterfaceInstance(instBody->parentInstance, loc);
+
+          // Fallback for module.interface.task() patterns where the parent
+          // interface instance symbol refers to a child module definition, not
+          // the concrete instance in the current scope.
+          if (!interfaceInstance && context.currentScope &&
+              instBody->parentInstance) {
+            Value candidate;
+            bool ambiguous = false;
+            auto *templateIfaceInst = instBody->parentInstance;
+            for (auto &member : context.currentScope->members()) {
+              auto *moduleInst = member.as_if<slang::ast::InstanceSymbol>();
+              if (!moduleInst ||
+                  moduleInst->getDefinition().definitionKind !=
+                      slang::ast::DefinitionKind::Module)
+                continue;
+              auto *nestedSym = moduleInst->body.find(templateIfaceInst->name);
+              if (!nestedSym)
+                continue;
+              auto *nestedIfaceInst = nestedSym->as_if<slang::ast::InstanceSymbol>();
+              if (!nestedIfaceInst ||
+                  nestedIfaceInst->getDefinition().definitionKind !=
+                      slang::ast::DefinitionKind::Interface)
+                continue;
+              if (&nestedIfaceInst->getDefinition() !=
+                  &templateIfaceInst->getDefinition())
+                continue;
+              auto resolved = context.resolveInterfaceInstance(nestedIfaceInst, loc);
+              if (!resolved)
+                continue;
+              if (candidate && resolved != candidate) {
+                ambiguous = true;
+                break;
+              }
+              candidate = resolved;
+            }
+            if (!ambiguous)
+              interfaceInstance = candidate;
           }
 
           if (!interfaceInstance) {

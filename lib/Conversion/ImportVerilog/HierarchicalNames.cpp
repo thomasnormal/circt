@@ -122,6 +122,50 @@ struct HierPathValueExprVisitor
     }
   }
 
+  bool collectReceiverSegments(const slang::syntax::NameSyntax &nameSyntax,
+                               SmallVectorImpl<std::string> &segments) {
+    if (auto *id =
+            nameSyntax.as_if<slang::syntax::IdentifierNameSyntax>()) {
+      segments.emplace_back(id->identifier.valueText());
+      return true;
+    }
+    auto *scoped = nameSyntax.as_if<slang::syntax::ScopedNameSyntax>();
+    if (!scoped)
+      return false;
+    if (!collectReceiverSegments(*scoped->left, segments))
+      return false;
+    auto *right = scoped->right->as_if<slang::syntax::IdentifierNameSyntax>();
+    if (!right)
+      return false;
+    segments.emplace_back(right->identifier.valueText());
+    return true;
+  }
+
+  const slang::ast::InstanceSymbol *
+  resolveInstancePath(ArrayRef<std::string> path) {
+    if (path.empty())
+      return nullptr;
+    auto *outermostInstBody =
+        outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+    if (!outermostInstBody)
+      return nullptr;
+
+    const slang::ast::Symbol *current = outermostInstBody->find(path.front());
+    if (!current)
+      return nullptr;
+
+    for (const auto &name : path.drop_front()) {
+      auto *instSym = current->as_if<slang::ast::InstanceSymbol>();
+      if (!instSym)
+        return nullptr;
+      current = instSym->body.find(name);
+      if (!current)
+        return nullptr;
+    }
+
+    return current->as_if<slang::ast::InstanceSymbol>();
+  }
+
   // Handle hierarchical values
   void handle(const slang::ast::HierarchicalValueExpression &expr) {
     if (failed(result))
@@ -620,6 +664,57 @@ struct HierPathValueExprVisitor
     }
   }
 
+  void handle(const slang::ast::CallExpression &expr) {
+    if (failed(result))
+      return;
+
+    auto *subroutine =
+        std::get_if<const slang::ast::SubroutineSymbol *>(&expr.subroutine);
+    if (!subroutine || !*subroutine)
+      return;
+
+    auto *parentScope = (*subroutine)->getParentScope();
+    auto *ifaceBody =
+        parentScope ? parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()
+                    : nullptr;
+    if (!ifaceBody ||
+        ifaceBody->getDefinition().definitionKind !=
+            slang::ast::DefinitionKind::Interface)
+      return;
+
+    auto *invocation =
+        expr.syntax ? expr.syntax->as_if<slang::syntax::InvocationExpressionSyntax>()
+                    : nullptr;
+    if (!invocation)
+      return;
+
+    auto *scopedReceiver =
+        invocation->left->as_if<slang::syntax::ScopedNameSyntax>();
+    if (!scopedReceiver)
+      return;
+
+    SmallVector<std::string, 4> path;
+    if (!collectReceiverSegments(*scopedReceiver->left, path) || path.empty())
+      return;
+
+    auto *ifaceInst = resolveInstancePath(path);
+    if (!ifaceInst)
+      return;
+    if (ifaceInst->getDefinition().definitionKind !=
+        slang::ast::DefinitionKind::Interface)
+      return;
+    if (&ifaceInst->getDefinition() != &ifaceBody->getDefinition())
+      return;
+
+    SmallString<64> pathName;
+    for (auto [idx, name] : llvm::enumerate(path)) {
+      if (idx)
+        pathName += ".";
+      pathName += name;
+    }
+    threadInterfaceInstance(ifaceInst, builder.getStringAttr(pathName));
+  }
+
   void handle(const slang::ast::InvalidExpression &expr) {
     // InvalidExpression can appear in dead generate blocks (e.g., assertions
     // referencing instances that don't exist, or DynamicNotProcedural assigns).
@@ -649,6 +744,13 @@ struct HierPathValueStmtVisitor
     if (failed(result))
       return;
     // Delegate to the expression visitor logic via collectHierarchicalValues
+    if (failed(context.collectHierarchicalValues(expr, outermostModule)))
+      result = failure();
+  }
+
+  void handle(const slang::ast::CallExpression &expr) {
+    if (failed(result))
+      return;
     if (failed(context.collectHierarchicalValues(expr, outermostModule)))
       result = failure();
   }
@@ -696,6 +798,8 @@ Context::collectHierarchicalValues(const slang::ast::Expression &expr,
                                    const slang::ast::Scope *bindScope) {
   auto loc = convertLocation(expr.sourceRange);
   HierPathValueExprVisitor visitor(*this, loc, outermostModule, bindScope);
+  if (auto *callExpr = expr.as_if<slang::ast::CallExpression>())
+    visitor.handle(*callExpr);
   expr.visit(visitor);
   return visitor.result;
 }

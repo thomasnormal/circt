@@ -1,11 +1,14 @@
-// RUN: not circt-verilog %s --ir-moore 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --ir-moore | FileCheck %s
 
 // Test hierarchical interface task calls through module.interface.task() pattern
 // This is common in UVM verification environments like AHB AVIP
-// We emit a helpful error message for this unsupported pattern.
-
-// CHECK: error: hierarchical interface method calls through module instances are not yet supported
-// CHECK-SAME: consider using a virtual interface passed through module ports instead
+// CHECK-LABEL: moore.module @TopLevel()
+// CHECK: %agentBFM.driverBFM = moore.instance "agentBFM" @AgentBFM
+// CHECK: moore.procedure initial {
+// CHECK: moore.read %agentBFM.driverBFM : <virtual_interface<@DriverBFM>>
+// CHECK: func.call @"DriverBFM::waitForResetn{{(_[0-9]+)?}}"
+// CHECK: moore.read %agentBFM.driverBFM : <virtual_interface<@DriverBFM>>
+// CHECK: func.call @"DriverBFM::driveToBFM"
 
 interface DriverBFM(input bit clk, input bit resetn);
   logic [7:0] data;
