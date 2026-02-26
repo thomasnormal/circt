@@ -11,8 +11,9 @@ module test_simple_param;
   test_cls #(34) test_obj;
 
   initial begin
-    // TODO: Class parameters accessed via instance should be treated as constants
-    // $display("a = %d", test_obj.a);  // This currently fails MLIR verification
+    // CHECK: moore.constant 34 : l32
+    // CHECK: moore.builtin.display
+    $display("a = %d", test_obj.a);
   end
 endmodule
 

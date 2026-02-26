@@ -1689,3 +1689,34 @@ Continue cross-select intersect parity by fixing tolerance-range (`+/-`, `+%-`) 
 - xrun notation check:
   - `xrun -sv test/Conversion/ImportVerilog/cross-select-intersect-tolerance-range-supported.sv -elaborate -nolog`
   - FAIL (`*E,ILLPRI`) in Xcelium 24.03 parser for `+/-` / `+%-` covergroup range tokens (tool limitation).
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog gap closure by converting stale TODO-only areas into explicit
+regression coverage with xrun parity checks.
+
+### Realizations
+- Class-parameter access through an instance handle (`obj.P`) is already lowered as
+  a constant in current ImportVerilog; the old TODO in `class-parameters.sv` was stale.
+- `$realtime()` to `real` conversion is already implemented end-to-end via
+  `time -> logic -> int -> uint_to_real -> fdiv(timescale)`, but did not have a
+  focused regression.
+
+### Changes Landed In This Slice
+- Updated regression to assert supported class parameter instance constant access:
+  - `test/Conversion/ImportVerilog/class-parameters.sv`
+  - uncommented `$display("a = %d", test_obj.a);`
+  - added `FileCheck` for constant-folded value `34` and display emission.
+- Added focused regression for realtime-to-real conversion:
+  - `test/Conversion/ImportVerilog/realtime-to-real-conversion.sv`
+  - checks `moore.builtin.time` -> `moore.time_to_logic` -> `moore.logic_to_int`
+    -> `moore.uint_to_real` -> `moore.fdiv` -> call to real sink.
+
+### Validation
+- CIRCT regressions:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/class-parameters.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/class-parameters.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/realtime-to-real-conversion.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/realtime-to-real-conversion.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/class-parameters.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/realtime-to-real-conversion.sv -elaborate -nolog` (PASS)
