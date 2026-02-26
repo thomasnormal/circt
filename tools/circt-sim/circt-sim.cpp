@@ -107,6 +107,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -2872,9 +2873,10 @@ LogicalResult SimulationContext::run() {
       }
     }
 
-    // Check simulation time limit
+    // Check simulation time limit.
+    // Execute work scheduled exactly at maxTime, but never run beyond it.
     const auto &currentTime = scheduler.getCurrentTime();
-    if (maxTime > 0 && currentTime.realTime >= maxTime) {
+    if (maxTime > 0 && currentTime.realTime > maxTime) {
       stoppedByMaxTime = true;
       llvm::errs() << "[circt-sim] Main loop exit: maxTime reached ("
                    << currentTime.realTime << " >= " << maxTime
@@ -3069,10 +3071,21 @@ LogicalResult SimulationContext::run() {
       // is called (rather than advancing to the next scheduled event first).
       if (!control.shouldContinue())
         break;
+      if (maxTime > 0) {
+        uint64_t nextWake = scheduler.peekNextWakeTime();
+        if (nextWake > maxTime) {
+          stoppedByMaxTime = true;
+          llvm::errs() << "[circt-sim] Main loop exit: maxTime reached ("
+                       << currentTime.realTime << " >= " << maxTime
+                       << " fs), iter=" << loopIterations << "\n";
+          break;
+        }
+      }
 
       // No more events at current time, advance to next event
       uint64_t preAdvTime = currentTime.realTime;
-      if (!scheduler.advanceTime()) {
+      if (!scheduler.advanceTime(maxTime > 0 ? std::optional<uint64_t>(maxTime)
+                                             : std::nullopt)) {
         LLVM_DEBUG(llvm::dbgs() << "[MAINLOOP] advanceTime returned FALSE at time="
                      << currentTime.realTime << " iter=" << loopIterations
                      << "\n");

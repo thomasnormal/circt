@@ -420,6 +420,9 @@ SimTime ParallelScheduler::runParallel(uint64_t maxTimeFemtoseconds) {
   while (currentTime.realTime <= maxTimeFemtoseconds) {
     // Execute all delta cycles at current time
     executeCurrentTimeParallel();
+    // Parallel execution consumes ready states directly; clear any stale
+    // intrusive queue links before handing control back to ProcessScheduler.
+    baseScheduler.clearReadyQueueMetadata();
 
     // Do not advance to a wake beyond caller's time horizon.
     uint64_t nextWakeFs = baseScheduler.peekNextWakeTime();
@@ -427,7 +430,7 @@ SimTime ParallelScheduler::runParallel(uint64_t maxTimeFemtoseconds) {
       break;
 
     // Advance to next event time
-    if (!baseScheduler.advanceTime()) {
+    if (!baseScheduler.advanceTime(maxTimeFemtoseconds)) {
       break; // No more events
     }
   }
