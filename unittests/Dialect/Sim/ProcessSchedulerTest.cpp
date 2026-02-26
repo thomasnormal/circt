@@ -1041,6 +1041,27 @@ TEST(ProcessSchedulerIntegration, RunUntilProcessesEventsAtLimit) {
   EXPECT_EQ(executedAt100, 1);
 }
 
+TEST(ProcessSchedulerIntegration, RunUntilPastLimitDoesNotExecuteCurrentTime) {
+  ProcessScheduler scheduler;
+  bool eventExecuted = false;
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(100, 0, 0), SchedulingRegion::Active,
+      Event([&eventExecuted]() { eventExecuted = true; }));
+
+  // Move current time past the requested horizon without draining events.
+  scheduler.getEventScheduler().advanceTimeTo(100);
+  EXPECT_EQ(scheduler.getCurrentTime().realTime, 100u);
+
+  SimTime end = scheduler.runUntil(50);
+  EXPECT_EQ(end.realTime, 100u);
+  EXPECT_FALSE(eventExecuted);
+  EXPECT_FALSE(scheduler.isComplete());
+
+  scheduler.runUntil(200);
+  EXPECT_TRUE(eventExecuted);
+}
+
 //===----------------------------------------------------------------------===//
 // ProcessScheduler Tests - Concurrent Initial and Always Blocks
 //===----------------------------------------------------------------------===//

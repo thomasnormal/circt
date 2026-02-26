@@ -2015,6 +2015,17 @@ LogicalResult SimulationContext::setupParallelSimulation() {
     return success();
   }
 
+  const bool allowUnsafeLlhdParallel =
+      isTruthyEnv(std::getenv("CIRCT_SIM_UNSAFE_LLHD_PARALLEL"));
+  if (llhdInterpreter && !allowUnsafeLlhdParallel) {
+    llvm::errs()
+        << "[circt-sim] Warning: experimental parallel scheduler is disabled "
+           "for LLHD interpreter workloads due deadlock risk; running "
+           "sequentially. Set CIRCT_SIM_UNSAFE_LLHD_PARALLEL=1 to "
+           "force-enable.\n";
+    return success();
+  }
+
   ParallelScheduler::Config config;
   config.numThreads = numThreads;
   config.enableWorkStealing = enableWorkStealing;
