@@ -18,9 +18,10 @@
 // SIM: add42(5) = 47
 // SIM: mul100(3) = 300
 //
-// COMPILED: Loaded 2 compiled functions: 2 native-dispatched, 0 excluded (call_indirect), 0 intercepted
+// COMPILED: Loaded 2 compiled functions: 2 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // COMPILED: Entry table: 2 entries for tagged-FuncId dispatch (2 native, 0 non-native)
 // COMPILED: Entry-table native calls:         2
+// COMPILED: Entry-table trampoline calls:     0
 // COMPILED: add42(5) = 47
 // COMPILED: mul100(3) = 300
 
