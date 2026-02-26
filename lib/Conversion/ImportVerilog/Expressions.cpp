@@ -3008,7 +3008,9 @@ struct RvalueExprVisitor : public ExprVisitor {
       return rhs;
     }
 
-    // For non-blocking assignments, we only support time delays for now.
+    // For non-blocking assignments, keep a dedicated op for pure #delay
+    // controls, and lower all other intra-assignment timing controls by
+    // waiting first and then issuing a regular nonblocking assignment.
     if (expr.timingControl) {
       // Handle regular time delays.
       if (auto *ctrl = expr.timingControl->as_if<slang::ast::DelayControl>()) {
@@ -3023,12 +3025,12 @@ struct RvalueExprVisitor : public ExprVisitor {
         return rhs;
       }
 
-      // All other timing controls are not supported.
-      auto loc = context.convertLocation(expr.timingControl->sourceRange);
-      mlir::emitError(loc)
-          << "unsupported non-blocking assignment timing control: "
-          << slang::ast::toString(expr.timingControl->kind);
-      return {};
+      if (failed(context.convertTimingControl(*expr.timingControl)))
+        return {};
+      auto assignOp = moore::NonBlockingAssignOp::create(builder, loc, lhs, rhs);
+      if (context.variableAssignCallback)
+        context.variableAssignCallback(assignOp);
+      return rhs;
     }
     auto assignOp = moore::NonBlockingAssignOp::create(builder, loc, lhs, rhs);
     if (context.variableAssignCallback)

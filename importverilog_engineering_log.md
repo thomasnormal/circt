@@ -2215,3 +2215,60 @@ Continue ImportVerilog gap closure for nested module-array hierarchical
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-task.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-nested-module-array-signal.sv -elaborate -nolog` (PASS)
   - `xrun -sv /tmp/iv_nested_signal_access.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Close ImportVerilog gap for non-blocking intra-assignment **event controls**
+that were accepted by xrun but rejected by circt-verilog:
+- `x <= @y x;`
+- `x <= @(posedge clk) x;`
+- `x <= @(a or b) x;`
+- `x <= repeat (N) @(posedge clk) x;`
+
+### Realizations
+- Differential probe run identified a clean xrun-pass/circt-fail cluster:
+  `SignalEvent`, `EventList`, and `RepeatedEvent` timing controls on
+  non-blocking assignments.
+- Existing lowering already handled these timing controls for blocking
+  assignments via `convertTimingControl(...)` and had the correct RHS-before-wait
+  evaluation order for intra-assignment semantics.
+- Non-blocking lowering only gated to `DelayControl` and emitted an error for all
+  other timing controls, despite the backend already supporting wait/event ops.
+
+### TDD Baseline
+- Added regression:
+  - `test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv`
+- Baseline failure before fix:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv`
+    failed with:
+    - `unsupported non-blocking assignment timing control: SignalEvent`
+- Differential probe evidence:
+  - `/tmp/iv_probe/nba_event_signal.sv: xrun=0 circt=1`
+  - `/tmp/iv_probe/nba_event_posedge.sv: xrun=0 circt=1`
+  - `/tmp/iv_probe/nba_event_or.sv: xrun=0 circt=1`
+  - `/tmp/iv_probe/nba_event_repeat.sv: xrun=0 circt=1`
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/Expressions.cpp`:
+  - updated non-blocking assignment lowering to:
+    - keep `DelayControl` on `moore.delayed_nonblocking_assign`, and
+    - lower all other timing controls through `convertTimingControl(...)`
+      followed by `moore.nonblocking_assign`.
+- `test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv`:
+  - added regression covering `SignalEvent`, `EventList`, `RepeatedEvent`, and
+    posedge forms for non-blocking intra-assignment controls.
+- `test/Conversion/ImportVerilog/errors.sv`:
+  - removed stale expected-error for `initial x <= @y x;`.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Regressions:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv build_test/test/Conversion/ImportVerilog/repeated-event-control.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv -elaborate -nolog` (PASS)
+  - `/tmp/iv_probe/nba_event_signal.sv: xrun=0 circt=0`
+  - `/tmp/iv_probe/nba_event_posedge.sv: xrun=0 circt=0`
+  - `/tmp/iv_probe/nba_event_or.sv: xrun=0 circt=0`
+  - `/tmp/iv_probe/nba_event_repeat.sv: xrun=0 circt=0`

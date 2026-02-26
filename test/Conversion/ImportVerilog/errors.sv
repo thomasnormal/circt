@@ -89,7 +89,6 @@ endmodule
 module Foo;
   int x;
   bit y;
-  // expected-error @below {{unsupported non-blocking assignment timing control: SignalEvent}}
   initial x <= @y x;
 endmodule
 
