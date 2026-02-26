@@ -164,12 +164,28 @@ struct HierPathValueExprVisitor
       return std::nullopt;
     auto *literal =
         bitSelect->expr->as_if<slang::syntax::LiteralExpressionSyntax>();
-    if (!literal)
+    if (literal) {
+      int64_t value = 0;
+      if (!llvm::StringRef(literal->literal.valueText()).getAsInteger(0, value))
+        return value;
+    }
+    // Accept non-literal constant selectors (e.g. parameter/localparam refs or
+    // folded arithmetic like [1-0]) by binding and evaluating the selector.
+    const slang::ast::Scope *scope = context.currentScope;
+    if (!scope)
+      scope = outermostModule.as_if<slang::ast::InstanceBodySymbol>();
+    if (!scope)
       return std::nullopt;
-    int64_t value = 0;
-    if (llvm::StringRef(literal->literal.valueText()).getAsInteger(0, value))
+    slang::ast::ASTContext astContext(*scope,
+                                      slang::ast::LookupLocation::max);
+    const auto &boundExpr = slang::ast::Expression::bind(*bitSelect->expr,
+                                                         astContext);
+    if (boundExpr.bad())
       return std::nullopt;
-    return value;
+    auto value = context.evaluateConstant(boundExpr).integer().as<int64_t>();
+    if (!value)
+      return std::nullopt;
+    return *value;
   }
 
   bool collectReceiverSegments(const slang::syntax::NameSyntax &nameSyntax,
