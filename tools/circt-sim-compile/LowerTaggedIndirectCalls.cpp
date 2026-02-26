@@ -102,6 +102,8 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
         BasicBlock::Create(ctx, "tagged_check", F, normalDest);
     BasicBlock *taggedBB =
         BasicBlock::Create(ctx, "tagged_call", F, normalDest);
+    BasicBlock *taggedInvokeBB =
+        BasicBlock::Create(ctx, "tagged_invoke", F, normalDest);
     BasicBlock *taggedInvalidBB =
         BasicBlock::Create(ctx, "tagged_invalid", F, normalDest);
     BasicBlock *directBB =
@@ -120,6 +122,11 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
         funcEntries->getValueType(), funcEntries,
         {ConstantInt::get(i64Ty, 0), fid}, "entry_ptr");
     Value *entry = builder.CreateLoad(ptrTy, entryGEP, "entry");
+    Value *entryIsNonNull = builder.CreateICmpNE(
+        entry, ConstantPointerNull::get(ptrTy), "entry_nonnull");
+    builder.CreateCondBr(entryIsNonNull, taggedInvokeBB, taggedInvalidBB);
+
+    builder.SetInsertPoint(taggedInvokeBB);
 
     SmallVector<Value *, 8> args(II->arg_begin(), II->arg_end());
     Twine taggedName = II->getType()->isVoidTy() ? Twine("") : Twine("tagged_ret");
@@ -146,7 +153,7 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
     if (!II->getType()->isVoidTy()) {
       PHINode *phi = builder.CreatePHI(II->getType(), 3, "call_ret");
       phi->addIncoming(taggedInvoke, taggedInvoke->getNormalDest() == mergeBB
-                                         ? taggedBB
+                                         ? taggedInvokeBB
                                          : taggedInvoke->getParent());
       phi->addIncoming(directInvoke, directInvoke->getNormalDest() == mergeBB
                                          ? directBB
@@ -190,6 +197,8 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
 
   BasicBlock *taggedCheckBB = BasicBlock::Create(ctx, "tagged_check", F, restBB);
   BasicBlock *taggedBB = BasicBlock::Create(ctx, "tagged_call", F, restBB);
+  BasicBlock *taggedCallBB =
+      BasicBlock::Create(ctx, "tagged_call_nonnull", F, restBB);
   BasicBlock *taggedInvalidBB =
       BasicBlock::Create(ctx, "tagged_invalid", F, restBB);
   BasicBlock *directBB = BasicBlock::Create(ctx, "direct_call", F, restBB);
@@ -209,6 +218,12 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
       funcEntries->getValueType(), funcEntries,
       {ConstantInt::get(i64Ty, 0), fid}, "entry_ptr");
   Value *entry = builder.CreateLoad(ptrTy, entryGEP, "entry");
+  Value *entryIsNonNull = builder.CreateICmpNE(
+      entry, ConstantPointerNull::get(ptrTy), "entry_nonnull");
+  builder.CreateCondBr(entryIsNonNull, taggedCallBB, taggedInvalidBB);
+
+  // Tagged non-null path.
+  builder.SetInsertPoint(taggedCallBB);
 
   SmallVector<Value *, 8> args(CI->arg_begin(), CI->arg_end());
   Twine taggedName = CI->getType()->isVoidTy() ? Twine("") : Twine("tagged_ret");
@@ -237,7 +252,7 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
   builder.SetInsertPoint(mergeBB);
   if (!CI->getType()->isVoidTy()) {
     PHINode *phi = builder.CreatePHI(CI->getType(), 3, "call_ret");
-    phi->addIncoming(taggedCall, taggedBB);
+    phi->addIncoming(taggedCall, taggedCallBB);
     phi->addIncoming(directCall, directBB);
     phi->addIncoming(Constant::getNullValue(CI->getType()), taggedInvalidBB);
     CI->replaceAllUsesWith(phi);
