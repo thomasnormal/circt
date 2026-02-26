@@ -450,6 +450,29 @@ TEST(ParallelSchedulerTest, RunParallelProcessesCurrentTimeAtLimit) {
   EXPECT_TRUE(fired);
 }
 
+TEST(ParallelSchedulerTest, RunParallelProcessesEventsAtLimit) {
+  ProcessScheduler scheduler;
+  int firedAt50 = 0;
+  int firedAt100 = 0;
+
+  scheduler.getEventScheduler().schedule(
+      SimTime(50, 0, 0), SchedulingRegion::Active,
+      Event([&firedAt50]() { ++firedAt50; }));
+  scheduler.getEventScheduler().schedule(
+      SimTime(100, 0, 0), SchedulingRegion::Active,
+      Event([&firedAt100]() { ++firedAt100; }));
+
+  ParallelScheduler::Config config;
+  config.numThreads = 1;
+  ParallelScheduler parallel(scheduler, config);
+
+  SimTime end = parallel.runParallel(50);
+  EXPECT_EQ(end.realTime, 50u);
+  EXPECT_EQ(firedAt50, 1);
+  EXPECT_EQ(firedAt100, 0);
+  EXPECT_FALSE(scheduler.getEventScheduler().isComplete());
+}
+
 TEST(ParallelSchedulerTest, RunParallelNoDuplicateAtDelayedWake) {
   ProcessScheduler scheduler;
   int counter = 0;

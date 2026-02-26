@@ -1542,9 +1542,12 @@ size_t ProcessScheduler::executeCurrentTime() {
   return totalDeltas;
 }
 
-bool ProcessScheduler::advanceTime() {
+bool ProcessScheduler::advanceTime(std::optional<uint64_t> maxTimeFemtoseconds) {
   if (isAbortRequested())
     return false;
+  auto canAdvanceTo = [&](uint64_t targetFs) {
+    return !maxTimeFemtoseconds || targetFs <= *maxTimeFemtoseconds;
+  };
   // First, process any ready processes
   executeCurrentTime();
 
@@ -1657,12 +1660,14 @@ bool ProcessScheduler::advanceTime() {
     uint64_t earliestBypass = std::min(earliestClockWake, earliestMinnowWake);
     bool timeWheelAdvanced = false;
     if (!eventScheduler->isComplete()) {
+      uint64_t nextTWTime = eventScheduler->peekNextRealTime();
       // Peek at the TimeWheel's next event time. If a minnow/clock wakes
       // before that, advance to the bypass time instead of the TW event time.
       if (earliestBypass < UINT64_MAX) {
-        uint64_t nextTWTime = eventScheduler->peekNextRealTime();
         if (nextTWTime > earliestBypass) {
           // Minnow/clock fires before next TW event: advance to bypass time.
+          if (!canAdvanceTo(earliestBypass))
+            break;
           eventScheduler->advanceTimeTo(earliestBypass);
           didWork = true;
           for (auto &queue : readyQueues)
@@ -1671,6 +1676,8 @@ bool ProcessScheduler::advanceTime() {
           continue;
         }
       }
+      if (!canAdvanceTo(nextTWTime))
+        break;
       timeWheelAdvanced = eventScheduler->advanceToNextTime();
     }
 
@@ -1698,6 +1705,8 @@ bool ProcessScheduler::advanceTime() {
       // No events at current time. Check if minnow/clock wake can drive time.
       if (earliestBypass < UINT64_MAX) {
         // Advance sim time directly to the earliest bypass wake.
+        if (!canAdvanceTo(earliestBypass))
+          break;
         eventScheduler->advanceTimeTo(earliestBypass);
         didWork = true;
         continue;
@@ -1746,7 +1755,7 @@ SimTime ProcessScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
     executeCurrentTime();
 
     // Check time limit
-    if (getCurrentTime().realTime >= maxTimeFemtoseconds)
+    if (getCurrentTime().realTime > maxTimeFemtoseconds)
       break;
 
     // Do not advance to a future wake beyond the caller's requested horizon.
@@ -1755,7 +1764,7 @@ SimTime ProcessScheduler::runUntil(uint64_t maxTimeFemtoseconds) {
       break;
 
     // Advance to next event
-    if (!advanceTime())
+    if (!advanceTime(maxTimeFemtoseconds))
       break;
   }
 
@@ -1781,6 +1790,11 @@ bool ProcessScheduler::hasReadyProcesses() const {
       return true;
   }
   return false;
+}
+
+void ProcessScheduler::clearReadyQueueMetadata() {
+  for (auto &queue : readyQueues)
+    queue.clear();
 }
 
 bool ProcessScheduler::isComplete() const {

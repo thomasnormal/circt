@@ -26,6 +26,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <variant>
@@ -1306,10 +1307,16 @@ public:
   /// them and resumes any processes that were waiting for that time.
   ///
   /// Returns false if there are no more events or processes to run.
-  bool advanceTime();
+  /// If `maxTimeFemtoseconds` is set, real time will not advance past it.
+  bool advanceTime(std::optional<uint64_t> maxTimeFemtoseconds = std::nullopt);
 
   /// Check if any processes are ready to run.
   bool hasReadyProcesses() const;
+
+  /// Clear intrusive ready-queue bookkeeping without changing process states.
+  /// ParallelScheduler executes ready processes by state and uses this to
+  /// prevent stale queue entries from being re-executed on serial paths.
+  void clearReadyQueueMetadata();
 
   /// Run the simulation until completion or time limit.
   SimTime runUntil(uint64_t maxTimeFemtoseconds);
