@@ -4,6 +4,8 @@
 // CHECK: [circt-sim-compile] Stripped 1 functions with non-LLVM ops
 // CHECK: [circt-sim-compile] Top residual non-LLVM strip reasons:
 // CHECK: 1x sig_nonllvm_arg:!hw.struct<f: i8>
+// CHECK: [circt-sim-compile] Residual stripped symbols (top 20):
+// CHECK: strip_me [sig_nonllvm_arg:!hw.struct<f: i8>]
 
 module {
   func.func private @ok() -> i32 {

@@ -2954,6 +2954,7 @@ static std::string firstNonLLVMTypeReason(LLVM::LLVMFunctionType funcTy) {
 
 struct StripNonLLVMResult {
   llvm::SmallVector<std::string> strippedSymbols;
+  llvm::SmallVector<std::pair<std::string, std::string>> strippedDetails;
   llvm::StringMap<unsigned> reasonCounts;
 };
 
@@ -3008,10 +3009,13 @@ static StripNonLLVMResult stripNonLLVMFunctions(ModuleOp microModule) {
   });
 
   for (auto func : toStrip) {
-    result.strippedSymbols.push_back(func.getSymName().str());
     auto it = stripReasons.find(func.getOperation());
-    ++result.reasonCounts[it != stripReasons.end() ? it->second
-                                                   : "unknown_strip_reason"];
+    std::string reason =
+        it != stripReasons.end() ? it->second : "unknown_strip_reason";
+    std::string symbol = func.getSymName().str();
+    result.strippedSymbols.push_back(symbol);
+    result.strippedDetails.push_back({symbol, reason});
+    ++result.reasonCounts[reason];
     if (func.isExternal() || !hasAllLLVMCompatibleTypes(func.getFunctionType())) {
       // Erase outright: external declarations have no body to clear, and
       // defined functions with non-LLVM-typed signatures cannot be demoted to
@@ -6225,6 +6229,14 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
         llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
                      << "\n";
+    }
+    if (verbose && !stripResult.strippedDetails.empty()) {
+      llvm::errs()
+          << "[circt-sim-compile] Residual stripped symbols (top 20):\n";
+      for (unsigned i = 0;
+           i < std::min<unsigned>(20, stripResult.strippedDetails.size()); ++i)
+        llvm::errs() << "  " << stripResult.strippedDetails[i].first << " ["
+                     << stripResult.strippedDetails[i].second << "]\n";
     }
   }
 
