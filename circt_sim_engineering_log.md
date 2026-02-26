@@ -366,3 +366,30 @@
     - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK)
     - `aot-process-indirect-cast-dispatch.mlir` (RUNTIME)
     - `aot-entry-table-trampoline-counter.mlir` (COMPILE+COMPILED).
+
+- Additional audit finding in call_indirect compiled/native argument mapping:
+  native dispatch paths read arguments using resolved callee arity (`numArgs`)
+  without checking provided call-site argument count.
+  - Deterministic reproducer (before fix):
+    - resolved callee `@add2 : (i32, i32) -> i32`
+    - call site cast to `(i32) -> i32`
+    - compiled run aborted with:
+      `SmallVector::operator[] Assertion 'idx < size()' failed`.
+- Fix:
+  - Added bounded native-arg packing helper in
+    `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp` that zero-fills
+    missing arguments.
+  - Replaced all native `call_indirect` argument packing loops to use helper.
+- Added regression:
+  - `test/Tools/circt-sim/aot-call-indirect-arg-arity-mismatch.mlir`
+  - checks:
+    - no assertion in compiled mode
+    - output `r=5` (missing second arg is zero-filled).
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `circt-sim-compile` + `circt-sim --compiled` with FileCheck for:
+    - `aot-call-indirect-arg-arity-mismatch.mlir` (COMPILE+RUNTIME)
+    - `aot-call-indirect-result-arity-mismatch.mlir` (COMPILE+RUNTIME)
+  - Spot non-regression:
+    - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK)
+    - `aot-process-indirect-cast-dispatch.mlir` (RUNTIME).

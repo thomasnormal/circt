@@ -352,6 +352,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
         };
 
+    auto fillNativeCallArgs = [&](llvm::ArrayRef<InterpretedValue> callArgs,
+                                  unsigned numArgs, uint64_t (&packed)[8]) {
+      for (unsigned i = 0; i < numArgs; ++i)
+        packed[i] = (i < callArgs.size()) ? callArgs[i].getUInt64() : 0;
+    };
+
     if (funcPtrVal.isX()) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
@@ -711,8 +717,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               }
               if (eligible) {
                 uint64_t a[8] = {};
-                for (unsigned i = 0; i < numArgs; ++i)
-                  a[i] = args[i].getUInt64();
+                fillNativeCallArgs(args, numArgs, a);
 
                 if (eligible) {
 
@@ -1496,8 +1501,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               }
               if (eligible) {
                 uint64_t a[8] = {};
-                for (unsigned i = 0; i < numArgs; ++i)
-                  a[i] = sArgs[i].getUInt64();
+                fillNativeCallArgs(sArgs, numArgs, a);
 
                 if (eligible) {
 
@@ -1980,8 +1984,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           if (eligible) {
             uint64_t a[8] = {};
-            for (unsigned i = 0; i < numArgs; ++i)
-              a[i] = fastArgs[i].getUInt64();
+            fillNativeCallArgs(fastArgs, numArgs, a);
 
             if (eligible) {
 
@@ -4283,8 +4286,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           if (eligible) {
             uint64_t a[8] = {};
-            for (unsigned i = 0; i < numArgs; ++i)
-              a[i] = args[i].getUInt64();
+            fillNativeCallArgs(args, numArgs, a);
 
             if (eligible) {
 
