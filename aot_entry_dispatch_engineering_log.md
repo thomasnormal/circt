@@ -1895,3 +1895,53 @@
   - outcome:
     - no-FuncId-table indirect-call compile now links successfully
     - no `LowerTaggedIndirectCalls: lowered` emission in that regression path.
+
+## 2026-02-26
+- Phase 5.2 high-ROI coverage step: canonicalized 4-state HW-struct function
+  boundary ABIs in the micro-module.
+- Root cause addressed:
+  - most remaining strip volume was signature-only:
+    - `sig_nonllvm_arg:!hw.struct<value: i4096, unknown: i4096>`
+    - `sig_nonllvm_arg:!hw.struct<value: i64, unknown: i64>`
+    - `sig_nonllvm_ret:!hw.struct<value: i4096, unknown: i4096>`
+  - these signatures prevented LLVM translation even when function bodies were
+    otherwise lowerable.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - added `canonicalizeFourStateStructABIs(microModule)`:
+    - rewrites function arg/result boundary types from
+      `!hw.struct<value,unknown>` to LLVM-compatible forms.
+    - rewrites direct `func.call` and `func.call_indirect` sites to the
+      updated function types.
+    - inserts boundary bridge casts where needed.
+  - existing pre-lowering folds then remove bridge casts in common patterns,
+    notably `hw.struct_extract(cast(llvm.struct -> hw.struct), field)`.
+- TDD/regression:
+  - added:
+    `test/Tools/circt-sim/aot-fourstate-abi-canonicalization.mlir`
+    - verifies:
+      - no strip
+      - `3 functions + 0 processes ready for codegen`
+      - interpreter/compiled parity (`out=12`).
+- Validation:
+  - rebuilt: `ninja -C build_test circt-sim-compile circt-sim`.
+  - focused pack passed:
+    - `aot-fourstate-abi-canonicalization.mlir`
+    - `aot-hw-bitcast-struct-extract-lowering.mlir`
+    - `aot-hw-struct-create-cast-llvm-lowering.mlir`
+    - `aot-call-indirect-hw-struct-arg-lowering.mlir`
+    - `aot-strip-non-llvm-telemetry.mlir`
+    - `aot-call-indirect-no-funcid-table.mlir`
+  - large workload (`uvm_seq_body`, `-v`) after this patch:
+    - `Stripped 2 functions with non-LLVM ops` (from `74`)
+    - `3425 functions + 1 processes ready for codegen` (from `3371 + 1`)
+    - remaining reasons:
+      - `1x body_nonllvm_op:hw.struct_create`
+      - `1x body_nonllvm_op:arith.cmpf`
+  - compiled runtime sanity remains stable:
+    - `EXIT_CODE=0`
+    - same short-window AOT stats shape (`Compiled function calls=5`,
+      `Interpreted function calls=28`).
+- Realization:
+  - signature ABI canonicalization removed the dominant residual strip bucket.
+  - next direct coverage target is now very small and concrete:
+    - lower residual `hw.struct_create` and `arith.cmpf` body cases.

@@ -958,6 +958,261 @@ static void canonicalizeLLHDRefArgumentABIs(ModuleOp moduleOp) {
   }
 }
 
+static bool isFourStateBoundaryStructType(Type ty) {
+  auto structTy = dyn_cast<hw::StructType>(ty);
+  if (!structTy)
+    return false;
+  auto fields = structTy.getElements();
+  if (fields.size() != 2)
+    return false;
+  if (!isa<IntegerType>(fields[0].type) || !isa<IntegerType>(fields[1].type))
+    return false;
+  return fields[0].name.getValue() == "value" &&
+         fields[1].name.getValue() == "unknown";
+}
+
+static Type convertFourStateBoundaryType(Type ty, MLIRContext *ctx) {
+  if (!isFourStateBoundaryStructType(ty))
+    return ty;
+  Type converted = convertToLLVMCompatibleType(ty, ctx);
+  if (!converted || !LLVM::isCompatibleType(converted))
+    return ty;
+  return converted;
+}
+
+/// Canonicalize 4-state HW struct function boundary ABIs by rewriting
+/// !hw.struct<value: iN, unknown: iN> arguments/results to LLVM-compatible
+/// aggregate types in the micro-module.
+static void canonicalizeFourStateStructABIs(ModuleOp moduleOp) {
+  MLIRContext *ctx = moduleOp.getContext();
+
+  struct FuncRewriteInfo {
+    FunctionType oldType;
+    FunctionType newType;
+  };
+  llvm::StringMap<FuncRewriteInfo> rewriteMap;
+
+  moduleOp.walk([&](func::FuncOp funcOp) {
+    auto oldType = funcOp.getFunctionType();
+    if (oldType.getNumResults() > 1)
+      return;
+
+    bool changed = false;
+    SmallVector<Type> newInputs;
+    newInputs.reserve(oldType.getNumInputs());
+    for (Type inputTy : oldType.getInputs()) {
+      Type newInputTy = convertFourStateBoundaryType(inputTy, ctx);
+      changed |= (newInputTy != inputTy);
+      newInputs.push_back(newInputTy);
+    }
+
+    SmallVector<Type> newResults;
+    newResults.reserve(oldType.getNumResults());
+    for (Type resultTy : oldType.getResults()) {
+      Type newResultTy = convertFourStateBoundaryType(resultTy, ctx);
+      changed |= (newResultTy != resultTy);
+      newResults.push_back(newResultTy);
+    }
+
+    if (!changed)
+      return;
+    auto newType = FunctionType::get(ctx, newInputs, newResults);
+    rewriteMap[funcOp.getSymName()] = {oldType, newType};
+  });
+
+  if (rewriteMap.empty())
+    return;
+
+  // Rewrite function signatures, entry block args, and returns.
+  for (auto &kv : rewriteMap) {
+    auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(kv.first());
+    if (!funcOp)
+      continue;
+    auto oldType = kv.second.oldType;
+    auto newType = kv.second.newType;
+    funcOp.setFunctionType(newType);
+    if (funcOp.isExternal())
+      continue;
+
+    Block &entry = funcOp.getBody().front();
+    OpBuilder entryBuilder = OpBuilder::atBlockBegin(&entry);
+    for (unsigned i = 0, e = entry.getNumArguments(); i < e; ++i) {
+      Type oldInputTy = oldType.getInput(i);
+      Type newInputTy = newType.getInput(i);
+      if (oldInputTy == newInputTy)
+        continue;
+      BlockArgument arg = entry.getArgument(i);
+      if (arg.getType() != newInputTy)
+        arg.setType(newInputTy);
+      auto bridgeCast = entryBuilder.create<UnrealizedConversionCastOp>(
+          funcOp.getLoc(), TypeRange{oldInputTy}, ValueRange{arg});
+      arg.replaceAllUsesExcept(bridgeCast.getResult(0), bridgeCast.getOperation());
+    }
+
+    if (oldType.getNumResults() == 1 &&
+        oldType.getResult(0) != newType.getResult(0)) {
+      SmallVector<func::ReturnOp> returns;
+      funcOp.walk([&](func::ReturnOp ret) { returns.push_back(ret); });
+      for (auto ret : returns) {
+        if (ret.getNumOperands() != 1)
+          continue;
+        Value operand = ret.getOperand(0);
+        if (operand.getType() == newType.getResult(0))
+          continue;
+        OpBuilder builder(ret);
+        auto bridgeCast = builder.create<UnrealizedConversionCastOp>(
+            ret.getLoc(), TypeRange{newType.getResult(0)},
+            ValueRange{operand});
+        ret.setOperand(0, bridgeCast.getResult(0));
+      }
+    }
+  }
+
+  // Rewrite direct call sites to match updated signatures.
+  SmallVector<func::CallOp> callsToRewrite;
+  moduleOp.walk([&](func::CallOp callOp) {
+    if (rewriteMap.count(callOp.getCallee()))
+      callsToRewrite.push_back(callOp);
+  });
+
+  for (auto callOp : callsToRewrite) {
+    auto it = rewriteMap.find(callOp.getCallee());
+    if (it == rewriteMap.end())
+      continue;
+    auto oldType = it->second.oldType;
+    auto newType = it->second.newType;
+
+    bool needsRewrite = oldType.getResults() != newType.getResults();
+    if (!needsRewrite) {
+      for (unsigned i = 0, e = callOp.getNumOperands(); i < e; ++i) {
+        if (callOp.getOperand(i).getType() != newType.getInput(i)) {
+          needsRewrite = true;
+          break;
+        }
+      }
+    }
+    if (!needsRewrite)
+      continue;
+
+    OpBuilder builder(callOp);
+    SmallVector<Value> newOperands;
+    newOperands.reserve(callOp.getNumOperands());
+    for (unsigned i = 0, e = callOp.getNumOperands(); i < e; ++i) {
+      Value operand = callOp.getOperand(i);
+      Type targetTy = newType.getInput(i);
+      if (operand.getType() == targetTy) {
+        newOperands.push_back(operand);
+        continue;
+      }
+      auto bridgeCast = builder.create<UnrealizedConversionCastOp>(
+          callOp.getLoc(), TypeRange{targetTy}, ValueRange{operand});
+      newOperands.push_back(bridgeCast.getResult(0));
+    }
+
+    auto newCall = builder.create<func::CallOp>(
+        callOp.getLoc(), callOp.getCallee(), newType.getResults(), newOperands);
+    for (unsigned i = 0, e = callOp.getNumResults(); i < e; ++i) {
+      Value replacement = newCall.getResult(i);
+      Type oldResultTy = callOp.getResult(i).getType();
+      if (replacement.getType() != oldResultTy) {
+        auto backCast = builder.create<UnrealizedConversionCastOp>(
+            callOp.getLoc(), TypeRange{oldResultTy}, ValueRange{replacement});
+        replacement = backCast.getResult(0);
+      }
+      callOp.getResult(i).replaceAllUsesWith(replacement);
+    }
+    callOp.erase();
+  }
+
+  // Rewrite call_indirect sites to match updated four-state function types.
+  SmallVector<func::CallIndirectOp> indirectCallsToRewrite;
+  moduleOp.walk([&](func::CallIndirectOp callOp) {
+    auto calleeTy = dyn_cast<FunctionType>(callOp.getCallee().getType());
+    if (!calleeTy || calleeTy.getNumResults() > 1)
+      return;
+    bool changed = false;
+    for (Type inputTy : calleeTy.getInputs())
+      changed |= convertFourStateBoundaryType(inputTy, ctx) != inputTy;
+    for (Type resultTy : calleeTy.getResults())
+      changed |= convertFourStateBoundaryType(resultTy, ctx) != resultTy;
+    if (changed)
+      indirectCallsToRewrite.push_back(callOp);
+  });
+
+  for (auto callOp : indirectCallsToRewrite) {
+    auto oldTy = dyn_cast<FunctionType>(callOp.getCallee().getType());
+    if (!oldTy || oldTy.getNumResults() > 1)
+      continue;
+
+    SmallVector<Type> newInputs;
+    SmallVector<Type> newResults;
+    bool changed = false;
+    newInputs.reserve(oldTy.getNumInputs());
+    newResults.reserve(oldTy.getNumResults());
+    for (Type inputTy : oldTy.getInputs()) {
+      Type newInputTy = convertFourStateBoundaryType(inputTy, ctx);
+      changed |= (newInputTy != inputTy);
+      newInputs.push_back(newInputTy);
+    }
+    for (Type resultTy : oldTy.getResults()) {
+      Type newResultTy = convertFourStateBoundaryType(resultTy, ctx);
+      changed |= (newResultTy != resultTy);
+      newResults.push_back(newResultTy);
+    }
+    if (!changed)
+      continue;
+
+    auto newTy = FunctionType::get(ctx, newInputs, newResults);
+    OpBuilder builder(callOp);
+
+    Value oldCallee = callOp.getCallee();
+    Value newCallee = oldCallee;
+    if (oldCallee.getType() != newTy) {
+      if (auto oldCast = oldCallee.getDefiningOp<UnrealizedConversionCastOp>();
+          oldCast && oldCast.getNumOperands() == 1 &&
+          oldCast.getNumResults() == 1 &&
+          isa<LLVM::LLVMPointerType>(oldCast.getOperand(0).getType())) {
+        auto newCast = builder.create<UnrealizedConversionCastOp>(
+            callOp.getLoc(), TypeRange{newTy},
+            ValueRange{oldCast.getOperand(0)});
+        newCallee = newCast.getResult(0);
+      } else {
+        auto newCast = builder.create<UnrealizedConversionCastOp>(
+            callOp.getLoc(), TypeRange{newTy}, ValueRange{oldCallee});
+        newCallee = newCast.getResult(0);
+      }
+    }
+
+    SmallVector<Value> newOperands;
+    newOperands.reserve(callOp.getArgOperands().size());
+    for (unsigned i = 0, e = callOp.getArgOperands().size(); i < e; ++i) {
+      Value operand = callOp.getArgOperands()[i];
+      Type targetTy = newTy.getInput(i);
+      if (operand.getType() == targetTy) {
+        newOperands.push_back(operand);
+        continue;
+      }
+      auto bridgeCast = builder.create<UnrealizedConversionCastOp>(
+          callOp.getLoc(), TypeRange{targetTy}, ValueRange{operand});
+      newOperands.push_back(bridgeCast.getResult(0));
+    }
+
+    auto newCall = builder.create<func::CallIndirectOp>(
+        callOp.getLoc(), newCallee, ValueRange{newOperands});
+    for (unsigned i = 0, e = callOp.getNumResults(); i < e; ++i) {
+      Value replacement = newCall.getResult(i);
+      Type oldResultTy = callOp.getResult(i).getType();
+      if (replacement.getType() != oldResultTy) {
+        auto backCast = builder.create<UnrealizedConversionCastOp>(
+            callOp.getLoc(), TypeRange{oldResultTy}, ValueRange{replacement});
+        replacement = backCast.getResult(0);
+      }
+      callOp.getResult(i).replaceAllUsesWith(replacement);
+    }
+    callOp.erase();
+  }
+}
+
 /// Synthesize optional native module-init functions from hw.module top-level
 /// LLVM-style init ops. Returns synthesis stats including skip reasons.
 static NativeModuleInitSynthesisStats
@@ -5642,6 +5897,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Normalize ref-like func argument ABIs in the micro-module to keep helper
   // call wrappers pointer-typed for LLVM lowering.
   canonicalizeLLHDRefArgumentABIs(microModule);
+
+  // Canonicalize 4-state hw.struct function boundaries to LLVM-compatible
+  // ABI forms to reduce residual signature-based stripping.
+  canonicalizeFourStateStructABIs(microModule);
 
   // Strip bodies of intercepted functions so they become external
   // declarations → trampolines. This ensures compiled code calls back into
