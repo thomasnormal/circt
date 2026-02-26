@@ -335,3 +335,34 @@
     - `aot-trampoline-failure-zero-result.mlir` (COMPILE+COMPILED checks)
     - `aot-entry-table-trampoline-counter.mlir` (COMPILE+COMPILED checks)
     - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK).
+
+- Additional audit finding in call_indirect compiled/native result mapping:
+  result assignment used call-site result count to index the produced-result
+  vector in several paths. When a call site requested more results than the
+  resolved callee produced (possible via unrealized function-pointer casts),
+  this caused out-of-bounds access.
+  - Deterministic reproducer (before fix):
+    - compiled run of `func.call_indirect` cast to `(i32) -> (i32, i32)` with
+      resolved callee `@ret1 : (i32) -> i32` aborts with:
+      `SmallVector::operator[] Assertion 'idx < size()' failed`.
+- Fix:
+  - Added a single bounded helper in
+    `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp` to assign
+    call_indirect results with:
+    - min-size copy of produced values
+    - zero-fill of any extra call-site results.
+  - Replaced all call_indirect result assignment sites (native and interpreted
+    paths) to use the helper.
+- Added regression:
+  - `test/Tools/circt-sim/aot-call-indirect-result-arity-mismatch.mlir`
+  - checks:
+    - no assertion in compiled mode
+    - output `r0=5 r1=0`.
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `circt-sim-compile` + `circt-sim --compiled` with FileCheck for:
+    - `aot-call-indirect-result-arity-mismatch.mlir` (COMPILE+RUNTIME)
+  - Spot non-regression:
+    - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK)
+    - `aot-process-indirect-cast-dispatch.mlir` (RUNTIME)
+    - `aot-entry-table-trampoline-counter.mlir` (COMPILE+COMPILED).
