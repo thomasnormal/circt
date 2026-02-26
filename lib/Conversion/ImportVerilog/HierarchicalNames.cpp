@@ -101,7 +101,10 @@ struct HierPathValueExprVisitor
             paths.push_back(HierInterfacePathInfo{nameAttr, {}, dir, ifaceInst});
         };
 
-    SmallString<64> upwardName(ifaceInst->name);
+    auto ifaceSegment = getInstancePathSegment(*ifaceInst);
+    SmallString<64> upwardName(ifaceSegment);
+    if (upwardName.empty())
+      return;
     for (auto *body = ifaceParentBody; body && body != lca;
          body = body->parentInstance
                     ? body->parentInstance->getParentScope()
@@ -110,8 +113,11 @@ struct HierPathValueExprVisitor
       addHierIfacePath(body, builder.getStringAttr(upwardName),
                        slang::ast::ArgumentDirection::Out);
       if (body->parentInstance) {
+        auto parentSegment = getInstancePathSegment(*body->parentInstance);
+        if (parentSegment.empty())
+          return;
         SmallString<64> nextName;
-        nextName += body->parentInstance->name;
+        nextName += parentSegment;
         nextName += ".";
         nextName += upwardName;
         upwardName = nextName;
@@ -139,6 +145,34 @@ struct HierPathValueExprVisitor
     int64_t relIndex = static_cast<int64_t>(instSym.arrayPath[0]);
     return range.isLittleEndian() ? range.lower() + relIndex
                                   : range.upper() - relIndex;
+  }
+
+  std::string getInstancePathSegment(const slang::ast::InstanceSymbol &instSym) {
+    if (!instSym.name.empty())
+      return std::string(instSym.name);
+
+    auto *parentArray =
+        instSym.getParentScope()
+            ->asSymbol()
+            .as_if<slang::ast::InstanceArraySymbol>();
+    if (!parentArray || parentArray->name.empty())
+      return {};
+
+    SmallString<64> segment(parentArray->name);
+    slang::SmallVector<slang::ConstantRange, 4> dimensions;
+    instSym.getArrayDimensions(dimensions);
+    size_t rank = instSym.arrayPath.size();
+    if (rank > dimensions.size())
+      rank = dimensions.size();
+    for (size_t dim = 0; dim < rank; ++dim) {
+      const auto &range = dimensions[dim];
+      int64_t relIndex = static_cast<int64_t>(instSym.arrayPath[dim]);
+      int64_t actualIndex =
+          range.isLittleEndian() ? range.lower() + relIndex
+                                 : range.upper() - relIndex;
+      segment += ("[" + llvm::Twine(actualIndex) + "]").str();
+    }
+    return segment.str().str();
   }
 
   const slang::ast::InstanceSymbol *
