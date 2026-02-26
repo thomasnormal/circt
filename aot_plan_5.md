@@ -524,6 +524,16 @@ Status update:
   - next high-ROI coverage step is now clear and measured: eliminate residual
     4-state HW struct ABI/body op shapes (`hw.struct_create` / `hw.bitcast` +
     non-LLVM hw-struct signatures) in function lowering.
+- follow-up landed: `hw.struct_extract(hw.bitcast(iN -> hw.struct<...>), field)`
+  now folds to integer slicing when all struct fields are integers.
+  - regression added:
+    `aot-hw-bitcast-struct-extract-lowering.mlir`
+  - large-workload impact (`uvm_seq_body`):
+    - stripped residual functions: `107 -> 100`
+    - codegen-ready functions: `3338 -> 3345` (`+7`)
+    - prior `body_nonllvm_op:hw.bitcast` top reason was removed; dominant
+      residual blocker is now concentrated on `hw.struct_create` + 4-state
+      hw-struct ABI signatures.
 
 ---
 

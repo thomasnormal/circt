@@ -1773,3 +1773,46 @@
   - the bottleneck has shifted from unknown residual stripping to a narrow,
     measurable 4-state HW-struct lowering/ABI gap; this is now the next
     concrete high-ROI Phase 5.2/5.3 target.
+
+## 2026-02-26
+- Phase 5.2 follow-up: added targeted lowering for integer-to-struct bitcast
+  extraction patterns that were leaving residual non-LLVM `hw.bitcast` ops.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - in pre-lowering (`hw.struct_extract` rewrite block), added:
+    - fold for `hw.struct_extract(hw.bitcast(iN -> hw.struct<...>), field)`
+      when:
+      - bitcast input is integer
+      - destination struct fields are all integers
+      - packed widths match
+      - selected field width matches extract result type
+    - rewrite emits integer slice logic (`shrui` + `trunci`) and erases now-dead
+      `hw.bitcast` ops.
+- TDD/regression:
+  - added `test/Tools/circt-sim/aot-hw-bitcast-struct-extract-lowering.mlir`.
+  - checks:
+    - compile path keeps function native-ready (`1 functions + 0 processes
+      ready for codegen`)
+    - interpreter and compiled outputs match (`out=26796`).
+- Validation:
+  - rebuilt `circt-sim-compile`.
+  - regression run (manual in this workspace):
+    - compile: `Functions: 1 total ... 1 compilable`
+    - compile: `1 functions + 0 processes ready for codegen`
+    - sim: `out=26796`
+    - compiled: `out=26796`
+  - large workload (`uvm_seq_body`, `-v`) after patch:
+    - `Stripped 100 functions with non-LLVM ops` (from `107`)
+    - `3345 functions + 1 processes ready for codegen` (from `3338 + 1`)
+    - top residual reasons now:
+      - `36x body_nonllvm_op:hw.struct_create`
+      - `33x sig_nonllvm_arg:!hw.struct<value: i4096, unknown: i4096>`
+      - `9x sig_nonllvm_arg:!hw.struct<value: i64, unknown: i64>`
+      - `4x body_nonllvm_op:builtin.unrealized_conversion_cast`
+      - `4x sig_nonllvm_ret:!hw.struct<value: i4096, unknown: i4096>`
+    - the prior `body_nonllvm_op:hw.bitcast` top bucket is no longer present.
+  - compiled runtime sanity (`uvm_seq_body`, `CIRCT_AOT_STATS=1`) remains
+    stable:
+    - `EXIT_CODE=0`
+    - stats shape unchanged (`Compiled function calls=5`,
+      `Interpreted function calls=28`, `direct_calls_native=5`,
+      `direct_calls_interpreted=28`).
