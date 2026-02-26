@@ -556,6 +556,22 @@ Status update:
     the new cast-lowering behavior:
     `aot-strip-non-llvm-telemetry.mlir` now checks
     `sig_nonllvm_arg:!hw.struct<f: i8>`.
+- major coverage follow-up landed: canonicalized four-state HW struct
+  function boundary ABIs in the micro-module:
+  - rewrites `!hw.struct<value: iN, unknown: iN>` func args/results to
+    LLVM-compatible boundary types.
+  - rewrites direct and indirect call sites accordingly with boundary bridge
+    casts.
+  - leverages existing pre-lowering folds to eliminate bridge casts in-body
+    (e.g. `extract(cast(llvm.struct -> hw.struct), field)`).
+  - regression added:
+    `aot-fourstate-abi-canonicalization.mlir`.
+  - large-workload impact (`uvm_seq_body`):
+    - stripped residual functions: `74 -> 2`
+    - codegen-ready functions: `3371 -> 3425` (`+54`)
+    - remaining strip reasons:
+      - `1x body_nonllvm_op:hw.struct_create`
+      - `1x body_nonllvm_op:arith.cmpf`.
 
 ---
 
