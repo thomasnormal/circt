@@ -720,3 +720,40 @@
     `ModuleTranslation::convertOneFunction`).
   - This appears independent of `LowerTaggedIndirectCalls` and should be
     investigated separately.
+
+- Additional audit finding in AOT trampoline generation:
+  `circt-sim-compile --emit-llvm` could segfault while translating modules
+  where a non-compiled `llvm.func` with EH personality metadata is converted
+  into an interpreter trampoline.
+  - Deterministic repro (before fix):
+    - Minimal mixed-dialect input with:
+      - `func.func @entry` calling `llvm.call @invoke_wrap`, and
+      - `llvm.func @invoke_wrap(...) attributes { personality = @__gxx_personality_v0 }`
+        containing an `llvm.invoke` + `landingpad`.
+    - Command:
+      - `build_test/bin/circt-sim-compile --emit-llvm /tmp/mixed_invoke_direct.mlir -o /tmp/mixed_invoke_direct.ll`
+    - Result: SIGSEGV in MLIR->LLVM translation path
+      (`llvm::ConstantExpr::getBitCast` via `ModuleTranslation::convertOneFunction`).
+- Root cause:
+  - `generateTrampolines()` materialized bodies for selected external
+    `llvm.func`s but left a stale `personality` function attribute attached.
+  - The generated trampoline body has no EH semantics; keeping that attribute
+    could trigger translator crashes while materializing function attributes.
+- Fix:
+  - `tools/circt-sim-compile/circt-sim-compile.cpp`
+    - In `generateTrampolines()`, remove `personality` attribute before
+      constructing trampoline blocks/bodies.
+- Added regression:
+  - `test/Tools/circt-sim/aot-trampoline-personality-no-crash.mlir`
+  - checks successful compile with expected stats + LLVM IR emission.
+- Verification:
+  - `ninja -C build_test circt-sim-compile`
+  - `build_test/bin/circt-sim-compile --emit-llvm test/Tools/circt-sim/aot-trampoline-personality-no-crash.mlir -o /tmp/t4.ll`
+  - `build_test/unittests/Tools/circt-sim-compile/CIRCTSimCompileToolTests --gtest_filter=LowerTaggedIndirectCallsTest.InvokeUnwindPhiUsesInvokeBlocks`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/aot-call-indirect-tagged-fid-oob-safe.mlir`
+  - `build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-call-indirect-tagged-fid-oob-safe.mlir -o /tmp/t1.so`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/aot-call-indirect-tagged-fid-oob-safe.mlir --compiled=/tmp/t1.so`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir`
+  - `build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir -o /tmp/t2.so`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir --compiled=/tmp/t2.so`
+  - Result: all pass; prior segfault no longer reproduces.
