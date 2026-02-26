@@ -10,5 +10,5 @@ module {
 }
 
 // CHECK-LABEL: hw.module @clocked_attrs
-// CHECK: verif.assert {{.*}}bmc.clock = "clk"{{.*}}bmc.clock_edge = #ltl<clock_edge negedge>
-// CHECK: verif.assert {{.*}}bmc.clock = "clk"{{.*}}bmc.clock_edge = #ltl<clock_edge negedge>{{.*}}bmc.final
+// CHECK: verif.assert {{.*}}bmc.clock = "clk"{{.*}}bmc.clock_edge = #ltl<clock_edge negedge>{{.*}}bmc.clock_key = "port:clk"
+// CHECK: verif.assert {{.*}}bmc.clock = "clk"{{.*}}bmc.clock_edge = #ltl<clock_edge negedge>{{.*}}bmc.clock_key = "port:clk"{{.*}}bmc.final
