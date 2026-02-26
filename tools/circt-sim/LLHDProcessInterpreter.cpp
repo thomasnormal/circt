@@ -24103,9 +24103,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       }
     }
 
-    unsigned idx = 0;
-    for (auto [arg, val] : llvm::zip(entryBlock.getArguments(), args)) {
-      setValue(procId, arg, val);
+    for (auto [idx, arg] : llvm::enumerate(entryBlock.getArguments())) {
+      if (idx < args.size()) {
+        setValue(procId, arg, args[idx]);
+      } else {
+        // Defensive initialization for mismatched call signatures (e.g.
+        // call_indirect via unrealized casts): do not reuse stale block-arg
+        // values from prior invocations when an argument is omitted.
+        unsigned width = getTypeWidth(arg.getType());
+        setValue(procId, arg, InterpretedValue(llvm::APInt(width, 0)));
+      }
 
       // If the argument type is !llhd.ref<...>, try to propagate signal mapping
       // from the caller. This enables llhd.drv/llhd.prb on ref arguments
@@ -24127,7 +24134,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
                      << " -> signal " << sigId << "\n");
         }
       }
-      ++idx;
     }
   }
 
@@ -38018,6 +38024,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMFuncBody(
        llvm::enumerate(entryBlock.getArguments())) {
     if (idx < args.size())
       cachedState->valueMap[blockArg] = args[idx];
+    else {
+      unsigned width = getTypeWidth(blockArg.getType());
+      cachedState->valueMap[blockArg] =
+          InterpretedValue(llvm::APInt(width, 0));
+    }
 
     // If call operands are provided, create signal mappings for BlockArguments
     // when the corresponding call operand resolves to a signal ID.

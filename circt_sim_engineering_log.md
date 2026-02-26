@@ -393,3 +393,31 @@
   - Spot non-regression:
     - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK)
     - `aot-process-indirect-cast-dispatch.mlir` (RUNTIME).
+
+- Additional audit finding in interpreted function argument binding:
+  missing function arguments were not initialized at function entry, so
+  block arguments could retain stale values from prior invocations.
+  - Deterministic reproducer (before fix):
+    - warm call to `@sum2_i65(%a, %b)` sets `%b=7`
+    - later mismatched `call_indirect` cast invokes same callee with only `%a=5`
+    - interpreted fallback produced `r=12` (stale `%b=7`) instead of zero-filled
+      missing arg behavior (`r=5`).
+- Fix:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - `interpretFuncBody`: initialize missing entry block args to zero.
+    - `interpretLLVMFuncBody`: initialize missing entry block args to zero.
+  - This prevents stale value-map reuse for omitted args in mismatched dynamic
+    call shapes.
+- Added regression:
+  - `test/Tools/circt-sim/aot-call-indirect-interp-missing-arg-stale.mlir`
+  - checks:
+    - no stale prior-arg result (`RUNTIME-NOT: r=12`)
+    - expected output `RUNTIME: r=5`.
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `circt-sim-compile` + `circt-sim --compiled` with FileCheck for:
+    - `aot-call-indirect-interp-missing-arg-stale.mlir` (COMPILE+RUNTIME)
+    - `aot-call-indirect-arg-arity-mismatch.mlir` (COMPILE+RUNTIME)
+    - `aot-call-indirect-result-arity-mismatch.mlir` (COMPILE+RUNTIME)
+  - Spot non-regression:
+    - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK).
