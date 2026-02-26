@@ -750,8 +750,17 @@ void writeIntKey(void *key, int64_t value, int32_t keySize) {
 /// interpreter virtual addresses back to real host pointers.
 static thread_local void *circtSimTlsCtx = nullptr;
 
+/// Callback to translate interpreter virtual addresses to host pointers.
+/// Signature: (ctx, virtualAddr) -> host pointer (or nullptr on failure).
+using NormalizeVirtualPtrFn = void *(*)(void *ctx, uint64_t addr);
+static thread_local NormalizeVirtualPtrFn circtSimTlsNormalize = nullptr;
+
 extern "C" void __circt_sim_set_tls_ctx(void *ctx) { circtSimTlsCtx = ctx; }
 extern "C" void *__circt_sim_get_tls_ctx() { return circtSimTlsCtx; }
+
+extern "C" void __circt_sim_set_tls_normalize(NormalizeVirtualPtrFn fn) {
+  circtSimTlsNormalize = fn;
+}
 
 /// Classify and optionally translate a pointer that might be an interpreter
 /// virtual address rather than a real host pointer.
@@ -777,13 +786,16 @@ static void *normalizeHostPtr(void *ptr, const char *funcName) {
 
   // Range 2: interpreter virtual address — try TLS context translation.
   if (addr >= 0x10000000ULL && addr < 0x20000000ULL) {
-    // TODO (Phase 1.2): use circtSimTlsCtx + findMemoryBlockByAddress to
-    // translate the virtual address to a real host pointer.
-    static bool trace =
-        std::getenv("CIRCT_AOT_TRACE_PTR") != nullptr;
+    if (circtSimTlsNormalize && circtSimTlsCtx) {
+      void *hostPtr = circtSimTlsNormalize(circtSimTlsCtx, addr);
+      if (hostPtr)
+        return hostPtr;
+    }
+    // Fallback: warn if tracing enabled.
+    static bool trace = std::getenv("CIRCT_AOT_TRACE_PTR") != nullptr;
     if (trace) {
       fprintf(stderr,
-              "[AOT PTR] %s: virtual address %p — cannot normalize yet\n",
+              "[AOT PTR] %s: virtual address %p — could not normalize\n",
               funcName, ptr);
     }
     return ptr;
@@ -4867,8 +4879,26 @@ bool matchesNamedCrossBin(const CrossNamedBin &namedBin,
                           const std::vector<int64_t> &values,
                           MooreCovergroup *covergroup,
                           const MooreCrossCoverage &cross) {
-  // All filters must match (AND semantics)
+  if (namedBin.filters.empty())
+    return true;
+
+  // Filters are AND-ed within each group. Separator entries (cp_index < 0)
+  // split groups, and groups are OR-ed.
+  bool groupMatches = true;
+  bool sawAnyNonSeparatorFilter = false;
+
   for (const auto &filter : namedBin.filters) {
+    if (filter.cp_index < 0) {
+      if (groupMatches)
+        return true;
+      groupMatches = true;
+      continue;
+    }
+
+    sawAnyNonSeparatorFilter = true;
+    if (!groupMatches)
+      continue;
+
     // Find the index of this coverpoint in the cross
     int32_t crossCpIdx = -1;
     for (int32_t i = 0; i < cross.num_cps; ++i) {
@@ -4880,17 +4910,19 @@ bool matchesNamedCrossBin(const CrossNamedBin &namedBin,
 
     if (crossCpIdx < 0 ||
         crossCpIdx >= static_cast<int32_t>(values.size())) {
-      // Filter references a coverpoint not in this cross
-      return false;
+      // Filter references a coverpoint not in this cross.
+      groupMatches = false;
+      continue;
     }
 
     int64_t value = values[crossCpIdx];
-    if (!matchesBinsofFilter(filter, value, covergroup)) {
-      return false;
-    }
+    if (!matchesBinsofFilter(filter, value, covergroup))
+      groupMatches = false;
   }
 
-  return true;
+  if (!sawAnyNonSeparatorFilter)
+    return true;
+  return groupMatches;
 }
 
 } // anonymous namespace

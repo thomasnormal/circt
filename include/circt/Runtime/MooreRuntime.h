@@ -249,6 +249,12 @@ void __circt_sim_set_tls_ctx(void *ctx);
 /// Get the current thread-local simulation context pointer.
 void *__circt_sim_get_tls_ctx(void);
 
+/// Set the thread-local virtual-address normalize callback.
+/// The callback translates interpreter virtual addresses (0x10000000–0x1FFFFFFF)
+/// to host pointers via findMemoryBlockByAddress.
+/// Signature: (ctx, virtualAddr) -> host pointer (or nullptr on failure).
+void __circt_sim_set_tls_normalize(void *(*fn)(void *ctx, uint64_t addr));
+
 /// Create a new empty associative array.
 /// @param key_size Size of keys in bytes (0 for string keys)
 /// @param value_size Size of values in bytes
@@ -1323,6 +1329,7 @@ enum MooreCrossBinKind {
 /// Binsof filter for a single coverpoint in a cross bin expression.
 /// Specifies which bins of a coverpoint are included in the cross bin.
 /// @member cp_index Index of the coverpoint in the cross
+///   - negative value denotes a separator between OR groups
 /// @member bin_indices Array of bin indices to include (NULL = all bins)
 /// @member num_bins Number of bin indices (0 = all bins)
 /// @member values Array of specific values to intersect (NULL = no value filter)
@@ -1340,7 +1347,9 @@ typedef struct {
 /// Named cross bin definition.
 /// @member name Name of the cross bin
 /// @member kind Type of bin (normal, ignore, illegal)
-/// @member filters Array of binsof filters (AND-ed together)
+/// @member filters Array of binsof filters.
+///   - filters are AND-ed within each group
+///   - separator entries (cp_index < 0) split groups, and groups are OR-ed
 /// @member num_filters Number of filters in the expression
 /// @member hit_count Number of times this named bin was hit
 typedef struct {

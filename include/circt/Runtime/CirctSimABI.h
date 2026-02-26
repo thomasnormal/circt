@@ -275,6 +275,9 @@ void __circt_sim_drive_nba(CirctSimCtx *ctx, uint32_t sig_id, uint64_t val);
 void __circt_sim_drive_time(CirctSimCtx *ctx, uint32_t sig_id, uint64_t val,
                             uint64_t delay);
 
+/// Get current simulation time in femtoseconds.
+uint64_t __circt_sim_current_time_fs(void);
+
 //===----------------------------------------------------------------------===//
 // Runtime API — Coroutine Yields
 //===----------------------------------------------------------------------===//

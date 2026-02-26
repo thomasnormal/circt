@@ -703,6 +703,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 // Set TLS context so Moore runtime helpers can normalize ptrs.
                 void *prevTls = __circt_sim_get_tls_ctx();
                 __circt_sim_set_tls_ctx(static_cast<void *>(this));
+                __circt_sim_set_tls_normalize(LLHDProcessInterpreter::normalizeVirtualPtr);
                 uint64_t result = 0;
                 using F0 = uint64_t (*)();
                 using F1 = uint64_t (*)(uint64_t);
@@ -1490,6 +1491,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 // Set TLS context so Moore runtime helpers can normalize ptrs.
                 void *prevTls = __circt_sim_get_tls_ctx();
                 __circt_sim_set_tls_ctx(static_cast<void *>(this));
+                __circt_sim_set_tls_normalize(LLHDProcessInterpreter::normalizeVirtualPtr);
                 uint64_t result = 0;
                 using F0 = uint64_t (*)();
                 using F1 = uint64_t (*)(uint64_t);
@@ -1977,6 +1979,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             // Set TLS context so Moore runtime helpers can normalize ptrs.
             void *prevTls = __circt_sim_get_tls_ctx();
             __circt_sim_set_tls_ctx(static_cast<void *>(this));
+            __circt_sim_set_tls_normalize(LLHDProcessInterpreter::normalizeVirtualPtr);
             uint64_t result = 0;
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
@@ -4270,6 +4273,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             // Set TLS context so Moore runtime helpers can normalize ptrs.
             void *prevTls = __circt_sim_get_tls_ctx();
             __circt_sim_set_tls_ctx(static_cast<void *>(this));
+            __circt_sim_set_tls_normalize(LLHDProcessInterpreter::normalizeVirtualPtr);
             uint64_t result = 0;
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);

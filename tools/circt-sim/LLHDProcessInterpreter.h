@@ -1102,6 +1102,7 @@ public:
   void
   setCompiledLoaderForModuleInit(const CompiledModuleLoader *loader) {
     compiledLoaderForModuleInit = loader;
+    moduleInitTrampolinesPrepared = false;
   }
 
   /// Dispatch a trampoline call from compiled code back to the interpreter.
@@ -2484,6 +2485,11 @@ private:
                                         ProcessId procId = static_cast<ProcessId>(-1),
                                         uint64_t *outOffset = nullptr);
 
+  /// TLS callback: translate a virtual address to a host pointer.
+  /// Registered with __circt_sim_set_tls_normalize so that Moore runtime
+  /// helpers can resolve interpreter virtual addresses during native calls.
+  static void *normalizeVirtualPtr(void *ctx, uint64_t addr);
+
   /// Resolve a runtime assoc-array pointer to a host-dereferenceable address.
   /// Used by MooreRuntime callback bridging when native code passes an
   /// interpreter virtual address.
@@ -3185,6 +3191,7 @@ private:
   llvm::SmallVector<std::string> aotFuncEntryNamesById;
   llvm::StringMap<uint32_t> aotFuncNameToCanonicalId;
   const CompiledModuleLoader *compiledLoaderForModuleInit = nullptr;
+  bool moduleInitTrampolinesPrepared = false;
   void noteAotFuncIdCall(uint32_t fid);
   void noteAotCalleeNameCall(llvm::StringRef calleeName);
 
