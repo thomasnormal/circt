@@ -325,8 +325,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
     // high-frequency churn while objections remain raised.
     constexpr int64_t kExecutePhaseObjectionFallbackPollDelayFs =
         10000000000; // 10 us
-    constexpr uint32_t kMemoryMaxDeltaPolls = 32;
-    constexpr int64_t kMemoryFallbackPollDelayFs = 1000000000; // 1 us
+    constexpr int64_t kMemoryPollDelayFs = 1000000; // 1 ps
     SimTime targetTime;
     uint64_t memoryWaitAddr = 0;
     int64_t objectionWaitHandle = MOORE_OBJECTION_INVALID_HANDLE;
@@ -430,7 +429,10 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
       targetTime = currentTime.advanceTime(kQueueFallbackPollDelayFs);
     } else if (waitConditionLoadAddrs.size() == 1) {
       // For memory-backed waits that depend on a single load, register a
-      // direct memory waiter so stores wake the process without tight polls.
+      // direct memory waiter so stores wake the process quickly.
+      // Also keep a fixed 1 ps timed poll cadence. Avoid same-time delta
+      // churn here: it can starve unrelated earlier real-time events and
+      // leave very-sparse fallback polls pending far in the future.
       auto onlyLoad = *waitConditionLoadAddrs.begin();
       memoryWaitAddr = onlyLoad.getFirst();
       unsigned memoryWaitSize = onlyLoad.getSecond();
@@ -450,15 +452,8 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitConditionCall(
         }
       }
       memoryEventWaiters[procId] = waiter;
-
-      // wait_for_state in UVM can stall indefinitely if resumed only via
-      // same-time delta polls; prefer real-time polling for forward progress.
-      if (isPhaseWaitForState)
-        targetTime = currentTime.advanceTime(kMemoryFallbackPollDelayFs);
-      else if (currentTime.deltaStep < kMemoryMaxDeltaPolls)
-        targetTime = currentTime.nextDelta();
-      else
-        targetTime = currentTime.advanceTime(kMemoryFallbackPollDelayFs);
+      (void)isPhaseWaitForState;
+      targetTime = currentTime.advanceTime(kMemoryPollDelayFs);
     } else {
       if (currentTime.deltaStep < kMaxDeltaPolls) {
         targetTime = currentTime.nextDelta();
