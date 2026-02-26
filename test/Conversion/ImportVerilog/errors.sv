@@ -168,7 +168,6 @@ endmodule
 
 // -----
 function Foo;
-  // expected-error @below {{unsupported format specifier `%l`}}
   $write("%l");
 endfunction
 

@@ -2319,3 +2319,46 @@ Close delayed non-blocking event trigger gap:
   - `/tmp/iv_probe/delayed_event_trigger_nb.sv: xrun=0 circt=0`
 - Probe recheck:
   - `/tmp/iv_probe/*.sv` now has no remaining `xrun=0/circt!=0` in this batch.
+
+## 2026-02-26
+
+### Task
+Close format-string `%l` gap (`xrun` accepted, ImportVerilog rejected).
+
+### Realizations
+- Differential probe found a clean mismatch:
+  - `/tmp/iv_probe2/format_l_probe.sv: xrun=0 circt=1`
+  - diagnostic: `unsupported format specifier `%l``.
+- IEEE 1800-2023 (Clause 21.2.1 / 33.7) defines `%l` / `%L` as library binding
+  display (`library.cell`) and says `%l` is a non-argument-consuming specifier.
+- ImportVerilog already had `%m` support and a `%L` compatibility path lowering
+  to hierarchical scope text; `%l` was hard-error.
+
+### TDD Baseline
+- New regression added:
+  - `test/Conversion/ImportVerilog/format-lowercase-l-compat.sv`
+- Baseline before fix:
+  - `xrun -sv /tmp/iv_probe2/format_l_probe.sv -elaborate -nolog` passed.
+  - `build_test/bin/circt-verilog /tmp/iv_probe2/format_l_probe.sv --ir-moore`
+    failed with unsupported `%l`.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/FormatStrings.cpp`:
+  - changed `%l` handling from hard error to non-failing lowering path.
+  - `%l` now uses the same hierarchical-name fallback as `%m`/`%L` in the
+    importer (until full library-binding metadata is threaded).
+- `test/Conversion/ImportVerilog/format-lowercase-l-compat.sv`:
+  - added regression covering `%l` in plain and prefixed strings.
+- `test/Conversion/ImportVerilog/errors.sv`:
+  - removed stale expected-error for `%l`.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Regressions:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/format-lowercase-l-compat.sv build_test/test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv build_test/test/Conversion/ImportVerilog/nonblocking-delayed-event-trigger.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/format-lowercase-l-compat.sv -elaborate -nolog` (PASS)
+  - `xrun -sv /tmp/iv_probe2/format_l_probe.sv -elaborate -nolog` (PASS)
+- Differential recheck:
+  - `/tmp/iv_probe2/format_l_probe.sv: xrun=0 circt=0`

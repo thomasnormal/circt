@@ -150,16 +150,17 @@ struct FormatStringParser {
       return emitHierarchicalName(options);
     }
 
-    // Compatibility handling for non-standard %L.
+    // Compatibility handling for %L.
     // Some large codebases use %L where simulators print a hierarchical path.
     // Treat it like %m so formatting can proceed.
     if (specifier == 'L')
       return emitHierarchicalName(options);
 
-    // Special handling for %l - library binding (unsupported).
+    // %l is the standard "library binding information" specifier.
+    // ImportVerilog does not currently track full library binding metadata, so
+    // fall back to the same hierarchical path behavior as %m.
     if (specifierLower == 'l')
-      return mlir::emitError(loc)
-             << "unsupported format specifier `" << fullSpecifier << "`";
+      return emitHierarchicalName(options);
 
     // Consume the next argument, which will provide the value to be
     // formatted.
