@@ -2563,6 +2563,96 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (auto ref = context.resolveInterfaceInstance(instSym, loc))
         return ref;
 
+      // Path-based fallback for hierarchical references where slang uses
+      // synthesized/unnamed array-element symbols. Use the threaded
+      // hierarchical interface path when available to disambiguate.
+      if (instSym->getDefinition().definitionKind ==
+              slang::ast::DefinitionKind::Interface &&
+          !expr.hierRef.path.empty() && context.currentScope) {
+        struct PathSegment {
+          std::string name;
+          std::optional<int64_t> index;
+        };
+
+        SmallVector<PathSegment, 8> path;
+        bool validPath = true;
+        for (const auto &elem : expr.hierRef.path) {
+          std::optional<int64_t> selectorIndex;
+          if (auto *index = std::get_if<int32_t>(&elem.selector))
+            selectorIndex = static_cast<int64_t>(*index);
+          else if (std::holds_alternative<std::pair<int32_t, int32_t>>(
+                       elem.selector)) {
+            validPath = false;
+            break;
+          }
+
+          StringRef segmentName;
+          if (auto *inst = elem.symbol->as_if<slang::ast::InstanceSymbol>())
+            segmentName = inst->name;
+          else if (auto *array =
+                       elem.symbol->as_if<slang::ast::InstanceArraySymbol>())
+            segmentName = array->name;
+          else if (auto *ifacePort =
+                       elem.symbol->as_if<slang::ast::InterfacePortSymbol>())
+            segmentName = ifacePort->name;
+          else
+            continue;
+
+          if (segmentName.empty()) {
+            if (!selectorIndex || path.empty() || path.back().index) {
+              validPath = false;
+              break;
+            }
+            path.back().index = selectorIndex;
+            continue;
+          }
+
+          path.push_back({segmentName.str(), selectorIndex});
+        }
+
+        if (validPath && !path.empty()) {
+          SmallString<64> pathNameStorage;
+          for (auto [idx, segment] : llvm::enumerate(path)) {
+            if (idx)
+              pathNameStorage += ".";
+            pathNameStorage += segment.name;
+            if (segment.index)
+              pathNameStorage += ("[" + llvm::Twine(*segment.index) + "]").str();
+          }
+          auto pathName = context.builder.getStringAttr(pathNameStorage);
+
+          const slang::ast::InstanceBodySymbol *scopeBody =
+              context.currentScope->getContainingInstance();
+          if (!scopeBody)
+            scopeBody = context.currentScope->asSymbol()
+                            .as_if<slang::ast::InstanceBodySymbol>();
+
+          if (scopeBody) {
+            Value candidate;
+            bool ambiguous = false;
+            for (const auto &pathInfo : context.hierInterfacePaths[scopeBody]) {
+              if (!pathInfo.hierName || pathInfo.hierName != pathName ||
+                  !pathInfo.ifaceInst)
+                continue;
+              if (&pathInfo.ifaceInst->getDefinition() !=
+                  &instSym->getDefinition())
+                continue;
+              auto resolved =
+                  context.resolveInterfaceInstance(pathInfo.ifaceInst, loc);
+              if (!resolved)
+                continue;
+              if (candidate && candidate != resolved) {
+                ambiguous = true;
+                break;
+              }
+              candidate = resolved;
+            }
+            if (candidate && !ambiguous)
+              return candidate;
+          }
+        }
+      }
+
       // Final fallback for interface array element references where slang can
       // surface a synthesized/unnamed instance symbol that doesn't match the
       // exact pointer/body identity used in the threading map. If there is a
