@@ -2362,3 +2362,48 @@ Close format-string `%l` gap (`xrun` accepted, ImportVerilog rejected).
   - `xrun -sv /tmp/iv_probe2/format_l_probe.sv -elaborate -nolog` (PASS)
 - Differential recheck:
   - `/tmp/iv_probe2/format_l_probe.sv: xrun=0 circt=0`
+
+## 2026-02-26
+
+### Task
+Close additional display-format differential gaps for `%u`, `%z`, `%v`.
+
+### Realizations
+- Differential probes found all three as xrun-pass/circt-fail:
+  - `/tmp/iv_probe2/format_u_probe.sv: xrun=0 circt=1`
+  - `/tmp/iv_probe2/format_z_probe.sv: xrun=0 circt=1`
+  - `/tmp/iv_probe2/format_v_probe.sv: xrun=0 circt=1`
+- Current format parser had no switch cases for `%u`, `%z`, `%v`, so they
+  hard-failed as unsupported format specifiers.
+- For importer compatibility, lowering these through binary integer formatting
+  is a pragmatic non-failing fallback:
+  - `%u` and `%z`: fallback binary formatting
+  - `%v` (strength): value-only binary fallback
+
+### TDD Baseline
+- Added regression:
+  - `test/Conversion/ImportVerilog/format-vuz-compat.sv`
+- Baseline failure before fix:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/format-vuz-compat.sv`
+    failed on unsupported `%u`.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/FormatStrings.cpp`:
+  - added handling for `%u`, `%z`, `%v` in format-specifier switch.
+  - lowered each through `emitInteger(..., IntFormat::Binary)` with explicit
+    fallback comments for semantics.
+- `test/Conversion/ImportVerilog/format-vuz-compat.sv`:
+  - added regression coverage for `%u`, `%z`, `%v`.
+- `test/Conversion/ImportVerilog/errors.sv`:
+  - removed stale expected-error on `$fwrite` (already supported lowering).
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Regressions:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/format-vuz-compat.sv build_test/test/Conversion/ImportVerilog/format-lowercase-l-compat.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/format-vuz-compat.sv -elaborate -nolog` (PASS)
+  - `/tmp/iv_probe2/format_u_probe.sv: xrun=0 circt=0`
+  - `/tmp/iv_probe2/format_z_probe.sv: xrun=0 circt=0`
+  - `/tmp/iv_probe2/format_v_probe.sv: xrun=0 circt=0`

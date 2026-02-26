@@ -173,6 +173,18 @@ struct FormatStringParser {
     switch (specifierLower) {
     case 'b':
       return emitInteger(arg, options, IntFormat::Binary);
+    case 'u':
+      // IEEE %u writes unformatted 2-state binary data. ImportVerilog lowers
+      // this using binary integer formatting.
+      return emitInteger(arg, options, IntFormat::Binary);
+    case 'z':
+      // IEEE %z writes unformatted 4-state binary data. ImportVerilog lowers
+      // this using binary integer formatting.
+      return emitInteger(arg, options, IntFormat::Binary);
+    case 'v':
+      // IEEE %v prints strength information; lower value-only binary formatting
+      // as a compatibility fallback.
+      return emitInteger(arg, options, IntFormat::Binary);
     case 'o':
       return emitInteger(arg, options, IntFormat::Octal);
     case 'd':
