@@ -43,6 +43,23 @@
     - default interpreter path
     - opt-in direct fast-path path
 
+### Follow-up audit (same session): similar fast-path correctness risks
+- Checked `test/circt-sim` under `CIRCT_SIM_ENABLE_DIRECT_FASTPATHS=1`.
+- Found a latent bytecode bug risk in `cf.cond_br` lowering:
+  - true/false target block indices were packed into `uint8_t` without
+    overflow checks, so processes with >255 blocks could branch to wrong
+    targets via truncation.
+- Fix:
+  - added explicit overflow guards for `cf.cond_br` true/false target block
+    indices; overflow now forces bytecode compile fallback to interpreter
+    (`failedOpName = "cf.cond_br(block-index-overflow)"`).
+- Audit note:
+  - two existing `test/circt-sim` failures in this worktree
+    (`llhd-process-wait-no-delay-no-signals.mlir`,
+    `llhd-process-wait-condition-func.mlir`) reproduce identically with and
+    without fast-path opt-in and show `Bytecode Stats 0/N`, i.e. unrelated to
+    direct bytecode fast-path dispatch.
+
 ## 2026-02-26 Session: LLHD interpret-mode case-arm correctness over external constants
 
 ### What changed

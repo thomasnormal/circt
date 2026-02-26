@@ -448,6 +448,16 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
 
   // cf.cond_br (conditional branch)
   if (auto condBrOp = dyn_cast<cf::CondBranchOp>(op)) {
+    auto getU8BlockIndex = [&](Block *dest, uint8_t &out) -> bool {
+      uint32_t idx = getBlockIndex(dest);
+      if (idx > 255) {
+        failedOpName = "cf.cond_br(block-index-overflow)";
+        return false;
+      }
+      out = static_cast<uint8_t>(idx);
+      return true;
+    };
+
     bool hasTrueArgs = !condBrOp.getTrueDestOperands().empty();
     bool hasFalseArgs = !condBrOp.getFalseDestOperands().empty();
 
@@ -456,10 +466,10 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
       MicroOp mop;
       mop.kind = MicroOpKind::BranchIf;
       mop.srcReg1 = getOrAssignReg(condBrOp.getCondition());
-      mop.srcReg2 =
-          static_cast<uint8_t>(getBlockIndex(condBrOp.getTrueDest()));
-      mop.srcReg3 =
-          static_cast<uint8_t>(getBlockIndex(condBrOp.getFalseDest()));
+      if (!getU8BlockIndex(condBrOp.getTrueDest(), mop.srcReg2))
+        return false;
+      if (!getU8BlockIndex(condBrOp.getFalseDest(), mop.srcReg3))
+        return false;
       program.ops.push_back(mop);
       return !tooManyRegs;
     }
@@ -489,8 +499,8 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
       aux.targetBlockIndex = getBlockIndex(condBrOp.getTrueDest());
       deferredAuxBlocks.push_back(std::move(aux));
     } else {
-      trueTarget =
-          static_cast<uint8_t>(getBlockIndex(condBrOp.getTrueDest()));
+      if (!getU8BlockIndex(condBrOp.getTrueDest(), trueTarget))
+        return false;
     }
 
     if (hasFalseArgs) {
@@ -506,8 +516,8 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
       aux.targetBlockIndex = getBlockIndex(condBrOp.getFalseDest());
       deferredAuxBlocks.push_back(std::move(aux));
     } else {
-      falseTarget =
-          static_cast<uint8_t>(getBlockIndex(condBrOp.getFalseDest()));
+      if (!getU8BlockIndex(condBrOp.getFalseDest(), falseTarget))
+        return false;
     }
 
     MicroOp mop;
