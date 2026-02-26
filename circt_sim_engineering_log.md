@@ -647,3 +647,38 @@
       build_test/test/Tools/circt-sim/aot-uvm-random-native-optin.mlir \
       build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir`
   - Result: 6/6 passed.
+
+- Additional audit finding in AOT tagged-indirect lowering (null entry slots):
+  the previous tagged-FuncId bounds check still allowed calling a null entry
+  pointer when `fid` was in range but `@__circt_sim_func_entries[fid]` was
+  null (e.g. unresolved/missing vtable symbol with no generated trampoline).
+  - Deterministic repro (before fix):
+    - `/tmp/tagged_indirect_null_dynamic.mlir` with vtable entries
+      `[add42, missing]` and runtime select of slot1.
+    - Interpreted run completed with `dyn=x`.
+    - Compiled run crashed inside `circt-sim` after startup (null call target).
+- Root cause:
+  - `tools/circt-sim-compile/LowerTaggedIndirectCalls.cpp` checked only
+    `fid < num_func_entries` before loading `entry_ptr` and issuing the call.
+  - No `entry != null` guard existed on the tagged dispatch path.
+- Fix:
+  - Add `entry_nonnull` checks in both lowered `call` and `invoke` paths.
+  - Route null-entry cases to the same safe invalid-tag fallback path
+    (zero return / no-op for void), preventing null indirect calls.
+- Added regression:
+  - `test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir`
+  - checks:
+    - lowering pass still runs,
+    - interpreted behavior (`dyn=x`) remains,
+    - compiled behavior is safe (`dyn=0`) with no crash.
+- Verification:
+  - `ninja -C build_test circt-sim-compile circt-sim`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv \
+      build_test/test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir \
+      build_test/test/Tools/circt-sim/aot-call-indirect-tagged-fid-oob-safe.mlir \
+      build_test/test/Tools/circt-sim/callback-classify-pointer-probe-dynamic.mlir \
+      build_test/test/Tools/circt-sim/finish-item-blocks-until-item-done.mlir \
+      build_test/test/Tools/circt-sim/finish-item-multiple-outstanding-item-done.mlir \
+      build_test/test/Tools/circt-sim/aot-uvm-random-native-optin.mlir \
+      build_test/test/Tools/circt-sim/aot-native-module-init-memset.mlir`
+  - Result: 7/7 passed.
