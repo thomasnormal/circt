@@ -1971,3 +1971,21 @@
     - `EXIT_CODE=0`
     - same short-window counters (`Compiled function calls=5`,
       `Interpreted function calls=28`).
+
+## 2026-02-26
+- Follow-up: widened LLVM-compat type conversion to include `FloatType` so
+  mixed float/int HW-struct aggregates can materialize through the existing
+  cast lowering path.
+- Implementation:
+  - `convertToLLVMCompatibleType` now accepts `FloatType`.
+- TDD/regression:
+  - added:
+    `test/Tools/circt-sim/aot-hw-struct-float-field-cast-lowering.mlir`
+    - verifies no strip and interpreter/compiled parity (`out=5`).
+- Validation:
+  - rebuilt `circt-sim-compile`.
+  - focused regression passed.
+  - `uvm_seq_body` telemetry remains:
+    - `Stripped 1 functions with non-LLVM ops`
+    - residual reason still `1x body_nonllvm_op:hw.struct_create`
+    - `3426 functions + 1 processes ready for codegen`.

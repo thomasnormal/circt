@@ -710,7 +710,7 @@ static Value unwrapPointerFromRefCast(Value value) {
 }
 
 static Type convertToLLVMCompatibleType(Type type, MLIRContext *ctx) {
-  if (isa<IntegerType, LLVM::LLVMPointerType, LLVM::LLVMStructType,
+  if (isa<IntegerType, FloatType, LLVM::LLVMPointerType, LLVM::LLVMStructType,
           LLVM::LLVMArrayType>(type))
     return type;
   if (auto hwStructTy = dyn_cast<hw::StructType>(type)) {
