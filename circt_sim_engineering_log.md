@@ -303,3 +303,35 @@
     - `env CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-entry-table-trampoline-counter.mlir -o /tmp/aot-entry-table-trampoline-counter.so`
     - `env CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim test/Tools/circt-sim/aot-entry-table-trampoline-counter.mlir --compiled=/tmp/aot-entry-table-trampoline-counter.so --aot-stats`
       -> expected trampoline counters + output observed.
+
+- Additional audit finding in trampoline symbol mapping:
+  compiled process callback dispatch could crash on `llvm.func` trampoline
+  targets that have no native fallback pointer.
+  - Reproducer: `test/Tools/circt-sim/aot-process-indirect-cast-dispatch.mlir`
+    in compiled mode aborted with:
+    `FATAL: trampoline dispatch for func_id=0 (set_true) — FuncOp not found in module`.
+  - Root cause: trampoline metadata kept only `func.func` mappings plus native
+    fallbacks. `llvm.func` symbols with bodies (but no native pointer) were not
+    tracked, and `dispatchTrampoline` treated them as fatal missing symbols.
+- Fix:
+  - Added `trampolineLLVMFuncOps` mapping in
+    `tools/circt-sim/LLHDProcessInterpreter.h/.cpp`.
+  - `loadCompiledFunctions` now records `llvm.func` trampoline symbols for
+    interpreter fallback even when no native pointer exists.
+  - `dispatchTrampoline` now dispatches to `interpretLLVMFuncBody` for those
+    `llvm.func` trampolines instead of aborting.
+- Regression update:
+  - Extended `test/Tools/circt-sim/aot-process-indirect-cast-dispatch.mlir`
+    with runtime check:
+    - no fatal trampoline-dispatch crash
+    - compiled run prints `a=1`.
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-process-indirect-cast-dispatch.mlir -o /tmp/aot-process-indirect-cast-dispatch.so`
+  - `build_test/bin/circt-sim test/Tools/circt-sim/aot-process-indirect-cast-dispatch.mlir --compiled=/tmp/aot-process-indirect-cast-dispatch.so`
+  - FileCheck validation:
+    - `--check-prefix=COMPILE` and `--check-prefix=RUNTIME` for the updated test.
+  - Spot non-regression:
+    - `aot-trampoline-failure-zero-result.mlir` (COMPILE+COMPILED checks)
+    - `aot-entry-table-trampoline-counter.mlir` (COMPILE+COMPILED checks)
+    - `call-indirect-direct-dispatch-cache-failure-result.mlir` (CHECK).

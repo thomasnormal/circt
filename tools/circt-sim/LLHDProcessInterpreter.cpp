@@ -38877,9 +38877,12 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   uint32_t numTrampolines = loader.getNumTrampolines();
   trampolineFuncOps.clear();
   trampolineFuncOps.resize(numTrampolines);
+  trampolineLLVMFuncOps.clear();
+  trampolineLLVMFuncOps.resize(numTrampolines);
   trampolineNativeFallback.clear();
   trampolineNativeFallback.resize(numTrampolines, nullptr);
   unsigned trampolineMapped = 0;
+  unsigned trampolineLLVMMapped = 0;
   unsigned trampolineNative = 0;
   for (uint32_t i = 0; i < numTrampolines; ++i) {
     llvm::StringRef name = loader.getTrampolineName(i);
@@ -38895,6 +38898,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     } else if (cacheIt != funcLookupCache.end() && cacheIt->second.kind == 0) {
       // LLVM::LLVMFuncOp — try native dispatch. First check nativeFuncPtrs,
       // then fall back to dlsym for libc functions like malloc.
+      trampolineLLVMFuncOps[i] = mlir::cast<mlir::LLVM::LLVMFuncOp>(cacheIt->second.op);
+      ++trampolineLLVMMapped;
       auto nativeIt = nativeFuncPtrs.find(cacheIt->second.op);
       if (nativeIt != nativeFuncPtrs.end()) {
         trampolineNativeFallback[i] = nativeIt->second;
@@ -38919,7 +38924,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   if (numTrampolines > 0)
     llvm::errs() << "[circt-sim] Mapped " << trampolineMapped << "/"
                  << numTrampolines
-                 << " trampolines for interpreted dispatch, "
+                 << " func trampolines and " << trampolineLLVMMapped
+                 << " llvm trampolines for interpreted dispatch, "
                  << trampolineNative << " native fallbacks\n";
 
   // Initialize entry table for tagged-FuncId dispatch (Step 7C).
@@ -39116,17 +39122,23 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
     return;
   }
 
-  // Look up the FuncOp for this trampoline.
-  if (funcId >= trampolineFuncOps.size() || !trampolineFuncOps[funcId]) {
+  bool hasFuncOp = funcId < trampolineFuncOps.size() && trampolineFuncOps[funcId];
+  bool hasLLVMFuncOp =
+      funcId < trampolineLLVMFuncOps.size() && trampolineLLVMFuncOps[funcId];
+  // Look up the function symbol for this trampoline.
+  if (!hasFuncOp && !hasLLVMFuncOp) {
     llvm::errs() << "[circt-sim] FATAL: trampoline dispatch for func_id="
                  << funcId;
     if (funcName)
       llvm::errs() << " (" << funcName << ")";
-    llvm::errs() << " — FuncOp not found in module\n";
+    llvm::errs() << " — function symbol not found in module\n";
     abort();
   }
 
-  mlir::func::FuncOp funcOp = trampolineFuncOps[funcId];
+  mlir::func::FuncOp funcOp = hasFuncOp ? trampolineFuncOps[funcId]
+                                        : mlir::func::FuncOp();
+  mlir::LLVM::LLVMFuncOp llvmFuncOp =
+      hasLLVMFuncOp ? trampolineLLVMFuncOps[funcId] : mlir::LLVM::LLVMFuncOp();
 
   // Use the currently active process ID. The trampoline is called from
   // within the interpreter's call chain (interpreter → native func →
@@ -39136,7 +39148,21 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   // Convert uint64_t args to InterpretedValue with correct widths from the
   // function signature. Struct args consume multiple uint64_t slots.
   llvm::SmallVector<InterpretedValue, 8> interpArgs;
-  auto argTypes = funcOp.getArgumentTypes();
+  llvm::SmallVector<mlir::Type, 8> argTypes;
+  llvm::SmallVector<mlir::Type, 2> resultTypes;
+  if (hasFuncOp) {
+    auto fArgTypes = funcOp.getArgumentTypes();
+    argTypes.append(fArgTypes.begin(), fArgTypes.end());
+    auto fResultTypes = funcOp.getFunctionType().getResults();
+    resultTypes.append(fResultTypes.begin(), fResultTypes.end());
+  } else {
+    auto fnType = llvmFuncOp.getFunctionType();
+    auto params = fnType.getParams();
+    argTypes.append(params.begin(), params.end());
+    mlir::Type retTy = fnType.getReturnType();
+    if (!mlir::isa<mlir::LLVM::LLVMVoidType>(retTy))
+      resultTypes.push_back(retTy);
+  }
   uint32_t slotIdx = 0;
   for (unsigned argIdx = 0;
        argIdx < argTypes.size() && slotIdx < numArgs; ++argIdx) {
@@ -39160,9 +39186,13 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   ++callState.callDepth;
   ++aotDepth;
   maxAotDepth = std::max(maxAotDepth, aotDepth);
-  LogicalResult interpResult =
-      interpretFuncBody(procId, funcOp, interpArgs, interpResults,
-                        /*callOp=*/nullptr);
+  LogicalResult interpResult = hasFuncOp
+                                   ? interpretFuncBody(procId, funcOp, interpArgs,
+                                                       interpResults,
+                                                       /*callOp=*/nullptr)
+                                   : interpretLLVMFuncBody(procId, llvmFuncOp,
+                                                           interpArgs,
+                                                           interpResults);
   --aotDepth;
   --callState.callDepth;
   if (failed(interpResult))
@@ -39173,7 +39203,6 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
 
   // Convert results back to uint64_t (handle structs consuming multiple slots).
   if (!interpResults.empty() && numRets > 0) {
-    auto resultTypes = funcOp.getFunctionType().getResults();
     uint32_t retSlotIdx = 0;
     for (unsigned i = 0;
          i < interpResults.size() && retSlotIdx < numRets; ++i) {

@@ -4176,6 +4176,10 @@ private:
   /// module descriptor. Populated by loadCompiledFunctions().
   llvm::SmallVector<mlir::func::FuncOp> trampolineFuncOps;
 
+  /// Trampoline func_id → llvm.func mapping for compiled→interpreted
+  /// dispatch when no native fallback exists.
+  llvm::SmallVector<mlir::LLVM::LLVMFuncOp> trampolineLLVMFuncOps;
+
   /// Native fallback pointers for trampolines that map to LLVM functions
   /// (e.g., malloc, __cg_init_*). These are called directly without
   /// going through the interpreter. Index matches trampolineFuncOps.
