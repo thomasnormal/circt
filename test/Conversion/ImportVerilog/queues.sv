@@ -169,14 +169,35 @@ endmodule
 // String Method Tests
 //===----------------------------------------------------------------------===//
 
-// Note: String itoa() method tests are commented out due to a known limitation
-// where slang promotes integer arguments to logic types, but moore.int_to_string
-// requires two-valued integer types. The itoa method IS recognized by the
-// converter but needs a type conversion fix.
-//
-// TODO: Add itoa tests once the type conversion issue is resolved:
-// - s.itoa(num) should convert integer to decimal string
-// - Works with int, byte, shortint, longint types
+/// Test string.itoa with mixed integral argument types.
+// CHECK-LABEL: moore.module @StringItoaMethodTest() {
+module StringItoaMethodTest;
+    string s;
+    int i;
+    byte b;
+    shortint sh;
+    longint l;
+
+    initial begin
+        i = 123;
+        b = -3;
+        sh = 42;
+        l = 64'd1000;
+
+        // CHECK: moore.int_to_logic
+        // CHECK: moore.string.itoa
+        s.itoa(i);
+        // CHECK: moore.sext
+        // CHECK: moore.string.itoa
+        s.itoa(b);
+        // CHECK: moore.sext
+        // CHECK: moore.string.itoa
+        s.itoa(sh);
+        // CHECK: moore.trunc
+        // CHECK: moore.string.itoa
+        s.itoa(l);
+    end
+endmodule
 
 /// Test string methods used together (UVM pattern)
 // CHECK-LABEL: moore.module @StringMethodsComboTest() {

@@ -1748,3 +1748,31 @@ turning commented "future" cases into active regression coverage.
   - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/coverage_explicit_bins.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/coverage_explicit_bins.sv`
 - xrun notation check:
   - `xrun -sv test/Conversion/ImportVerilog/coverage_explicit_bins.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue gap closure by replacing stale TODO-only string conversion notes with
+active regression coverage for `string.itoa` argument typing.
+
+### Realizations
+- `string.itoa` is already supported for multiple integral argument types; the
+  old TODO in `queues.sv` claiming a type-conversion blocker was stale.
+- Current lowering handles mixed widths/signedness via conversion steps before
+  `moore.string.itoa`:
+  - sign-extend for narrow signed types (`byte`, `shortint`)
+  - truncation path for wide integral (`longint`) to the expected logic width.
+
+### Changes Landed In This Slice
+- Updated `test/Conversion/ImportVerilog/queues.sv`:
+  - removed stale commented TODO block for `itoa`.
+  - added new module `StringItoaMethodTest` with active `s.itoa(...)` calls for
+    `int`, `byte`, `shortint`, and `longint`.
+  - added FileCheck expectations for conversion ops and
+    `moore.string.itoa` lowering.
+
+### Validation
+- CIRCT regression:
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/queues.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/queues.sv`
+- xrun notation check:
+  - `xrun -sv test/Conversion/ImportVerilog/queues.sv -elaborate -nolog` (PASS)
