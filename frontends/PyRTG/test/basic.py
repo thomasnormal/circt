@@ -511,3 +511,35 @@ def seq0(set: Set):
 @sequence([])
 def seq1():
   Label.declare("s1").place()
+
+
+# ASM-LABEL: Begin of test 'test94_to_string
+# ASM-NEXT: # imm=0x2A{{$}}
+# ASM-NEXT: # reg=t0{{$}}
+# ASM: End of test 'test94_to_string
+
+
+@test(Singleton)
+def test94_to_string(config):
+  imm = Immediate(12, 42)
+  imm_str = imm.to_string()
+  embed_comment(String("imm=") + imm_str)
+
+  reg = IntegerRegister.t0()
+  reg_str = reg.to_string()
+  embed_comment(String("reg=") + reg_str)
+
+
+# ASM-LABEL: Begin of test 'test95_string_format
+# ASM-NEXT: # hello 42 t2 0xAB 4{{$}}
+# ASM-NEXT: # hello-world-test{{$}}
+# ASM: End of test 'test95_string_format
+
+
+@test(Singleton)
+def test95_string_format(config):
+  embed_comment(
+      String.format(String("hello"), Integer(42), IntegerRegister.t2(),
+                    Immediate(8, 171), 4))
+  embed_comment(
+      String.format(String("hello"), "world", String("test"), delimiter="-"))
