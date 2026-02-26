@@ -2084,6 +2084,60 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
           }
         }
 
+        // Fold extract(bitcast(iN -> hw.struct<...>), "field") to integer
+        // slicing when all destination struct fields are integers.
+        if (auto bitcastOp =
+                extractOp.getInput().getDefiningOp<hw::BitcastOp>()) {
+          auto inIntTy =
+              dyn_cast<IntegerType>(bitcastOp.getInput().getType());
+          auto dstStructTy =
+              dyn_cast<hw::StructType>(bitcastOp.getResult().getType());
+          auto outIntTy = dyn_cast<IntegerType>(extractOp.getResult().getType());
+          if (inIntTy && dstStructTy && outIntTy) {
+            auto fieldIndex = dstStructTy.getFieldIndex(extractOp.getFieldName());
+            if (fieldIndex) {
+              bool allIntFields = true;
+              unsigned totalWidth = 0;
+              SmallVector<unsigned> fieldWidths;
+              fieldWidths.reserve(dstStructTy.getElements().size());
+              for (auto field : dstStructTy.getElements()) {
+                auto intFieldTy = dyn_cast<IntegerType>(field.type);
+                if (!intFieldTy) {
+                  allIntFields = false;
+                  break;
+                }
+                unsigned w = intFieldTy.getWidth();
+                fieldWidths.push_back(w);
+                totalWidth += w;
+              }
+              unsigned idx = *fieldIndex;
+              if (allIntFields && idx < fieldWidths.size() &&
+                  totalWidth == inIntTy.getWidth() &&
+                  fieldWidths[idx] == outIntTy.getWidth()) {
+                unsigned consumedHigh = 0;
+                for (unsigned i = 0; i < idx; ++i)
+                  consumedHigh += fieldWidths[i];
+                unsigned fieldWidth = fieldWidths[idx];
+                unsigned lowBit = totalWidth - consumedHigh - fieldWidth;
+                Value slice = bitcastOp.getInput();
+                if (lowBit != 0) {
+                  auto shiftAmt = arith::ConstantOp::create(
+                      rewriter, loc,
+                      rewriter.getIntegerAttr(inIntTy, lowBit));
+                  slice = arith::ShRUIOp::create(rewriter, loc, slice, shiftAmt);
+                }
+                if (fieldWidth < inIntTy.getWidth())
+                  slice = arith::TruncIOp::create(rewriter, loc, outIntTy, slice);
+                extractOp.getResult().replaceAllUsesWith(slice);
+                rewriter.eraseOp(extractOp);
+                if (bitcastOp->use_empty())
+                  rewriter.eraseOp(bitcastOp);
+                continue;
+              }
+            }
+          }
+        }
+
         // Generic fold: extract(struct_create(...), "field") -> operand.
         if (auto createOp =
                 extractOp.getInput().getDefiningOp<hw::StructCreateOp>()) {
