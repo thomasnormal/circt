@@ -1616,6 +1616,44 @@ static LLVM::ICmpPredicate convertCmpPredicate(arith::CmpIPredicate pred) {
   llvm_unreachable("unhandled arith::CmpIPredicate");
 }
 
+static LLVM::FCmpPredicate convertCmpFPredicate(arith::CmpFPredicate pred) {
+  switch (pred) {
+  case arith::CmpFPredicate::AlwaysFalse:
+    return LLVM::FCmpPredicate::_false;
+  case arith::CmpFPredicate::OEQ:
+    return LLVM::FCmpPredicate::oeq;
+  case arith::CmpFPredicate::OGT:
+    return LLVM::FCmpPredicate::ogt;
+  case arith::CmpFPredicate::OGE:
+    return LLVM::FCmpPredicate::oge;
+  case arith::CmpFPredicate::OLT:
+    return LLVM::FCmpPredicate::olt;
+  case arith::CmpFPredicate::OLE:
+    return LLVM::FCmpPredicate::ole;
+  case arith::CmpFPredicate::ONE:
+    return LLVM::FCmpPredicate::one;
+  case arith::CmpFPredicate::ORD:
+    return LLVM::FCmpPredicate::ord;
+  case arith::CmpFPredicate::UEQ:
+    return LLVM::FCmpPredicate::ueq;
+  case arith::CmpFPredicate::UGT:
+    return LLVM::FCmpPredicate::ugt;
+  case arith::CmpFPredicate::UGE:
+    return LLVM::FCmpPredicate::uge;
+  case arith::CmpFPredicate::ULT:
+    return LLVM::FCmpPredicate::ult;
+  case arith::CmpFPredicate::ULE:
+    return LLVM::FCmpPredicate::ule;
+  case arith::CmpFPredicate::UNE:
+    return LLVM::FCmpPredicate::une;
+  case arith::CmpFPredicate::UNO:
+    return LLVM::FCmpPredicate::uno;
+  case arith::CmpFPredicate::AlwaysTrue:
+    return LLVM::FCmpPredicate::_true;
+  }
+  llvm_unreachable("unhandled arith::CmpFPredicate");
+}
+
 static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                     MLIRContext &mlirContext) {
   IRRewriter rewriter(&mlirContext);
@@ -2654,6 +2692,14 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
       auto r = rewriter.create<LLVM::TruncOp>(loc, o.getType(), o.getIn());
       o.replaceAllUsesWith(r.getResult());
       rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::FPToSIOp>(op)) {
+      auto r = rewriter.create<LLVM::FPToSIOp>(loc, o.getType(), o.getIn());
+      o.replaceAllUsesWith(r.getResult());
+      rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::FPToUIOp>(op)) {
+      auto r = rewriter.create<LLVM::FPToUIOp>(loc, o.getType(), o.getIn());
+      o.replaceAllUsesWith(r.getResult());
+      rewriter.eraseOp(o);
     } else if (auto o = dyn_cast<arith::BitcastOp>(op)) {
       auto r = rewriter.create<LLVM::BitcastOp>(loc, o.getType(), o.getIn());
       o.replaceAllUsesWith(r.getResult());
@@ -2661,6 +2707,12 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     } else if (auto o = dyn_cast<arith::CmpIOp>(op)) {
       auto r = rewriter.create<LLVM::ICmpOp>(
           loc, convertCmpPredicate(o.getPredicate()), o.getLhs(), o.getRhs());
+      o.replaceAllUsesWith(r.getResult());
+      rewriter.eraseOp(o);
+    } else if (auto o = dyn_cast<arith::CmpFOp>(op)) {
+      auto r = rewriter.create<LLVM::FCmpOp>(
+          loc, convertCmpFPredicate(o.getPredicate()), o.getLhs(),
+          o.getRhs());
       o.replaceAllUsesWith(r.getResult());
       rewriter.eraseOp(o);
     } else if (auto o = dyn_cast<arith::SelectOp>(op)) {

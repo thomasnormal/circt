@@ -572,6 +572,16 @@ Status update:
     - remaining strip reasons:
       - `1x body_nonllvm_op:hw.struct_create`
       - `1x body_nonllvm_op:arith.cmpf`.
+- float-op follow-up landed: lowered `arith.cmpf`, `arith.fptosi`,
+  and `arith.fptoui` in the arith->LLVM rewrite phase.
+  - regressions added:
+    - `aot-arith-cmpf-lowering.mlir`
+    - `aot-arith-fptosi-lowering.mlir`
+  - large-workload impact (`uvm_seq_body`):
+    - stripped residual functions: `2 -> 1`
+    - codegen-ready functions: `3425 -> 3426` (`+1`)
+    - only remaining residual strip reason:
+      - `1x body_nonllvm_op:hw.struct_create`.
 
 ---
 
