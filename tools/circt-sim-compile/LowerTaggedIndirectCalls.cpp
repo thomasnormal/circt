@@ -39,9 +39,18 @@ static GlobalVariable *getFuncEntriesGlobalIfPresent(Module &M) {
   return M.getGlobalVariable("__circt_sim_func_entries");
 }
 
+/// Return the number of entries in @__circt_sim_func_entries.
+static uint64_t getFuncEntriesCount(GlobalVariable *funcEntries) {
+  if (!funcEntries)
+    return 0;
+  auto *arrayTy = dyn_cast<ArrayType>(funcEntries->getValueType());
+  return arrayTy ? arrayTy->getNumElements() : 0;
+}
+
 /// Lower a single indirect call/invoke through the tagged dispatch check.
 /// Returns true if the instruction was transformed.
-static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
+static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries,
+                              uint64_t numFuncEntries) {
   Value *calledOp = CB->getCalledOperand();
   if (!calledOp)
     return false;
@@ -74,6 +83,11 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
 
   // %tagged = and i1 %is_tagged, %is_low
   Value *isTagged = builder.CreateAnd(isGe, isLt, "is_tagged");
+  Value *fidI64 = builder.CreateSub(
+      fpInt, ConstantInt::get(i64Ty, 0xF0000000ULL), "fid_i64");
+  Value *fidInRange = builder.CreateICmpULT(
+      fidI64, ConstantInt::get(i64Ty, numFuncEntries), "fid_in_range");
+  Value *fid = builder.CreateTrunc(fidI64, i32Ty, "fid");
 
   // Split the basic block.
   BasicBlock *origBB = CB->getParent();
@@ -84,20 +98,24 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
     BasicBlock *normalDest = II->getNormalDest();
     BasicBlock *unwindDest = II->getUnwindDest();
 
+    BasicBlock *taggedCheckBB =
+        BasicBlock::Create(ctx, "tagged_check", F, normalDest);
     BasicBlock *taggedBB =
         BasicBlock::Create(ctx, "tagged_call", F, normalDest);
+    BasicBlock *taggedInvalidBB =
+        BasicBlock::Create(ctx, "tagged_invalid", F, normalDest);
     BasicBlock *directBB =
         BasicBlock::Create(ctx, "direct_call", F, normalDest);
     BasicBlock *mergeBB =
         BasicBlock::Create(ctx, "merge_call", F, normalDest);
 
-    builder.CreateCondBr(isTagged, taggedBB, directBB);
+    builder.CreateCondBr(isTagged, taggedCheckBB, directBB);
+
+    builder.SetInsertPoint(taggedCheckBB);
+    builder.CreateCondBr(fidInRange, taggedBB, taggedInvalidBB);
 
     // Tagged path: decode fid, load from entry table, invoke.
     builder.SetInsertPoint(taggedBB);
-    Value *fidI64 = builder.CreateSub(
-        fpInt, ConstantInt::get(i64Ty, 0xF0000000ULL), "fid_i64");
-    Value *fid = builder.CreateTrunc(fidI64, i32Ty, "fid");
     Value *entryGEP = builder.CreateInBoundsGEP(
         funcEntries->getValueType(), funcEntries,
         {ConstantInt::get(i64Ty, 0), fid}, "entry_ptr");
@@ -119,16 +137,21 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
     directInvoke->setCallingConv(II->getCallingConv());
     directInvoke->setAttributes(II->getAttributes());
 
+    // Invalid tagged FuncId path: match interpreter behavior (zero return).
+    builder.SetInsertPoint(taggedInvalidBB);
+    builder.CreateBr(mergeBB);
+
     // Merge: PHI for non-void returns.
     builder.SetInsertPoint(mergeBB, mergeBB->begin());
     if (!II->getType()->isVoidTy()) {
-      PHINode *phi = builder.CreatePHI(II->getType(), 2, "call_ret");
+      PHINode *phi = builder.CreatePHI(II->getType(), 3, "call_ret");
       phi->addIncoming(taggedInvoke, taggedInvoke->getNormalDest() == mergeBB
                                          ? taggedBB
                                          : taggedInvoke->getParent());
       phi->addIncoming(directInvoke, directInvoke->getNormalDest() == mergeBB
                                          ? directBB
                                          : directInvoke->getParent());
+      phi->addIncoming(Constant::getNullValue(II->getType()), taggedInvalidBB);
       II->replaceAllUsesWith(phi);
     }
     // Branch from merge to original normal dest.
@@ -165,19 +188,23 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
   // Remove the unconditional branch that splitBasicBlock created.
   origBB->getTerminator()->eraseFromParent();
 
+  BasicBlock *taggedCheckBB = BasicBlock::Create(ctx, "tagged_check", F, restBB);
   BasicBlock *taggedBB = BasicBlock::Create(ctx, "tagged_call", F, restBB);
+  BasicBlock *taggedInvalidBB =
+      BasicBlock::Create(ctx, "tagged_invalid", F, restBB);
   BasicBlock *directBB = BasicBlock::Create(ctx, "direct_call", F, restBB);
   BasicBlock *mergeBB = BasicBlock::Create(ctx, "merge_call", F, restBB);
 
   // Terminate origBB with conditional branch.
   builder.SetInsertPoint(origBB);
-  builder.CreateCondBr(isTagged, taggedBB, directBB);
+  builder.CreateCondBr(isTagged, taggedCheckBB, directBB);
+
+  // Tagged classification path.
+  builder.SetInsertPoint(taggedCheckBB);
+  builder.CreateCondBr(fidInRange, taggedBB, taggedInvalidBB);
 
   // Tagged path.
   builder.SetInsertPoint(taggedBB);
-  Value *fidI64 = builder.CreateSub(
-      fpInt, ConstantInt::get(i64Ty, 0xF0000000ULL), "fid_i64");
-  Value *fid = builder.CreateTrunc(fidI64, i32Ty, "fid");
   Value *entryGEP = builder.CreateInBoundsGEP(
       funcEntries->getValueType(), funcEntries,
       {ConstantInt::get(i64Ty, 0), fid}, "entry_ptr");
@@ -202,12 +229,17 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
   directCall->setTailCallKind(CI->getTailCallKind());
   builder.CreateBr(mergeBB);
 
+  // Invalid tagged FuncId path: match interpreter behavior (zero return).
+  builder.SetInsertPoint(taggedInvalidBB);
+  builder.CreateBr(mergeBB);
+
   // Merge.
   builder.SetInsertPoint(mergeBB);
   if (!CI->getType()->isVoidTy()) {
-    PHINode *phi = builder.CreatePHI(CI->getType(), 2, "call_ret");
+    PHINode *phi = builder.CreatePHI(CI->getType(), 3, "call_ret");
     phi->addIncoming(taggedCall, taggedBB);
     phi->addIncoming(directCall, directBB);
+    phi->addIncoming(Constant::getNullValue(CI->getType()), taggedInvalidBB);
     CI->replaceAllUsesWith(phi);
   }
   builder.CreateBr(restBB);
@@ -219,6 +251,9 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
 void runLowerTaggedIndirectCalls(Module &M) {
   auto *funcEntries = getFuncEntriesGlobalIfPresent(M);
   if (!funcEntries || funcEntries->isDeclaration())
+    return;
+  uint64_t numFuncEntries = getFuncEntriesCount(funcEntries);
+  if (numFuncEntries == 0)
     return;
 
   // Collect all indirect calls first (we'll modify the IR as we go).
@@ -240,7 +275,7 @@ void runLowerTaggedIndirectCalls(Module &M) {
 
   unsigned lowered = 0;
   for (auto *CB : indirectCalls) {
-    if (lowerIndirectCall(CB, funcEntries))
+    if (lowerIndirectCall(CB, funcEntries, numFuncEntries))
       ++lowered;
   }
 
