@@ -2504,6 +2504,57 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
 
   auto parameters = module->getParameters();
   bool hasModuleSame = false;
+  auto hasEquivalentHierPortShape =
+      [&](const slang::ast::InstanceBodySymbol *lhsBody,
+          const slang::ast::InstanceBodySymbol *rhsBody) {
+        auto lhsPathIt = hierPaths.find(lhsBody);
+        auto rhsPathIt = hierPaths.find(rhsBody);
+        ArrayRef<HierPathInfo> lhsPaths =
+            lhsPathIt == hierPaths.end()
+                ? ArrayRef<HierPathInfo>{}
+                : ArrayRef<HierPathInfo>(lhsPathIt->second);
+        ArrayRef<HierPathInfo> rhsPaths =
+            rhsPathIt == hierPaths.end()
+                ? ArrayRef<HierPathInfo>{}
+                : ArrayRef<HierPathInfo>(rhsPathIt->second);
+        if (lhsPaths.size() != rhsPaths.size())
+          return false;
+        for (const auto &lhsPath : lhsPaths) {
+          auto match = llvm::find_if(rhsPaths, [&](const auto &rhsPath) {
+            return lhsPath.hierName == rhsPath.hierName &&
+                   lhsPath.direction == rhsPath.direction;
+          });
+          if (match == rhsPaths.end())
+            return false;
+        }
+
+        auto lhsIfaceIt = hierInterfacePaths.find(lhsBody);
+        auto rhsIfaceIt = hierInterfacePaths.find(rhsBody);
+        ArrayRef<HierInterfacePathInfo> lhsIfacePaths =
+            lhsIfaceIt == hierInterfacePaths.end()
+                ? ArrayRef<HierInterfacePathInfo>{}
+                : ArrayRef<HierInterfacePathInfo>(lhsIfaceIt->second);
+        ArrayRef<HierInterfacePathInfo> rhsIfacePaths =
+            rhsIfaceIt == hierInterfacePaths.end()
+                ? ArrayRef<HierInterfacePathInfo>{}
+                : ArrayRef<HierInterfacePathInfo>(rhsIfaceIt->second);
+        if (lhsIfacePaths.size() != rhsIfacePaths.size())
+          return false;
+        for (const auto &lhsPath : lhsIfacePaths) {
+          auto match = llvm::find_if(rhsIfacePaths, [&](const auto &rhsPath) {
+            if (lhsPath.hierName != rhsPath.hierName ||
+                lhsPath.direction != rhsPath.direction)
+              return false;
+            if (!lhsPath.ifaceInst || !rhsPath.ifaceInst)
+              return lhsPath.ifaceInst == rhsPath.ifaceInst;
+            return &lhsPath.ifaceInst->getDefinition() ==
+                   &rhsPath.ifaceInst->getDefinition();
+          });
+          if (match == rhsIfacePaths.end())
+            return false;
+        }
+        return true;
+      };
   // If there is already exist a module that has the same name with this
   // module, has the same parent scope, has the same parameters, and is not
   // targeted by instance-specific bind directives, we can define this module
@@ -2556,6 +2607,10 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
           break;
       }
       if (hasModuleSame) {
+        if (!hasEquivalentHierPortShape(module, existingModule.first)) {
+          hasModuleSame = false;
+          continue;
+        }
         module = existingModule.first;
         break;
       }
@@ -3123,14 +3178,35 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
       continue;
     if (!hierIface.ifaceInst)
       continue;
-    auto it = interfaceInstances.find(hierIface.ifaceInst);
-    if (it == interfaceInstances.end()) {
+    auto ifaceValue =
+        resolveInterfaceInstance(hierIface.ifaceInst, lowering.op.getLoc());
+    if (!ifaceValue && hierIface.hierName) {
+      Value candidate;
+      bool ambiguous = false;
+      for (const auto &entry : hierInterfacePaths[module]) {
+        if (entry.direction != slang::ast::ArgumentDirection::Out)
+          continue;
+        if (entry.hierName != hierIface.hierName || !entry.ifaceInst)
+          continue;
+        auto it = interfaceInstances.find(entry.ifaceInst);
+        if (it == interfaceInstances.end())
+          continue;
+        if (candidate && candidate != it->second) {
+          ambiguous = true;
+          break;
+        }
+        candidate = it->second;
+      }
+      if (!ambiguous)
+        ifaceValue = candidate;
+    }
+    if (!ifaceValue) {
       mlir::emitError(lowering.op.getLoc())
           << "missing hierarchical interface value for `"
           << hierIface.hierName.getValue() << "`";
       return failure();
     }
-    outputs.push_back(it->second);
+    outputs.push_back(ifaceValue);
   }
 
   // Collect elaborated parameter values and attach them as a dictionary
