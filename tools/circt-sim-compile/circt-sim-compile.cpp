@@ -2524,18 +2524,44 @@ static bool hasAllLLVMCompatibleTypes(LLVM::LLVMFunctionType funcTy) {
   return true;
 }
 
-static llvm::SmallVector<std::string>
-stripNonLLVMFunctions(ModuleOp microModule) {
-  llvm::SmallVector<std::string> stripped;
+static std::string stringifyType(Type ty) {
+  std::string out;
+  llvm::raw_string_ostream os(out);
+  ty.print(os);
+  return os.str();
+}
+
+static std::string firstNonLLVMTypeReason(LLVM::LLVMFunctionType funcTy) {
+  if (!LLVM::isCompatibleType(funcTy.getReturnType()))
+    return ("sig_nonllvm_ret:" + stringifyType(funcTy.getReturnType()));
+  for (unsigned i = 0; i < funcTy.getNumParams(); ++i) {
+    Type paramTy = funcTy.getParamType(i);
+    if (!LLVM::isCompatibleType(paramTy))
+      return ("sig_nonllvm_arg:" + stringifyType(paramTy));
+  }
+  return "sig_nonllvm";
+}
+
+struct StripNonLLVMResult {
+  llvm::SmallVector<std::string> strippedSymbols;
+  llvm::StringMap<unsigned> reasonCounts;
+};
+
+static StripNonLLVMResult stripNonLLVMFunctions(ModuleOp microModule) {
+  StripNonLLVMResult result;
   llvm::SmallVector<LLVM::LLVMFuncOp> toStrip;
+  llvm::DenseMap<Operation *, std::string> stripReasons;
 
   microModule.walk([&](LLVM::LLVMFuncOp func) {
     if (func.isExternal()) {
       // External declarations with non-LLVM param/result types (e.g.
       // !hw.struct, !llhd.ref, !hw.inout) cannot be translated to LLVM IR
       // and must be erased before the translation step.
-      if (!hasAllLLVMCompatibleTypes(func.getFunctionType()))
+      if (!hasAllLLVMCompatibleTypes(func.getFunctionType())) {
         toStrip.push_back(func);
+        stripReasons[func.getOperation()] =
+            firstNonLLVMTypeReason(func.getFunctionType());
+      }
       return;
     }
     // Defined functions whose signature contains non-LLVM types (e.g.
@@ -2544,28 +2570,38 @@ stripNonLLVMFunctions(ModuleOp microModule) {
     // walk below, so we must check the function type here first.
     if (!hasAllLLVMCompatibleTypes(func.getFunctionType())) {
       toStrip.push_back(func);
+      stripReasons[func.getOperation()] =
+          firstNonLLVMTypeReason(func.getFunctionType());
       return;
     }
     bool hasNonLLVM = false;
+    std::string reason = "body_nonllvm";
     func.walk([&](Operation *op) {
       if (!isa<LLVM::LLVMDialect>(op->getDialect())) {
         hasNonLLVM = true;
+        reason = ("body_nonllvm_op:" + op->getName().getStringRef()).str();
         return WalkResult::interrupt();
       }
       for (auto ty : op->getResultTypes()) {
         if (!LLVM::isCompatibleType(ty)) {
           hasNonLLVM = true;
+          reason = ("body_nonllvm_result:" + stringifyType(ty));
           return WalkResult::interrupt();
         }
       }
       return WalkResult::advance();
     });
-    if (hasNonLLVM)
+    if (hasNonLLVM) {
       toStrip.push_back(func);
+      stripReasons[func.getOperation()] = std::move(reason);
+    }
   });
 
   for (auto func : toStrip) {
-    stripped.push_back(func.getSymName().str());
+    result.strippedSymbols.push_back(func.getSymName().str());
+    auto it = stripReasons.find(func.getOperation());
+    ++result.reasonCounts[it != stripReasons.end() ? it->second
+                                                   : "unknown_strip_reason"];
     if (func.isExternal() || !hasAllLLVMCompatibleTypes(func.getFunctionType())) {
       // Erase outright: external declarations have no body to clear, and
       // defined functions with non-LLVM-typed signatures cannot be demoted to
@@ -2593,7 +2629,9 @@ stripNonLLVMFunctions(ModuleOp microModule) {
       globalsToErase.push_back(global);
   });
   for (auto global : globalsToErase) {
-    stripped.push_back(global.getSymName().str());
+    result.strippedSymbols.push_back(global.getSymName().str());
+    ++result.reasonCounts["global_nonllvm_type:" +
+                          stringifyType(global.getType())];
     global.erase();
   }
 
@@ -2649,11 +2687,12 @@ stripNonLLVMFunctions(ModuleOp microModule) {
     funcOpsToErase.push_back(funcOp);
   });
   for (auto funcOp : funcOpsToErase) {
-    stripped.push_back(funcOp.getSymName().str());
+    result.strippedSymbols.push_back(funcOp.getSymName().str());
+    ++result.reasonCounts["residual_func.func"];
     funcOp.erase();
   }
 
-  return stripped;
+  return result;
 }
 
 //===----------------------------------------------------------------------===//
@@ -5734,7 +5773,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   flattenAggregateFunctionABIs(microModule);
 
   // Strip functions with residual non-LLVM ops.
-  auto stripped = stripNonLLVMFunctions(microModule);
+  auto stripResult = stripNonLLVMFunctions(microModule);
+  auto &stripped = stripResult.strippedSymbols;
   if (!stripped.empty()) {
     llvm::DenseSet<llvm::StringRef> strippedSet;
     for (const auto &name : stripped)
@@ -5759,6 +5799,19 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     procKinds = std::move(survivingKinds);
     llvm::errs() << "[circt-sim-compile] Stripped " << stripped.size()
                  << " functions with non-LLVM ops\n";
+    if (verbose && !stripResult.reasonCounts.empty()) {
+      llvm::SmallVector<std::pair<llvm::StringRef, unsigned>> sorted;
+      for (auto &kv : stripResult.reasonCounts)
+        sorted.push_back({kv.first(), kv.second});
+      llvm::sort(sorted, [](const auto &a, const auto &b) {
+        return a.second > b.second;
+      });
+      llvm::errs()
+          << "[circt-sim-compile] Top residual non-LLVM strip reasons:\n";
+      for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
+        llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
+                     << "\n";
+    }
   }
 
   // Collect vtable FuncId assignments from the original module.
