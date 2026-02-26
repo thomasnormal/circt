@@ -76,10 +76,20 @@ struct MicroOp {
 
 /// A compiled bytecode program for a single LLHD process.
 struct BytecodeProgram {
+  struct RegisterInit {
+    uint8_t reg = 0;
+    uint64_t value = 0;
+  };
+
   /// The micro-ops, organized by block. blockOffsets[i] gives the index
   /// of the first op in block i. blockOffsets[numBlocks] = ops.size().
   llvm::SmallVector<MicroOp, 32> ops;
   llvm::SmallVector<uint32_t, 8> blockOffsets;
+
+  /// Register values that must be initialized at process activation.
+  /// This is used for constants defined outside the process body and for
+  /// constant values that may not be visited on resumed activations.
+  llvm::SmallVector<RegisterInit, 8> registerInits;
 
   /// Number of virtual registers needed.
   uint8_t numRegs = 0;
