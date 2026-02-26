@@ -19,6 +19,11 @@ namespace {
 struct HierPathValueExprVisitor
     : public slang::ast::ASTVisitor<HierPathValueExprVisitor, false, true,
                                     true> {
+  struct ReceiverPathSegment {
+    std::string name;
+    std::optional<int64_t> index;
+  };
+
   Context &context;
   Location loc;
   OpBuilder &builder;
@@ -122,11 +127,71 @@ struct HierPathValueExprVisitor
     }
   }
 
+  std::optional<int64_t>
+  getArrayElementIndex(const slang::ast::InstanceSymbol &instSym) {
+    if (instSym.arrayPath.empty())
+      return std::nullopt;
+    slang::SmallVector<slang::ConstantRange, 4> dimensions;
+    instSym.getArrayDimensions(dimensions);
+    if (dimensions.empty())
+      return std::nullopt;
+    const auto &range = dimensions[0];
+    int64_t relIndex = static_cast<int64_t>(instSym.arrayPath[0]);
+    return range.isLittleEndian() ? range.lower() + relIndex
+                                  : range.upper() - relIndex;
+  }
+
+  const slang::ast::InstanceSymbol *
+  findArrayElement(const slang::ast::InstanceArraySymbol &arraySym,
+                   int64_t index) {
+    for (const auto *elementSym : arraySym.elements) {
+      if (!elementSym)
+        continue;
+      auto *element = elementSym->as_if<slang::ast::InstanceSymbol>();
+      if (!element)
+        continue;
+      auto actualIndex = getArrayElementIndex(*element);
+      if (actualIndex && *actualIndex == index)
+        return element;
+    }
+    return nullptr;
+  }
+
+  std::optional<int64_t>
+  parseConstantIndex(const slang::syntax::ElementSelectSyntax &selector) {
+    auto *bitSelect = selector.selector->as_if<slang::syntax::BitSelectSyntax>();
+    if (!bitSelect)
+      return std::nullopt;
+    auto *literal =
+        bitSelect->expr->as_if<slang::syntax::LiteralExpressionSyntax>();
+    if (!literal)
+      return std::nullopt;
+    int64_t value = 0;
+    if (llvm::StringRef(literal->literal.valueText()).getAsInteger(0, value))
+      return std::nullopt;
+    return value;
+  }
+
   bool collectReceiverSegments(const slang::syntax::NameSyntax &nameSyntax,
-                               SmallVectorImpl<std::string> &segments) {
+                               SmallVectorImpl<ReceiverPathSegment> &segments) {
     if (auto *id =
             nameSyntax.as_if<slang::syntax::IdentifierNameSyntax>()) {
-      segments.emplace_back(id->identifier.valueText());
+      segments.push_back({std::string(id->identifier.valueText()), std::nullopt});
+      return true;
+    }
+    if (auto *idSelect =
+            nameSyntax.as_if<slang::syntax::IdentifierSelectNameSyntax>()) {
+      std::optional<int64_t> index;
+      if (!idSelect->selectors.empty()) {
+        if (idSelect->selectors.size() != 1)
+          return false;
+        if (!idSelect->selectors[0])
+          return false;
+        index = parseConstantIndex(*idSelect->selectors[0]);
+        if (!index)
+          return false;
+      }
+      segments.push_back({std::string(idSelect->identifier.valueText()), index});
       return true;
     }
     auto *scoped = nameSyntax.as_if<slang::syntax::ScopedNameSyntax>();
@@ -134,15 +199,13 @@ struct HierPathValueExprVisitor
       return false;
     if (!collectReceiverSegments(*scoped->left, segments))
       return false;
-    auto *right = scoped->right->as_if<slang::syntax::IdentifierNameSyntax>();
-    if (!right)
+    if (!collectReceiverSegments(*scoped->right, segments))
       return false;
-    segments.emplace_back(right->identifier.valueText());
     return true;
   }
 
   const slang::ast::InstanceSymbol *
-  resolveInstancePath(ArrayRef<std::string> path) {
+  resolveInstancePath(ArrayRef<ReceiverPathSegment> path) {
     if (path.empty())
       return nullptr;
     auto *outermostInstBody =
@@ -150,20 +213,182 @@ struct HierPathValueExprVisitor
     if (!outermostInstBody)
       return nullptr;
 
-    const slang::ast::Symbol *current = outermostInstBody->find(path.front());
+    const slang::ast::Symbol *current = outermostInstBody->find(path.front().name);
     if (!current)
       return nullptr;
 
-    for (const auto &name : path.drop_front()) {
+    for (const auto &segment : path.drop_front()) {
       auto *instSym = current->as_if<slang::ast::InstanceSymbol>();
       if (!instSym)
         return nullptr;
-      current = instSym->body.find(name);
-      if (!current)
+      if (!segment.index) {
+        current = instSym->body.find(segment.name);
+        if (!current)
+          return nullptr;
+        continue;
+      }
+      auto *nextSym = instSym->body.find(segment.name);
+      if (!nextSym)
         return nullptr;
+      if (auto *arraySym = nextSym->as_if<slang::ast::InstanceArraySymbol>()) {
+        current = findArrayElement(*arraySym, *segment.index);
+        if (!current)
+          return nullptr;
+        continue;
+      }
+      auto *childInst = nextSym->as_if<slang::ast::InstanceSymbol>();
+      if (!childInst)
+        return nullptr;
+      auto actualIndex = getArrayElementIndex(*childInst);
+      if (!actualIndex || *actualIndex != *segment.index)
+        return nullptr;
+      current = childInst;
     }
 
     return current->as_if<slang::ast::InstanceSymbol>();
+  }
+
+  mlir::StringAttr
+  makePathNameFromHierRef(const slang::ast::HierarchicalReference &ref) {
+    SmallString<64> pathName;
+    for (const auto &elem : ref.path) {
+      auto appendSegment = [&](StringRef name) {
+        if (name.empty())
+          return;
+        if (!pathName.empty())
+          pathName += ".";
+        pathName += name;
+      };
+      if (auto *inst = elem.symbol->as_if<slang::ast::InstanceSymbol>())
+        appendSegment(inst->name);
+      else if (auto *array =
+                   elem.symbol->as_if<slang::ast::InstanceArraySymbol>())
+        appendSegment(array->name);
+      else if (auto *ifacePort =
+                   elem.symbol->as_if<slang::ast::InterfacePortSymbol>())
+        appendSegment(ifacePort->name);
+
+      if (auto *index = std::get_if<int32_t>(&elem.selector))
+        pathName += ("[" + llvm::Twine(*index) + "]").str();
+      else if (auto *range =
+                   std::get_if<std::pair<int32_t, int32_t>>(&elem.selector))
+        pathName += ("[" + llvm::Twine(range->first) + ":" +
+                     llvm::Twine(range->second) +
+                     "]")
+                        .str();
+    }
+    if (pathName.empty())
+      return mlir::StringAttr{};
+    return builder.getStringAttr(pathName);
+  }
+
+  bool threadInterfaceFromReceiverExpr(const slang::ast::Expression &recvExpr) {
+    auto getInterfaceArrayIndex =
+        [&](const slang::ast::InstanceSymbol &inst)
+        -> std::optional<int64_t> {
+      if (inst.arrayPath.empty())
+        return std::nullopt;
+      slang::SmallVector<slang::ConstantRange, 4> dimensions;
+      inst.getArrayDimensions(dimensions);
+      if (dimensions.empty())
+        return std::nullopt;
+      const auto &range = dimensions[0];
+      int64_t relIndex = static_cast<int64_t>(inst.arrayPath[0]);
+      return range.isLittleEndian() ? range.lower() + relIndex
+                                    : range.upper() - relIndex;
+    };
+    auto findInterfaceArrayElement =
+        [&](const slang::ast::InstanceArraySymbol &arraySym, int64_t index)
+        -> const slang::ast::InstanceSymbol * {
+      for (const auto *elementSym : arraySym.elements) {
+        if (!elementSym)
+          continue;
+        auto *element = elementSym->as_if<slang::ast::InstanceSymbol>();
+        if (!element)
+          continue;
+        auto actualIndex = getInterfaceArrayIndex(*element);
+        if (actualIndex && *actualIndex == index)
+          return element;
+      }
+      return nullptr;
+    };
+
+    if (auto *arb = recvExpr.as_if<slang::ast::ArbitrarySymbolExpression>()) {
+      auto *ifaceInst = arb->symbol->as_if<slang::ast::InstanceSymbol>();
+      if (!ifaceInst || ifaceInst->getDefinition().definitionKind !=
+                            slang::ast::DefinitionKind::Interface)
+        return false;
+      mlir::StringAttr pathName{};
+      if (!arb->hierRef.path.empty())
+        pathName = makePathNameFromHierRef(arb->hierRef);
+      threadInterfaceInstance(ifaceInst, pathName);
+      return true;
+    }
+    if (auto *hier = recvExpr.as_if<slang::ast::HierarchicalValueExpression>()) {
+      auto *ifaceInst = hier->symbol.as_if<slang::ast::InstanceSymbol>();
+      if (!ifaceInst || ifaceInst->getDefinition().definitionKind !=
+                            slang::ast::DefinitionKind::Interface)
+        return false;
+      mlir::StringAttr pathName{};
+      if (!hier->ref.path.empty())
+        pathName = makePathNameFromHierRef(hier->ref);
+      threadInterfaceInstance(ifaceInst, pathName);
+      return true;
+    }
+    if (auto *elemSel = recvExpr.as_if<slang::ast::ElementSelectExpression>()) {
+      const slang::ast::InstanceArraySymbol *arraySym = nullptr;
+      if (auto symRef = elemSel->value().getSymbolReference())
+        arraySym = symRef->as_if<slang::ast::InstanceArraySymbol>();
+      if (!arraySym) {
+        if (auto *hier =
+                elemSel->value()
+                    .as_if<slang::ast::HierarchicalValueExpression>()) {
+          if (!hier->ref.path.empty())
+            arraySym = hier->ref.path.back()
+                           .symbol->as_if<slang::ast::InstanceArraySymbol>();
+        } else if (auto *arb =
+                       elemSel->value()
+                           .as_if<slang::ast::ArbitrarySymbolExpression>()) {
+          if (!arb->hierRef.path.empty())
+            arraySym = arb->hierRef.path.back()
+                           .symbol->as_if<slang::ast::InstanceArraySymbol>();
+        }
+      }
+      if (!arraySym)
+        return false;
+      auto constIndex = context.evaluateConstant(elemSel->selector());
+      if (!constIndex.isInteger())
+        return false;
+      auto index = constIndex.integer().as<int64_t>();
+      if (!index)
+        return false;
+      auto *ifaceInst = findInterfaceArrayElement(*arraySym, *index);
+      if (!ifaceInst || ifaceInst->getDefinition().definitionKind !=
+                            slang::ast::DefinitionKind::Interface)
+        return false;
+      SmallString<64> pathName;
+      if (auto *hier = elemSel->value()
+                           .as_if<slang::ast::HierarchicalValueExpression>()) {
+        if (!hier->ref.path.empty()) {
+          auto pathAttr = makePathNameFromHierRef(hier->ref);
+          if (pathAttr)
+            pathName = pathAttr.getValue();
+        }
+      } else if (auto *arb =
+                     elemSel->value().as_if<slang::ast::ArbitrarySymbolExpression>()) {
+        if (!arb->hierRef.path.empty()) {
+          auto pathAttr = makePathNameFromHierRef(arb->hierRef);
+          if (pathAttr)
+            pathName = pathAttr.getValue();
+        }
+      }
+      if (pathName.empty())
+        pathName = arraySym->name;
+      pathName += ("[" + llvm::Twine(*index) + "]").str();
+      threadInterfaceInstance(ifaceInst, builder.getStringAttr(pathName));
+      return true;
+    }
+    return false;
   }
 
   // Handle hierarchical values
@@ -688,31 +913,49 @@ struct HierPathValueExprVisitor
     if (!invocation)
       return;
 
-    auto *scopedReceiver =
-        invocation->left->as_if<slang::syntax::ScopedNameSyntax>();
-    if (!scopedReceiver)
-      return;
-
-    SmallVector<std::string, 4> path;
-    if (!collectReceiverSegments(*scopedReceiver->left, path) || path.empty())
-      return;
-
-    auto *ifaceInst = resolveInstancePath(path);
-    if (!ifaceInst)
-      return;
-    if (ifaceInst->getDefinition().definitionKind !=
-        slang::ast::DefinitionKind::Interface)
-      return;
-    if (&ifaceInst->getDefinition() != &ifaceBody->getDefinition())
-      return;
-
-    SmallString<64> pathName;
-    for (auto [idx, name] : llvm::enumerate(path)) {
-      if (idx)
-        pathName += ".";
-      pathName += name;
+    if (auto *scopedReceiver =
+            invocation->left->as_if<slang::syntax::ScopedNameSyntax>()) {
+      SmallVector<ReceiverPathSegment, 4> path;
+      if (collectReceiverSegments(*scopedReceiver->left, path) && !path.empty()) {
+        if (auto *ifaceInst = resolveInstancePath(path)) {
+          if (ifaceInst->getDefinition().definitionKind ==
+                  slang::ast::DefinitionKind::Interface &&
+              &ifaceInst->getDefinition() == &ifaceBody->getDefinition()) {
+            SmallString<64> pathName;
+            for (auto [idx, segment] : llvm::enumerate(path)) {
+              if (idx)
+                pathName += ".";
+              pathName += segment.name;
+              if (segment.index)
+                pathName += ("[" + llvm::Twine(*segment.index) + "]").str();
+            }
+            threadInterfaceInstance(ifaceInst, builder.getStringAttr(pathName));
+            return;
+          }
+        }
+      }
     }
-    threadInterfaceInstance(ifaceInst, builder.getStringAttr(pathName));
+
+    if (!context.currentScope)
+      return;
+    const slang::syntax::ExpressionSyntax *receiverSyntax = nullptr;
+    if (auto *memberAccess =
+            invocation->left->as_if<slang::syntax::MemberAccessExpressionSyntax>())
+      receiverSyntax = memberAccess->left;
+    else if (auto *scopedReceiver =
+                 invocation->left->as_if<slang::syntax::ScopedNameSyntax>())
+      receiverSyntax = scopedReceiver->left;
+    if (!receiverSyntax)
+      return;
+
+    slang::ast::ASTContext astContext(*context.currentScope,
+                                      slang::ast::LookupLocation::max);
+    const auto &receiverExpr =
+        slang::ast::Expression::bind(*receiverSyntax, astContext);
+    if (receiverExpr.bad())
+      return;
+    if (threadInterfaceFromReceiverExpr(receiverExpr))
+      return;
   }
 
   void handle(const slang::ast::InvalidExpression &expr) {

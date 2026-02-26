@@ -1800,3 +1800,58 @@ regression coverage in `covergroups.sv`.
   - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/covergroups.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/covergroups.sv`
 - xrun notation check:
   - `xrun -sv test/Conversion/ImportVerilog/covergroups.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog gap closure for hierarchical interface method calls by
+supporting indexed interface-instance receivers in module hierarchy paths:
+`module.if_array[idx].task()`.
+
+### Realizations
+- `xrun` elaborates `agent.driverBFM[1].ping()` successfully, while ImportVerilog
+  rejected it with:
+  `hierarchical interface method calls through module instances are not yet supported`.
+- For this call shape, the invocation receiver arrives as a scoped-name path
+  using `IdentifierSelectNameSyntax` (`name[idx]`), and the previous
+  hierarchical call collector only handled plain `IdentifierNameSyntax`.
+- Existing interface-instance fallback lookup in call lowering keyed on
+  `&instSym->body == instBody`; for array elements this can miss even when a
+  unique same-definition candidate is already threaded.
+
+### TDD Baseline
+- Added regression: `test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv`.
+- Baseline behavior before fix:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv --ir-moore`
+    failed with unsupported hierarchical interface call error.
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog`
+    passed.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+  - Extended call receiver path collection to support
+    `IdentifierSelectNameSyntax` with constant single index selectors.
+  - Added indexed path resolution through `InstanceArraySymbol` to recover the
+    concrete selected interface `InstanceSymbol`.
+  - Built stable threaded path names including `[idx]` suffixes for indexed
+    receivers.
+- `lib/Conversion/ImportVerilog/Expressions.cpp`:
+  - For interface-method receiver fallback lookup, added unique
+    same-interface-definition candidate selection when exact `instBody` pointer
+    match is unavailable.
+  - Retained exact-body match preference; only falls back to same-definition
+    candidate when unambiguous.
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv`.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Regression checks:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-task.sv`
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-task.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)
+  - `xrun -sv -elaborate -top TopLevel test/Conversion/ImportVerilog/hierarchical-interface-task.sv -nolog` (PASS)
+  - `xrun -sv -elaborate -top DirectTest test/Conversion/ImportVerilog/hierarchical-interface-task.sv -nolog` (PASS)
