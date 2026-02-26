@@ -2040,14 +2040,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         ++interpretedCallCounts[siteIt->second.funcOp.getOperation()];
         ++fastState.callDepth;
         SmallVector<InterpretedValue, 2> fastResults;
-        interpretFuncBody(procId, siteIt->second.funcOp, fastArgs, fastResults,
-                          callIndirectOp);
+        LogicalResult fastCallResult =
+            interpretFuncBody(procId, siteIt->second.funcOp, fastArgs,
+                              fastResults, callIndirectOp);
         --fastState.callDepth;
-        if (!processStates[procId].waiting) {
-          for (auto [res, val] :
-               llvm::zip(callIndirectOp.getResults(), fastResults))
-            setValue(procId, res, val);
+        if (failed(fastCallResult)) {
+          auto &failState = processStates[procId];
+          if (failState.waiting)
+            return success();
+          for (Value result : callIndirectOp.getResults()) {
+            unsigned width = getTypeWidth(result.getType());
+            setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
+          }
+          return success();
         }
+        if (processStates[procId].waiting)
+          return success();
+        for (auto [res, val] : llvm::zip(callIndirectOp.getResults(), fastResults))
+          setValue(procId, res, val);
         return success();
       }
       ++ciSiteCacheMisses;
@@ -4361,8 +4371,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // The function suspended -- this is not an error. Propagate the
         // suspension so the caller can save a call stack frame.
         // callDepth was already decremented above (line after interpretFuncBody).
-        if (indAddedToVisited)
-          decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
         LLVM_DEBUG(llvm::dbgs() << "  call_indirect: '" << calleeName
                                 << "' returned failure but process is waiting"
                                 << " -- treating as suspension\n");
@@ -4409,9 +4417,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         unsigned width = getTypeWidth(result.getType());
         setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
       }
-      // Decrement depth counter since we're returning early
-      if (indAddedToVisited)
-        decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
       return success();
     }
 
