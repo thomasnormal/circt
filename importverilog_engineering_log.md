@@ -1903,3 +1903,51 @@ receivers: `vif = module.if_array[idx];`.
 - xrun notation checks:
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog hierarchical interface-array gap closure by supporting
+non-literal constant indices in hierarchical interface task-call receivers:
+- parameter index: `m.ifs[PIDX].ping()`
+- folded expression index: `m.ifs[1-0].ping()`
+
+### Realizations
+- A remaining xrun-valid gap existed for hierarchical interface task calls when
+  the receiver path used `IdentifierSelectNameSyntax` selectors that were
+  constant expressions but not literal tokens.
+- The receiver-path parser in `HierarchicalNames.cpp` only accepted literal
+  selector syntax in this path, so valid constant selectors were rejected before
+  interface threading resolved the instance.
+
+### TDD Baseline
+- Added regression: `test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`.
+- Baseline behavior before fix:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv --ir-moore`
+    failed with:
+    `hierarchical interface method calls through module instances are not yet supported`.
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv -elaborate -nolog`
+    passed.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+  - extended `parseConstantIndex(...)` to bind and constant-evaluate selector
+    expressions (not only literal syntax), enabling parameter/localparam and
+    folded arithmetic indices in hierarchical receiver paths.
+  - added fallback binding scope to the outermost instance body when
+    `context.currentScope` is unavailable.
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- New regression:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`
+- Focused lit sweep:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-task.sv -elaborate -top TopLevel -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv -elaborate -nolog` (PASS)
