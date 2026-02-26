@@ -1904,6 +1904,32 @@ receivers: `vif = module.if_array[idx];`.
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)
 
+### Task
+Stabilize formal front-end reliability for BMC/LEC workloads after repeated
+`circt-verilog` crashes/hangs in UVM/SVA tests under `Tools/circt-bmc`.
+
+### Realizations
+- The primary failures were not in BMC lowering; stacks consistently pointed
+  into Slang analysis threading (`BS::thread_pool` / `watchdogThreadMain`).
+- The most impactful safety fix is to avoid running Slang semantic analysis in
+  normal lowering modes used by formal flows (`--ir-hw` / `--ir-llhd`) while
+  preserving analysis for explicit `--lint-only`.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/ImportVerilog.cpp`:
+  - Changed `shouldRunSlangAnalysis` to run analysis only when
+    `ImportVerilogOptions::Mode::OnlyLint`.
+  - Added rationale comments documenting current Slang thread-pool instability
+    on large formal/UVM workloads.
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Targeted failing formal regressions now pass:
+  - `llvm/build/bin/llvm-lit -sv -j 8 --filter='sva-uvm-seq-local-var-e2e|sv-tests-uvm-path|sva-local-var-disable-iff-abort-unsat-e2e|sva-xprop-dyn-partselect-sat-e2e|sv-tests-keep-logs-logtag|sva-sequence-event-list-provenance-emit-mlir' build_test/test`
+- Stress reruns of key failures:
+  - `for i in 1 2 3; do llvm/build/bin/llvm-lit -q -j 8 --filter='sva-uvm-seq-local-var-e2e|sv-tests-uvm-path|sva-local-var-disable-iff-abort-unsat-e2e|sva-xprop-dyn-partselect-sat-e2e|sv-tests-keep-logs-logtag' build_test/test; done`
+
 ## 2026-02-26
 
 ### Task
@@ -1951,3 +1977,52 @@ non-literal constant indices in hierarchical interface task-call receivers:
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-task.sv -elaborate -top TopLevel -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue ImportVerilog hierarchical interface gap closure for method calls through
+module-instance arrays with indexed first path segments:
+- `a[idx].ifs[idx].ping()`
+
+### Realizations
+- `xrun` elaborates hierarchical calls through module-instance arrays, but
+  ImportVerilog still rejected them with the generic hierarchical-interface
+  unsupported diagnostic.
+- In `resolveInstancePath(...)`, indexed array selection was only handled for
+  segments after the first path element; a leading segment like `a[1]` was left
+  as an `InstanceArraySymbol`, causing path resolution to fail.
+
+### TDD Baseline
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv`
+- Baseline behavior before fix:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv --ir-moore`
+    failed with:
+    `hierarchical interface method calls through module instances are not yet supported`.
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv -elaborate -nolog`
+    passed.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/HierarchicalNames.cpp`:
+  - updated `resolveInstancePath(...)` to support indexed selection on the
+    first path segment.
+  - centralized indexed instance selection logic so both head and non-head
+    segments resolve through the same `InstanceArraySymbol` / `InstanceSymbol`
+    handling.
+- Added regression:
+  - `test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv`
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- New regression:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv`
+- Re-validation:
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv`
+  - `build_test/bin/circt-verilog test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv --ir-moore | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv`
+- Focused lit sweep:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-assign.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv build_test/test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-through-module-array-task.sv -elaborate -nolog` (PASS)
+  - `xrun -sv test/Conversion/ImportVerilog/hierarchical-interface-array-task-const-index.sv -elaborate -nolog` (PASS)

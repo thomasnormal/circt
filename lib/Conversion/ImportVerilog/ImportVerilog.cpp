@@ -168,9 +168,14 @@ struct DenseMapInfo<slang::BufferID> {
 namespace {
 const static ImportVerilogOptions defaultOptions;
 
-/// CIRCT should run analysis diagnostics in all modes except parse-only.
+/// Run slang analysis only in explicit lint mode.
+///
+/// Slang analysis currently relies on an internal thread-pool implementation
+/// that can hang or crash on large formal front-end workloads (notably UVM/SVA
+/// imports used by BMC/LEC). Keep that phase out of normal lowering flows
+/// until upstream analysis threading is hardened for these workloads.
 static bool shouldRunSlangAnalysis(const ImportVerilogOptions &options) {
-  return options.mode != ImportVerilogOptions::Mode::OnlyParse;
+  return options.mode == ImportVerilogOptions::Mode::OnlyLint;
 }
 
 /// Keep slang's lint-mode behavior aligned with CIRCT mode selection.
