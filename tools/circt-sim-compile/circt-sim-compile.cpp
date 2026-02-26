@@ -2209,6 +2209,18 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
               continue;
             }
           }
+          Type inTy = in.getType();
+          // Canonicalize non-LLVM aggregate producers by materializing an
+          // LLVM-compatible value directly at cast sites.
+          if (!LLVM::isCompatibleType(inTy) && LLVM::isCompatibleType(outTy)) {
+            Value lowered = materializeLLVMValue(loc, in, outTy,
+                                                 materializeLLVMValue);
+            if (lowered && lowered.getType() == outTy) {
+              castOp.getResult(0).replaceAllUsesWith(lowered);
+              rewriter.eraseOp(castOp);
+              continue;
+            }
+          }
         }
         // Dead casts are no-ops; keep them from forcing whole-function
         // rejection in the compilability filter.
@@ -2477,17 +2489,24 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
       SmallVector<Type> llvmArgTypes;
       bool unsupported = false;
       for (Type argTy : calleeTy.getInputs()) {
-        if (!LLVM::isCompatibleType(argTy)) {
+        Type loweredArgTy = argTy;
+        if (!LLVM::isCompatibleType(loweredArgTy))
+          loweredArgTy = convertToLLVMCompatibleType(argTy, &mlirContext);
+        if (!loweredArgTy || !LLVM::isCompatibleType(loweredArgTy)) {
           unsupported = true;
           break;
         }
-        llvmArgTypes.push_back(argTy);
+        llvmArgTypes.push_back(loweredArgTy);
       }
       Type llvmRetTy = LLVM::LLVMVoidType::get(&mlirContext);
       if (!unsupported && calleeTy.getNumResults() == 1) {
-        llvmRetTy = calleeTy.getResult(0);
-        if (!LLVM::isCompatibleType(llvmRetTy))
+        Type retTy = calleeTy.getResult(0);
+        if (!LLVM::isCompatibleType(retTy))
+          retTy = convertToLLVMCompatibleType(retTy, &mlirContext);
+        if (!retTy || !LLVM::isCompatibleType(retTy))
           unsupported = true;
+        else
+          llvmRetTy = retTy;
       }
       if (unsupported)
         continue;
@@ -2500,17 +2519,33 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
       callOperands.push_back(calleePtr);
       for (auto [arg, expectedTy] :
            llvm::zip(callIndirectOp.getArgOperands(), llvmArgTypes)) {
-        if (arg.getType() != expectedTy) {
-          unsupported = true;
-          break;
+        Value callArg = arg;
+        if (callArg.getType() != expectedTy) {
+          if (!LLVM::isCompatibleType(callArg.getType()) &&
+              LLVM::isCompatibleType(expectedTy))
+            callArg = materializeLLVMValue(loc, callArg, expectedTy,
+                                           materializeLLVMValue);
+          if (!callArg || callArg.getType() != expectedTy) {
+            unsupported = true;
+            break;
+          }
         }
-        callOperands.push_back(arg);
+        callOperands.push_back(callArg);
       }
       if (unsupported)
         continue;
 
       auto newCall = rewriter.create<LLVM::CallOp>(loc, llvmFuncTy, callOperands);
-      callIndirectOp.replaceAllUsesWith(newCall.getResults());
+      if (callIndirectOp.getNumResults() == 1) {
+        Value result = newCall.getResult();
+        Type oldRetTy = callIndirectOp.getResult(0).getType();
+        if (result.getType() != oldRetTy) {
+          auto bridgeCast = rewriter.create<UnrealizedConversionCastOp>(
+              loc, TypeRange{oldRetTy}, ValueRange{result});
+          result = bridgeCast.getResult(0);
+        }
+        callIndirectOp.getResult(0).replaceAllUsesWith(result);
+      }
       rewriter.eraseOp(callIndirectOp);
 
       // Cast becomes dead after lowering the only call_indirect use.
@@ -2559,6 +2594,20 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     rewriter.eraseOp(funcOp);
     llvmFunc.setSymName(origName);
   }
+
+  // Phase 3: Drop dead helper ops that can become trivially unused after
+  // call/cast rewrites in Phase 1.
+  llvm::SmallVector<Operation *> deadHelperOps;
+  microModule.walk([&](Operation *op) {
+    if (!op->use_empty())
+      return;
+    if (isa<hw::StructCreateOp, hw::AggregateConstantOp, hw::BitcastOp,
+            hw::ArrayCreateOp, llhd::SigExtractOp, llhd::SigStructExtractOp,
+            UnrealizedConversionCastOp>(op))
+      deadHelperOps.push_back(op);
+  });
+  for (Operation *op : deadHelperOps)
+    op->erase();
 
   return true;
 }
