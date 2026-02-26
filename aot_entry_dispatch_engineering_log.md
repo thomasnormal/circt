@@ -1945,3 +1945,29 @@
   - signature ABI canonicalization removed the dominant residual strip bucket.
   - next direct coverage target is now very small and concrete:
     - lower residual `hw.struct_create` and `arith.cmpf` body cases.
+
+## 2026-02-26
+- Follow-up: completed floating compare/cast coverage for residual non-LLVM ops
+  in arith->LLVM lowering.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - added lowering cases:
+    - `arith.cmpf` -> `llvm.fcmp`
+    - `arith.fptosi` -> `llvm.fptosi`
+    - `arith.fptoui` -> `llvm.fptoui`
+- TDD/regressions:
+  - added:
+    - `test/Tools/circt-sim/aot-arith-cmpf-lowering.mlir`
+    - `test/Tools/circt-sim/aot-arith-fptosi-lowering.mlir`
+  - both verify no strip + interpreter/compiled parity.
+- Validation:
+  - rebuilt `circt-sim-compile`.
+  - focused pack passed (cmpf/fptosi + prior four-state ABI regression).
+  - large workload (`uvm_seq_body`, `-v`):
+    - `Stripped 1 functions with non-LLVM ops` (from `2`)
+    - `3426 functions + 1 processes ready for codegen` (from `3425 + 1`)
+    - remaining reason:
+      - `1x body_nonllvm_op:hw.struct_create`
+  - compiled runtime sanity unchanged/stable:
+    - `EXIT_CODE=0`
+    - same short-window counters (`Compiled function calls=5`,
+      `Interpreted function calls=28`).
