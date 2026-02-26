@@ -11,14 +11,16 @@ module test_coverage;
   // CHECK: moore.module @test_coverage
   // CHECK:   moore.covergroup.inst @cg
 
-  // Basic covergroup with a coverpoint
-  // Note: Explicit bin definitions are not yet fully supported in the import,
-  // but the infrastructure is in place for runtime bin tracking.
+  // Basic covergroup with a coverpoint and explicit bins.
   covergroup cg @(posedge clk);
-    cp_data: coverpoint data;
-    // Future: bins low = {[0:3]};
-    // Future: bins mid = {[4:11]};
-    // Future: bins high = {[12:15]};
+    cp_data: coverpoint data {
+      // CHECK: moore.coverbin.decl @low kind<bins> values {{\[\[0, 3\]\]}}
+      bins low = {[0:3]};
+      // CHECK: moore.coverbin.decl @mid kind<bins> values {{\[\[4, 11\]\]}}
+      bins mid = {[4:11]};
+      // CHECK: moore.coverbin.decl @high kind<bins> values {{\[\[12, 15\]\]}}
+      bins high = {[12:15]};
+    }
   endgroup
 
   cg cg_inst = new();
@@ -27,9 +29,6 @@ module test_coverage;
   // The runtime will track coverage data when values are sampled.
 
 endmodule
-
-// CHECK: moore.covergroup.decl @cg
-// CHECK:   moore.coverpoint.decl @cp_data
 
 // Test multiple coverpoints in a single covergroup
 module test_multi_coverpoint;

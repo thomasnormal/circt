@@ -1720,3 +1720,31 @@ regression coverage with xrun parity checks.
 - xrun notation checks:
   - `xrun -sv test/Conversion/ImportVerilog/class-parameters.sv -elaborate -nolog` (PASS)
   - `xrun -sv test/Conversion/ImportVerilog/realtime-to-real-conversion.sv -elaborate -nolog` (PASS)
+
+## 2026-02-26
+
+### Task
+Continue closing stale ImportVerilog gap tracking around explicit coverpoint bins by
+turning commented "future" cases into active regression coverage.
+
+### Realizations
+- Explicit coverpoint bins (`bins low = {[0:3]};` etc.) are already lowered as
+  `moore.coverbin.decl` with concrete value ranges.
+- The older note in `coverage_explicit_bins.sv` claiming explicit bins were not
+  fully supported was stale.
+
+### Changes Landed In This Slice
+- Updated `test/Conversion/ImportVerilog/coverage_explicit_bins.sv`:
+  - converted commented-out explicit bin declarations into active syntax.
+  - added FileCheck coverage for:
+    - `@low` values `[[0, 3]]`
+    - `@mid` values `[[4, 11]]`
+    - `@high` values `[[12, 15]]`
+  - removed redundant late check lines that conflicted with sequential check
+    ordering after the new inline coverbin checks.
+
+### Validation
+- CIRCT regression:
+  - `build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/coverage_explicit_bins.sv | llvm/build/bin/FileCheck test/Conversion/ImportVerilog/coverage_explicit_bins.sv`
+- xrun notation check:
+  - `xrun -sv test/Conversion/ImportVerilog/coverage_explicit_bins.sv -elaborate -nolog` (PASS)
