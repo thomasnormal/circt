@@ -82,6 +82,17 @@ static Type unwrapSignalType(Type type) {
   return type;
 }
 
+/// TLS callback: translate an interpreter virtual address to a host pointer.
+void *LLHDProcessInterpreter::normalizeVirtualPtr(void *ctx, uint64_t addr) {
+  auto *interp = static_cast<LLHDProcessInterpreter *>(ctx);
+  uint64_t offset = 0;
+  auto *block = interp->findMemoryBlockByAddress(
+      addr, /*procId=*/static_cast<ProcessId>(-1), &offset);
+  if (!block)
+    return nullptr;
+  return block->bytes() + offset;
+}
+
 // Memory-backed refs use LLVM aggregate layout. For arrays, the helper layout
 // converters map HW index i to LLVM index (N-1-i), so array subrefs that are
 // resolved/written directly in memory must use the same mapping.
@@ -2086,6 +2097,28 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
       std::getenv("CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT")) {
     if (void *initFn = compiledLoaderForModuleInit->lookupModuleInit(
             hwModule.getName())) {
+      if (!moduleInitTrampolinesPrepared) {
+        uint32_t numTrampolines = compiledLoaderForModuleInit->getNumTrampolines();
+        trampolineFuncOps.clear();
+        trampolineFuncOps.resize(numTrampolines);
+        trampolineNativeFallback.clear();
+        trampolineNativeFallback.resize(numTrampolines, nullptr);
+        for (uint32_t i = 0; i < numTrampolines; ++i) {
+          llvm::StringRef name = compiledLoaderForModuleInit->getTrampolineName(i);
+          if (name.empty())
+            continue;
+          auto cacheIt = funcLookupCache.find(name);
+          if (cacheIt != funcLookupCache.end() && cacheIt->second.kind == 1) {
+            trampolineFuncOps[i] =
+                mlir::cast<mlir::func::FuncOp>(cacheIt->second.op);
+            continue;
+          }
+          std::string nameStr = name.str();
+          if (void *sym = dlsym(RTLD_DEFAULT, nameStr.c_str()))
+            trampolineNativeFallback[i] = sym;
+        }
+        moduleInitTrampolinesPrepared = true;
+      }
       auto nativeInit = reinterpret_cast<void (*)()>(initFn);
       nativeInit();
       usedNativeModuleInit = true;
@@ -22990,6 +23023,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             // Set TLS context so Moore runtime helpers can normalize ptrs.
             void *prevTls = __circt_sim_get_tls_ctx();
             __circt_sim_set_tls_ctx(static_cast<void *>(this));
+            __circt_sim_set_tls_normalize(LLHDProcessInterpreter::normalizeVirtualPtr);
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
             using F2 = uint64_t (*)(uint64_t, uint64_t);
@@ -23268,6 +23302,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
           // Set TLS context so Moore runtime helpers can normalize ptrs.
           void *prevTls = __circt_sim_get_tls_ctx();
           __circt_sim_set_tls_ctx(static_cast<void *>(this));
+          __circt_sim_set_tls_normalize(LLHDProcessInterpreter::normalizeVirtualPtr);
           using F0 = uint64_t (*)();
           using F1 = uint64_t (*)(uint64_t);
           using F2 = uint64_t (*)(uint64_t, uint64_t);
@@ -29612,6 +29647,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                    << " len_before=" << beforeLen
                    << " len_after=" << afterLen << "\n";
     };
+    constexpr int64_t kQueueLenSanityLimit = 100000;
 
     // Handle __moore_queue_push_back - append element to queue
     // Signature: (queue_ptr, element_ptr, element_size)
@@ -29726,6 +29762,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             for (int i = 0; i < 8; ++i)
               queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
           }
+        }
+        if (queueLen < 0 || queueLen > kQueueLenSanityLimit) {
+          traceQueueOp("size_invalid_len", queueAddr, queueLen, 0);
+          queueLen = 0;
         }
 
         setValue(procId, callOp.getResult(),
@@ -34487,7 +34527,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                               queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
 
-            if (queueLen > 0 && dataPtr != 0) {
+            if (queueLen < 0 || queueLen > kQueueLenSanityLimit) {
+              traceQueueOp("pop_back_ptr_invalid_len", queueAddr, queueLen,
+                           queueLen);
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_pop_back_ptr invalid "
+                            "queueLen="
+                         << queueLen << " queue=0x"
+                         << llvm::format_hex(queueAddr, 16) << "\n");
+            } else if (queueLen > 0 && dataPtr != 0) {
               // Look up queue data via interpreter memory model
               uint64_t dataOffset = 0;
               auto *dataBlock =
@@ -34558,7 +34606,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                               queueBlock->bytes()[queueOffset + 8 + i])
                           << (i * 8);
 
-            if (queueLen > 0 && dataPtr != 0) {
+            if (queueLen < 0 || queueLen > kQueueLenSanityLimit) {
+              traceQueueOp("pop_front_ptr_invalid_len", queueAddr, queueLen,
+                           queueLen);
+              LLVM_DEBUG(llvm::dbgs()
+                         << "  llvm.call: __moore_queue_pop_front_ptr invalid "
+                            "queueLen="
+                         << queueLen << " queue=0x"
+                         << llvm::format_hex(queueAddr, 16) << "\n");
+            } else if (queueLen > 0 && dataPtr != 0) {
               // Look up queue data via interpreter memory model
               uint64_t dataOffset = 0;
               auto *dataBlock =

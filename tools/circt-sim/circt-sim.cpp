@@ -319,10 +319,16 @@ extern "C" void __circt_sim_drive_time(CirctSimCtx * /*ctx*/, uint32_t sigId,
   auto currentTime = g_aotScheduler->getCurrentTime();
   SimTime resumeTime(currentTime.realTime + delay, 0);
   g_aotScheduler->getEventScheduler().schedule(
-      resumeTime, SchedulingRegion::Active,
-      Event([sigId, val]() {
-        g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
-      }));
+        resumeTime, SchedulingRegion::Active,
+        Event([sigId, val]() {
+          g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
+        }));
+}
+
+extern "C" uint64_t __circt_sim_current_time_fs(void) {
+  if (!g_aotScheduler)
+    return 0;
+  return g_aotScheduler->getCurrentTime().realTime;
 }
 
 //===----------------------------------------------------------------------===//
@@ -1574,6 +1580,7 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
       // initializeGlobals() writes directly to .so memory. This prevents
       // dangling inter-global pointers from post-init aliasing.
       if (compiledLoaderForPreAlias) {
+        g_compiledModule = compiledLoaderForPreAlias->getModule();
         // Set runtime context early so optional native module-init entrypoints
         // can resolve __circt_sim_ctx before setCompiledModule() runs.
         compiledLoaderForPreAlias->setRuntimeContext(
@@ -1582,6 +1589,20 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             compiledLoaderForPreAlias);
         compiledLoaderForPreAlias->preAliasGlobals(
             llhdInterpreter->getGlobalMemoryBlocks());
+
+        // Wire trampoline callback early so native module init can call
+        // trampoline fallbacks. Function/trampoline metadata is loaded in
+        // LLHDProcessInterpreter::initialize() once function lookup caches
+        // are populated.
+        g_trampolineDispatch = [](uint32_t funcId, const char *funcName,
+                                  const uint64_t *args, uint32_t numArgs,
+                                  uint64_t *rets, uint32_t numRets,
+                                  void *userData) {
+          static_cast<LLHDProcessInterpreter *>(userData)
+              ->dispatchTrampoline(funcId, funcName, args, numArgs, rets,
+                                   numRets);
+        };
+        g_trampolineUserData = llhdInterpreter.get();
       }
     }
 
