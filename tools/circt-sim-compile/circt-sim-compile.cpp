@@ -587,6 +587,40 @@ static bool isNativeModuleInitOp(Operation *op) {
              llhd::ProbeOp, UnrealizedConversionCastOp>(op);
 }
 
+/// Return true when a module-level llhd.prb from a hw.module block argument
+/// can be lowered to a native-init runtime helper call.
+static bool isSupportedNativeModuleInitBlockArgProbe(llhd::ProbeOp probeOp,
+                                                     Block &moduleBody) {
+  auto blockArg = dyn_cast<BlockArgument>(probeOp.getSignal());
+  if (!blockArg || blockArg.getOwner() != &moduleBody)
+    return false;
+
+  Type resultTy = probeOp.getResult().getType();
+  if (auto intTy = dyn_cast<IntegerType>(resultTy))
+    return intTy.getWidth() <= 64;
+  if (isa<LLVM::LLVMPointerType>(resultTy))
+    return true;
+  return false;
+}
+
+/// Return true when llhd.prb directly probes a skipped module-level llhd.sig
+/// whose value is still the signal init operand (no module-level mutations).
+static bool isSupportedNativeModuleInitSignalProbe(llhd::ProbeOp probeOp,
+                                                   Block &moduleBody) {
+  auto signalOp = probeOp.getSignal().getDefiningOp<llhd::SignalOp>();
+  if (!signalOp || signalOp->getBlock() != &moduleBody)
+    return false;
+
+  // Keep this conservative: only allow module-level users that are probes.
+  for (Operation *user : signalOp->getUsers()) {
+    if (user->getBlock() != &moduleBody)
+      continue;
+    if (!isa<llhd::ProbeOp>(user))
+      return false;
+  }
+  return true;
+}
+
 static std::string encodeModuleInitSymbol(llvm::StringRef moduleName) {
   std::string out = "__circt_sim_module_init__";
   out.reserve(out.size() + moduleName.size() * 3);
@@ -893,6 +927,21 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
                                     ModuleOp microModule) {
   NativeModuleInitSynthesisStats stats;
   OpBuilder moduleBuilder(microModule.getContext());
+  constexpr llvm::StringLiteral kProbePortHelperName =
+      "__circt_sim_module_init_probe_port_raw";
+
+  auto ensureProbePortHelperDecl = [&](Location loc) -> func::FuncOp {
+    if (auto existing =
+            microModule.lookupSymbol<func::FuncOp>(kProbePortHelperName))
+      return existing;
+    moduleBuilder.setInsertionPointToEnd(microModule.getBody());
+    auto helperTy = moduleBuilder.getFunctionType(
+        {moduleBuilder.getI64Type()}, {moduleBuilder.getI64Type()});
+    auto decl = func::FuncOp::create(moduleBuilder, loc, kProbePortHelperName,
+                                     helperTy);
+    decl.setPrivate();
+    return decl;
+  };
 
   for (auto hwModule : sourceModule.getOps<hw::HWModuleOp>()) {
     ++stats.totalModules;
@@ -927,6 +976,11 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
       // Reject dependencies on hw.module block arguments or skipped ops.
       for (Value operand : opPtr->getOperands()) {
         if (isa<BlockArgument>(operand)) {
+          if (auto probeOp = dyn_cast<llhd::ProbeOp>(opPtr)) {
+            if (operand == probeOp.getSignal() &&
+                isSupportedNativeModuleInitBlockArgProbe(probeOp, body))
+              continue;
+          }
           skipReason = ("operand_block_arg:" +
                         opPtr->getName().getStringRef().str());
           unsupported = true;
@@ -935,6 +989,11 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
         if (Operation *defOp = operand.getDefiningOp()) {
           if (defOp->getBlock() == &body) {
             if (isModuleInitSkippableOp(defOp)) {
+              if (auto probeOp = dyn_cast<llhd::ProbeOp>(opPtr)) {
+                if (defOp == probeOp.getSignal().getDefiningOp() &&
+                    isSupportedNativeModuleInitSignalProbe(probeOp, body))
+                  continue;
+              }
               skipReason = ("operand_dep_skipped:" +
                             defOp->getName().getStringRef().str());
               unsupported = true;
@@ -971,8 +1030,74 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
     Block *entry = initFunc.addEntryBlock();
     OpBuilder initBuilder(entry, entry->begin());
     IRMapping mapping;
-    for (Operation *op : opsToClone)
+    bool cloneUnsupported = false;
+    std::string cloneSkipReason;
+    for (Operation *op : opsToClone) {
+      if (auto probeOp = dyn_cast<llhd::ProbeOp>(op)) {
+        auto blockArg = dyn_cast<BlockArgument>(probeOp.getSignal());
+        if (blockArg && blockArg.getOwner() == &body) {
+          if (!isSupportedNativeModuleInitBlockArgProbe(probeOp, body)) {
+            cloneUnsupported = true;
+            cloneSkipReason = "operand_block_arg:llhd.prb";
+            break;
+          }
+
+          auto helperDecl =
+              ensureProbePortHelperDecl(probeOp.getLoc());
+          Value portIdx = arith::ConstantOp::create(
+              initBuilder, probeOp.getLoc(),
+              initBuilder.getI64IntegerAttr(blockArg.getArgNumber()));
+          auto helperCall = initBuilder.create<func::CallOp>(
+              probeOp.getLoc(), helperDecl.getName(),
+              TypeRange{initBuilder.getI64Type()}, ValueRange{portIdx});
+          Value rawVal = helperCall.getResult(0);
+          Value mappedResult = rawVal;
+          Type resultTy = probeOp.getResult().getType();
+          if (auto intTy = dyn_cast<IntegerType>(resultTy)) {
+            if (intTy.getWidth() < 64) {
+              mappedResult = arith::TruncIOp::create(initBuilder, probeOp.getLoc(),
+                                                     intTy, rawVal);
+            } else if (intTy.getWidth() > 64) {
+              mappedResult = arith::ExtUIOp::create(initBuilder, probeOp.getLoc(),
+                                                    intTy, rawVal);
+            }
+          } else if (isa<LLVM::LLVMPointerType>(resultTy)) {
+            auto cast = initBuilder.create<UnrealizedConversionCastOp>(
+                probeOp.getLoc(), TypeRange{resultTy}, ValueRange{rawVal});
+            mappedResult = cast.getResult(0);
+          } else {
+            cloneUnsupported = true;
+            cloneSkipReason = "operand_block_arg:llhd.prb";
+            break;
+          }
+          mapping.map(probeOp.getResult(), mappedResult);
+          continue;
+        }
+        if (isSupportedNativeModuleInitSignalProbe(probeOp, body)) {
+          auto signalOp = probeOp.getSignal().getDefiningOp<llhd::SignalOp>();
+          Value signalInit = signalOp.getInit();
+          Value mappedInit = signalInit;
+          if (mapping.contains(signalInit))
+            mappedInit = mapping.lookup(signalInit);
+          if (mappedInit.getType() != probeOp.getResult().getType()) {
+            auto cast = initBuilder.create<UnrealizedConversionCastOp>(
+                probeOp.getLoc(), TypeRange{probeOp.getResult().getType()},
+                ValueRange{mappedInit});
+            mappedInit = cast.getResult(0);
+          }
+          mapping.map(probeOp.getResult(), mappedInit);
+          continue;
+        }
+      }
       initBuilder.clone(*op, mapping);
+    }
+    if (cloneUnsupported) {
+      if (cloneSkipReason.empty())
+        cloneSkipReason = "unsupported:unknown";
+      ++stats.skipReasons[cloneSkipReason];
+      initFunc.erase();
+      continue;
+    }
     initBuilder.create<func::ReturnOp>(hwModule.getLoc());
     ++stats.emittedModules;
   }

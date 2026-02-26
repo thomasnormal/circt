@@ -1492,3 +1492,55 @@
   - Next ROI is not adding more op names; it is bridging block-arg probes and
     selected `llhd.sig` dependency chains safely (or introducing hybrid
     native+interpreter fallback per module).
+
+## 2026-02-26
+- Phase 4 follow-up: landed module-init bridge for `llhd.prb` on module
+  block-args and conservative aliasing for probe-only `llhd.sig` chains.
+- Trigger:
+  - previous AVIP spot telemetry after `llhd.prb` allowlisting still showed
+    `operand_block_arg:llhd.prb` and `operand_dep_skipped:llhd.sig` as the
+    dominant blockers (`ahb` `1/4`, `axi4Lite` `2/9` emitted).
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - added `isSupportedNativeModuleInitBlockArgProbe(...)` and
+    `isSupportedNativeModuleInitSignalProbe(...)`.
+  - synthesis now lowers supported block-arg probes to runtime helper calls:
+    `__circt_sim_module_init_probe_port_raw(i64) -> i64`.
+  - synthesis now aliases supported probe-only `llhd.sig` probes to the signal
+    init value instead of rejecting with `operand_dep_skipped:llhd.sig`.
+  - micro-module synthesis auto-declares the helper symbol when needed.
+- Runtime bridge (`tools/circt-sim/LLHDProcessInterpreter.cpp/.h`):
+  - added TLS interpreter handle for native module-init helper dispatch.
+  - exported helper:
+    `extern "C" uint64_t __circt_sim_module_init_probe_port_raw(uint64_t)`.
+  - during native module init, interpreter now maps `hw.module` port index to
+    live `SignalId` and serves raw values via
+    `getNativeModuleInitPortRawValue(...)`.
+- TDD/regressions:
+  - added `test/Tools/circt-sim/aot-native-module-init-llhd-prb-block-arg.mlir`.
+  - added `test/Tools/circt-sim/aot-native-module-init-llhd-prb-signal-alias.mlir`.
+  - compile expectation in `signal-alias` test was relaxed to
+    `Functions: {{.*}}0 rejected, 1 compilable` (external helper count is
+    workload-dependent).
+  - both tests now pass sequential compile/interpreter/native runs.
+- Validation:
+  - AVIP spot telemetry rerun (`--emit-llvm -v`) on
+    `out/avip_core8_interpret_20260226_110735`:
+    - `ahb`:
+      - `Functions: 7602 total, 23 external, 86 rejected, 7493 compilable`
+      - `Native module init functions: 3`
+      - `Native module init modules: 3 emitted / 4 total`
+      - remaining skip: `1x operand_dep_skipped:llhd.sig`
+    - `axi4Lite`:
+      - `Functions: 10174 total, 23 external, 104 rejected, 10047 compilable`
+      - `Native module init functions: 9`
+      - `Native module init modules: 9 emitted / 9 total`
+  - large UVM sanity after patch:
+    - `uvm_seq_body` with `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1`:
+      `COMPILE_EXIT=0`, `RUN_EXIT=0` (reaches `50000000000 fs`).
+    - `uvm_run_phase` with native-init opt-in:
+      preserves parity endpoint (`UVM_FATAL FCTTYP`, `RUN_EXIT=1`).
+- Realization:
+  - module-arg probe ABI support is no longer the limiting factor on the tested
+    AVIP workloads.
+  - remaining native-init extraction misses are now concentrated in mutable
+    `llhd.sig` dependency chains rather than missing op coverage.
