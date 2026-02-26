@@ -1727,3 +1727,49 @@
     - default deny: native `0`, interpreted `1`
     - allow-all: native `1`, interpreted `0`
     - allow+deny-list: native `0`, interpreted `1`
+
+## 2026-02-26
+- Phase 5.3 follow-up: added residual non-LLVM strip telemetry to
+  `circt-sim-compile -v` so coverage work can be driven by measured
+  post-lowering blockers (not just front-end rejection reasons).
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - upgraded `stripNonLLVMFunctions(...)` to return both:
+    - stripped symbol list
+    - aggregated reason counters
+  - reason buckets now include:
+    - `body_nonllvm_op:<opname>`
+    - `body_nonllvm_result:<type>`
+    - `sig_nonllvm_arg:<type>`
+    - `sig_nonllvm_ret:<type>`
+    - `global_nonllvm_type:<type>`
+    - `residual_func.func`
+  - verbose mode now emits:
+    - `[circt-sim-compile] Top residual non-LLVM strip reasons:`
+    - top-5 counted reasons.
+- TDD/regression:
+  - added `test/Tools/circt-sim/aot-strip-non-llvm-telemetry.mlir`.
+  - test forces one function through the residual strip path and checks:
+    - function collection accepted it
+    - strip count emitted
+    - top strip-reason line emitted (`body_nonllvm_op:builtin.unrealized_conversion_cast`).
+- Validation:
+  - rebuilt `circt-sim-compile`.
+  - focused regression command (manual in this workspace, no FileCheck binary):
+    - `circt-sim-compile -v test/Tools/circt-sim/aot-strip-non-llvm-telemetry.mlir ...`
+    - observed expected lines:
+      - `Functions: 2 total, 0 external, 0 rejected, 2 compilable`
+      - `Stripped 1 functions with non-LLVM ops`
+      - `Top residual non-LLVM strip reasons`
+      - `1x body_nonllvm_op:builtin.unrealized_conversion_cast`
+  - large workload telemetry (`uvm_seq_body`) now reports actionable blockers:
+    - `Stripped 107 functions with non-LLVM ops`
+    - top reasons:
+      - `34x body_nonllvm_op:hw.struct_create`
+      - `33x sig_nonllvm_arg:!hw.struct<value: i4096, unknown: i4096>`
+      - `9x body_nonllvm_op:hw.bitcast`
+      - `9x sig_nonllvm_arg:!hw.struct<value: i64, unknown: i64>`
+      - `4x body_nonllvm_op:builtin.unrealized_conversion_cast`
+- Realization:
+  - the bottleneck has shifted from unknown residual stripping to a narrow,
+    measurable 4-state HW-struct lowering/ABI gap; this is now the next
+    concrete high-ROI Phase 5.2/5.3 target.

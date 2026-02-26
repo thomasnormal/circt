@@ -506,6 +506,25 @@ Current priority:
 
 Retain detailed process rejection reasons (`process_extract_external_operand:<op>`, `process_lowering_failed:<op>`, etc.) and drive fixes from measured counts.
 
+Status update:
+
+- landed residual-strip telemetry in `circt-sim-compile -v`:
+  - after residual-op stripping, now emits top strip reasons
+    (`body_nonllvm_op:*`, `sig_nonllvm_arg:*`, `global_nonllvm_type:*`, etc.)
+  - regression added: `aot-strip-non-llvm-telemetry.mlir`
+- current large-workload readout (`uvm_seq_body`) after this telemetry:
+  - `Stripped 107 functions with non-LLVM ops`
+  - top reasons:
+    - `34x body_nonllvm_op:hw.struct_create`
+    - `33x sig_nonllvm_arg:!hw.struct<value: i4096, unknown: i4096>`
+    - `9x body_nonllvm_op:hw.bitcast`
+    - `9x sig_nonllvm_arg:!hw.struct<value: i64, unknown: i64>`
+    - `4x body_nonllvm_op:builtin.unrealized_conversion_cast`
+- implication:
+  - next high-ROI coverage step is now clear and measured: eliminate residual
+    4-state HW struct ABI/body op shapes (`hw.struct_create` / `hw.bitcast` +
+    non-LLVM hw-struct signatures) in function lowering.
+
 ---
 
 ## Phase 6: Long-term architecture simplification
