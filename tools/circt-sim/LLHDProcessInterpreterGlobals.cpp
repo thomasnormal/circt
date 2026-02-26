@@ -160,18 +160,28 @@ bool LLHDProcessInterpreter::checkRTTICast(int32_t srcTypeId,
   // Load the RTTI table on first use
   loadRTTIParentTable();
 
-  // If we have a hierarchy table, walk the parent chain
+  // If we have a hierarchy table, walk the parent chain.
+  // Some wasm builds can observe sparse/misaligned type IDs across separately
+  // initialized units. When that happens, table lookup may fail even though
+  // runtime IDs still follow the monotonic (derived >= base) property.
+  // Fall back to the legacy heuristic in those cases to avoid false negatives
+  // in $cast-heavy UVM startup paths.
   if (!rttiParentTable.empty()) {
     int32_t current = srcTypeId;
+    bool tableApplicable = true;
     // Guard against infinite loops with a max depth
     for (int i = 0; i < 1000 && current != 0; ++i) {
-      if (current < 0 || current >= static_cast<int32_t>(rttiParentTable.size()))
+      if (current < 0 ||
+          current >= static_cast<int32_t>(rttiParentTable.size())) {
+        tableApplicable = false;
         break;
+      }
       current = rttiParentTable[current];
       if (current == targetTypeId)
         return true;
     }
-    return false;
+    if (tableApplicable)
+      return false;
   }
 
   // Fallback: use the simple >= heuristic (backward compat for old MLIR files)
@@ -207,27 +217,31 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
     if (size == 0)
       size = 8; // Default minimum size
 
-    // Allocate memory for the global
-    uint64_t addr = nextGlobalAddress;
-    nextGlobalAddress += ((size + 7) / 8) * 8; // Align to 8 bytes
+    // Check if this global was pre-aliased to .so storage (AOT mode).
+    // Pre-aliased blocks write directly to .so memory via bytes(), preventing
+    // dangling inter-global pointers that arise from post-init aliasing.
+    uint64_t addr;
+    {
+      auto existIt = globalMemoryBlocks.find(globalName);
+      if (existIt != globalMemoryBlocks.end() &&
+          existIt->second.aliasedStorage) {
+        // Pre-aliased: use the real .so address so native compiled code can
+        // dereference pointers to this global (critical for vtable globals
+        // whose address is stored in objects at byte offset 4).
+        addr = reinterpret_cast<uint64_t>(existIt->second.aliasedStorage);
+      } else {
+        // Normal path: allocate a virtual address and create a new block.
+        addr = nextGlobalAddress;
+        nextGlobalAddress += ((size + 7) / 8) * 8; // Align to 8 bytes
+        globalMemoryBlocks[globalName] = MemoryBlock(size, 64);
+      }
+    }
 
     globalAddresses[globalName] = addr;
     addrRangeIndexDirty = true;
 
     // Also populate the reverse map for address-to-global lookup
     addressToGlobal[addr] = globalName.str();
-
-    // Check if this global was pre-aliased to .so storage (AOT mode).
-    // Pre-aliased blocks write directly to .so memory via bytes(), preventing
-    // dangling inter-global pointers that arise from post-init aliasing.
-    {
-      auto existIt = globalMemoryBlocks.find(globalName);
-      if (!(existIt != globalMemoryBlocks.end() &&
-            existIt->second.aliasedStorage)) {
-        // Normal path: create new block in the map.
-        globalMemoryBlocks[globalName] = MemoryBlock(size, 64);
-      }
-    }
     MemoryBlock &block = globalMemoryBlocks[globalName];
 
     // Check the initializer attribute

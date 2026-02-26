@@ -125,6 +125,43 @@ void LLHDProcessInterpreter::cacheSequenceRuntimeVtableForObject(
   if (objectAddr == 0 || vtableAddr == 0)
     return;
 
+  auto classifySequenceBodyVtable = [&](uint64_t candidateVtable) -> int {
+    // -1: unknown, 0: non-base body target, 1: base body target.
+    auto globalIt = addressToGlobal.find(candidateVtable);
+    if (globalIt == addressToGlobal.end())
+      return -1;
+    auto blockIt = globalMemoryBlocks.find(globalIt->second);
+    if (blockIt == globalMemoryBlocks.end())
+      return -1;
+    auto &vtableBlock = blockIt->second;
+    constexpr uint64_t kBodySlot = 43;
+    unsigned slotOffset = static_cast<unsigned>(kBodySlot * 8);
+    if (slotOffset + 8 > vtableBlock.size)
+      return -1;
+
+    uint64_t slotFuncAddr = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      slotFuncAddr |= static_cast<uint64_t>(vtableBlock[slotOffset + i])
+                      << (i * 8);
+    if (slotFuncAddr == 0)
+      return -1;
+
+    auto funcIt = addressToFunction.find(slotFuncAddr);
+    if (funcIt == addressToFunction.end())
+      return -1;
+    if (funcIt->second.find("::body") == std::string::npos)
+      return -1;
+    if (funcIt->second == "uvm_pkg::uvm_sequence_base::body")
+      return 1;
+    return 0;
+  };
+  auto isBaseSequenceVtable = [&](uint64_t candidateVtable) -> bool {
+    auto globalIt = addressToGlobal.find(candidateVtable);
+    if (globalIt == addressToGlobal.end())
+      return false;
+    return globalIt->second == "uvm_pkg::uvm_sequence_base::__vtable__";
+  };
+
   llvm::SmallVector<uint64_t, 8> candidates;
   auto addCandidate = [&](uint64_t addr) {
     if (addr == 0)
@@ -145,8 +182,50 @@ void LLHDProcessInterpreter::cacheSequenceRuntimeVtableForObject(
     addCandidate(canonicalizeUvmObjectAddress(procId, masked));
   }
 
-  for (uint64_t candidate : candidates)
-    sequenceRuntimeVtableByObjectAddr[candidate] = vtableAddr;
+  int newClass = classifySequenceBodyVtable(vtableAddr);
+  if (newClass == -1)
+    return;
+  for (uint64_t candidate : candidates) {
+    uint64_t &slot = sequenceRuntimeVtableByObjectAddr[candidate];
+    if (slot == 0 || slot == vtableAddr) {
+      slot = vtableAddr;
+      continue;
+    }
+    bool oldIsBase = isBaseSequenceVtable(slot);
+    bool newIsBase = isBaseSequenceVtable(vtableAddr);
+    // Never downgrade a discovered non-base sequence vtable to the generic
+    // uvm_sequence_base fallback.
+    if (!oldIsBase && newIsBase)
+      continue;
+    // Prefer a discovered non-base vtable over a previously cached base one.
+    if (oldIsBase && !newIsBase) {
+      slot = vtableAddr;
+      continue;
+    }
+    int oldClass = classifySequenceBodyVtable(slot);
+    // Keep derived/non-base mapping when a later fallback only infers base body.
+    if (oldClass == 0 && newClass == 1)
+      continue;
+    // Upgrade cached base-body mapping when we later discover a derived body.
+    if (oldClass == 1 && newClass == 0) {
+      slot = vtableAddr;
+      continue;
+    }
+    // Unknown/equal-class cases: prefer the latest observation.
+    slot = vtableAddr;
+  }
+
+  if (traceSeqEnabled) {
+    llvm::errs() << "[SEQ-VTBL-CACHE] store proc=" << procId << " obj=0x"
+                 << llvm::format_hex(objectAddr, 16) << " vtbl=0x"
+                 << llvm::format_hex(vtableAddr, 16) << " cands=";
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      if (i)
+        llvm::errs() << ",";
+      llvm::errs() << "0x" << llvm::format_hex(candidates[i], 16);
+    }
+    llvm::errs() << "\n";
+  }
 }
 
 bool LLHDProcessInterpreter::lookupCachedSequenceRuntimeVtable(
@@ -180,7 +259,24 @@ bool LLHDProcessInterpreter::lookupCachedSequenceRuntimeVtable(
     if (it == sequenceRuntimeVtableByObjectAddr.end() || it->second == 0)
       continue;
     vtableAddr = it->second;
+    if (traceSeqEnabled) {
+      llvm::errs() << "[SEQ-VTBL-CACHE] hit proc=" << procId << " obj=0x"
+                   << llvm::format_hex(objectAddr, 16) << " cand=0x"
+                   << llvm::format_hex(candidate, 16) << " vtbl=0x"
+                   << llvm::format_hex(vtableAddr, 16) << "\n";
+    }
     return true;
+  }
+
+  if (traceSeqEnabled) {
+    llvm::errs() << "[SEQ-VTBL-CACHE] miss proc=" << procId << " obj=0x"
+                 << llvm::format_hex(objectAddr, 16) << " cands=";
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      if (i)
+        llvm::errs() << ",";
+      llvm::errs() << "0x" << llvm::format_hex(candidates[i], 16);
+    }
+    llvm::errs() << "\n";
   }
 
   return false;
@@ -195,9 +291,33 @@ void LLHDProcessInterpreter::maybeSeedSequenceRuntimeVtableFromFunction(
   if (objectAddr == 0)
     return;
 
+  auto isSequenceBodyVtable = [&](uint64_t candidateVtable) -> bool {
+    auto globalIt = addressToGlobal.find(candidateVtable);
+    if (globalIt == addressToGlobal.end())
+      return false;
+    auto blockIt = globalMemoryBlocks.find(globalIt->second);
+    if (blockIt == globalMemoryBlocks.end())
+      return false;
+    auto &vtableBlock = blockIt->second;
+    constexpr uint64_t kBodySlot = 43;
+    unsigned slotOffset = static_cast<unsigned>(kBodySlot * 8);
+    if (slotOffset + 8 > vtableBlock.size)
+      return false;
+    uint64_t slotFuncAddr = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      slotFuncAddr |= static_cast<uint64_t>(vtableBlock[slotOffset + i]) << (i * 8);
+    if (slotFuncAddr == 0)
+      return false;
+    auto funcIt = addressToFunction.find(slotFuncAddr);
+    if (funcIt == addressToFunction.end())
+      return false;
+    return funcIt->second.find("::body") != std::string::npos;
+  };
+
   // First prefer a real runtime-header read when available.
   uint64_t runtimeVtableAddr = 0;
-  if (readObjectVTableAddress(objectAddr, runtimeVtableAddr, procId)) {
+  if (readObjectVTableAddress(objectAddr, runtimeVtableAddr, procId) &&
+      isSequenceBodyVtable(runtimeVtableAddr)) {
     cacheSequenceRuntimeVtableForObject(procId, objectAddr, runtimeVtableAddr);
     return;
   }

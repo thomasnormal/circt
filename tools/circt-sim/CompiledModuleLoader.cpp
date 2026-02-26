@@ -9,11 +9,28 @@
 #include "CompiledModuleLoader.h"
 #include "LLHDProcessInterpreter.h"
 #include "llvm/Support/raw_ostream.h"
+#include <cctype>
 #include <cstring>
 #include <dlfcn.h>
 
 using namespace circt;
 using namespace circt::sim;
+
+static std::string encodeModuleInitSymbol(llvm::StringRef moduleName) {
+  std::string out = "__circt_sim_module_init__";
+  out.reserve(out.size() + moduleName.size() * 3);
+  static constexpr char hex[] = "0123456789ABCDEF";
+  for (unsigned char c : moduleName.bytes()) {
+    if (std::isalnum(c) || c == '_') {
+      out.push_back(static_cast<char>(c));
+      continue;
+    }
+    out.push_back('_');
+    out.push_back(hex[(c >> 4) & 0xF]);
+    out.push_back(hex[c & 0xF]);
+  }
+  return out;
+}
 
 std::unique_ptr<CompiledModuleLoader>
 CompiledModuleLoader::load(llvm::StringRef path) {
@@ -123,6 +140,13 @@ void *CompiledModuleLoader::lookupFunction(llvm::StringRef name) const {
   if (it != funcMap.end())
     return it->second;
   return nullptr;
+}
+
+void *CompiledModuleLoader::lookupModuleInit(llvm::StringRef hwModuleName) const {
+  if (!dlHandle)
+    return nullptr;
+  std::string sym = encodeModuleInitSymbol(hwModuleName);
+  return dlsym(dlHandle, sym.c_str());
 }
 
 void CompiledModuleLoader::applyGlobalPatches(

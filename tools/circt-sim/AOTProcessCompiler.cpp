@@ -1309,7 +1309,11 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
       // Derive signals from probes — treat as static if all resolvable.
       llvm::DenseSet<SignalId> derivedSigs;
       bool allStatic = true;
+      bool hasPointerProbeSignal = false;
       processOp.walk([&](llhd::ProbeOp probeOp) {
+        if (auto refTy = dyn_cast<llhd::RefType>(probeOp.getSignal().getType()))
+          hasPointerProbeSignal |= isa<LLVM::LLVMPointerType>(
+              refTy.getNestedType());
         auto it = valueToSignal.find(probeOp.getSignal());
         if (it != valueToSignal.end() && it->second != 0) {
           // Ignore probes of signals driven by this process. Static
@@ -1322,7 +1326,11 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
           allStatic = false;
       });
 
-      if (allStatic && !derivedSigs.empty()) {
+      // Pointer-backed probes (e.g. interface handles lowered as !llvm.ptr)
+      // should not be treated as static sensitivity sources: the pointer value
+      // is stable while pointee fields change. Keep these in dynamic mode so
+      // runtime wait sensitivity derivation can track the real dependencies.
+      if (!hasPointerProbeSignal && allStatic && !derivedSigs.empty()) {
         plan.model = ExecModel::CallbackStaticObserved;
         // Populate staticSignals from derived probes.
         for (SignalId sigId : derivedSigs)
@@ -1333,6 +1341,11 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
         return plan;
       } else {
         plan.model = ExecModel::CallbackDynamicWait;
+        if (hasPointerProbeSignal) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "[classify] → CallbackDynamicWait: pointer probe "
+                        "derived sensitivity\n");
+        }
       }
     } else {
       // No observed, no delay, no probes — conservative fallback.

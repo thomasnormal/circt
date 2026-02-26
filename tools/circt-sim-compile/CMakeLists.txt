@@ -36,6 +36,7 @@ target_link_libraries(circt-sim-compile
   MLIRBytecodeWriter
   MLIRParser
   MLIRSCFDialect
+  MLIRSCFToControlFlow
   MLIRTargetLLVMIRExport
   MLIRTransforms
   LLVMSupport

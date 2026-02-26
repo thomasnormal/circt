@@ -102,6 +102,7 @@ private:
   llvm::DenseMap<Value, uint8_t> valueToReg;
   llvm::DenseMap<Block *, uint32_t> blockToIndex;
   llvm::SmallVector<DeferredAuxBlock> deferredAuxBlocks;
+  unsigned waitOpCount = 0;
   uint32_t nextAuxBlockIndex = 0;
   uint8_t nextReg = 0;
   bool tooManyRegs = false;
@@ -248,6 +249,37 @@ bool BytecodeCompiler::compileOp(Operation *op, BytecodeProgram &program) {
 
   // llhd.wait — record the wait and emit a Wait micro-op.
   if (auto waitOp = dyn_cast<llhd::WaitOp>(op)) {
+    // The bytecode executor currently supports exactly one event-only wait site
+    // with no loop-carried wait values. More complex wait semantics are handled
+    // by the generic interpreter.
+    ++waitOpCount;
+    if (waitOpCount > 1) {
+      failedOpName = "llhd.wait(multi-site)";
+      return false;
+    }
+    if (waitOp.getDelay()) {
+      failedOpName = "llhd.wait(delay)";
+      return false;
+    }
+    if (!waitOp.getYieldOperands().empty()) {
+      failedOpName = "llhd.wait(yield)";
+      return false;
+    }
+    if (!waitOp.getDestOperands().empty()) {
+      failedOpName = "llhd.wait(dest-operands)";
+      return false;
+    }
+    if (!waitOp.getDest()) {
+      failedOpName = "llhd.wait(no-dest)";
+      return false;
+    }
+    if (!waitOp.getDest()->getArguments().empty()) {
+      failedOpName = "llhd.wait(dest-block-args)";
+      return false;
+    }
+
+    program.waitBlockIndex = getBlockIndex(waitOp->getBlock());
+
     // Collect observed signals.
     for (Value observed : waitOp.getObserved()) {
       SignalId sigId = resolveSignalId(observed);
@@ -687,20 +719,9 @@ BytecodeCompiler::compile(llhd::ProcessOp processOp) {
   program.blockOffsets.push_back(program.ops.size());
   program.numRegs = nextReg;
 
-  // Find the wait block (the block containing a Wait micro-op).
-  for (uint32_t bi = 0; bi < program.blockOffsets.size() - 1; ++bi) {
-    uint32_t start = program.blockOffsets[bi];
-    uint32_t end = program.blockOffsets[bi + 1];
-    for (uint32_t i = start; i < end; ++i) {
-      if (program.ops[i].kind == MicroOpKind::Wait) {
-        program.waitBlockIndex = bi;
-        break;
-      }
-    }
-  }
-
   // Validate: must have at least one wait and some signals to observe.
   if (program.waitSignals.empty()) {
+    failedOpName = "llhd.wait(no-observed)";
     LLVM_DEBUG(llvm::dbgs()
                << "[Bytecode] No wait signals found, rejecting\n");
     return std::nullopt;
@@ -1021,6 +1042,10 @@ void LLHDProcessInterpreter::printCompileReport() const {
     if (nativeEntryCallCount > 0) {
       llvm::errs() << "  Entry table calls:  " << nativeEntryCallCount << "\n";
     }
+    if (trampolineEntryCallCount > 0) {
+      llvm::errs() << "  Entry table tramp:  " << trampolineEntryCallCount
+                   << "\n";
+    }
   }
 
   llvm::errs() << "===============================\n";
@@ -1115,4 +1140,3 @@ bool LLHDProcessInterpreter::executeBytecodeProcess(
 
   return true;
 }
-

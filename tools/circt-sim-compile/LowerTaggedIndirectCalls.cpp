@@ -115,16 +115,18 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
     Value *entry = builder.CreateLoad(ptrTy, entryGEP, "entry");
 
     SmallVector<Value *, 8> args(II->arg_begin(), II->arg_end());
+    Twine taggedName = II->getType()->isVoidTy() ? Twine("") : Twine("tagged_ret");
     InvokeInst *taggedInvoke = builder.CreateInvoke(
-        II->getFunctionType(), entry, mergeBB, unwindDest, args, "tagged_ret");
+        II->getFunctionType(), entry, mergeBB, unwindDest, args, taggedName);
     taggedInvoke->setCallingConv(II->getCallingConv());
     taggedInvoke->setAttributes(II->getAttributes());
 
     // Direct path: invoke original pointer.
     builder.SetInsertPoint(directBB);
+    Twine directName = II->getType()->isVoidTy() ? Twine("") : Twine("direct_ret");
     InvokeInst *directInvoke = builder.CreateInvoke(
         II->getFunctionType(), calledOp, mergeBB, unwindDest, args,
-        "direct_ret");
+        directName);
     directInvoke->setCallingConv(II->getCallingConv());
     directInvoke->setAttributes(II->getAttributes());
 
@@ -193,8 +195,9 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
   Value *entry = builder.CreateLoad(ptrTy, entryGEP, "entry");
 
   SmallVector<Value *, 8> args(CI->arg_begin(), CI->arg_end());
+  Twine taggedName = CI->getType()->isVoidTy() ? Twine("") : Twine("tagged_ret");
   CallInst *taggedCall =
-      builder.CreateCall(CI->getFunctionType(), entry, args, "tagged_ret");
+      builder.CreateCall(CI->getFunctionType(), entry, args, taggedName);
   taggedCall->setCallingConv(CI->getCallingConv());
   taggedCall->setAttributes(CI->getAttributes());
   taggedCall->setTailCallKind(CI->getTailCallKind());
@@ -202,8 +205,9 @@ static bool lowerIndirectCall(CallBase *CB, GlobalVariable *funcEntries) {
 
   // Direct path.
   builder.SetInsertPoint(directBB);
+  Twine directName = CI->getType()->isVoidTy() ? Twine("") : Twine("direct_ret");
   CallInst *directCall =
-      builder.CreateCall(CI->getFunctionType(), calledOp, args, "direct_ret");
+      builder.CreateCall(CI->getFunctionType(), calledOp, args, directName);
   directCall->setCallingConv(CI->getCallingConv());
   directCall->setAttributes(CI->getAttributes());
   directCall->setTailCallKind(CI->getTailCallKind());

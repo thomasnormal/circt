@@ -3080,6 +3080,8 @@ void LLHDProcessInterpreter::maybeTraceDisableForkDeferredArm(
 void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
     llvm::raw_ostream &os, size_t topN) const {
   if (aotFuncIdCallCounts.empty()) {
+    os << "[circt-sim] Hot native FuncIds (top " << topN
+       << "): none (no FuncIds)\n";
     os << "[circt-sim] Hot uncompiled FuncIds (top " << topN
        << "): none (no FuncIds)\n";
     return;
@@ -3089,41 +3091,49 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
     uint32_t fid = 0;
     uint64_t calls = 0;
   };
-  llvm::SmallVector<HotRow, 64> rows;
-  rows.reserve(aotFuncIdCallCounts.size());
+  llvm::SmallVector<HotRow, 64> nativeRows;
+  llvm::SmallVector<HotRow, 64> uncompiledRows;
+  nativeRows.reserve(aotFuncIdCallCounts.size());
+  uncompiledRows.reserve(aotFuncIdCallCounts.size());
 
   for (uint32_t fid = 0, e = aotFuncIdCallCounts.size(); fid < e; ++fid) {
     uint64_t calls = aotFuncIdCallCounts[fid];
     if (calls == 0)
       continue;
-    if (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid])
+    if (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]) {
+      nativeRows.push_back(HotRow{fid, calls});
       continue;
-    rows.push_back(HotRow{fid, calls});
+    }
+    uncompiledRows.push_back(HotRow{fid, calls});
   }
 
-  os << "[circt-sim] Hot uncompiled FuncIds (top " << topN << "):\n";
-  if (rows.empty()) {
-    os << "[circt-sim]   (none)\n";
-    return;
-  }
+  auto printRows = [&](llvm::StringRef title,
+                       llvm::SmallVectorImpl<HotRow> &rows) {
+    os << "[circt-sim] " << title << " (top " << topN << "):\n";
+    if (rows.empty()) {
+      os << "[circt-sim]   (none)\n";
+      return;
+    }
+    llvm::sort(rows, [](const HotRow &lhs, const HotRow &rhs) {
+      if (lhs.calls != rhs.calls)
+        return lhs.calls > rhs.calls;
+      return lhs.fid < rhs.fid;
+    });
+    size_t limit = std::min(topN, rows.size());
+    for (size_t i = 0; i < limit; ++i) {
+      uint32_t fid = rows[i].fid;
+      llvm::StringRef name;
+      if (fid < aotFuncEntryNamesById.size())
+        name = aotFuncEntryNamesById[fid];
+      os << "[circt-sim]   " << rows[i].calls << "x fid=" << fid;
+      if (!name.empty())
+        os << " " << name;
+      os << "\n";
+    }
+  };
 
-  llvm::sort(rows, [](const HotRow &lhs, const HotRow &rhs) {
-    if (lhs.calls != rhs.calls)
-      return lhs.calls > rhs.calls;
-    return lhs.fid < rhs.fid;
-  });
-
-  size_t limit = std::min(topN, rows.size());
-  for (size_t i = 0; i < limit; ++i) {
-    uint32_t fid = rows[i].fid;
-    llvm::StringRef name;
-    if (fid < aotFuncEntryNamesById.size())
-      name = aotFuncEntryNamesById[fid];
-    os << "[circt-sim]   " << rows[i].calls << "x fid=" << fid;
-    if (!name.empty())
-      os << " " << name;
-    os << "\n";
-  }
+  printRows("Hot native FuncIds", nativeRows);
+  printRows("Hot uncompiled FuncIds", uncompiledRows);
 
   // Print top N hottest interpreted callees (per-Operation* counts).
   if (!interpretedCallCounts.empty()) {

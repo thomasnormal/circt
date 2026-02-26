@@ -232,6 +232,23 @@ typedef struct {
   void *array;
 } AssocArrayHeader;
 
+/// Callback used to translate assoc-array pointers before runtime dereference.
+/// This lets the simulator map interpreter virtual addresses to host pointers.
+typedef void *(*MooreAssocPtrResolver)(const void *ptr, void *userData);
+
+/// Register an assoc-array pointer resolver callback.
+/// Pass nullptr to disable translation.
+void __moore_assoc_set_ptr_resolver(MooreAssocPtrResolver resolver,
+                                    void *userData);
+
+/// Set the thread-local simulation context pointer.
+/// Called by the interpreter around native dispatch calls so that Moore runtime
+/// helpers can translate interpreter virtual addresses.
+void __circt_sim_set_tls_ctx(void *ctx);
+
+/// Get the current thread-local simulation context pointer.
+void *__circt_sim_get_tls_ctx(void);
+
 /// Create a new empty associative array.
 /// @param key_size Size of keys in bytes (0 for string keys)
 /// @param value_size Size of values in bytes
@@ -729,9 +746,18 @@ int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth);
 /// @param weights Array of weights for each range
 /// @param perRange Array indicating weight type (0 = :=, 1 = :/)
 /// @param numRanges Number of ranges (weights and perRange have this length)
+/// @param isSigned Whether the constrained variable is signed (0 or 1)
+/// @param bitWidth Bit width of the constrained variable
+/// @param hasDefaultWeight Whether a default dist weight is present (0 or 1)
+/// @param defaultWeight The default dist weight value
+/// @param defaultPerRange Default weight kind (0 = :=, 1 = :/)
 /// @return A random value selected according to the distribution
 int64_t __moore_randomize_with_dist(int64_t *ranges, int64_t *weights,
-                                    int64_t *perRange, int64_t numRanges);
+                                    int64_t *perRange, int64_t numRanges,
+                                    int64_t isSigned, int64_t bitWidth,
+                                    int64_t hasDefaultWeight,
+                                    int64_t defaultWeight,
+                                    int64_t defaultPerRange);
 
 //===----------------------------------------------------------------------===//
 // Dynamic Cast / RTTI Operations

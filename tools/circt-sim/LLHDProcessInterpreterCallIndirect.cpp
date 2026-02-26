@@ -653,9 +653,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcPtrVal.getUInt64() - 0xF0000000ULL);
           noteAotFuncIdCall(fid);
-          if (nativeCallDepth != 0) {
+          if (aotDepth != 0) {
             ++entryTableSkippedDepthCount;
           } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+            // Deny/trap checks for call_indirect X-fallback path.
+            if (aotDenyFids.count(fid))
+              goto ci_xfallback_interpreted;
+            if (static_cast<int32_t>(fid) == aotTrapFid) {
+              llvm::errs() << "[AOT TRAP] ci-xfallback fid=" << fid;
+              if (fid < aotFuncEntryNamesById.size())
+                llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
+              llvm::errs() << "\n";
+              __builtin_trap();
+            }
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = funcOp.getNumArguments();
@@ -690,6 +700,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
                 if (eligible) {
 
+                // Set TLS context so Moore runtime helpers can normalize ptrs.
+                void *prevTls = __circt_sim_get_tls_ctx();
+                __circt_sim_set_tls_ctx(static_cast<void *>(this));
                 uint64_t result = 0;
                 using F0 = uint64_t (*)();
                 using F1 = uint64_t (*)(uint64_t);
@@ -715,6 +728,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 case 7: result = reinterpret_cast<F7>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
                 case 8: result = reinterpret_cast<F8>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
                 }
+                __circt_sim_set_tls_ctx(prevTls);
                 if (numResults == 1) {
                   SmallVector<InterpretedValue, 2> nativeResults;
                   auto resTy = funcOp.getResultTypes()[0];
@@ -737,6 +751,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
           }
         }
+      ci_xfallback_interpreted:
         auto &callState = processStates[procId];
         ++interpretedCallCounts[funcOp.getOperation()];
         ++callState.callDepth;
@@ -1425,9 +1440,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
           noteAotFuncIdCall(fid);
-          if (nativeCallDepth != 0) {
+          if (aotDepth != 0) {
             ++entryTableSkippedDepthCount;
           } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+            // Deny/trap checks for call_indirect static fallback path.
+            if (aotDenyFids.count(fid))
+              goto ci_static_interpreted;
+            if (static_cast<int32_t>(fid) == aotTrapFid) {
+              llvm::errs() << "[AOT TRAP] ci-static fid=" << fid;
+              if (fid < aotFuncEntryNamesById.size())
+                llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
+              llvm::errs() << "\n";
+              __builtin_trap();
+            }
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = fOp.getNumArguments();
@@ -1462,6 +1487,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
                 if (eligible) {
 
+                // Set TLS context so Moore runtime helpers can normalize ptrs.
+                void *prevTls = __circt_sim_get_tls_ctx();
+                __circt_sim_set_tls_ctx(static_cast<void *>(this));
                 uint64_t result = 0;
                 using F0 = uint64_t (*)();
                 using F1 = uint64_t (*)(uint64_t);
@@ -1487,6 +1515,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 case 7: result = reinterpret_cast<F7>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
                 case 8: result = reinterpret_cast<F8>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
                 }
+                __circt_sim_set_tls_ctx(prevTls);
                 if (numResults == 1) {
                   SmallVector<InterpretedValue, 2> nativeResults;
                   auto resTy = fOp.getResultTypes()[0];
@@ -1509,6 +1538,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
           }
         }
+      ci_static_interpreted:
         auto &cs2 = processStates[procId];
         ++interpretedCallCounts[fOp.getOperation()];
         ++cs2.callDepth;
@@ -1897,9 +1927,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (siteIt->second.cachedEntryPtr &&
             siteIt->second.funcAddr == funcAddr &&
             processStates[procId].callDepth < 2000 &&
-            nativeCallDepth == 0) {
+            aotDepth == 0) {
           auto &entry = siteIt->second;
           noteAotFuncIdCall(entry.cachedFid);
+          // Deny/trap checks for call_indirect E5 cache path.
+          if (aotDenyFids.count(entry.cachedFid))
+            goto ci_cache_interpreted;
+          if (static_cast<int32_t>(entry.cachedFid) == aotTrapFid) {
+            llvm::errs() << "[AOT TRAP] ci-cache fid=" << entry.cachedFid;
+            if (entry.cachedFid < aotFuncEntryNamesById.size())
+              llvm::errs() << " name=" << aotFuncEntryNamesById[entry.cachedFid];
+            llvm::errs() << "\n";
+            __builtin_trap();
+          }
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
           unsigned numResults = cachedFuncOp.getNumResults();
@@ -1934,6 +1974,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             if (eligible) {
 
             void *fptr = entry.cachedEntryPtr;
+            // Set TLS context so Moore runtime helpers can normalize ptrs.
+            void *prevTls = __circt_sim_get_tls_ctx();
+            __circt_sim_set_tls_ctx(static_cast<void *>(this));
             uint64_t result = 0;
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
@@ -1960,6 +2003,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             case 7: result = reinterpret_cast<F7>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
             case 8: result = reinterpret_cast<F8>(fptr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
             }
+            __circt_sim_set_tls_ctx(prevTls);
             --processStates[procId].callDepth;
             if (numResults == 1) {
               SmallVector<InterpretedValue, 2> nativeResults;
@@ -1983,10 +2027,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         } else if (siteIt->second.cachedEntryPtr &&
                    siteIt->second.funcAddr == funcAddr &&
                    processStates[procId].callDepth < 2000 &&
-                   nativeCallDepth != 0) {
+                   aotDepth != 0) {
           noteAotFuncIdCall(siteIt->second.cachedFid);
           ++entryTableSkippedDepthCount;
         }
+      ci_cache_interpreted:
         // Fall through to interpretFuncBody for non-native-eligible calls.
         auto &fastState = processStates[procId];
         ++interpretedCallCounts[siteIt->second.funcOp.getOperation()];
@@ -4154,7 +4199,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         se.valid = true;
         se.isIntercepted = false;
         se.hadVtableOverride = false;
-        // Populate entry-table pointer for site cache dispatch (native + trampoline).
+        // Populate entry-table pointer for site cache dispatch.
         if (compiledFuncEntries && funcAddr >= 0xF0000000ULL &&
             funcAddr < 0x100000000ULL) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
@@ -4175,9 +4220,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         funcAddr < 0x100000000ULL && callState.callDepth < 2000) {
       uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
       noteAotFuncIdCall(fid);
-      if (nativeCallDepth != 0) {
+      if (aotDepth != 0) {
         ++entryTableSkippedDepthCount;
       } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+        // Deny/trap checks for call_indirect main dispatch path.
+        if (aotDenyFids.count(fid))
+          goto ci_main_interpreted;
+        if (static_cast<int32_t>(fid) == aotTrapFid) {
+          llvm::errs() << "[AOT TRAP] ci-main fid=" << fid;
+          if (fid < aotFuncEntryNamesById.size())
+            llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
+          llvm::errs() << "\n";
+          __builtin_trap();
+        }
         void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
         if (entryPtr) {
           unsigned numArgs = funcOp.getNumArguments();
@@ -4212,6 +4267,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
             if (eligible) {
 
+            // Set TLS context so Moore runtime helpers can normalize ptrs.
+            void *prevTls = __circt_sim_get_tls_ctx();
+            __circt_sim_set_tls_ctx(static_cast<void *>(this));
             uint64_t result = 0;
             using F0 = uint64_t (*)();
             using F1 = uint64_t (*)(uint64_t);
@@ -4238,6 +4296,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             case 7: result = reinterpret_cast<F7>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]); break;
             case 8: result = reinterpret_cast<F8>(entryPtr)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]); break;
             }
+            __circt_sim_set_tls_ctx(prevTls);
             --callState.callDepth;
             SmallVector<InterpretedValue, 2> results;
             if (numResults == 1) {
@@ -4264,6 +4323,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
+  ci_main_interpreted:
     // Call the function with depth tracking
     ++interpretedCallCounts[funcOp.getOperation()];
     ++callState.callDepth;
