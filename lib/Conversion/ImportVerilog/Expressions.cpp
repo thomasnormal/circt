@@ -5510,6 +5510,54 @@ struct RvalueExprVisitor : public ExprVisitor {
               const auto &viExpr = slang::ast::Expression::bind(
                   *viExprSyntax, astContext);
               if (!viExpr.bad()) {
+                auto getInterfaceArrayIndex =
+                    [&](const slang::ast::InstanceSymbol &inst)
+                    -> std::optional<int64_t> {
+                  if (inst.arrayPath.empty())
+                    return std::nullopt;
+                  slang::SmallVector<slang::ConstantRange, 4> dimensions;
+                  inst.getArrayDimensions(dimensions);
+                  if (dimensions.empty())
+                    return std::nullopt;
+                  const auto &range = dimensions[0];
+                  int64_t relIndex = static_cast<int64_t>(inst.arrayPath[0]);
+                  return range.isLittleEndian() ? range.lower() + relIndex
+                                                : range.upper() - relIndex;
+                };
+                auto findInterfaceArrayElement =
+                    [&](const slang::ast::InstanceArraySymbol &arraySym,
+                        int64_t index) -> const slang::ast::InstanceSymbol * {
+                  for (const auto *elementSym : arraySym.elements) {
+                    if (!elementSym)
+                      continue;
+                    auto *element = elementSym->as_if<slang::ast::InstanceSymbol>();
+                    if (!element)
+                      continue;
+                    auto actualIndex = getInterfaceArrayIndex(*element);
+                    if (actualIndex && *actualIndex == index)
+                      return element;
+                  }
+                  return nullptr;
+                };
+                auto getArraySym =
+                    [&](const slang::ast::Expression &valueExpr)
+                    -> const slang::ast::InstanceArraySymbol * {
+                  if (auto symRef = valueExpr.getSymbolReference())
+                    return symRef->as_if<slang::ast::InstanceArraySymbol>();
+                  if (auto *hier = valueExpr.as_if<
+                          slang::ast::HierarchicalValueExpression>()) {
+                    if (!hier->ref.path.empty())
+                      return hier->ref.path.back()
+                          .symbol->as_if<slang::ast::InstanceArraySymbol>();
+                  }
+                  if (auto *arb = valueExpr.as_if<
+                          slang::ast::ArbitrarySymbolExpression>()) {
+                    if (!arb->hierRef.path.empty())
+                      return arb->hierRef.path.back()
+                          .symbol->as_if<slang::ast::InstanceArraySymbol>();
+                  }
+                  return nullptr;
+                };
                 if (viExpr.type->isVirtualInterface()) {
                   interfaceInstance = context.convertRvalueExpression(viExpr);
                 } else if (auto *arb =
@@ -5524,6 +5572,19 @@ struct RvalueExprVisitor : public ExprVisitor {
                       if (!interfaceInstance)
                         interfaceInstance =
                             context.resolveInterfaceInstance(instSym, loc);
+                    }
+                  }
+                } else if (auto *elemSel =
+                               viExpr.as_if<slang::ast::ElementSelectExpression>()) {
+                  if (auto *arraySym = getArraySym(elemSel->value())) {
+                    auto constIndex = context.evaluateConstant(elemSel->selector());
+                    if (constIndex.isInteger()) {
+                      auto index = constIndex.integer().as<int64_t>();
+                      if (index)
+                        if (auto *element =
+                                findInterfaceArrayElement(*arraySym, *index))
+                          interfaceInstance =
+                              context.resolveInterfaceInstance(element, loc);
                     }
                   }
                 }
@@ -5546,12 +5607,22 @@ struct RvalueExprVisitor : public ExprVisitor {
           // instances whose definition matches the method's parent interface.
           if (!interfaceInstance) {
             // Find the interface instance by scanning tracked instances
+            Value defCandidate;
+            bool defAmbiguous = false;
             for (const auto &[instSym, instValue] : context.interfaceInstances) {
               if (&instSym->body == instBody) {
                 interfaceInstance = instValue;
                 break;
               }
+              if (&instSym->getDefinition() == &instBody->getDefinition()) {
+                if (defCandidate && defCandidate != instValue)
+                  defAmbiguous = true;
+                else
+                  defCandidate = instValue;
+              }
             }
+            if (!interfaceInstance && !defAmbiguous)
+              interfaceInstance = defCandidate;
           }
 
           // Resolve hierarchical interface instances through the existing
