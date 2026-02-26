@@ -3607,27 +3607,45 @@ static LogicalResult processInput(MLIRContext &context,
   }
   if (aotStats) {
     auto &interp = *simContext.getInterpreter();
+    uint64_t directCallsNative = interp.getNativeFuncCallCount();
+    uint64_t directCallsInterpreted = interp.getInterpretedFuncCallCount();
+    uint64_t indirectCallsNative = interp.getNativeEntryCallCount();
+    uint64_t indirectCallsTrampoline = interp.getTrampolineEntryCallCount();
+    uint64_t indirectCallsTotal = indirectCallsNative + indirectCallsTrampoline;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
     llvm::errs() << "[circt-sim] Interpreter process invocations:  "
                  << interp.getInterpreterProcessInvocations() << "\n";
     llvm::errs() << "[circt-sim] Compiled function calls:          "
-                 << interp.getNativeFuncCallCount() << "\n";
+                 << directCallsNative << "\n";
     llvm::errs() << "[circt-sim] Trampoline calls:                 "
                  << g_trampolineCalls << "\n";
     llvm::errs() << "[circt-sim] Interpreted function calls:       "
-                 << interp.getInterpretedFuncCallCount() << "\n";
+                 << directCallsInterpreted << "\n";
     llvm::errs() << "[circt-sim] Entry-table native calls:         "
-                 << interp.getNativeEntryCallCount() << "\n";
+                 << indirectCallsNative << "\n";
     llvm::errs() << "[circt-sim] Entry-table trampoline calls:     "
-                 << interp.getTrampolineEntryCallCount() << "\n";
+                 << indirectCallsTrampoline << "\n";
     llvm::errs() << "[circt-sim] Entry-table skipped (depth):      "
                  << interp.getEntryTableSkippedDepthCount() << "\n";
     llvm::errs() << "[circt-sim] Max AOT depth:                    "
                  << interp.getMaxAotDepth() << "\n";
     llvm::errs() << "[circt-sim] func.call skipped (depth):        "
                  << interp.getNativeFuncSkippedDepth() << "\n";
+    // Phase 5.1 canonical counters for perf telemetry consumers.
+    llvm::errs() << "[circt-sim] indirect_calls_total:             "
+                 << indirectCallsTotal << "\n";
+    llvm::errs() << "[circt-sim] indirect_calls_native:            "
+                 << indirectCallsNative << "\n";
+    llvm::errs() << "[circt-sim] indirect_calls_trampoline:        "
+                 << indirectCallsTrampoline << "\n";
+    llvm::errs() << "[circt-sim] direct_calls_native:              "
+                 << directCallsNative << "\n";
+    llvm::errs() << "[circt-sim] direct_calls_interpreted:         "
+                 << directCallsInterpreted << "\n";
+    llvm::errs() << "[circt-sim] aotDepth_max:                     "
+                 << interp.getMaxAotDepth() << "\n";
     interp.dumpAotHotUncompiledFuncs(llvm::errs(), /*topN=*/50);
   }
   // Use std::_Exit() here, before returning, to skip the expensive

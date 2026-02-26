@@ -14,6 +14,12 @@
 // COMPILED: out=200
 //
 // AOTSTATS: [circt-sim] === AOT Statistics ===
+// AOTSTATS: [circt-sim] indirect_calls_total:             0
+// AOTSTATS: [circt-sim] indirect_calls_native:            0
+// AOTSTATS: [circt-sim] indirect_calls_trampoline:        0
+// AOTSTATS: [circt-sim] direct_calls_native:              1
+// AOTSTATS: [circt-sim] direct_calls_interpreted:         0
+// AOTSTATS: [circt-sim] aotDepth_max:                     0
 // AOTSTATS: [circt-sim] Entry-table trampoline calls:     0
 // AOTSTATS: out=200
 

@@ -12,16 +12,22 @@
 // DEFAULT: Unmapped native func.call policy: default deny get_*
 // DEFAULT: Compiled function calls:          0
 // DEFAULT: Interpreted function calls:       1
+// DEFAULT: direct_calls_native:              0
+// DEFAULT: direct_calls_interpreted:         1
 // DEFAULT: out=47
 //
 // ALLOW: Unmapped native func.call policy: allow-all
 // ALLOW: Compiled function calls:          1
 // ALLOW: Interpreted function calls:       0
+// ALLOW: direct_calls_native:              1
+// ALLOW: direct_calls_interpreted:         0
 // ALLOW: out=47
 //
 // ALLOWDENY: Unmapped native func.call policy: allow-all with deny list 'get_*'
 // ALLOWDENY: Compiled function calls:          0
 // ALLOWDENY: Interpreted function calls:       1
+// ALLOWDENY: direct_calls_native:              0
+// ALLOWDENY: direct_calls_interpreted:         1
 // ALLOWDENY: out=47
 
 func.func @get_2160(%x: i32) -> i32 {

@@ -1694,3 +1694,36 @@
     module-init-only canonicalization plus strict shape gating is stable.
   - AVIP core8 module-init op-coverage is now closed; next ROI shifts to init
     wall-time reductions and broader benchmark telemetry.
+
+## 2026-02-26
+- Phase 5.1 follow-up: added canonical shutdown AOT counters for telemetry
+  consumers.
+- Implementation (`tools/circt-sim/circt-sim.cpp`):
+  - under `CIRCT_AOT_STATS=1`, now emits:
+    - `indirect_calls_total`
+    - `indirect_calls_native`
+    - `indirect_calls_trampoline`
+    - `direct_calls_native`
+    - `direct_calls_interpreted`
+    - `aotDepth_max`
+  - values are sourced from existing interpreter counters; legacy AOT-stat
+    lines remain unchanged for compatibility.
+- TDD/regressions:
+  - updated `test/Tools/circt-sim/aot-basic-func.mlir` AOT-stats checks to
+    assert canonical counter lines and expected values.
+  - updated
+    `test/Tools/circt-sim/aot-unmapped-native-get-policy.mlir` checks to assert
+    `direct_calls_native` / `direct_calls_interpreted` in default/allow/deny
+    policy modes.
+- Validation:
+  - rebuilt `circt-sim`.
+  - `aot-basic-func` run with `CIRCT_AOT_STATS=1` shows:
+    - `indirect_calls_total=0`
+    - `direct_calls_native=1`
+    - `direct_calls_interpreted=0`
+    - `aotDepth_max=0`
+  - `aot-unmapped-native-get-policy` confirms policy-sensitive direct-call
+    counters:
+    - default deny: native `0`, interpreted `1`
+    - allow-all: native `1`, interpreted `0`
+    - allow+deny-list: native `0`, interpreted `1`
