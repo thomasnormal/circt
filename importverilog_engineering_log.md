@@ -2272,3 +2272,50 @@ that were accepted by xrun but rejected by circt-verilog:
   - `/tmp/iv_probe/nba_event_posedge.sv: xrun=0 circt=0`
   - `/tmp/iv_probe/nba_event_or.sv: xrun=0 circt=0`
   - `/tmp/iv_probe/nba_event_repeat.sv: xrun=0 circt=0`
+
+## 2026-02-26
+
+### Task
+Close delayed non-blocking event trigger gap:
+- `->> #1 e;`
+
+### Realizations
+- Differential probe showed this as a clean xrun-pass/circt-fail case:
+  `/tmp/iv_probe/delayed_event_trigger_nb.sv: xrun=0 circt=1`.
+- Existing lowering already handled immediate event triggers (`->` and `->>`) but
+  rejected any trigger with `stmt.timing`.
+- To preserve non-blocking behavior for delayed non-blocking triggers, lowering
+  should not stall the current process; detached fork lowering is the right fit.
+
+### TDD Baseline
+- Added regression:
+  - `test/Conversion/ImportVerilog/nonblocking-delayed-event-trigger.sv`
+- Baseline failure before fix:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/nonblocking-delayed-event-trigger.sv`
+    failed with:
+    - `unsupported delayed event trigger`
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/Statements.cpp`:
+  - refactored event-trigger emission into a local helper.
+  - added support for timed non-blocking event triggers by lowering
+    `stmt.timing` under `stmt.isNonBlocking` as:
+    - `moore.fork join_none` branch,
+    - `convertTimingControl(...)` inside the branch,
+    - event-trigger emission,
+    - `moore.fork_terminator`.
+  - kept blocking timed event triggers rejected (`unsupported delayed event
+    trigger`).
+- Added regression:
+  - `test/Conversion/ImportVerilog/nonblocking-delayed-event-trigger.sv`
+
+### Validation
+- Build:
+  - `ninja -C build_test circt-verilog`
+- Regressions:
+  - `llvm/build/bin/llvm-lit -sv build_test/test/Conversion/ImportVerilog/nonblocking-delayed-event-trigger.sv build_test/test/Conversion/ImportVerilog/hierarchical-event-trigger.sv build_test/test/Conversion/ImportVerilog/event-trigger-fork.sv build_test/test/Conversion/ImportVerilog/nonblocking-assignment-event-control.sv`
+- xrun notation checks:
+  - `xrun -sv test/Conversion/ImportVerilog/nonblocking-delayed-event-trigger.sv -elaborate -nolog` (PASS)
+  - `/tmp/iv_probe/delayed_event_trigger_nb.sv: xrun=0 circt=0`
+- Probe recheck:
+  - `/tmp/iv_probe/*.sv` now has no remaining `xrun=0/circt!=0` in this batch.

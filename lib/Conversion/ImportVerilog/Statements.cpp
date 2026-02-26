@@ -4260,40 +4260,64 @@ struct StmtVisitor {
 
   // Handle event trigger statements.
   LogicalResult visit(const slang::ast::EventTriggerStatement &stmt) {
-    if (stmt.timing) {
+    auto emitTriggerNow = [&]() -> LogicalResult {
+      // Get an lvalue ref to the event target.
+      auto target = context.convertLvalueExpression(stmt.target);
+      if (!target)
+        return failure();
+
+      // Check if this is an event type - if so, use EventTriggerOp with the
+      // ref. EventTriggerOp takes a reference so it can toggle the underlying
+      // signal.
+      auto refType = dyn_cast<moore::RefType>(target.getType());
+      if (refType && isa<moore::EventType>(refType.getNestedType())) {
+        moore::EventTriggerOp::create(builder, loc, target);
+        return success();
+      }
+
+      // Read the current value of the target.
+      Value readValue = moore::ReadOp::create(builder, loc, target);
+
+      // For integer types, use the toggle mechanism: invert the current value
+      // and write it back to signal the event.
+      if (!isa<moore::IntType>(readValue.getType())) {
+        mlir::emitError(loc) << "event target must have event or integer type, "
+                             << "but got " << readValue.getType();
+        return failure();
+      }
+      Value inverted = moore::NotOp::create(builder, loc, readValue);
+
+      if (stmt.isNonBlocking)
+        moore::NonBlockingAssignOp::create(builder, loc, target, inverted);
+      else
+        moore::BlockingAssignOp::create(builder, loc, target, inverted);
+      return success();
+    };
+
+    if (!stmt.timing)
+      return emitTriggerNow();
+
+    // Slang/xrun accepts delayed nonblocking triggers (`->> #d e`). Lower this
+    // as detached work so the current process remains nonblocking.
+    if (!stmt.isNonBlocking) {
       mlir::emitError(loc) << "unsupported delayed event trigger";
       return failure();
     }
 
-    // Get an lvalue ref to the event target.
-    auto target = context.convertLvalueExpression(stmt.target);
-    if (!target)
+    auto forkOp = moore::ForkOp::create(builder, loc, moore::JoinType::JoinNone,
+                                        StringAttr{}, /*numBranches=*/1);
+    auto &region = forkOp.getBranches().front();
+    if (region.empty())
+      region.emplaceBlock();
+
+    OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(&region.front());
+
+    if (failed(context.convertTimingControl(*stmt.timing)))
       return failure();
-
-    // Check if this is an event type - if so, use EventTriggerOp with the ref.
-    // EventTriggerOp takes a reference so it can toggle the underlying signal.
-    auto refType = dyn_cast<moore::RefType>(target.getType());
-    if (refType && isa<moore::EventType>(refType.getNestedType())) {
-      moore::EventTriggerOp::create(builder, loc, target);
-      return success();
-    }
-
-    // Read the current value of the target.
-    Value readValue = moore::ReadOp::create(builder, loc, target);
-
-    // For integer types, use the toggle mechanism: invert the current value
-    // and write it back to signal the event.
-    if (!isa<moore::IntType>(readValue.getType())) {
-      mlir::emitError(loc) << "event target must have event or integer type, "
-                           << "but got " << readValue.getType();
+    if (failed(emitTriggerNow()))
       return failure();
-    }
-    Value inverted = moore::NotOp::create(builder, loc, readValue);
-
-    if (stmt.isNonBlocking)
-      moore::NonBlockingAssignOp::create(builder, loc, target, inverted);
-    else
-      moore::BlockingAssignOp::create(builder, loc, target, inverted);
+    moore::ForkTerminatorOp::create(builder, loc);
     return success();
   }
 
