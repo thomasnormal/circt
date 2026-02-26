@@ -71,6 +71,17 @@ using namespace mlir;
 using namespace circt;
 using namespace circt::sim;
 
+namespace {
+thread_local LLHDProcessInterpreter *tlsNativeModuleInitInterpreter = nullptr;
+}
+
+extern "C" uint64_t __circt_sim_module_init_probe_port_raw(uint64_t portIndex) {
+  if (!tlsNativeModuleInitInterpreter)
+    return 0;
+  return tlsNativeModuleInitInterpreter->getNativeModuleInitPortRawValue(
+      portIndex);
+}
+
 static bool getSignalInitValue(Value initValue, unsigned width,
                                llvm::APInt &outValue);
 static bool isProcessCacheableBody(Operation *op);
@@ -2119,8 +2130,17 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
         }
         moduleInitTrampolinesPrepared = true;
       }
+      nativeModuleInitPortSignalIds.clear();
+      Block &moduleBody = hwModule.getBody().front();
+      nativeModuleInitPortSignalIds.reserve(moduleBody.getNumArguments());
+      for (BlockArgument arg : moduleBody.getArguments())
+        nativeModuleInitPortSignalIds.push_back(getSignalId(arg));
+      auto *prevNativeModuleInitInterp = tlsNativeModuleInitInterpreter;
+      tlsNativeModuleInitInterpreter = this;
       auto nativeInit = reinterpret_cast<void (*)()>(initFn);
       nativeInit();
+      tlsNativeModuleInitInterpreter = prevNativeModuleInitInterp;
+      nativeModuleInitPortSignalIds.clear();
       usedNativeModuleInit = true;
       llvm::errs() << "[circt-sim] Native module init: " << hwModule.getName()
                    << "\n";
@@ -3802,6 +3822,19 @@ SignalId LLHDProcessInterpreter::getSignalId(Value signalRef) const {
   if (uniqueSigId != 0)
     return uniqueSigId;
   return 0; // Invalid signal ID
+}
+
+uint64_t
+LLHDProcessInterpreter::getNativeModuleInitPortRawValue(uint64_t portIndex) const {
+  if (portIndex >= nativeModuleInitPortSignalIds.size())
+    return 0;
+  SignalId sigId = nativeModuleInitPortSignalIds[portIndex];
+  if (!sigId)
+    return 0;
+  const SignalValue &value = scheduler.getSignalValue(sigId);
+  if (value.isUnknown())
+    return 0;
+  return value.getValue();
 }
 
 SignalId LLHDProcessInterpreter::getSignalIdInInstance(Value signalRef,

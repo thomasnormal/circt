@@ -384,10 +384,34 @@ Status update (incremental):
     `operand_block_arg:llhd.prb` and `operand_dep_skipped:llhd.sig`
   - interpretation: blocker moved from unsupported op coverage to module-init
     ABI/state-model limits (module block-arg probes + skipped `llhd.sig` deps).
-- Next expansion target: module-init support for block-arg probe paths
-  (module-arg-aware native-init ABI and/or selective interpreter fallback for
-  unresolved probe/signal dependency chains), then re-run AVIP/OpenTitan
-  telemetry.
+- Module-init block-arg probe bridge is now landed:
+  - compile-time synthesis rewrites supported `llhd.prb` on `hw.module` block
+    arguments into runtime helper calls:
+    `__circt_sim_module_init_probe_port_raw(i64) -> i64`
+  - runtime now exposes current module-port raw values during native init via
+    TLS interpreter context and port-index to signal-id mapping.
+  - regression: `aot-native-module-init-llhd-prb-block-arg.mlir`
+- Conservative `llhd.sig` probe aliasing is now landed for module init:
+  - supported shape: `llhd.prb` of a module-body `llhd.sig` where module-body
+    users of that signal are probes only (no mutations).
+  - synthesis aliases probe result to signal init value instead of rejecting
+    due `operand_dep_skipped:llhd.sig`.
+  - regression: `aot-native-module-init-llhd-prb-signal-alias.mlir`
+- AVIP spot telemetry after block-arg bridge + signal alias (`--emit-llvm -v`):
+  - `ahb`: `3 emitted / 4 total` (was `1 / 4`), remaining skip:
+    `1x operand_dep_skipped:llhd.sig`
+  - `axi4Lite`: `9 emitted / 9 total` (was `2 / 9`)
+  - interpretation: module-arg probe ABI gap is resolved on these samples;
+    remaining work is selective handling of mutable/complex `llhd.sig`
+    dependency chains.
+- UVM sanity after this expansion remains stable:
+  - `uvm_seq_body` with `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1`:
+    `COMPILE_EXIT=0`, `RUN_EXIT=0` (max-time reached)
+  - `uvm_run_phase` with native-init opt-in:
+    preserves known parity endpoint `UVM_FATAL FCTTYP`, `RUN_EXIT=1`.
+- Next expansion target: reduce residual `operand_dep_skipped:llhd.sig`
+  rejections in multi-module workloads without weakening correctness guards,
+  then re-run AVIP/OpenTitan telemetry.
 - Current OpenTitan telemetry constraint in this workspace:
   - probe set mostly fails during MLIR generation (`gpio`, `spi_device`,
     `usbdev`, `i2c`, `spi_host`, `uart_*`, `tlul_adapter_reg`).

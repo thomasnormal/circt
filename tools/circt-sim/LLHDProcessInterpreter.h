@@ -945,6 +945,10 @@ public:
   /// Get the signal ID for an MLIR value (signal reference).
   SignalId getSignalId(mlir::Value signalRef) const;
 
+  /// Return current raw signal value for a hw.module port index while running
+  /// native module init. Returns 0 if no active module-init context exists.
+  uint64_t getNativeModuleInitPortRawValue(uint64_t portIndex) const;
+
   /// Get the signal ID for an MLIR value within an explicit instance context.
   SignalId getSignalIdInInstance(mlir::Value signalRef,
                                  InstanceId instanceId) const;
@@ -3192,6 +3196,7 @@ private:
   llvm::StringMap<uint32_t> aotFuncNameToCanonicalId;
   const CompiledModuleLoader *compiledLoaderForModuleInit = nullptr;
   bool moduleInitTrampolinesPrepared = false;
+  llvm::SmallVector<SignalId, 8> nativeModuleInitPortSignalIds;
   void noteAotFuncIdCall(uint32_t fid);
   void noteAotCalleeNameCall(llvm::StringRef calleeName);
 
