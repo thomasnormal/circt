@@ -417,14 +417,31 @@ Status update (incremental):
   - `axi4Lite`: unchanged at `9 emitted / 9 total`
   - interpretation: the prior residual `ahb` skip due
     `operand_dep_skipped:llhd.sig` is now closed for this sample.
+- Follow-up landed: conservative top-level `scf.if` support in native module
+  init synthesis.
+  - `isNativeModuleInitOp(...)` now admits `scf.if`.
+  - region guard now permits `scf.if` regions during native-init extraction
+    (other region-bearing ops remain rejected).
+  - regression: `aot-native-module-init-scf-if.mlir`.
+- AVIP core8 telemetry after re-run (`--emit-llvm -v`):
+  - fully emitted:
+    - `ahb` `4/4`
+    - `apb` `4/4`
+    - `axi4` `6/6`
+    - `axi4Lite` `9/9`
+    - `i2s` `4/4`
+    - `jtag` `4/4`
+    - `spi` `4/4`
+  - remaining miss:
+    - `i3c` `3/4`, skip: `1x unsupported_op:hw.struct_extract`
 - UVM sanity after this expansion remains stable:
   - `uvm_seq_body` with `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1`:
     `COMPILE_EXIT=0`, `RUN_EXIT=0` (max-time reached)
   - `uvm_run_phase` with native-init opt-in:
     preserves known parity endpoint `UVM_FATAL FCTTYP`, `RUN_EXIT=1`.
-- Next expansion target: survey remaining multi-module workloads for residual
-  `operand_dep_skipped:llhd.sig` patterns beyond this AVIP spot set and widen
-  safely where mutation-free.
+- Next expansion target: close the remaining `i3c` module-init gap by adding a
+  safe `hw.struct_extract` lowering path for module-level init code (especially
+  struct-valued conditionals), then re-run core8 telemetry.
 - Current OpenTitan telemetry constraint in this workspace:
   - probe set mostly fails during MLIR generation (`gpio`, `spi_device`,
     `usbdev`, `i2c`, `spi_host`, `uart_*`, `tlul_adapter_reg`).

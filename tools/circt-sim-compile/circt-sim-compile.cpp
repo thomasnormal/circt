@@ -584,7 +584,7 @@ static bool isNativeModuleInitOp(Operation *op) {
              arith::ConstantOp, hw::ConstantOp, hw::AggregateConstantOp,
              LLVM::UndefOp, LLVM::ZeroOp, LLVM::AddressOfOp, LLVM::LoadOp,
              LLVM::InsertValueOp, LLVM::ExtractValueOp, LLVM::GEPOp,
-             llhd::ProbeOp, UnrealizedConversionCastOp>(op);
+             llhd::ProbeOp, scf::IfOp, UnrealizedConversionCastOp>(op);
 }
 
 /// Return true when a module-level llhd.prb from a hw.module block argument
@@ -968,7 +968,7 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
         unsupported = true;
         break;
       }
-      if (opPtr->getNumRegions() != 0) {
+      if (opPtr->getNumRegions() != 0 && !isa<scf::IfOp>(opPtr)) {
         skipReason = ("op_has_region:" + opPtr->getName().getStringRef().str());
         unsupported = true;
         break;
