@@ -3477,6 +3477,10 @@ generateTrampolines(ModuleOp microModule) {
     Region &body = funcOp.getBody();
     Block *entry = new Block();
     body.push_back(entry);
+    // Trampoline bodies do not use EH personalities, and keeping a stale
+    // personality attribute on an externalized function can crash
+    // MLIR->LLVM translation while materializing function attributes.
+    funcOp->removeAttr("personality");
     for (unsigned i = 0; i < numArgs; ++i)
       entry->addArgument(funcTy.getParamType(i), funcLoc);
     funcOp.setLinkage(LLVM::Linkage::External);
