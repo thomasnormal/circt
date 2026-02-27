@@ -55,7 +55,7 @@ static int32_t defaultUvmActionForSeverity(uint64_t sev) {
   case 1:
     return 1; // UVM_WARNING -> UVM_DISPLAY
   case 2:
-    return 9; // UVM_ERROR -> UVM_DISPLAY | UVM_COUNT
+    return 41; // UVM_ERROR -> UVM_DISPLAY | UVM_COUNT | UVM_EXIT
   case 3:
     return 33; // UVM_FATAL -> UVM_DISPLAY | UVM_EXIT
   default:

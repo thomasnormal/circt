@@ -110,7 +110,7 @@ module {
 }
 
 // CHECK: ro action info = 1
-// CHECK: ro action error = 9
+// CHECK: ro action error = 41
 // CHECK: ro verbosity = 200
 // CHECK: rh action fatal = 33
 // CHECK: rh verbosity = 200
