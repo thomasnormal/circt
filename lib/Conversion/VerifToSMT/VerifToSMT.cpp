@@ -59,6 +59,80 @@ constexpr const char kWeakEventuallyAttr[] = "ltl.weak";
 
 static DenseSet<Operation *> collectSMTLIBLiveOpsInBMCBlock(Block &block);
 
+static bool parsePortClockKey(StringRef key, StringRef &name, bool &invert) {
+  if (!key.starts_with("port:"))
+    return false;
+  auto payload = key.drop_front(5);
+  invert = false;
+  if (payload.ends_with(":inv")) {
+    invert = true;
+    payload = payload.drop_back(4);
+  }
+  if (payload.empty())
+    return false;
+  name = payload;
+  return true;
+}
+
+static void collectClockNameAliases(StringRef name,
+                                    SmallVectorImpl<std::string> &aliases) {
+  auto addAlias = [&](StringRef alias) {
+    if (alias.empty() || alias == name)
+      return;
+    if (llvm::any_of(aliases, [&](const std::string &existing) {
+          return existing == alias;
+        }))
+      return;
+    aliases.push_back(alias.str());
+  };
+
+  // Imported clock names may be normalized as `<base>_i` while wrapper/module
+  // ports preserve `<base>_io_i` (or the `_o` variants). Accept the paired
+  // spelling when there is a unique mapping.
+  if (name.ends_with("_io_i"))
+    addAlias((name.drop_back(5) + "_i").str());
+  if (name.ends_with("_io_o"))
+    addAlias((name.drop_back(5) + "_o").str());
+  if (name.ends_with("_i"))
+    addAlias((name.drop_back(2) + "_io_i").str());
+  if (name.ends_with("_o"))
+    addAlias((name.drop_back(2) + "_io_o").str());
+
+  // Some flows materialize an i1 view of a clock source with an appended
+  // `_i1` suffix (`clk_i_i1`). Allow metadata to match either spelling.
+  if (name.ends_with("_i") || name.ends_with("_o"))
+    addAlias((name.str() + "_i1"));
+  if (name.ends_with("_io_i") || name.ends_with("_io_o"))
+    addAlias((name.str() + "_i1"));
+  if (name.ends_with("_i1")) {
+    StringRef base = name.drop_back(3);
+    addAlias(base);
+    if (base.ends_with("_i"))
+      addAlias((base.drop_back(2) + "_io_i").str());
+    if (base.ends_with("_o"))
+      addAlias((base.drop_back(2) + "_io_o").str());
+  }
+}
+
+static bool isBMCStateCarriedDelay(ltl::DelayOp op) {
+  if (op.getDelay() == 0)
+    return false;
+  if (auto lengthAttr = op.getLengthAttr();
+      lengthAttr && lengthAttr.getValue().getZExtValue() != 0)
+    return false;
+  if (op.use_empty())
+    return false;
+
+  for (Operation *user : op->getUsers()) {
+    auto castOp = dyn_cast<UnrealizedConversionCastOp>(user);
+    if (!castOp || castOp.getNumOperands() != 1 || castOp.getNumResults() != 1)
+      return false;
+    if (!isa<smt::BoolType>(castOp.getResult(0).getType()))
+      return false;
+  }
+  return true;
+}
+
 static LogicalResult inlineSingleBlockFuncCall(func::CallOp callOp,
                                                func::FuncOp callee) {
   if (!callee || callee.isExternal())
@@ -156,22 +230,6 @@ static LogicalResult inlineSingleBlockInstance(InstanceOp instance,
       return nameAttr.getValue();
     }
     return {};
-  };
-
-  auto parsePortClockKey = [&](StringRef key, StringRef &name,
-                               bool &invert) -> bool {
-    if (!key.starts_with("port:"))
-      return false;
-    auto payload = key.drop_front(5);
-    invert = false;
-    if (payload.ends_with(":inv")) {
-      invert = true;
-      payload = payload.drop_back(4);
-    }
-    if (payload.empty())
-      return false;
-    name = payload;
-    return true;
   };
 
   IRMapping mapping;
@@ -2234,6 +2292,72 @@ private:
 // Verif Operation Conversion Patterns
 //===----------------------------------------------------------------------===//
 
+static ltl::ClockEdge toLTLClockEdge(verif::ClockEdge edge) {
+  switch (edge) {
+  case verif::ClockEdge::Pos:
+    return ltl::ClockEdge::Pos;
+  case verif::ClockEdge::Neg:
+    return ltl::ClockEdge::Neg;
+  case verif::ClockEdge::Both:
+    return ltl::ClockEdge::Both;
+  }
+  llvm_unreachable("unknown clock edge");
+}
+
+/// Lower residual clocked assert-like ops that appear inside verif.bmc by
+/// preserving the property and materializing explicit clock metadata attrs.
+template <typename ClockedOp, typename PlainOp>
+struct LowerClockedAssertLikeInBMCConversion : OpConversionPattern<ClockedOp> {
+  using OpConversionPattern<ClockedOp>::OpConversionPattern;
+  using OpAdaptor = typename ClockedOp::Adaptor;
+
+  LogicalResult
+  matchAndRewrite(ClockedOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto bmcOp = op->template getParentOfType<verif::BoundedModelCheckingOp>();
+    if (!bmcOp)
+      return failure();
+
+    SmallVector<NamedAttribute> attrs(op->getAttrs().begin(),
+                                      op->getAttrs().end());
+    auto edge = op.getEdge();
+    Value clockValue = adaptor.getClock();
+    auto lowered = rewriter.replaceOpWithNewOp<PlainOp>(
+        op, adaptor.getProperty(), adaptor.getEnable(), op.getLabelAttr());
+
+    for (auto attr : attrs) {
+      if (attr.getName() == "edge")
+        continue;
+      lowered->setAttr(attr.getName(), attr.getValue());
+    }
+    lowered->setAttr("bmc.clock_edge",
+                     ltl::ClockEdgeAttr::get(rewriter.getContext(),
+                                             toLTLClockEdge(edge)));
+
+    if (lowered->hasAttr("bmc.clock"))
+      return success();
+
+    BlockArgument root;
+    if (!traceI1ValueRoot(clockValue, root) || !root)
+      return success();
+    if (root.getOwner() != &bmcOp.getCircuit().front())
+      return success();
+    auto namesAttr = bmcOp->template getAttrOfType<ArrayAttr>("bmc_input_names");
+    if (!namesAttr || root.getArgNumber() >= namesAttr.size())
+      return success();
+    auto nameAttr = dyn_cast_or_null<StringAttr>(namesAttr[root.getArgNumber()]);
+    if (!nameAttr || nameAttr.getValue().empty())
+      return success();
+
+    lowered->setAttr("bmc.clock", nameAttr);
+    if (!lowered->hasAttr("bmc.clock_key")) {
+      std::string key = "port:" + nameAttr.getValue().str();
+      lowered->setAttr("bmc.clock_key", rewriter.getStringAttr(key));
+    }
+    return success();
+  }
+};
+
 /// Lower a verif::AssertOp operation with an i1 operand to a smt::AssertOp,
 /// negated to check for unsatisfiability.
 struct VerifAssertOpConversion : OpConversionPattern<verif::AssertOp> {
@@ -2408,6 +2532,43 @@ struct BoolBVCastOpRewrite : OpRewritePattern<UnrealizedConversionCastOp> {
     }
 
     return failure();
+  }
+};
+
+/// Lower residual carried-state delays that survive BMC multi-step rewriting.
+/// These are delay values threaded only through return/yield bool casts.
+struct LowerCarriedDelayOpRewrite : OpRewritePattern<ltl::DelayOp> {
+  using OpRewritePattern<ltl::DelayOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ltl::DelayOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!isBMCStateCarriedDelay(op))
+      return failure();
+
+    OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPoint(op);
+    Value input = op.getInput();
+    Value boolValue;
+    if (isa<smt::BoolType>(input.getType())) {
+      boolValue = input;
+    } else if (auto bvTy = dyn_cast<smt::BitVectorType>(input.getType());
+               bvTy && bvTy.getWidth() == 1) {
+      auto one = smt::BVConstantOp::create(rewriter, op.getLoc(), 1, 1);
+      boolValue = smt::EqOp::create(rewriter, op.getLoc(), input, one);
+    } else if (auto intTy = dyn_cast<IntegerType>(input.getType());
+               intTy && intTy.getWidth() == 1) {
+      auto bvTy = smt::BitVectorType::get(rewriter.getContext(), 1);
+      auto asBV = UnrealizedConversionCastOp::create(
+          rewriter, op.getLoc(), TypeRange{bvTy}, input);
+      auto one = smt::BVConstantOp::create(rewriter, op.getLoc(), 1, 1);
+      boolValue = smt::EqOp::create(rewriter, op.getLoc(), asBV.getResult(0),
+                                    one);
+    } else {
+      return failure();
+    }
+
+    rewriter.replaceOp(op, boolValue);
+    return success();
   }
 };
 
@@ -3872,6 +4033,86 @@ struct VerifBoundedModelCheckingOpConversion
     }
 
     auto &circuitBlock = op.getCircuit().front();
+
+    // Normalize residual clocked assert-like ops up front. The BMC conversion
+    // logic below (delay/past buffer setup, sequence root cloning, and check
+    // materialization) is written against non-clocked assert/assume/cover ops.
+    // If verif.bmc is rewritten before dedicated clocked-op patterns fire, we
+    // can otherwise miss temporal rewrites and leak nonzero ltl.delay ops.
+    auto inferClockNameFromValue = [&](Value clockValue) -> StringAttr {
+      if (!clockValue)
+        return {};
+      BlockArgument root;
+      if (!traceI1ValueRoot(clockValue, root) || !root)
+        return {};
+      if (root.getOwner() != &circuitBlock)
+        return {};
+      auto namesAttr = op->getAttrOfType<ArrayAttr>("bmc_input_names");
+      if (!namesAttr || root.getArgNumber() >= namesAttr.size())
+        return {};
+      auto nameAttr = dyn_cast_or_null<StringAttr>(namesAttr[root.getArgNumber()]);
+      if (!nameAttr || nameAttr.getValue().empty())
+        return {};
+      return nameAttr;
+    };
+    auto transferClockMetadata = [&](Operation *srcOp, Operation *dstOp,
+                                     verif::ClockEdge edge, Value clockValue) {
+      for (auto attr : srcOp->getAttrs()) {
+        if (attr.getName() == "edge")
+          continue;
+        dstOp->setAttr(attr.getName(), attr.getValue());
+      }
+      dstOp->setAttr("bmc.clock_edge", ltl::ClockEdgeAttr::get(getContext(),
+                                                               toLTLClockEdge(edge)));
+
+      if (!dstOp->getAttr("bmc.clock"))
+        if (auto inferred = inferClockNameFromValue(clockValue))
+          dstOp->setAttr("bmc.clock", inferred);
+
+      if (!dstOp->getAttr("bmc.clock_key"))
+        if (auto clockName = dstOp->getAttrOfType<StringAttr>("bmc.clock"))
+          dstOp->setAttr("bmc.clock_key",
+                         rewriter.getStringAttr("port:" +
+                                                clockName.getValue().str()));
+    };
+
+    SmallVector<Operation *> clockedCheckOps;
+    circuitBlock.walk([&](Operation *curOp) {
+      if (isa<verif::ClockedAssertOp, verif::ClockedAssumeOp,
+              verif::ClockedCoverOp>(curOp))
+        clockedCheckOps.push_back(curOp);
+    });
+    for (Operation *clockedOp : clockedCheckOps) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(clockedOp);
+
+      if (auto assertOp = dyn_cast<verif::ClockedAssertOp>(clockedOp)) {
+        auto lowered = verif::AssertOp::create(
+            rewriter, assertOp.getLoc(), assertOp.getProperty(),
+            assertOp.getEnable(), assertOp.getLabelAttr());
+        transferClockMetadata(assertOp, lowered, assertOp.getEdge(),
+                              assertOp.getClock());
+        rewriter.eraseOp(assertOp);
+        continue;
+      }
+      if (auto assumeOp = dyn_cast<verif::ClockedAssumeOp>(clockedOp)) {
+        auto lowered = verif::AssumeOp::create(
+            rewriter, assumeOp.getLoc(), assumeOp.getProperty(),
+            assumeOp.getEnable(), assumeOp.getLabelAttr());
+        transferClockMetadata(assumeOp, lowered, assumeOp.getEdge(),
+                              assumeOp.getClock());
+        rewriter.eraseOp(assumeOp);
+        continue;
+      }
+      auto coverOp = cast<verif::ClockedCoverOp>(clockedOp);
+      auto lowered = verif::CoverOp::create(
+          rewriter, coverOp.getLoc(), coverOp.getProperty(),
+          coverOp.getEnable(), coverOp.getLabelAttr());
+      transferClockMetadata(coverOp, lowered, coverOp.getEdge(),
+                            coverOp.getClock());
+      rewriter.eraseOp(coverOp);
+    }
+
     struct ClockEquivalenceUF {
       DenseMap<Value, Value> parent;
       DenseMap<Value, bool> parity;
@@ -4698,6 +4939,58 @@ struct VerifBoundedModelCheckingOpConversion
       nonFinalCheckIsCover.clear();
       nonFinalCheckInfos.clear();
     }
+
+    // Materialize check expressions before delay/past/NFA rewriting so any
+    // delay ops introduced by enable-gating are visible to the shared
+    // multi-step lowering below.
+    if (!nonFinalOps.empty() && nonFinalCheckValues.empty()) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(circuitBlock.getTerminator());
+      nonFinalCheckValues.reserve(nonFinalOps.size());
+      nonFinalCheckProps.reserve(nonFinalOps.size());
+      for (auto [checkIdx, opToCheck] : llvm::enumerate(nonFinalOps)) {
+        bool isCover = checkIdx < nonFinalCheckIsCover.size() &&
+                       nonFinalCheckIsCover[checkIdx];
+        if (isCover) {
+          auto coverOp = cast<verif::CoverOp>(opToCheck);
+          nonFinalCheckProps.push_back(coverOp.getProperty());
+          nonFinalCheckValues.push_back(gatePropertyWithEnable(
+              coverOp.getProperty(), coverOp.getEnable(), /*isCover=*/true,
+              rewriter, coverOp.getLoc()));
+        } else {
+          auto assertOp = cast<verif::AssertOp>(opToCheck);
+          nonFinalCheckProps.push_back(assertOp.getProperty());
+          nonFinalCheckValues.push_back(gatePropertyWithEnable(
+              assertOp.getProperty(), assertOp.getEnable(), /*isCover=*/false,
+              rewriter, assertOp.getLoc()));
+        }
+      }
+    }
+    if (!opsToErase.empty() && finalCheckValues.empty()) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPoint(circuitBlock.getTerminator());
+      finalCheckValues.reserve(opsToErase.size());
+      finalCheckProps.reserve(opsToErase.size());
+      for (Operation *opToCheck : opsToErase) {
+        if (auto assertOp = dyn_cast<verif::AssertOp>(opToCheck)) {
+          finalCheckValues.push_back(gatePropertyWithEnable(
+              assertOp.getProperty(), assertOp.getEnable(), /*isCover=*/false,
+              rewriter, assertOp.getLoc()));
+          finalCheckProps.push_back(assertOp.getProperty());
+        } else if (auto assumeOp = dyn_cast<verif::AssumeOp>(opToCheck)) {
+          finalCheckValues.push_back(gatePropertyWithEnable(
+              assumeOp.getProperty(), assumeOp.getEnable(), /*isCover=*/false,
+              rewriter, assumeOp.getLoc()));
+          finalCheckProps.push_back(assumeOp.getProperty());
+        } else if (auto coverOp = dyn_cast<verif::CoverOp>(opToCheck)) {
+          finalCheckValues.push_back(gatePropertyWithEnable(
+              coverOp.getProperty(), coverOp.getEnable(), /*isCover=*/true,
+              rewriter, coverOp.getLoc()));
+          finalCheckProps.push_back(coverOp.getProperty());
+        }
+      }
+    }
+
     size_t numNonFinalChecks = nonFinalOps.size();
     size_t numFinalChecks = opsToErase.size();
     uint64_t boundValue = op.getBound();
@@ -4957,8 +5250,17 @@ struct VerifBoundedModelCheckingOpConversion
           ltlClockInfo.find(delayOp.getOperation()) == ltlClockInfo.end())
         return;
       bool isSequenceRoot = sequenceRootSet.contains(delayOp.getResult());
-      if (nfaSequenceOps.contains(delayOp.getOperation()) && !isSequenceRoot)
-        return;
+      if (nfaSequenceOps.contains(delayOp.getOperation()) && !isSequenceRoot) {
+        // Sequence ops used only by NFA-tracked roots are lowered by the NFA
+        // path. If a delay is shared with non-NFA consumers, still lower it
+        // through delay buffers to avoid leaking nonzero delays later.
+        bool hasExternalUse =
+            llvm::any_of(delayOp->getUsers(), [&](Operation *user) {
+              return !nfaSequenceOps.contains(user);
+            });
+        if (!hasExternalUse)
+          return;
+      }
       uint64_t delay = delayOp.getDelay();
 
       uint64_t length = 0;
@@ -5065,7 +5367,6 @@ struct VerifBoundedModelCheckingOpConversion
       SmallVector<Value> newYieldOperands(origOperands.begin(),
                                           origOperands.end());
       SmallVector<Value> delayBufferOutputs;
-
       for (auto &info : delayInfos) {
         // The input signal type - used for delay buffer slots.
         Type bufferElementType = info.inputSignal.getType();
@@ -5714,13 +6015,38 @@ struct VerifBoundedModelCheckingOpConversion
           return failure();
         rewriter.eraseOp(assumeOp);
       }
+      SmallVector<verif::ClockedAssumeOp> clockedAssumes;
+      funcOp.walk([&](verif::ClockedAssumeOp assumeOp) {
+        clockedAssumes.push_back(assumeOp);
+      });
+      for (auto assumeOp : clockedAssumes) {
+        OpBuilder builder(assumeOp);
+        if (failed(lowerAssumeToSMTAssert(builder, assumeOp.getLoc(),
+                                          assumeOp.getProperty(),
+                                          assumeOp.getEnable(),
+                                          assumeOp.getLabelAttr())))
+          return failure();
+        rewriter.eraseOp(assumeOp);
+      }
       SmallVector<verif::AssertOp> asserts;
       funcOp.walk([&](verif::AssertOp assertOp) { asserts.push_back(assertOp); });
       for (auto assertOp : asserts)
         rewriter.eraseOp(assertOp);
+      SmallVector<verif::ClockedAssertOp> clockedAsserts;
+      funcOp.walk([&](verif::ClockedAssertOp assertOp) {
+        clockedAsserts.push_back(assertOp);
+      });
+      for (auto assertOp : clockedAsserts)
+        rewriter.eraseOp(assertOp);
       SmallVector<verif::CoverOp> covers;
       funcOp.walk([&](verif::CoverOp coverOp) { covers.push_back(coverOp); });
       for (auto coverOp : covers)
+        rewriter.eraseOp(coverOp);
+      SmallVector<verif::ClockedCoverOp> clockedCovers;
+      funcOp.walk([&](verif::ClockedCoverOp coverOp) {
+        clockedCovers.push_back(coverOp);
+      });
+      for (auto coverOp : clockedCovers)
         rewriter.eraseOp(coverOp);
       return success();
     };
@@ -6215,6 +6541,61 @@ struct VerifBoundedModelCheckingOpConversion
       return static_cast<unsigned>(clockIt - clockIndexes.begin());
     };
 
+    auto lookupClockNamePos = [&](StringRef name) -> std::optional<unsigned> {
+      if (name.empty())
+        return std::nullopt;
+      if (auto it = clockNameToPos.find(name); it != clockNameToPos.end())
+        return it->second;
+
+      SmallVector<std::string, 4> aliases;
+      collectClockNameAliases(name, aliases);
+      std::optional<unsigned> resolvedPos;
+      for (const auto &alias : aliases) {
+        auto it = clockNameToPos.find(alias);
+        if (it == clockNameToPos.end())
+          continue;
+        if (!resolvedPos) {
+          resolvedPos = it->second;
+          continue;
+        }
+        if (*resolvedPos != it->second)
+          return std::nullopt;
+      }
+      return resolvedPos;
+    };
+
+    auto lookupClockKeyPosInfo =
+        [&](StringRef key) -> std::optional<ClockPosInfo> {
+      if (key.empty())
+        return std::nullopt;
+      if (auto it = clockKeyToPos.find(key); it != clockKeyToPos.end())
+        return it->second;
+      StringRef portName;
+      bool invert = false;
+      if (!parsePortClockKey(key, portName, invert))
+        return std::nullopt;
+
+      SmallVector<std::string, 4> aliases;
+      collectClockNameAliases(portName, aliases);
+      std::optional<ClockPosInfo> resolvedInfo;
+      for (const auto &aliasName : aliases) {
+        std::string aliasKey = "port:" + aliasName;
+        if (invert)
+          aliasKey.append(":inv");
+        auto it = clockKeyToPos.find(aliasKey);
+        if (it == clockKeyToPos.end())
+          continue;
+        if (!resolvedInfo) {
+          resolvedInfo = it->second;
+          continue;
+        }
+        if (resolvedInfo->pos != it->second.pos ||
+            resolvedInfo->invert != it->second.invert)
+          return std::nullopt;
+      }
+      return resolvedInfo;
+    };
+
     auto addClockKeyAlias = [&](StringRef key, ClockPosInfo info,
                                 StringRef conflictError) -> LogicalResult {
       auto keyRef = rewriter.getStringAttr(key).getValue();
@@ -6276,17 +6657,15 @@ struct VerifBoundedModelCheckingOpConversion
           mappedPos = mapArgIndexToClockPos(
               static_cast<unsigned>(argAttr.getInt()));
         if (!mappedPos) {
-          auto it = clockKeyToPos.find(keyAttr.getValue());
-          if (it != clockKeyToPos.end())
-            mappedPos = it->second.pos;
+          if (auto info = lookupClockKeyPosInfo(keyAttr.getValue()))
+            mappedPos = info->pos;
         }
         if (!mappedPos && regClocksAttr && regIndex < regClocksAttr.size()) {
           auto regClockNameAttr =
               dyn_cast_or_null<StringAttr>(regClocksAttr[regIndex]);
           if (regClockNameAttr && !regClockNameAttr.getValue().empty()) {
-            if (auto itName = clockNameToPos.find(regClockNameAttr.getValue());
-                itName != clockNameToPos.end()) {
-              mappedPos = itName->second;
+            if (auto pos = lookupClockNamePos(regClockNameAttr.getValue())) {
+              mappedPos = *pos;
             } else if (auto itArg =
                            inputNameToArgIndex.find(regClockNameAttr.getValue());
                        itArg != inputNameToArgIndex.end()) {
@@ -6357,9 +6736,8 @@ struct VerifBoundedModelCheckingOpConversion
           std::optional<unsigned> mappedPos;
           if (auto keyAttr = dict.getAs<StringAttr>("clock_key");
               keyAttr && !keyAttr.getValue().empty()) {
-            if (auto it = clockKeyToPos.find(keyAttr.getValue());
-                it != clockKeyToPos.end())
-              mappedPos = it->second.pos;
+            if (auto info = lookupClockKeyPosInfo(keyAttr.getValue()))
+              mappedPos = info->pos;
           }
           if (!mappedPos) {
             if (auto argAttr = dict.getAs<IntegerAttr>("arg_index"))
@@ -6465,14 +6843,12 @@ struct VerifBoundedModelCheckingOpConversion
       if (!clockKeyToPos.empty()) {
         if (auto itKey = clockValueKeys.find(clockValue);
             itKey != clockValueKeys.end()) {
-          auto it = clockKeyToPos.find(itKey->second.getValue());
-          if (it != clockKeyToPos.end())
-            return it->second;
+          if (auto info = lookupClockKeyPosInfo(itKey->second.getValue()))
+            return *info;
         }
         if (auto key = getI1ValueKey(clockValue)) {
-          auto it = clockKeyToPos.find(*key);
-          if (it != clockKeyToPos.end())
-            return it->second;
+          if (auto info = lookupClockKeyPosInfo(*key))
+            return *info;
         }
       }
       bool invert = false;
@@ -6513,6 +6889,56 @@ struct VerifBoundedModelCheckingOpConversion
           return info;
         }
       }
+      return std::nullopt;
+    };
+
+    DenseMap<unsigned, ClockPosInfo> inferredClockPosByInputArg;
+    DenseSet<unsigned> inferredClockPosConflictArgs;
+    auto mergeInferredClockPos = [&](unsigned argIndex, ClockPosInfo info) {
+      if (inferredClockPosConflictArgs.contains(argIndex))
+        return;
+      auto insert = inferredClockPosByInputArg.try_emplace(argIndex, info);
+      if (!insert.second &&
+          (insert.first->second.pos != info.pos ||
+           insert.first->second.invert != info.invert)) {
+        inferredClockPosByInputArg.erase(argIndex);
+        inferredClockPosConflictArgs.insert(argIndex);
+      }
+    };
+    auto recordInferredClockPosFromValue = [&](Value value) {
+      if (!isI1Value(value))
+        return;
+      BlockArgument root;
+      if (!traceClockRoot(value, root) || !root)
+        return;
+      unsigned argIndex = root.getArgNumber();
+      if (argIndex >= originalNumNonStateInputs)
+        return;
+
+      if (auto info = resolveClockPosInfo(value)) {
+        mergeInferredClockPos(argIndex, *info);
+        return;
+      }
+      if (auto key = getI1ValueKey(value))
+        if (auto keyInfo = lookupClockKeyPosInfo(*key))
+          mergeInferredClockPos(argIndex, *keyInfo);
+    };
+    for (auto &entry : clockValueToPos)
+      recordInferredClockPosFromValue(entry.first);
+    for (auto &entry : clockEquivalenceUF.parent)
+      recordInferredClockPosFromValue(entry.first);
+    circuitBlock.walk([&](Operation *curOp) {
+      for (Value result : curOp->getResults())
+        recordInferredClockPosFromValue(result);
+    });
+
+    auto inferClockPosFromInputArg =
+        [&](unsigned argIndex) -> std::optional<ClockPosInfo> {
+      if (inferredClockPosConflictArgs.contains(argIndex))
+        return std::nullopt;
+      if (auto it = inferredClockPosByInputArg.find(argIndex);
+          it != inferredClockPosByInputArg.end())
+        return it->second;
       return std::nullopt;
     };
 
@@ -6562,9 +6988,7 @@ struct VerifBoundedModelCheckingOpConversion
       gateInfo.edge = info.edge.value_or(ltl::ClockEdge::Pos);
       gateInfo.hasExplicitClock = info.clockName || info.clockValue;
       if (info.clockName && !info.clockName.getValue().empty()) {
-        auto it = clockNameToPos.find(info.clockName.getValue());
-        if (it != clockNameToPos.end())
-          gateInfo.clockPos = it->second;
+        gateInfo.clockPos = lookupClockNamePos(info.clockName.getValue());
       } else if (info.clockValue) {
         if (auto posInfo = resolveClockPosInfo(info.clockValue)) {
           gateInfo.clockPos = posInfo->pos;
@@ -6671,11 +7095,10 @@ struct VerifBoundedModelCheckingOpConversion
                 invert = invertAttr.getValue();
               if (auto keyAttr = dict.getAs<StringAttr>("clock_key");
                   keyAttr && !keyAttr.getValue().empty()) {
-                if (auto it = clockKeyToPos.find(keyAttr.getValue());
-                    it != clockKeyToPos.end())
-                  info = ClockPosInfo{it->second.pos,
-                                      static_cast<bool>(invert ^
-                                                        it->second.invert)};
+                if (auto keyInfo = lookupClockKeyPosInfo(keyAttr.getValue()))
+                  info = ClockPosInfo{
+                      keyInfo->pos,
+                      static_cast<bool>(invert ^ keyInfo->invert)};
                 else
                   pendingRegClockByIndex[regIndex] =
                       PendingRegClockInfo{keyAttr, invert};
@@ -6773,9 +7196,8 @@ struct VerifBoundedModelCheckingOpConversion
     auto resolveSlotClockPos = [&](StringAttr clockName, Value clockValue)
         -> std::optional<ClockPosInfo> {
       if (clockName && !clockName.getValue().empty()) {
-        auto it = clockNameToPos.find(clockName.getValue());
-        if (it != clockNameToPos.end())
-          return ClockPosInfo{it->second, false};
+        if (auto pos = lookupClockNamePos(clockName.getValue()))
+          return ClockPosInfo{*pos, false};
       } else if (clockValue) {
         if (auto info = resolveClockPosInfo(clockValue))
           return *info;
@@ -6886,9 +7308,8 @@ struct VerifBoundedModelCheckingOpConversion
               op, "clock name does not match any BMC clock input");
           return std::nullopt;
         }
-        auto it = clockNameToPos.find(clockName.getValue());
-        if (it != clockNameToPos.end())
-          return it->second;
+        if (auto pos = lookupClockNamePos(clockName.getValue()))
+          return *pos;
         reportUnmappedClockForOp(op,
                                  "clock name does not match any BMC clock input");
         return std::nullopt;
@@ -6925,29 +7346,97 @@ struct VerifBoundedModelCheckingOpConversion
             if (inferred.pos)
               pos = inferred.pos;
             if (info.clockKey && !info.clockKey.getValue().empty()) {
-              auto it = clockKeyToPos.find(info.clockKey.getValue());
-              if (it != clockKeyToPos.end()) {
-                if (pos && *pos != it->second.pos) {
+              if (auto keyInfo = lookupClockKeyPosInfo(info.clockKey.getValue())) {
+                if (pos && *pos != keyInfo->pos) {
                   reportUnmappedClock(
                       info.loc,
                       "clocked property uses conflicting clock information; "
                       "ensure each property uses a single clock/edge");
                 }
-                pos = it->second.pos;
-                if (info.edge && it->second.invert)
+                pos = keyInfo->pos;
+                if (info.edge && keyInfo->invert)
                   info.edge = invertClockEdge(*info.edge);
+              } else {
+                StringRef keyName;
+                bool keyInvert = false;
+                if (parsePortClockKey(info.clockKey.getValue(), keyName,
+                                      keyInvert)) {
+                  if (auto itArg = inputNameToArgIndex.find(keyName);
+                      itArg != inputNameToArgIndex.end()) {
+                    if (auto argInfo = inferClockPosFromInputArg(itArg->second)) {
+                      ClockPosInfo resolvedInfo = *argInfo;
+                      if (keyInvert)
+                        resolvedInfo.invert = !resolvedInfo.invert;
+                      if (pos && *pos != resolvedInfo.pos) {
+                        reportUnmappedClock(
+                            info.loc,
+                            "clocked property uses conflicting clock "
+                            "information; ensure each property uses a single "
+                            "clock/edge");
+                      }
+                      pos = resolvedInfo.pos;
+                      if (resolvedInfo.invert) {
+                        if (info.edge)
+                          info.edge = invertClockEdge(*info.edge);
+                        else
+                          info.edge = ltl::ClockEdge::Neg;
+                      }
+                    } else if (auto argPos =
+                                   mapArgIndexToClockPos(itArg->second)) {
+                      if (pos && *pos != *argPos) {
+                        reportUnmappedClock(
+                            info.loc,
+                            "clocked property uses conflicting clock "
+                            "information; ensure each property uses a single "
+                            "clock/edge");
+                      }
+                      pos = *argPos;
+                      if (keyInvert) {
+                        if (info.edge)
+                          info.edge = invertClockEdge(*info.edge);
+                        else
+                          info.edge = ltl::ClockEdge::Neg;
+                      }
+                    }
+                  }
+                }
               }
             }
             if (info.clockName && !info.clockName.getValue().empty()) {
-              auto it = clockNameToPos.find(info.clockName.getValue());
-              if (it != clockNameToPos.end()) {
-                if (pos && *pos != it->second) {
+              if (auto namePos = lookupClockNamePos(info.clockName.getValue())) {
+                if (pos && *pos != *namePos) {
                   reportUnmappedClock(
                       info.loc,
                       "clocked property uses conflicting clock information; "
                       "ensure each property uses a single clock/edge");
                 }
-                pos = it->second;
+                pos = *namePos;
+              } else if (auto itArg =
+                             inputNameToArgIndex.find(info.clockName.getValue());
+                         itArg != inputNameToArgIndex.end()) {
+                if (auto argInfo = inferClockPosFromInputArg(itArg->second)) {
+                  if (pos && *pos != argInfo->pos) {
+                    reportUnmappedClock(
+                        info.loc,
+                        "clocked property uses conflicting clock information; "
+                        "ensure each property uses a single clock/edge");
+                  }
+                  pos = argInfo->pos;
+                  if (argInfo->invert) {
+                    if (info.edge)
+                      info.edge = invertClockEdge(*info.edge);
+                    else
+                      info.edge = ltl::ClockEdge::Neg;
+                  }
+                } else if (auto argPos = mapArgIndexToClockPos(itArg->second)) {
+                  if (pos && *pos != *argPos) {
+                    reportUnmappedClock(
+                        info.loc,
+                        "clocked property uses conflicting clock information; "
+                        "ensure each property uses a single clock/edge");
+                  }
+                  pos = *argPos;
+                }
               }
             } else if (!risingClocksOnly && clockIndexes.size() == 1) {
               pos = 0;
@@ -7296,10 +7785,9 @@ struct VerifBoundedModelCheckingOpConversion
             if (keyAttr && !keyAttr.getValue().empty()) {
               if (keyAttr.getValue().starts_with("expr:"))
                 exprClockKey = true;
-              auto it = clockKeyToPos.find(keyAttr.getValue());
-              if (it != clockKeyToPos.end()) {
-                regClockPosByReg[regIndex] = it->second.pos;
-                invert = dictInvert ^ it->second.invert;
+              if (auto keyInfo = lookupClockKeyPosInfo(keyAttr.getValue())) {
+                regClockPosByReg[regIndex] = keyInfo->pos;
+                invert = dictInvert ^ keyInfo->invert;
                 mapped = true;
               }
             }
@@ -7322,10 +7810,9 @@ struct VerifBoundedModelCheckingOpConversion
           if (nameAttr && !nameAttr.getValue().empty()) {
             if (nameAttr.getValue().starts_with("expr:"))
               exprClockKey = true;
-            if (auto keyIt = clockKeyToPos.find(nameAttr.getValue());
-                keyIt != clockKeyToPos.end()) {
-              regClockPosByReg[regIndex] = keyIt->second.pos;
-              invert = keyIt->second.invert;
+            if (auto keyInfo = lookupClockKeyPosInfo(nameAttr.getValue())) {
+              regClockPosByReg[regIndex] = keyInfo->pos;
+              invert = keyInfo->invert;
               mapped = true;
             }
           }
@@ -8302,9 +8789,7 @@ struct VerifBoundedModelCheckingOpConversion
             return Value();
           std::optional<unsigned> pos;
           if (clockName && !clockName.getValue().empty()) {
-            auto it = clockNameToPos.find(clockName.getValue());
-            if (it != clockNameToPos.end())
-              pos = it->second;
+            pos = lookupClockNamePos(clockName.getValue());
           } else if (clockValue) {
             if (auto info = resolveClockPosInfo(clockValue))
               pos = info->pos;
@@ -9137,9 +9622,7 @@ struct VerifBoundedModelCheckingOpConversion
               return Value();
             std::optional<unsigned> pos;
             if (clockName && !clockName.getValue().empty()) {
-              auto it = clockNameToPos.find(clockName.getValue());
-              if (it != clockNameToPos.end())
-                pos = it->second;
+              pos = lookupClockNamePos(clockName.getValue());
             } else if (clockValue) {
               if (auto info = resolveClockPosInfo(clockValue))
                 pos = info->pos;
@@ -9849,8 +10332,19 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     SmallVector<LLVM::GEPOp> geps;
     SmallVector<int64_t> elementIndices;
   };
+  struct AllocaLoadAccessInfo {
+    LLVM::AllocaOp alloca;
+    SmallVector<LLVM::GEPOp> geps;
+    SmallVector<int64_t> elementIndices;
+  };
   struct MallocLoadNondetInfo {
     Operation *mallocCall = nullptr;
+    Type loadType;
+    SmallVector<int64_t> elementIndices;
+    Value value;
+  };
+  struct AllocaLoadNondetInfo {
+    Operation *alloca = nullptr;
     Type loadType;
     SmallVector<int64_t> elementIndices;
     Value value;
@@ -9958,6 +10452,76 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
         if (!callee || callee.getValue() != "malloc")
           return std::nullopt;
         access.mallocCall = call;
+        break;
+      }
+      if (auto gep = current.getDefiningOp<LLVM::GEPOp>()) {
+        auto rawIndices = gep.getRawConstantIndices();
+        if (rawIndices.empty())
+          return std::nullopt;
+        reversedGeps.push_back(gep);
+        current = gep.getBase();
+        continue;
+      }
+      if (auto bitcast = current.getDefiningOp<LLVM::BitcastOp>()) {
+        current = bitcast.getArg();
+        continue;
+      }
+      if (auto addrCast = current.getDefiningOp<LLVM::AddrSpaceCastOp>()) {
+        current = addrCast.getArg();
+        continue;
+      }
+      if (auto cast = current.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast->getNumOperands() != 1 || cast->getNumResults() != 1)
+          return std::nullopt;
+        current = cast.getOperand(0);
+        continue;
+      }
+      return std::nullopt;
+    }
+
+    for (auto it = reversedGeps.rbegin(), e = reversedGeps.rend(); it != e;
+         ++it) {
+      auto gep = *it;
+      auto rawIndices = gep.getRawConstantIndices();
+      if (rawIndices.empty())
+        return std::nullopt;
+      ValueRange dynamicIndices = gep.getDynamicIndices();
+      unsigned dynamicCursor = 0;
+      SmallVector<int64_t> resolvedIndices;
+      resolvedIndices.reserve(rawIndices.size());
+      for (int32_t rawIdx : rawIndices) {
+        if (rawIdx != LLVM::GEPOp::kDynamicIndex) {
+          resolvedIndices.push_back(rawIdx);
+          continue;
+        }
+        if (dynamicCursor >= dynamicIndices.size())
+          return std::nullopt;
+        auto idxValue = getConstantIndexValue(dynamicIndices[dynamicCursor++]);
+        if (!idxValue)
+          return std::nullopt;
+        resolvedIndices.push_back(*idxValue);
+      }
+      if (dynamicCursor != dynamicIndices.size())
+        return std::nullopt;
+      if (resolvedIndices.empty() || resolvedIndices.front() != 0)
+        return std::nullopt;
+      access.geps.push_back(gep);
+      for (int64_t idx : llvm::drop_begin(resolvedIndices)) {
+        if (idx < 0)
+          return std::nullopt;
+        access.elementIndices.push_back(idx);
+      }
+    }
+    return access;
+  };
+  auto resolveAllocaLoadAccess =
+      [&](Value loadAddr) -> std::optional<AllocaLoadAccessInfo> {
+    AllocaLoadAccessInfo access;
+    SmallVector<LLVM::GEPOp> reversedGeps;
+    Value current = loadAddr;
+    while (true) {
+      if (auto alloca = current.getDefiningOp<LLVM::AllocaOp>()) {
+        access.alloca = alloca;
         break;
       }
       if (auto gep = current.getDefiningOp<LLVM::GEPOp>()) {
@@ -10262,6 +10826,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   SmallVector<Operation *> llvmIntOps;
   SmallVector<LLVM::ExtractValueOp> llvmExtractValues;
   SmallVector<LLVM::LoadOp> llvmLoads;
+  SmallVector<LLVM::StoreOp> llvmStores;
   DenseMap<SymbolRefAttr, bool> globalHasStoreCache;
   auto getRootGlobalName = [](Value value) -> std::optional<SymbolRefAttr> {
     while (true) {
@@ -10318,6 +10883,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   });
   bmcOp->walk([&](LLVM::ExtractValueOp op) { llvmExtractValues.push_back(op); });
   bmcOp->walk([&](LLVM::LoadOp op) { llvmLoads.push_back(op); });
+  bmcOp->walk([&](LLVM::StoreOp op) { llvmStores.push_back(op); });
 
   for (auto llvmConstant : llvmConstants) {
     auto ty = llvmConstant.getType();
@@ -10511,6 +11077,7 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
   }
 
   SmallVector<MallocLoadNondetInfo> mallocLoadNondetCache;
+  SmallVector<AllocaLoadNondetInfo> allocaLoadNondetCache;
   auto createFreshMallocNondetValue = [&](Type scalarType, Location loc,
                                           OpBuilder &builder) -> Value {
     auto intTy = dyn_cast<IntegerType>(scalarType);
@@ -10547,6 +11114,31 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     mallocLoadNondetCache.push_back(std::move(info));
     return replacement;
   };
+  auto getOrCreateAllocaNondetValue =
+      [&](LLVM::AllocaOp alloca, ArrayRef<int64_t> elementIndices,
+          Type scalarType, Location loc, OpBuilder &builder) -> Value {
+    for (auto &entry : allocaLoadNondetCache) {
+      if (entry.alloca != alloca.getOperation())
+        continue;
+      if (entry.loadType != scalarType)
+        continue;
+      if (!llvm::equal(entry.elementIndices, elementIndices))
+        continue;
+      return entry.value;
+    }
+
+    Value replacement = createFreshMallocNondetValue(scalarType, loc, builder);
+    if (!replacement)
+      return {};
+
+    AllocaLoadNondetInfo info;
+    info.alloca = alloca.getOperation();
+    info.loadType = scalarType;
+    info.elementIndices.append(elementIndices.begin(), elementIndices.end());
+    info.value = replacement;
+    allocaLoadNondetCache.push_back(std::move(info));
+    return replacement;
+  };
   auto eraseUnusedAddressChain = [&](Value value, auto &&eraseUnusedAddressChainRef) {
     auto *def = value.getDefiningOp();
     if (!def || !def->use_empty())
@@ -10569,6 +11161,27 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     def->erase();
     eraseUnusedAddressChainRef(next, eraseUnusedAddressChainRef);
   };
+  auto findLatestAllocaStoreValue = [&](const AllocaLoadAccessInfo &loadAccess,
+                                        Operation *beforeOp,
+                                        Type loadType) -> Value {
+    LLVM::StoreOp latestStore;
+    for (auto store : llvmStores) {
+      auto storeAccess = resolveAllocaLoadAccess(store.getAddr());
+      if (!storeAccess || storeAccess->alloca != loadAccess.alloca)
+        continue;
+      if (!llvm::equal(storeAccess->elementIndices, loadAccess.elementIndices))
+        continue;
+      if (store->getBlock() != beforeOp->getBlock())
+        continue;
+      if (!store->isBeforeInBlock(beforeOp))
+        continue;
+      if (!latestStore || latestStore->isBeforeInBlock(store))
+        latestStore = store;
+    }
+    if (!latestStore || latestStore.getValue().getType() != loadType)
+      return {};
+    return latestStore.getValue();
+  };
 
   auto getAggregateSubelementType = [](Type baseType, int64_t index) -> Type {
     if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(baseType)) {
@@ -10590,6 +11203,16 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
       extractAggregateConstant =
           [&](Value container, Type containerType, ArrayRef<int64_t> path,
               Type resultType) -> std::optional<TypedAttr> {
+    if (auto extract = container.getDefiningOp<LLVM::ExtractValueOp>()) {
+      SmallVector<int64_t, 8> composedPath;
+      composedPath.reserve(extract.getPosition().size() + path.size());
+      llvm::append_range(composedPath, extract.getPosition());
+      llvm::append_range(composedPath, path);
+      return extractAggregateConstant(extract.getContainer(),
+                                      extract.getContainer().getType(),
+                                      composedPath, resultType);
+    }
+
     if (path.empty()) {
       if (auto cst = container.getDefiningOp<LLVM::ConstantOp>())
         return coerceToTypedScalarAttr(cst.getValue(), resultType);
@@ -10690,6 +11313,17 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     // Fold insert/extract projection through aggregate builder trees.
     std::function<Value(Value, ArrayRef<int64_t>)> findInsertedValue =
         [&](Value container, ArrayRef<int64_t> path) -> Value {
+      if (path.empty())
+        return container;
+
+      if (auto extract = container.getDefiningOp<LLVM::ExtractValueOp>()) {
+        SmallVector<int64_t, 8> composedPath;
+        composedPath.reserve(extract.getPosition().size() + path.size());
+        llvm::append_range(composedPath, extract.getPosition());
+        llvm::append_range(composedPath, path);
+        return findInsertedValue(extract.getContainer(), composedPath);
+      }
+
       auto insert = container.getDefiningOp<LLVM::InsertValueOp>();
       if (!insert)
         return {};
@@ -10728,6 +11362,40 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     auto load = extractValue.getContainer().getDefiningOp<LLVM::LoadOp>();
     if (!load)
       continue;
+    if (auto allocaAccess = resolveAllocaLoadAccess(load.getAddr())) {
+      OpBuilder builder(extractValue);
+      Value replacement;
+      if (Value loadedValue = findLatestAllocaStoreValue(*allocaAccess, load,
+                                                         load.getType())) {
+        if (Value projected =
+                findInsertedValue(loadedValue, extractValue.getPosition())) {
+          if (projected.getType() == extractValue.getType())
+            replacement = projected;
+        }
+        if (!replacement) {
+          if (auto typedAttr =
+                  extractAggregateConstant(loadedValue, load.getType(),
+                                           extractValue.getPosition(),
+                                           extractValue.getType())) {
+            replacement =
+                arith::ConstantOp::create(builder, extractValue.getLoc(), *typedAttr);
+          }
+        }
+      }
+      if (!replacement) {
+        SmallVector<int64_t> elementIndices(allocaAccess->elementIndices.begin(),
+                                            allocaAccess->elementIndices.end());
+        llvm::append_range(elementIndices, extractValue.getPosition());
+        replacement = getOrCreateAllocaNondetValue(
+            allocaAccess->alloca, elementIndices, extractValue.getType(),
+            extractValue.getLoc(), builder);
+      }
+      if (!replacement)
+        continue;
+      extractValue.replaceAllUsesWith(replacement);
+      extractValue.erase();
+      continue;
+    }
     if (auto loadAccess = resolveGlobalLoadAccess(load.getAddr())) {
       auto addr = loadAccess->addrOf;
       auto module = extractValue->getParentOfType<ModuleOp>();
@@ -10863,6 +11531,27 @@ legalizeSMTLIBSupportedLLVMOps(verif::BoundedModelCheckingOp bmcOp) {
     if (handled)
       continue;
 
+    if (auto allocaAccess = resolveAllocaLoadAccess(llvmLoad.getAddr())) {
+      OpBuilder builder(llvmLoad);
+      Value replacement =
+          findLatestAllocaStoreValue(*allocaAccess, llvmLoad, llvmLoad.getType());
+      if (!replacement)
+        replacement = getOrCreateAllocaNondetValue(
+            allocaAccess->alloca, allocaAccess->elementIndices,
+            llvmLoad.getType(), llvmLoad.getLoc(), builder);
+      if (!replacement && !llvmLoad.getResult().use_empty())
+        continue;
+
+      Value loadAddr = llvmLoad.getAddr();
+      if (replacement)
+        llvmLoad.replaceAllUsesWith(replacement);
+      llvmLoad.erase();
+      eraseUnusedAddressChain(loadAddr, eraseUnusedAddressChain);
+      handled = true;
+    }
+    if (handled)
+      continue;
+
     OpBuilder builder(llvmLoad);
     auto mallocAccess = resolveMallocLoadAccess(llvmLoad.getAddr());
     LLVM::CallOp mallocRoot =
@@ -10904,6 +11593,13 @@ void circt::populateVerifToSMTConversionPatterns(
   // Add Verif operation conversion patterns
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
                VerifCoverOpConversion>(converter, patterns.getContext());
+  patterns.add<LowerClockedAssertLikeInBMCConversion<verif::ClockedAssertOp,
+                                                     verif::AssertOp>,
+               LowerClockedAssertLikeInBMCConversion<verif::ClockedAssumeOp,
+                                                     verif::AssumeOp>,
+               LowerClockedAssertLikeInBMCConversion<verif::ClockedCoverOp,
+                                                     verif::CoverOp>>(
+      converter, patterns.getContext());
   patterns.add<LogicEquivalenceCheckingOpConversion,
                RefinementCheckingOpConversion>(
       converter, patterns.getContext(), assumeKnownInputs, xOptimisticOutputs);
@@ -10927,6 +11623,7 @@ void ConvertVerifToSMTPass::runOnOperation() {
   // issues with whether assertions are/aren't lowered yet)
   SymbolTable symbolTable(getOperation());
   SmallVector<Operation *> propertylessBMCOps;
+  bool sawBMC = false;
   auto bmcModeOr = parseBMCMode(bmcMode);
   if (failed(bmcModeOr)) {
     getOperation().emitError()
@@ -10939,12 +11636,14 @@ void ConvertVerifToSMTPass::runOnOperation() {
   WalkResult assertionCheck = getOperation().walk(
       [&](Operation *op) { // Check there is exactly one assertion and clock
         if (auto bmcOp = dyn_cast<verif::BoundedModelCheckingOp>(op)) {
+          sawBMC = true;
           if (failed(inlineBMCRegionFuncCalls(bmcOp, symbolTable)))
             return WalkResult::interrupt();
 
           bool hasLocalCheck = false;
           op->walk([&](Operation *curOp) {
-            if (isa<verif::AssertOp, verif::CoverOp>(curOp)) {
+            if (isa<verif::AssertOp, verif::CoverOp, verif::ClockedAssertOp,
+                    verif::ClockedCoverOp>(curOp)) {
               hasLocalCheck = true;
               return WalkResult::interrupt();
             }
@@ -11067,7 +11766,13 @@ void ConvertVerifToSMTPass::runOnOperation() {
             if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
               numAssertions++;
             }
+            if (isa<verif::ClockedAssertOp>(curOp)) {
+              numAssertions++;
+            }
             if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
+              numCovers++;
+            }
+            if (isa<verif::ClockedCoverOp>(curOp)) {
               numCovers++;
             }
             if (auto inst = dyn_cast<InstanceOp>(curOp))
@@ -11085,7 +11790,13 @@ void ConvertVerifToSMTPass::runOnOperation() {
               if (auto assertOp = dyn_cast<verif::AssertOp>(curOp)) {
                 numNestedAssertions++;
               }
+              if (isa<verif::ClockedAssertOp>(curOp)) {
+                numNestedAssertions++;
+              }
               if (auto coverOp = dyn_cast<verif::CoverOp>(curOp)) {
+                numNestedCovers++;
+              }
+              if (isa<verif::ClockedCoverOp>(curOp)) {
                 numNestedCovers++;
               }
               if (auto inst = dyn_cast<InstanceOp>(curOp))
@@ -11098,8 +11809,9 @@ void ConvertVerifToSMTPass::runOnOperation() {
           }
           if (numNestedAssertions > 0 || numNestedCovers > 0) {
             op->emitError("bounded model checking with nested "
-                          "verif.assert/verif.cover in called functions or "
-                          "instantiated modules is not yet supported");
+                          "verif.assert/verif.cover (including clocked forms) "
+                          "in called functions or instantiated modules is not "
+                          "yet supported");
             return WalkResult::interrupt();
           }
           if (numAssertions == 0 && numCovers == 0) {
@@ -11131,12 +11843,36 @@ void ConvertVerifToSMTPass::runOnOperation() {
   auto isInsideBMC = [](Operation *op) {
     return op->getParentOfType<verif::BoundedModelCheckingOp>() != nullptr;
   };
+  auto isOutsideBMCInHWModule = [&](Operation *op) {
+    return sawBMC && !isInsideBMC(op) &&
+           op->getParentOfType<hw::HWModuleOp>() != nullptr;
+  };
+  auto isInBMCHelperFunc = [&](Operation *op) {
+    auto funcOp = op->getParentOfType<func::FuncOp>();
+    if (!funcOp)
+      return false;
+    return funcOp.getSymName().starts_with("bmc_");
+  };
+  auto isInBMCResidualContext = [&](Operation *op) {
+    return isInBMCHelperFunc(op) ||
+           op->getParentOfType<smt::SolverOp>() != nullptr;
+  };
   verifTarget.addDynamicallyLegalOp<verif::AssertOp>(
       [&](verif::AssertOp op) { return isInsideBMC(op); });
   verifTarget.addDynamicallyLegalOp<verif::AssumeOp>(
       [&](verif::AssumeOp op) { return isInsideBMC(op); });
   verifTarget.addDynamicallyLegalOp<verif::CoverOp>(
       [&](verif::CoverOp op) { return isInsideBMC(op); });
+  // Clocked assert-like ops are currently interpreted only in BMC contexts.
+  // In mixed workloads (BMC + imported helper hw.modules), keep them legal in
+  // non-BMC hw.modules so unrelated helper/library checks do not trip
+  // legalization when this pass runs on whole modules.
+  verifTarget.addDynamicallyLegalOp<verif::ClockedAssertOp>(
+      [&](verif::ClockedAssertOp op) { return isOutsideBMCInHWModule(op); });
+  verifTarget.addDynamicallyLegalOp<verif::ClockedAssumeOp>(
+      [&](verif::ClockedAssumeOp op) { return isOutsideBMCInHWModule(op); });
+  verifTarget.addDynamicallyLegalOp<verif::ClockedCoverOp>(
+      [&](verif::ClockedCoverOp op) { return isOutsideBMCInHWModule(op); });
 
   SymbolCache symCache;
   symCache.addDefinitions(getOperation());
@@ -11146,6 +11882,13 @@ void ConvertVerifToSMTPass::runOnOperation() {
   // First phase: lower Verif operations, leaving LTL ops untouched.
   patterns.add<VerifAssertOpConversion, VerifAssumeOpConversion,
                VerifCoverOpConversion>(converter, patterns.getContext());
+  patterns.add<LowerClockedAssertLikeInBMCConversion<verif::ClockedAssertOp,
+                                                     verif::AssertOp>,
+               LowerClockedAssertLikeInBMCConversion<verif::ClockedAssumeOp,
+                                                     verif::AssumeOp>,
+               LowerClockedAssertLikeInBMCConversion<verif::ClockedCoverOp,
+                                                     verif::CoverOp>>(
+      converter, patterns.getContext());
   patterns.add<LogicEquivalenceCheckingOpConversion,
                RefinementCheckingOpConversion>(
       converter, patterns.getContext(), assumeKnownInputs,
@@ -11195,17 +11938,49 @@ void ConvertVerifToSMTPass::runOnOperation() {
                             comb::CombDialect, hw::HWDialect, seq::SeqDialect,
                             verif::VerifDialect>();
   ltlTarget.addLegalOp<UnrealizedConversionCastOp>();
-  ltlTarget.addIllegalOp<ltl::AndOp, ltl::OrOp, ltl::IntersectOp, ltl::NotOp,
-                         ltl::ImplicationOp, ltl::EventuallyOp, ltl::UntilOp,
-                         ltl::BooleanConstantOp, ltl::DelayOp, ltl::ConcatOp,
-                         ltl::RepeatOp, ltl::GoToRepeatOp,
-                         ltl::NonConsecutiveRepeatOp, ltl::PastOp>();
+  ltlTarget.addDynamicallyLegalDialect<ltl::LTLDialect>(
+      [&](Operation *op) {
+        return isOutsideBMCInHWModule(op) ||
+               (op->use_empty() && isInBMCResidualContext(op));
+      });
+  ltlTarget.addDynamicallyLegalOp<ltl::DelayOp>(
+      [&](ltl::DelayOp op) {
+        return isOutsideBMCInHWModule(op) ||
+               (isInBMCResidualContext(op) && isBMCStateCarriedDelay(op));
+      });
 
   RewritePatternSet ltlPatterns(&getContext());
   populateLTLToSMTConversionPatterns(converter, ltlPatterns, approxTemporalOps);
   if (failed(mlir::applyPartialConversion(getOperation(), ltlTarget,
                                           std::move(ltlPatterns))))
     return signalPassFailure();
+
+  RewritePatternSet carriedDelayPatterns(&getContext());
+  carriedDelayPatterns.add<LowerCarriedDelayOpRewrite>(&getContext());
+  if (failed(applyPatternsGreedily(getOperation(),
+                                   std::move(carriedDelayPatterns))))
+    return signalPassFailure();
+
+  // Drop dead LTL ops that became legal only to unblock partial conversion.
+  {
+    SmallVector<Operation *> ordered;
+    getOperation()->walk([&](Operation *op) {
+      if (isa_and_nonnull<ltl::LTLDialect>(op->getDialect()))
+        ordered.push_back(op);
+    });
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (int64_t i = static_cast<int64_t>(ordered.size()) - 1; i >= 0; --i) {
+        Operation *op = ordered[static_cast<size_t>(i)];
+        if (!op || !op->use_empty())
+          continue;
+        op->erase();
+        ordered[static_cast<size_t>(i)] = nullptr;
+        changed = true;
+      }
+    }
+  }
 
   RewritePatternSet relocatePatterns(&getContext());
   relocatePatterns.add<RelocateCastIntoInputRegion>(&getContext());
