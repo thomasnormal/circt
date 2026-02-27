@@ -1246,6 +1246,7 @@ public:
   }
   uint64_t getNativeFuncCallCount() const { return nativeFuncCallCount; }
   uint64_t getNativeFuncSkippedDepth() const { return nativeFuncSkippedDepth; }
+  uint64_t getNativeFuncSkippedYield() const { return nativeFuncSkippedYield; }
   uint64_t getInterpretedFuncCallCount() const {
     return interpretedFuncCallCount;
   }
@@ -4257,6 +4258,7 @@ private:
   /// Counters for native vs interpreted dispatch (for compile report).
   uint64_t nativeFuncCallCount = 0;
   uint64_t nativeFuncSkippedDepth = 0;
+  uint64_t nativeFuncSkippedYield = 0;
   uint64_t nativeCallIndirectDispatchCount = 0;
   uint64_t interpretedFuncCallCount = 0;
 

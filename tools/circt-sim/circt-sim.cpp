@@ -3742,10 +3742,14 @@ static LogicalResult processInput(MLIRContext &context,
                  << indirectCallsTrampoline << "\n";
     llvm::errs() << "[circt-sim] Entry-table skipped (depth):      "
                  << interp.getEntryTableSkippedDepthCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry-table skipped (yield):      "
+                 << interp.getEntryTableSkippedYieldCount() << "\n";
     llvm::errs() << "[circt-sim] Max AOT depth:                    "
                  << interp.getMaxAotDepth() << "\n";
     llvm::errs() << "[circt-sim] func.call skipped (depth):        "
                  << interp.getNativeFuncSkippedDepth() << "\n";
+    llvm::errs() << "[circt-sim] func.call skipped (yield):        "
+                 << interp.getNativeFuncSkippedYield() << "\n";
     // Phase 5.1 canonical counters for perf telemetry consumers.
     llvm::errs() << "[circt-sim] indirect_calls_total:             "
                  << indirectCallsTotal << "\n";
