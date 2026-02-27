@@ -101,6 +101,10 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
 - Constant mutations (`CONST0_TO_1`, `CONST1_TO_0`) cover sized binary/decimal/
   hex 1-bit literals and unsized tick literals (`1'b*`, `1'd*`, `1'h*`, `'0`,
   `'1`).
+- Logical mutations (`AND_TO_OR`, `OR_TO_AND`) target short-circuit boolean
+  operators (`&&`, `||`).
+- Bitwise mutations (`BAND_TO_BOR`, `BOR_TO_BAND`) target binary bitwise
+  operators (`&`, `|`) and exclude reduction/operator-assignment spellings.
 - Cast mutations (`SIGNED_TO_UNSIGNED`, `UNSIGNED_TO_SIGNED`) target
   `$signed(...)`/`$unsigned(...)` calls with boundary checks and optional
   whitespace before `(`.

@@ -396,6 +396,49 @@ def find_binary_xor_token(nth: int) -> int:
     return -1
 
 
+def find_binary_bitwise_token(token: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    if token not in ("&", "|"):
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        if text[i] != token:
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
+        if prev == token or nxt == token:
+            i += 1
+            continue
+        if prev == "=" or nxt == "=":
+            i += 1
+            continue
+        if prev == "~":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 1)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+            text[next_sig]
+        ):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_cast_function_token(name: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -490,6 +533,16 @@ elif op == 'XOR_TO_OR':
     idx = find_binary_xor_token(site_index)
     if idx >= 0:
         text = text[:idx] + '|' + text[idx + 1:]
+        changed = True
+elif op == 'BAND_TO_BOR':
+    idx = find_binary_bitwise_token('&', site_index)
+    if idx >= 0:
+        text = text[:idx] + '|' + text[idx + 1:]
+        changed = True
+elif op == 'BOR_TO_BAND':
+    idx = find_binary_bitwise_token('|', site_index)
+    if idx >= 0:
+        text = text[:idx] + '&' + text[idx + 1:]
         changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
