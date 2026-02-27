@@ -8,7 +8,7 @@
 //   - Configuration object passing
 //   - Hierarchical path matching
 //
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -137,7 +137,7 @@ package config_db_test_pkg;
     //========================================================================
     // Test helper
     //========================================================================
-    function void check(bit condition, string test_name);
+    function void check_result(bit condition, string test_name);
       if (condition) begin
         test_pass_count++;
         `uvm_info("PASS", test_name, UVM_MEDIUM)
@@ -155,43 +155,43 @@ package config_db_test_pkg;
       `uvm_info("TEST", "=== Running uvm_is_match tests ===", UVM_LOW)
 
       // Exact match
-      check(uvm_is_match("hello", "hello"), "Exact match: hello == hello");
-      check(!uvm_is_match("hello", "world"), "No match: hello != world");
-      check(!uvm_is_match("hello", "hell"), "Prefix mismatch: hello != hell");
-      check(!uvm_is_match("hell", "hello"), "Suffix mismatch: hell != hello");
+      check_result(uvm_is_match("hello", "hello"), "Exact match: hello == hello");
+      check_result(!uvm_is_match("hello", "world"), "No match: hello != world");
+      check_result(!uvm_is_match("hello", "hell"), "Prefix mismatch: hello != hell");
+      check_result(!uvm_is_match("hell", "hello"), "Suffix mismatch: hell != hello");
 
       // Single wildcard *
-      check(uvm_is_match("*", "anything"), "Wildcard * matches anything");
-      check(uvm_is_match("*", ""), "Wildcard * matches empty string");
-      check(uvm_is_match("hello*", "hello"), "Trailing *: hello* matches hello");
-      check(uvm_is_match("hello*", "helloworld"), "Trailing *: hello* matches helloworld");
-      check(uvm_is_match("*world", "helloworld"), "Leading *: *world matches helloworld");
-      check(uvm_is_match("*world", "world"), "Leading *: *world matches world");
-      check(uvm_is_match("hel*rld", "helloworld"), "Middle *: hel*rld matches helloworld");
+      check_result(uvm_is_match("*", "anything"), "Wildcard * matches anything");
+      check_result(uvm_is_match("*", ""), "Wildcard * matches empty string");
+      check_result(uvm_is_match("hello*", "hello"), "Trailing *: hello* matches hello");
+      check_result(uvm_is_match("hello*", "helloworld"), "Trailing *: hello* matches helloworld");
+      check_result(uvm_is_match("*world", "helloworld"), "Leading *: *world matches helloworld");
+      check_result(uvm_is_match("*world", "world"), "Leading *: *world matches world");
+      check_result(uvm_is_match("hel*rld", "helloworld"), "Middle *: hel*rld matches helloworld");
 
       // Multiple wildcards
-      check(uvm_is_match("*.*", "env.agent"), "Multiple *: *.* matches env.agent");
-      check(uvm_is_match("*agent*", "env.agent.driver"), "*agent* matches env.agent.driver");
-      check(uvm_is_match("env.*.*", "env.agent.driver"), "env.*.* matches env.agent.driver");
+      check_result(uvm_is_match("*.*", "env.agent"), "Multiple *: *.* matches env.agent");
+      check_result(uvm_is_match("*agent*", "env.agent.driver"), "*agent* matches env.agent.driver");
+      check_result(uvm_is_match("env.*.*", "env.agent.driver"), "env.*.* matches env.agent.driver");
 
       // Question mark wildcard
-      check(uvm_is_match("hel?o", "hello"), "? wildcard: hel?o matches hello");
-      check(!uvm_is_match("hel?o", "helo"), "? wildcard: hel?o doesn't match helo");
-      check(uvm_is_match("h?l?o", "hello"), "Multiple ?: h?l?o matches hello");
+      check_result(uvm_is_match("hel?o", "hello"), "? wildcard: hel?o matches hello");
+      check_result(!uvm_is_match("hel?o", "helo"), "? wildcard: hel?o doesn't match helo");
+      check_result(uvm_is_match("h?l?o", "hello"), "Multiple ?: h?l?o matches hello");
 
       // Combined wildcards
-      check(uvm_is_match("h*l?o", "hello"), "Combined: h*l?o matches hello");
-      check(uvm_is_match("h*l?o", "heeello"), "Combined: h*l?o matches heeello");
+      check_result(uvm_is_match("h*l?o", "hello"), "Combined: h*l?o matches hello");
+      check_result(uvm_is_match("h*l?o", "heeello"), "Combined: h*l?o matches heeello");
 
       // Edge cases
-      check(uvm_is_match("", ""), "Empty pattern matches empty string");
-      check(uvm_is_match("", "nonempty"), "Empty pattern matches non-empty (legacy)");
-      check(uvm_is_match("***", "anything"), "Multiple consecutive *");
+      check_result(uvm_is_match("", ""), "Empty pattern matches empty string");
+      check_result(uvm_is_match("", "nonempty"), "Empty pattern matches non-empty (legacy)");
+      check_result(uvm_is_match("***", "anything"), "Multiple consecutive *");
 
       // UVM-specific patterns
-      check(uvm_is_match("uvm_test_top.*", "uvm_test_top.env"), "UVM path: uvm_test_top.*");
-      check(uvm_is_match("uvm_test_top.env.*", "uvm_test_top.env.agent"), "UVM path: nested");
-      check(uvm_is_match("*agent*", "uvm_test_top.env.my_agent.driver"), "Contains agent");
+      check_result(uvm_is_match("uvm_test_top.*", "uvm_test_top.env"), "UVM path: uvm_test_top.*");
+      check_result(uvm_is_match("uvm_test_top.env.*", "uvm_test_top.env.agent"), "UVM path: nested");
+      check_result(uvm_is_match("*agent*", "uvm_test_top.env.my_agent.driver"), "Contains agent");
     endfunction
 
     //========================================================================
@@ -206,12 +206,12 @@ package config_db_test_pkg;
 
       // Test integer config
       uvm_config_db#(int)::set(null, "test_path", "int_field", 42);
-      check(uvm_config_db#(int)::get(null, "test_path", "int_field", int_val) && int_val == 42,
+      check_result(uvm_config_db#(int)::get(null, "test_path", "int_field", int_val) && int_val == 42,
             "Basic int set/get");
 
       // Test string config
       uvm_config_db#(string)::set(null, "test_path", "str_field", "test_value");
-      check(uvm_config_db#(string)::get(null, "test_path", "str_field", str_val) &&
+      check_result(uvm_config_db#(string)::get(null, "test_path", "str_field", str_val) &&
             str_val == "test_value",
             "Basic string set/get");
 
@@ -222,20 +222,20 @@ package config_db_test_pkg;
       uvm_config_db#(test_config)::set(null, "test_path", "obj_field", cfg);
       begin
         test_config retrieved_cfg;
-        check(uvm_config_db#(test_config)::get(null, "test_path", "obj_field", retrieved_cfg) &&
+        check_result(uvm_config_db#(test_config)::get(null, "test_path", "obj_field", retrieved_cfg) &&
               retrieved_cfg.data_width == 64 && retrieved_cfg.addr_width == 32,
               "Basic object set/get");
       end
 
       // Test exists
-      check(uvm_config_db#(int)::exists(null, "test_path", "int_field"),
+      check_result(uvm_config_db#(int)::exists(null, "test_path", "int_field"),
             "exists() returns true for existing entry");
-      check(!uvm_config_db#(int)::exists(null, "test_path", "nonexistent"),
+      check_result(!uvm_config_db#(int)::exists(null, "test_path", "nonexistent"),
             "exists() returns false for nonexistent entry");
 
       // Test overwrite
       uvm_config_db#(int)::set(null, "test_path", "int_field", 100);
-      check(uvm_config_db#(int)::get(null, "test_path", "int_field", int_val) && int_val == 100,
+      check_result(uvm_config_db#(int)::get(null, "test_path", "int_field", int_val) && int_val == 100,
             "Overwrite existing value");
     endfunction
 
@@ -250,10 +250,10 @@ package config_db_test_pkg;
 
       // Test global wildcard "*"
       uvm_config_db#(int)::set(null, "*", "global_field", 999);
-      check(uvm_config_db#(int)::get(null, "any.path.here", "global_field", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "any.path.here", "global_field", int_val) &&
             int_val == 999,
             "Global * wildcard matches any path");
-      check(uvm_config_db#(int)::get(null, "", "global_field", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "", "global_field", int_val) &&
             int_val == 999,
             "Global * wildcard matches empty path");
 
@@ -264,29 +264,29 @@ package config_db_test_pkg;
       uvm_config_db#(agent_config)::set(null, "*agent*", "config", cfg);
       begin
         agent_config retrieved_cfg;
-        check(uvm_config_db#(agent_config)::get(null, "env.my_agent", "config", retrieved_cfg) &&
+        check_result(uvm_config_db#(agent_config)::get(null, "env.my_agent", "config", retrieved_cfg) &&
               retrieved_cfg.is_active == 0 && retrieved_cfg.timeout_cycles == 500,
               "*agent* matches env.my_agent");
-        check(uvm_config_db#(agent_config)::get(null, "test.agent.driver", "config", retrieved_cfg),
+        check_result(uvm_config_db#(agent_config)::get(null, "test.agent.driver", "config", retrieved_cfg),
               "*agent* matches test.agent.driver");
       end
 
       // Test prefix wildcard
       uvm_config_db#(int)::set(null, "env.*", "env_setting", 123);
-      check(uvm_config_db#(int)::get(null, "env.agent", "env_setting", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "env.agent", "env_setting", int_val) &&
             int_val == 123,
             "env.* matches env.agent");
-      check(uvm_config_db#(int)::get(null, "env.scoreboard", "env_setting", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "env.scoreboard", "env_setting", int_val) &&
             int_val == 123,
             "env.* matches env.scoreboard");
 
       // Test exact match takes precedence over wildcard
       uvm_config_db#(int)::set(null, "*", "precedence_field", 1);
       uvm_config_db#(int)::set(null, "specific.path", "precedence_field", 2);
-      check(uvm_config_db#(int)::get(null, "specific.path", "precedence_field", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "specific.path", "precedence_field", int_val) &&
             int_val == 2,
             "Exact match takes precedence over wildcard");
-      check(uvm_config_db#(int)::get(null, "other.path", "precedence_field", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "other.path", "precedence_field", int_val) &&
             int_val == 1,
             "Wildcard still matches non-specific paths");
 
@@ -294,7 +294,7 @@ package config_db_test_pkg;
       uvm_config_db#(int)::set(null, "*", "multi_wild", 10);
       uvm_config_db#(int)::set(null, "env.*", "multi_wild", 20);
       uvm_config_db#(int)::set(null, "env.agent*", "multi_wild", 30);
-      check(uvm_config_db#(int)::get(null, "env.agent1", "multi_wild", int_val) &&
+      check_result(uvm_config_db#(int)::get(null, "env.agent1", "multi_wild", int_val) &&
             int_val == 30,
             "More specific wildcard wins (env.agent*)");
     endfunction
@@ -331,7 +331,7 @@ package config_db_test_pkg;
 
       // Verify hierarchical lookup from component context would work
       // Note: This tests the path construction logic
-      check(uvm_config_db#(test_config)::exists(this, "env", "env_config"),
+      check_result(uvm_config_db#(test_config)::exists(this, "env", "env_config"),
             "Hierarchical exists check for env_config");
     endfunction
 
