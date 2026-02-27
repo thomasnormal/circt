@@ -352,3 +352,56 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_comparator_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
     - improved from 14 pass / 3 fail to 15 pass / 2 fail.
+
+### UVM: update coverage test to available MAM/coverage APIs
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_coverage_test.sv`
+  - Failed on multiple unsupported/absent APIs:
+    - duplicate `get_type_name` declaration from `uvm_object_utils`
+    - nonexistent `uvm_coverage_db` symbols in bundled `uvm-core`
+    - stale `uvm_mem_mam` usage (`new("cfg")`, `UVM_MEM_MAM_GREEDY`,
+      `get_allocated_regions`, `get_total_size`, etc.)
+- Root cause:
+  - Test was written against coverage-db and MAM helper APIs not present in the
+    bundled IEEE-oriented `uvm-core` snapshot.
+  - MAM APIs in this tree use iterator/policy interfaces and class-scoped enums.
+- Fix:
+  - Removed redundant `get_type_name` override in `my_coverage`.
+  - Dropped `uvm_coverage_db` registration/control calls from the test and
+    reported collector-local coverage metrics directly.
+  - Updated MAM setup and allocation usage:
+    - `cfg = new;`
+    - `cfg.mode = uvm_mem_mam::GREEDY`
+    - `request_region(size)` without obsolete enum arg
+    - region enumeration via `mam.for_each(...)`.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_coverage_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - improved from 15 pass / 2 fail to 16 pass / 1 fail.
+
+### UVM: update stress test reporting/phase helpers for current `uvm-core`
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_stress_test.sv`
+  - Failed with API conflicts:
+    - local `check(...)` methods collided with `uvm_component::check()`
+    - `uvm_report_catcher` subclass used old `catch_action` signature/type
+    - old report server counters (`get_info_count/get_warning_count/get_error_count`)
+    - old catcher static APIs (`uvm_report_catcher::add/remove/get_catcher_count`)
+    - undefined `uvm_test_done` usage.
+- Root cause:
+  - The stress test targeted legacy reporting and phase helper APIs; bundled
+    `uvm-core` now uses:
+    - `action_e catch()` for catchers
+    - severity-based report counts
+    - catcher registration through `uvm_report_cb`.
+- Fix:
+  - Renamed local helper methods from `check(...)` to `check_test(...)`.
+  - Updated catcher override to `virtual function action_e catch();`.
+  - Switched report counts to `get_severity_count(UVM_*)`.
+  - Replaced catcher registration/removal with `uvm_report_cb::add/delete`.
+  - Replaced `uvm_test_done` dependency with phase-local objection count checks.
+  - Updated final error summary to severity-count API.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_stress_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - improved from 16 pass / 1 fail to 17 pass / 0 fail.
