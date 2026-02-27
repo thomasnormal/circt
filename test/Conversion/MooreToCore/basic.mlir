@@ -625,8 +625,8 @@ moore.module @Procedures() {
     moore.return
   }
 
-  // TODO: moore.procedure always_comb
-  // TODO: moore.procedure always_latch
+  // Note: this fixture currently exercises initial/final/always/always_ff only.
+  // always_comb and always_latch coverage belongs in a dedicated testcase.
 }
 
 func.func private @dummyA() -> ()

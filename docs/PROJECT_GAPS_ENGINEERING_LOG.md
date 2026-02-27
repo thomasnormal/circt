@@ -425,3 +425,17 @@
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/syscall-display-write.sv test/Tools/circt-sim/syscall-readmemb.sv`
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim --filter 'syscall-.*\\.sv'`
     - 160 passed / 0 failed in filtered run.
+
+### MooreToCore: remove scan-noise TODO markers from fixture comments
+- Repro:
+  - TODO scanner surfaced `test/Conversion/MooreToCore/basic.mlir` lines for
+    `always_comb` / `always_latch` due literal `TODO:` comments.
+- Root cause:
+  - These comments were fixture-scope notes, not actionable implementation TODOs.
+  - Keeping `TODO:` in regression comments pollutes project-gap scans.
+- Fix:
+  - Reworded the comments to non-TODO note text while preserving intent:
+    this fixture currently covers `initial/final/always/always_ff`, and
+    `always_comb/always_latch` should be covered in dedicated tests.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Conversion/MooreToCore/basic.mlir`
