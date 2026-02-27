@@ -105,6 +105,10 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   operators (`&&`, `||`).
 - Bitwise mutations (`BAND_TO_BOR`, `BOR_TO_BAND`) target binary bitwise
   operators (`&`, `|`) and exclude reduction/operator-assignment spellings.
+- Unary inversion mutations split logical and bitwise intent:
+  - `UNARY_NOT_DROP` targets logical negation (`!expr`).
+  - `UNARY_BNOT_DROP` targets bitwise negation (`~expr`) and excludes reduction
+    forms (`~&`, `~|`, `~^`) and XNOR token contexts (`^~`).
 - Cast mutations (`SIGNED_TO_UNSIGNED`, `UNSIGNED_TO_SIGNED`) target
   `$signed(...)`/`$unsigned(...)` calls with boundary checks and optional
   whitespace before `(`.
