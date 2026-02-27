@@ -3695,6 +3695,10 @@ static LogicalResult processInput(MLIRContext &context,
                                           loadCompiledDoneTime - initDoneTime)
                                           .count())
                                 : 0;
+    // Snapshot restore timing is reserved for .csnap state restoration paths.
+    // Until restore is wired into AOT execution, expose an explicit zero metric
+    // so telemetry schemas stay stable across releases.
+    uint64_t snapshotRestoreWallMs = 0;
     uint64_t directCallsNative = interp.getNativeFuncCallCount();
     uint64_t directCallsInterpreted = interp.getInterpretedFuncCallCount();
     uint64_t indirectCallsNative = interp.getNativeEntryCallCount();
@@ -3738,6 +3742,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << initWallMs << "\n";
     llvm::errs() << "[circt-sim] so_load_ms:                       "
                  << soLoadWallMs << "\n";
+    llvm::errs() << "[circt-sim] snapshot_restore_ms:              "
+                 << snapshotRestoreWallMs << "\n";
     llvm::errs() << "[circt-sim] run_ms:                           "
                  << runWallMs << "\n";
     llvm::errs() << "[circt-sim] total_ms:                         "
