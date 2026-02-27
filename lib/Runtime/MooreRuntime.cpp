@@ -17785,12 +17785,20 @@ extern "C" uint64_t __moore_reg_read(MooreRegHandle reg, MooreRegMapHandle map,
   }
 
   uint64_t value = r->mirrorValue;
-
-  // For backdoor access, we could read from HDL path if configured
-  // For now, just return the mirror value
   if (path == UVM_BACKDOOR) {
-    // TODO: Integrate with HDL access functions if HDL path is set
-    value = r->mirrorValue;
+    // Backdoor access reads from the HDL view keyed by register name.
+    MooreString hdlPath{const_cast<char *>(r->name.c_str()),
+                        static_cast<int64_t>(r->name.size())};
+    uvm_hdl_data_t hdlValue = 0;
+    if (uvm_hdl_read(&hdlPath, &hdlValue) != 0) {
+      value = static_cast<uint64_t>(hdlValue) & r->getMask();
+      // Keep mirror synchronized with observed backdoor state.
+      r->mirrorValue = value;
+    } else {
+      if (status)
+        *status = UVM_REG_STATUS_NOT_OK;
+      return 0;
+    }
   }
 
   // Call access callback if registered
@@ -17825,14 +17833,20 @@ extern "C" void __moore_reg_write(MooreRegHandle reg, MooreRegMapHandle map,
   // Mask value to register width
   value &= r->getMask();
 
+  if (path == UVM_BACKDOOR) {
+    // Backdoor access writes directly to the HDL view keyed by register name.
+    MooreString hdlPath{const_cast<char *>(r->name.c_str()),
+                        static_cast<int64_t>(r->name.size())};
+    if (uvm_hdl_deposit(&hdlPath, static_cast<uvm_hdl_data_t>(value)) == 0) {
+      if (status)
+        *status = UVM_REG_STATUS_NOT_OK;
+      return;
+    }
+  }
+
   // Update mirror value
   r->mirrorValue = value;
   r->hasBeenWritten = true;
-
-  // For backdoor access, we could write to HDL path if configured
-  if (path == UVM_BACKDOOR) {
-    // TODO: Integrate with HDL access functions if HDL path is set
-  }
 
   // Call access callback if registered
   if (r->accessCallback) {

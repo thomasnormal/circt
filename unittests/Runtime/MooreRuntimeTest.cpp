@@ -13059,6 +13059,50 @@ TEST(MooreRuntimeRALTest, RegisterReadWrite) {
   __moore_reg_destroy(reg);
 }
 
+TEST(MooreRuntimeRALTest, RegisterBackdoorReadUsesHdlValue) {
+  __moore_reg_clear_all();
+
+  const char *regName = "top.ral_backdoor_read";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  ASSERT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  // Keep mirror intentionally different from HDL value.
+  __moore_reg_set_value(reg, 0x11);
+
+  MooreString path = makeMooreString(regName);
+  ASSERT_EQ(uvm_hdl_deposit(&path, 0xA5), 1);
+
+  MooreRegStatus status = UVM_REG_STATUS_NOT_OK;
+  uint64_t value = __moore_reg_read(reg, MOORE_REG_INVALID_HANDLE, UVM_BACKDOOR,
+                                    &status, 0);
+  EXPECT_EQ(status, UVM_REG_STATUS_OK);
+  EXPECT_EQ(value, 0xA5);
+  EXPECT_EQ(__moore_reg_get_value(reg), 0xA5);
+
+  __moore_reg_destroy(reg);
+}
+
+TEST(MooreRuntimeRALTest, RegisterBackdoorWriteDepositsToHdl) {
+  __moore_reg_clear_all();
+
+  const char *regName = "top.ral_backdoor_write";
+  MooreRegHandle reg = __moore_reg_create(regName, strlen(regName), 32);
+  ASSERT_NE(reg, MOORE_REG_INVALID_HANDLE);
+
+  MooreRegStatus status = UVM_REG_STATUS_NOT_OK;
+  __moore_reg_write(reg, MOORE_REG_INVALID_HANDLE, 0x1234ABCD, UVM_BACKDOOR,
+                    &status, 0);
+  EXPECT_EQ(status, UVM_REG_STATUS_OK);
+  EXPECT_EQ(__moore_reg_get_value(reg), 0x1234ABCD);
+
+  MooreString path = makeMooreString(regName);
+  uvm_hdl_data_t hdlValue = 0;
+  ASSERT_EQ(uvm_hdl_read(&path, &hdlValue), 1);
+  EXPECT_EQ(hdlValue, 0x1234ABCD);
+
+  __moore_reg_destroy(reg);
+}
+
 TEST(MooreRuntimeRALTest, RegisterMirrorDesired) {
   __moore_reg_clear_all();
 
