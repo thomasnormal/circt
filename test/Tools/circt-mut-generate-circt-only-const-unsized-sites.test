@@ -1,8 +1,8 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf "module top(output logic [3:0] y0, output logic [3:0] y1, output logic [3:0] y2);\n  assign y0 = '0;\n  assign y1 = '0;\n  assign y2 = '1;\nendmodule\n" > %t/design.sv
-// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 21 --seed 0 --cfg planner_policy=legacy > %t/log.txt
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 23 --seed 0 --cfg planner_policy=legacy > %t/log.txt
 // RUN: grep -q 'NATIVE_CONST0_TO_1@1' %t/mutations.txt
 // RUN: grep -q 'NATIVE_CONST0_TO_1@2' %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
-// LOG: Generated mutations: 21
+// LOG: Generated mutations: 23

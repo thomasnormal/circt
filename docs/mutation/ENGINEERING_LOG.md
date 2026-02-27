@@ -81,3 +81,14 @@
 - changes made:
   - Switched seeded mini parity harnesses to deterministic reset initialization before signature comparison.
   - Re-ran a 24-mutant campaign after reset hygiene; parity result was `ok=24 mismatch=0 fail=0`.
+
+## 2026-02-27 (bitwise operator fault class)
+
+- realizations:
+  - Logical (`&&`, `||`) and bitwise (`&`, `|`) operator faults are distinct and both appear in realistic RTL bug patterns.
+  - Keeping them separate avoids operator-class blind spots and avoids duplicating existing logical mutation semantics.
+
+- changes made:
+  - Added native bitwise operators `BAND_TO_BOR` and `BOR_TO_BAND`.
+  - Added binary-site filtering to skip reduction and assignment forms while preserving site-index determinism.
+  - Added site-index mutation tests and mode-generation coverage tests for the new bitwise operators.

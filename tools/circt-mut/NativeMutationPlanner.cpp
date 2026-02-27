@@ -25,10 +25,10 @@ namespace circt::mut {
 static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
-    "XOR_TO_OR",        "UNARY_NOT_DROP", "CONST0_TO_1",     "CONST1_TO_0",
-    "ADD_TO_SUB",       "SUB_TO_ADD",     "SHL_TO_SHR",      "SHR_TO_SHL",
-    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED",
-    "UNSIGNED_TO_SIGNED"};
+    "XOR_TO_OR",        "BAND_TO_BOR",    "BOR_TO_BAND",     "UNARY_NOT_DROP",
+    "CONST0_TO_1",      "CONST1_TO_0",    "ADD_TO_SUB",      "SUB_TO_ADD",
+    "SHL_TO_SHR",       "SHR_TO_SHL",     "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
+    "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
 
@@ -468,6 +468,35 @@ static void collectBinaryXorSites(StringRef text, ArrayRef<uint8_t> codeMask,
   }
 }
 
+static void collectBinaryBitwiseSites(StringRef text, char needle,
+                                      ArrayRef<uint8_t> codeMask,
+                                      SmallVectorImpl<SiteInfo> &sites) {
+  assert((needle == '&' || needle == '|') && "expected & or | token");
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (text[i] != needle)
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (prev == needle || next == needle)
+      continue;
+    if (prev == '=' || next == '=')
+      continue;
+    if (prev == '~')
+      continue;
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+    sites.push_back({i});
+  }
+}
+
 static void collectBinaryArithmeticSites(StringRef text, char needle,
                                          ArrayRef<uint8_t> codeMask,
                                          SmallVectorImpl<SiteInfo> &sites) {
@@ -628,6 +657,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryXorSites(designText, codeMask, sites);
     return;
   }
+  if (op == "BAND_TO_BOR") {
+    collectBinaryBitwiseSites(designText, '&', codeMask, sites);
+    return;
+  }
+  if (op == "BOR_TO_BAND") {
+    collectBinaryBitwiseSites(designText, '|', codeMask, sites);
+    return;
+  }
   if (op == "UNARY_NOT_DROP") {
     collectUnaryNotDropSites(designText, codeMask, sites);
     return;
@@ -691,7 +728,7 @@ static std::string getOpFamily(StringRef op) {
   if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
     return "xcompare";
   if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "XOR_TO_OR" ||
-      op == "UNARY_NOT_DROP")
+      op == "BAND_TO_BOR" || op == "BOR_TO_BAND" || op == "UNARY_NOT_DROP")
     return "logic";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
