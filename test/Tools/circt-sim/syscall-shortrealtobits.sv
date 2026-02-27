@@ -1,5 +1,5 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// TODO: $shortrealtobits partial — negative shortreal values produce x instead of bits.
+// Regression: negative shortreal round-trip must preserve IEEE value.
 // Test $shortrealtobits and $bitstoshortreal
 module top;
   shortreal sr;
