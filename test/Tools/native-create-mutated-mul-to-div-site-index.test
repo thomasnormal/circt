@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [7:0] a,b,c,d, output logic [7:0] y0,y1);\n  assign y0 = a * b;\n  assign y1 = c * d;\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_MUL_TO_DIV@2\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: assign y0 = a * b;
+// MUTANT: assign y1 = c / d;

@@ -1,9 +1,9 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf 'module top(input logic [7:0] a,b,c,d, output logic [7:0] y0,y1);\n  assign y0 = a << b;\n  assign y1 = c >> d;\nendmodule\n' > %t/design.sv
-// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 16 --seed 3 --modes arith > %t/log.txt
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 40 --seed 3 --modes arith > %t/log.txt
 // RUN: grep -q 'NATIVE_SHL_TO_SHR' %t/mutations.txt
 // RUN: grep -q 'NATIVE_SHR_TO_SHL' %t/mutations.txt
 // RUN: not grep -q 'NATIVE_AND_TO_OR' %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
-// LOG: Generated mutations: 16
+// LOG: Generated mutations: 40

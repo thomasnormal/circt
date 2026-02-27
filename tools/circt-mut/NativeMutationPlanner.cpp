@@ -28,7 +28,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "XOR_TO_OR",        "BAND_TO_BOR",    "BOR_TO_BAND",     "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
     "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
-    "SHL_TO_SHR",       "SHR_TO_SHL",     "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
+    "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
+    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
@@ -639,9 +640,10 @@ static void collectBinaryArithmeticSites(StringRef text, char needle,
   }
 }
 
-static void collectBinaryMultiplySites(StringRef text,
-                                       ArrayRef<uint8_t> codeMask,
-                                       SmallVectorImpl<SiteInfo> &sites) {
+static void collectBinaryMulDivSites(StringRef text, char needle,
+                                     ArrayRef<uint8_t> codeMask,
+                                     SmallVectorImpl<SiteInfo> &sites) {
+  assert((needle == '*' || needle == '/') && "expected * or / token");
   int bracketDepth = 0;
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (!isCodeAt(codeMask, i))
@@ -656,18 +658,25 @@ static void collectBinaryMultiplySites(StringRef text,
         --bracketDepth;
       continue;
     }
-    if (ch != '*')
+    if (ch != needle)
       continue;
     if (bracketDepth > 0)
       continue;
     char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
     char next = (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
-    if (prev == '*' || next == '*')
-      continue;
-    if (next == '=')
-      continue;
-    if (prev == '(' && next == ')')
-      continue;
+    if (needle == '*') {
+      if (prev == '*' || next == '*')
+        continue;
+      if (next == '=')
+        continue;
+      if (prev == '(' && next == ')')
+        continue;
+    } else {
+      if (prev == '/' || next == '/')
+        continue;
+      if (next == '=')
+        continue;
+    }
 
     size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
     size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
@@ -846,11 +855,19 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "MUL_TO_ADD") {
-    collectBinaryMultiplySites(designText, codeMask, sites);
+    collectBinaryMulDivSites(designText, '*', codeMask, sites);
     return;
   }
   if (op == "ADD_TO_MUL") {
     collectBinaryArithmeticSites(designText, '+', codeMask, sites);
+    return;
+  }
+  if (op == "DIV_TO_MUL") {
+    collectBinaryMulDivSites(designText, '/', codeMask, sites);
+    return;
+  }
+  if (op == "MUL_TO_DIV") {
+    collectBinaryMulDivSites(designText, '*', codeMask, sites);
     return;
   }
   if (op == "SHL_TO_SHR") {
@@ -890,7 +907,8 @@ static std::string getOpFamily(StringRef op) {
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
-      op == "ADD_TO_MUL" || op == "UNARY_MINUS_DROP")
+      op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
+      op == "UNARY_MINUS_DROP")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL")
     return "shift";
