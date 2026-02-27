@@ -185,8 +185,12 @@ maybeSynthesizeCovergroupImplicitSamplingOnNewAssign(
       break;
     }
   }
-  if (!instBody)
-    return success();
+  if (!instBody) {
+    mlir::emitError(loc)
+        << "failed to resolve module instance scope for implicit covergroup "
+           "event sampling";
+    return failure();
+  }
 
   auto moduleIt = context.modules.find(instBody);
   if (moduleIt == context.modules.end())

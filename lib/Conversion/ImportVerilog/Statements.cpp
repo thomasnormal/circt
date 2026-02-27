@@ -1460,6 +1460,19 @@ struct StmtVisitor {
     // Non-static local variable - create a local VariableOp.
     Value initial;
     if (const auto *init = var.getInitializer()) {
+      if (init->as_if<slang::ast::NewCovergroupExpression>()) {
+        const auto &canonicalVarType = var.getDeclaredType()->getType();
+        if (auto *cgType = canonicalVarType.getCanonicalType().as_if<
+                slang::ast::CovergroupType>()) {
+          if (cgType->getCoverageEvent()) {
+            mlir::emitError(loc)
+                << "implicit covergroup event sampling for local variables is "
+                   "not supported; declare the covergroup variable at module "
+                   "scope or call sample() explicitly";
+            return failure();
+          }
+        }
+      }
       initial = context.convertRvalueExpression(*init, type);
       if (!initial)
         return failure();
