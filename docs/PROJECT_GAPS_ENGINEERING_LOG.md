@@ -55,3 +55,21 @@
     a body block and a wait block (`llhd.wait`) that loops back to the body.
 - Tests:
   - `llvm-lit -sv ... --filter 'Conversion/MooreToCore/procedure-always-comb-latch.mlir'`
+
+### UVM: fix missing `final_ph` phase alias and re-enable alias regression
+- Repro:
+  - `circt-verilog --parse-only --uvm-path=lib/Runtime/uvm-core test/Runtime/uvm/uvm_phase_aliases_test.sv`
+  - Failed with undeclared identifier `final_ph`.
+- Root cause:
+  - `uvm_domain.svh` declared and initialized `build_ph` through `report_ph`
+    but omitted the standard `final_ph` alias.
+- Fix:
+  - Added `uvm_phase final_ph;` global alias in
+    `lib/Runtime/uvm-core/src/base/uvm_domain.svh`.
+  - Initialized it in `get_common_domain()` with
+    `domain.find(uvm_final_phase::get())`.
+  - Re-enabled `test/Runtime/uvm/uvm_phase_aliases_test.sv` as a real parse-only
+    test against bundled `uvm-core`.
+- Tests:
+  - Direct repro command now parses successfully.
+  - `llvm-lit -sv ... --filter 'Runtime/uvm/uvm_phase_aliases_test.sv'`
