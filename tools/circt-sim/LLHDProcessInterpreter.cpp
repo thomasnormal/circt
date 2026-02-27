@@ -23843,6 +23843,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       };
       if (fidIt != funcOpToFid.end() &&
           shouldSkipMayYieldNativeFunc(fidIt->second)) {
+        ++nativeFuncSkippedYield;
         ++interpretedFuncCallCount;
         goto func_call_interpreted_fallback;
       }
@@ -24233,6 +24234,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       return skip;
     };
     if (shouldSkipMayYieldNativeFunc(fidIt->second)) {
+      ++nativeFuncSkippedYield;
       nfp = nullptr;
       forcedInterpreter = true;
     }

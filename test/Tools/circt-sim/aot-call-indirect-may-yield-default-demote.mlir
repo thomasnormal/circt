@@ -12,11 +12,13 @@
 // DEFAULT: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
 // DEFAULT: Entry-table native calls:         0
 // DEFAULT: Entry-table trampoline calls:     0
+// DEFAULT: Entry-table skipped (yield):      1
 // DEFAULT: out=42{{$}}
 //
 // OPTIN: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
 // OPTIN: Entry-table native calls:         1
 // OPTIN: Entry-table trampoline calls:     0
+// OPTIN: Entry-table skipped (yield):      0
 // OPTIN: out=42{{$}}
 
 func.func private @"uvm_pkg::inner_add_one"(%x: i32) -> i32 {

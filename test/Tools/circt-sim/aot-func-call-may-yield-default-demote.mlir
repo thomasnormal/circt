@@ -9,10 +9,12 @@
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Collected 1 vtable FuncIds
 //
+// DEFAULT: [circt-sim] func.call skipped (yield):        1
 // DEFAULT: [circt-sim] direct_calls_native:              1
 // DEFAULT: [circt-sim] direct_calls_interpreted:         1
 // DEFAULT: out=42{{$}}
 //
+// OPTIN: [circt-sim] func.call skipped (yield):        0
 // OPTIN: [circt-sim] direct_calls_native:              1
 // OPTIN: [circt-sim] direct_calls_interpreted:         0
 // OPTIN: out=42{{$}}
