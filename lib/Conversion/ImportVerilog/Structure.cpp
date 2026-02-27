@@ -1822,9 +1822,10 @@ struct ModuleVisitor : public BaseVisitor {
     if (const auto *initExpr = varNode.getInitializer()) {
       if (const auto *newCg =
               initExpr->as_if<slang::ast::NewCovergroupExpression>()) {
-        const auto &canonicalCgType = newCg->type->getCanonicalType();
-        if (const auto *cgType =
-                canonicalCgType.as_if<slang::ast::CovergroupType>()) {
+        if (!context.covergroupImplicitSamplingVars.contains(&varNode)) {
+          const auto &canonicalCgType = newCg->type->getCanonicalType();
+          if (const auto *cgType =
+                  canonicalCgType.as_if<slang::ast::CovergroupType>()) {
           if (const auto *sampleEvent = cgType->getCoverageEvent()) {
             auto procOp = moore::ProcedureOp::create(
                 builder, loc, moore::ProcedureKind::Always);
@@ -1863,7 +1864,6 @@ struct ModuleVisitor : public BaseVisitor {
 
               if (!hasAnyIff)
                 continue;
-
               if (const auto *iffExpr = cp->getIffExpr()) {
                 Value iffVal = context.convertRvalueExpression(*iffExpr);
                 iffVal = context.convertToBool(iffVal, moore::Domain::TwoValued);
