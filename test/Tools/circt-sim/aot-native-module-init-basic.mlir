@@ -7,6 +7,7 @@
 // COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 // COMPILE: [circt-compile] Native module init functions: 1
 // COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] Arena: 1 globals, 16 bytes
 //
 // SIM: out=123
 //
@@ -18,7 +19,7 @@
 // NATIVE-NOT: Warning: .so missing __circt_sim_arena_base symbol
 //
 // STATS-DAG: [circt-sim] arena_globals:                    1
-// STATS-DAG: [circt-sim] arena_size_bytes:                 4
+// STATS-DAG: [circt-sim] arena_size_bytes:                 16
 // STATS-DAG: [circt-sim] global_patch_count:               0
 // STATS: out=123
 
