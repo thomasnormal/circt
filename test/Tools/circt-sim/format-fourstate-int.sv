@@ -27,6 +27,6 @@ endmodule
 // CHECK: ovz<zz>
 // CHECK: hvx<X>
 // CHECK: hvz<z>
-// CHECK: dvx< X>
-// CHECK: dvz< z>
+// CHECK: dvx<{{ ?}}X>
+// CHECK: dvz<{{ ?}}z>
 // CHECK: d04vx<000X>

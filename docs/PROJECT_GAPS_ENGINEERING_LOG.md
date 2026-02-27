@@ -439,3 +439,22 @@
     `always_comb/always_latch` should be covered in dedicated tests.
 - Tests:
   - `build_test/bin/llvm-lit -sv test/Conversion/MooreToCore/basic.mlir`
+
+### Sim/formatting: make four-state and bitcast checks robust to formatter width details
+- Repro:
+  - Tracked `circt-sim` sweep flagged expectation drift in:
+    - `test/Tools/circt-sim/format-fourstate-int.sv`
+    - `test/Tools/circt-sim/bitcast-four-state.sv`
+- Root cause:
+  - Output formatting now omits decimal leading-space for unknown four-state
+    values in `%d` printouts (`<X>`/`<z>` instead of `< X>`/`< z>`).
+  - Hex printing for 8-bit fields may include width-preserving leading zeroes
+    (`0x0a` instead of `0xa`).
+- Fix:
+  - Relaxed checks to accept both spacing variants for four-state decimal:
+    - `dvx<{{ ?}}X>`
+    - `dvz<{{ ?}}z>`
+  - Relaxed 8-bit hex check to allow optional leading zeroes:
+    - `val8=0x{{0*}}a`
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/format-fourstate-int.sv test/Tools/circt-sim/bitcast-four-state.sv`

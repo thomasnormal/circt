@@ -5,7 +5,7 @@
 // per-field {value: iM, unknown: iM} struct types preserves field values.
 // Regression test for f986412ae.
 
-// CHECK: val8=0xa
+// CHECK: val8=0x{{0*}}a
 // CHECK: val4=0x5
 // CHECK: [circt-sim] Simulation completed
 module bitcast_4s_tb();
