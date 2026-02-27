@@ -253,3 +253,27 @@
 - Tests:
   - Rebuilt `circt-verilog` target.
   - `llvm-lit -sv --filter 'Tools/circt-sim/syscall-swrite.sv' test/Tools/circt-sim` now passes.
+
+### ImportVerilog: support `$rose/$fell` on virtual interface sampled operands
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
+  - Failed with:
+    - `error: unsupported sampled value type for $rose`
+- Root cause:
+  - Sampled-value type gating in `AssertionExpr.cpp` treated class handles as
+    legal edge operands for `$rose/$fell`, but not virtual interface handles.
+  - Even when reaching edge lowering, sampled truthiness conversion lacked a
+    virtual-interface branch in `buildSampledBoolean`.
+- Fix:
+  - Added virtual-interface non-null lowering in `buildSampledBoolean` using:
+    - `moore.virtual_interface.null`
+    - `moore.virtual_interface_cmp ne`
+  - Extended edge-sample legality checks to treat virtual interfaces as
+    supported handle edge operands.
+  - Expanded regression coverage in
+    `sva-immediate-sampled-continue-on-unsupported.sv` to include `$fell(vif)`
+    and assert no strict/continue unsupported diagnostics for `$stable/$rose/$fell`.
+- Tests:
+  - `utils/ninja-with-lock.sh -C build_test circt-verilog`
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
