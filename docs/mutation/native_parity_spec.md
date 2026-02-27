@@ -70,6 +70,11 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - fault family (`compare|logic|constant|misc`)
   - operator kind
   - coarse statement context (`control|assignment|verification|expression`)
+- Adds realism bias in scoring:
+  - favors control and assignment contexts over verification-only contexts.
+- Adds anti-dominance penalties:
+  - gradually penalizes repeated family/op/context picks to keep early schedules
+    semantically distinct.
 - Selects candidates by weighted bucket choice across:
   - cover bucket
   - primary queues (`w,b,c,s`)
