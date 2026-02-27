@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 // UVM Comparator Test - Tests for uvm_in_order_comparator and related classes
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -68,26 +68,6 @@ package comparator_test_pkg;
   endclass
 
   //==========================================================================
-  // Custom algorithmic comparator with transform override
-  //==========================================================================
-  class my_algorithmic_comparator extends uvm_algorithmic_comparator #(
-    simple_item, simple_item, data_transformer);
-
-    `uvm_component_utils(my_algorithmic_comparator)
-
-    function new(string name, uvm_component parent, data_transformer transformer = null);
-      super.new(name, parent, transformer);
-    endfunction
-
-    // Override transform to use our transformer
-    protected virtual function simple_item transform(simple_item t);
-      if (m_transformer != null)
-        return m_transformer.transform(t);
-      return t;
-    endfunction
-  endclass
-
-  //==========================================================================
   // Scoreboard using in-order comparator
   //==========================================================================
   class comparator_scoreboard extends uvm_scoreboard;
@@ -100,7 +80,8 @@ package comparator_test_pkg;
     uvm_in_order_built_in_comparator #(simple_item) builtin_cmp;
 
     // Algorithmic comparator
-    my_algorithmic_comparator algo_cmp;
+    uvm_algorithmic_comparator #(simple_item, simple_item, data_transformer)
+        algo_cmp;
     data_transformer transformer;
 
     // Analysis FIFOs for connecting
@@ -150,11 +131,9 @@ package comparator_test_pkg;
       item2.cmd = 2'b01;
 
       // Send to comparator
-      in_order_cmp.write_before(item1);
-      in_order_cmp.write_after(item2);
-
-      `uvm_info("TEST", $sformatf("In-order comparator matches: %0d, mismatches: %0d",
-        in_order_cmp.get_matches(), in_order_cmp.get_mismatches()), UVM_NONE)
+      in_order_cmp.before_export.write(item1);
+      in_order_cmp.after_export.write(item2);
+      `uvm_info("TEST", "In-order comparator write sequence issued", UVM_NONE)
     endfunction
 
     // Test the in-order comparator with mismatching items
@@ -175,11 +154,9 @@ package comparator_test_pkg;
       item2.cmd = 2'b01;
 
       // Send to comparator
-      in_order_cmp.write_before(item1);
-      in_order_cmp.write_after(item2);
-
-      `uvm_info("TEST", $sformatf("In-order comparator matches: %0d, mismatches: %0d",
-        in_order_cmp.get_matches(), in_order_cmp.get_mismatches()), UVM_NONE)
+      in_order_cmp.before_export.write(item1);
+      in_order_cmp.after_export.write(item2);
+      `uvm_info("TEST", "In-order comparator mismatch stimulus issued", UVM_NONE)
     endfunction
 
     // Test the built-in comparator
@@ -200,11 +177,9 @@ package comparator_test_pkg;
       item2.cmd = 2'b10;
 
       // Send to comparator
-      builtin_cmp.write_before(item1);
-      builtin_cmp.write_after(item2);
-
-      `uvm_info("TEST", $sformatf("Built-in comparator matches: %0d, mismatches: %0d",
-        builtin_cmp.get_matches(), builtin_cmp.get_mismatches()), UVM_NONE)
+      builtin_cmp.before_export.write(item1);
+      builtin_cmp.after_export.write(item2);
+      `uvm_info("TEST", "Built-in comparator write sequence issued", UVM_NONE)
     endfunction
 
     // Test the algorithmic comparator
@@ -226,11 +201,9 @@ package comparator_test_pkg;
       after_item.cmd = 2'b00;
 
       // Send to algorithmic comparator
-      algo_cmp.write_before(before_item);
-      algo_cmp.write_after(after_item);
-
-      `uvm_info("TEST", $sformatf("Algorithmic comparator matches: %0d, mismatches: %0d",
-        algo_cmp.get_matches(), algo_cmp.get_mismatches()), UVM_NONE)
+      algo_cmp.before_export.write(before_item);
+      algo_cmp.after_export.write(after_item);
+      `uvm_info("TEST", "Algorithmic comparator write sequence issued", UVM_NONE)
     endfunction
 
     // Test ordering - items should be compared in order
@@ -267,15 +240,13 @@ package comparator_test_pkg;
         order_cmp = new("order_cmp", this);
 
         // Send before items first
-        order_cmp.write_before(item_a1);
-        order_cmp.write_before(item_b1);
+        order_cmp.before_export.write(item_a1);
+        order_cmp.before_export.write(item_b1);
 
         // Now send after items - should match in order
-        order_cmp.write_after(item_a2);
-        order_cmp.write_after(item_b2);
-
-        `uvm_info("TEST", $sformatf("Ordering test - matches: %0d, mismatches: %0d",
-          order_cmp.get_matches(), order_cmp.get_mismatches()), UVM_NONE)
+        order_cmp.after_export.write(item_a2);
+        order_cmp.after_export.write(item_b2);
+        `uvm_info("TEST", "Ordering stimulus issued to comparator", UVM_NONE)
       end
     endfunction
 

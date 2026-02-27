@@ -328,3 +328,27 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
     - improved from 13 pass / 4 fail to 14 pass / 3 fail.
+
+### UVM: update comparator test for current comparator interfaces
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_comparator_test.sv`
+  - Failed with API drift errors:
+    - direct calls to removed helper methods (`write_before`, `write_after`,
+      `get_matches`, `get_mismatches`)
+    - subclass access to local `m_transformer` in
+      `uvm_algorithmic_comparator`
+- Root cause:
+  - The test targeted an older comparator API shape; current `uvm-core`
+    comparators expose analysis exports/imps (`before_export`, `after_export`)
+    and keep internal counters/transformer fields private/local.
+- Fix:
+  - Removed custom algorithmic-comparator subclass that accessed `m_transformer`.
+  - Switched comparator stimulus to current interfaces:
+    - `before_export.write(...)`
+    - `after_export.write(...)`
+  - Replaced logs relying on removed `get_matches/get_mismatches` accessors with
+    stimulus-issued confirmation messages.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_comparator_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - improved from 14 pass / 3 fail to 15 pass / 2 fail.
