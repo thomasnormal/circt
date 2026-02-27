@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(output logic [3:0] y0, output logic [3:0] y1);\n  assign y0 = '0;\n  assign y1 = '1;\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_CONST0_TO_1@1\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: assign y0 = '1;
+// MUTANT: assign y1 = '1;

@@ -98,6 +98,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   shift-assignment spellings (`<<<`, `>>>`, `<<=`, `>>=`).
 - `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign
   forms like `^a`, `^~`, `~^`, `^=`).
+- Constant mutations (`CONST0_TO_1`, `CONST1_TO_0`) cover sized binary/decimal/
+  hex 1-bit literals and unsized tick literals (`1'b*`, `1'd*`, `1'h*`, `'0`,
+  `'1`).
 - Mutation application must use the same site-index contract (code-only spans),
   otherwise `NATIVE_<OP>@<n>` can target different textual occurrences.
 

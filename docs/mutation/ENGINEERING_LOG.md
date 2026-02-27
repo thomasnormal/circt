@@ -51,3 +51,13 @@
 - changes made:
   - Tightened `XOR_TO_OR` site detection in planner and mutator to binary XOR only.
   - Added guards for XNOR and assignment forms (`^~`, `~^`, `^=`), and ensured site-index parity between planner and mutator.
+
+## 2026-02-27 (constant literal coverage broadening)
+
+- realizations:
+  - Many real SV designs use unsized tick constants and hex 1-bit literals (`'0`, `'1`, `1'h0`, `1'h1`) rather than only decimal/binary 1-bit constants.
+  - Limiting stuck-at mutations to `1'b*`/`1'd*` leaves practical constant-fault space under-exercised.
+
+- changes made:
+  - Extended `CONST0_TO_1`/`CONST1_TO_0` detection and rewrite support to include `1'h0`/`1'h1` and `'0`/`'1`.
+  - Refactored constant-flip rewrite logic into a single helper to avoid duplicated token-mapping code.

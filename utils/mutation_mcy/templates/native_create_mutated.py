@@ -115,6 +115,26 @@ def replace_nth(pattern, repl, nth: int):
     return True
 
 
+def flip_const01(token: str) -> str:
+    if token == "1'b0":
+        return "1'b1"
+    if token == "1'd0":
+        return "1'd1"
+    if token == "1'h0":
+        return "1'h1"
+    if token == "'0":
+        return "'1"
+    if token == "1'b1":
+        return "1'b0"
+    if token == "1'd1":
+        return "1'd0"
+    if token == "1'h1":
+        return "1'h0"
+    if token == "'1":
+        return "'0"
+    return token
+
+
 def find_comparator_token(token: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -425,14 +445,14 @@ elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
 elif op == 'CONST0_TO_1':
     changed = replace_nth(
-        r"1'b0|1'd0",
-        lambda m: "1'b1" if m.group(0).endswith("b0") else "1'd1",
+        r"1'b0|1'd0|1'h0|'0",
+        lambda m: flip_const01(m.group(0)),
         site_index,
     )
 elif op == 'CONST1_TO_0':
     changed = replace_nth(
-        r"1'b1|1'd1",
-        lambda m: "1'b0" if m.group(0).endswith("b1") else "1'd0",
+        r"1'b1|1'd1|1'h1|'1",
+        lambda m: flip_const01(m.group(0)),
         site_index,
     )
 elif op == 'ADD_TO_SUB':
