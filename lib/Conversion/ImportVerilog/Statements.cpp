@@ -1701,8 +1701,13 @@ struct StmtVisitor {
           while (isa_and_nonnull<moore::ConversionOp, moore::IntToLogicOp,
                                  moore::LogicToIntOp>(maybeConst.getDefiningOp()))
             maybeConst = maybeConst.getDefiningOp()->getOperand(0);
-          if (auto defOp = maybeConst.getDefiningOp<moore::ConstantOp>())
-            itemConsts.push_back(defOp.getValueAttr());
+          if (auto defOp = maybeConst.getDefiningOp<moore::ConstantOp>()) {
+            // The two-state exhaustiveness heuristic must ignore constants that
+            // carry X/Z bits. Their raw values can spuriously cover the full
+            // value range and incorrectly suppress an explicit default branch.
+            if (!defOp.getValue().hasUnknown())
+              itemConsts.push_back(defOp.getValueAttr());
+          }
 
           if (isa<moore::StringType>(caseExpr.getType())) {
             // String case statement - use string comparison.
