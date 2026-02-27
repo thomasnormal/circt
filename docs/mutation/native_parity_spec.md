@@ -86,6 +86,8 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   entries (unless `planner_policy` is explicitly set to `legacy`).
 - Site detection is lexer-aware for structural validity: mutation tokens inside
   comments and string literals are ignored.
+- Mutation application must use the same site-index contract (code-only spans),
+  otherwise `NATIVE_<OP>@<n>` can target different textual occurrences.
 
 ## Yosys Mapping Notes
 
