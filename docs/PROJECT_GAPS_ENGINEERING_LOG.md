@@ -112,3 +112,20 @@
     - `aot-native-module-init-empty-telemetry.mlir`
     - `aot-native-module-init-skip-telemetry.mlir`
     - `--filter 'Tools/circt-sim/aot-native-module-init'`
+
+### UVM: add package timescale to bundled `uvm-core` and enable simple parse test
+- Repro:
+  - `Runtime/uvm/uvm_simple_test.sv` failed with:
+    `error: design element does not have a time scale defined but others in the design do`
+    when parsed against `--uvm-path=.../uvm-core`.
+- Root cause:
+  - `lib/Runtime/uvm-core/src/uvm_pkg.sv` did not declare a `timescale`, while
+    tests compile compilation units that do.
+- Fix:
+  - Added `` `timescale 1ns/1ps `` to `uvm_pkg.sv`.
+  - Updated `test/Runtime/uvm/uvm_simple_test.sv` to use bundled
+    `lib/Runtime/uvm-core` in its RUN line.
+- Tests:
+  - `llvm-lit --filter 'Runtime/uvm/uvm_simple_test.sv' test/Runtime/uvm` now passes.
+  - `llvm-lit --filter 'Runtime/uvm/' test/Runtime/uvm` improved to 8 passing / 9 failing
+    (remaining failures are API-compatibility mismatches in the test corpus).
