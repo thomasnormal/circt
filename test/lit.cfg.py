@@ -63,7 +63,7 @@ tools = [
     'circt-capi-ir-test', 'circt-capi-om-test', 'circt-capi-firrtl-test',
     'circt-capi-firtool-test', 'circt-capi-rtg-test', 'circt-capi-rtgtest-test',
     'circt-capi-support-test', 'circt-cov', 'circt-dis', 'circt-lec',
-    'circt-mut', 'circt-sim', 'circt-sim-compile',
+    'circt-mut', 'circt-sim', 'circt-compile',
     'circt-reduce', 'circt-synth', 'circt-test', 'circt-translate',
     'domaintool', 'firld', 'firtool', 'hlstool', 'om-linker', 'kanagawatool'
 ]

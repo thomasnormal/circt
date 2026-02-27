@@ -1,10 +1,10 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s
 
-// Verify that circt-sim-compile correctly reports compilation statistics.
+// Verify that circt-compile correctly reports compilation statistics.
 // Has one external declaration (counted as external) and one compilable body.
 
-// CHECK: [circt-sim-compile] Functions: 2 total, 1 external, 0 rejected, 1 compilable
-// CHECK: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// CHECK: [circt-compile] Functions: 2 total, 1 external, 0 rejected, 1 compilable
+// CHECK: [circt-compile] 1 functions + 0 processes ready for codegen
 
 // External declaration — counted but not compiled.
 func.func private @external_fn(i32) -> i32

@@ -1,13 +1,13 @@
-// RUN: circt-sim-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_STATS=1 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
 
 // Regression: call_indirect entry-table dispatch must only normalize pointer
 // arguments for native entries. Trampoline entries dispatch back into the
 // interpreter and must preserve raw pointer payloads (including low-bit tags).
 //
-// COMPILE: [circt-sim-compile] Functions: 3 total, 0 external, 0 rejected, 3 compilable
-// COMPILE: [circt-sim-compile] Demoted 2 intercepted functions to trampolines
-// COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] Functions: 3 total, 0 external, 0 rejected, 3 compilable
+// COMPILE: [circt-compile] Demoted 2 intercepted functions to trampolines
+// COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // RUNTIME: Entry table: 1 entries for tagged-FuncId dispatch (0 native, 1 non-native)
 // RUNTIME: Entry-table native calls:         0

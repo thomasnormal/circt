@@ -1,20 +1,20 @@
-// RUN: circt-sim-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=COMPILE-DEFAULT
+// RUN: circt-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=COMPILE-DEFAULT
 // RUN: circt-sim %s --compiled=%t.default.so 2>&1 | FileCheck %s --check-prefix=DEFAULT
-// RUN: env CIRCT_AOT_ALLOW_NATIVE_UVM_HIERARCHY=1 circt-sim-compile %s -o %t.optin.so 2>&1 | FileCheck %s --check-prefix=COMPILE-OPTIN
+// RUN: env CIRCT_AOT_ALLOW_NATIVE_UVM_HIERARCHY=1 circt-compile %s -o %t.optin.so 2>&1 | FileCheck %s --check-prefix=COMPILE-OPTIN
 // RUN: env CIRCT_AOT_ALLOW_NATIVE_UVM_HIERARCHY=1 circt-sim %s --compiled=%t.optin.so 2>&1 | FileCheck %s --check-prefix=OPTIN
 
 // Regression: keep UVM hierarchy mutators interpreted by default.
 // Native dispatch of this path can bypass interpreter-side hierarchy updates.
 //
-// COMPILE-DEFAULT: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE-DEFAULT: [circt-sim-compile] Demoted 1 intercepted functions to trampolines
-// COMPILE-DEFAULT: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE-DEFAULT: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE-DEFAULT: [circt-compile] Demoted 1 intercepted functions to trampolines
+// COMPILE-DEFAULT: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // DEFAULT: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // DEFAULT: out=33
 //
-// COMPILE-OPTIN: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE-OPTIN: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// COMPILE-OPTIN: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE-OPTIN: [circt-compile] 2 functions + 0 processes ready for codegen
 //
 // OPTIN: Loaded 2 compiled functions: 2 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // OPTIN: out=33

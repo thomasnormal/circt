@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so
+// RUN: circt-compile %s -o %t.so
 // RUN: circt-sim %s --compiled=%t.so --top top 2>&1 | FileCheck %s
 //
 // Regression: AOT/native func.call dispatch must not silently bypass unhandled

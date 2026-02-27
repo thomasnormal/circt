@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=STATS
 //
@@ -20,7 +20,7 @@
 //   t=6ns:  print clk=1
 //   t=11ns: print clk=0
 //
-// COMPILE: [circt-sim-compile] Compiled 1 process bodies
+// COMPILE: [circt-compile] Compiled 1 process bodies
 //
 // SIM: clk=0
 // SIM: clk=1

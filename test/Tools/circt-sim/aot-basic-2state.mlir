@@ -1,5 +1,5 @@
 // RUN: circt-sim %s | FileCheck %s
-// RUN: circt-sim-compile %s -o %t.so -v 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so -v 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --max-time=20000000 --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=DISPATCH
 
 // Test AOT process body compilation for a 2-state signal inverter.
@@ -14,8 +14,8 @@
 // CHECK: b=1
 // CHECK: b=0
 //
-// COMPILE: [circt-sim-compile] Compiled 1 process bodies
-// COMPILE: [circt-sim-compile] 0 functions + 1 processes ready for codegen
+// COMPILE: [circt-compile] Compiled 1 process bodies
+// COMPILE: [circt-compile] 0 functions + 1 processes ready for codegen
 //
 // DISPATCH: Compiled process dispatch: 1/1 processes wired
 

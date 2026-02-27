@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=STATS
 //
@@ -14,10 +14,10 @@
 //   # interpreted
 //   time circt-sim aot-microbench.mlir
 //   # compiled (AOT)
-//   circt-sim-compile aot-microbench.mlir -o /tmp/mb.so
+//   circt-compile aot-microbench.mlir -o /tmp/mb.so
 //   time circt-sim aot-microbench.mlir --compiled=/tmp/mb.so
 //
-// COMPILE: [circt-sim-compile] Compiled 1 process bodies
+// COMPILE: [circt-compile] Compiled 1 process bodies
 //
 // SIM: result=49995000
 //

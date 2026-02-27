@@ -561,8 +561,12 @@ MooreString __moore_process_get_randstate(int64_t handle);
 /// @param state MooreString containing the serialized RNG state
 void __moore_process_set_randstate(int64_t handle, MooreString state);
 
-/// Seed the process random generator.
+/// Seed process-randomization state.
 /// Implements SystemVerilog `process::srandom()`.
+/// xrun-compatible behavior:
+/// - reseeds the legacy `$urandom` stream for the process
+/// - reseeds process randomization/get_randstate stream
+/// - does not rewind legacy `$random` stream
 /// @param handle Process handle (as 64-bit value)
 /// @param seed Seed value
 void __moore_process_srandom(int64_t handle, int32_t seed);
@@ -677,10 +681,23 @@ void __moore_wait_condition(int32_t condition);
 /// @return A 32-bit pseudo-random unsigned integer
 uint32_t __moore_urandom(void);
 
-/// Seed the pseudo-random number generator.
-/// Implements the seeded form of $urandom: $urandom(seed).
-/// @param seed The seed value for the random number generator
-/// @return A 32-bit pseudo-random unsigned integer
+/// Advance the legacy xrun-compatible $urandom state machine by one draw.
+/// This helper mutates the caller-provided state and returns the draw result.
+/// Exposed so interpreter and native runtime share one implementation.
+/// @param state Pointer to caller-owned 32-bit RNG state
+/// @return The next $urandom value for this state stream
+uint32_t __moore_xrun_urandom_next(uint32_t *state);
+
+/// Map a SystemVerilog seed to xrun-compatible legacy $urandom stream state.
+/// In xrun, seed==0 maps to a non-zero internal bootstrap state.
+/// @param seed Seed argument from process::srandom or $urandom(seed)
+/// @return Internal state to use for the legacy $urandom stream
+uint32_t __moore_xrun_urandom_state_from_seed(int32_t seed);
+
+/// Deterministic seeded form of $urandom: $urandom(seed).
+/// xrun-compatible behavior: pure in `seed` (does not mutate process RNG state).
+/// @param seed The input seed value
+/// @return A 32-bit pseudo-random unsigned integer derived from `seed`
 uint32_t __moore_urandom_seeded(int32_t seed);
 
 /// Generate a pseudo-random unsigned integer within a range.
@@ -696,10 +713,18 @@ uint32_t __moore_urandom_range(uint32_t maxval, uint32_t minval);
 /// @return A 32-bit random signed integer
 int32_t __moore_random(void);
 
-/// Seed the true random number generator and return a random value.
-/// Implements the seeded form of $random: $random(seed).
-/// @param seed The seed value for the random number generator
-/// @return A 32-bit random signed integer
+/// Advance the legacy xrun-compatible $random state machine by one draw.
+/// This helper mutates the caller-provided state and returns the draw result.
+/// Exposed so interpreter and native runtime share one implementation.
+/// @param state Pointer to caller-owned 32-bit RNG state
+/// @return The next $random value for this state stream
+int32_t __moore_xrun_random_next(uint32_t *state);
+
+/// Deterministic seeded form of $random: $random(seed).
+/// xrun-compatible behavior: returns a value derived from the next LCG state.
+/// ImportVerilog lowering handles inout seed update separately.
+/// @param seed The input seed value
+/// @return A 32-bit random signed integer derived from `seed`
 int32_t __moore_random_seeded(int32_t seed);
 
 //===----------------------------------------------------------------------===//

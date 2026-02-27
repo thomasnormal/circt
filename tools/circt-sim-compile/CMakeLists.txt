@@ -8,11 +8,11 @@ set(LLVM_LINK_COMPONENTS
   Passes
 )
 
-add_circt_tool(circt-sim-compile
+add_circt_tool(circt-compile
   circt-sim-compile.cpp
   LowerTaggedIndirectCalls.cpp
 )
-target_link_libraries(circt-sim-compile
+target_link_libraries(circt-compile
   PRIVATE
   CIRCTCombToArith
   CIRCTCombToLLVM
@@ -44,5 +44,5 @@ target_link_libraries(circt-sim-compile
   LLVMTarget
 )
 
-llvm_update_compile_flags(circt-sim-compile)
-mlir_check_all_link_libraries(circt-sim-compile)
+llvm_update_compile_flags(circt-compile)
+mlir_check_all_link_libraries(circt-compile)

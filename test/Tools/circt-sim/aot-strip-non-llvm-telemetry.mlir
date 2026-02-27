@@ -1,10 +1,10 @@
-// RUN: circt-sim-compile -v %s -o %t.so 2>&1 | FileCheck %s
+// RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s
 
-// CHECK: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// CHECK: [circt-sim-compile] Stripped 1 functions with non-LLVM ops
-// CHECK: [circt-sim-compile] Top residual non-LLVM strip reasons:
+// CHECK: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// CHECK: [circt-compile] Stripped 1 functions with non-LLVM ops
+// CHECK: [circt-compile] Top residual non-LLVM strip reasons:
 // CHECK: 1x sig_nonllvm_arg:!hw.struct<f: i8>
-// CHECK: [circt-sim-compile] Residual stripped symbols (top 20):
+// CHECK: [circt-compile] Residual stripped symbols (top 20):
 // CHECK: strip_me [sig_nonllvm_arg:!hw.struct<f: i8>]
 
 module {

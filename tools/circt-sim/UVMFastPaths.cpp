@@ -681,8 +681,15 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     }
   }
 
-  // m_uvm_get_root / uvm_get_report_object: return cached uvm_root::m_inst.
-  if ((matchesMethod("m_uvm_get_root") ||
+  // m_uvm_get_root / uvm_get_report_object fast-path is opt-in. Returning
+  // m_inst too early can race root construction and leave phase/domain state
+  // partially initialized for subsequent component::new calls.
+  static bool enableUvmGetRootFastPath = []() {
+    const char *env = std::getenv("CIRCT_SIM_ENABLE_UVM_GET_ROOT_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (enableUvmGetRootFastPath &&
+      (matchesMethod("m_uvm_get_root") ||
        matchesMethod("uvm_get_report_object")) &&
       funcOp.getNumResults() >= 1) {
     // Look up uvm_root::m_inst global for the root singleton pointer.

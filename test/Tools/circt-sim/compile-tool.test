@@ -1,0 +1,1 @@
+// RUN: circt-compile --help > /dev/null

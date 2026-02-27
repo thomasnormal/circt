@@ -136,6 +136,20 @@ uint64_t LLHDProcessInterpreter::normalizeNativeCallPointerArg(
                  << llvm::format_hex(to, 16) << "\n";
   };
 
+  if (tracePtr && calleeName.contains("uvm_callback_iter::first")) {
+    uint64_t blockOff = 0;
+    MemoryBlock *blk = findMemoryBlockByAddress(rawAddr, procId, &blockOff);
+    llvm::errs() << "[AOT PTR] callback_iter::first raw="
+                 << llvm::format_hex(rawAddr, 16)
+                 << " mapped_block=" << (blk ? 1 : 0);
+    if (blk)
+      llvm::errs() << " off=" << blockOff << " size=" << blk->size
+                   << " host="
+                   << llvm::format_hex(
+                          reinterpret_cast<uint64_t>(blk->bytes()), 16);
+    llvm::errs() << "\n";
+  }
+
   auto tryVirtualToHost = [&](uint64_t candidate,
                               llvm::StringRef kind) -> uint64_t {
     if (candidate == 0)
@@ -531,7 +545,11 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
       return false;
     auto [resolvedQueueAddr, resolvedStrongHint] =
         promoteToSequencerQueue(resolvedOwnerAddr);
-    if (resolvedQueueAddr == 0 || !sequencerItemFifo.contains(resolvedQueueAddr))
+    // During initial get_next_item waits, the producer may not have pushed yet,
+    // so the sequencer queue won't exist in `sequencerItemFifo` yet. Still
+    // accept the owner-resolved queue address so waiters bind to the right
+    // queue instead of falling back to global wakeups.
+    if (resolvedQueueAddr == 0)
       return false;
     if (resolvedQueueAddr != queueAddr)
       strongHint = true;

@@ -202,7 +202,8 @@ int main() {
 
     // Test copy
     char source[] = "hello";
-    arr = __moore_dyn_array_new_copy(5, source);
+    MooreQueue init = {source, static_cast<int64_t>(sizeof(source) - 1)};
+    arr = __moore_dyn_array_new_copy(5, &init);
     CHECK(arr.data != nullptr, "dyn_array_new_copy should return non-null");
     CHECK(std::string(static_cast<char*>(arr.data), 5) == "hello",
           "dyn_array_new_copy should copy data");

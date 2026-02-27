@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
 //
 // Regression: interpreted call_indirect fallback must not reuse stale block-arg
@@ -7,7 +7,7 @@
 // The i65 signature forces call_indirect to skip native entry dispatch and
 // execute the callee in interpreter fallback.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // RUNTIME-NOT: r=12
 // RUNTIME: r=5
 

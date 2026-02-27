@@ -1,5 +1,5 @@
-// RUN: circt-sim-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=DEFAULT
-// RUN: env CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING=1 circt-sim-compile %s -o %t.optin.so 2>&1 | FileCheck %s --check-prefix=OPTIN
+// RUN: circt-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=DEFAULT
+// RUN: env CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING=1 circt-compile %s -o %t.optin.so 2>&1 | FileCheck %s --check-prefix=OPTIN
 // RUN: circt-sim %s --top test --compiled=%t.default.so 2>&1 | FileCheck %s --check-prefix=RUN-DEFAULT
 // RUN: env CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING=1 circt-sim %s --top test --compiled=%t.optin.so 2>&1 | FileCheck %s --check-prefix=RUN-OPTIN
 
@@ -8,10 +8,10 @@
 // normalization landed in the Moore runtime.
 //
 // DEFAULT-NOT: Demoted 1 intercepted functions to trampolines
-// DEFAULT: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// DEFAULT: [circt-compile] 2 functions + 0 processes ready for codegen
 //
 // OPTIN-NOT: Demoted 1 intercepted functions to trampolines
-// OPTIN: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// OPTIN: [circt-compile] 2 functions + 0 processes ready for codegen
 //
 // RUN-DEFAULT: sev=0
 // RUN-OPTIN: sev=0

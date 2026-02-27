@@ -9,7 +9,7 @@
 // Stable C ABI contract between circt-sim (the runtime) and AOT-compiled
 // simulation shared objects (.so). This header is used by both sides:
 //
-//   Compiler side (circt-sim-compile):
+//   Compiler side (circt-compile):
 //     - Emits code that calls __circt_sim_* runtime functions declared here.
 //     - Exports a CirctSimCompiledModule descriptor via
 //       circt_sim_get_compiled_module().

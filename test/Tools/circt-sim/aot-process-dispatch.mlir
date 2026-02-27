@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=STATS
 //
@@ -10,7 +10,7 @@
 // process through the compiled entry point, giving non-zero compiled callback
 // invocations while producing identical output.
 //
-// COMPILE: [circt-sim-compile] Compiled 1 process bodies
+// COMPILE: [circt-compile] Compiled 1 process bodies
 //
 // SIM: b=1
 // SIM: b=0

@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so
+// RUN: circt-compile %s -o %t.so
 // RUN: circt-sim %s --compiled=%t.so | FileCheck %s --check-prefix=OK
 // RUN: not --crash env CIRCT_AOT_TRAP_FID=0 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=TRAP
 

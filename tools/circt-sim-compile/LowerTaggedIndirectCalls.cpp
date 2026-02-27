@@ -297,7 +297,7 @@ void runLowerTaggedIndirectCalls(Module &M) {
   }
 
   if (lowered > 0) {
-    errs() << "[circt-sim-compile] LowerTaggedIndirectCalls: lowered "
+    errs() << "[circt-compile] LowerTaggedIndirectCalls: lowered "
            << lowered << " indirect calls\n";
   }
 }

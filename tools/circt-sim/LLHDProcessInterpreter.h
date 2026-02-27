@@ -389,6 +389,12 @@ struct ProcessExecutionState {
   /// Per-process random generator for process::srandom/get_randstate.
   std::mt19937 randomGenerator;
 
+  /// Legacy xrun-compatible $random stream state.
+  uint32_t legacyRandomState = 0;
+
+  /// Legacy xrun-compatible $urandom stream state.
+  uint32_t legacyUrandomState = 0;
+
   /// Flag indicating whether the process is waiting.
   bool waiting = false;
 
@@ -3899,16 +3905,16 @@ private:
     return insertIt->second;
   }
 
-  /// The object address of the last __moore_randomize_basic call.
+  /// Per-process object address of the last __moore_randomize_basic call.
   /// Used to associate subsequent __moore_randomize_with_range/ranges calls
   /// with the same per-object RNG, since those calls don't receive the
   /// object pointer directly.
-  uint64_t lastRandomizeObjAddr = 0;
+  llvm::DenseMap<ProcessId, uint64_t> lastRandomizeObjAddrByProcess;
 
-  /// Pending seed from old-style @srandom() stubs (no object pointer).
-  /// When set, the next __moore_randomize_basic call will use this seed
-  /// instead of the default per-object seed.
-  std::optional<uint32_t> pendingSrandomSeed;
+  /// Pending seeds from old-style @srandom() stubs (no object pointer).
+  /// Scoped per process to avoid cross-process seed contamination.
+  /// The next __moore_randomize_basic call in the same process consumes it.
+  llvm::DenseMap<ProcessId, uint32_t> pendingSrandomSeeds;
 
   /// Tracks active function call depth for recursion detection.
   /// Maps funcOp operation pointer to current call depth. Used to enable
