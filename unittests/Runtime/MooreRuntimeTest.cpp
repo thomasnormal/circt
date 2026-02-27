@@ -970,6 +970,24 @@ TEST(MooreRuntimeSignalRegistryTest, FallbackToStubWhenNotRegistered) {
   __moore_signal_registry_clear();
 }
 
+TEST(MooreRuntimeSignalRegistryTest,
+     HierarchicalLookupStripsArrayIndicesPerComponent) {
+  __moore_signal_registry_clear();
+  mockSignalStore.reset();
+
+  EXPECT_EQ(__moore_signal_registry_register("top.dut.mem", 500, 32), 1);
+  EXPECT_EQ(__moore_signal_registry_register("top.dut.mem[3]", 501, 32), 1);
+
+  // Exact indexed path should win when present.
+  EXPECT_EQ(__moore_signal_registry_lookup_hierarchical("top.dut.mem[3]"), 501u);
+
+  // Non-exact indexed paths should still resolve via stripped base path.
+  EXPECT_EQ(__moore_signal_registry_lookup_hierarchical("top.dut.mem[7]"), 500u);
+  EXPECT_EQ(__moore_signal_registry_lookup_hierarchical("top/dut/mem[2]"), 500u);
+
+  __moore_signal_registry_clear();
+}
+
 TEST(MooreRuntimeStringTest, StringToLower) {
   char data[] = "Hello World";
   MooreString str = {data, 11};
