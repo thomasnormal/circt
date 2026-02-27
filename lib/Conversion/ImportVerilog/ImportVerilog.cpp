@@ -752,11 +752,43 @@ static bool isConfigKeywordIdentifierCompat(StringRef word) {
 /// compilation-unit syntax where config keywords must retain keyword meaning.
 static bool hasProbableConfigCompilationUnit(StringRef text) {
   auto startsWithUnitKeyword = [](StringRef line, StringRef keyword) {
-    if (!line.consume_front(keyword))
+    if (!line.starts_with(keyword))
       return false;
+    if (line.size() == keyword.size())
+      return true;
+    return std::isspace(static_cast<unsigned char>(line[keyword.size()])) != 0;
+  };
+  auto isLikelyCompilationUnitKeywordUse = [&](StringRef line,
+                                               StringRef keyword) {
+    if (!startsWithUnitKeyword(line, keyword))
+      return false;
+
+    line = line.drop_front(keyword.size()).ltrim();
     if (line.empty())
       return true;
-    return std::isspace(static_cast<unsigned char>(line.front())) != 0;
+
+    // Procedural uses like `config = ...` / `library <= ...` should not be
+    // treated as compilation-unit directives.
+    char first = line.front();
+    if (first == '=' || first == ',' || first == '.' || first == ':' ||
+        first == ')' || first == ']' || first == '}' || first == '+' ||
+        first == '-' || first == '*' || first == '/' || first == '%' ||
+        first == '&' || first == '|' || first == '^' || first == '?')
+      return false;
+    if (first == '<' && line.size() > 1 && line[1] == '=')
+      return false;
+
+    // Guard against assignment-looking lines.
+    size_t semi = line.find(';');
+    size_t eq = line.find('=');
+    if (eq != StringRef::npos && (semi == StringRef::npos || eq < semi))
+      return false;
+
+    if (keyword == "include")
+      return first == '"' || first == '<' || isIdentifierStartChar(first) ||
+             first == '\\';
+
+    return isIdentifierStartChar(first) || first == '\\';
   };
   size_t lineStart = 0;
   while (lineStart <= text.size()) {
@@ -764,9 +796,9 @@ static bool hasProbableConfigCompilationUnit(StringRef text) {
     if (lineEnd == StringRef::npos)
       lineEnd = text.size();
     auto line = text.slice(lineStart, lineEnd).ltrim();
-    if (startsWithUnitKeyword(line, "config") ||
-        startsWithUnitKeyword(line, "library") ||
-        startsWithUnitKeyword(line, "include"))
+    if (isLikelyCompilationUnitKeywordUse(line, "config") ||
+        isLikelyCompilationUnitKeywordUse(line, "library") ||
+        isLikelyCompilationUnitKeywordUse(line, "include"))
       return true;
     if (lineEnd == text.size())
       break;
