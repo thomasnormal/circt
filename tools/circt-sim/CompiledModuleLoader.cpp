@@ -66,11 +66,11 @@ CompiledModuleLoader::load(llvm::StringRef path) {
     return nullptr;
   }
 
-  // Validate ABI version.
-  if (loader->compiledModule->abi_version != CIRCT_SIM_ABI_VERSION) {
-    llvm::errs() << "[circt-sim] ABI version mismatch: .so has v"
-                 << loader->compiledModule->abi_version << ", runtime expects v"
-                 << CIRCT_SIM_ABI_VERSION << "\n";
+  // Validate ABI version. Accept v4 (legacy) and v5+ (arena).
+  uint32_t abiVer = loader->compiledModule->abi_version;
+  if (abiVer != 4 && abiVer != CIRCT_SIM_ABI_VERSION) {
+    llvm::errs() << "[circt-sim] ABI version mismatch: .so has v" << abiVer
+                 << ", runtime expects v4 or v" << CIRCT_SIM_ABI_VERSION << "\n";
     dlclose(loader->dlHandle);
     return nullptr;
   }
@@ -114,6 +114,42 @@ CompiledModuleLoader::load(llvm::StringRef path) {
   if (ctxGlobalSym)
     loader->ctxGlobalPtr = reinterpret_cast<void **>(ctxGlobalSym);
 
+  // v5 arena setup: allocate a single contiguous block for all mutable globals.
+  if (abiVer >= 5 && loader->compiledModule->arena_size > 0) {
+    uint32_t aSize = loader->compiledModule->arena_size;
+    loader->arenaBase = std::aligned_alloc(16, aSize);
+    if (!loader->arenaBase) {
+      llvm::errs() << "[circt-sim] Failed to allocate arena (" << aSize
+                   << " bytes)\n";
+      dlclose(loader->dlHandle);
+      return nullptr;
+    }
+    std::memset(loader->arenaBase, 0, aSize);
+    loader->arenaAllocSize = aSize;
+
+    // Write the arena base pointer into the .so's __circt_sim_arena_base.
+    auto *arenaBaseSym = dlsym(loader->dlHandle, "__circt_sim_arena_base");
+    if (arenaBaseSym) {
+      *reinterpret_cast<void **>(arenaBaseSym) = loader->arenaBase;
+    } else {
+      llvm::errs()
+          << "[circt-sim] Warning: .so missing __circt_sim_arena_base symbol\n";
+    }
+
+    // Build the arena global name set for skip-checking in patch methods.
+    uint32_t numArenaGlobals = loader->compiledModule->num_arena_globals;
+    if (numArenaGlobals > 0 && loader->compiledModule->arena_global_names) {
+      for (uint32_t i = 0; i < numArenaGlobals; ++i) {
+        const char *name = loader->compiledModule->arena_global_names[i];
+        if (name)
+          loader->arenaGlobalNames.insert(name);
+      }
+    }
+
+    llvm::errs() << "[circt-sim] Allocated arena: " << aSize << " bytes, "
+                 << numArenaGlobals << " arena globals\n";
+  }
+
   llvm::errs() << "[circt-sim] Loaded compiled module '" << path << "': "
                << loader->funcMap.size() << " functions";
   if (numTrampolines > 0)
@@ -131,6 +167,7 @@ CompiledModuleLoader::load(llvm::StringRef path) {
 }
 
 CompiledModuleLoader::~CompiledModuleLoader() {
+  std::free(arenaBase); // no-op if nullptr
   if (dlHandle)
     dlclose(dlHandle);
 }
@@ -154,11 +191,17 @@ void CompiledModuleLoader::applyGlobalPatches(
   if (!compiledModule || compiledModule->num_global_patches == 0)
     return;
 
-  unsigned patched = 0, missed = 0;
+  unsigned patched = 0, missed = 0, skippedArena = 0;
   for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
     const char *name = compiledModule->global_patch_names[i];
     void *soAddr = compiledModule->global_patch_addrs[i];
     uint32_t size = compiledModule->global_patch_sizes[i];
+
+    // Skip globals that live in the arena (already wired up).
+    if (arenaGlobalNames.count(name)) {
+      ++skippedArena;
+      continue;
+    }
 
     auto it = globalMemoryBlocks.find(name);
     if (it == globalMemoryBlocks.end()) {
@@ -173,7 +216,10 @@ void CompiledModuleLoader::applyGlobalPatches(
   }
 
   llvm::errs() << "[circt-sim] Applied " << patched
-               << " global patches (" << missed << " not found)\n";
+               << " global patches (" << missed << " not found";
+  if (skippedArena)
+    llvm::errs() << ", " << skippedArena << " in arena";
+  llvm::errs() << ")\n";
 }
 
 void CompiledModuleLoader::aliasGlobals(
@@ -181,11 +227,17 @@ void CompiledModuleLoader::aliasGlobals(
   if (!compiledModule || compiledModule->num_global_patches == 0)
     return;
 
-  unsigned newlyAliased = 0, alreadyAliased = 0, missed = 0;
+  unsigned newlyAliased = 0, alreadyAliased = 0, missed = 0, skippedArena = 0;
   for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
     const char *name = compiledModule->global_patch_names[i];
     void *soAddr = compiledModule->global_patch_addrs[i];
     uint32_t soSize = compiledModule->global_patch_sizes[i];
+
+    // Skip globals that live in the arena.
+    if (arenaGlobalNames.count(name)) {
+      ++skippedArena;
+      continue;
+    }
 
     auto it = globalMemoryBlocks.find(name);
     if (it == globalMemoryBlocks.end()) {
@@ -207,6 +259,8 @@ void CompiledModuleLoader::aliasGlobals(
                << " globals to .so storage";
   if (alreadyAliased)
     llvm::errs() << " (" << alreadyAliased << " already pre-aliased, skipped)";
+  if (skippedArena)
+    llvm::errs() << " (" << skippedArena << " in arena, skipped)";
   if (missed)
     llvm::errs() << " (" << missed << " not found in interpreter)";
   llvm::errs() << "\n";
@@ -217,11 +271,17 @@ void CompiledModuleLoader::preAliasGlobals(
   if (!compiledModule || compiledModule->num_global_patches == 0)
     return;
 
-  unsigned preAliased = 0;
+  unsigned preAliased = 0, skippedArena = 0;
   for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i) {
     const char *name = compiledModule->global_patch_names[i];
     void *soAddr = compiledModule->global_patch_addrs[i];
     uint32_t soSize = compiledModule->global_patch_sizes[i];
+
+    // Skip globals that live in the arena.
+    if (arenaGlobalNames.count(name)) {
+      ++skippedArena;
+      continue;
+    }
 
     // Create a pre-aliased MemoryBlock pointing directly to .so storage.
     // initializeGlobals() will detect this and write initializer data
@@ -233,5 +293,34 @@ void CompiledModuleLoader::preAliasGlobals(
   }
 
   llvm::errs() << "[circt-sim] Pre-aliased " << preAliased
-               << " globals to .so storage\n";
+               << " globals to .so storage";
+  if (skippedArena)
+    llvm::errs() << " (" << skippedArena << " in arena, skipped)";
+  llvm::errs() << "\n";
+}
+
+void CompiledModuleLoader::setupArenaGlobals(
+    llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const {
+  if (!compiledModule || !arenaBase ||
+      compiledModule->num_arena_globals == 0)
+    return;
+
+  unsigned mapped = 0;
+  for (uint32_t i = 0; i < compiledModule->num_arena_globals; ++i) {
+    const char *name = compiledModule->arena_global_names[i];
+    uint32_t offset = compiledModule->arena_global_offsets[i];
+    uint32_t size = compiledModule->arena_global_sizes[i];
+    if (!name)
+      continue;
+
+    // Point the MemoryBlock directly into the arena allocation.
+    void *addr = static_cast<char *>(arenaBase) + offset;
+    MemoryBlock block;
+    block.preAlias(addr, size);
+    globalMemoryBlocks[name] = std::move(block);
+    ++mapped;
+  }
+
+  llvm::errs() << "[circt-sim] Mapped " << mapped
+               << " arena globals to memory blocks\n";
 }

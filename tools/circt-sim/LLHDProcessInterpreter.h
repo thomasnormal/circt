@@ -1245,6 +1245,9 @@ public:
   uint64_t getEntryTableSkippedDepthCount() const {
     return entryTableSkippedDepthCount;
   }
+  uint64_t getEntryTableSkippedYieldCount() const {
+    return entryTableSkippedYieldCount;
+  }
   uint32_t getMaxAotDepth() const { return maxAotDepth; }
   void dumpAotHotUncompiledFuncs(llvm::raw_ostream &os, size_t topN) const;
 
@@ -3395,6 +3398,13 @@ private:
   /// This is a structural normalization (no dynamic function calls).
   uint64_t canonicalizeUvmObjectAddress(ProcessId procId, uint64_t addr);
 
+  /// Normalize pointer arguments crossing interpreted -> native func.call.
+  /// This resolves interpreter virtual addresses to host pointers and clears
+  /// low-bit object tags for UVM-style object-method calls.
+  uint64_t normalizeNativeCallPointerArg(ProcessId procId,
+                                         llvm::StringRef calleeName,
+                                         uint64_t rawAddr);
+
   /// Cache a sequence object's runtime vtable using canonical/tag-cleared
   /// address variants so forked/subobject call sites can reuse it.
   void cacheSequenceRuntimeVtableForObject(ProcessId procId, uint64_t objectAddr,
@@ -3442,6 +3452,18 @@ private:
 
   /// Wake one queue-specific waiter first, then unresolved waiters.
   void wakeUvmSequencerGetWaiterForPush(uint64_t queueAddr);
+
+  /// Normalize an object pointer used as a runtime lookup key.
+  /// This canonicalizes allocation-owner aliases and low-bit tagged variants.
+  uint64_t normalizeUvmObjectKey(ProcessId procId, uint64_t addr);
+
+  /// Normalize a sequencer queue address across alias-equivalent pointers.
+  /// Prefers addresses already observed in native sequencer maps/caches.
+  uint64_t normalizeUvmSequencerAddress(ProcessId procId, uint64_t addr);
+
+  /// Resolve interface field shadow signal for a raw pointer value.
+  /// Tries canonicalized and low-tag-cleared address variants.
+  SignalId lookupInterfaceFieldSignal(ProcessId procId, uint64_t addr);
 
   /// Record ownership mapping for sequence item -> sequencer address.
   void recordUvmSequencerItemOwner(uint64_t itemAddr, uint64_t sqrAddr);
@@ -3656,6 +3678,7 @@ private:
   llvm::DenseMap<uint64_t, uint64_t> itemToSequencer;
   uint64_t uvmSeqItemOwnerStores = 0;
   uint64_t uvmSeqItemOwnerErases = 0;
+  uint64_t uvmSeqItemOwnerLive = 0;
   uint64_t uvmSeqItemOwnerPeak = 0;
 
   /// Maps item address to the process waiting for item_done.
@@ -3668,8 +3691,14 @@ private:
   llvm::DenseSet<uint64_t> itemDoneReceived;
 
   /// Outstanding send_request() items per sequence process. These are consumed
-  /// by wait_for_item_done() interception.
+  /// by wait_for_item_done() interception. Kept as a compatibility fallback
+  /// for flows where sequence identity cannot be recovered.
   llvm::DenseMap<ProcessId, std::deque<uint64_t>> sequencePendingItemsByProc;
+
+  /// Outstanding send_request() items per sequence object address.
+  /// Keyed by the sequence handle argument passed to
+  /// uvm_sequencer_base::wait_for_item_done(self, sequence).
+  llvm::DenseMap<uint64_t, std::deque<uint64_t>> sequencePendingItemsBySeq;
 
   /// Maps pull-port / sequencer aliases to dequeued items not yet completed by
   /// item_done. A deque is required because some benches may dequeue multiple
@@ -4198,10 +4227,12 @@ private:
   /// Entry table for tagged-FuncId dispatch (Step 7C).
   /// Populated from CompiledModuleLoader during loadCompiledFunctions().
   const void *const *compiledFuncEntries = nullptr;
+  const uint8_t *compiledFuncFlags = nullptr; // per-FuncId flags from .so
   uint32_t numCompiledAllFuncs = 0;
   uint64_t nativeEntryCallCount = 0;
   uint64_t trampolineEntryCallCount = 0;
   uint64_t entryTableSkippedDepthCount = 0;
+  uint64_t entryTableSkippedYieldCount = 0;
   uint32_t maxAotDepth = 0;
 
   /// Bitmap indicating which FuncId entries are natively compiled functions

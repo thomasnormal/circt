@@ -12,6 +12,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
+#include "circt/Runtime/CirctSimABI.h"
 #include "circt/Runtime/MooreRuntime.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/Support/Format.h"
@@ -687,6 +688,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
               llvm::errs() << "\n";
               __builtin_trap();
+            }
+            // Skip native dispatch for yield-capable functions outside process
+            // context.
+            if (compiledFuncFlags &&
+                (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
+                !activeProcessId) {
+              ++entryTableSkippedYieldCount;
+              goto ci_xfallback_interpreted;
             }
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
@@ -1472,6 +1481,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               llvm::errs() << "\n";
               __builtin_trap();
             }
+            // Skip native dispatch for yield-capable functions outside process
+            // context.
+            if (compiledFuncFlags &&
+                (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
+                !activeProcessId) {
+              ++entryTableSkippedYieldCount;
+              goto ci_static_interpreted;
+            }
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
             if (entryPtr) {
               unsigned numArgs = fOp.getNumArguments();
@@ -1821,7 +1838,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
       if (calleeName.ends_with("::wait_for_grant")) {
         if (!args.empty() && !args[0].isX()) {
-          uint64_t sqrAddr = args[0].getUInt64();
+          uint64_t sqrAddr =
+              normalizeUvmSequencerAddress(procId, args[0].getUInt64());
           if (sqrAddr != 0)
             itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
         }
@@ -1829,7 +1847,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
 
       if (calleeName.ends_with("::send_request") && args.size() >= 3) {
-        uint64_t sqrAddr = args[0].isX() ? 0 : args[0].getUInt64();
+        uint64_t sqrAddr = args[0].isX()
+                               ? 0
+                               : normalizeUvmSequencerAddress(
+                                     procId, args[0].getUInt64());
+        uint64_t seqAddr = args[1].isX()
+                               ? 0
+                               : normalizeUvmObjectKey(procId,
+                                                       args[1].getUInt64());
         uint64_t itemAddr = args[2].isX() ? 0 : args[2].getUInt64();
         uint64_t queueAddr = 0;
         if (itemAddr != 0) {
@@ -1844,10 +1869,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
         if (queueAddr == 0)
           queueAddr = sqrAddr;
+        queueAddr = normalizeUvmSequencerAddress(procId, queueAddr);
         if (itemAddr != 0 && queueAddr != 0) {
           sequencerItemFifo[queueAddr].push_back(itemAddr);
           recordUvmSequencerItemOwner(itemAddr, queueAddr);
           sequencePendingItemsByProc[procId].push_back(itemAddr);
+          if (seqAddr != 0)
+            sequencePendingItemsBySeq[seqAddr].push_back(itemAddr);
           wakeUvmSequencerGetWaiterForPush(queueAddr);
           if (traceSeqEnabled) {
             llvm::errs() << "[SEQ-CI] send_request item=0x"
@@ -1860,15 +1888,60 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
 
       if (calleeName.ends_with("::wait_for_item_done")) {
-        auto pendingIt = sequencePendingItemsByProc.find(procId);
-        if (pendingIt == sequencePendingItemsByProc.end() ||
-            pendingIt->second.empty())
+        uint64_t seqAddr = args.size() > 1 && !args[1].isX()
+                               ? normalizeUvmObjectKey(procId,
+                                                       args[1].getUInt64())
+                               : 0;
+
+        uint64_t itemAddr = 0;
+        auto seqIt = sequencePendingItemsBySeq.end();
+        if (seqAddr != 0) {
+          seqIt = sequencePendingItemsBySeq.find(seqAddr);
+          if (seqIt != sequencePendingItemsBySeq.end() &&
+              !seqIt->second.empty())
+            itemAddr = seqIt->second.front();
+        }
+        auto procIt = sequencePendingItemsByProc.find(procId);
+        if (itemAddr == 0 && procIt != sequencePendingItemsByProc.end() &&
+            !procIt->second.empty())
+          itemAddr = procIt->second.front();
+        if (itemAddr == 0) {
+          if (traceSeqEnabled) {
+            llvm::errs() << "[SEQ-CI] wait_for_item_done miss proc=" << procId
+                         << " seq=0x" << llvm::format_hex(seqAddr, 16)
+                         << "\n";
+          }
           return success();
-        uint64_t itemAddr = pendingIt->second.front();
+        }
+
+        auto erasePendingItemByProc = [&](uint64_t item) {
+          auto it = sequencePendingItemsByProc.find(procId);
+          if (it == sequencePendingItemsByProc.end())
+            return;
+          auto &pending = it->second;
+          auto match = std::find(pending.begin(), pending.end(), item);
+          if (match != pending.end())
+            pending.erase(match);
+          if (pending.empty())
+            sequencePendingItemsByProc.erase(it);
+        };
+        auto erasePendingItemBySeq = [&](uint64_t seqKey, uint64_t item) {
+          if (seqKey == 0)
+            return;
+          auto it = sequencePendingItemsBySeq.find(seqKey);
+          if (it == sequencePendingItemsBySeq.end())
+            return;
+          auto &pending = it->second;
+          auto match = std::find(pending.begin(), pending.end(), item);
+          if (match != pending.end())
+            pending.erase(match);
+          if (pending.empty())
+            sequencePendingItemsBySeq.erase(it);
+        };
+
         if (itemDoneReceived.count(itemAddr)) {
-          pendingIt->second.pop_front();
-          if (pendingIt->second.empty())
-            sequencePendingItemsByProc.erase(pendingIt);
+          erasePendingItemByProc(itemAddr);
+          erasePendingItemBySeq(seqAddr, itemAddr);
           itemDoneReceived.erase(itemAddr);
           finishItemWaiters.erase(itemAddr);
           (void)takeUvmSequencerItemOwner(itemAddr);
@@ -1955,6 +2028,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               llvm::errs() << " name=" << aotFuncEntryNamesById[entry.cachedFid];
             llvm::errs() << "\n";
             __builtin_trap();
+          }
+          // Skip native dispatch for yield-capable functions outside process
+          // context.
+          if (compiledFuncFlags &&
+              (compiledFuncFlags[entry.cachedFid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
+              !activeProcessId) {
+            ++entryTableSkippedYieldCount;
+            goto ci_cache_interpreted;
           }
           auto cachedFuncOp = entry.funcOp;
           unsigned numArgs = cachedFuncOp.getNumArguments();
@@ -3769,7 +3850,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
          calleeName.ends_with("::wait_for_item_done"))) {
       if (calleeName.ends_with("::wait_for_grant")) {
         if (!args.empty() && !args[0].isX()) {
-          uint64_t sqrAddr = args[0].getUInt64();
+          uint64_t sqrAddr =
+              normalizeUvmSequencerAddress(procId, args[0].getUInt64());
           if (sqrAddr != 0)
             itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
         }
@@ -3778,7 +3860,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
 
       if (calleeName.ends_with("::send_request") && args.size() >= 3) {
-        uint64_t sqrAddr = args[0].isX() ? 0 : args[0].getUInt64();
+        uint64_t sqrAddr = args[0].isX()
+                               ? 0
+                               : normalizeUvmSequencerAddress(
+                                     procId, args[0].getUInt64());
+        uint64_t seqAddr = args[1].isX()
+                               ? 0
+                               : normalizeUvmObjectKey(procId,
+                                                       args[1].getUInt64());
         uint64_t itemAddr = args[2].isX() ? 0 : args[2].getUInt64();
         uint64_t queueAddr = 0;
         if (itemAddr != 0) {
@@ -3793,10 +3882,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
         if (queueAddr == 0)
           queueAddr = sqrAddr;
+        queueAddr = normalizeUvmSequencerAddress(procId, queueAddr);
         if (itemAddr != 0 && queueAddr != 0) {
           sequencerItemFifo[queueAddr].push_back(itemAddr);
           recordUvmSequencerItemOwner(itemAddr, queueAddr);
           sequencePendingItemsByProc[procId].push_back(itemAddr);
+          if (seqAddr != 0)
+            sequencePendingItemsBySeq[seqAddr].push_back(itemAddr);
           wakeUvmSequencerGetWaiterForPush(queueAddr);
           if (traceSeq) {
             llvm::errs() << "[SEQ-CI] send_request item=0x"
@@ -3809,15 +3901,60 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
 
       if (calleeName.ends_with("::wait_for_item_done")) {
-        auto pendingIt = sequencePendingItemsByProc.find(procId);
-        if (pendingIt == sequencePendingItemsByProc.end() ||
-            pendingIt->second.empty())
+        uint64_t seqAddr = args.size() > 1 && !args[1].isX()
+                               ? normalizeUvmObjectKey(procId,
+                                                       args[1].getUInt64())
+                               : 0;
+
+        uint64_t itemAddr = 0;
+        auto seqIt = sequencePendingItemsBySeq.end();
+        if (seqAddr != 0) {
+          seqIt = sequencePendingItemsBySeq.find(seqAddr);
+          if (seqIt != sequencePendingItemsBySeq.end() &&
+              !seqIt->second.empty())
+            itemAddr = seqIt->second.front();
+        }
+        auto procIt = sequencePendingItemsByProc.find(procId);
+        if (itemAddr == 0 && procIt != sequencePendingItemsByProc.end() &&
+            !procIt->second.empty())
+          itemAddr = procIt->second.front();
+        if (itemAddr == 0) {
+          if (traceSeq) {
+            llvm::errs() << "[SEQ-CI] wait_for_item_done miss proc=" << procId
+                         << " seq=0x" << llvm::format_hex(seqAddr, 16)
+                         << "\n";
+          }
           return success();
-        uint64_t itemAddr = pendingIt->second.front();
+        }
+
+        auto erasePendingItemByProc = [&](uint64_t item) {
+          auto it = sequencePendingItemsByProc.find(procId);
+          if (it == sequencePendingItemsByProc.end())
+            return;
+          auto &pending = it->second;
+          auto match = std::find(pending.begin(), pending.end(), item);
+          if (match != pending.end())
+            pending.erase(match);
+          if (pending.empty())
+            sequencePendingItemsByProc.erase(it);
+        };
+        auto erasePendingItemBySeq = [&](uint64_t seqKey, uint64_t item) {
+          if (seqKey == 0)
+            return;
+          auto it = sequencePendingItemsBySeq.find(seqKey);
+          if (it == sequencePendingItemsBySeq.end())
+            return;
+          auto &pending = it->second;
+          auto match = std::find(pending.begin(), pending.end(), item);
+          if (match != pending.end())
+            pending.erase(match);
+          if (pending.empty())
+            sequencePendingItemsBySeq.erase(it);
+        };
+
         if (itemDoneReceived.count(itemAddr)) {
-          pendingIt->second.pop_front();
-          if (pendingIt->second.empty())
-            sequencePendingItemsByProc.erase(pendingIt);
+          erasePendingItemByProc(itemAddr);
+          erasePendingItemBySeq(seqAddr, itemAddr);
           itemDoneReceived.erase(itemAddr);
           finishItemWaiters.erase(itemAddr);
           (void)takeUvmSequencerItemOwner(itemAddr);
@@ -3838,9 +3975,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // start_item: Record item→sequencer mapping and return immediately
     // (grants arbitration instantly). Args: (self, item, priority, sequencer).
     if (calleeName.contains("::start_item") && args.size() >= 4) {
-      uint64_t seqAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      uint64_t seqAddr = args[0].isX()
+                             ? 0
+                             : normalizeUvmObjectKey(procId,
+                                                     args[0].getUInt64());
       uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
-      uint64_t sqrAddr = args[3].isX() ? 0 : args[3].getUInt64();
+      uint64_t sqrAddr = args[3].isX()
+                             ? 0
+                             : normalizeUvmSequencerAddress(procId,
+                                                            args[3].getUInt64());
       InterpretedValue sqrArg = args[3];
       // If sequencer arg is null, get it from the sequence object.
       // The sequence's m_sequencer is set by seq.start(sqr).
@@ -3859,13 +4002,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           --cState.callDepth;
           if (succeeded(getSeqResult) && !getSeqResults.empty() &&
               !getSeqResults[0].isX()) {
-            sqrAddr = getSeqResults[0].getUInt64();
+            sqrAddr = normalizeUvmSequencerAddress(procId,
+                                                   getSeqResults[0].getUInt64());
             sqrArg = InterpretedValue(llvm::APInt(64, sqrAddr));
           }
         }
       }
       if (itemAddr != 0 && sqrAddr != 0) {
-        uint64_t queueAddr = sqrAddr;
+        uint64_t queueAddr = normalizeUvmSequencerAddress(procId, sqrAddr);
         itemToSequencer[sequencerProcKey(procId)] = queueAddr;
         recordUvmSequencerItemOwner(itemAddr, queueAddr);
         LLVM_DEBUG(llvm::dbgs()
@@ -3922,7 +4066,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 procIt != itemToSequencer.end())
               sqrAddr = procIt->second;
           }
-          uint64_t queueAddr = sqrAddr;
+          uint64_t queueAddr = normalizeUvmSequencerAddress(procId, sqrAddr);
           if (queueAddr == 0)
             return success();
           sequencerItemFifo[queueAddr].push_back(itemAddr);
@@ -4256,6 +4400,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
           llvm::errs() << "\n";
           __builtin_trap();
+        }
+        // Skip native dispatch for yield-capable functions outside process
+        // context.
+        if (compiledFuncFlags &&
+            (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
+            !activeProcessId) {
+          ++entryTableSkippedYieldCount;
+          goto ci_main_interpreted;
         }
         void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
         if (entryPtr) {

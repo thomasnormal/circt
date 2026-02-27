@@ -11,6 +11,7 @@
 #include "circt/Dialect/LLHD/IR/LLHDTypes.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/IR/SymbolTable.h"
@@ -269,17 +270,12 @@ struct HWConstantOpConversion : OpConversionPattern<ConstantOp> {
   LogicalResult
   matchAndRewrite(ConstantOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    if (adaptor.getValue().getBitWidth() < 1) {
-      // Constants of type i0 cannot be represented in SMT. They can still
-      // appear as singleton-array indices and become dead once the consumer is
-      // lowered.
-      if (op->use_empty()) {
-        rewriter.eraseOp(op);
-        return success();
-      }
-      return rewriter.notifyMatchFailure(op.getLoc(),
-                                         "0-bit constants with uses not "
-                                         "supported");
+    if (cast<IntegerType>(op.getType()).getWidth() < 1) {
+      // Constants of type i0 cannot be represented in SMT bit-vectors.
+      // Keep the value in core IR so i0-typed comb ops can lower/fold later.
+      auto valueAttr = rewriter.getIntegerAttr(op.getType(), adaptor.getValue());
+      rewriter.replaceOpWithNewOp<mlir::arith::ConstantOp>(op, valueAttr);
+      return success();
     }
     rewriter.replaceOpWithNewOp<mlir::smt::BVConstantOp>(op,
                                                          adaptor.getValue());
@@ -845,6 +841,22 @@ struct NormalizeSingletonArrayInjectIndex : OpRewritePattern<ArrayInjectOp> {
   }
 };
 
+/// Rewrite zero-width hw.constant to arith.constant before type conversion.
+struct NormalizeZeroWidthConstant : OpRewritePattern<ConstantOp> {
+  using OpRewritePattern<ConstantOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ConstantOp op,
+                                PatternRewriter &rewriter) const override {
+    auto type = dyn_cast<IntegerType>(op.getType());
+    if (!type || type.getWidth() != 0)
+      return failure();
+
+    auto valueAttr = rewriter.getIntegerAttr(op.getType(), op.getValue());
+    rewriter.replaceOpWithNewOp<mlir::arith::ConstantOp>(op, valueAttr);
+    return success();
+  }
+};
+
 } // namespace
 
 //===----------------------------------------------------------------------===//
@@ -1023,7 +1035,7 @@ void ConvertHWToSMTPass::runOnOperation() {
   {
     RewritePatternSet normalizePatterns(&getContext());
     normalizePatterns
-        .add<NormalizeSingletonArrayGetIndex,
+        .add<NormalizeZeroWidthConstant, NormalizeSingletonArrayGetIndex,
              NormalizeSingletonArrayInjectIndex>(&getContext());
     (void)applyPatternsGreedily(getOperation(), std::move(normalizePatterns));
   }

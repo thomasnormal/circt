@@ -1,0 +1,79 @@
+# Project Gap Audit Engineering Log
+
+## 2026-02-27
+- Goal: produce a whole-project TODO / unsupported gap list beyond ImportVerilog.
+- First pass included docs and produced many non-actionable documentation hits.
+- Refined scope to code-focused paths: `include lib tools frontends unittests test utils cmake CMakeLists.txt`.
+- Generated a reproducible audit report with full line-level entries and summary counts at `docs/PROJECT_GAPS_TODO_AUDIT.md`.
+- Audited OpenTitan FPV BMC `entropy_src_sec_cm` failure: confirmed `circt-bmc` failed under `verify-each=true` with `llhd.final` parent legality.
+- Added tests first to prove verifier gap:
+  - `test/Dialect/LLHD/IR/basic.mlir` now covers `llhd.final` nested in `llhd.process` and `llhd.combinational`.
+  - `test/Tools/circt-bmc/lower-to-bmc-llhd-final-parent-bmc.mlir` reproduces `lower-to-bmc` placing `llhd.final` under `verif.bmc`.
+- Implemented LLHD verifier change:
+  - Moved `FinalOp` parent checks from static trait to custom `FinalOp::verify`.
+  - Allowed transient/legal parents observed in BMC lowering: `hw.module`, `llhd.process`, `llhd.combinational`, `verif.bmc`, `verif.lec`, `verif.refines`.
+- Verified outcomes:
+  - LLHD IR tests pass (`basic.mlir`, `errors.mlir`).
+  - New `lower-to-bmc-llhd-final-parent-bmc.mlir` regression passes.
+  - Real OpenTitan replay now succeeds for `entropy_src`: `BMC_RESULT=UNSAT` (previously verifier error).
+- New gap discovered while continuing audit:
+  - `rstmgr_sec_cm` lane now progresses past previous structural errors but shows high memory pressure/long runtime in SMT-LIB run (initial resource-guard hit at ~10GB RSS, auto-retry at higher cap still expensive).
+- Audited and fixed OpenTitan compile-contract setup gap for `otp_ctrl_sec_cm`:
+  - Root cause in setup log: FuseSoC rejected legacy two-part core name `earlgrey_dv:otp_ctrl_sva` as illegal VLNV.
+  - Implemented normalization in `resolve_opentitan_formal_compile_contracts.py` to map two-part names to `lowrisc:<name>` for setup invocation.
+  - Added regression: `test/Tools/resolve-opentitan-formal-compile-contracts-legacy-core-name.test`.
+  - Manual validation confirms resolver now emits a non-error contract row for `otp_ctrl_sec_cm` (`setup_status=partial` instead of setup error).
+- Post-fix follow-up gap for `otp_ctrl_sec_cm`:
+  - BMC now reaches Verilog ingestion and fails with duplicate package definitions (`pwrmgr_reg_pkg`, `pwrmgr_pkg`) due mixed Earlgrey/Englishbreakfast package files in one compile list.
+  - This is now a concrete compile-list sanitization parity gap (next target for resolver/pairwise prefiltering).
+- Added `utils/generate_project_gap_writeups.py` to produce one paragraph per gap marker from the rg audit list.
+- Generated `docs/PROJECT_GAPS_WRITEUP.md` with 2,071 per-entry paragraphs covering what is missing and a concrete fix direction.
+- Classifier distinguishes implementation gaps, tooling gaps, test expectation gaps, and TODO-style deferred work to keep writeups actionable.
+- Switched from auto-generated classification output to manual judgment writeups on user request.
+- Added `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` and completed entries 1-40 with one manually reasoned paragraph each.
+- Kept ordering aligned to `out/project-gap-todo.all.txt` so remaining entries can be processed sequentially.
+- Audited next BMC parity blocker from OpenTitan `otp_ctrl_sec_cm`: `llhd-mem2reg` generated invalid IR (`comb.xor` on aggregate struct operand) while rewriting projection probes across wait loops.
+- Built a minimal reproducer (`ProjectionProbeAcrossWaitLoop`) showing the failure in isolation: local `llhd.sig` of `!hw.struct<value,unknown>`, probe of `llhd.sig.struct_extract`+`llhd.sig.extract`, backedge wait loop.
+- Root cause: `getProjections` required forwarded block-argument incoming values to be identical; loop-carried aliases (`%sig` vs forwarded block arg) caused path resolution failure and fallback to whole-slot value substitution.
+- Fix: rewrote projection-path discovery in `Mem2Reg.cpp` to recursively trace through `BranchOpInterface` successor operands and projection ops until reaching the slot, instead of requiring a single identical forwarded value.
+- Added regression checks in `test/Dialect/LLHD/Transforms/mem2reg.mlir` under `@ProjectionProbeAcrossWaitLoop`.
+- Validation: rebuilt `circt-opt` and ran `circt-opt --llhd-mem2reg ... | FileCheck ...`; regression passes and the minimal reproducer no longer produces verifier errors.
+- Continued manual writeup with entries 41-70 in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+- Focused this batch on additional `circt-sim-compile` unsupported-format and trampoline ABI gaps.
+- Continued manual writeup with entries 71-90, including explicit identification of scan false positives (`mktemp ...XXXXXX`) and runtime-test infrastructure gaps.
+- Audited new OpenTitan `otp_ctrl_sec_cm` blocker after LLHD mem2reg fix: `convert-hw-to-smt` failed on `hw.constant 0 : i0` with live uses in `comb.mux`/`comb.icmp` (`i0`).
+- TDD reproducer:
+  - Standalone repro (`/tmp/hw_to_smt_i0_use_repro.mlir`) failed pre-fix with `failed to legalize operation 'hw.constant'`.
+- Root cause:
+  - `HWConstantOpConversion` is an `OpConversionPattern`; dialect conversion cannot adapt `hw.constant` producing `i0` because `i0` is intentionally not convertible to SMT bit-vectors.
+  - So the conversion pattern path never legalized this op class in practice.
+- Fix in `lib/Conversion/HWToSMT/HWToSMT.cpp`:
+  - Added pre-conversion normalization pattern `NormalizeZeroWidthConstant` that rewrites `hw.constant : i0` to `arith.constant : i0` before partial conversion.
+  - Kept SMT lowering behavior unchanged for legal-width HW constants.
+- Regression tests:
+  - Added `test/Conversion/HWToSMT/hw-to-smt-zero-width-constant.mlir` to assert `hw.constant : i0` is removed and `arith.constant : i0` remains through `--convert-hw-to-smt`.
+  - Updated `test/Conversion/HWToSMT/hw-to-smt-errors.mlir` to track an actually unsupported case (`hw.struct_create` with `i0` struct field).
+- Validation:
+  - Rebuilt `circt-opt`.
+  - `circt-opt --convert-hw-to-smt test/Conversion/HWToSMT/hw-to-smt-zero-width-constant.mlir | FileCheck ...` passes.
+  - `circt-opt --convert-hw-to-smt --verify-diagnostics test/Conversion/HWToSMT/hw-to-smt-errors.mlir` passes.
+  - Standalone repro now succeeds (`EXIT:0`).
+- Follow-up OpenTitan replay (`otp_ctrl_sec_cm`) after HWToSMT i0 fix exposed a new hard crash in `ConvertCombToSMT`: assertion in `TypeRange` from `comb.extract` lowering when result type was `i0`.
+- Root-cause localization via stack symbolization (`addr2line`): crash in `ExtractOpConversion` constructing `smt.extract` with null converted type; pass path was `ConvertCombToSMTPass`.
+- Fix in `lib/Conversion/CombToSMT/CombToSMT.cpp`:
+  - Added zero-width normalization patterns run before dialect conversion:
+    - `NormalizeZeroWidthExtract`: `comb.extract (...)->i0` -> `arith.constant 0 : i0`.
+    - `NormalizeZeroWidthMux`: `comb.mux ... : i0` -> representative operand.
+    - `NormalizeZeroWidthICmp`: `comb.icmp` on `i0` -> `hw.constant` i1 truth value by predicate.
+  - Added defensive handling in conversion patterns for zero-width extract/mux/icmp paths.
+- Regression coverage:
+  - Added `test/Conversion/CombToSMT/comb-to-smt-zero-width.mlir` to ensure zero-width extract/mux/icmp no longer crash and lower to a valid SMT-visible result.
+  - Updated `test/Conversion/CombToSMT/comb-to-smt-error.mlir` so the existing zero-width parity expected-fail remains live (not dead-code eliminated).
+- Validation:
+  - Rebuilt `circt-opt` and `circt-bmc`.
+  - `comb-to-smt-zero-width.mlir` FileCheck passes.
+  - `comb-to-smt-error.mlir` verify-diagnostics passes.
+  - Prior direct `circt-bmc` crash repro no longer aborts.
+- OpenTitan status progression:
+  - `otp_ctrl_sec_cm` moved from `CIRCT_BMC_ERROR` (crash/legalization blockers) to `FAIL (SAT)`.
+  - This confirms the conversion/runtime blockers are removed for this lane; next gap is SAT quality under LLHD abstraction warnings (process/interface inputs still unconstrained and may yield spurious witnesses).

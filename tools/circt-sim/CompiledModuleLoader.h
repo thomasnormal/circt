@@ -21,6 +21,8 @@
 #include "circt/Runtime/CirctSimABI.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -129,6 +131,23 @@ public:
   /// dangling inter-global pointers from post-init aliasing.
   void preAliasGlobals(llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
 
+  /// Set up arena-backed MemoryBlocks for all arena globals (v5+).
+  /// Creates pre-aliased MemoryBlock entries pointing into the runtime-
+  /// allocated arena. Call this instead of preAliasGlobals for arena globals.
+  void setupArenaGlobals(llvm::StringMap<MemoryBlock> &globalMemoryBlocks) const;
+
+  /// Check if a global name is backed by the arena (and should be skipped
+  /// by the legacy patch/alias mechanism).
+  bool isArenaGlobal(llvm::StringRef name) const {
+    return arenaGlobalNames.count(name);
+  }
+
+  /// Get the arena base pointer (nullptr if no arena).
+  void *getArenaBase() const { return arenaBase; }
+
+  /// Get the arena allocation size in bytes (0 if no arena).
+  uint32_t getArenaSize() const { return arenaAllocSize; }
+
   /// Get number of global patches in the .so.
   uint32_t getNumGlobalPatches() const {
     return compiledModule ? compiledModule->num_global_patches : 0;
@@ -186,6 +205,11 @@ private:
   llvm::StringMap<void *> funcMap;          // name → native function pointer
   llvm::StringMap<int32_t> trampolineIdMap; // name → trampoline func_id
   void **ctxGlobalPtr = nullptr;            // pointer to __circt_sim_ctx in .so
+
+  // Arena state (v5+).
+  void *arenaBase = nullptr;                // runtime-allocated arena memory
+  uint32_t arenaAllocSize = 0;              // size of arenaBase allocation
+  llvm::StringSet<> arenaGlobalNames;       // names of globals in the arena
 };
 
 } // namespace sim
