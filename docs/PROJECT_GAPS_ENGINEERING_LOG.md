@@ -14,3 +14,18 @@
 - Tests:
   - Added `test/Conversion/ImportVerilog/unconnected-inout-instance-port.sv`.
   - Verified with `llvm-lit` filter for that test and direct `circt-verilog` repro.
+
+### ImportVerilog: capture module-scope interface refs in task/function regions
+- Repro:
+  - Access a module-scope interface instance (`vif.sig`) from an `automatic` task.
+  - Lowering could produce `moore.read` that uses a value defined outside the task
+    function region, violating region isolation.
+- Root cause:
+  - Interface instance refs used by hierarchical member access were read directly
+    without ensuring they were captured into the isolated function/task region.
+- Fix:
+  - Call `context.captureRef(...)` before reading those interface refs in both
+    relevant hierarchical access paths.
+- Tests:
+  - Added `test/Conversion/ImportVerilog/task-interface-instance-capture.sv`.
+  - Verified with focused `llvm-lit` run for that test.

@@ -1242,7 +1242,10 @@ struct ExprVisitor {
     if (!vifTy)
       return {};
 
-    // Read the base interface instance.
+    // Read the base interface instance. If this ref is defined outside a
+    // function/task body, capture it so isolated function regions don't use an
+    // outer SSA value directly.
+    context.captureRef(instRef);
     Value vifValue = moore::ReadOp::create(builder, loc, instRef);
 
     // Walk nested interface instances in the hierarchical path, if any.
@@ -1551,7 +1554,9 @@ struct ExprVisitor {
               if (!vifTy)
                 return {};
 
-              // Read the interface to get the virtual interface value
+              // Read the interface to get the virtual interface value.
+              // Capture outer-scope refs before reading in isolated regions.
+              context.captureRef(ifaceRef);
               Value vifValue = moore::ReadOp::create(builder, loc, ifaceRef);
 
               // Walk through intermediate interface instances
