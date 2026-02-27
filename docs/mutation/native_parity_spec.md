@@ -97,6 +97,8 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
 - Multiplication mutations (`MUL_TO_ADD`, `ADD_TO_MUL`) use binary-site
   detection and intentionally skip reduction/wildcard/assignment contexts
   (`(*)`, `**`, `*=`) and `[...]` range/index expressions.
+- Unary arithmetic sign mutations (`UNARY_MINUS_DROP`) target unary-minus sites
+  and avoid binary/compound contexts (`a-b`, `--`, `->`).
 - Shift site detection (`SHL_TO_SHR`, `SHR_TO_SHL`) excludes triple-shift and
   shift-assignment spellings (`<<<`, `>>>`, `<<=`, `>>=`).
 - `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign

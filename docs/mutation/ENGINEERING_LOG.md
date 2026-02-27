@@ -119,3 +119,16 @@
   - Added mutation rewrite/site-index regression tests plus arith-mode generation coverage tests.
   - Hardened const-site generation regression (`const-unsized-sites`) to avoid brittle dependence on exact global op count growth.
   - Ran seeded parity campaign on a multiplier-bearing mini design (`35` mutants): `ok=35 mismatch=0 fail=0`.
+
+## 2026-02-27 (unary arithmetic sign fault class)
+
+- realizations:
+  - Missing unary minus is a realistic arithmetic polarity bug and is semantically distinct from binary operator substitutions.
+  - Site detection must reject binary/compound minus contexts (`a-b`, `--`, `->`) to avoid invalid rewrites.
+
+- changes made:
+  - Added native operator `UNARY_MINUS_DROP`.
+  - Implemented planner and mutator site matching for unary-minus tokens with binary/compound context guards.
+  - Integrated `UNARY_MINUS_DROP` into CIRCT-only `arith`, `inv`/`invert`, and `balanced/all` mode mappings.
+  - Added site-index and no-op fallback regression tests for unary-minus behavior, plus arith-mode generation test coverage.
+  - Ran seeded parity campaign on unary-minus-bearing mini design (`35` mutants): `ok=35 mismatch=0 fail=0`.
