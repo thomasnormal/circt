@@ -46,6 +46,7 @@
 // AOTSTATS-DAG: [circt-sim] delta_cycles_per_s:               {{[1-9][0-9]*}}
 // AOTSTATS-DAG: [circt-sim] signal_updates_per_s:             {{[0-9]+}}
 // AOTSTATS-DAG: [circt-sim] edges_detected_per_s:             {{[0-9]+}}
+// AOTSTATS-DAG: [circt-sim] simulated_fs_per_s:               {{[1-9][0-9]*}}
 // AOTSTATS-DAG: [circt-sim] simulated_ns_per_s:               {{[1-9][0-9]*}}
 // AOTSTATS-DAG: [circt-sim] event_activations_total:          {{[0-9]+}}
 // AOTSTATS-DAG: [circt-sim] event_activations_per_s:          {{[1-9][0-9]*}}
