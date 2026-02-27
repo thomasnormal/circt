@@ -41717,6 +41717,12 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
           name.contains("get_root_blocks") ||
           name == "get_inst" || name.starts_with("get_inst_"))))
       return true;
+    // Callback iterator queue walkers dispatch deep callback-list traversal
+    // via m_get_q_*/get_first_* helper wrappers; keep these interpreted until
+    // coroutine/callback parity is complete.
+    if (name.contains("::uvm_callback_iter::first") ||
+        name.starts_with("m_get_q_") || name.starts_with("get_first_"))
+      return true;
     // Phase-graph/state mutators have interpreter-side cache/update logic.
     if (!allowNativeUvmPhaseState &&
         (name.contains("uvm_phase::set_state") ||

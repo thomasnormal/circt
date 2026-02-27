@@ -351,7 +351,6 @@ TEST(MooreRuntimeWaitConditionTest, FalseConditionBlocksUntilCallbackUnblocks) {
   EXPECT_EQ(ctx.pollCalls, 1);
   __moore_wait_condition_set_poll_callback(nullptr, nullptr);
 }
-
 //===----------------------------------------------------------------------===//
 // DPI Regex Tests
 //===----------------------------------------------------------------------===//
