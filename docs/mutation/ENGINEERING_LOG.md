@@ -155,3 +155,33 @@
     - `circt-mut-generate-circt-only-arith-mode-div-ops`
   - Ran seeded xrun-vs-circt parity campaign including division/multiplication
     mutations (`40` mutants): `ok=40 mismatch=0 fail=0`.
+
+## 2026-02-27 (signed shift fault class)
+
+- realizations:
+  - Confusing logical and arithmetic right shifts (`>>` vs `>>>`) is a
+    realistic RTL bug class, especially in signed datapaths.
+  - Matching `>>>` requires distinct token handling from `>>` so we avoid
+    consuming shift-assignment spellings (`>>>=`) and preserve site-index
+    consistency.
+
+- surprises:
+  - The local `yosys` executable available in this environment is a
+    self-recursing wrapper script, so direct binary decompilation was not
+    possible here.
+
+- changes made:
+  - Added native operators `SHR_TO_ASHR` and `ASHR_TO_SHR`.
+  - Implemented dedicated planner/mutator site detection for arithmetic
+    right-shift tokens (`>>>`) with assignment-guard filtering.
+  - Integrated the new operators into CIRCT-only `arith`, `inv`/`invert`, and
+    `balanced/all` mode mappings.
+  - Added regression tests:
+    - `native-create-mutated-shr-to-ashr-site-index`
+    - `native-create-mutated-ashr-to-shr-site-index`
+    - `native-create-mutated-ashr-skip-assign`
+    - `circt-mut-generate-circt-only-arith-mode-ashr-ops`
+  - Hardened an existing xcompare generation regression that depended on a
+    stale fixed op-count window (`circt-mut-generate-circt-only-xcompare-mode-ops`).
+  - Ran seeded xrun-vs-circt parity campaign including shift-class mutations
+    (`40` mutants, `SHR_TO_ASHR=6`, `ASHR_TO_SHR=6`): `ok=40 mismatch=0 fail=0`.

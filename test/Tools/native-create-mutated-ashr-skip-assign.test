@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk, input logic signed [7:0] a,b, output logic signed [7:0] y, output logic [2:0] sh);\n  always_ff @(posedge clk) y >>>= sh;\n  assign y = a >>> b[2:0];\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_ASHR_TO_SHR@1\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: always_ff @(posedge clk) y >>>= sh;
+// MUTANT: assign y = a >> b[2:0];

@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic signed [7:0] a,b,c,d, output logic signed [7:0] y0,y1);\n  assign y0 = a >> b[2:0];\n  assign y1 = c >>> d[2:0];\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 80 --seed 17 --modes arith > %t/log.txt
+// RUN: grep -q 'NATIVE_SHR_TO_ASHR' %t/mutations.txt
+// RUN: grep -q 'NATIVE_ASHR_TO_SHR' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 80

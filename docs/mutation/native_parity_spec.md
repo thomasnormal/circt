@@ -104,6 +104,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   and avoid binary/compound contexts (`a-b`, `--`, `->`).
 - Shift site detection (`SHL_TO_SHR`, `SHR_TO_SHL`) excludes triple-shift and
   shift-assignment spellings (`<<<`, `>>>`, `<<=`, `>>=`).
+- Signed right-shift mutations (`SHR_TO_ASHR`, `ASHR_TO_SHR`) distinguish
+  logical and arithmetic right-shift spellings and exclude operator-assignment
+  forms (`>>>=`).
 - `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign
   forms like `^a`, `^~`, `~^`, `^=`).
 - Constant mutations (`CONST0_TO_1`, `CONST1_TO_0`) cover sized binary/decimal/
