@@ -3825,7 +3825,8 @@ SignalId LLHDProcessInterpreter::registerSignal(llhd::SignalOp sigOp) {
         mlir::Type elemType = arrayType.getElementType();
         uint32_t elemPhysW = getTypeWidth(elemType);
         uint32_t elemLogW = getLogicalWidth(elemType);
-        ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
+        ProcessScheduler::SignalArrayInfo info{
+            numElems, elemPhysW, elemLogW, 0, -1, nullptr};
         if (sigBounds) {
           if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
             info.leftBound = leftAttr.getInt();
