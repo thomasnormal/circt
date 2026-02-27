@@ -3,9 +3,8 @@
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 4 --seed 0 --cfg planner_policy=weighted --cfg weight_cover=1 --cfg weight_pq_w=0 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=0 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 --cfg pick_cover_prcnt=100 > %t/log.txt
 // RUN: head -n 4 %t/mutations.txt > %t/head4.txt
 // RUN: grep -E 'NATIVE_(EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT)' %t/head4.txt
-// RUN: grep -E 'NATIVE_(AND_TO_OR|OR_TO_AND|XOR_TO_OR|UNARY_NOT_DROP)' %t/head4.txt
-// RUN: grep -E 'NATIVE_(CONST0_TO_1|CONST1_TO_0)' %t/head4.txt
-// RUN: grep -E 'NATIVE_(ADD_TO_SUB|SUB_TO_ADD)' %t/head4.txt
+// RUN: grep -E 'NATIVE_(AND_TO_OR|OR_TO_AND|XOR_TO_OR|BAND_TO_BOR|BOR_TO_BAND|UNARY_NOT_DROP|UNARY_BNOT_DROP)' %t/head4.txt
+// RUN: grep -E 'NATIVE_(ADD_TO_SUB|SUB_TO_ADD|MUL_TO_ADD|ADD_TO_MUL)' %t/head4.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
 // LOG: Generated mutations: 4

@@ -105,3 +105,17 @@
   - Extended CIRCT-only mode mappings (`control`, `inv`, `invert`, `balanced/all`) to include `UNARY_BNOT_DROP`.
   - Added site-index rewrite and mode-generation regression tests.
   - Ran seeded `xrun` vs `circt` parity campaign (`30` mutants including `UNARY_BNOT_DROP`): `ok=30 mismatch=0 fail=0` (with retry guard for transient `Permission denied` relink races).
+
+## 2026-02-27 (multiplication arithmetic fault class)
+
+- realizations:
+  - Operand/operator confusions between `+` and `*` are realistic datapath bugs and are semantically distinct from existing add/sub flips.
+  - Binary `*` site detection must explicitly exclude wildcard and assignment contexts (`(*)`, `**`, `*=`) to avoid structurally invalid or semantically unrelated mutations.
+
+- changes made:
+  - Added native operators `MUL_TO_ADD` and `ADD_TO_MUL`.
+  - Added bracket-depth filtering so width/index expressions in `[...]` are not targeted.
+  - Integrated multiplication operators into CIRCT-only `arith`, `inv`/`invert`, and `balanced/all` mode mappings.
+  - Added mutation rewrite/site-index regression tests plus arith-mode generation coverage tests.
+  - Hardened const-site generation regression (`const-unsized-sites`) to avoid brittle dependence on exact global op count growth.
+  - Ran seeded parity campaign on a multiplier-bearing mini design (`35` mutants): `ok=35 mismatch=0 fail=0`.
