@@ -26,7 +26,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
     "XOR_TO_OR",        "UNARY_NOT_DROP", "CONST0_TO_1",     "CONST1_TO_0",
-    "ADD_TO_SUB",       "SUB_TO_ADD"};
+    "ADD_TO_SUB",       "SUB_TO_ADD",     "SHL_TO_SHR",      "SHR_TO_SHL"};
 
 namespace {
 
@@ -351,6 +351,37 @@ static bool isOperandStartChar(char c) {
          c == '\'' || c == '~' || c == '!' || c == '$';
 }
 
+static void collectBinaryShiftSites(StringRef text, StringRef token,
+                                    ArrayRef<uint8_t> codeMask,
+                                    SmallVectorImpl<SiteInfo> &sites) {
+  assert((token == "<<" || token == ">>") && "expected << or >> token");
+  char marker = token[0];
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!isCodeRange(codeMask, i, token.size()))
+      continue;
+    if (!text.substr(i).starts_with(token))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next =
+        (i + 2 < e && isCodeAt(codeMask, i + 2)) ? text[i + 2] : '\0';
+    if (prev == marker || next == marker)
+      continue;
+    if (next == '=')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 2);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectBinaryArithmeticSites(StringRef text, char needle,
                                          ArrayRef<uint8_t> codeMask,
                                          SmallVectorImpl<SiteInfo> &sites) {
@@ -523,6 +554,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryArithmeticSites(designText, '-', codeMask, sites);
     return;
   }
+  if (op == "SHL_TO_SHR") {
+    collectBinaryShiftSites(designText, "<<", codeMask, sites);
+    return;
+  }
+  if (op == "SHR_TO_SHL") {
+    collectBinaryShiftSites(designText, ">>", codeMask, sites);
+    return;
+  }
 }
 
 static uint64_t countNativeMutationSitesForOp(StringRef designText,
@@ -550,6 +589,8 @@ static std::string getOpFamily(StringRef op) {
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD")
     return "arithmetic";
+  if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL")
+    return "shift";
   return "misc";
 }
 

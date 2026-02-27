@@ -14803,7 +14803,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
 
   if (modeName == "arith") {
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
-               "GE_TO_GT", "ADD_TO_SUB", "SUB_TO_ADD"});
+               "GE_TO_GT", "ADD_TO_SUB", "SUB_TO_ADD", "SHL_TO_SHR",
+               "SHR_TO_SHL"});
     return;
   }
   if (modeName == "control") {
@@ -14817,7 +14818,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   if (modeName == "invert") {
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR",
-               "UNARY_NOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD"});
+               "UNARY_NOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "SHL_TO_SHR",
+               "SHR_TO_SHL"});
     return;
   }
   if (modeName == "connect") {
@@ -14828,7 +14830,7 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR",
                "UNARY_NOT_DROP", "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB",
-               "SUB_TO_ADD"});
+               "SUB_TO_ADD", "SHL_TO_SHR", "SHR_TO_SHL"});
     return;
   }
 
@@ -14836,7 +14838,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   if (modeName == "inv") {
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR",
-               "UNARY_NOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD"});
+               "UNARY_NOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "SHL_TO_SHR",
+               "SHR_TO_SHL"});
     return;
   }
   if (modeName == "const0") {

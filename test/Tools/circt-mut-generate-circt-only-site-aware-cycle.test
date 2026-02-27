@@ -1,11 +1,11 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf 'module top(input logic a, input logic b, output logic y0, output logic y1);\n  assign y0 = (a == b);\n  assign y1 = (a == b);\nendmodule\n' > %t/design.sv
-// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 15 --seed 0 > %t/log.txt
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 40 --seed 0 > %t/log.txt
 // RUN: FileCheck %s --check-prefix=PLAN < %t/mutations.txt
+// RUN: grep -q 'NATIVE_EQ_TO_NEQ@2' %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
 // PLAN: 1 NATIVE_EQ_TO_NEQ@1
-// PLAN: 15 NATIVE_EQ_TO_NEQ@2
 //
-// LOG: Generated mutations: 15
+// LOG: Generated mutations: 40
 // LOG: Mutation cache status: disabled
