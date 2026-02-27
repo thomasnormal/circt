@@ -1,8 +1,5 @@
 // RUN: circt-verilog %s --ir-hw -o %t.mlir 2>/dev/null
 // RUN: circt-sim %t.mlir --top top --max-time 200000000 2>&1 | FileCheck %s
-// XFAIL: *
-// REQUIRES-BUG: set_type_override(...)/create() currently returns the base
-// type instead of the override in circt-sim.
 
 // Regression: by-type factory override must affect type_id::create().
 // CHECK: OVERRIDE_OK

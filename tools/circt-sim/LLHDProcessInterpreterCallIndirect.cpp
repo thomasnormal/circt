@@ -2080,6 +2080,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
     StringRef calleeName = it->second;
     std::string overriddenCalleeName;
+    if (!nativeFactoryOverridesConfigured &&
+        isUvmFactoryOverrideSetter(calleeName))
+      nativeFactoryOverridesConfigured = true;
 
     // Intercept low-level sequencer handshake immediately after target
     // resolution, before any call-site caches or fast-dispatch paths.
@@ -2583,6 +2586,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     } while (false);
 
     noteResolvedTarget(calleeName);
+    if (!nativeFactoryOverridesConfigured &&
+        isUvmFactoryOverrideSetter(calleeName))
+      nativeFactoryOverridesConfigured = true;
     SimTime now = scheduler.getCurrentTime();
     maybeTraceFilteredCall(procId, "func.call_indirect", calleeName,
                            now.realTime, now.deltaStep);

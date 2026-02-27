@@ -20265,6 +20265,20 @@ LLHDProcessInterpreter::checkUvmRunTestEntry(ProcessId procId,
   return failure();
 }
 
+bool LLHDProcessInterpreter::isUvmFactoryOverrideSetter(
+    llvm::StringRef calleeName) {
+  return calleeName.ends_with("::set_type_override_by_type") ||
+         calleeName.ends_with("::set_type_override_by_name") ||
+         calleeName.ends_with("::set_inst_override_by_type") ||
+         calleeName.ends_with("::set_inst_override_by_name") ||
+         calleeName.ends_with("::set_type_override") ||
+         calleeName == "set_type_override_by_type" ||
+         calleeName == "set_type_override_by_name" ||
+         calleeName == "set_inst_override_by_type" ||
+         calleeName == "set_inst_override_by_name" ||
+         calleeName == "set_type_override";
+}
+
 bool LLHDProcessInterpreter::isCoverageRuntimeCallee(
     llvm::StringRef calleeName) {
   return calleeName.starts_with("__moore_coverage_") ||
@@ -20331,6 +20345,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting func.call to '"
                           << callOp.getCallee() << "'\n");
   StringRef calleeName = callOp.getCallee();
+  if (!nativeFactoryOverridesConfigured &&
+      isUvmFactoryOverrideSetter(calleeName))
+    nativeFactoryOverridesConfigured = true;
   if (failed(checkUvmRunTestEntry(procId, calleeName)))
     return failure();
   SimTime now = scheduler.getCurrentTime();
@@ -21088,8 +21105,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // observe transient null returns in startup paths even with a valid wrapper
   // pointer. We bypass the indirection and dispatch directly through the
   // wrapper vtable.
-  if (calleeName.starts_with("create_by_type_") && callOp.getNumResults() >= 1 &&
-      callOp.getNumOperands() >= 4) {
+  if (!nativeFactoryOverridesConfigured &&
+      calleeName.starts_with("create_by_type_") &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 4) {
     InterpretedValue wrapperArg = getValue(procId, callOp.getOperand(0));
     InterpretedValue nameArg = getValue(procId, callOp.getOperand(2));
     InterpretedValue parentArg = getValue(procId, callOp.getOperand(3));
@@ -21128,8 +21146,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // Fallback for object by-type creation. The lowered create_by_type path can
   // transiently fail to dispatch factory slot 5 during startup even when a
   // valid wrapper is already provided as arg0.
-  if (calleeName == "create_by_type" && callOp.getNumResults() >= 1 &&
-      callOp.getNumOperands() >= 4) {
+  if (!nativeFactoryOverridesConfigured && calleeName == "create_by_type" &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 4) {
     InterpretedValue wrapperArg = getValue(procId, callOp.getOperand(0));
     InterpretedValue nameArg = getValue(procId, callOp.getOperand(2));
     if (!wrapperArg.isX() && wrapperArg.getUInt64() != 0) {
@@ -21148,8 +21166,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // `create` here is the phase-state helper that dispatches through get_21();
   // avoid string-decoding the name (can be transiently unavailable at startup)
   // and gate only on a null parent to keep the override narrow.
-  if (calleeName == "create" && rootModule && callOp.getNumResults() >= 1 &&
-      callOp.getNumOperands() >= 3) {
+  if (!nativeFactoryOverridesConfigured && calleeName == "create" && rootModule &&
+      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 3) {
     InterpretedValue nameArg = getValue(procId, callOp.getOperand(0));
     InterpretedValue parentArg = getValue(procId, callOp.getOperand(1));
     bool isRootCreate =
@@ -21188,7 +21206,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // wrapper create_* vtable slots.
   if ((calleeName == "uvm_pkg::uvm_default_factory::create_object_by_type" ||
        calleeName == "uvm_pkg::uvm_factory::create_object_by_type") &&
-      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 4) {
+      !nativeFactoryOverridesConfigured && callOp.getNumResults() >= 1 &&
+      callOp.getNumOperands() >= 4) {
     InterpretedValue wrapperVal = getValue(procId, callOp.getOperand(1));
     if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
       InterpretedValue nameArg = getValue(procId, callOp.getOperand(3));
@@ -21203,7 +21222,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   if ((calleeName == "uvm_pkg::uvm_default_factory::create_component_by_type" ||
        calleeName == "uvm_pkg::uvm_factory::create_component_by_type") &&
-      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 5) {
+      !nativeFactoryOverridesConfigured && callOp.getNumResults() >= 1 &&
+      callOp.getNumOperands() >= 5) {
     InterpretedValue wrapperVal = getValue(procId, callOp.getOperand(1));
     if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
       InterpretedValue nameArg = getValue(procId, callOp.getOperand(3));

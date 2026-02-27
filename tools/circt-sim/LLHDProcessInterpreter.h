@@ -1896,6 +1896,10 @@ private:
   mlir::LogicalResult checkUvmRunTestEntry(ProcessId procId,
                                            llvm::StringRef calleeName);
 
+  /// Return true when the callee is a UVM factory override setter.
+  /// Used to disable native by-type fast paths that bypass override lookup.
+  static bool isUvmFactoryOverrideSetter(llvm::StringRef calleeName);
+
   //===--------------------------------------------------------------------===//
   // Sim Dialect Operation Handlers
   //===--------------------------------------------------------------------===//
@@ -3978,6 +3982,11 @@ private:
   /// Populated by the fast-path factory.register interceptor (which calls
   /// get_type_name once instead of 7 times). Used by find_wrapper_by_name.
   llvm::StringMap<uint64_t> nativeFactoryTypeNames;
+
+  /// Set once any UVM factory override API is called.
+  /// When true, by-type native fast paths must be disabled to preserve
+  /// override semantics.
+  bool nativeFactoryOverridesConfigured = false;
 
   /// Cache for resolved get_type_name packed-string results by callee symbol.
   /// This avoids repeatedly interpreting identical virtual type-name helpers.
