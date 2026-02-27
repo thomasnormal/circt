@@ -1,4 +1,5 @@
 // RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-sim %s 2>&1 | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 // RUN: env CIRCT_AOT_STATS=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=STATS
 
@@ -10,6 +11,8 @@
 // COMPILE: [circt-compile] Global patches: 1 mutable globals
 // COMPILE: [circt-compile] Arena migration skipped 1 mutable globals with non-rewritable constant users
 // COMPILE: [circt-compile] Arena: 0 globals, 0 bytes
+//
+// SIM: out=77
 //
 // COMPILED: out=77
 //

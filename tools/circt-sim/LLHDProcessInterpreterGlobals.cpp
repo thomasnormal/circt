@@ -199,7 +199,10 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
 
   LLVM_DEBUG(llvm::dbgs() << "LLHDProcessInterpreter: Initializing globals\n");
 
-  // Process all pre-discovered LLVM global operations (no walk() needed)
+  llvm::SmallVector<LLVM::GlobalOp, 64> newGlobals;
+
+  // Pass 1: Allocate all global addresses/blocks first so initializer regions
+  // can resolve inter-global addressof references in either declaration order.
   for (LLVM::GlobalOp globalOp : globalOps.globals) {
     StringRef globalName = globalOp.getSymName();
 
@@ -242,6 +245,26 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
 
     // Also populate the reverse map for address-to-global lookup
     addressToGlobal[addr] = globalName.str();
+    newGlobals.push_back(globalOp);
+  }
+
+  auto writeBitsToBlock = [&](MemoryBlock &block, const llvm::APInt &bits) {
+    unsigned bitWidth = bits.getBitWidth();
+    unsigned byteWidth = (bitWidth + 7) / 8;
+    for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
+      unsigned bitOffset = j * 8;
+      if (bitOffset >= bitWidth)
+        break;
+      unsigned bitsThisByte = std::min(8u, bitWidth - bitOffset);
+      block[j] = static_cast<uint8_t>(
+          bits.extractBitsAsZExtValue(bitsThisByte, bitOffset));
+    }
+    block.initialized = true;
+  };
+
+  // Pass 2: Materialize initializers and vtable contents.
+  for (LLVM::GlobalOp globalOp : newGlobals) {
+    StringRef globalName = globalOp.getSymName();
     MemoryBlock &block = globalMemoryBlocks[globalName];
 
     // Check the initializer attribute
@@ -260,38 +283,50 @@ LLHDProcessInterpreter::initializeGlobals(const DiscoveredGlobalOps &globalOps) 
       } else if (auto intAttr = dyn_cast<IntegerAttr>(initAttr)) {
         // Handle integer initializers (including i1 true/false)
         APInt intValue = intAttr.getValue();
-        unsigned bitWidth = intValue.getBitWidth();
-        unsigned byteWidth = (bitWidth + 7) / 8;
-        for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
-          unsigned bitOffset = j * 8;
-          if (bitOffset >= bitWidth)
-            break;
-          unsigned bitsThisByte = std::min(8u, bitWidth - bitOffset);
-          block[j] = static_cast<uint8_t>(
-              intValue.extractBitsAsZExtValue(bitsThisByte, bitOffset));
-        }
+        writeBitsToBlock(block, intValue);
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with integer: 0x"
                                 << llvm::format_hex(intValue.getZExtValue(), 18)
-                                << " (" << byteWidth << " bytes)\n");
+                                << " (" << ((intValue.getBitWidth() + 7) / 8)
+                                << " bytes)\n");
       } else if (auto floatAttr = dyn_cast<FloatAttr>(initAttr)) {
         // Handle float initializers
         llvm::APFloat floatValue = floatAttr.getValue();
         const llvm::APInt &floatBits = floatValue.bitcastToAPInt();
-        unsigned bitWidth = floatBits.getBitWidth();
-        unsigned byteWidth = (floatBits.getBitWidth() + 7) / 8;
-        for (unsigned j = 0; j < byteWidth && j < block.size; ++j) {
-          unsigned bitOffset = j * 8;
-          if (bitOffset >= bitWidth)
-            break;
-          unsigned bitsThisByte = std::min(8u, bitWidth - bitOffset);
-          block[j] = static_cast<uint8_t>(
-              floatBits.extractBitsAsZExtValue(bitsThisByte, bitOffset));
-        }
+        writeBitsToBlock(block, floatBits);
         LLVM_DEBUG(llvm::dbgs() << "    Initialized with float\n");
       } else {
         // For #llvm.zero or other initializers, data is already zeroed
         LLVM_DEBUG(llvm::dbgs() << "    Initialized to zero\n");
       }
+    } else if (Block *initBlock = globalOp.getInitializerBlock()) {
+      // Region initializers (for example pointer globals initialized from
+      // llvm.mlir.addressof) must be interpreted to materialize bytes.
+      ProcessExecutionState tempState;
+      ProcessId tempProcId = nextTempProcId++;
+      while (processStates.count(tempProcId) || tempProcId == InvalidProcessId)
+        tempProcId = nextTempProcId++;
+      processStates[tempProcId] = std::move(tempState);
+
+      for (Operation &initOp : *initBlock) {
+        if (auto retOp = dyn_cast<LLVM::ReturnOp>(&initOp)) {
+          if (retOp.getNumOperands() == 1) {
+            InterpretedValue retVal = getValue(tempProcId, retOp.getOperand(0));
+            if (!retVal.isX())
+              writeBitsToBlock(block, retVal.getAPInt());
+          }
+          break;
+        }
+        if (failed(interpretOperation(tempProcId, &initOp)))
+          break;
+      }
+      processStates.erase(tempProcId);
+      LLVM_DEBUG({
+        if (block.initialized) {
+          llvm::dbgs() << "    Initialized from region\n";
+        } else {
+          llvm::dbgs() << "    Region initializer fell back to zero\n";
+        }
+      });
     }
 
     // Check if this is a vtable (has circt.vtable_entries attribute)
