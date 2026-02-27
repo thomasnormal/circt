@@ -177,17 +177,16 @@ maybeSynthesizeCovergroupImplicitSamplingOnNewAssign(
   if (!sampleEvent)
     return success();
 
-  auto *parentScope = varSym->getParentScope();
-  if (!parentScope)
-    return success();
-  auto *instBody = parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
-  if (!instBody) {
-    mlir::emitError(loc)
-        << "implicit covergroup event sampling for local variables is not "
-           "supported; declare the covergroup variable at module scope or call "
-           "sample() explicitly";
-    return failure();
+  const slang::ast::InstanceBodySymbol *instBody = nullptr;
+  for (auto *scope = varSym->getParentScope(); scope;
+       scope = scope->asSymbol().getParentScope()) {
+    if (auto *body = scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+      instBody = body;
+      break;
+    }
   }
+  if (!instBody)
+    return success();
 
   auto moduleIt = context.modules.find(instBody);
   if (moduleIt == context.modules.end())

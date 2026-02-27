@@ -119,6 +119,69 @@ static bool isHoistableAssertionOp(Operation *op) {
   return isa<moore::ReadOp>(op);
 }
 
+/// Synthesize implicit covergroup event sampling for a covergroup handle
+/// variable that is visible at module scope.
+static LogicalResult synthesizeCovergroupImplicitSamplingProcedure(
+    Context &context, Location loc, moore::SVModuleOp moduleOp, Value varRef,
+    const slang::ast::CovergroupType &cgType,
+    const slang::ast::TimingControl &sampleEvent) {
+  auto &builder = context.builder;
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToEnd(moduleOp.getBody());
+
+  auto procOp =
+      moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
+  builder.setInsertionPointToEnd(&procOp.getBody().emplaceBlock());
+  Context::ValueSymbolScope scope(context.valueSymbols);
+
+  if (failed(context.convertTimingControl(sampleEvent)))
+    return failure();
+
+  Value cgHandle = moore::ReadOp::create(builder, loc, varRef);
+  SmallVector<Value> sampleArgs;
+  SmallVector<Value> iffArgs;
+
+  const auto &cgBody = cgType.getBody();
+  bool hasAnyIff = false;
+  for (const auto &member : cgBody.members()) {
+    if (auto *cp = member.as_if<slang::ast::CoverpointSymbol>()) {
+      if (cp->getIffExpr()) {
+        hasAnyIff = true;
+        break;
+      }
+    }
+  }
+
+  for (const auto &member : cgBody.members()) {
+    auto *cp = member.as_if<slang::ast::CoverpointSymbol>();
+    if (!cp)
+      continue;
+
+    Value sampleVal = context.convertRvalueExpression(cp->getCoverageExpr());
+    if (!sampleVal)
+      return failure();
+    sampleArgs.push_back(sampleVal);
+
+    if (!hasAnyIff)
+      continue;
+
+    if (const auto *iffExpr = cp->getIffExpr()) {
+      Value iffVal = context.convertRvalueExpression(*iffExpr);
+      iffVal = context.convertToBool(iffVal, moore::Domain::TwoValued);
+      if (!iffVal)
+        return failure();
+      iffArgs.push_back(iffVal);
+    } else {
+      auto i1Ty = moore::IntType::getInt(context.getContext(), 1);
+      iffArgs.push_back(moore::ConstantOp::create(builder, loc, i1Ty, 1));
+    }
+  }
+
+  moore::CovergroupSampleOp::create(builder, loc, cgHandle, sampleArgs, iffArgs);
+  moore::ReturnOp::create(builder, loc);
+  return success();
+}
+
 static Value cloneAssertionValueIntoBlock(Value value, OpBuilder &builder,
                                           Block *destBlock,
                                           IRMapping &mapping,
@@ -1174,6 +1237,24 @@ struct StmtVisitor {
     auto type = context.convertType(*var.getDeclaredType());
     if (!type)
       return failure();
+
+    const auto &canonicalVarType = var.getDeclaredType()->getType();
+    auto *eventedCovergroupType =
+        canonicalVarType.getCanonicalType().as_if<slang::ast::CovergroupType>();
+    if (eventedCovergroupType && !eventedCovergroupType->getCoverageEvent())
+      eventedCovergroupType = nullptr;
+
+    auto *parentScope = var.getParentScope();
+    auto *instanceBodyScope =
+        parentScope ? parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()
+                    : nullptr;
+    bool isLocalToProceduralScope =
+        eventedCovergroupType && instanceBodyScope == nullptr;
+    bool canHoistEventedCovergroupLocal =
+        isLocalToProceduralScope && context.currentFunctionLowering == nullptr &&
+        context.currentProcedureKind &&
+        *context.currentProcedureKind == moore::ProcedureKind::Initial;
+
     // Check if this is a static function-local variable with an EXPLICIT
     // `static` keyword on the variable declaration. Static variables persist
     // across function calls and should be stored as global variables with
@@ -1223,10 +1304,8 @@ struct StmtVisitor {
 
     if (const auto *init = var.getInitializer()) {
       if (init->as_if<slang::ast::NewCovergroupExpression>()) {
-        const auto &canonicalVarType = var.getDeclaredType()->getType();
-        if (auto *cgType = canonicalVarType.getCanonicalType().as_if<
-                slang::ast::CovergroupType>()) {
-          if (cgType->getCoverageEvent()) {
+        if (eventedCovergroupType) {
+          if (!canHoistEventedCovergroupLocal) {
             mlir::emitError(loc)
                 << "implicit covergroup event sampling for local variables is "
                    "not supported; declare the covergroup variable at module "
@@ -1327,6 +1406,54 @@ struct StmtVisitor {
           moore::GetGlobalVariableOp::create(builder, loc, refTy, symRef);
       context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
                                            &var, ref);
+      return success();
+    }
+
+    // Local covergroup variables with implicit sampling events need to be
+    // visible from the synthesized sampling process. For initial blocks, hoist
+    // these declarations to module scope and keep declaration-time assignment
+    // semantics via a procedural blocking assignment.
+    if (canHoistEventedCovergroupLocal) {
+      auto moduleOp = builder.getInsertionBlock()
+                          ? builder.getInsertionBlock()
+                                ->getParentOp()
+                                ->getParentOfType<moore::SVModuleOp>()
+                          : moore::SVModuleOp{};
+      if (!moduleOp) {
+        mlir::emitError(loc)
+            << "failed to locate enclosing module for covergroup local `"
+            << var.name << "`";
+        return failure();
+      }
+
+      auto varOp = [&]() -> moore::VariableOp {
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(moduleOp.getBody());
+        return moore::VariableOp::create(
+            builder, loc, moore::RefType::get(unpackedType),
+            builder.getStringAttr(var.name), /*initial=*/Value{});
+      }();
+      context.valueSymbols.insertIntoScope(context.valueSymbols.getCurScope(),
+                                           &var, varOp);
+
+      if (const auto *init = var.getInitializer()) {
+        Value initial = context.convertRvalueExpression(*init, type);
+        if (!initial)
+          return failure();
+        moore::BlockingAssignOp::create(builder, loc, varOp, initial);
+
+        if (init->as_if<slang::ast::NewCovergroupExpression>() &&
+            !context.covergroupImplicitSamplingVars.contains(&var)) {
+          auto *sampleEvent = eventedCovergroupType->getCoverageEvent();
+          if (sampleEvent &&
+              failed(synthesizeCovergroupImplicitSamplingProcedure(
+                  context, loc, moduleOp, varOp, *eventedCovergroupType,
+                  *sampleEvent)))
+            return failure();
+          context.covergroupImplicitSamplingVars.insert(&var);
+        }
+      }
+
       return success();
     }
 

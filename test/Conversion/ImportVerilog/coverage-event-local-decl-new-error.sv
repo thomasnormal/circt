@@ -1,4 +1,4 @@
-// RUN: not circt-verilog %s --ir-llhd --no-uvm-auto-include 2>&1 | FileCheck %s
+// RUN: circt-verilog %s --ir-moore --no-uvm-auto-include | FileCheck %s
 // REQUIRES: slang
 
 module top;
@@ -11,10 +11,19 @@ module top;
   endgroup
 
   initial begin
-    cg cov = new;
+    static cg cov = new;
     @(posedge clk);
     addr <= addr + 1;
   end
 endmodule
 
-// CHECK: error: implicit covergroup event sampling for local variables is not supported
+// CHECK-LABEL: moore.module @top
+// CHECK: %[[COV:.*]] = moore.variable : <covergroup<@cg>>
+// CHECK: moore.procedure initial {
+// CHECK: %[[NEW:.*]] = moore.covergroup.inst @cg : <@cg>
+// CHECK: moore.blocking_assign %[[COV]], %[[NEW]] : covergroup<@cg>
+// CHECK: moore.procedure always {
+// CHECK: moore.wait_event
+// CHECK: moore.detect_event posedge
+// CHECK: %[[CGH:.*]] = moore.read %[[COV]] : <covergroup<@cg>>
+// CHECK: moore.covergroup.sample %[[CGH]]

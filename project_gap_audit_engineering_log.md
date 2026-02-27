@@ -407,3 +407,25 @@
   - Validation:
     - `circt-verilog --no-uvm-auto-include --ir-moore ... | FileCheck --check-prefix=MOORE` PASS.
     - `circt-verilog --no-uvm-auto-include ... | FileCheck` PASS.
+- ImportVerilog parity slice (xrun-validated): local covergroup variables with implicit sampling events.
+  - Discovery: automated scan of `test/Conversion/ImportVerilog/*` tests with `not circt-verilog` found two `xrun accepts / CIRCT rejects` mismatches:
+    - `coverage-event-local-assign-new-error.sv`
+    - `coverage-event-local-decl-new-error.sv`
+  - Root cause: ImportVerilog rejected implicit sampling synthesis for non-module-scope covergroup variables (`var = new;` and `cg var = new;`) via a local-scope guard.
+  - Fix:
+    - `lib/Conversion/ImportVerilog/Statements.cpp`: added targeted support for covergroup locals in `initial` blocks by hoisting the handle variable to module scope and preserving declaration-time assignment semantics via procedural blocking assignment; added synthesized implicit sampling procedure emission for declaration-time `new`.
+    - `lib/Conversion/ImportVerilog/Expressions.cpp`: relaxed assignment-path module discovery to walk parent scopes up to `InstanceBodySymbol`, enabling local-initial hoisted variables to synthesize implicit sampling on `cov = new`.
+    - Converted tests to positive semantic regressions:
+      - `test/Conversion/ImportVerilog/coverage-event-local-assign-new-error.sv`
+      - `test/Conversion/ImportVerilog/coverage-event-local-decl-new-error.sv`
+      They now check for: module-visible covergroup handle storage, runtime covergroup instantiation assignment, and synthesized `always` sampling (`wait_event` + `covergroup.sample`).
+  - Guardrail kept: function/task-local covergroup instantiation remains unsupported (parity with xrun).
+    - `test/Conversion/ImportVerilog/coverage-event-func-static-local-decl-new-error.sv` remains expected-error.
+  - Validation:
+    - CIRCT checks:
+      - `build_clang_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/coverage-event-local-assign-new-error.sv | build_clang_test/bin/FileCheck ...` PASS
+      - `build_clang_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/coverage-event-local-decl-new-error.sv | build_clang_test/bin/FileCheck ...` PASS
+      - `build_clang_test/bin/circt-verilog --no-uvm-auto-include --ir-llhd test/Conversion/ImportVerilog/coverage-event-func-static-local-decl-new-error.sv -o /dev/null` FAIL as expected with existing diagnostic.
+    - xrun parity checks:
+      - PASS: `coverage-event-local-assign-new-error.sv`
+      - PASS: `coverage-event-local-decl-new-error.sv`
