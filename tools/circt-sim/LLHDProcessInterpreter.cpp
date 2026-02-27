@@ -28770,6 +28770,62 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    if (calleeName == "__moore_covergroup_set_weight") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int64_t weight = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      __moore_covergroup_set_weight(cg, weight);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_set_weight("
+                              << cg << ", " << weight << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_covergroup_set_goal") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      uint64_t goalBits = getValue(procId, callOp.getOperand(1)).getUInt64();
+      double goal = 0.0;
+      std::memcpy(&goal, &goalBits, sizeof(goal));
+      __moore_covergroup_set_goal(cg, goal);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_set_goal("
+                              << cg << ", " << goal << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_covergroup_set_per_instance") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      bool perInstance = getValue(procId, callOp.getOperand(1)).getUInt64() != 0;
+      __moore_covergroup_set_per_instance(cg, perInstance);
+      LLVM_DEBUG(
+          llvm::dbgs() << "  llvm.call: __moore_covergroup_set_per_instance("
+                       << cg << ", " << (perInstance ? "true" : "false")
+                       << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_covergroup_set_at_least") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int64_t atLeast = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      __moore_covergroup_set_at_least(cg, atLeast);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_set_at_least("
+                              << cg << ", " << atLeast << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_covergroup_set_comment") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      const char *comment = readCStringFromPtr(callOp.getOperand(1));
+      __moore_covergroup_set_comment(cg, comment);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_covergroup_set_comment("
+                              << cg << ", \"" << comment << "\")\n");
+      return success();
+    }
+
     if (calleeName == "__moore_covergroup_get_coverage") {
       uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
       void *cg = reinterpret_cast<void *>(cgAddr);
@@ -28859,6 +28915,76 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_init("
                                << cg << ", " << cpIdx << ", \""
                                << name << "\")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_set_weight") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      int64_t weight = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(2)).getUInt64());
+      __moore_coverpoint_set_weight(cg, cpIdx, weight);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_set_weight("
+                              << cg << ", " << cpIdx << ", " << weight
+                              << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_set_goal") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      uint64_t goalBits = getValue(procId, callOp.getOperand(2)).getUInt64();
+      double goal = 0.0;
+      std::memcpy(&goal, &goalBits, sizeof(goal));
+      __moore_coverpoint_set_goal(cg, cpIdx, goal);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_set_goal("
+                              << cg << ", " << cpIdx << ", " << goal
+                              << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_set_at_least") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      int64_t atLeast = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(2)).getUInt64());
+      __moore_coverpoint_set_at_least(cg, cpIdx, atLeast);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_set_at_least("
+                              << cg << ", " << cpIdx << ", " << atLeast
+                              << ")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_set_comment") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *comment = readCStringFromPtr(callOp.getOperand(2));
+      __moore_coverpoint_set_comment(cg, cpIdx, comment);
+      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_set_comment("
+                              << cg << ", " << cpIdx << ", \"" << comment
+                              << "\")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_set_auto_bin_max") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      int64_t autoBinMax = static_cast<int64_t>(
+          getValue(procId, callOp.getOperand(2)).getUInt64());
+      __moore_coverpoint_set_auto_bin_max(cg, cpIdx, autoBinMax);
+      LLVM_DEBUG(
+          llvm::dbgs() << "  llvm.call: __moore_coverpoint_set_auto_bin_max("
+                       << cg << ", " << cpIdx << ", " << autoBinMax << ")\n");
       return success();
     }
 
@@ -35279,20 +35405,184 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       const char *name = readCStringFromPtr(callOp.getOperand(2));
       int32_t kind = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(3)).getUInt64());
-      // Pass NULL filters for now (named bins without complex filters)
+      uint64_t filtersAddr = 0;
+      if (callOp.getNumOperands() >= 5)
+        filtersAddr = getValue(procId, callOp.getOperand(4)).getUInt64();
       int32_t numFilters = 0;
       if (callOp.getNumOperands() >= 6)
         numFilters = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(5)).getUInt64());
+
+      std::vector<MooreCrossBinsofFilter> parsedFilters;
+      std::vector<std::vector<int32_t>> ownedBinIndices;
+      std::vector<std::vector<int64_t>> ownedValues;
+      std::vector<std::vector<int64_t>> ownedRanges;
+
+      auto readBytes = [&](uint64_t addr, void *dst, size_t bytes) -> bool {
+        if (!addr || !dst || bytes == 0)
+          return false;
+        uint64_t off = 0;
+        MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &off);
+        if (!block || !block->initialized || off + bytes > block->size)
+          return false;
+        std::memcpy(dst, block->bytes() + off, bytes);
+        return true;
+      };
+
+      auto readI32 = [&](uint64_t addr, int32_t &out) -> bool {
+        return readBytes(addr, &out, sizeof(out));
+      };
+      auto readI64 = [&](uint64_t addr, int64_t &out) -> bool {
+        return readBytes(addr, &out, sizeof(out));
+      };
+      auto readPtr = [&](uint64_t addr, uint64_t &out) -> bool {
+        return readBytes(addr, &out, sizeof(out));
+      };
+      auto readBool = [&](uint64_t addr, bool &out) -> bool {
+        uint8_t raw = 0;
+        if (!readBytes(addr, &raw, sizeof(raw)))
+          return false;
+        out = raw != 0;
+        return true;
+      };
+
+      // MooreToCore lowers cross filters as:
+      //   struct<(i32, ptr, i32, ptr, i32, ptr, i32, i1)>
+      // The interpreter models LLVM GEP with packed field layout (no ABI
+      // alignment padding), so decode using packed offsets/stride here.
+      constexpr uint64_t kFilterCpIndexOff = 0;
+      constexpr uint64_t kFilterBinIndicesOff =
+          kFilterCpIndexOff + sizeof(int32_t);
+      constexpr uint64_t kFilterNumBinsOff =
+          kFilterBinIndicesOff + sizeof(uint64_t);
+      constexpr uint64_t kFilterValuesOff =
+          kFilterNumBinsOff + sizeof(int32_t);
+      constexpr uint64_t kFilterNumValuesOff =
+          kFilterValuesOff + sizeof(uint64_t);
+      constexpr uint64_t kFilterRangesOff =
+          kFilterNumValuesOff + sizeof(int32_t);
+      constexpr uint64_t kFilterNumRangesOff =
+          kFilterRangesOff + sizeof(uint64_t);
+      constexpr uint64_t kFilterNegateOff =
+          kFilterNumRangesOff + sizeof(int32_t);
+      constexpr uint64_t kFilterStride = kFilterNegateOff + sizeof(uint8_t);
+
+      if (filtersAddr && numFilters > 0) {
+        parsedFilters.reserve(numFilters);
+        ownedBinIndices.reserve(numFilters);
+        ownedValues.reserve(numFilters);
+        ownedRanges.reserve(numFilters);
+
+        for (int32_t i = 0; i < numFilters; ++i) {
+          uint64_t filterAddr =
+              filtersAddr + static_cast<uint64_t>(i) * kFilterStride;
+          MooreCrossBinsofFilter filter{};
+          bool filterOk = true;
+
+          filterOk &= readI32(filterAddr + kFilterCpIndexOff, filter.cp_index);
+
+          uint64_t binIndicesAddr = 0;
+          filterOk &= readPtr(filterAddr + kFilterBinIndicesOff, binIndicesAddr);
+          filterOk &= readI32(filterAddr + kFilterNumBinsOff, filter.num_bins);
+          if (!filterOk)
+            continue;
+          if (filter.num_bins > 0 && binIndicesAddr) {
+            auto &owned = ownedBinIndices.emplace_back();
+            owned.resize(filter.num_bins);
+            bool binsOk = true;
+            for (int32_t bi = 0; bi < filter.num_bins; ++bi) {
+              binsOk &= readI32(
+                  binIndicesAddr + static_cast<uint64_t>(bi) * sizeof(int32_t),
+                  owned[bi]);
+            }
+            if (binsOk) {
+              filter.bin_indices = owned.data();
+            } else {
+              filter.bin_indices = nullptr;
+              filter.num_bins = 0;
+            }
+          } else {
+            filter.bin_indices = nullptr;
+            filter.num_bins = 0;
+          }
+
+          uint64_t valuesAddr = 0;
+          filterOk &= readPtr(filterAddr + kFilterValuesOff, valuesAddr);
+          filterOk &= readI32(filterAddr + kFilterNumValuesOff,
+                              filter.num_values);
+          if (!filterOk)
+            continue;
+          if (filter.num_values > 0 && valuesAddr) {
+            auto &owned = ownedValues.emplace_back();
+            owned.resize(filter.num_values);
+            bool valuesOk = true;
+            for (int32_t vi = 0; vi < filter.num_values; ++vi) {
+              valuesOk &= readI64(
+                  valuesAddr + static_cast<uint64_t>(vi) * sizeof(int64_t),
+                  owned[vi]);
+            }
+            if (valuesOk) {
+              filter.values = owned.data();
+            } else {
+              filter.values = nullptr;
+              filter.num_values = 0;
+            }
+          } else {
+            filter.values = nullptr;
+            filter.num_values = 0;
+          }
+
+          uint64_t rangesAddr = 0;
+          filterOk &= readPtr(filterAddr + kFilterRangesOff, rangesAddr);
+          filterOk &= readI32(filterAddr + kFilterNumRangesOff,
+                              filter.num_ranges);
+          if (!filterOk)
+            continue;
+          if (filter.num_ranges > 0 && rangesAddr) {
+            int32_t flattened = filter.num_ranges * 2;
+            auto &owned = ownedRanges.emplace_back();
+            owned.resize(flattened);
+            bool rangesOk = true;
+            for (int32_t ri = 0; ri < flattened; ++ri) {
+              rangesOk &= readI64(
+                  rangesAddr + static_cast<uint64_t>(ri) * sizeof(int64_t),
+                  owned[ri]);
+            }
+            if (rangesOk) {
+              filter.ranges = owned.data();
+            } else {
+              filter.ranges = nullptr;
+              filter.num_ranges = 0;
+            }
+          } else {
+            filter.ranges = nullptr;
+            filter.num_ranges = 0;
+          }
+
+          bool negate = false;
+          if (readBool(filterAddr + kFilterNegateOff, negate))
+            filter.negate = negate;
+          parsedFilters.push_back(filter);
+        }
+      }
+
+      MooreCrossBinsofFilter *filtersPtr = nullptr;
+      int32_t effectiveNumFilters = 0;
+      if (!parsedFilters.empty()) {
+        filtersPtr = parsedFilters.data();
+        effectiveNumFilters = static_cast<int32_t>(parsedFilters.size());
+      }
+
       int32_t binIdx = __moore_cross_add_named_bin(
-          cg, crossIdx, name, kind, nullptr, numFilters);
+          cg, crossIdx, name, kind, filtersPtr, effectiveNumFilters);
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
                 InterpretedValue(static_cast<uint64_t>(binIdx), 32));
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_cross_add_named_bin("
                  << cg << ", " << crossIdx << ", \"" << name << "\", "
-                 << kind << ") = " << binIdx << "\n");
+                 << kind << ", filters=" << effectiveNumFilters
+                 << ") = " << binIdx << "\n");
       return success();
     }
 
@@ -37026,6 +37316,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                  << "  llvm.call: __moore_constraint_unique_scalars() = "
                  << result << "\n");
       return success();
+    }
+
+    // Coverage/cross runtime calls must never silently fall through to the
+    // generic external-call path; missing handlers should fail loudly.
+    bool isCoverageRuntimeCall =
+        calleeName.starts_with("__moore_coverage_") ||
+        calleeName.starts_with("__moore_covergroup_") ||
+        calleeName.starts_with("__moore_coverpoint_") ||
+        calleeName.starts_with("__moore_cross_");
+    if (isCoverageRuntimeCall) {
+      return callOp.emitError()
+             << "unhandled coverage runtime call in interpreter: "
+             << calleeName;
     }
 
     // Cache this function as non-intercepted so we skip the entire 128-entry
