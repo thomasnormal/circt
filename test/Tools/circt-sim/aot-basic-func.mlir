@@ -24,6 +24,9 @@
 // AOTSTATS-DAG: [circt-sim] entry_calls_total:                0
 // AOTSTATS-DAG: [circt-sim] entry_calls_native:               0
 // AOTSTATS-DAG: [circt-sim] entry_calls_trampoline:           0
+// AOTSTATS-DAG: [circt-sim] parse_ms:                         {{[0-9]+}}
+// AOTSTATS-DAG: [circt-sim] so_load_ms:                       {{[0-9]+}}
+// AOTSTATS-DAG: [circt-sim] init_ms:                          {{[0-9]+}}
 // AOTSTATS-DAG: [circt-sim] yield_count_total:                2
 // AOTSTATS: out=200
 

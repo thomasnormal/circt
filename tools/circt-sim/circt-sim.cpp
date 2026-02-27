@@ -3262,6 +3262,13 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 static LogicalResult processInput(MLIRContext &context,
                                    llvm::SourceMgr &sourceMgr) {
   auto startTime = std::chrono::steady_clock::now();
+  auto parseDoneTime = startTime;
+  auto passesDoneTime = startTime;
+  auto initDoneTime = startTime;
+  auto loadCompiledDoneTime = startTime;
+  auto runStartTime = startTime;
+  auto runDoneTime = startTime;
+  bool hadCompiledLoad = false;
   auto lastStageTime = startTime;
   auto reportStage = [&lastStageTime, &startTime](llvm::StringRef stage) {
     auto now = std::chrono::steady_clock::now();
@@ -3307,6 +3314,7 @@ static LogicalResult processInput(MLIRContext &context,
     llvm::errs() << "Error: Failed to parse input\n";
     return failure();
   }
+  parseDoneTime = std::chrono::steady_clock::now();
 
   auto countRegionOps = [](mlir::Region &region) -> size_t {
     llvm::SmallVector<mlir::Region *, 16> regionWorklist;
@@ -3573,6 +3581,7 @@ static LogicalResult processInput(MLIRContext &context,
       }
     }
   }
+  passesDoneTime = std::chrono::steady_clock::now();
 
   // Create and initialize simulation context
   // Convert topModules from cl::list to SmallVector
@@ -3609,24 +3618,30 @@ static LogicalResult processInput(MLIRContext &context,
   if (failed(simContext.initialize(*module, tops))) {
     return failure();
   }
+  initDoneTime = std::chrono::steady_clock::now();
 
   // Install compiled module (functions + processes; globals already pre-aliased).
   if (compiledLoader) {
     simContext.setCompiledModule(std::move(compiledLoader));
+    hadCompiledLoad = true;
+    loadCompiledDoneTime = std::chrono::steady_clock::now();
     reportStage("load-compiled");
+  } else {
+    loadCompiledDoneTime = initDoneTime;
   }
 
   // Run the simulation
   reportStage("run");
-  auto runStartTime = std::chrono::steady_clock::now();
+  runStartTime = std::chrono::steady_clock::now();
   LogicalResult runResult = simContext.run();
+  runDoneTime = std::chrono::steady_clock::now();
   uint64_t runWallMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - runStartTime)
+          runDoneTime - runStartTime)
           .count());
   uint64_t totalWallMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - startTime)
+          runDoneTime - startTime)
           .count());
   if (failed(runResult)) {
 #if defined(__EMSCRIPTEN__)
@@ -3652,6 +3667,25 @@ static LogicalResult processInput(MLIRContext &context,
   }
   if (aotStats) {
     auto &interp = *simContext.getInterpreter();
+    uint64_t parseWallMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(parseDoneTime -
+                                                               startTime)
+            .count());
+    uint64_t passesWallMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(passesDoneTime -
+                                                               parseDoneTime)
+            .count());
+    uint64_t initWallMs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(initDoneTime -
+                                                               passesDoneTime)
+            .count());
+    uint64_t soLoadWallMs = hadCompiledLoad
+                                ? static_cast<uint64_t>(
+                                      std::chrono::duration_cast<
+                                          std::chrono::milliseconds>(
+                                          loadCompiledDoneTime - initDoneTime)
+                                          .count())
+                                : 0;
     uint64_t directCallsNative = interp.getNativeFuncCallCount();
     uint64_t directCallsInterpreted = interp.getInterpretedFuncCallCount();
     uint64_t indirectCallsNative = interp.getNativeEntryCallCount();
@@ -3661,6 +3695,18 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t entryCallsTotal = entryCallsNative + entryCallsTrampoline;
     uint64_t indirectCallsTotal = indirectCallsNative + indirectCallsTrampoline;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
+    llvm::errs() << "[circt-sim] parse_ms:                         "
+                 << parseWallMs << "\n";
+    llvm::errs() << "[circt-sim] passes_ms:                        "
+                 << passesWallMs << "\n";
+    llvm::errs() << "[circt-sim] init_ms:                          "
+                 << initWallMs << "\n";
+    llvm::errs() << "[circt-sim] so_load_ms:                       "
+                 << soLoadWallMs << "\n";
+    llvm::errs() << "[circt-sim] run_ms:                           "
+                 << runWallMs << "\n";
+    llvm::errs() << "[circt-sim] total_ms:                         "
+                 << totalWallMs << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
     llvm::errs() << "[circt-sim] Interpreter process invocations:  "
