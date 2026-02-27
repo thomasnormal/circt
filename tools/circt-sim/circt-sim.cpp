@@ -3713,6 +3713,19 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t mutableBytesArena = arenaSizeBytes;
     uint64_t mutableBytesPatch = globalPatchBytes;
     uint64_t mutableBytesTotal = mutableBytesArena + mutableBytesPatch;
+    const auto &schedStats = simContext.getSchedulerStats();
+    uint64_t processActivationsTotal = schedStats.processesExecuted;
+    uint64_t deltaCyclesTotal = schedStats.deltaCyclesExecuted;
+    uint64_t simulatedTimeFs = simContext.getFinalTime().realTime;
+    auto scalePerSecond = [runWallMs](uint64_t value) -> uint64_t {
+      if (runWallMs == 0)
+        return 0;
+      return static_cast<uint64_t>(
+          (static_cast<unsigned __int128>(value) * 1000u) / runWallMs);
+    };
+    uint64_t processActivationsPerS = scalePerSecond(processActivationsTotal);
+    uint64_t deltaCyclesPerS = scalePerSecond(deltaCyclesTotal);
+    uint64_t simulatedNsPerS = scalePerSecond(simulatedTimeFs) / 1000000;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] parse_ms:                         "
                  << parseWallMs << "\n";
@@ -3746,6 +3759,18 @@ static LogicalResult processInput(MLIRContext &context,
                  << mutableBytesArena << "\n";
     llvm::errs() << "[circt-sim] mutable_bytes_patch:              "
                  << mutableBytesPatch << "\n";
+    llvm::errs() << "[circt-sim] simulated_time_fs:                "
+                 << simulatedTimeFs << "\n";
+    llvm::errs() << "[circt-sim] process_activations_total:        "
+                 << processActivationsTotal << "\n";
+    llvm::errs() << "[circt-sim] delta_cycles_total:               "
+                 << deltaCyclesTotal << "\n";
+    llvm::errs() << "[circt-sim] process_activations_per_s:        "
+                 << processActivationsPerS << "\n";
+    llvm::errs() << "[circt-sim] delta_cycles_per_s:               "
+                 << deltaCyclesPerS << "\n";
+    llvm::errs() << "[circt-sim] simulated_ns_per_s:               "
+                 << simulatedNsPerS << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
     llvm::errs() << "[circt-sim] Interpreter process invocations:  "
