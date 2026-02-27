@@ -151,6 +151,12 @@ struct CLOptions {
       cl::desc("Destructure arrays and structs into individual signals."),
       cl::init(false), cl::cat(cat)};
 
+  cl::opt<bool> skipPostMooreToCoreCleanup{
+      "skip-post-moore-to-core-cleanup",
+      cl::desc("Skip post-conversion CSE/canonicalize cleanup after "
+               "convert-moore-to-core"),
+      cl::init(false), cl::Hidden, cl::cat(cat)};
+
   //===--------------------------------------------------------------------===//
   // Include paths
   //===--------------------------------------------------------------------===//
@@ -771,7 +777,7 @@ static void populatePasses(PassManager &pm) {
   populateVerilogToMoorePipeline(pm);
   if (opts.loweringMode == LoweringMode::OutputIRMoore)
     return;
-  populateMooreToCorePipeline(pm);
+  populateMooreToCorePipeline(pm, opts.skipPostMooreToCoreCleanup);
   if (opts.loweringMode == LoweringMode::OutputIRLLHD)
     return;
   // OutputIRHW and Full modes both require LLHD lowering to convert

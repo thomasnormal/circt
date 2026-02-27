@@ -268,7 +268,8 @@ importVerilog(llvm::SourceMgr &sourceMgr, mlir::MLIRContext *context,
 void populateVerilogToMoorePipeline(mlir::OpPassManager &pm);
 
 /// Convert Moore dialect IR into core dialect IR
-void populateMooreToCorePipeline(mlir::OpPassManager &pm);
+void populateMooreToCorePipeline(mlir::OpPassManager &pm,
+                                 bool skipPostCleanup = false);
 
 /// Convert LLHD dialect IR into core dialect IR
 struct LlhdToCorePipelineOptions
