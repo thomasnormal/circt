@@ -317,8 +317,10 @@ def find_binary_arithmetic_token(token: str, nth: int) -> int:
     return -1
 
 
-def find_binary_mul_token(nth: int) -> int:
+def find_binary_muldiv_token(token: str, nth: int) -> int:
     if nth < 1:
+        return -1
+    if token not in ("*", "/"):
         return -1
     seen = 0
     i = 0
@@ -337,7 +339,7 @@ def find_binary_mul_token(nth: int) -> int:
             bracket_depth = max(bracket_depth - 1, 0)
             i += 1
             continue
-        if ch != "*":
+        if ch != token:
             i += 1
             continue
         if bracket_depth > 0:
@@ -345,15 +347,23 @@ def find_binary_mul_token(nth: int) -> int:
             continue
         prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
         nxt = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
-        if prev == "*" or nxt == "*":
-            i += 1
-            continue
-        if nxt == "=":
-            i += 1
-            continue
-        if prev == "(" and nxt == ")":
-            i += 1
-            continue
+        if token == "*":
+            if prev == "*" or nxt == "*":
+                i += 1
+                continue
+            if nxt == "=":
+                i += 1
+                continue
+            if prev == "(" and nxt == ")":
+                i += 1
+                continue
+        else:
+            if prev == "/" or nxt == "/":
+                i += 1
+                continue
+            if nxt == "=":
+                i += 1
+                continue
         prev_sig = find_prev_code_nonspace(i)
         next_sig = find_next_code_nonspace(i + 1)
         if prev_sig < 0 or next_sig < 0:
@@ -708,7 +718,7 @@ elif op == 'SUB_TO_ADD':
         text = text[:idx] + '+' + text[idx + 1:]
         changed = True
 elif op == 'MUL_TO_ADD':
-    idx = find_binary_mul_token(site_index)
+    idx = find_binary_muldiv_token('*', site_index)
     if idx >= 0:
         text = text[:idx] + '+' + text[idx + 1:]
         changed = True
@@ -716,6 +726,16 @@ elif op == 'ADD_TO_MUL':
     idx = find_binary_arithmetic_token('+', site_index)
     if idx >= 0:
         text = text[:idx] + '*' + text[idx + 1:]
+        changed = True
+elif op == 'DIV_TO_MUL':
+    idx = find_binary_muldiv_token('/', site_index)
+    if idx >= 0:
+        text = text[:idx] + '*' + text[idx + 1:]
+        changed = True
+elif op == 'MUL_TO_DIV':
+    idx = find_binary_muldiv_token('*', site_index)
+    if idx >= 0:
+        text = text[:idx] + '/' + text[idx + 1:]
         changed = True
 elif op == 'UNARY_MINUS_DROP':
     idx = find_unary_minus_token(site_index)

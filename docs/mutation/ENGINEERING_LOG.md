@@ -132,3 +132,26 @@
   - Integrated `UNARY_MINUS_DROP` into CIRCT-only `arith`, `inv`/`invert`, and `balanced/all` mode mappings.
   - Added site-index and no-op fallback regression tests for unary-minus behavior, plus arith-mode generation test coverage.
   - Ran seeded parity campaign on unary-minus-bearing mini design (`35` mutants): `ok=35 mismatch=0 fail=0`.
+
+## 2026-02-27 (division arithmetic fault class)
+
+- realizations:
+  - `/` vs `*` confusion is a realistic datapath bug class and complements the
+    existing add/sub/mul operator substitutions.
+  - Division site detection must be strict enough to avoid non-expression
+    spellings (`/=`, `//`) and keep site-index parity between planner and
+    mutator.
+
+- changes made:
+  - Added native operators `DIV_TO_MUL` and `MUL_TO_DIV`.
+  - Refactored mutator-side mul/div token scanning into one helper to avoid
+    duplicated site logic.
+  - Integrated division operators into CIRCT-only `arith`, `inv`/`invert`, and
+    `balanced/all` mode mappings.
+  - Added regression tests:
+    - `native-create-mutated-div-to-mul-site-index`
+    - `native-create-mutated-mul-to-div-site-index`
+    - `native-create-mutated-div-skip-contexts`
+    - `circt-mut-generate-circt-only-arith-mode-div-ops`
+  - Ran seeded xrun-vs-circt parity campaign including division/multiplication
+    mutations (`40` mutants): `ok=40 mismatch=0 fail=0`.
