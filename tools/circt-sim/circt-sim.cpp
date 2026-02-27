@@ -3720,6 +3720,8 @@ static LogicalResult processInput(MLIRContext &context,
     const auto &schedStats = simContext.getSchedulerStats();
     uint64_t processActivationsTotal = schedStats.processesExecuted;
     uint64_t deltaCyclesTotal = schedStats.deltaCyclesExecuted;
+    uint64_t signalUpdatesTotal = schedStats.signalUpdates;
+    uint64_t edgesDetectedTotal = schedStats.edgesDetected;
     uint64_t simulatedTimeFs = simContext.getFinalTime().realTime;
     auto scalePerSecond = [runWallNs](uint64_t value) -> uint64_t {
       if (runWallNs == 0)
@@ -3729,6 +3731,8 @@ static LogicalResult processInput(MLIRContext &context,
     };
     uint64_t processActivationsPerS = scalePerSecond(processActivationsTotal);
     uint64_t deltaCyclesPerS = scalePerSecond(deltaCyclesTotal);
+    uint64_t signalUpdatesPerS = scalePerSecond(signalUpdatesTotal);
+    uint64_t edgesDetectedPerS = scalePerSecond(edgesDetectedTotal);
     uint64_t simulatedNsPerS = scalePerSecond(simulatedTimeFs) / 1000000;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] parse_ms:                         "
@@ -3769,10 +3773,18 @@ static LogicalResult processInput(MLIRContext &context,
                  << processActivationsTotal << "\n";
     llvm::errs() << "[circt-sim] delta_cycles_total:               "
                  << deltaCyclesTotal << "\n";
+    llvm::errs() << "[circt-sim] signal_updates_total:             "
+                 << signalUpdatesTotal << "\n";
+    llvm::errs() << "[circt-sim] edges_detected_total:             "
+                 << edgesDetectedTotal << "\n";
     llvm::errs() << "[circt-sim] process_activations_per_s:        "
                  << processActivationsPerS << "\n";
     llvm::errs() << "[circt-sim] delta_cycles_per_s:               "
                  << deltaCyclesPerS << "\n";
+    llvm::errs() << "[circt-sim] signal_updates_per_s:             "
+                 << signalUpdatesPerS << "\n";
+    llvm::errs() << "[circt-sim] edges_detected_per_s:             "
+                 << edgesDetectedPerS << "\n";
     llvm::errs() << "[circt-sim] simulated_ns_per_s:               "
                  << simulatedNsPerS << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
