@@ -94,6 +94,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
 - Arithmetic site detection (`ADD_TO_SUB`, `SUB_TO_ADD`) intentionally excludes
   `[...]` range/index contexts to avoid mutating packed-width declarations such
   as `[W-1:0]`.
+- Multiplication mutations (`MUL_TO_ADD`, `ADD_TO_MUL`) use binary-site
+  detection and intentionally skip reduction/wildcard/assignment contexts
+  (`(*)`, `**`, `*=`) and `[...]` range/index expressions.
 - Shift site detection (`SHL_TO_SHR`, `SHR_TO_SHL`) excludes triple-shift and
   shift-assignment spellings (`<<<`, `>>>`, `<<=`, `>>=`).
 - `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign

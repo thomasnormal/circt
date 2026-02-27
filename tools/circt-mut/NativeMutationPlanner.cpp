@@ -27,8 +27,9 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
     "XOR_TO_OR",        "BAND_TO_BOR",    "BOR_TO_BAND",     "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",  "CONST0_TO_1",    "CONST1_TO_0",     "ADD_TO_SUB",
-    "SUB_TO_ADD",       "SHL_TO_SHR",     "SHR_TO_SHL",      "CASEEQ_TO_EQ",
-    "CASENEQ_TO_NEQ",   "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
+    "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",      "SHL_TO_SHR",
+    "SHR_TO_SHL",       "CASEEQ_TO_EQ",   "CASENEQ_TO_NEQ",  "SIGNED_TO_UNSIGNED",
+    "UNSIGNED_TO_SIGNED"};
 
 namespace {
 
@@ -574,6 +575,49 @@ static void collectBinaryArithmeticSites(StringRef text, char needle,
   }
 }
 
+static void collectBinaryMultiplySites(StringRef text,
+                                       ArrayRef<uint8_t> codeMask,
+                                       SmallVectorImpl<SiteInfo> &sites) {
+  int bracketDepth = 0;
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      if (bracketDepth > 0)
+        --bracketDepth;
+      continue;
+    }
+    if (ch != '*')
+      continue;
+    if (bracketDepth > 0)
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (prev == '*' || next == '*')
+      continue;
+    if (next == '=')
+      continue;
+    if (prev == '(' && next == ')')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectRelationalComparatorSites(StringRef text, StringRef token,
                                              ArrayRef<uint8_t> codeMask,
                                              SmallVectorImpl<SiteInfo> &sites) {
@@ -733,6 +777,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryArithmeticSites(designText, '-', codeMask, sites);
     return;
   }
+  if (op == "MUL_TO_ADD") {
+    collectBinaryMultiplySites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "ADD_TO_MUL") {
+    collectBinaryArithmeticSites(designText, '+', codeMask, sites);
+    return;
+  }
   if (op == "SHL_TO_SHR") {
     collectBinaryShiftSites(designText, "<<", codeMask, sites);
     return;
@@ -769,7 +821,8 @@ static std::string getOpFamily(StringRef op) {
     return "logic";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
-  if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD")
+  if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
+      op == "ADD_TO_MUL")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL")
     return "shift";

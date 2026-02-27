@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic a,b, output logic y, output logic [7:0] z);\n  always @(*) y = a & b;\n  assign z = a * b;\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_MUL_TO_ADD@1\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: always @(*) y = a & b;
+// MUTANT: assign z = a + b;
