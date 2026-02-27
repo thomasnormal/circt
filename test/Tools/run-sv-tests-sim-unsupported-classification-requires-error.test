@@ -1,0 +1,14 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-16
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.20--sim-note.sv <<"SV"\n/*\n:name: sim_note\n:description: non-error note mentioning not-yet-implemented should not classify as UNSUPPORTED\n:type: simulation\n:tags: 16.20\n*/\nmodule top;\nendmodule\nSV\n'
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-16/16.20--sim-unsupported.sv <<"SV"\n/*\n:name: sim_unsupported\n:description: explicit unsupported error should classify as UNSUPPORTED\n:type: simulation\n:tags: 16.20\n*/\nmodule top;\nendmodule\nSV\n'
+// RUN: bash -eu -c $'cat > %t/fake-verilog.sh <<"EOFV"\n#!/usr/bin/env bash\ncat <<"MLIR"\nmodule {\n  hw.module @top() {\n    hw.output\n  }\n}\nMLIR\nEOFV\nchmod +x %t/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/fake-sim.sh <<"EOFS"\n#!/usr/bin/env bash\nfor arg in "$@"; do\n  case "$arg" in\n    *16.20--sim-note*)\n      echo "note: feature not yet implemented in harness" >&2\n      exit 1\n      ;;\n    *16.20--sim-unsupported*)\n      echo "error: unsupported simulation construct" >&2\n      exit 1\n      ;;\n  esac\ndone\nexit 0\nEOFS\nchmod +x %t/fake-sim.sh\n'
+// RUN: env OUT=%t/results.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/fake-verilog.sh CIRCT_SIM=%t/fake-sim.sh DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )16\.20( |$)" %S/../../utils/run_sv_tests_circt_sim.sh %t/sv-tests | FileCheck %s --check-prefix=SUMMARY
+// RUN: cat %t/results.tsv | FileCheck %s --check-prefix=OUT
+
+// SUMMARY: === sv-tests Simulation Summary ===
+// SUMMARY: total=2 pass=0 fail=1 xfail=0 xpass=0
+// SUMMARY: compile_fail=0 timeout=0 error=1 skip=0
+
+// OUT: FAIL{{[[:space:]]+}}16.20--sim-note{{[[:space:]]+}}
+// OUT: UNSUPPORTED{{[[:space:]]+}}16.20--sim-unsupported{{[[:space:]]+}}

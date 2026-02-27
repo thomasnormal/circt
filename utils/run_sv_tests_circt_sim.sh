@@ -512,8 +512,9 @@ WRAPPER_EOF
       result="PASS"
       pass=$((pass + 1))
     else
-      # Check stderr for known non-fatal issues
-      if grep -q "unsupported\|not yet implemented\|unimplemented" "$sim_log" 2>/dev/null; then
+      # Classify as unsupported only when diagnostics explicitly mark it as an
+      # error/fatal unsupported/not-yet-implemented condition.
+      if grep -Eqi "((error|fatal):.*(unsupported|not yet implemented|unimplemented))|((unsupported|not yet implemented|unimplemented).*(error|fatal):)" "$sim_log" 2>/dev/null; then
         result="UNSUPPORTED"
         error=$((error + 1))
       else

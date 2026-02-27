@@ -157,3 +157,27 @@
 - Tests:
   - `llvm-lit --filter 'Runtime/uvm/uvm_factory_test.sv|Runtime/uvm/uvm_factory_override_test.sv' test/Runtime/uvm` passes.
   - Full `Runtime/uvm` parse subset now: 11 passing / 6 failing.
+
+### Sim: tighten `UNSUPPORTED` classification in sv-tests simulation runner
+- Repro:
+  - `utils/run_sv_tests_circt_sim.sh` marked a test `UNSUPPORTED` on any
+    non-zero sim exit if stderr contained words like `not yet implemented`,
+    even without an actual error diagnostic.
+- Root cause:
+  - Classification used broad substring matching:
+    `unsupported|not yet implemented|unimplemented` across the whole log.
+- Fix:
+  - Require explicit `error:` or `fatal:` context on the same line as
+    `unsupported/not yet implemented/unimplemented` before classifying as
+    `UNSUPPORTED`.
+  - Keep other non-zero exits as `FAIL`.
+- Tests:
+  - Added `test/Tools/run-sv-tests-sim-unsupported-classification-requires-error.test`
+    to cover:
+    - non-error note -> `FAIL`
+    - explicit unsupported error -> `UNSUPPORTED`
+  - Re-ran focused sim-runner tests:
+    - `run-sv-tests-sim-should-fail-pass.test`
+    - `run-sv-tests-sim-should-fail-elab-compile-pass.test`
+    - `run-sv-tests-sim-tag-regex-empty-tags.test`
+    - `run-sv-tests-sim-toolchain-derived-from-circt-verilog.test`
