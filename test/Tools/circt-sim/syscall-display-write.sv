@@ -17,13 +17,13 @@ module top;
     $write("\n");
 
     // $displayb, $displayo, $displayh
-    // CHECK: displayh=2a
+    // CHECK: displayh=0000002a
     $displayh("displayh=", x);
 
-    // CHECK: displayo=52
+    // CHECK: displayo=00000000052
     $displayo("displayo=", x);
 
-    // CHECK: displayb=101010
+    // CHECK: displayb=00000000000000000000000000101010
     $displayb("displayb=", x);
 
     $finish;

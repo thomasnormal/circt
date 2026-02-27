@@ -405,3 +405,23 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_stress_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
     - improved from 16 pass / 1 fail to 17 pass / 0 fail.
+
+### Sim/syscalls: align display and readmemb expectations with width-aware formatting
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim --filter 'syscall-.*\\.sv'`
+  - Failed in:
+    - `test/Tools/circt-sim/syscall-display-write.sv`
+    - `test/Tools/circt-sim/syscall-readmemb.sv`
+- Root cause:
+  - Test expectations were stale relative to current `circt-sim` formatting:
+    - `$displayh/$displayo/$displayb` on `integer` now print width-aware,
+      zero-padded radix strings.
+    - `%h` on `reg [7:0]` values prints two hex digits (`0f`), not `f`.
+- Fix:
+  - Updated FileCheck expectations in:
+    - `syscall-display-write.sv` (`displayh/displayo/displayb` padded forms)
+    - `syscall-readmemb.sv` (`mem[3]=0f`)
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/syscall-display-write.sv test/Tools/circt-sim/syscall-readmemb.sv`
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim --filter 'syscall-.*\\.sv'`
+    - 160 passed / 0 failed in filtered run.
