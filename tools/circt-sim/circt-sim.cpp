@@ -1306,7 +1306,8 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             LLHDProcessInterpreter::getTypeWidth(elemType);
         uint32_t elemLogW =
             LLHDProcessInterpreter::getLogicalWidth(elemType);
-        ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW, elemLogW};
+        ProcessScheduler::SignalArrayInfo info{
+            numElems, elemPhysW, elemLogW, 0, -1, nullptr};
         if (sigBounds) {
           if (auto leftAttr = sigBounds.getAs<IntegerAttr>("left"))
             info.leftBound = leftAttr.getInt();
@@ -2243,8 +2244,8 @@ LogicalResult SimulationContext::run() {
             uint32_t elemLogW =
                 (numElems > 0) ? logicalWidth / numElems : logicalWidth;
             uint32_t elemPhysW = elemLogW * 2;
-            ProcessScheduler::SignalArrayInfo info{numElems, elemPhysW,
-                                                   elemLogW};
+            ProcessScheduler::SignalArrayInfo info{
+                numElems, elemPhysW, elemLogW, 0, -1, nullptr};
             info.leftBound = left;
             info.rightBound = right;
 
