@@ -18,6 +18,10 @@
 // COMPILE: [circt-compile] 0 functions + 1 processes ready for codegen
 //
 // DISPATCH: Compiled process dispatch: 1/1 processes wired
+// DISPATCH: [circt-sim] signal_updates_total:             {{[1-9][0-9]*}}
+// DISPATCH: [circt-sim] edges_detected_total:             {{[1-9][0-9]*}}
+// DISPATCH: [circt-sim] signal_updates_per_s:             {{[1-9][0-9]*}}
+// DISPATCH: [circt-sim] edges_detected_per_s:             {{[1-9][0-9]*}}
 
 hw.module @test() {
   %false = hw.constant false
