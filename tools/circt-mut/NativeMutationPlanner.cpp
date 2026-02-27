@@ -96,6 +96,18 @@ struct CoverageDB {
   StringMap<uint64_t> opCoverage;
   StringMap<uint64_t> contextCoverage;
 
+  static int contextRealismBonus(StringRef context) {
+    if (context == "control")
+      return 4;
+    if (context == "assignment")
+      return 3;
+    if (context == "expression")
+      return 1;
+    if (context == "verification")
+      return 0;
+    return 0;
+  }
+
   void insert(const Candidate &c) {
     srcCoverage.try_emplace(c.srcKey, 0);
     wireCoverage.try_emplace(c.wireKey, 0);
@@ -128,6 +140,16 @@ struct CoverageDB {
       thisScore += it->second == 0 ? 3 : 0;
     if (auto it = contextCoverage.find(c.contextKey); it != contextCoverage.end())
       thisScore += it->second == 0 ? 2 : 0;
+    thisScore += contextRealismBonus(c.contextKey);
+
+    // Anti-dominance: keep schedules semantically distinct by discouraging
+    // repeated operator/family/context picks once novelty has been consumed.
+    if (auto it = familyCoverage.find(c.family); it != familyCoverage.end())
+      thisScore -= static_cast<int>(std::min<uint64_t>(2, it->second));
+    if (auto it = opCoverage.find(c.op); it != opCoverage.end())
+      thisScore -= static_cast<int>(std::min<uint64_t>(3, it->second));
+    if (auto it = contextCoverage.find(c.contextKey); it != contextCoverage.end())
+      thisScore -= static_cast<int>(std::min<uint64_t>(1, it->second));
     return thisScore;
   }
 };
