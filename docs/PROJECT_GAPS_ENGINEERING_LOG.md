@@ -73,3 +73,23 @@
 - Tests:
   - Direct repro command now parses successfully.
   - `llvm-lit -sv ... --filter 'Runtime/uvm/uvm_phase_aliases_test.sv'`
+
+### MooreToCore: handle selected format strings in `fstring_to_string`
+- Repro:
+  - A selected format string lowered to an empty string:
+    `arith.select/mux` over `!moore.format_string` then `moore.fstring_to_string`.
+  - Before fix, conversion fell through to "unsupported format string type"
+    fallback and emitted null/zero string struct.
+- Root cause:
+  - `FormatStringToStringOpConversion::convertFormatStringToStringStatic`
+    only handled direct format producers and concat, not selector wrappers.
+  - It also did not unwrap `builtin.unrealized_conversion_cast`, which appears
+    around `!sim.fstring` values in this pipeline.
+- Fix:
+  - Added pass-through handling for `UnrealizedConversionCastOp`.
+  - Added handling for `comb.mux` and `arith.select` by recursively converting
+    true/false format operands and selecting between the resulting strings.
+- Tests:
+  - Extended `test/Conversion/MooreToCore/string-ops.mlir` with
+    `@FStringToStringSelect`.
+  - Verified with focused `llvm-lit` run for that test file.

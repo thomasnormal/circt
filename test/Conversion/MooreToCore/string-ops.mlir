@@ -279,3 +279,17 @@ func.func @FStringToStringConcat(%str: !moore.string) -> !moore.string {
   %3 = moore.fstring_to_string %2
   return %3 : !moore.string
 }
+
+// Test fstring_to_string conversion with selected format string.
+// CHECK-LABEL: func @FStringToStringSelect
+func.func @FStringToStringSelect(%cond: i1) -> !moore.string {
+  // CHECK: sim.fmt.literal "T"
+  // CHECK: sim.fmt.literal "F"
+  // CHECK: arith.select %arg0
+  // CHECK-NOT: llvm.mlir.zero : !llvm.ptr
+  %t = moore.fmt.literal "T"
+  %f = moore.fmt.literal "F"
+  %sel = arith.select %cond, %t, %f : !moore.format_string
+  %s = moore.fstring_to_string %sel
+  return %s : !moore.string
+}
