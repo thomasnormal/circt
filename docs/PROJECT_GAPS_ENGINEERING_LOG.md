@@ -29,3 +29,17 @@
 - Tests:
   - Added `test/Conversion/ImportVerilog/task-interface-instance-capture.sv`.
   - Verified with focused `llvm-lit` run for that test.
+
+### UVM: re-enable `wait_for_state` compile-time regression
+- Repro:
+  - `test/Runtime/uvm/uvm_phase_wait_for_state_test.sv` was disabled with
+    `UNSUPPORTED: true` and did not exercise compile-time API availability.
+- Fix:
+  - Converted the test to a real parse-only lit check using
+    `--uvm-path=%S/../../../lib/Runtime/uvm-core`.
+- Tests:
+  - `llvm-lit -sv ... --filter 'Runtime/uvm/uvm_phase_wait_for_state_test.sv'`
+- Note:
+  - `uvm_phase_aliases_test.sv` still fails today on `final_ph` undeclared when
+    run against upstream `uvm-core`; fixing that requires a coordinated
+    submodule update rather than a superproject-only patch.
