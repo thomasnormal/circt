@@ -61,3 +61,23 @@
 - changes made:
   - Extended `CONST0_TO_1`/`CONST1_TO_0` detection and rewrite support to include `1'h0`/`1'h1` and `'0`/`'1`.
   - Refactored constant-flip rewrite logic into a single helper to avoid duplicated token-mapping code.
+
+## 2026-02-27 (signedness cast mutations)
+
+- realizations:
+  - Missing or inverted signedness casts are a realistic non-trivial RTL bug class, especially around arithmetic comparisons and overflow behavior.
+
+- changes made:
+  - Added native cast operators `SIGNED_TO_UNSIGNED` and `UNSIGNED_TO_SIGNED`.
+  - Added boundary-safe cast-call site detection with optional whitespace handling.
+  - Integrated cast operators into CIRCT-only `arith`/`inv`/`invert`/`balanced` mode mappings.
+
+## 2026-02-27 (seeded parity campaign hygiene)
+
+- realizations:
+  - A full xrun-vs-circt mutant mismatch can be a false alarm when the harness reads uninitialized state (`X`), even with fixed seeds.
+  - `$random(seed)` sequence parity was confirmed separately; the mismatch source was testbench/design initialization, not RNG drift.
+
+- changes made:
+  - Switched seeded mini parity harnesses to deterministic reset initialization before signature comparison.
+  - Re-ran a 24-mutant campaign after reset hygiene; parity result was `ok=24 mismatch=0 fail=0`.

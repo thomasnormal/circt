@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [7:0] a,b,c,d, output logic [7:0] y0,y1);\n  assign y0 = $signed(a + b);\n  assign y1 = $unsigned(c + d);\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 40 --seed 1 --modes arith > %t/log.txt
+// RUN: grep -q 'NATIVE_SIGNED_TO_UNSIGNED' %t/mutations.txt
+// RUN: grep -q 'NATIVE_UNSIGNED_TO_SIGNED' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 40

@@ -67,7 +67,7 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - wire-ish key
   - wirebit-ish key
 - Adds diversity pressure across semantic buckets:
-  - fault family (`compare|xcompare|logic|constant|arithmetic|shift|misc`)
+  - fault family (`compare|xcompare|logic|constant|arithmetic|shift|cast|misc`)
   - operator kind
   - coarse statement context (`control|assignment|verification|expression`)
 - Adds realism bias in scoring:
@@ -101,6 +101,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
 - Constant mutations (`CONST0_TO_1`, `CONST1_TO_0`) cover sized binary/decimal/
   hex 1-bit literals and unsized tick literals (`1'b*`, `1'd*`, `1'h*`, `'0`,
   `'1`).
+- Cast mutations (`SIGNED_TO_UNSIGNED`, `UNSIGNED_TO_SIGNED`) target
+  `$signed(...)`/`$unsigned(...)` calls with boundary checks and optional
+  whitespace before `(`.
 - Mutation application must use the same site-index contract (code-only spans),
   otherwise `NATIVE_<OP>@<n>` can target different textual occurrences.
 

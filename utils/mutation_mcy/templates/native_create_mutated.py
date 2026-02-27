@@ -396,6 +396,46 @@ def find_binary_xor_token(nth: int) -> int:
     return -1
 
 
+def find_cast_function_token(name: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    if name not in ("signed", "unsigned"):
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    name_len = len(name)
+    while i < n:
+        if not is_code_at(i) or text[i] != "$":
+            i += 1
+            continue
+        if i + 1 + name_len > n:
+            i += 1
+            continue
+        if not is_code_span(i + 1, i + 1 + name_len):
+            i += 1
+            continue
+        if text[i + 1 : i + 1 + name_len] != name:
+            i += 1
+            continue
+        end_name = i + 1 + name_len
+        nxt = text[end_name] if end_name < n and is_code_at(end_name) else ""
+        if nxt.isalnum() or nxt in ("_", "$"):
+            i += 1
+            continue
+        j = end_name
+        while j < n and is_code_at(j) and text[j].isspace():
+            j += 1
+        if j >= n or not is_code_at(j) or text[j] != "(":
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 code_mask = build_code_mask(text)
 
 if op == 'EQ_TO_NEQ':
@@ -417,6 +457,16 @@ elif op == 'CASENEQ_TO_NEQ':
     idx = find_comparator_token('!==', site_index)
     if idx >= 0:
         text = text[:idx] + '!=' + text[idx + 3:]
+        changed = True
+elif op == 'SIGNED_TO_UNSIGNED':
+    idx = find_cast_function_token('signed', site_index)
+    if idx >= 0:
+        text = text[:idx] + '$unsigned' + text[idx + len('$signed') :]
+        changed = True
+elif op == 'UNSIGNED_TO_SIGNED':
+    idx = find_cast_function_token('unsigned', site_index)
+    if idx >= 0:
+        text = text[:idx] + '$signed' + text[idx + len('$unsigned') :]
         changed = True
 elif op == 'LT_TO_LE':
     changed = replace_nth(r'(?<![<>=!])<(?![<>=])', '<=', site_index)
