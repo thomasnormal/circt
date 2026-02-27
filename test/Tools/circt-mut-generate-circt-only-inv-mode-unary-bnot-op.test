@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [3:0] a,b,c, output logic [3:0] y0,y1,y2);\n  assign y0 = ~a;\n  assign y1 = ~ b;\n  assign y2 = a ^ c;\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 40 --seed 11 --modes inv > %t/log.txt
+// RUN: grep -q 'NATIVE_UNARY_BNOT_DROP' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 40

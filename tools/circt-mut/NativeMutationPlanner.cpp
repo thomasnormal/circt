@@ -26,9 +26,9 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
     "XOR_TO_OR",        "BAND_TO_BOR",    "BOR_TO_BAND",     "UNARY_NOT_DROP",
-    "CONST0_TO_1",      "CONST1_TO_0",    "ADD_TO_SUB",      "SUB_TO_ADD",
-    "SHL_TO_SHR",       "SHR_TO_SHL",     "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
-    "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
+    "UNARY_BNOT_DROP",  "CONST0_TO_1",    "CONST1_TO_0",     "ADD_TO_SUB",
+    "SUB_TO_ADD",       "SHL_TO_SHR",     "SHR_TO_SHL",      "CASEEQ_TO_EQ",
+    "CASENEQ_TO_NEQ",   "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
 
@@ -374,6 +374,38 @@ static void collectUnaryNotDropSites(StringRef text,
   }
 }
 
+static void collectUnaryBitwiseNotDropSites(StringRef text,
+                                            ArrayRef<uint8_t> codeMask,
+                                            SmallVectorImpl<SiteInfo> &sites) {
+  auto isUnaryOperandStart = [](char c) {
+    return isAlnum(c) || c == '_' || c == '(' || c == '[' || c == '{' ||
+           c == '\'' || c == '~' || c == '!' || c == '$';
+  };
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (text[i] != '~')
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    if (prev == '^')
+      continue;
+    if (i + 1 < e && isCodeAt(codeMask, i + 1)) {
+      char immediateNext = text[i + 1];
+      if (immediateNext == '&' || immediateNext == '|' || immediateNext == '^' ||
+          immediateNext == '=')
+        continue;
+    }
+    size_t j = i + 1;
+    while (j < e && std::isspace(static_cast<unsigned char>(text[j])))
+      ++j;
+    if (j >= e || !isCodeAt(codeMask, j))
+      continue;
+    char next = text[j];
+    if (isUnaryOperandStart(next))
+      sites.push_back({i});
+  }
+}
+
 static size_t findPrevCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
                                    size_t pos) {
   if (pos == 0)
@@ -669,6 +701,10 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectUnaryNotDropSites(designText, codeMask, sites);
     return;
   }
+  if (op == "UNARY_BNOT_DROP") {
+    collectUnaryBitwiseNotDropSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "CONST0_TO_1") {
     collectLiteralTokenSites(designText, "1'b0", codeMask, sites);
     collectLiteralTokenSites(designText, "1'd0", codeMask, sites);
@@ -728,7 +764,8 @@ static std::string getOpFamily(StringRef op) {
   if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
     return "xcompare";
   if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "XOR_TO_OR" ||
-      op == "BAND_TO_BOR" || op == "BOR_TO_BAND" || op == "UNARY_NOT_DROP")
+      op == "BAND_TO_BOR" || op == "BOR_TO_BAND" || op == "UNARY_NOT_DROP" ||
+      op == "UNARY_BNOT_DROP")
     return "logic";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";

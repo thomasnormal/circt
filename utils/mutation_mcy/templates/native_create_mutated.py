@@ -439,6 +439,43 @@ def find_binary_bitwise_token(token: str, nth: int) -> int:
     return -1
 
 
+def find_unary_bitnot_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        if text[i] != "~":
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        if prev == "^":
+            i += 1
+            continue
+        nxt = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
+        if nxt in ("&", "|", "^", "="):
+            i += 1
+            continue
+        j = i + 1
+        while j < n and is_code_at(j) and text[j].isspace():
+            j += 1
+        if j >= n or not is_code_at(j):
+            i += 1
+            continue
+        if not is_operand_start_char(text[j]):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_cast_function_token(name: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -546,6 +583,14 @@ elif op == 'BOR_TO_BAND':
         changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
+elif op == 'UNARY_BNOT_DROP':
+    idx = find_unary_bitnot_token(site_index)
+    if idx >= 0:
+        end = idx + 1
+        while end < len(text) and is_code_at(end) and text[end].isspace():
+            end += 1
+        text = text[:idx] + text[end:]
+        changed = True
 elif op == 'CONST0_TO_1':
     changed = replace_nth(
         r"1'b0|1'd0|1'h0|'0",

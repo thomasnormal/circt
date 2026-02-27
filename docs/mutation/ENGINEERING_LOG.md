@@ -92,3 +92,16 @@
   - Added native bitwise operators `BAND_TO_BOR` and `BOR_TO_BAND`.
   - Added binary-site filtering to skip reduction and assignment forms while preserving site-index determinism.
   - Added site-index mutation tests and mode-generation coverage tests for the new bitwise operators.
+
+## 2026-02-27 (unary bitwise inversion fault class)
+
+- realizations:
+  - Dropped bitwise inversion (`~expr` accidentally removed) is a common RTL polarity bug and should be modeled separately from logical-negation drops (`!expr`).
+  - Unary `~` must be token-aware to avoid mutating reduction and XNOR spellings (`~&`, `~|`, `~^`, `^~`).
+
+- changes made:
+  - Added native operator `UNARY_BNOT_DROP`.
+  - Implemented site detection and mutation rewriting with guards for reduction/XNOR contexts.
+  - Extended CIRCT-only mode mappings (`control`, `inv`, `invert`, `balanced/all`) to include `UNARY_BNOT_DROP`.
+  - Added site-index rewrite and mode-generation regression tests.
+  - Ran seeded `xrun` vs `circt` parity campaign (`30` mutants including `UNARY_BNOT_DROP`): `ok=30 mismatch=0 fail=0` (with retry guard for transient `Permission denied` relink races).
