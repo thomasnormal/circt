@@ -3631,6 +3631,7 @@ static LogicalResult processInput(MLIRContext &context,
   if (failed(runResult)) {
 #if defined(__EMSCRIPTEN__)
     VPIRuntime::getInstance().resetForNewSimulationRun();
+    __moore_runtime_reset_for_new_simulation_run();
 #endif
     return failure();
   }
@@ -3700,6 +3701,12 @@ static LogicalResult processInput(MLIRContext &context,
                  << entryCallsNative << "\n";
     llvm::errs() << "[circt-sim] entry_calls_trampoline:           "
                  << entryCallsTrampoline << "\n";
+    llvm::errs() << "[circt-sim] wait_event_count:                 "
+                 << interp.getMooreWaitEventCount() << "\n";
+    llvm::errs() << "[circt-sim] fork_count:                       "
+                 << interp.getSimForkCount() << "\n";
+    llvm::errs() << "[circt-sim] join_count:                       "
+                 << interp.getSimJoinCount() << "\n";
     interp.dumpAotHotUncompiledFuncs(llvm::errs(), /*topN=*/50);
   }
   // Use std::_Exit() here, before returning, to skip the expensive
@@ -3756,6 +3763,7 @@ static LogicalResult processInput(MLIRContext &context,
   std::fflush(stderr);
 #if defined(__EMSCRIPTEN__)
   VPIRuntime::getInstance().resetForNewSimulationRun();
+  __moore_runtime_reset_for_new_simulation_run();
   return exitCode == 0 ? success() : failure();
 #else
   std::_Exit(exitCode);
@@ -3775,6 +3783,7 @@ int main(int argc, char **argv) {
   // Wasm/browser integrations may invoke this entrypoint repeatedly in one
   // loaded module instance. Reset parser state to avoid cross-run leakage.
   llvm::cl::ResetAllOptionOccurrences();
+  __moore_runtime_reset_for_new_simulation_run();
 #endif
 
   // Increase main thread stack size to 64 MB to handle deep UVM call chains.

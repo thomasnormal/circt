@@ -27512,6 +27512,7 @@ void LLHDProcessInterpreter::pollJoinNoneDisableForkResume(
 
 LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
                                                         sim::SimForkOp forkOp) {
+  ++simForkCount;
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.fork with "
                           << forkOp.getBranches().size() << " branches, join_type="
                           << forkOp.getJoinType() << "\n");
@@ -27962,6 +27963,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimForkTerminator(
 
 LogicalResult LLHDProcessInterpreter::interpretSimJoin(ProcessId procId,
                                                         sim::SimJoinOp joinOp) {
+  ++simJoinCount;
   // Get the fork handle
   InterpretedValue handleVal = getValue(procId, joinOp.getHandle());
   ForkId forkId = static_cast<ForkId>(handleVal.getUInt64());
@@ -27988,6 +27990,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimJoin(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretSimJoinAny(
     ProcessId procId, sim::SimJoinAnyOp joinAnyOp) {
+  ++simJoinCount;
   // Get the fork handle
   InterpretedValue handleVal = getValue(procId, joinAnyOp.getHandle());
   ForkId forkId = static_cast<ForkId>(handleVal.getUInt64());
@@ -28015,6 +28018,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimJoinAny(
 
 LogicalResult LLHDProcessInterpreter::interpretSimWaitFork(
     ProcessId procId, sim::SimWaitForkOp waitForkOp) {
+  ++simJoinCount;
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.wait_fork\n");
 
   // Check if all child processes of this parent are complete
@@ -28258,6 +28262,7 @@ LogicalResult LLHDProcessInterpreter::interpretSeqYield(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     ProcessId procId, moore::WaitEventOp waitEventOp) {
+  ++mooreWaitEventCount;
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting moore.wait_event\n");
 
   auto &state = processStates[procId];

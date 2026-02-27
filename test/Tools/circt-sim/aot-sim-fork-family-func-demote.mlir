@@ -1,16 +1,25 @@
 // RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
+// RUN: env CIRCT_AOT_STATS=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=STATS
 
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
 // COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // COMPILED: out=9
+//
+// STATS-DAG: fork_count:                       1
+// STATS-DAG: join_count:                       1
+// STATS-DAG: wait_event_count:                 0
 
 func.func @fork_wait_wrapper() -> i32 {
+  %c1 = hw.constant 1 : i32
+  %c2 = hw.constant 2 : i32
   %handle = sim.fork join_type "join_none" {
+    %v1 = func.call @keep_alive(%c1) : (i32) -> i32
     sim.fork.terminator
   }, {
+    %v2 = func.call @keep_alive(%c2) : (i32) -> i32
     sim.fork.terminator
   }
   sim.wait_fork

@@ -1259,6 +1259,9 @@ public:
   uint64_t getEntryTableSkippedYieldCount() const {
     return entryTableSkippedYieldCount;
   }
+  uint64_t getMooreWaitEventCount() const { return mooreWaitEventCount; }
+  uint64_t getSimForkCount() const { return simForkCount; }
+  uint64_t getSimJoinCount() const { return simJoinCount; }
   uint32_t getMaxAotDepth() const { return maxAotDepth; }
   void dumpAotHotUncompiledFuncs(llvm::raw_ostream &os, size_t topN) const;
 
@@ -3774,6 +3777,11 @@ private:
   /// dispatch during objection object creation.
   std::map<uint64_t, int64_t> phaseObjectionHandles;
 
+  /// Yield counters for wait_for_self_and_siblings_to_drop fast-path polling.
+  /// Kept per interpreter instance to avoid cross-run leakage on wasm
+  /// callMain re-entry.
+  std::map<ProcessId, int> phaseWaitYieldCountByProc;
+
   /// Processes blocked waiting for an objection handle to drop to zero.
   struct ObjectionWaiter {
     ProcessId procId;
@@ -4258,6 +4266,9 @@ private:
   uint64_t trampolineEntryCallCount = 0;
   uint64_t entryTableSkippedDepthCount = 0;
   uint64_t entryTableSkippedYieldCount = 0;
+  uint64_t mooreWaitEventCount = 0;
+  uint64_t simForkCount = 0;
+  uint64_t simJoinCount = 0;
   uint32_t maxAotDepth = 0;
 
   /// Bitmap indicating which FuncId entries are natively compiled functions
