@@ -726,18 +726,6 @@ static llvm::cl::opt<std::string>
                     llvm::cl::Hidden, llvm::cl::cat(mainCategory));
 
 
-static llvm::StringRef getRunModeName(RunMode mode) {
-  switch (mode) {
-  case RunMode::Interpret:
-    return "interpret";
-  case RunMode::Compile:
-    return "compile";
-  case RunMode::Analyze:
-    return "analyze";
-  }
-  return "unknown";
-}
-
 static std::optional<bool> parseEnvBool(const char *value) {
   if (!value)
     return std::nullopt;
@@ -3544,6 +3532,7 @@ static LogicalResult processInput(MLIRContext &context,
     // accumulate correctly because the read-modify-write base is a stale
     // signal probe instead of the loop-carried accumulated value.
     int loopFixes = fixLoopPartialDriveAccumulation(module->getOperation());
+    (void)loopFixes;
     LLVM_DEBUG(if (loopFixes) llvm::dbgs()
                << "[circt-sim] Fixed " << loopFixes
                << " loop partial-drive accumulation issues\n");
