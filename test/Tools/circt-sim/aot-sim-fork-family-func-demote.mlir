@@ -11,6 +11,7 @@
 // STATS-DAG: fork_count:                       1
 // STATS-DAG: join_count:                       1
 // STATS-DAG: wait_event_count:                 0
+// STATS-DAG: yield_count_total:               1
 
 func.func @fork_wait_wrapper() -> i32 {
   %c1 = hw.constant 1 : i32

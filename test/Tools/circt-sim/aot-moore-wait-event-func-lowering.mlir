@@ -14,6 +14,7 @@
 // STATS: wait_event_count:                 1
 // STATS: fork_count:                       0
 // STATS: join_count:                       0
+// STATS: yield_count_total:               1
 
 llvm.mlir.global internal @g_evt(false) : i1
 

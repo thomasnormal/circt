@@ -3707,6 +3707,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << interp.getSimForkCount() << "\n";
     llvm::errs() << "[circt-sim] join_count:                       "
                  << interp.getSimJoinCount() << "\n";
+    llvm::errs() << "[circt-sim] yield_count_total:               "
+                 << interp.getYieldCountTotal() << "\n";
     interp.dumpAotHotUncompiledFuncs(llvm::errs(), /*topN=*/50);
   }
   // Use std::_Exit() here, before returning, to skip the expensive
