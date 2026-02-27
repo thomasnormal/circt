@@ -371,6 +371,46 @@ def find_binary_mul_token(nth: int) -> int:
     return -1
 
 
+def find_unary_minus_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+
+    def is_unary_context(ch: str) -> bool:
+        return ch in "([{:,;?=+-*/%&|^!~<>"
+
+    while i < n:
+        if not is_code_at(i) or text[i] != "-":
+            i += 1
+            continue
+        prev_immediate = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        next_immediate = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
+        if prev_immediate == "-" or next_immediate == "-":
+            i += 1
+            continue
+        if next_immediate == ">":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        if prev_sig >= 0 and not is_unary_context(text[prev_sig]):
+            i += 1
+            continue
+        next_sig = find_next_code_nonspace(i + 1)
+        if next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_binary_shift_token(token: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -676,6 +716,14 @@ elif op == 'ADD_TO_MUL':
     idx = find_binary_arithmetic_token('+', site_index)
     if idx >= 0:
         text = text[:idx] + '*' + text[idx + 1:]
+        changed = True
+elif op == 'UNARY_MINUS_DROP':
+    idx = find_unary_minus_token(site_index)
+    if idx >= 0:
+        end = idx + 1
+        while end < len(text) and is_code_at(end) and text[end].isspace():
+            end += 1
+        text = text[:idx] + text[end:]
         changed = True
 elif op == 'SHL_TO_SHR':
     idx = find_binary_shift_token('<<', site_index)

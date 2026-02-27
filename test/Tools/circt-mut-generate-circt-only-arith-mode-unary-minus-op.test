@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic signed [7:0] a,b,c, output logic signed [7:0] y0,y1,y2);\n  assign y0 = -a;\n  assign y1 = a - b;\n  assign y2 = -(b + c);\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 60 --seed 7 --modes arith > %t/log.txt
+// RUN: grep -q 'NATIVE_UNARY_MINUS_DROP' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 60

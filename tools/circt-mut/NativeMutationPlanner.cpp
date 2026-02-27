@@ -26,10 +26,10 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
     "XOR_TO_OR",        "BAND_TO_BOR",    "BOR_TO_BAND",     "UNARY_NOT_DROP",
-    "UNARY_BNOT_DROP",  "CONST0_TO_1",    "CONST1_TO_0",     "ADD_TO_SUB",
-    "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",      "SHL_TO_SHR",
-    "SHR_TO_SHL",       "CASEEQ_TO_EQ",   "CASENEQ_TO_NEQ",  "SIGNED_TO_UNSIGNED",
-    "UNSIGNED_TO_SIGNED"};
+    "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
+    "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
+    "SHL_TO_SHR",       "SHR_TO_SHL",     "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
+    "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
 
@@ -407,6 +407,70 @@ static void collectUnaryBitwiseNotDropSites(StringRef text,
   }
 }
 
+static void collectUnaryMinusDropSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                       SmallVectorImpl<SiteInfo> &sites) {
+  auto findPrevSig = [&](size_t pos) -> size_t {
+    if (pos == 0)
+      return StringRef::npos;
+    size_t i = pos;
+    while (i > 0) {
+      --i;
+      if (!isCodeAt(codeMask, i))
+        continue;
+      if (std::isspace(static_cast<unsigned char>(text[i])))
+        continue;
+      return i;
+    }
+    return StringRef::npos;
+  };
+  auto findNextSig = [&](size_t pos) -> size_t {
+    for (size_t i = pos, e = text.size(); i < e; ++i) {
+      if (!isCodeAt(codeMask, i))
+        continue;
+      if (std::isspace(static_cast<unsigned char>(text[i])))
+        continue;
+      return i;
+    }
+    return StringRef::npos;
+  };
+  auto isUnaryContext = [](char prev) {
+    return prev == '(' || prev == '[' || prev == '{' || prev == ':' ||
+           prev == ';' || prev == ',' || prev == '?' || prev == '=' ||
+           prev == '+' || prev == '-' || prev == '*' || prev == '/' ||
+           prev == '%' || prev == '&' || prev == '|' || prev == '^' ||
+           prev == '!' || prev == '~' || prev == '<' || prev == '>';
+  };
+
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (text[i] != '-')
+      continue;
+    char prevImmediate =
+        (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char nextImmediate =
+        (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (prevImmediate == '-' || nextImmediate == '-')
+      continue;
+    if (nextImmediate == '>')
+      continue;
+
+    size_t prevSig = findPrevSig(i);
+    if (prevSig != StringRef::npos && !isUnaryContext(text[prevSig]))
+      continue;
+
+    size_t nextSig = findNextSig(i + 1);
+    if (nextSig == StringRef::npos)
+      continue;
+    char next = text[nextSig];
+    if (!(isAlnum(next) || next == '_' || next == '(' || next == '[' ||
+          next == '{' || next == '\'' || next == '~' || next == '!' ||
+          next == '$'))
+      continue;
+    sites.push_back({i});
+  }
+}
+
 static size_t findPrevCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
                                    size_t pos) {
   if (pos == 0)
@@ -749,6 +813,10 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectUnaryBitwiseNotDropSites(designText, codeMask, sites);
     return;
   }
+  if (op == "UNARY_MINUS_DROP") {
+    collectUnaryMinusDropSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "CONST0_TO_1") {
     collectLiteralTokenSites(designText, "1'b0", codeMask, sites);
     collectLiteralTokenSites(designText, "1'd0", codeMask, sites);
@@ -822,7 +890,7 @@ static std::string getOpFamily(StringRef op) {
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
-      op == "ADD_TO_MUL")
+      op == "ADD_TO_MUL" || op == "UNARY_MINUS_DROP")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL")
     return "shift";
