@@ -896,7 +896,7 @@ static void *assocNormalizePtr(void *ptr, const char *funcName) {
     return nullptr;
   if (assocPtrResolver) {
     if (void *resolved = assocPtrResolver(ptr, assocPtrResolverUserData))
-      ptr = resolved;
+      return resolved;
   }
   return normalizeHostPtr(ptr, funcName);
 }
@@ -12831,6 +12831,7 @@ namespace {
 // Simulated command line arguments (empty for stub)
 std::vector<std::string> cmdLineArgs;
 std::string cmdLineArgsEnv;
+int32_t uvmCmdLineIdx = 0;
 
 void parseCommandLineArgs(const std::string &args) {
   cmdLineArgs.clear();
@@ -12880,6 +12881,7 @@ void initCommandLineArgs() {
   if (nextEnv == cmdLineArgsEnv)
     return;
 
+  uvmCmdLineIdx = 0;
   cmdLineArgsEnv = nextEnv;
   if (cmdLineArgsEnv.empty())
     cmdLineArgs.clear();
@@ -12887,9 +12889,6 @@ void initCommandLineArgs() {
     parseCommandLineArgs(cmdLineArgsEnv);
 }
 } // namespace
-
-// Static index for iterating command line arguments
-static int32_t uvmCmdLineIdx = 0;
 
 extern "C" MooreString uvm_dpi_get_next_arg_c(int32_t init) {
   initCommandLineArgs();

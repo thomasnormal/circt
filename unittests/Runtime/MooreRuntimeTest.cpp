@@ -308,24 +308,23 @@ TEST(MooreRuntimeDpiArgsTest, GetNextArgFromEnv) {
   setenv("CIRCT_UVM_ARGS", "arg1 \"two words\" 'three words' arg\\\"4", 1);
   unsetenv("UVM_ARGS");
 
-  int32_t idx = 0;
-  MooreString arg1 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg1 = uvm_dpi_get_next_arg_c(/*init=*/1);
   EXPECT_EQ(std::string(arg1.data, arg1.len), "arg1");
   __moore_free(arg1.data);
 
-  MooreString arg2 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg2 = uvm_dpi_get_next_arg_c(/*init=*/0);
   EXPECT_EQ(std::string(arg2.data, arg2.len), "two words");
   __moore_free(arg2.data);
 
-  MooreString arg3 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg3 = uvm_dpi_get_next_arg_c(/*init=*/0);
   EXPECT_EQ(std::string(arg3.data, arg3.len), "three words");
   __moore_free(arg3.data);
 
-  MooreString arg4 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg4 = uvm_dpi_get_next_arg_c(/*init=*/0);
   EXPECT_EQ(std::string(arg4.data, arg4.len), "arg\"4");
   __moore_free(arg4.data);
 
-  MooreString arg5 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg5 = uvm_dpi_get_next_arg_c(/*init=*/0);
   EXPECT_EQ(arg5.data, nullptr);
   EXPECT_EQ(arg5.len, 0);
 }
@@ -334,16 +333,15 @@ TEST(MooreRuntimeDpiArgsTest, GetNextArgFromUvmArgsFallback) {
   unsetenv("CIRCT_UVM_ARGS");
   setenv("UVM_ARGS", "fallback1 fallback2", 1);
 
-  int32_t idx = 0;
-  MooreString arg1 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg1 = uvm_dpi_get_next_arg_c(/*init=*/1);
   EXPECT_EQ(std::string(arg1.data, arg1.len), "fallback1");
   __moore_free(arg1.data);
 
-  MooreString arg2 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg2 = uvm_dpi_get_next_arg_c(/*init=*/0);
   EXPECT_EQ(std::string(arg2.data, arg2.len), "fallback2");
   __moore_free(arg2.data);
 
-  MooreString arg3 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg3 = uvm_dpi_get_next_arg_c(/*init=*/0);
   EXPECT_EQ(arg3.data, nullptr);
   EXPECT_EQ(arg3.len, 0);
 }
@@ -351,14 +349,12 @@ TEST(MooreRuntimeDpiArgsTest, GetNextArgFromUvmArgsFallback) {
 TEST(MooreRuntimeDpiArgsTest, GetNextArgClearsOnEmpty) {
   setenv("CIRCT_UVM_ARGS", "first", 1);
   unsetenv("UVM_ARGS");
-  int32_t idx = 0;
-  MooreString arg1 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg1 = uvm_dpi_get_next_arg_c(/*init=*/1);
   EXPECT_EQ(std::string(arg1.data, arg1.len), "first");
   __moore_free(arg1.data);
 
   setenv("CIRCT_UVM_ARGS", "", 1);
-  idx = 0;
-  MooreString arg2 = uvm_dpi_get_next_arg_c(idx);
+  MooreString arg2 = uvm_dpi_get_next_arg_c(/*init=*/1);
   EXPECT_EQ(arg2.data, nullptr);
   EXPECT_EQ(arg2.len, 0);
 }
@@ -1692,7 +1688,8 @@ TEST(MooreRuntimeArrayTest, DynArrayNew) {
 
 TEST(MooreRuntimeArrayTest, DynArrayNewCopy) {
   char source[] = "hello";
-  MooreQueue arr = __moore_dyn_array_new_copy(5, source);
+  MooreQueue init = {source, static_cast<int64_t>(sizeof(source) - 1)};
+  MooreQueue arr = __moore_dyn_array_new_copy(5, &init);
   ASSERT_NE(arr.data, nullptr);
   EXPECT_EQ(arr.len, 5);
   EXPECT_EQ(std::string(static_cast<char *>(arr.data), 5), "hello");
