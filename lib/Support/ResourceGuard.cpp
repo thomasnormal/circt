@@ -227,6 +227,24 @@ std::optional<uint64_t> circt::parseMegabytes(llvm::StringRef text) {
   return mb;
 }
 
+uint64_t
+circt::computeDefaultResourceGuardMaxRSSMB(
+    std::optional<uint64_t> systemMemoryMB) {
+  if (!systemMemoryMB)
+    return 8192ull;
+  uint64_t byPercent = 0;
+  if (*systemMemoryMB <= 4096ull)
+    byPercent = (*systemMemoryMB * 80ull) / 100ull;
+  else if (*systemMemoryMB <= 16384ull)
+    byPercent = (*systemMemoryMB * 60ull) / 100ull;
+  else
+    byPercent = (*systemMemoryMB * 40ull) / 100ull;
+
+  // Keep a hard cap to avoid defaulting to very high budgets on large-memory
+  // servers. This remains configurable via --max-rss-mb/CIRCT_MAX_RSS_MB.
+  return std::min<uint64_t>(32768ull, byPercent);
+}
+
 static uint64_t megabytesToBytes(uint64_t mb) {
   return mb * 1024ull * 1024ull;
 }
@@ -460,22 +478,11 @@ void circt::installResourceGuard() {
   uint64_t effectiveMaxWallMs = maxWallMs;
 
   auto applyDefaultMaxRSS = [&]() {
-    // Default to a conservative fraction of system memory, but cap at 10GB.
-    // This is intentionally sized to prevent runaway memory growth on typical
-    // developer workstations while remaining easy to override for large
-    // one-off jobs.
-    if (auto memTotalMB = getSystemMemoryMegabytes()) {
-      uint64_t byPercent = 0;
-      if (*memTotalMB <= 4096ull)
-        byPercent = (*memTotalMB * 80ull) / 100ull;
-      else if (*memTotalMB <= 16384ull)
-        byPercent = (*memTotalMB * 60ull) / 100ull;
-      else
-        byPercent = (*memTotalMB * 40ull) / 100ull;
-      effectiveMaxRSSMB = std::min<uint64_t>(10240ull, byPercent);
-    } else {
-      effectiveMaxRSSMB = 8192ull;
-    }
+    // Default to a conservative fraction of system memory with a bounded cap.
+    // This preserves safety against runaway growth while avoiding overly low
+    // defaults on larger designs such as OpenTitan.
+    effectiveMaxRSSMB =
+        computeDefaultResourceGuardMaxRSSMB(getSystemMemoryMegabytes());
   };
 
   // Apply conservative defaults when the guard is enabled and a specific RSS
