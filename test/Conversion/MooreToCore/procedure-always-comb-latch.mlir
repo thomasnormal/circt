@@ -1,33 +1,48 @@
-// RUN: circt-opt --convert-moore-to-core %s | FileCheck %s
+// RUN: circt-opt %s --convert-moore-to-core | FileCheck %s
 
-moore.module @AlwaysCombAndLatch() {
-  moore.procedure always_comb {
-    func.call @dummy() : () -> ()
-    moore.return
+module {
+  moore.module @AlwaysCombLatchProcedures() {
+    %comb_input = moore.variable : !moore.ref<i1>
+
+    moore.procedure always_comb {
+      %0 = moore.read %comb_input : !moore.ref<i1>
+      func.call @dummyA() : () -> ()
+      moore.return
+    }
+
+    moore.procedure always_latch {
+      %0 = moore.read %comb_input : !moore.ref<i1>
+      func.call @dummyA() : () -> ()
+      moore.return
+    }
+
+    moore.output
   }
 
-  moore.procedure always_latch {
-    func.call @dummy() : () -> ()
-    moore.return
-  }
+  func.func private @dummyA() -> ()
 }
 
-func.func private @dummy()
+// CHECK-LABEL: hw.module @AlwaysCombLatchProcedures
+// CHECK: %comb_input = llhd.sig
 
-// CHECK-LABEL: hw.module @AlwaysCombAndLatch
 // CHECK: llhd.process {
-// CHECK:   cf.br ^[[COMB_BODY:.+]]
-// CHECK: ^[[COMB_BODY]]:
-// CHECK:   func.call @dummy()
-// CHECK:   cf.br ^[[COMB_WAIT:.+]]
-// CHECK: ^[[COMB_WAIT]]:
-// CHECK:   llhd.wait ^[[COMB_BODY]]
+// CHECK:   cf.br ^[[AC_BODY:.+]]
+// CHECK: ^[[AC_BODY]]:
+// CHECK:   {{.*}} = llhd.prb %comb_input
+// CHECK:   func.call @dummyA()
+// CHECK:   cf.br ^[[AC_WAIT:.+]]
+// CHECK: ^[[AC_WAIT]]:
+// CHECK:   llhd.wait
+// CHECK:   ^[[AC_BODY]]
 // CHECK: }
+
 // CHECK: llhd.process {
-// CHECK:   cf.br ^[[LATCH_BODY:.+]]
-// CHECK: ^[[LATCH_BODY]]:
-// CHECK:   func.call @dummy()
-// CHECK:   cf.br ^[[LATCH_WAIT:.+]]
-// CHECK: ^[[LATCH_WAIT]]:
-// CHECK:   llhd.wait ^[[LATCH_BODY]]
+// CHECK:   cf.br ^[[AL_BODY:.+]]
+// CHECK: ^[[AL_BODY]]:
+// CHECK:   {{.*}} = llhd.prb %comb_input
+// CHECK:   func.call @dummyA()
+// CHECK:   cf.br ^[[AL_WAIT:.+]]
+// CHECK: ^[[AL_WAIT]]:
+// CHECK:   llhd.wait
+// CHECK:   ^[[AL_BODY]]
 // CHECK: }

@@ -43,3 +43,15 @@
   - `uvm_phase_aliases_test.sv` still fails today on `final_ph` undeclared when
     run against upstream `uvm-core`; fixing that requires a coordinated
     submodule update rather than a superproject-only patch.
+
+### MooreToCore: add explicit `always_comb` / `always_latch` lowering coverage
+- Repro:
+  - Existing MooreToCore coverage had TODO commentary for `always_comb` and
+    `always_latch`, but no focused regression proving the implicit wait-loop
+    lowering shape.
+- Fix:
+  - Added `test/Conversion/MooreToCore/procedure-always-comb-latch.mlir`.
+  - The test checks that both procedure kinds lower to `llhd.process` with
+    a body block and a wait block (`llhd.wait`) that loops back to the body.
+- Tests:
+  - `llvm-lit -sv ... --filter 'Conversion/MooreToCore/procedure-always-comb-latch.mlir'`
