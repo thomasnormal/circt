@@ -7813,6 +7813,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     arenaGlobalSizes.push_back(globalPatchSizes[i]);
     arenaSize = offset + globalPatchSizes[i];
   }
+  // Keep the total arena size aligned so runtime aligned_alloc(16, size)
+  // is always well-formed, including small single-global cases.
+  if (arenaSize > 0)
+    arenaSize = (arenaSize + 15u) & ~15u;
 
   llvm::errs() << "[circt-compile] Arena: " << arenaGlobalNames.size()
                << " globals, " << arenaSize << " bytes\n";

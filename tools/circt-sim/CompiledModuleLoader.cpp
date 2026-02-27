@@ -117,15 +117,16 @@ CompiledModuleLoader::load(llvm::StringRef path) {
   // v5 arena setup: allocate a single contiguous block for all mutable globals.
   if (abiVer >= 5 && loader->compiledModule->arena_size > 0) {
     uint32_t aSize = loader->compiledModule->arena_size;
-    loader->arenaBase = std::aligned_alloc(16, aSize);
+    uint32_t allocSize = (aSize + 15u) & ~15u;
+    loader->arenaBase = std::aligned_alloc(16, allocSize);
     if (!loader->arenaBase) {
-      llvm::errs() << "[circt-sim] Failed to allocate arena (" << aSize
+      llvm::errs() << "[circt-sim] Failed to allocate arena (" << allocSize
                    << " bytes)\n";
       dlclose(loader->dlHandle);
       return nullptr;
     }
-    std::memset(loader->arenaBase, 0, aSize);
-    loader->arenaAllocSize = aSize;
+    std::memset(loader->arenaBase, 0, allocSize);
+    loader->arenaAllocSize = allocSize;
 
     // Write the arena base pointer into the .so's __circt_sim_arena_base.
     auto *arenaBaseSym = dlsym(loader->dlHandle, "__circt_sim_arena_base");
@@ -146,7 +147,7 @@ CompiledModuleLoader::load(llvm::StringRef path) {
       }
     }
 
-    llvm::errs() << "[circt-sim] Allocated arena: " << aSize << " bytes, "
+    llvm::errs() << "[circt-sim] Allocated arena: " << allocSize << " bytes, "
                  << numArenaGlobals << " arena globals\n";
   }
 
