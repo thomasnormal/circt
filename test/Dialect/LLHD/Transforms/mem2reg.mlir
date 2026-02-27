@@ -1156,3 +1156,39 @@ hw.module @CaptureNonProbeValuesAcrossWait(in %a: i42, in %b: i42) {
     llhd.halt
   }
 }
+
+// Regression test for projection probes over local signals in wait loops.
+// Historically `llhd-mem2reg` could fail to trace block-argument-forwarded
+// signal aliases and substitute the entire aggregate signal where a projected
+// bit-slice was expected, producing invalid comb ops.
+// CHECK-LABEL: @ProjectionProbeAcrossWaitLoop
+hw.module @ProjectionProbeAcrossWaitLoop() {
+  llhd.process {
+    %c0_i8 = hw.constant 0 : i8
+    %c0_i3 = hw.constant 0 : i3
+    %c1_i3 = hw.constant 1 : i3
+    %t = llhd.constant_time <0ns, 0d, 1e>
+    %init = hw.struct_create (%c0_i8, %c0_i8) : !hw.struct<value: i8, unknown: i8>
+    %sig = llhd.sig %init : !hw.struct<value: i8, unknown: i8>
+    cf.br ^bb2
+  ^bb1:
+    // CHECK: ^bb1(
+    // CHECK: [[BACK_PROBE:%.+]] = llhd.prb %sig
+    // CHECK: cf.br ^bb2({{.*}}[[BACK_PROBE]]{{.*}})
+    cf.br ^bb2
+  ^bb2:
+    // CHECK: ^bb2({{.*}}[[STATE:%.+]]: !hw.struct<value: i8, unknown: i8>{{.*}}):
+    // CHECK-NOT: llhd.prb
+    %v = llhd.sig.struct_extract %sig["value"] : <!hw.struct<value: i8, unknown: i8>>
+    %sl = llhd.sig.extract %v from %c0_i3 : <i8> -> <i3>
+    %p = llhd.prb %sl : i3
+    // CHECK: [[VALUE:%.+]] = hw.struct_extract [[STATE]]["value"]
+    // CHECK: [[SHIFT:%.+]] = comb.shru [[VALUE]], {{%.+}} : i8
+    // CHECK: [[SLICE:%.+]] = comb.extract [[SHIFT]] from 0 : (i8) -> i3
+    // CHECK: [[NEXT:%.+]] = comb.xor [[SLICE]], {{%.+}} : i3
+    %x = comb.xor %p, %c1_i3 : i3
+    llhd.drv %sl, %x after %t : i3
+    llhd.wait ^bb1
+  }
+  hw.output
+}

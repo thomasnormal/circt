@@ -179,6 +179,38 @@ hw.module @FinalProcess () {
   }
 }
 
+// CHECK-LABEL: @FinalNestedInProcess
+hw.module @FinalNestedInProcess () {
+  // CHECK-NEXT: llhd.process {
+  // CHECK-NEXT:   llhd.final {
+  // CHECK-NEXT:     llhd.halt
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   llhd.halt
+  // CHECK-NEXT: }
+  llhd.process {
+    llhd.final {
+      llhd.halt
+    }
+    llhd.halt
+  }
+}
+
+// CHECK-LABEL: @FinalNestedInCombinational
+hw.module @FinalNestedInCombinational () {
+  // CHECK-NEXT: llhd.combinational {
+  // CHECK-NEXT:   llhd.final {
+  // CHECK-NEXT:     llhd.halt
+  // CHECK-NEXT:   }
+  // CHECK-NEXT:   llhd.yield
+  // CHECK-NEXT: }
+  llhd.combinational {
+    llhd.final {
+      llhd.halt
+    }
+    llhd.yield
+  }
+}
+
 hw.module @ProcessWithResults(in %arg0: i42, in %arg1: i9001) {
   %0:2 = llhd.process -> i42, i9001 {
     llhd.wait yield (%arg0, %arg1 : i42, i9001), ^bb1

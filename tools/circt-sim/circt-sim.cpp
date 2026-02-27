@@ -738,6 +738,24 @@ static llvm::StringRef getRunModeName(RunMode mode) {
   return "unknown";
 }
 
+static std::optional<bool> parseEnvBool(const char *value) {
+  if (!value)
+    return std::nullopt;
+  llvm::StringRef v(value);
+  if (v.equals_insensitive("1") || v.equals_insensitive("true") ||
+      v.equals_insensitive("yes") || v.equals_insensitive("on"))
+    return true;
+  if (v.equals_insensitive("0") || v.equals_insensitive("false") ||
+      v.equals_insensitive("no") || v.equals_insensitive("off"))
+    return false;
+  return std::nullopt;
+}
+
+static bool isTruthyEnv(const char *value) {
+  auto parsed = parseEnvBool(value);
+  return parsed.has_value() && *parsed;
+}
+
 //===----------------------------------------------------------------------===//
 // VCD Waveform Writer
 //===----------------------------------------------------------------------===//
@@ -884,6 +902,12 @@ public:
     compiledLoader->setRuntimeContext(reinterpret_cast<void *>(this));
 
     if (llhdInterpreter) {
+      // Rebase arena-backed globals into interpreter storage first.
+      // For v5 modules this is required to keep interpreter/native globals
+      // coherent; for legacy modules this is a no-op.
+      compiledLoader->setupArenaGlobals(
+          llhdInterpreter->getGlobalMemoryBlocks());
+
       // Alias any remaining globals that weren't pre-aliased during init.
       // Pre-aliased globals (from setCompiledLoaderForPreAlias) are skipped.
       // This must happen BEFORE loadCompiledFunctions() (which decides
@@ -1588,6 +1612,10 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
             reinterpret_cast<void *>(this));
         llhdInterpreter->setCompiledLoaderForModuleInit(
             compiledLoaderForPreAlias);
+        // Rebase arena globals before initializeGlobals() executes so both
+        // interpreter and compiled code share the same mutable storage.
+        compiledLoaderForPreAlias->setupArenaGlobals(
+            llhdInterpreter->getGlobalMemoryBlocks());
         compiledLoaderForPreAlias->preAliasGlobals(
             llhdInterpreter->getGlobalMemoryBlocks());
 
@@ -1987,14 +2015,6 @@ LogicalResult SimulationContext::setupProfiling() {
 }
 
 LogicalResult SimulationContext::setupParallelSimulation() {
-  auto isTruthyEnv = [](const char *value) {
-    if (!value)
-      return false;
-    llvm::StringRef v(value);
-    return v.equals_insensitive("1") || v.equals_insensitive("true") ||
-           v.equals_insensitive("yes") || v.equals_insensitive("on");
-  };
-
   // The current parallel scheduler remains experimental and may deadlock on
   // LLHD-heavy workloads. Keep --parallel CLI compatibility, but default to
   // stable sequential execution unless explicitly opted in.
@@ -3981,6 +4001,7 @@ int main(int argc, char **argv) {
   // .csnap, treat it as a snapshot bundle (design.mlirbc + native.so +
   // meta.json) produced by circt-sim-compile --emit-snapshot.
   bool isSnapshot = false;
+  bool snapshotAutoEnabledNativeModuleInit = false;
   if (inputFilename != "-") {
     bool isDir = false;
     llvm::sys::fs::is_directory(inputFilename, isDir);
@@ -4033,11 +4054,25 @@ int main(int argc, char **argv) {
       if (llvm::sys::fs::exists(soPath) && compiledModulePath.empty())
         compiledModulePath = std::string(soPath);
 
+      // Snapshot mode should execute native module init by default when a
+      // compiled module is available. Preserve explicit env overrides.
+      if (!compiledModulePath.empty() &&
+          !std::getenv("CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT")) {
+        ::setenv("CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT", "1",
+                 /*overwrite=*/0);
+        snapshotAutoEnabledNativeModuleInit = true;
+      }
+
       isSnapshot = true;
       if (verbosity >= 1)
         llvm::errs() << "[circt-sim] Loading snapshot from " << snapDir
                      << "\n";
     }
+  }
+
+  if (snapshotAutoEnabledNativeModuleInit && verbosity >= 1) {
+    llvm::errs() << "[circt-sim] Snapshot auto-enabled native module init "
+                    "(set CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0 to disable)\n";
   }
 
   // Refresh inputNameRef in case it was invalidated by snapshot redirect.

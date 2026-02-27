@@ -190,7 +190,8 @@ def FormatHexOp : SimOp<"fmt.hex",
     BoolAttr:$isHexUppercase,
     DefaultValuedAttr<BoolAttr,"false">:$isLeftAligned,
     DefaultValuedAttr<I8Attr,"48">:$paddingChar,
-    OptionalAttr<I32Attr>:$specifierWidth);
+    OptionalAttr<I32Attr>:$specifierWidth,
+    OptionalAttr<I32Attr>:$fourStateWidth);
   let results = (outs FormatStringType:$result);
 
   let hasFolder = true;
@@ -201,6 +202,7 @@ def FormatHexOp : SimOp<"fmt.hex",
     (`isLeftAligned` $isLeftAligned^)?
     (`paddingChar` $paddingChar^)?
     (`specifierWidth` $specifierWidth^)?
+    (`fourStateWidth` $fourStateWidth^)?
     attr-dict `:` qualified(type($value))
   }];
 }
@@ -222,7 +224,8 @@ def FormatOctOp : SimOp<"fmt.oct",
   let arguments = (ins AnyInteger:$value,
     DefaultValuedAttr<BoolAttr,"false">:$isLeftAligned,
     DefaultValuedAttr<I8Attr,"48">:$paddingChar,
-    OptionalAttr<I32Attr>:$specifierWidth);
+    OptionalAttr<I32Attr>:$specifierWidth,
+    OptionalAttr<I32Attr>:$fourStateWidth);
 
   let results = (outs FormatStringType:$result);
 
@@ -233,6 +236,7 @@ def FormatOctOp : SimOp<"fmt.oct",
     (`isLeftAligned` $isLeftAligned^)?
     (`paddingChar` $paddingChar^)?
     (`specifierWidth` $specifierWidth^)?
+    (`fourStateWidth` $fourStateWidth^)?
     attr-dict `:` qualified(type($value))
   }];
 }
@@ -252,7 +256,8 @@ def FormatBinOp : SimOp<"fmt.bin",
   let arguments = (ins AnyInteger:$value,
     DefaultValuedAttr<BoolAttr,"false">:$isLeftAligned,
     DefaultValuedAttr<I8Attr,"48">:$paddingChar,
-    OptionalAttr<I32Attr>:$specifierWidth);
+    OptionalAttr<I32Attr>:$specifierWidth,
+    OptionalAttr<I32Attr>:$fourStateWidth);
   let results = (outs FormatStringType:$result);
 
   let hasFolder = true;
@@ -262,6 +267,7 @@ def FormatBinOp : SimOp<"fmt.bin",
     (`isLeftAligned` $isLeftAligned^)?
     (`paddingChar` $paddingChar^)?
     (`specifierWidth` $specifierWidth^)?
+    (`fourStateWidth` $fourStateWidth^)?
     attr-dict `:` qualified(type($value))
   }];
 }
@@ -377,6 +383,7 @@ def FormatDecOp : SimOp<"fmt.dec",
     DefaultValuedAttr<BoolAttr,"false">:$isLeftAligned,
     DefaultValuedAttr<I8Attr,"32">:$paddingChar,
     OptionalAttr<I32Attr>:$specifierWidth,
+    OptionalAttr<I32Attr>:$fourStateWidth,
     UnitAttr:$isSigned);
   let results = (outs FormatStringType:$result);
 
@@ -387,6 +394,7 @@ def FormatDecOp : SimOp<"fmt.dec",
     (`isLeftAligned` $isLeftAligned^)?
     (`paddingChar` $paddingChar^)?
     (`specifierWidth` $specifierWidth^)?
+    (`fourStateWidth` $fourStateWidth^)?
     (`signed` $isSigned^)?
     attr-dict `:` qualified(type($value))
   }];

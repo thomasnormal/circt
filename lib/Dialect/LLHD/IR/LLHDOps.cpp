@@ -824,6 +824,23 @@ LogicalResult ProcessOp::canonicalize(ProcessOp op, PatternRewriter &rewriter) {
 }
 
 //===----------------------------------------------------------------------===//
+// FinalOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult FinalOp::verify() {
+  Operation *parent = (*this)->getParentOp();
+  if (isa<hw::HWModuleOp, ProcessOp, CombinationalOp,
+          verif::BoundedModelCheckingOp, verif::LogicEquivalenceCheckingOp,
+          verif::RefinementCheckingOp>(parent))
+    return success();
+  return emitOpError()
+         << "expects parent op to be one of "
+            "'hw.module, llhd.process, llhd.combinational, verif.bmc, "
+            "verif.lec, verif.refines'; got '"
+         << parent->getName() << "'";
+}
+
+//===----------------------------------------------------------------------===//
 // CombinationalOp
 //===----------------------------------------------------------------------===//
 

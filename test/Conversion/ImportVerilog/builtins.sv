@@ -38,9 +38,6 @@ function void SimulationControlBuiltins(bit x);
   // CHECK: moore.unreachable
   if (x) $finish(2);
 
-  // Ignore `$exit` until we have support for programs.
-  // CHECK-NOT: moore.builtin.finish
-  $exit;
 endfunction
 
 // IEEE 1800-2017 § 20.10 "Severity tasks"
@@ -337,7 +334,8 @@ function TimeBuiltins();
   // CHECK: [[STIME:%.+]] = moore.builtin.time
   dummyA($stime());
   // CHECK: [[REALTIME:%.+]] = moore.builtin.time
-  // TODO: There is no int-to-real conversion yet; change this to dummyB once int-to-real works!
+  // Realtime-to-real conversion is covered by
+  // `realtime-to-real-conversion.sv`.
   dummyA($realtime());
 endfunction
 

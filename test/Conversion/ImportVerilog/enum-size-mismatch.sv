@@ -1,19 +1,19 @@
 // RUN: circt-translate --import-verilog --verify-diagnostics --split-input-file %s
 // REQUIRES: slang
 
-// Test: enum value with mismatched sized literal width should be an error.
+// Test: enum value with mismatched sized literal width is warned by default
+// for xrun compatibility.
 // IEEE 1800-2017 §6.19: If the integer value expression is a sized literal
 // constant, it shall be an error if the size is different from the enum base
 // type, even if the value is within the representable range.
 //
-// Regression test: a previous change downgraded this from error to warning
-// for VCS/Xcelium compatibility. This test ensures it stays an error.
+// Regression test: keep this as warning-level compatibility behavior.
 
 module EnumSizeMismatch;
   enum logic [2:0] {
-    // expected-error @below {{expression width of 4 does not exactly match declared enum type width of 3}}
+    // expected-warning @below {{expression width of 4 does not exactly match declared enum type width of 3}}
     Global = 4'h2,
-    // expected-error @below {{expression width of 4 does not exactly match declared enum type width of 3}}
+    // expected-warning @below {{expression width of 4 does not exactly match declared enum type width of 3}}
     Local = 4'h3
   } myenum;
 endmodule

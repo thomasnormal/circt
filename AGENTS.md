@@ -12,6 +12,7 @@
 ## Build, Test, and Development Commands
 - Configure: follow `README.md`; typical LLVM-style setup is `cmake -G Ninja -B build -S llvm/llvm`.
 - Build tools: `ninja -C build circt-verilog` or `ninja -C build circt-opt`.
+- Shared-workspace builds: prefer `utils/ninja-with-lock.sh -C build <targets...>` to avoid concurrent ninja contention.
 - Regression tests: `ninja -C build check-circt`.
 - Unit tests: `ninja -C build check-circt-unittests` or `ctest --test-dir build`.
 - For local integration suites (if available): `~/mbit/*avip*`, `~/sv-tests/`.
@@ -26,6 +27,9 @@
 - Add a regression test in `test/` for functional changes; use `// CHECK:` patterns.
 - Add or update `unittests/` for library/runtime behavior.
 - Keep tests minimal and focused; prefer a new test over extending an unrelated one.
+- Never delete tests that demonstrate real bugs. If a bug is real but not fixed yet,
+  keep the test as an explicit expected-fail bug tracker (e.g. `XFAIL`) with a
+  short comment describing the current failure mode.
 
 ## Commit & Pull Request Guidelines
 - No strict format, but use short, specific subjects and optional subsystem tags (e.g., `[ImportVerilog]`).

@@ -26,8 +26,12 @@ The remaining gap to Xcelium-level end-to-end throughput is now mostly:
   - `uvm_run_phase`: `Processes: 1 total, 1 callback-eligible, 0 rejected`
 - A shutdown/reporting-path crash signature in `__moore_assoc_exists` was
   traced to `uvm_pkg::uvm_report_message::get_severity` reading a virtual
-  pointer; tactical mitigation is now in place by default-intercepting that
-  function under the existing UVM reporting gate.
+  pointer.
+  - follow-up in progress: remove the specific `get_severity` default demotion
+    (keep broader reporting demotions), relying on assoc-pointer normalization.
+  - regression updated to require native-default codegen + compiled run:
+    `aot-uvm-report-message-severity-native-optin.mlir`.
+  - pending: re-run large workload validation on rebuilt binaries.
 - Strategic assoc-pointer fix is now partially landed:
   - MooreRuntime has assoc-pointer normalization callback plumbing.
   - LLHD interpreter registers a resolver that maps virtual/global addresses
@@ -48,19 +52,27 @@ The remaining gap to Xcelium-level end-to-end throughput is now mostly:
     - `MooreRuntimeQueueTest.QueuePopFrontPtrInvalidLengthGuard`
     - `MooreRuntimeQueueTest.QueuePopBackPtrInvalidLengthGuard`
     - `MooreRuntimeQueueTest.QueueSizeInvalidLengthGuard`
-- `uvm_seq_body` parity mismatch (`COMP/INTERNAL`) is now mitigated by default:
-  - direct native `func.call` dispatch for `FuncId`-unmapped callees now
-    falls back to interpreter by default.
-  - old behavior is still available with
-    `CIRCT_AOT_ALLOW_UNMAPPED_NATIVE=1` for targeted benchmarking/debug.
+- `uvm_seq_body` parity mismatch (`COMP/INTERNAL`) is now mitigated with a
+  root-cause-specific demotion:
+  - culprit class was generated short-name build-phase singleton getters
+    (for example `get_2160`) touching
+    `@"uvm_pkg::uvm_pkg::uvm_build_phase::m_inst"` under unmapped direct
+    native `func.call`.
+  - compile-time demotion now strips functions that access that global to
+    trampolines by default.
+  - unmapped direct native `func.call` policy is back to default allow-all;
+    targeted deny remains available via
+    `CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES=...`.
 - Direct-call policy consistency hardening landed:
   - cached `func.call` path now applies the same `CIRCT_AOT_DENY_FID` and
     `CIRCT_AOT_TRAP_FID` checks as the slow path.
   - interpreted-call accounting now includes policy-forced native fallbacks
-    (unmapped deny + `DENY_FID`) for accurate AOT stats.
+    (explicit unmapped-name deny + `DENY_FID`) for accurate AOT stats.
 - Regression coverage added:
   - `aot-unmapped-native-get-policy.mlir` locks in default/allow/allow+deny
     behavior for unmapped direct native `func.call`.
+  - `aot-uvm-build-phase-singleton-getter-demote.mlir` locks in targeted
+    demotion of build-phase singleton getter wrappers.
 - Phase 4 bootstrap landed (opt-in):
   - `circt-sim-compile` now emits conservative per-`hw.module` native init
     entrypoints (`__circt_sim_module_init__*`) when top-level init ops are in
@@ -83,6 +95,16 @@ The remaining gap to Xcelium-level end-to-end throughput is now mostly:
     - `uvm_run_phase`: preserves known parity point (`FCTTYP` fatal, `EXIT=1`)
       in both baseline and native-init opt-in modes.
 - `uvm_run_phase` compiled/interpreter still match on `FCTTYP` fatal (`EXIT_CODE=1` both).
+- Indirect aggregate-return ABI parity fix landed for native vtable dispatch:
+  - root cause for `uvm_phase::add -> uvm_object::get_name` crash was
+    mixed call ABI on indirect calls (caller register-return vs callee sret).
+  - `flattenAggregateFunctionABIs` now rewrites indirect `llvm.call` sites
+    when callee function types carry aggregate args/returns.
+- Trampoline generation is now scoped to actual interpreter-fallback symbols:
+  - host extern declarations (for example lowered `printf(... )`) are no
+    longer forced through interpreter trampoline synthesis.
+  - AOT regression added:
+    `aot-host-vararg-extern-no-trampoline.mlir`.
 - Phase 5 cast-coverage expansion landed for `!llhd.ref` argument ABIs:
   - micro-module `func.func` arg canonicalization: `!llhd.ref<T> -> !llvm.ptr`
   - direct callsite rewrites to peel wrapper casts
@@ -181,12 +203,180 @@ The remaining gap to Xcelium-level end-to-end throughput is now mostly:
     - `uvm_run_phase`: `39 rejected, 5255 compilable`, `3328 + 1 ready`
     - stripped non-LLVM functions: `106 -> 107` (coverage moved forward,
       but no additional ready-for-codegen net gain yet).
+- Added block-argument `!llhd.ref<hw.struct<...>>` support for
+  `llhd.sig.struct_extract` paths:
+  - fixed checker gap where ref-arg struct-extracts were rejected before
+    ref-ABI canonicalization.
+  - fixed ref-ABI canonicalization gap by treating `llhd.sig.struct_extract`
+    as a ref-typed operand user (inserts local `ptr -> ref` view cast).
+  - new regression:
+    - `aot-llhd-sig-struct-extract-ref-arg-prb-drv.mlir` (`out=8`
+      interp/compiled).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `37 rejected, 5277 compilable`, `3426 + 1 ready`
+    - `uvm_run_phase`: `37 rejected, 5257 compilable`, `3418 + 1 ready`
+    - stripped non-LLVM functions: `1` on both workloads.
+- Added `sim.proc.print` + `sim.fmt.*` lowering for function bodies:
+  - lowered to direct `llvm.call @printf` with recursive format-fragment
+    expansion from `sim.fmt.*` producer trees.
+  - format ops are now treated as compile-time metadata and dead-erased after
+    print lowering.
+  - new regression:
+    - `aot-sim-fmt-literal-print-lowering.mlir`
+      (literal + dec + concat in compiled func body; interp/compiled parity).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `35 rejected, 5279 compilable`, `3427 + 1 ready`
+    - `uvm_run_phase`: `35 rejected, 5259 compilable`, `3419 + 1 ready`
+    - stripped non-LLVM functions: `1` on both workloads.
+- Suspensive Moore call hardening landed for func-body AOT:
+  - uncovered failure mode: functions with `moore.wait_event` could be lowered
+    to `__moore_wait_event` and native-dispatched, causing runtime loader
+    failure (`undefined symbol: __moore_wait_event`) in compiled mode.
+  - fix: default-demote to trampolines any function that:
+    - contains `moore.wait_event`, or
+    - calls suspending Moore runtime helpers
+      (`__moore_wait_event`, `__moore_wait_condition`,
+      `__moore_process_await`).
+  - this keeps suspension semantics on the interpreter path until a proper
+    resumable/native ABI is implemented for these helpers.
+  - regression:
+    - `aot-moore-wait-event-func-lowering.mlir` now locks in demotion +
+      compiled/interpreter parity (no symbol-lookup crash).
+  - workload status after hardening:
+    - `uvm_seq_body`: `21 rejected, 5293 compilable`, `3416 + 1 ready`,
+      `RUN_EXIT=0` (known parity endpoint preserved at time 0).
+    - `uvm_run_phase`: `21 rejected, 5273 compilable`, `3408 + 1 ready`,
+      `RUN_EXIT=1` (`FCTTYP` parity endpoint unchanged).
+- Added `hw.array_get` coverage for `hw.aggregate_constant` array literals:
+  - compilability now accepts integer `hw.array_get` when input is an
+    integer-element `hw.aggregate_constant` array (not just `hw.array_create`).
+  - pre-lowering now rewrites
+    `array_get(aggregate_constant[...], idx)` to LLVM-compatible select chains
+    with constant element materialization (same logical index ordering as the
+    existing `array_create` lowering).
+  - regression:
+    - `aot-hw-array-get-aggregate-constant-lowering.mlir`
+      (`out=-1` interpreter/compiled parity).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `20 rejected, 5294 compilable`, `3417 + 1 ready`
+    - `uvm_run_phase`: `20 rejected, 5274 compilable`, `3409 + 1 ready`
+    - runtime parity endpoints preserved (`RUN_EXIT=0` / `RUN_EXIT=1`).
+- Added sim-control op compileability with explicit trampoline demotion:
+  - `isFuncBodyCompilable` now accepts:
+    - `sim.pause`
+    - `sim.terminate`
+    - `sim.clocked_pause`
+    - `sim.clocked_terminate`
+  - interception demotion now conservatively trampolines any function body
+    containing the above ops (`hasSimControlOp(...)`).
+  - this removes these ops from rejection buckets while preserving interpreter
+    control-flow semantics for termination/pause behavior.
+  - regression:
+    - `aot-sim-control-func-demote.mlir`
+      (`Functions: 3 ... 0 rejected`, `Demoted 2 ...`, `out=7` parity).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `18 rejected, 5296 compilable`, `3417 + 1 ready`
+    - `uvm_run_phase`: `18 rejected, 5276 compilable`, `3409 + 1 ready`
+    - parity endpoints preserved:
+      - `uvm_seq_body`: `RUN_EXIT=0` (`UVM_FATAL :0`, simulation completes)
+      - `uvm_run_phase`: `RUN_EXIT=1` (`FCTTYP` at time 0).
+- Closed wait-event-local cast rejection for `iN <-> !moore.iN` bridge casts:
+  - `isFuncBodyCompilable` now accepts same-width integer/moore-int
+    `builtin.unrealized_conversion_cast` when it appears under
+    `moore.wait_event` (where function bodies are already demoted).
+  - this targets the remaining UVM pattern in
+    `uvm_pkg::uvm_wait_for_nba_region`:
+    `i32 -> !moore.i32` before `moore.detect_event any`.
+  - regression:
+    - `aot-moore-wait-event-int-cast-demote.mlir`
+      (`Functions: 2 ... 0 rejected`, `Demoted 1 ...`, `out=2` parity).
+  - existing wait-event regression preserved:
+    - `aot-moore-wait-event-func-lowering.mlir` (`out=1` parity).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `17 rejected, 5297 compilable`, `3417 + 1 ready`
+    - `uvm_run_phase`: `17 rejected, 5277 compilable`, `3409 + 1 ready`.
+- Added fork-family compileability with explicit trampoline demotion:
+  - `isFuncBodyCompilable` now accepts:
+    - `sim.fork`
+    - `sim.fork.terminator`
+    - `sim.wait_fork`
+    - `sim.disable_fork`
+  - demotion policy now also trampolines any function containing fork-family
+    ops (`hasSimForkFamilyOp(...)`), preserving interpreter semantics while
+    removing hard rejections.
+  - regression:
+    - `aot-sim-fork-family-func-demote.mlir`
+      (`Functions: 2 ... 0 rejected`, `Demoted 1 ...`, `out=9`).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `1 rejected, 5313 compilable`, `3417 + 1 ready`
+    - `uvm_run_phase`: `1 rejected, 5293 compilable`, `3409 + 1 ready`
+    - only remaining top rejection reason:
+      - `comb.parity` (1).
+  - runtime sanity preserved on full compiled runs:
+    - `uvm_seq_body`: `RUN_EXIT=0`, `UVM_FATAL :0`, simulation completed.
+    - `uvm_run_phase`: `RUN_EXIT=1`, known `FCTTYP` parity endpoint.
+- Added comb-parity safe demotion closure (robustness-first):
+  - attempted native `comb.parity` lowering uncovered a backend crash in LLVM
+    translation (`mlir::PtrLikeTypeInterface::getMemorySpace`) on the large
+    UVM workloads after lowering/codegen start.
+  - to keep AOT robust while removing the final rejection bucket, parity ops
+    are now accepted for compilability and parity-containing functions are
+    demoted to trampolines (`hasCombParityOp(...)`).
+  - regression:
+    - `aot-comb-parity-lowering.mlir`
+      (`Functions: 2 ... 0 rejected`, `Demoted 1 ...`, `out=1` parity).
+  - large-workload metrics after this step:
+    - `uvm_seq_body`: `0 rejected, 5314 compilable`, `3417 + 1 ready`
+      (`Demoted 1896`).
+    - `uvm_run_phase`: `0 rejected, 5294 compilable`, `3409 + 1 ready`
+      (`Demoted 1884`).
+  - full compiled runtime sanity preserved:
+    - `uvm_seq_body`: `RUN_STATUS=0`, `UVM_FATAL :0`, simulation completed.
+    - `uvm_run_phase`: `RUN_STATUS=1`, known `FCTTYP` parity endpoint.
+- MLIR->LLVM translation crash class was root-caused and fixed:
+  - culprit pattern: `llvm.getelementptr` carrying non-LLVM `elem_type`
+    (for example `!hw.struct<...>`) reaching LLVM translation.
+  - fix:
+    - `isFuncBodyCompilable` now validates GEP `elem_type` convertibility
+      (`llvm.getelementptr:elem_type` rejection on non-convertible cases).
+    - pre-translation canonicalization rewrites non-LLVM GEP element types to
+      LLVM-compatible types via `convertToLLVMCompatibleType`.
+  - regression:
+    - `test/Tools/circt-sim/aot-llvm-gep-non-llvm-elemtype-lowering.mlir`.
+  - large parity-admission compile repros now succeed (no
+    `PtrLikeTypeInterface::getMemorySpace` signatures):
+    - `uvm_seq_body`: `0 rejected, 5314 compilable`, `.so` emitted.
+    - `uvm_run_phase`: `0 rejected, 5294 compilable`, `.so` emitted.
+- parity native codegen is now re-enabled by default:
+  - removed parity-specific demotion gating in function stripping.
+  - updated regression `aot-comb-parity-lowering.mlir` to expect native codegen
+    (`2 functions + 0 processes ready for codegen`).
+  - default large-workload compile metrics after re-enable:
+    - `uvm_seq_body`: `Demoted 1895`, `3418 + 1 ready`.
+    - `uvm_run_phase`: `Demoted 1883`, `3410 + 1 ready`.
+  - compiled runtime endpoints remain stable:
+    - `uvm_seq_body`: `EXIT=0`, known `UVM_FATAL :0` endpoint.
+    - `uvm_run_phase`: `EXIT=1`, known `FCTTYP` endpoint.
 - Current top function rejection reasons are now:
-  - `sim.fork.terminator` (13)
-  - `builtin.unrealized_conversion_cast:i1->!moore.event` (12)
-  - `sim.fmt.literal` (5)
-  - `builtin.unrealized_conversion_cast:i1->!moore.i1` (2)
-  - `sim.wait_fork` (1)
+  - none (current compile telemetry shows `0 rejected` on both tracked UVM
+    workloads).
+- Phase-graph opt-in stabilization follow-up landed:
+  - enabling `CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_GRAPH=1` was shown to recover
+    large compile coverage (`uvm_seq_body` `3428+1 -> 3472+1`) but crashed in
+    `uvm_phase` state/query paths.
+  - symbolized crash culprits:
+    - `uvm_phase::set_state`
+    - `uvm_phase::get_domain`
+    - `uvm_phase::get_full_name`
+  - added dedicated gate:
+    - `CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_STATE`
+    - default keeps the above phase-state methods intercepted even with
+      phase-graph opt-in.
+  - regression:
+    - `aot-uvm-phase-state-mutator-native-optin.mlir`.
+  - post-fix phase-graph opt-in workload status:
+    - `uvm_seq_body`: `3468 + 1 ready` (still +40 vs default) and `RUN_EXIT=0`
+    - `uvm_run_phase`: `3460 + 1 ready`, parity endpoint preserved (`EXIT=1`).
 
 ---
 
@@ -204,7 +394,7 @@ Land callback bridge at Moore runtime boundary:
 - `__moore_assoc_set_ptr_resolver(...)`
 - interpreter registers resolver during runtime accessor setup
 
-### 1.2 Pointer normalization policy (implemented, diagnostics still minimal)
+### 1.2 Pointer normalization policy (implemented)
 
 Normalize assoc-array pointers before dereference:
 
@@ -212,11 +402,16 @@ Normalize assoc-array pointers before dereference:
 - map interpreter virtual addresses to aliased host storage
 - recover host pointer from global pointer slots when the virtual address
   points at a pointer field
-- preserve optional validation traps via `CIRCT_AOT_VALIDATE`
-
-Remaining enhancement:
-
-- richer pointer-class diagnostics and optional trace stream (`CIRCT_AOT_TRACE_PTR`).
+- pointer-class diagnostics with optional trace stream (`CIRCT_AOT_TRACE_PTR`):
+  - `class=virtual ... -> host=... (tls-normalize)`
+  - `class=virtual ... unresolved (tls-miss|no-tls-callback)`
+  - `class=tagged_funcid ...` trap.
+- interpreter resolver provenance tracing now classifies:
+  - `assoc-host`, `virtual-direct`, `virtual-pointer-slot`,
+    `virtual-unmapped`.
+- unit coverage:
+  - `MooreRuntimeAssocTest.TlsNormalizeMapsVirtualPointer`
+  - `MooreRuntimeAssocTest.TracePtrLogsVirtualTranslation`.
 
 ### 1.3 Assoc helper integration (implemented)
 
@@ -226,8 +421,8 @@ All assoc helper entry points now normalize pointer operands before
 Acceptance criteria:
 
 - no crash at `header->type` dereference in assoc helper
-- failures become deterministic traps with pointer provenance (partially met;
-  classification detail still to be expanded)
+- failures become deterministic traps with pointer provenance (met for
+  pointer-class tracing in runtime + resolver path)
 - tactical intercept exceptions (like `get_severity`) can be removed once
   normalization + translation is verified.
 
@@ -304,7 +499,12 @@ Status update:
 - FID-only deny did not resolve `uvm_seq_body` mismatch.
 - native call tracing showed culprit class was direct native `func.call` with
   no reverse `funcOp -> FuncId` mapping (`fid=<unmapped>`).
-- default guard now routes those unmapped direct natives to interpreter.
+- narrower bisection isolated generated build-phase singleton getter wrappers
+  (for example `get_2160`) reading `uvm_build_phase::m_inst`.
+- compile-time interception now demotes functions touching
+  `uvm_build_phase::m_inst` to trampolines.
+- default unmapped direct native `func.call` policy is restored to allow-all;
+  targeted deny remains opt-in (`CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES`).
 
 ### 3.2 Culprit handling policy
 
@@ -316,7 +516,7 @@ For each culprit function/fid:
 Acceptance criteria:
 
 - `uvm_seq_body` parity restored (fatal mismatch removed) - met with default
-  unmapped-native guard
+  build-phase singleton demotion
 - no broad fallback that undoes coverage gains
 
 ---
@@ -451,6 +651,17 @@ Status update (incremental):
 - Next expansion target: move from op-coverage closure to init wall-time
   reduction (Phase 4.2 snapshot/native-init integration) and broader telemetry
   beyond the current AVIP core8 set.
+- Phase 4.2 snapshot/native-init integration is now landed:
+  - `.csnap` loading now auto-enables native module init by default when a
+    compiled module is present (`native.so` auto-load or explicit `--compiled`),
+    preserving explicit env overrides.
+  - explicit opt-out is supported via
+    `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0`.
+  - runtime native-init gate now uses truthy semantics (only
+    `1/true/yes/on` enables), replacing prior env-presence behavior.
+  - regression added:
+    - `aot-snapshot-native-module-init-auto.mlir`
+      (snapshot default-on + explicit-off behavior).
 - Current OpenTitan telemetry constraint in this workspace:
   - probe set mostly fails during MLIR generation (`gpio`, `spi_device`,
     `usbdev`, `i2c`, `spi_host`, `uart_*`, `tlul_adapter_reg`).
@@ -461,6 +672,19 @@ Status update (incremental):
 ### 4.2 Snapshot integration
 
 Reuse preprocessed IR + compiled `.so`; extend snapshot path to include native init flow.
+
+Status update:
+
+- Snapshot flow now sets `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1` by default
+  when loading `.csnap` with an available compiled module and no explicit env
+  override.
+- Explicit disable is preserved (`CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0`).
+- `LLHDProcessInterpreter` native-init execution now obeys truthy parsing
+  rather than raw env-presence checks, closing the prior `=0 still enabled`
+  behavior gap.
+- Regression coverage:
+  - `aot-snapshot-native-module-init-auto.mlir`
+    (compile snapshot, run default-on, run explicit-off).
 
 Acceptance criteria:
 
@@ -588,6 +812,61 @@ Status update:
     - `aot-hw-struct-float-field-cast-lowering.mlir`
   - status on `uvm_seq_body` unchanged after this patch:
     - still `1x body_nonllvm_op:hw.struct_create` residual.
+- residual-strip closure follow-up landed: canonicalized 4-state `cf` block
+  arguments after SCF->CF to LLVM boundary types, so merged CFG values no
+  longer keep `hw.struct_create` alive.
+  - implementation:
+    - new `canonicalizeFourStateCFBlockArguments(...)`
+    - runs between `lowerSCFToCF(...)` and `lowerFuncArithCfToLLVM(...)`.
+  - regression added:
+    - `aot-hw-struct-create-cf-blockarg-lowering.mlir`.
+  - large-workload impact:
+    - `uvm_seq_body`: ready-for-codegen `3427 -> 3428`, no `Stripped` output.
+    - `uvm_run_phase`: ready-for-codegen `3419 -> 3420`, no `Stripped` output.
+  - net status:
+    - prior tail `1x body_nonllvm_op:hw.struct_create` is now closed.
+- arena symbol visibility follow-up landed:
+  - root cause: runtime patch path uses `dlsym("__circt_sim_arena_base")`, but
+    compile-side hidden-visibility pass was hiding the symbol, leaving arena
+    base null in native code.
+  - fix: keep `__circt_sim_arena_base` default-visible (same treatment as
+    `__circt_sim_ctx`) in `setDefaultHiddenVisibility`.
+  - effect:
+    - `.so` now exports `__circt_sim_arena_base` (verified by `nm -D`)
+    - removes the loader warning (`missing __circt_sim_arena_base`) and the
+      immediate `m_uvm_get_root` native segfault class.
+  - next parity/stability target after this fix:
+    - native crash moved forward to `uvm_root::m_do_dump_args` path; continue
+      root-cause/fix (do not reintroduce broad gating).
+- call_indirect pointer-arg normalization follow-up landed:
+  - root cause: native `func.call_indirect` entry-table dispatch packed pointer
+    args as raw `uint64_t` without `normalizeNativeCallPointerArg(...)`, unlike
+    direct `func.call`.
+  - fix: all 4 native call_indirect dispatch paths now normalize pointer-typed
+    operands before native invocation.
+  - regression added:
+    - `aot-call-indirect-native-pointer-tag-normalize.mlir`.
+  - status:
+    - targeted pointer-tag behavior is fixed (`out=0` with
+      `Entry-table native calls: 1`), but large `uvm_seq_body` still crashes in
+      `uvm_root::m_do_dump_args` with null `arg0`, indicating a separate issue
+      in the compiled-process/run_test path remains.
+- arena-global state coherency fix landed (Phase 6 integration bug):
+  - root cause:
+    - `CompiledModuleLoader::setupArenaGlobals(...)` was implemented but not
+      called from `circt-sim`; arena globals were skipped by
+      `preAliasGlobals/aliasGlobals`, so interpreter/native mutable state
+      diverged.
+  - fixes:
+    - `circt-sim.cpp` now calls `setupArenaGlobals(...)` before init
+      (`compiledLoaderForPreAlias` path) and again in `setCompiledModule(...)`.
+    - `setupArenaGlobals(...)` now preserves preexisting global bytes +
+      initialized flags when rebasing onto arena storage.
+  - validation:
+    - `aot-native-module-init-basic.mlir` compiled output restored from `out=0`
+      back to `out=123`.
+    - `uvm_seq_body` compiled run moved from `EXIT=139` crash to clean exit;
+      remaining endpoint is `UVM_FATAL :0` parity at time 0 (no segfault).
 
 ---
 

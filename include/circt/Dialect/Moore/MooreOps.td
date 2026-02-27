@@ -4124,7 +4124,7 @@ def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
   let description = [{
     Represents a binsof expression used in cross coverage bin selection.
     The binsof expression references a coverpoint or coverpoint bin and
-    optionally specifies an intersect clause to filter values.
+    optionally specifies an intersect clause to filter values and/or ranges.
 
     The optional `negate` attribute implements the `!binsof(...)` syntax,
     which inverts the selection to match values NOT in the specified set.
@@ -4153,10 +4153,13 @@ def BinsOfOp : MooreOp<"binsof", [HasParent<"CrossBinDeclOp">]> {
   }];
   let arguments = (ins SymbolRefAttr:$target,
                        OptionalAttr<ArrayAttr>:$intersect_values,
+                       OptionalAttr<DenseI64ArrayAttr>:$intersect_ranges,
                        UnitAttr:$negate,
                        OptionalAttr<I32Attr>:$group);
   let assemblyFormat = [{
-    $target (`intersect` $intersect_values^)? (`negate` $negate^)? attr-dict
+    $target (`intersect` $intersect_values^)?
+            (`intersect_ranges` $intersect_ranges^)?
+            (`negate` $negate^)? attr-dict
   }];
 }
 

@@ -26,7 +26,8 @@
 //===----------------------------------------------------------------------===//
 // Test 1: Relaxed enum conversions (VCS allows implicit int-to-enum)
 //===----------------------------------------------------------------------===//
-// Without --compat vcs, this implicit conversion from int to enum is an error:
+// In strict mode (--relax-enum-conversions=false), this implicit conversion
+// from int to enum is an error:
 //   "no implicit conversion from 'int' to 'state_t'"
 // With --compat vcs, the RelaxEnumConversions flag allows this.
 

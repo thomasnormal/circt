@@ -72,7 +72,11 @@ public:
 
   /// Check if ABI version matches the runtime.
   bool isCompatible() const {
-    return compiledModule &&
+    if (!compiledModule)
+      return false;
+    // Keep runtime policy aligned with load(): accept legacy v4 modules and
+    // current ABI modules.
+    return compiledModule->abi_version == 4 ||
            compiledModule->abi_version == CIRCT_SIM_ABI_VERSION;
   }
 

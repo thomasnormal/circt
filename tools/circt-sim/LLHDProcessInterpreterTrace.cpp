@@ -2418,12 +2418,12 @@ void LLHDProcessInterpreter::dumpProcessStates(llvm::raw_ostream &os) const {
   for (const auto &entry : lastDequeuedItemByProc)
     lastDequeuedPending += entry.second.size();
 
-  if (uvmSeqItemOwnerStores || uvmSeqItemOwnerErases || !itemToSequencer.empty() ||
+  if (uvmSeqItemOwnerStores || uvmSeqItemOwnerErases || uvmSeqItemOwnerLive != 0 ||
       !sequencerItemFifo.empty() || !finishItemWaiters.empty() ||
       !itemDoneReceived.empty() || !lastDequeuedItem.empty() ||
       getWaiters != 0) {
     os << "[circt-sim] UVM sequencer native state: item_map_live="
-       << itemToSequencer.size() << " item_map_peak=" << uvmSeqItemOwnerPeak
+       << uvmSeqItemOwnerLive << " item_map_peak=" << uvmSeqItemOwnerPeak
        << " item_map_stores=" << uvmSeqItemOwnerStores
        << " item_map_erases=" << uvmSeqItemOwnerErases
        << " fifo_maps=" << sequencerItemFifo.size()

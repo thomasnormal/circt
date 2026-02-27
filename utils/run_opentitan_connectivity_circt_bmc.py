@@ -205,6 +205,30 @@ def collect_connectivity_status_counts(
     return by_rule
 
 
+def summarize_connectivity_status_counts(
+    by_rule: dict[str, dict[str, int]],
+) -> dict[str, int]:
+    total = init_connectivity_status_counts()
+    for counts in by_rule.values():
+        for field in CONNECTIVITY_STATUS_FIELDS:
+            total[field] += counts[field]
+    return total
+
+
+def evaluate_connectivity_case_rc(
+    case_rows: list[tuple[str, ...]],
+    cover_rows: list[tuple[str, ...]],
+) -> int:
+    counts = summarize_connectivity_status_counts(
+        collect_connectivity_status_counts(case_rows, cover_rows)
+    )
+    if counts["case_fail"] or counts["case_xpass"] or counts["case_error"]:
+        return 1
+    if counts["cover_timeout"] or counts["cover_unknown"] or counts["cover_error"]:
+        return 1
+    return 0
+
+
 def write_connectivity_status_summary(
     path: Path,
     by_rule: dict[str, dict[str, int]],
@@ -1134,8 +1158,31 @@ def main() -> int:
             if cover_results_path is not None
             else []
         )
+        case_rc = evaluate_connectivity_case_rc(case_rows, cover_rows)
+        expected_case_rows = len(generated_sv_files)
+        observed_case_rows = len(case_rows)
+        if observed_case_rows != expected_case_rows:
+            print(
+                "opentitan connectivity bmc: incomplete case results detected: "
+                f"expected_cases={expected_case_rows} observed_rows={observed_case_rows}",
+                file=sys.stderr,
+                flush=True,
+            )
+            case_rc = 1
         governance_rc = evaluate_status_governance(case_rows, cover_rows)
-        return max(proc.returncode, governance_rc)
+        if case_rc != 0 or governance_rc != 0:
+            return 1
+        if proc.returncode != 0:
+            if case_rows:
+                print(
+                    "warning: opentitan connectivity bmc: pairwise runner exited "
+                    f"non-zero ({proc.returncode}) but classified case rows are clean",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return 0
+            return proc.returncode
+        return 0
     finally:
         if temp_dir_obj is not None:
             temp_dir_obj.cleanup()

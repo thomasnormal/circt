@@ -58,6 +58,11 @@ KNOWN_TASK_POLICIES: dict[str, tuple[str, str, str]] = {
     "PwrmgrSecCmEsc": ("pwrmgr_sec_cm_esc", "none", "none"),
 }
 
+TARGET_DEFINE_OVERRIDES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (re.compile(r"^aes_masked_"), ("EN_MASKING=1",)),
+    (re.compile(r"^aes_unmasked_"), ("EN_MASKING=0",)),
+)
+
 
 def fail(msg: str) -> None:
     print(msg, file=sys.stderr)
@@ -237,6 +242,25 @@ def toplevel_string(value: Any) -> str:
     return ",".join(parts)
 
 
+VERILOG_SOURCE_SUFFIXES = {".sv", ".v"}
+VERILOG_HEADER_SUFFIXES = {".svh", ".vh"}
+MODULE_DECL_RE = re.compile(
+    r"(?m)^\s*module(?:\s+automatic)?\s+([A-Za-z_][A-Za-z0-9_$]*)\b"
+)
+
+
+def classify_verilog_entry(file_type: Any, path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in VERILOG_SOURCE_SUFFIXES:
+        return "source"
+    if suffix in VERILOG_HEADER_SUFFIXES:
+        return "header"
+    token = str(file_type or "").strip().lower()
+    if "verilog" not in token:
+        return ""
+    return "source"
+
+
 def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]]:
     if not isinstance(entries, list):
         return [], []
@@ -251,6 +275,9 @@ def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]
             continue
         file_path = (eda_dir / name).resolve(strict=False)
         file_text = str(file_path)
+        verilog_kind = classify_verilog_entry(entry.get("file_type"), file_path)
+        if not verilog_kind:
+            continue
         if entry.get("is_include_file"):
             incdir = str(file_path.parent)
             if incdir not in seen_incdirs:
@@ -260,10 +287,76 @@ def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]
             # OpenTitan/formal flows rely on some `.sv` macro libraries
             # (for example `prim_assert.sv`) being compiled, while header-only
             # include files (`.svh`, `.vh`) should remain include-only.
-            if file_path.suffix.lower() not in {".sv", ".v"}:
+            if verilog_kind != "source":
                 continue
+        elif verilog_kind == "header":
+            incdir = str(file_path.parent)
+            if incdir not in seen_incdirs:
+                include_dirs.append(incdir)
+                seen_incdirs.add(incdir)
+            continue
         files.append(file_text)
     return files, include_dirs
+
+
+def apply_platform_file_filter(rel_path: str, files: list[str]) -> list[str]:
+    rel = rel_path.lower()
+    if "top_earlgrey" in rel:
+        return [item for item in files if "/lowrisc_englishbreakfast_" not in item]
+    if "top_englishbreakfast" in rel:
+        return [item for item in files if "/lowrisc_earlgrey_" not in item]
+    return files
+
+
+def collect_declared_module_names(files: list[str]) -> set[str]:
+    names: set[str] = set()
+    for item in files:
+        path = Path(item)
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for match in MODULE_DECL_RE.finditer(text):
+            names.add(match.group(1))
+    return names
+
+
+def resolve_contract_toplevel(raw_toplevel: str, files: list[str]) -> str:
+    toplevel = raw_toplevel.strip()
+    if not toplevel or "," in toplevel:
+        return raw_toplevel
+    module_names = collect_declared_module_names(files)
+    if toplevel in module_names:
+        return toplevel
+    if toplevel.endswith("_tb"):
+        fallback = toplevel[:-3]
+        if fallback and fallback in module_names:
+            return fallback
+    return raw_toplevel
+
+
+def define_key(token: str) -> str:
+    text = token.strip()
+    if not text:
+        return ""
+    return text.split("=", 1)[0].strip()
+
+
+def apply_target_define_overrides(target_name: str, defines: list[str]) -> list[str]:
+    merged = list(defines)
+    keys = {define_key(item) for item in merged if define_key(item)}
+    for pattern, extras in TARGET_DEFINE_OVERRIDES:
+        if not pattern.search(target_name):
+            continue
+        for extra in extras:
+            key = define_key(extra)
+            if not key or key in keys:
+                continue
+            merged.append(extra)
+            keys.add(key)
+    return merged
 
 
 def hash_lines(lines: list[str]) -> str:
@@ -343,6 +436,12 @@ def run_fusesoc_setup(
     tool: str,
 ) -> tuple[int, Path]:
     log_path = job_dir / "fusesoc-setup.log"
+    # Some OpenTitan manifests use two-part core names (e.g.
+    # "earlgrey_dv:otp_ctrl_sva"). FuseSoC expects a full VLNV, so normalize
+    # these legacy names to the OpenTitan vendor namespace.
+    core_name = row.fusesoc_core
+    if core_name.count(":") == 1:
+        core_name = f"lowrisc:{core_name}"
     cmd = [
         fusesoc_bin,
         "--cores-root",
@@ -353,7 +452,7 @@ def run_fusesoc_setup(
         "--tool",
         tool,
         "--setup",
-        row.fusesoc_core,
+        core_name,
     ]
     proc = subprocess.run(
         cmd,
@@ -501,8 +600,12 @@ def main() -> None:
             eda_obj = yaml.safe_load(eda_path.read_text(encoding="utf-8")) or {}
             if not isinstance(eda_obj, dict):
                 fail(f"invalid eda yml object (not dict): {eda_path}")
-            toplevel = toplevel_string(eda_obj.get("toplevel"))
             files, include_dirs = resolve_eda_paths(eda_obj.get("files"), eda_path.parent)
+            files = apply_platform_file_filter(row.rel_path, files)
+            toplevel = resolve_contract_toplevel(
+                toplevel_string(eda_obj.get("toplevel")),
+                files,
+            )
             explicit_incdirs = [
                 str((eda_path.parent / item).resolve(strict=False))
                 for item in normalize_string_list(eda_obj.get("incdirs"))
@@ -510,7 +613,10 @@ def main() -> None:
             for incdir in explicit_incdirs:
                 if incdir not in include_dirs:
                     include_dirs.append(incdir)
-            defines = normalize_string_list(eda_obj.get("vlogdefine"))
+            defines = apply_target_define_overrides(
+                row.target_name,
+                normalize_string_list(eda_obj.get("vlogdefine")),
+            )
             files_fp = hash_lines(files)
             incdirs_fp = hash_lines(include_dirs)
             defines_fp = hash_lines(defines)

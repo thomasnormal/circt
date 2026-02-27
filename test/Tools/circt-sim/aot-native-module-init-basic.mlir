@@ -10,9 +10,11 @@
 // SIM: out=123
 //
 // COMPILED: out=123
+// COMPILED-NOT: Warning: .so missing __circt_sim_arena_base symbol
 //
 // NATIVE: [circt-sim] Native module init: top
 // NATIVE: out=123
+// NATIVE-NOT: Warning: .so missing __circt_sim_arena_base symbol
 
 llvm.mlir.global internal @g_counter(0 : i32) : i32
 

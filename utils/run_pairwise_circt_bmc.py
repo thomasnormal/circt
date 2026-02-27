@@ -71,6 +71,14 @@ BMC resource-guard auto-relax retry tuning:
   Comma-separated RSS retry ladder in MB (for example: `24576,32768`).
   Runner picks the next larger budget after each RSS guard failure.
 
+BMC timeout recovery tuning:
+- BMC_AUTO_ASSUME_KNOWN_INPUTS (default: 0)
+  Values:
+  - 1: on BMC solver timeout with known unconstrained 4-state-input warning,
+    retry once with `--assume-known-inputs` unless policy explicitly disables
+    it for the case.
+  - 0: disable timeout-based known-input retry.
+
 Verilog frontend mode:
 - BMC_VERILOG_SINGLE_UNIT_MODE (default: auto)
   Values:
@@ -484,8 +492,12 @@ def is_multiclock_retryable_bmc_failure(log_text: str) -> bool:
 
 
 def is_resource_guard_rss_retryable_bmc_failure(log_text: str) -> bool:
-    low = log_text.lower()
-    return "resource guard triggered: rss" in low and "exceeded limit" in low
+  low = log_text.lower()
+  return "resource guard triggered: rss" in low and "exceeded limit" in low
+
+
+def has_unconstrained_4state_inputs_warning(log_text: str) -> bool:
+    return "4-state inputs are unconstrained" in log_text.lower()
 
 
 def has_command_option(args: list[str], option: str) -> bool:
@@ -1737,6 +1749,19 @@ def main() -> int:
         )
         return 1
     bmc_auto_allow_multi_clock = bmc_auto_allow_multi_clock_raw == "1"
+    bmc_auto_assume_known_inputs_raw = os.environ.get(
+        "BMC_AUTO_ASSUME_KNOWN_INPUTS", "0"
+    )
+    if bmc_auto_assume_known_inputs_raw not in {"0", "1"}:
+        print(
+            (
+                "invalid BMC_AUTO_ASSUME_KNOWN_INPUTS: "
+                f"{bmc_auto_assume_known_inputs_raw} (expected 0 or 1)"
+            ),
+            file=sys.stderr,
+        )
+        return 1
+    bmc_auto_assume_known_inputs = bmc_auto_assume_known_inputs_raw == "1"
     bmc_auto_relax_resource_guard_raw = os.environ.get(
         "BMC_AUTO_RELAX_RESOURCE_GUARD", "1"
     )
@@ -2321,23 +2346,75 @@ def main() -> int:
                 stage_name: str,
             ) -> tuple[subprocess.CompletedProcess[str], str]:
                 active_cmd = list(cmd)
-                run_result = run_and_log(
-                    active_cmd,
-                    log_path,
-                    out_path,
-                    case_timeout_secs,
-                    etxtbsy_retries,
-                    etxtbsy_backoff_secs,
-                    launch_retry_attempts,
-                    launch_retry_backoff_secs,
-                    launch_retryable_exit_codes,
-                    launch_copy_fallback,
-                    launch_event_rows,
-                    case.case_id,
-                    case_path,
-                    stage_name,
+                assume_known_retry_used = False
+                
+                def run_bmc_once(
+                    cmd_to_run: list[str],
+                ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+                    nonlocal assume_known_retry_used
+                    local_cmd = list(cmd_to_run)
+                    while True:
+                        try:
+                            return (
+                                run_and_log(
+                                    local_cmd,
+                                    log_path,
+                                    out_path,
+                                    case_timeout_secs,
+                                    etxtbsy_retries,
+                                    etxtbsy_backoff_secs,
+                                    launch_retry_attempts,
+                                    launch_retry_backoff_secs,
+                                    launch_retryable_exit_codes,
+                                    launch_copy_fallback,
+                                    launch_event_rows,
+                                    case.case_id,
+                                    case_path,
+                                    stage_name,
+                                ),
+                                local_cmd,
+                            )
+                        except subprocess.TimeoutExpired:
+                            combined_local = (
+                                log_path.read_text(encoding="utf-8")
+                                + "\n"
+                                + out_path.read_text(encoding="utf-8")
+                            )
+                            if (
+                                bmc_auto_assume_known_inputs
+                                and not assume_known_retry_used
+                                and "--assume-known-inputs" not in local_cmd
+                                and case.assume_known_inputs_mode != "off"
+                                and has_unconstrained_4state_inputs_warning(
+                                    combined_local
+                                )
+                            ):
+                                assume_known_retry_used = True
+                                if launch_event_rows is not None:
+                                    launch_event_rows.append(
+                                        (
+                                            "RETRY",
+                                            case.case_id,
+                                            case_path,
+                                            stage_name,
+                                            circt_bmc,
+                                            "auto_assume_known_inputs",
+                                            "1",
+                                            "0.000",
+                                            "124",
+                                            "",
+                                        )
+                                    )
+                                local_cmd.append("--assume-known-inputs")
+                                continue
+                            raise
+
+                run_result, active_cmd = run_bmc_once(active_cmd)
+                combined_local = (
+                    log_path.read_text(encoding="utf-8")
+                    + "\n"
+                    + out_path.read_text(encoding="utf-8")
                 )
-                combined_local = log_path.read_text() + "\n" + out_path.read_text()
                 if (
                     run_result.returncode != 0
                     and bmc_auto_allow_multi_clock
@@ -2362,24 +2439,12 @@ def main() -> int:
                         )
                     retry_cmd = list(active_cmd)
                     retry_cmd.append("--allow-multi-clock")
-                    run_result = run_and_log(
-                        retry_cmd,
-                        log_path,
-                        out_path,
-                        case_timeout_secs,
-                        etxtbsy_retries,
-                        etxtbsy_backoff_secs,
-                        launch_retry_attempts,
-                        launch_retry_backoff_secs,
-                        launch_retryable_exit_codes,
-                        launch_copy_fallback,
-                        launch_event_rows,
-                        case.case_id,
-                        case_path,
-                        stage_name,
+                    run_result, active_cmd = run_bmc_once(retry_cmd)
+                    combined_local = (
+                        log_path.read_text(encoding="utf-8")
+                        + "\n"
+                        + out_path.read_text(encoding="utf-8")
                     )
-                    active_cmd = retry_cmd
-                    combined_local = log_path.read_text() + "\n" + out_path.read_text()
                 if (
                     run_result.returncode != 0
                     and bmc_auto_relax_resource_guard
@@ -2392,9 +2457,7 @@ def main() -> int:
                         run_result.returncode != 0
                         and is_resource_guard_rss_retryable_bmc_failure(combined_local)
                     ):
-                        current_rss_mb = parse_long_option_int(
-                            active_cmd, "--max-rss-mb"
-                        )
+                        current_rss_mb = parse_long_option_int(active_cmd, "--max-rss-mb")
                         next_rss_mb: int | None = None
                         for candidate in bmc_auto_relax_resource_guard_rss_ladder_mb:
                             if current_rss_mb is None or candidate > current_rss_mb:
@@ -2421,25 +2484,11 @@ def main() -> int:
                         retry_cmd = set_long_option_int(
                             active_cmd, "--max-rss-mb", next_rss_mb
                         )
-                        run_result = run_and_log(
-                            retry_cmd,
-                            log_path,
-                            out_path,
-                            case_timeout_secs,
-                            etxtbsy_retries,
-                            etxtbsy_backoff_secs,
-                            launch_retry_attempts,
-                            launch_retry_backoff_secs,
-                            launch_retryable_exit_codes,
-                            launch_copy_fallback,
-                            launch_event_rows,
-                            case.case_id,
-                            case_path,
-                            stage_name,
-                        )
-                        active_cmd = retry_cmd
+                        run_result, active_cmd = run_bmc_once(retry_cmd)
                         combined_local = (
-                            log_path.read_text() + "\n" + out_path.read_text()
+                            log_path.read_text(encoding="utf-8")
+                            + "\n"
+                            + out_path.read_text(encoding="utf-8")
                         )
                 return run_result, combined_local
 

@@ -103,6 +103,28 @@ getInterfaceArrayIndices(const slang::ast::InstanceSymbol &instSym,
   return true;
 }
 
+/// Get the current time precision as femtoseconds.
+static uint64_t getTimePrecisionInFemtoseconds(Context &context) {
+  static_assert(int(slang::TimeUnit::Seconds) == 0);
+  static_assert(int(slang::TimeUnit::Milliseconds) == 1);
+  static_assert(int(slang::TimeUnit::Microseconds) == 2);
+  static_assert(int(slang::TimeUnit::Nanoseconds) == 3);
+  static_assert(int(slang::TimeUnit::Picoseconds) == 4);
+  static_assert(int(slang::TimeUnit::Femtoseconds) == 5);
+
+  static_assert(int(slang::TimeScaleMagnitude::One) == 1);
+  static_assert(int(slang::TimeScaleMagnitude::Ten) == 10);
+  static_assert(int(slang::TimeScaleMagnitude::Hundred) == 100);
+
+  auto exp = static_cast<unsigned>(context.timeScale.precision.unit);
+  assert(exp <= 5);
+  exp = 5 - exp;
+  auto scale = static_cast<uint64_t>(context.timeScale.precision.magnitude);
+  while (exp-- > 0)
+    scale *= 1000;
+  return scale;
+}
+
 static constexpr unsigned kContinuousAssignmentBit = 1u << 0;
 static constexpr unsigned kProceduralAssignmentBit = 1u << 1;
 
@@ -120,39 +142,320 @@ convertCoverageBinKind(slang::ast::CoverageBinSymbol::BinKind kind) {
 }
 
 static const slang::ast::VariableSymbol *
-getDirectAssignedVariable(const slang::ast::Expression &lhs) {
+getAssignedVariable(const slang::ast::Expression &lhs, unsigned depth = 0) {
+  if (depth > 16)
+    return nullptr;
   if (auto *named = lhs.as_if<slang::ast::NamedValueExpression>())
     return named->symbol.as_if<slang::ast::VariableSymbol>();
   if (auto *hier = lhs.as_if<slang::ast::HierarchicalValueExpression>())
     return hier->symbol.as_if<slang::ast::VariableSymbol>();
+  if (auto *member = lhs.as_if<slang::ast::MemberAccessExpression>())
+    return getAssignedVariable(member->value(), depth + 1);
+  if (auto *elem = lhs.as_if<slang::ast::ElementSelectExpression>())
+    return getAssignedVariable(elem->value(), depth + 1);
+  if (auto *range = lhs.as_if<slang::ast::RangeSelectExpression>())
+    return getAssignedVariable(range->value(), depth + 1);
   return nullptr;
+}
+
+static std::optional<int64_t>
+getConstantIndexValue(Context &context, const slang::ast::Expression &expr) {
+  if (auto *constant = expr.getConstant()) {
+    if (constant->isInteger()) {
+      auto intVal = constant->integer().as<int64_t>();
+      if (intVal)
+        return *intVal;
+    }
+  }
+  auto constVal = context.evaluateConstant(expr);
+  if (!constVal.isInteger())
+    return std::nullopt;
+  auto intVal = constVal.integer().as<int64_t>();
+  if (!intVal)
+    return std::nullopt;
+  return *intVal;
+}
+
+static std::optional<std::pair<int64_t, int64_t>>
+getConstantRangeBounds(Context &context, const slang::ast::RangeSelectExpression &expr) {
+  auto left = getConstantIndexValue(context, expr.left());
+  auto right = getConstantIndexValue(context, expr.right());
+  if (!left || !right)
+    return std::nullopt;
+
+  int64_t lo = 0;
+  int64_t hi = 0;
+  using slang::ast::RangeSelectionKind;
+  switch (expr.getSelectionKind()) {
+  case RangeSelectionKind::Simple:
+    lo = std::min(*left, *right);
+    hi = std::max(*left, *right);
+    break;
+  case RangeSelectionKind::IndexedUp: {
+    if (*right <= 0)
+      return std::nullopt;
+    int64_t end = *left + *right - 1;
+    lo = std::min(*left, end);
+    hi = std::max(*left, end);
+    break;
+  }
+  case RangeSelectionKind::IndexedDown: {
+    if (*right <= 0)
+      return std::nullopt;
+    int64_t start = *left - *right + 1;
+    lo = std::min(start, *left);
+    hi = std::max(start, *left);
+    break;
+  }
+  }
+  return std::make_pair(lo, hi);
+}
+
+static bool buildContinuousAssignPath(
+    Context &context, const slang::ast::Expression &lhs,
+    Context::ContinuousAssignPath &path, unsigned depth = 0) {
+  if (depth > 16)
+    return false;
+  if (auto *named = lhs.as_if<slang::ast::NamedValueExpression>())
+    return named->symbol.as_if<slang::ast::VariableSymbol>() != nullptr;
+  if (auto *hier = lhs.as_if<slang::ast::HierarchicalValueExpression>())
+    return hier->symbol.as_if<slang::ast::VariableSymbol>() != nullptr;
+  if (auto *member = lhs.as_if<slang::ast::MemberAccessExpression>()) {
+    if (!buildContinuousAssignPath(context, member->value(), path, depth + 1))
+      return false;
+    auto baseType = member->value().type;
+    if (baseType->isPackedUnion() || baseType->isUnpackedUnion()) {
+      path.push_back({Context::ContinuousAssignPathSegment::Kind::Wildcard,
+                      StringRef(), 0, 0});
+    } else {
+      path.push_back({Context::ContinuousAssignPathSegment::Kind::Member,
+                      member->member.name, 0, 0});
+    }
+    return true;
+  }
+  if (auto *elem = lhs.as_if<slang::ast::ElementSelectExpression>()) {
+    if (!buildContinuousAssignPath(context, elem->value(), path, depth + 1))
+      return false;
+    if (auto index = getConstantIndexValue(context, elem->selector())) {
+      path.push_back(
+          {Context::ContinuousAssignPathSegment::Kind::ConstantIndex,
+           StringRef(), *index, 0});
+    } else {
+      path.push_back({Context::ContinuousAssignPathSegment::Kind::Wildcard,
+                      StringRef(), 0, 0});
+    }
+    return true;
+  }
+  if (auto *range = lhs.as_if<slang::ast::RangeSelectExpression>()) {
+    if (!buildContinuousAssignPath(context, range->value(), path, depth + 1))
+      return false;
+    if (auto bounds = getConstantRangeBounds(context, *range)) {
+      path.push_back({Context::ContinuousAssignPathSegment::Kind::ConstantRange,
+                      StringRef(), bounds->first, bounds->second});
+    } else {
+      path.push_back({Context::ContinuousAssignPathSegment::Kind::Wildcard,
+                      StringRef(), 0, 0});
+    }
+    return true;
+  }
+  return false;
+}
+
+static bool continuousAssignPathsOverlap(
+    ArrayRef<Context::ContinuousAssignPathSegment> lhs,
+    ArrayRef<Context::ContinuousAssignPathSegment> rhs) {
+  size_t commonDepth = std::min(lhs.size(), rhs.size());
+  for (size_t i = 0; i < commonDepth; ++i) {
+    auto lhsKind = lhs[i].kind;
+    auto rhsKind = rhs[i].kind;
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::Wildcard ||
+        rhsKind == Context::ContinuousAssignPathSegment::Kind::Wildcard)
+      return true;
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::Member &&
+        lhs[i].memberName != rhs[i].memberName)
+      return false;
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantIndex &&
+        rhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantIndex) {
+      if (lhs[i].index != rhs[i].index)
+        return false;
+      continue;
+    }
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantRange &&
+        rhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantRange) {
+      bool disjoint = lhs[i].rangeHigh < rhs[i].index ||
+                      rhs[i].rangeHigh < lhs[i].index;
+      return !disjoint;
+    }
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantRange &&
+        rhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantIndex) {
+      return rhs[i].index >= lhs[i].index && rhs[i].index <= lhs[i].rangeHigh;
+    }
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantIndex &&
+        rhsKind == Context::ContinuousAssignPathSegment::Kind::ConstantRange) {
+      return lhs[i].index >= rhs[i].index && lhs[i].index <= rhs[i].rangeHigh;
+    }
+    if (lhsKind == Context::ContinuousAssignPathSegment::Kind::Member &&
+        rhsKind == Context::ContinuousAssignPathSegment::Kind::Member)
+      continue;
+    // Mismatched kinds are conservatively treated as overlapping.
+    return true;
+  }
+  // Equal paths and parent/child paths overlap.
+  return true;
+}
+
+static const slang::ast::ValueSymbol *
+getAssignedValue(const slang::ast::Expression &lhs, unsigned depth = 0) {
+  if (depth > 16)
+    return nullptr;
+  if (auto *named = lhs.as_if<slang::ast::NamedValueExpression>())
+    return named->symbol.as_if<slang::ast::ValueSymbol>();
+  if (auto *hier = lhs.as_if<slang::ast::HierarchicalValueExpression>())
+    return hier->symbol.as_if<slang::ast::ValueSymbol>();
+  if (auto *member = lhs.as_if<slang::ast::MemberAccessExpression>())
+    return getAssignedValue(member->value(), depth + 1);
+  if (auto *elem = lhs.as_if<slang::ast::ElementSelectExpression>())
+    return getAssignedValue(elem->value(), depth + 1);
+  if (auto *range = lhs.as_if<slang::ast::RangeSelectExpression>())
+    return getAssignedValue(range->value(), depth + 1);
+  return nullptr;
+}
+
+static const slang::ast::PortSymbol *
+getInputPortForInternalSymbol(const slang::ast::ValueSymbol &sym) {
+  using slang::ast::ArgumentDirection;
+  using slang::ast::InstanceBodySymbol;
+  using slang::ast::MultiPortSymbol;
+  using slang::ast::PortSymbol;
+
+  auto *parentScope = sym.getParentScope();
+  if (!parentScope)
+    return nullptr;
+  auto *instanceBody = parentScope->asSymbol().as_if<InstanceBodySymbol>();
+  if (!instanceBody)
+    return nullptr;
+
+  for (auto *portMember : instanceBody->getPortList()) {
+    if (auto *port = portMember->as_if<PortSymbol>()) {
+      if (port->direction == ArgumentDirection::In &&
+          port->internalSymbol == &sym)
+        return port;
+      continue;
+    }
+    if (auto *multiPort = portMember->as_if<MultiPortSymbol>()) {
+      for (auto *port : multiPort->ports) {
+        if (!port)
+          continue;
+        if (port->direction == ArgumentDirection::In &&
+            port->internalSymbol == &sym)
+          return port;
+      }
+    }
+  }
+  return nullptr;
+}
+
+static bool isSpecialProcedureKind(moore::ProcedureKind kind) {
+  switch (kind) {
+  case moore::ProcedureKind::AlwaysComb:
+  case moore::ProcedureKind::AlwaysFF:
+  case moore::ProcedureKind::AlwaysLatch:
+    return true;
+  default:
+    return false;
+  }
+}
+
+static StringRef getProcedureKindName(moore::ProcedureKind kind) {
+  switch (kind) {
+  case moore::ProcedureKind::AlwaysComb:
+    return "always_comb";
+  case moore::ProcedureKind::AlwaysFF:
+    return "always_ff";
+  case moore::ProcedureKind::AlwaysLatch:
+    return "always_latch";
+  default:
+    return "procedural";
+  }
 }
 
 static LogicalResult noteVariableAssignmentKind(
     Context &context, const slang::ast::Expression &lhs, Location assignLoc,
     unsigned kindBit) {
-  auto *var = getDirectAssignedVariable(lhs);
+  auto *valueSym = getAssignedValue(lhs);
+  if (valueSym && kindBit == kProceduralAssignmentBit) {
+    if (auto *inputPort = getInputPortForInternalSymbol(*valueSym)) {
+      mlir::emitError(assignLoc)
+          << "cannot assign to input port '" << inputPort->name << "'";
+      return failure();
+    }
+  }
+
+  auto *var = getAssignedVariable(lhs);
   if (!var)
     return success();
 
-  auto &recordedKinds = context.variableAssignmentKinds[var];
-  if (kindBit == kContinuousAssignmentBit &&
-      (recordedKinds & kContinuousAssignmentBit)) {
-    // Keep repeated continuous assignments as non-fatal for compatibility.
-    // Slang reports these as diagnostics (currently warning severity), while
-    // CIRCT still rejects mixed continuous/procedural drivers below.
-    return success();
+  Context::ContinuousAssignPath newPath;
+  if (!buildContinuousAssignPath(context, lhs, newPath)) {
+    newPath.push_back({Context::ContinuousAssignPathSegment::Kind::Wildcard,
+                       StringRef(), 0, 0});
   }
 
-  if ((kindBit == kContinuousAssignmentBit &&
-       (recordedKinds & kProceduralAssignmentBit)) ||
-      (kindBit == kProceduralAssignmentBit &&
-       (recordedKinds & kContinuousAssignmentBit))) {
-    auto diagLoc = context.convertLocation(var->location);
-    mlir::emitError(diagLoc)
-        << "cannot mix continuous and procedural assignments to variable '"
-        << var->name << "'";
-    return failure();
+  if (kindBit == kProceduralAssignmentBit && context.currentProceduralBlock &&
+      context.currentProcedureKind.has_value()) {
+    Context::ProceduralDriverInfo currentDriver{*context.currentProcedureKind,
+                                                context.currentProceduralBlock,
+                                                newPath};
+    auto &drivers = context.variableProceduralDrivers[var];
+    for (const auto &prevDriver : drivers) {
+      if (prevDriver.procedure != currentDriver.procedure) {
+        bool prevSpecial = isSpecialProcedureKind(prevDriver.kind);
+        bool currentSpecial = isSpecialProcedureKind(currentDriver.kind);
+        if (prevSpecial || currentSpecial) {
+          if (!continuousAssignPathsOverlap(currentDriver.path, prevDriver.path))
+            continue;
+          auto diagKind = currentSpecial ? currentDriver.kind : prevDriver.kind;
+          mlir::emitError(assignLoc)
+              << "variable '" << var->name << "' driven by "
+              << getProcedureKindName(diagKind) << " procedure";
+          return failure();
+        }
+      }
+    }
+    drivers.push_back(std::move(currentDriver));
+  }
+
+  auto &recordedKinds = context.variableAssignmentKinds[var];
+  auto &continuousPaths = context.variableContinuousAssignmentPaths[var];
+  auto &proceduralPaths = context.variableProceduralAssignmentPaths[var];
+
+  if (kindBit == kContinuousAssignmentBit) {
+    for (const auto &existingPath : proceduralPaths) {
+      if (!continuousAssignPathsOverlap(newPath, existingPath))
+        continue;
+      mlir::emitError(assignLoc)
+          << "cannot mix continuous and procedural assignments to variable '"
+          << var->name << "'";
+      return failure();
+    }
+    for (const auto &existingPath : continuousPaths) {
+      if (!continuousAssignPathsOverlap(newPath, existingPath))
+        continue;
+      mlir::emitError(assignLoc)
+          << "multiple continuous assignments to variable '" << var->name << "'";
+      return failure();
+    }
+    continuousPaths.push_back(newPath);
+  } else if (kindBit == kProceduralAssignmentBit) {
+    for (const auto &existingPath : continuousPaths) {
+      if (!continuousAssignPathsOverlap(newPath, existingPath))
+        continue;
+      mlir::emitError(assignLoc)
+          << "cannot mix continuous and procedural assignments to variable '"
+          << var->name << "'";
+      return failure();
+    }
+    proceduralPaths.push_back(newPath);
   }
 
   recordedKinds |= kindBit;
@@ -562,6 +865,9 @@ struct RootVisitor : public BaseVisitor {
         slang::ast::InstanceFlags::Uninstantiated, nullptr, nullptr, nullptr);
     return context.convertInterfaceHeader(&body) ? success() : failure();
   }
+
+  // User-defined primitives are handled at instantiation sites.
+  LogicalResult visit(const slang::ast::PrimitiveSymbol &) { return success(); }
 
   // Emit an error for all other members.
   template <typename T>
@@ -1307,17 +1613,39 @@ struct ModuleVisitor : public BaseVisitor {
          context.bindScopeInterfacePorts[&instNode.body]) {
       if (!bindIfacePort.idx)
         continue;
-      // Look up the interface port value in the current scope
+      // Look up the interface port value in the current scope.
+      // Some bind / generate / modport paths can reference equivalent cloned
+      // InterfacePortSymbols, so fall back to a unique structural match.
+      Value bindIfaceValue;
       if (auto it =
               context.interfacePortValues.find(bindIfacePort.ifacePort);
           it != context.interfacePortValues.end()) {
-        inputValues.push_back(it->second);
+        bindIfaceValue = it->second;
       } else {
-        // Interface port not found - this shouldn't happen if collection worked
+        bool ambiguous = false;
+        for (const auto &entry : context.interfacePortValues) {
+          auto *candidate = entry.first;
+          if (candidate->name != bindIfacePort.ifacePort->name)
+            continue;
+          if (candidate->interfaceDef != bindIfacePort.ifacePort->interfaceDef)
+            continue;
+          if (candidate->modport != bindIfacePort.ifacePort->modport)
+            continue;
+          if (bindIfaceValue) {
+            ambiguous = true;
+            break;
+          }
+          bindIfaceValue = entry.second;
+        }
+        if (ambiguous)
+          bindIfaceValue = {};
+      }
+      if (!bindIfaceValue) {
         mlir::emitError(loc) << "missing bind scope interface port value for `"
                              << bindIfacePort.ifacePort->name << "`";
         return failure();
       }
+      inputValues.push_back(bindIfaceValue);
     }
 
     // Create the instance op itself.
@@ -1477,6 +1805,80 @@ struct ModuleVisitor : public BaseVisitor {
         moore::RefType::get(cast<moore::UnpackedType>(loweredType)),
         builder.getStringAttr(Twine(blockNamePrefix) + varNode.name), initial);
     context.valueSymbols.insert(&varNode, varOp);
+
+    // Implicit covergroup sampling event support:
+    // For declaration-time instantiation (`cg c = new;`) where the covergroup
+    // type has a declared sampling event, synthesize an `always` procedure
+    // that waits on the event and emits a covergroup sample.
+    //
+    // Late `c = new;` assignment sites are handled in expression lowering;
+    // this declaration-side path is only for initializer `new`.
+    if (const auto *initExpr = varNode.getInitializer()) {
+      if (const auto *newCg =
+              initExpr->as_if<slang::ast::NewCovergroupExpression>()) {
+        const auto &canonicalCgType = newCg->type->getCanonicalType();
+        if (const auto *cgType =
+                canonicalCgType.as_if<slang::ast::CovergroupType>()) {
+          if (const auto *sampleEvent = cgType->getCoverageEvent()) {
+            auto procOp = moore::ProcedureOp::create(
+                builder, loc, moore::ProcedureKind::Always);
+            OpBuilder::InsertionGuard procGuard(builder);
+            builder.setInsertionPointToEnd(&procOp.getBody().emplaceBlock());
+            Context::ValueSymbolScope scope(context.valueSymbols);
+
+            if (failed(context.convertTimingControl(*sampleEvent)))
+              return failure();
+
+            Value cgHandle = moore::ReadOp::create(builder, loc, varOp);
+            SmallVector<Value> sampleArgs;
+            SmallVector<Value> iffArgs;
+
+            const auto &cgBody = cgType->getBody();
+            bool hasAnyIff = false;
+            for (const auto &member : cgBody.members()) {
+              if (auto *cp = member.as_if<slang::ast::CoverpointSymbol>()) {
+                if (cp->getIffExpr()) {
+                  hasAnyIff = true;
+                  break;
+                }
+              }
+            }
+
+            for (const auto &member : cgBody.members()) {
+              auto *cp = member.as_if<slang::ast::CoverpointSymbol>();
+              if (!cp)
+                continue;
+
+              Value sampleVal =
+                  context.convertRvalueExpression(cp->getCoverageExpr());
+              if (!sampleVal)
+                return failure();
+              sampleArgs.push_back(sampleVal);
+
+              if (!hasAnyIff)
+                continue;
+
+              if (const auto *iffExpr = cp->getIffExpr()) {
+                Value iffVal = context.convertRvalueExpression(*iffExpr);
+                iffVal = context.convertToBool(iffVal, moore::Domain::TwoValued);
+                if (!iffVal)
+                  return failure();
+                iffArgs.push_back(iffVal);
+              } else {
+                auto i1Ty = moore::IntType::getInt(context.getContext(), 1);
+                iffArgs.push_back(
+                    moore::ConstantOp::create(builder, loc, i1Ty, 1));
+              }
+            }
+
+            moore::CovergroupSampleOp::create(builder, loc, cgHandle, sampleArgs,
+                                              iffArgs);
+            moore::ReturnOp::create(builder, loc);
+            context.covergroupImplicitSamplingVars.insert(&varNode);
+          }
+        }
+      }
+    }
     return success();
   }
 
@@ -1565,6 +1967,10 @@ struct ModuleVisitor : public BaseVisitor {
         // Min:typ:max delay: #(min:typ:max)
         // Use the first expression (rise delay / min value) as the delay.
         delay = context.convertRvalueExpression(ctrl3->expr1, timeType);
+      } else if (timingCtrl->as_if<slang::ast::OneStepDelayControl>()) {
+        // One precision tick delay: #1step.
+        delay = moore::ConstantTimeOp::create(
+            builder, loc, getTimePrecisionInFemtoseconds(context));
       } else {
         mlir::emitError(loc)
             << "unsupported continuous assignment timing control: "
@@ -1598,13 +2004,25 @@ struct ModuleVisitor : public BaseVisitor {
 
   // Handle procedures.
   LogicalResult convertProcedure(moore::ProcedureKind kind,
-                                 const slang::ast::Statement &body) {
+                                 const slang::ast::Statement &body,
+                                 const slang::ast::ProceduralBlockSymbol
+                                     *procedureSymbol = nullptr,
+                                 std::optional<moore::ProcedureKind>
+                                     assignmentKind = std::nullopt) {
     if (body.as_if<slang::ast::ConcurrentAssertionStatement>())
       return context.convertStatement(body);
     auto procOp = moore::ProcedureOp::create(builder, loc, kind);
     OpBuilder::InsertionGuard guard(builder);
     builder.setInsertionPointToEnd(&procOp.getBody().emplaceBlock());
     Context::ValueSymbolScope scope(context.valueSymbols);
+    auto prevProcedureKind = context.currentProcedureKind;
+    auto prevProcedureSymbol = context.currentProceduralBlock;
+    context.currentProcedureKind = assignmentKind.value_or(kind);
+    context.currentProceduralBlock = procedureSymbol;
+    auto restoreProcedureContext = llvm::make_scope_exit([&] {
+      context.currentProcedureKind = prevProcedureKind;
+      context.currentProceduralBlock = prevProcedureSymbol;
+    });
     if (failed(context.convertStatement(body)))
       return failure();
     if (builder.getBlock())
@@ -1638,11 +2056,12 @@ struct ModuleVisitor : public BaseVisitor {
       if (procNode.procedureKind == slang::ast::ProceduralBlockKind::Always &&
           stmt &&
           stmt->timing.kind == slang::ast::TimingControlKind::ImplicitEvent)
-        return convertProcedure(moore::ProcedureKind::AlwaysComb, stmt->stmt);
+        return convertProcedure(moore::ProcedureKind::AlwaysComb, stmt->stmt,
+                                &procNode, moore::ProcedureKind::Always);
     }
 
     return convertProcedure(convertProcedureKind(procNode.procedureKind),
-                            procNode.getBody());
+                            procNode.getBody(), &procNode);
   }
 
   // Handle generate block.
@@ -1842,7 +2261,7 @@ struct ModuleVisitor : public BaseVisitor {
     return success();
   }
 
-  // Handle primitive instances (pullup, pulldown, gate primitives).
+  // Handle primitive instances (built-ins and user-defined primitives).
   LogicalResult visit(const slang::ast::PrimitiveInstanceSymbol &primNode) {
     auto primName = primNode.primitiveType.name;
 
@@ -1863,6 +2282,521 @@ struct ModuleVisitor : public BaseVisitor {
         return &assign->left();
       return expr;
     };
+
+    // Handle user-defined primitive instances (UDP).
+    if (primNode.primitiveType.primitiveKind ==
+        slang::ast::PrimitiveSymbol::UserDefined) {
+      auto instName = primNode.name.empty() ? "<unnamed>" : primNode.name;
+      bool createdSequentialProcedure = false;
+      auto emitDropped = [&](StringRef reason = {}) -> LogicalResult {
+        auto diag = mlir::emitWarning(loc)
+                    << "dropping user-defined primitive instance `" << instName
+                    << "` of `" << primName << "`";
+        if (!reason.empty())
+          diag << ": " << reason;
+        if (createdSequentialProcedure && builder.getBlock() &&
+            !builder.getBlock()->mightHaveTerminator())
+          moore::ReturnOp::create(builder, loc);
+        return success();
+      };
+
+      auto &udp = primNode.primitiveType;
+      bool isSequentialUDP = udp.isSequential;
+      if (udp.isEdgeSensitive && !isSequentialUDP)
+        return emitDropped("edge-sensitive combinational UDP not yet supported");
+
+      if (portConnections.size() < 2)
+        return emitDropped("invalid UDP arity");
+
+      OpBuilder::InsertionGuard udpInsertionGuard(builder);
+      moore::ProcedureOp sequentialProc;
+      if (isSequentialUDP) {
+        sequentialProc =
+            moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
+        builder.setInsertionPointToEnd(&sequentialProc.getBody().emplaceBlock());
+        createdSequentialProcedure = true;
+      }
+
+      // First UDP argument is the output.
+      const auto *outputExpr = unpackOutputExpr(portConnections.front());
+      auto output = context.convertLvalueExpression(*outputExpr);
+      if (!output)
+        return failure();
+
+      auto outputRefType = dyn_cast<moore::RefType>(output.getType());
+      if (!outputRefType)
+        return emitDropped("output is not a reference");
+      auto outputType = outputRefType.getNestedType();
+
+      auto outputPackedType = dyn_cast<moore::PackedType>(outputType);
+      if (!outputPackedType)
+        return emitDropped("output must be packed");
+      auto outputSBVType = outputPackedType.getSimpleBitVector();
+      auto outputIntType = dyn_cast_or_null<moore::IntType>(outputSBVType);
+      if (!outputIntType || outputIntType.getWidth() != 1)
+        return emitDropped("only 1-bit UDP outputs are supported");
+
+      // Remaining arguments are inputs.
+      SmallVector<Value, 8> inputValues;
+      SmallVector<moore::IntType, 8> inputTypes;
+      inputValues.reserve(portConnections.size() - 1);
+      inputTypes.reserve(portConnections.size() - 1);
+      for (size_t i = 1; i < portConnections.size(); ++i) {
+        auto input = context.convertRvalueExpression(*portConnections[i]);
+        if (!input)
+          return failure();
+        input = context.convertToSimpleBitVector(input);
+        if (!input)
+          return failure();
+        auto inputIntType = dyn_cast<moore::IntType>(input.getType());
+        if (!inputIntType || inputIntType.getWidth() != 1)
+          return emitDropped("only 1-bit UDP inputs are supported");
+        inputValues.push_back(input);
+        inputTypes.push_back(inputIntType);
+      }
+
+      SmallVector<Value, 8> prevInputRefs;
+      if (udp.isEdgeSensitive) {
+        prevInputRefs.reserve(inputValues.size());
+        for (size_t i = 0; i < inputValues.size(); ++i) {
+          auto prevInput = moore::VariableOp::create(
+              builder, loc, moore::RefType::get(inputTypes[i]),
+              builder.getStringAttr(Twine("udp_prev_") + Twine(i)),
+              inputValues[i]);
+          prevInputRefs.push_back(prevInput);
+        }
+      }
+
+      if (isSequentialUDP) {
+        auto waitOp = moore::WaitEventOp::create(builder, loc);
+        {
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(&waitOp.getBody().emplaceBlock());
+          for (Value input : inputValues)
+            moore::DetectEventOp::create(builder, loc, moore::Edge::AnyChange,
+                                         input, Value{});
+        }
+      }
+
+      SmallVector<Value, 8> rowInputValues = inputValues;
+      if (isSequentialUDP) {
+        rowInputValues.clear();
+        rowInputValues.reserve(portConnections.size() - 1);
+        for (size_t i = 1; i < portConnections.size(); ++i) {
+          auto input = context.convertRvalueExpression(*portConnections[i]);
+          if (!input)
+            return failure();
+          input = context.convertToSimpleBitVector(input);
+          if (!input)
+            return failure();
+          auto inputIntType = dyn_cast<moore::IntType>(input.getType());
+          if (!inputIntType || inputIntType.getWidth() != 1)
+            return emitDropped("only 1-bit UDP inputs are supported");
+          rowInputValues.push_back(input);
+        }
+      }
+
+      auto makeBitConstant = [&](moore::IntType type,
+                                 char bit) -> std::optional<Value> {
+        switch (bit) {
+        case '0':
+          return moore::ConstantOp::create(builder, loc, type, FVInt::getZero(1));
+        case '1':
+          return moore::ConstantOp::create(builder, loc, type, FVInt::getAllOnes(1));
+        case 'x':
+        case 'X':
+          if (type.getDomain() == moore::Domain::TwoValued)
+            return std::nullopt;
+          return moore::ConstantOp::create(builder, loc, type, FVInt::getAllX(1));
+        case 'z':
+        case 'Z':
+          if (type.getDomain() == moore::Domain::TwoValued)
+            return std::nullopt;
+          return moore::ConstantOp::create(builder, loc, type, FVInt::getAllZ(1));
+        default:
+          return std::nullopt;
+        }
+      };
+
+      auto emitSequentialInit = [&]() -> LogicalResult {
+        if (!isSequentialUDP || !udp.initVal)
+          return success();
+
+        auto initInt = udp.initVal->integer();
+        auto initBit = initInt[0];
+        FVInt initValue;
+        if (initBit.value == 0) {
+          initValue = FVInt::getZero(1);
+        } else if (initBit.value == 1) {
+          initValue = FVInt::getAllOnes(1);
+        } else if (initBit.value == slang::logic_t::x.value ||
+                   initBit.value == slang::logic_t::z.value) {
+          if (outputIntType.getDomain() == moore::Domain::TwoValued)
+            initValue = FVInt::getZero(1);
+          else
+            initValue = initBit.value == slang::logic_t::z.value
+                            ? FVInt::getAllZ(1)
+                            : FVInt::getAllX(1);
+        } else {
+          return emitDropped("unsupported UDP initial value");
+        }
+
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPoint(sequentialProc);
+        auto initProc =
+            moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Initial);
+        auto &initBlock = initProc.getBody().emplaceBlock();
+        builder.setInsertionPointToEnd(&initBlock);
+
+        // Re-materialize the output reference in this procedure scope.
+        auto initOutput = context.convertLvalueExpression(*outputExpr);
+        if (!initOutput)
+          return failure();
+        auto initRefType = dyn_cast<moore::RefType>(initOutput.getType());
+        if (!initRefType)
+          return emitDropped("output is not a reference");
+        auto initOutputType = initRefType.getNestedType();
+
+        Value initConst =
+            moore::ConstantOp::create(builder, loc, outputIntType, initValue);
+        if (initConst.getType() != initOutputType)
+          initConst =
+              moore::ConversionOp::create(builder, loc, initOutputType, initConst);
+        moore::BlockingAssignOp::create(builder, loc, initOutput, initConst);
+        moore::ReturnOp::create(builder, loc);
+        return success();
+      };
+      if (failed(emitSequentialInit()))
+        return failure();
+
+      auto boolType = moore::IntType::getInt(context.getContext(), 1);
+      auto trueConst = moore::ConstantOp::create(builder, loc, boolType, 1);
+
+      auto appendCond = [&](Value &rowCond, Value term) -> LogicalResult {
+        term = context.convertToBool(term);
+        if (!term)
+          return failure();
+        if (rowCond)
+          rowCond = moore::AndOp::create(builder, loc, rowCond, term);
+        else
+          rowCond = term;
+        return success();
+      };
+
+      auto make01Matcher = [&](Value value, moore::IntType type) -> Value {
+        if (type.getDomain() == moore::Domain::TwoValued)
+          return trueConst;
+        auto c0 = moore::ConstantOp::create(builder, loc, type, FVInt::getZero(1));
+        auto c1 =
+            moore::ConstantOp::create(builder, loc, type, FVInt::getAllOnes(1));
+        auto eq0 = moore::CaseEqOp::create(builder, loc, value, c0);
+        auto eq1 = moore::CaseEqOp::create(builder, loc, value, c1);
+        return moore::OrOp::create(builder, loc, eq0, eq1);
+      };
+
+      auto addInputCharMatch = [&](Value &rowCond, bool &impossibleRow,
+                                   bool &unsupportedSymbol, Value value,
+                                   moore::IntType type,
+                                   char symbol) -> LogicalResult {
+        switch (symbol) {
+        case '?':
+        case '-':
+          return success();
+        case 'b':
+          return appendCond(rowCond, make01Matcher(value, type));
+        case '0':
+        case '1':
+        case 'x':
+        case 'X':
+        case 'z':
+        case 'Z': {
+          auto bitConst = makeBitConstant(type, symbol);
+          if (!bitConst) {
+            impossibleRow = true;
+            return success();
+          }
+          auto eq = moore::CaseEqOp::create(builder, loc, value, *bitConst);
+          return appendCond(rowCond, eq);
+        }
+        default:
+          unsupportedSymbol = true;
+          return success();
+        }
+      };
+
+      auto buildEdgeTransitionCond =
+          [&](Value prevValue, Value currValue, moore::IntType type,
+              ArrayRef<std::pair<char, char>> transitions, Value &edgeCond,
+              bool &unsupportedSymbol,
+              bool &impossibleEdge) -> LogicalResult {
+        edgeCond = Value{};
+        bool anyPossible = false;
+        for (auto [prevSymbol, currSymbol] : transitions) {
+          Value altCond;
+          bool altImpossible = false;
+          bool unsupported = false;
+          if (failed(addInputCharMatch(altCond, altImpossible, unsupported,
+                                       prevValue, type, prevSymbol)))
+            return failure();
+          if (unsupported) {
+            unsupportedSymbol = true;
+            return success();
+          }
+
+          if (failed(addInputCharMatch(altCond, altImpossible, unsupported,
+                                       currValue, type, currSymbol)))
+            return failure();
+          if (unsupported) {
+            unsupportedSymbol = true;
+            return success();
+          }
+
+          // UDP transition descriptors denote value changes. Constrain each
+          // expanded transition alternative to an actual previous/current
+          // change, so wildcard descriptors like "(??)" do not match stable
+          // values when another input triggers evaluation.
+          auto changed =
+              moore::CaseNeOp::create(builder, loc, prevValue, currValue);
+          if (failed(appendCond(altCond, changed)))
+            return failure();
+
+          if (altImpossible)
+            continue;
+          if (!altCond)
+            altCond = trueConst;
+          if (edgeCond)
+            edgeCond = moore::OrOp::create(builder, loc, edgeCond, altCond);
+          else
+            edgeCond = altCond;
+          anyPossible = true;
+        }
+        if (!anyPossible)
+          impossibleEdge = true;
+        return success();
+      };
+
+      struct UDPInputToken {
+        bool isEdge = false;
+        char first = 0;
+        char second = 0;
+      };
+
+      struct UDPRow {
+        Value cond;
+        Value value;
+      };
+      SmallVector<UDPRow, 16> rows;
+      rows.reserve(udp.table.size());
+      Value currentOutput;
+      if (isSequentialUDP) {
+        currentOutput = moore::ReadOp::create(builder, loc, output);
+        currentOutput = context.convertToSimpleBitVector(currentOutput);
+        if (!currentOutput)
+          return failure();
+        if (currentOutput.getType() != outputIntType)
+          currentOutput =
+              moore::ConversionOp::create(builder, loc, outputIntType,
+                                          currentOutput);
+      }
+
+      for (const auto &entry : udp.table) {
+        SmallVector<UDPInputToken, 8> symbols;
+        symbols.reserve(inputValues.size());
+        for (size_t pos = 0; pos < entry.inputs.size();) {
+          char c = entry.inputs[pos];
+          if (llvm::isSpace(c) || c == ',')
+            ++pos;
+          else if (c == '(') {
+            if (pos + 3 >= entry.inputs.size() || entry.inputs[pos + 3] != ')')
+              return emitDropped("unsupported UDP row shape");
+            symbols.push_back(
+                UDPInputToken{true, entry.inputs[pos + 1], entry.inputs[pos + 2]});
+            pos += 4;
+          } else {
+            bool isShorthandEdge =
+                c == 'r' || c == 'f' || c == 'p' || c == 'n' || c == '*';
+            symbols.push_back(
+                UDPInputToken{entry.isEdgeSensitive && isShorthandEdge, c, 0});
+            ++pos;
+          }
+        }
+        if (symbols.size() != rowInputValues.size())
+          return emitDropped("unsupported UDP row shape");
+
+        if (entry.isEdgeSensitive && !isSequentialUDP)
+          return emitDropped("edge-sensitive UDP table rows require sequential UDP");
+
+        Value rowCond;
+        bool impossibleRow = false;
+        for (size_t i = 0; i < symbols.size(); ++i) {
+          auto token = symbols[i];
+          if (!token.isEdge) {
+            bool unsupportedSymbol = false;
+            if (failed(addInputCharMatch(rowCond, impossibleRow,
+                                         unsupportedSymbol, rowInputValues[i],
+                                         inputTypes[i], token.first)))
+              return failure();
+            if (unsupportedSymbol)
+              return emitDropped("unsupported UDP input row symbol");
+            if (impossibleRow)
+              break;
+            continue;
+          }
+
+          if (prevInputRefs.empty())
+            return emitDropped("edge-sensitive UDP previous-value state missing");
+
+          Value prevInput =
+              moore::ReadOp::create(builder, loc, prevInputRefs[i]);
+          if (prevInput.getType() != inputTypes[i])
+            prevInput = moore::ConversionOp::create(builder, loc, inputTypes[i],
+                                                    prevInput);
+          SmallVector<std::pair<char, char>, 6> transitions;
+          if (token.second) {
+            transitions.emplace_back(token.first, token.second);
+          } else {
+            switch (token.first) {
+            case 'r':
+              transitions.emplace_back('0', '1');
+              break;
+            case 'f':
+              transitions.emplace_back('1', '0');
+              break;
+            case 'p':
+              transitions.emplace_back('0', '1');
+              transitions.emplace_back('0', 'x');
+              transitions.emplace_back('x', '1');
+              break;
+            case 'n':
+              transitions.emplace_back('1', '0');
+              transitions.emplace_back('1', 'x');
+              transitions.emplace_back('x', '0');
+              break;
+            case '*':
+              transitions.emplace_back('0', '1');
+              transitions.emplace_back('0', 'x');
+              transitions.emplace_back('1', '0');
+              transitions.emplace_back('1', 'x');
+              transitions.emplace_back('x', '0');
+              transitions.emplace_back('x', '1');
+              break;
+            default:
+              return emitDropped("unsupported UDP edge transition symbol");
+            }
+          }
+          Value edgeCond;
+          bool unsupportedSymbol = false;
+          bool impossibleEdge = false;
+          if (failed(buildEdgeTransitionCond(
+                  prevInput, rowInputValues[i], inputTypes[i], transitions,
+                  edgeCond, unsupportedSymbol, impossibleEdge)))
+            return failure();
+          if (unsupportedSymbol)
+            return emitDropped("unsupported UDP edge transition symbol");
+          if (impossibleEdge) {
+            impossibleRow = true;
+            break;
+          }
+          if (failed(appendCond(rowCond, edgeCond)))
+            return failure();
+        }
+
+        if (isSequentialUDP) {
+          if (!entry.state)
+            return emitDropped(
+                "sequential UDP row missing current-state symbol");
+          switch (entry.state) {
+          case '?':
+          case '-':
+            break;
+          case 'b':
+            if (failed(
+                    appendCond(rowCond, make01Matcher(currentOutput, outputIntType))))
+              return failure();
+            break;
+          case '0':
+          case '1':
+          case 'x':
+          case 'X':
+          case 'z':
+          case 'Z': {
+            auto stateConst = makeBitConstant(outputIntType, entry.state);
+            if (!stateConst) {
+              impossibleRow = true;
+              break;
+            }
+            auto eq =
+                moore::CaseEqOp::create(builder, loc, currentOutput, *stateConst);
+            if (failed(appendCond(rowCond, eq)))
+              return failure();
+            break;
+          }
+          default:
+            return emitDropped("unsupported UDP current-state row symbol");
+          }
+        }
+
+        Value rowValue;
+        if (entry.output == '-') {
+          if (!isSequentialUDP)
+            return emitDropped("unsupported UDP output row symbol");
+          rowValue = currentOutput;
+        } else {
+          auto rowValueConst = makeBitConstant(outputIntType, entry.output);
+          if (!rowValueConst)
+            return emitDropped("unsupported UDP output row symbol");
+          rowValue = *rowValueConst;
+        }
+
+        if (!impossibleRow)
+          rows.push_back({rowCond ? rowCond : trueConst, rowValue});
+      }
+
+      if (rows.empty())
+        return emitDropped("no usable UDP table rows");
+
+      Value result;
+      if (isSequentialUDP) {
+        // Unspecified sequential rows retain the current state.
+        result = currentOutput;
+      } else {
+        // SystemVerilog leaves unspecified combinational rows as X.
+        FVInt defaultValue = outputIntType.getDomain() == moore::Domain::TwoValued
+                                 ? FVInt::getZero(1)
+                                 : FVInt::getAllX(1);
+        result =
+            moore::ConstantOp::create(builder, loc, outputIntType, defaultValue);
+      }
+
+      for (size_t i = rows.size(); i > 0; --i) {
+        auto &row = rows[i - 1];
+        auto conditional =
+            moore::ConditionalOp::create(builder, loc, outputIntType, row.cond);
+        auto &trueBlock = conditional.getTrueRegion().emplaceBlock();
+        auto &falseBlock = conditional.getFalseRegion().emplaceBlock();
+        {
+          OpBuilder::InsertionGuard guard(builder);
+          builder.setInsertionPointToStart(&trueBlock);
+          moore::YieldOp::create(builder, loc, row.value);
+          builder.setInsertionPointToStart(&falseBlock);
+          moore::YieldOp::create(builder, loc, result);
+        }
+        result = conditional.getResult();
+      }
+
+      if (result.getType() != outputType)
+        result = moore::ConversionOp::create(builder, loc, outputType, result);
+      if (isSequentialUDP) {
+        moore::BlockingAssignOp::create(builder, loc, output, result);
+        for (size_t i = 0; i < prevInputRefs.size(); ++i)
+          moore::BlockingAssignOp::create(builder, loc, prevInputRefs[i],
+                                          rowInputValues[i]);
+        moore::ReturnOp::create(builder, loc);
+      } else {
+        moore::ContinuousAssignOp::create(builder, loc, output, result);
+      }
+      return success();
+    }
 
     // Handle pullup and pulldown primitives.
     // These drive a constant 1 or 0 onto the connected net.
@@ -2938,6 +3872,34 @@ Context::convertModuleBody(const slang::ast::InstanceBodySymbol *module) {
   auto pendingInterfacePortConnectionsGuard = llvm::make_scope_exit([&] {
     pendingInterfacePortConnections =
         std::move(prevPendingInterfacePortConnections);
+  });
+  auto prevProcedureDrivers = std::move(variableProceduralDrivers);
+  variableProceduralDrivers.clear();
+  auto procedureDriversGuard = llvm::make_scope_exit([&] {
+    variableProceduralDrivers = std::move(prevProcedureDrivers);
+  });
+  auto prevAssignmentKinds = std::move(variableAssignmentKinds);
+  variableAssignmentKinds.clear();
+  auto assignmentKindsGuard = llvm::make_scope_exit([&] {
+    variableAssignmentKinds = std::move(prevAssignmentKinds);
+  });
+  auto prevContinuousAssignmentPaths = std::move(variableContinuousAssignmentPaths);
+  variableContinuousAssignmentPaths.clear();
+  auto continuousAssignmentPathsGuard = llvm::make_scope_exit([&] {
+    variableContinuousAssignmentPaths = std::move(prevContinuousAssignmentPaths);
+  });
+  auto prevProceduralAssignmentPaths = std::move(variableProceduralAssignmentPaths);
+  variableProceduralAssignmentPaths.clear();
+  auto proceduralAssignmentPathsGuard = llvm::make_scope_exit([&] {
+    variableProceduralAssignmentPaths = std::move(prevProceduralAssignmentPaths);
+  });
+  auto prevProcedureKind = currentProcedureKind;
+  auto prevProcedureSymbol = currentProceduralBlock;
+  currentProcedureKind.reset();
+  currentProceduralBlock = nullptr;
+  auto procedureContextGuard = llvm::make_scope_exit([&] {
+    currentProcedureKind = prevProcedureKind;
+    currentProceduralBlock = prevProcedureSymbol;
   });
 
   ValueSymbolScope scope(valueSymbols);
@@ -4659,12 +5621,107 @@ Value Context::resolveInterfaceInstance(
 Value Context::resolveInterfaceInstance(
     const slang::ast::HierarchicalReference &ref, Location loc) {
   Value currentRef;
+  SmallString<64> pathName;
+
+  auto appendPathElem =
+      [&](const slang::ast::HierarchicalReference::Element &elem) {
+        auto appendName = [&](StringRef name) {
+          if (name.empty())
+            return;
+          if (!pathName.empty())
+            pathName += ".";
+          pathName += name;
+        };
+
+        if (auto *instSym = elem.symbol->as_if<slang::ast::InstanceSymbol>())
+          appendName(instSym->name);
+        else if (auto *arraySym =
+                     elem.symbol->as_if<slang::ast::InstanceArraySymbol>())
+          appendName(arraySym->name);
+        else if (auto *ifacePort =
+                     elem.symbol->as_if<slang::ast::InterfacePortSymbol>())
+          appendName(ifacePort->name);
+
+        if (auto *index = std::get_if<int32_t>(&elem.selector))
+          pathName += ("[" + llvm::Twine(*index) + "]").str();
+        else if (auto *range =
+                     std::get_if<std::pair<int32_t, int32_t>>(&elem.selector))
+          pathName += ("[" + llvm::Twine(range->first) + ":" +
+                       llvm::Twine(range->second) + "]")
+                          .str();
+      };
+
+  auto lookupThreadedByPath = [&](StringRef fullPath) -> Value {
+    auto scanPathSet = [&](ArrayRef<HierInterfacePathInfo> paths) -> Value {
+      Value candidate;
+      bool ambiguous = false;
+      for (const auto &pathInfo : paths) {
+        if (pathInfo.direction != slang::ast::ArgumentDirection::In)
+          continue;
+        if (!pathInfo.hierName || pathInfo.hierName.getValue() != fullPath)
+          continue;
+        if (!pathInfo.ifaceInst)
+          continue;
+        auto instIt = interfaceInstances.find(pathInfo.ifaceInst);
+        if (instIt == interfaceInstances.end())
+          continue;
+        if (candidate && candidate != instIt->second) {
+          ambiguous = true;
+          break;
+        }
+        candidate = instIt->second;
+      }
+      if (ambiguous)
+        return {};
+      return candidate;
+    };
+
+    if (currentScope) {
+      if (const auto *scopeBody =
+              currentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+        if (auto ifacePathIt = hierInterfacePaths.find(scopeBody);
+            ifacePathIt != hierInterfacePaths.end()) {
+          if (auto scoped = scanPathSet(ifacePathIt->second))
+            return scoped;
+        }
+      }
+      if (const auto *containingBody = currentScope->getContainingInstance()) {
+        if (auto ifacePathIt = hierInterfacePaths.find(containingBody);
+            ifacePathIt != hierInterfacePaths.end()) {
+          if (auto scoped = scanPathSet(ifacePathIt->second))
+            return scoped;
+        }
+      }
+    }
+
+    // Fallback: search all collected hierarchical interface path entries.
+    // This handles scope instances where currentScope is a nested procedural
+    // block that cannot be mapped back to the exact module body symbol.
+    Value candidate;
+    bool ambiguous = false;
+    for (const auto &entry : hierInterfacePaths) {
+      if (auto hit = scanPathSet(entry.second)) {
+        if (candidate && candidate != hit) {
+          ambiguous = true;
+          break;
+        }
+        candidate = hit;
+      }
+    }
+    if (ambiguous)
+      return {};
+    return candidate;
+  };
 
   for (const auto &elem : ref.path) {
+    appendPathElem(elem);
     if (!currentRef) {
       if (auto *instSym =
               elem.symbol->as_if<slang::ast::InstanceSymbol>()) {
         currentRef = resolveInterfaceInstance(instSym, loc);
+        if (currentRef)
+          continue;
+        currentRef = lookupThreadedByPath(pathName);
         if (currentRef)
           continue;
       }
@@ -7089,11 +8146,123 @@ Context::convertCovergroup(const slang::ast::CovergroupType &covergroup) {
                 if (auto *selectExpr = bin->getCrossSelectExpr()) {
                   OpBuilder::InsertionGuard binsofGuard(builder);
                   builder.setInsertionPointToStart(&binBody.front());
-                  // Create lambda to capture this context for evaluateConstant
-                  auto evalConst =
-                      [this](const slang::ast::Expression &e)
-                          -> slang::ConstantValue {
-                    return this->evaluateConstant(e);
+                  // Cross-select intersect operands can reference symbols that
+                  // are elaboration-stable but not strict constant expressions
+                  // (for example initialized variables). Fall back to
+                  // initializer / script evaluation in those cases.
+                  auto evalConstRec =
+                      [&](const slang::ast::Expression &e, auto &self,
+                          unsigned depth) -> slang::ConstantValue {
+                    auto value = this->evaluateConstant(e);
+                    if (!value.bad())
+                      return value;
+                    if (depth >= 8)
+                      return value;
+
+                    using namespace slang::ast;
+                    auto flags = EvalFlags::CacheResults |
+                                 EvalFlags::SpecparamsAllowed |
+                                 EvalFlags::IsScript;
+
+                    const Symbol *contextSymbol = e.getSymbolReference();
+                    SmallVector<const ValueSymbol *> referencedValues;
+                    e.visitSymbolReferences([&](const Expression &,
+                                                const Symbol &symbol) {
+                      if (!contextSymbol)
+                        contextSymbol = &symbol;
+                      auto *valueSymbol = symbol.as_if<ValueSymbol>();
+                      if (!valueSymbol)
+                        return;
+                      for (auto *seen : referencedValues)
+                        if (seen == valueSymbol)
+                          return;
+                      referencedValues.push_back(valueSymbol);
+                    });
+
+                    auto tryEval = [&](EvalContext &evalContext)
+                        -> slang::ConstantValue {
+                      auto normalizeUnknownIntegralDefaults =
+                          [&](slang::ConstantValue &value,
+                              auto &self) -> bool {
+                        if (value.isInteger()) {
+                          auto intValue = value.integer();
+                          if (!intValue.hasUnknown())
+                            return true;
+                          auto width = intValue.getBitWidth();
+                          if (width == 0 || width > 64)
+                            return false;
+                          auto zeroValue =
+                              slang::SVInt(width, uint64_t(0), intValue.isSigned());
+                          value = slang::ConstantValue(std::move(zeroValue));
+                          return true;
+                        }
+
+                        if (value.isUnpacked()) {
+                          slang::ConstantValue::Elements elems;
+                          elems.reserve(value.elements().size());
+                          for (auto &elem : value.elements()) {
+                            auto normalized = elem;
+                            if (!self(normalized, self))
+                              return false;
+                            elems.push_back(std::move(normalized));
+                          }
+                          value = slang::ConstantValue(std::move(elems));
+                          return true;
+                        }
+
+                        return true;
+                      };
+
+                      for (auto *valueSymbol : referencedValues) {
+                        auto *initializer = valueSymbol->getInitializer();
+                        if (initializer) {
+                          auto initValue = self(*initializer, self, depth + 1);
+                          if (initValue.bad())
+                            return {};
+                          evalContext.createLocal(valueSymbol,
+                                                  std::move(initValue));
+                          continue;
+                        }
+                        auto &valueType = valueSymbol->getType();
+                        auto defaultValue = valueType.getDefaultValue();
+                        if (defaultValue.bad())
+                          return {};
+                        // Cross-select intersect evaluation in xrun treats
+                        // uninitialized integral symbols as elaboration-stable
+                        // zero-valued bounds. Mirror that behavior here to
+                        // avoid spurious hard failures.
+                        if (!normalizeUnknownIntegralDefaults(
+                                defaultValue, normalizeUnknownIntegralDefaults))
+                          return {};
+                        evalContext.createLocal(valueSymbol,
+                                                std::move(defaultValue));
+                      }
+                      return e.eval(evalContext);
+                    };
+
+                    if (contextSymbol) {
+                      EvalContext scopedEval(*contextSymbol, flags);
+                      scopedEval.pushEmptyFrame();
+                      auto scriptValue = tryEval(scopedEval);
+                      scopedEval.popFrame();
+                      if (!scriptValue.bad())
+                        return scriptValue;
+                    }
+
+                    EvalContext scriptEval(
+                        ASTContext(compilation.getRoot(), LookupLocation::max),
+                        flags);
+                    scriptEval.pushEmptyFrame();
+                    auto scriptValue = tryEval(scriptEval);
+                    scriptEval.popFrame();
+                    if (!scriptValue.bad())
+                      return scriptValue;
+
+                    return value;
+                  };
+                  auto evalConst = [&](const slang::ast::Expression &e)
+                      -> slang::ConstantValue {
+                    return evalConstRec(e, evalConstRec, 0);
                   };
                   if (failed(convertBinsSelectExpr(*selectExpr, cross->targets,
                                                    coverpointSymbols, compilation,

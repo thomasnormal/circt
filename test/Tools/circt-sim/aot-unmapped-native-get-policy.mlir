@@ -9,11 +9,11 @@
 // COMPILE: [circt-sim-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 // COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
 //
-// DEFAULT: Unmapped native func.call policy: default deny get_*
-// DEFAULT: Compiled function calls:          0
-// DEFAULT: Interpreted function calls:       1
-// DEFAULT: direct_calls_native:              0
-// DEFAULT: direct_calls_interpreted:         1
+// DEFAULT: Unmapped native func.call policy: default allow-all
+// DEFAULT: Compiled function calls:          1
+// DEFAULT: Interpreted function calls:       0
+// DEFAULT: direct_calls_native:              1
+// DEFAULT: direct_calls_interpreted:         0
 // DEFAULT: out=47
 //
 // ALLOW: Unmapped native func.call policy: allow-all

@@ -1,4 +1,4 @@
-// RUN: ! circt-verilog --language-version 1800-2023 %s --ir-moore 2>&1 | FileCheck %s
+// RUN: circt-verilog --language-version 1800-2023 %s --ir-moore | FileCheck %s
 
 module CrossSelectIntersectOpenRangeUnsupported;
   bit clk;
@@ -13,4 +13,6 @@ module CrossSelectIntersectOpenRangeUnsupported;
   endgroup
 endmodule
 
-// CHECK: error: unsupported non-constant intersect value range in cross select expression
+// CHECK: moore.crossbin.decl @c kind<bins> {
+// CHECK:   moore.binsof @a intersect_ranges [0, 9223372036854775807]
+// CHECK: }

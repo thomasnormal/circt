@@ -42,6 +42,15 @@
 #include <string>
 #include <vector>
 
+// Some libc implementations define `stdout` / `stderr` as macros. Undefine
+// them so the TestCase fields with those names compile reliably.
+#ifdef stdout
+#undef stdout
+#endif
+#ifdef stderr
+#undef stderr
+#endif
+
 namespace circt {
 
 //===----------------------------------------------------------------------===//

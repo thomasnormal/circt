@@ -26,6 +26,7 @@
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/SourceMgr.h"
 #include <cctype>
@@ -91,6 +92,11 @@ namespace {
 static bool isIdentifierChar(char c) {
   unsigned char uc = static_cast<unsigned char>(c);
   return std::isalnum(uc) || c == '_' || c == '$';
+}
+
+static bool isIdentifierStartChar(char c) {
+  unsigned char uc = static_cast<unsigned char>(c);
+  return std::isalpha(uc) || c == '_' || c == '$';
 }
 
 /// Skip whitespace and comments. Returns std::nullopt for unterminated block
@@ -735,6 +741,260 @@ static std::string rewriteRandomizeInlineConstraints(StringRef text,
   return out;
 }
 
+static bool isConfigKeywordIdentifierCompat(StringRef word) {
+  return word == "cell" || word == "config" || word == "design" ||
+         word == "endconfig" || word == "incdir" || word == "include" ||
+         word == "instance" || word == "liblist" || word == "library" ||
+         word == "use";
+}
+
+/// Return true if this source likely contains configuration / library
+/// compilation-unit syntax where config keywords must retain keyword meaning.
+static bool hasProbableConfigCompilationUnit(StringRef text) {
+  auto startsWithUnitKeyword = [](StringRef line, StringRef keyword) {
+    if (!line.consume_front(keyword))
+      return false;
+    if (line.empty())
+      return true;
+    return std::isspace(static_cast<unsigned char>(line.front())) != 0;
+  };
+  size_t lineStart = 0;
+  while (lineStart <= text.size()) {
+    size_t lineEnd = text.find('\n', lineStart);
+    if (lineEnd == StringRef::npos)
+      lineEnd = text.size();
+    auto line = text.slice(lineStart, lineEnd).ltrim();
+    if (startsWithUnitKeyword(line, "config") ||
+        startsWithUnitKeyword(line, "library") ||
+        startsWithUnitKeyword(line, "include"))
+      return true;
+    if (lineEnd == text.size())
+      break;
+    lineStart = lineEnd + 1;
+  }
+  return false;
+}
+
+/// Rewrite config-reserved keywords that are used as identifiers in design
+/// source, matching mainstream simulator compatibility behavior.
+static std::string rewriteConfigKeywordIdentifiersCompat(StringRef text,
+                                                         bool &changed) {
+  if (hasProbableConfigCompilationUnit(text))
+    return text.str();
+
+  std::string out;
+  out.reserve(text.size());
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '`') {
+      size_t start = i++;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    // Escaped identifiers are already explicit and should remain untouched.
+    if (text[i] == '\\') {
+      size_t start = i++;
+      while (i < text.size() &&
+             !std::isspace(static_cast<unsigned char>(text[i])))
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (isIdentifierStartChar(text[i])) {
+      size_t start = i++;
+      while (i < text.size() && isIdentifierChar(text[i]))
+        ++i;
+      StringRef word = text.slice(start, i);
+      if (isConfigKeywordIdentifierCompat(word)) {
+        out.append("__circt_cfgkw_");
+        out.append(word);
+        changed = true;
+      } else {
+        out.append(word);
+      }
+      continue;
+    }
+    out.push_back(text[i++]);
+  }
+
+  return out;
+}
+
+/// Rewrite unspecialized generic class scope references `C::x` into
+/// `C#()::x`, where `C` is declared as a parameterized class.
+static std::string rewriteGenericClassScopeCompat(StringRef text,
+                                                  bool &changed) {
+  llvm::StringSet<> parameterizedClassNames;
+
+  auto skipCommentOrString = [&](size_t &i) -> bool {
+    if (i >= text.size())
+      return false;
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      return true;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < text.size() &&
+             !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      return true;
+    }
+    if (text[i] == '"') {
+      ++i;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      return true;
+    }
+    return false;
+  };
+
+  auto scanIdentifier = [&](size_t start,
+                            std::optional<StringRef> &ident) -> size_t {
+    ident = std::nullopt;
+    if (start >= text.size() || !isIdentifierStartChar(text[start]))
+      return start;
+    size_t end = start + 1;
+    while (end < text.size() && isIdentifierChar(text[end]))
+      ++end;
+    ident = text.slice(start, end);
+    return end;
+  };
+
+  // Pass 1: collect parameterized class names declared in this source.
+  for (size_t i = 0; i < text.size();) {
+    if (skipCommentOrString(i))
+      continue;
+    if (!isIdentifierStartChar(text[i])) {
+      ++i;
+      continue;
+    }
+    size_t wordStart = i;
+    while (i < text.size() && isIdentifierChar(text[i]))
+      ++i;
+    StringRef word = text.slice(wordStart, i);
+    if (word != "class")
+      continue;
+
+    auto maybeNameStart = skipTrivia(text, i);
+    if (!maybeNameStart)
+      continue;
+    size_t cursor = *maybeNameStart;
+
+    std::optional<StringRef> token;
+    cursor = scanIdentifier(cursor, token);
+    if (!token)
+      continue;
+    if (*token == "static" || *token == "automatic") {
+      auto maybeAfterLifetime = skipTrivia(text, cursor);
+      if (!maybeAfterLifetime)
+        continue;
+      cursor = scanIdentifier(*maybeAfterLifetime, token);
+      if (!token)
+        continue;
+    }
+
+    StringRef className = *token;
+    auto maybeAfterName = skipTrivia(text, cursor);
+    if (!maybeAfterName || *maybeAfterName >= text.size())
+      continue;
+    if (text[*maybeAfterName] == '#')
+      parameterizedClassNames.insert(className);
+  }
+
+  if (parameterizedClassNames.empty())
+    return text.str();
+
+  // Pass 2: rewrite unspecialized generic class scope references.
+  std::string out;
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size();) {
+    size_t before = i;
+    if (skipCommentOrString(i)) {
+      out.append(text.slice(before, i));
+      continue;
+    }
+    if (!isIdentifierStartChar(text[i])) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    size_t identStart = i;
+    while (i < text.size() && isIdentifierChar(text[i]))
+      ++i;
+    StringRef ident = text.slice(identStart, i);
+    out.append(ident);
+
+    if (!parameterizedClassNames.contains(ident))
+      continue;
+
+    auto maybeAfterIdent = skipTrivia(text, i);
+    if (!maybeAfterIdent)
+      continue;
+    size_t afterIdent = *maybeAfterIdent;
+    if (afterIdent + 1 >= text.size())
+      continue;
+    if (text[afterIdent] == '#' || text[afterIdent] != ':' ||
+        text[afterIdent + 1] != ':')
+      continue;
+
+    out.append("#()");
+    changed = true;
+  }
+
+  return out;
+}
+
 /// A converter that can be plugged into a slang `DiagnosticEngine` as a client
 /// that will map slang diagnostics to their MLIR counterpart and emit them.
 class MlirDiagnosticClient : public slang::DiagnosticClient {
@@ -1058,6 +1318,20 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
     applyRewrite(rewriteRandomizeInlineConstraints,
                  rewrittenText.contains("randomize") &&
                      rewrittenText.contains("this"));
+    applyRewrite(rewriteConfigKeywordIdentifiersCompat,
+                 rewrittenText.contains("cell") ||
+                     rewrittenText.contains("config") ||
+                     rewrittenText.contains("design") ||
+                     rewrittenText.contains("endconfig") ||
+                     rewrittenText.contains("incdir") ||
+                     rewrittenText.contains("include") ||
+                     rewrittenText.contains("instance") ||
+                     rewrittenText.contains("liblist") ||
+                     rewrittenText.contains("library") ||
+                     rewrittenText.contains("use"));
+    applyRewrite(rewriteGenericClassScopeCompat,
+                 rewrittenText.contains("class") &&
+                     rewrittenText.contains("::"));
     applyRewrite(rewriteFormatWidthCompat,
                  rewrittenText.contains('"') && rewrittenText.contains('%'));
     applyRewrite(rewriteUDPZCompat,

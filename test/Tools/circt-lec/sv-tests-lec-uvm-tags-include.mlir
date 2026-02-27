@@ -1,6 +1,5 @@
 // REQUIRES: slang
-// XFAIL: *
-// NOTE: UVM tests currently fail during lowering
+// NOTE: Exercises legacy UVM path compatibility (lib/Runtime/uvm -> uvm-core/src).
 // RUN: env CIRCT_VERILOG=circt-verilog CIRCT_OPT=circt-opt CIRCT_LEC=circt-lec \
 // RUN:   OUT=%t/results.txt TEST_FILTER=uvm \
 // RUN:   INCLUDE_UVM_TAGS=1 LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir \

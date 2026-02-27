@@ -14984,6 +14984,19 @@ run_opentitan_fpv_bmc_evidence_parity_lane() {
     return
   fi
 
+  local assertion_rows=0
+  local cover_rows=0
+  assertion_rows="$(awk 'NF {c++} END {print c+0}' "$assertion_results_file")"
+  if [[ -n "$cover_results_file" && -f "$cover_results_file" ]]; then
+    cover_rows="$(awk 'NF {c++} END {print c+0}' "$cover_results_file")"
+  fi
+  local objective_rows=$((assertion_rows + cover_rows))
+  if (( objective_rows == 0 )); then
+    local summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_fpv_evidence_rows=1 fpv_evidence_objective_rows=0 fpv_evidence_assertion_rows=${assertion_rows} fpv_evidence_cover_rows=${cover_rows} missing_assertion_objective_rows=1"
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$summary"
+    return
+  fi
+
   local parity_args=(
     --case-results "$case_results_file"
     --assertion-results "$assertion_results_file"
@@ -15173,6 +15186,32 @@ run_opentitan_fpv_objective_parity_lane() {
     fi
     if [[ ! -f "$lec_assertion_results_file" ]]; then
       summary="${summary} missing_lec_assertion_results=1"
+    fi
+    record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$summary"
+    return
+  fi
+
+  local bmc_assertion_rows=0
+  local lec_assertion_rows=0
+  local bmc_cover_rows=0
+  local lec_cover_rows=0
+  bmc_assertion_rows="$(awk 'NF {c++} END {print c+0}' "$bmc_assertion_results_file")"
+  lec_assertion_rows="$(awk 'NF {c++} END {print c+0}' "$lec_assertion_results_file")"
+  if [[ -n "$bmc_cover_results_file" && -f "$bmc_cover_results_file" ]]; then
+    bmc_cover_rows="$(awk 'NF {c++} END {print c+0}' "$bmc_cover_results_file")"
+  fi
+  if [[ -n "$lec_cover_results_file" && -f "$lec_cover_results_file" ]]; then
+    lec_cover_rows="$(awk 'NF {c++} END {print c+0}' "$lec_cover_results_file")"
+  fi
+  local bmc_objective_rows=$((bmc_assertion_rows + bmc_cover_rows))
+  local lec_objective_rows=$((lec_assertion_rows + lec_cover_rows))
+  if (( bmc_objective_rows == 0 || lec_objective_rows == 0 )); then
+    local summary="total=1 pass=0 fail=0 xfail=0 xpass=0 error=1 skip=0 missing_fpv_objective_evidence_rows=1 bmc_objective_rows=${bmc_objective_rows} lec_objective_rows=${lec_objective_rows} bmc_assertion_rows=${bmc_assertion_rows} lec_assertion_rows=${lec_assertion_rows} bmc_cover_rows=${bmc_cover_rows} lec_cover_rows=${lec_cover_rows}"
+    if (( bmc_objective_rows == 0 )); then
+      summary="${summary} missing_bmc_objective_rows=1"
+    fi
+    if (( lec_objective_rows == 0 )); then
+      summary="${summary} missing_lec_objective_rows=1"
     fi
     record_result_with_summary "opentitan" "$mode_name" 1 0 0 0 0 1 0 "$summary"
     return

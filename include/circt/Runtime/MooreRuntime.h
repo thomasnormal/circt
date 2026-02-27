@@ -1279,6 +1279,17 @@ int32_t __moore_cross_create(void *cg, const char *name, int32_t *cp_indices,
 /// @param num_values Number of values (must match num_coverpoints)
 void __moore_cross_sample(void *cg, int64_t *cp_values, int32_t num_values);
 
+/// Sample all crosses in a covergroup with a per-coverpoint validity mask.
+/// A cross is sampled only when all of its participating coverpoints are valid.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_values Array of values for each coverpoint
+/// @param cp_valid_mask Array of validity flags (0/1), one per coverpoint
+/// @param num_values Number of values/mask entries
+void __moore_cross_sample_masked(void *cg, int64_t *cp_values,
+                                 const uint8_t *cp_valid_mask,
+                                 int32_t num_values);
+
 /// Get the coverage percentage for a specific cross.
 /// Respects the at_least threshold from covergroup options.
 ///
@@ -1334,6 +1345,9 @@ enum MooreCrossBinKind {
 /// @member num_bins Number of bin indices (0 = all bins)
 /// @member values Array of specific values to intersect (NULL = no value filter)
 /// @member num_values Number of intersect values (0 = no value filter)
+/// @member ranges Flattened [low, high] pairs for intersect ranges
+///   (NULL = no range filter)
+/// @member num_ranges Number of range pairs in `ranges`
 /// @member negate If true, negate the filter (!binsof)
 typedef struct {
   int32_t cp_index;
@@ -1341,6 +1355,8 @@ typedef struct {
   int32_t num_bins;
   int64_t *values;
   int32_t num_values;
+  int64_t *ranges;
+  int32_t num_ranges;
   bool negate;
 } MooreCrossBinsofFilter;
 

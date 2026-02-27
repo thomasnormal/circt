@@ -1,5 +1,70 @@
 # CIRCT Sim Engineering Log
 
+## 2026-02-27
+- Continued coverage audit: found and fixed cross/`iff` sampling over-gating.
+  - Reproducer shape:
+    - `cp1` has `iff (en1)`, `x12` crosses `cp1`, and `x23` crosses unrelated
+      `cp2/cp3`.
+    - With `en1=0`, `x23` should still sample.
+  - Bug:
+    - MooreToCore lowered cross sampling behind a single conjunction of *all*
+      coverpoint `iff` conditions, so one unrelated false `iff` suppressed all
+      crosses.
+  - Fix:
+    - Added runtime API `__moore_cross_sample_masked(cg, cp_values, cp_valid_mask, num_values)`.
+    - MooreToCore now lowers `CovergroupSampleOp` to pass per-coverpoint
+      validity mask when any `iff` guards are present.
+    - Runtime cross sampling now skips only crosses that reference invalid
+      coverpoints; unrelated crosses still sample.
+    - Interpreter gained dispatch for `__moore_cross_sample_masked`.
+  - Regression added:
+    - `test/Tools/circt-sim/coverage-cross-iff-per-cross-mask.sv`
+      checks:
+      - `x12_nonzero=0` (guarded coverpoint in cross)
+      - `x23_nonzero=1` (unrelated cross still sampled)
+- Audit tooling gap found in the new parity test:
+  - `coverage-dispatch-parity.test` used `printf "%s"` in a `RUN:` line, which
+    conflicts with lit `%s` substitution and can false-pass.
+  - Fixed by removing `%`-format usage in favor of `cat <<<`.
+- Post-fix validation:
+  - Rebuilt `circt-verilog` and `circt-sim` with the new runtime/lowering path.
+  - Focused coverage regression set passed, including the new per-cross-mask
+    test, parity test, and unhandled-dispatch diagnostic test.
+  - Full `test/Tools/circt-sim/{coverage*,coverpoint*,cross*}.sv` sweep passed
+    (excluding explicit `XFAIL` tests).
+
+## 2026-02-27
+- Reproduced and fixed interpreted-mode coverage regressions where covergroup
+  option setters were emitted by MooreToCore but silently ignored in
+  `LLHDProcessInterpreter` (external-call fallback returns success+X for
+  unhandled symbols).
+- Added missing interpreter dispatch handlers for:
+  - `__moore_covergroup_set_weight`
+  - `__moore_covergroup_set_goal`
+  - `__moore_covergroup_set_per_instance`
+  - `__moore_covergroup_set_at_least`
+  - `__moore_covergroup_set_comment`
+  - `__moore_coverpoint_set_weight`
+  - `__moore_coverpoint_set_goal`
+  - `__moore_coverpoint_set_at_least`
+  - `__moore_coverpoint_set_comment`
+  - `__moore_coverpoint_set_auto_bin_max`
+- Root-cause surprise: `__moore_cross_add_named_bin` filter decoding used host
+  `sizeof/offsetof(MooreCrossBinsofFilter)` while interpreter GEP address math
+  is packed (no ABI padding). This mis-decoded filter arrays and could produce
+  empty ignore-bin filters that matched everything.
+- Fix: decode cross filters using packed struct layout offsets/stride for
+  `{i32, ptr, i32, ptr, i32, ptr, i32, i1}`.
+- Added/updated regression coverage tests and removed stale `XFAIL` markers
+  for now-passing coverpoint/cross method tests.
+- Added source-level parity regression
+  `test/Tools/circt-sim/coverage-dispatch-parity.test` to guard against future
+  missing coverage/cross dispatch handlers:
+  - mechanically compares emitted `__moore_cover*`/`__moore_cross*` symbols in
+    MooreToCore against `calleeName == ...` handlers in
+    `LLHDProcessInterpreter`.
+  - currently reports no missing handlers.
+
 ## 2026-02-26
 - Added `utils/run_sv_tests_waveform_diff.sh` to run `sv-tests` simulation cases
   across four lanes with waveform artifacts:
@@ -1189,3 +1254,298 @@
       constants are excluded.
     - Differential fuzzers need explicit protection against time-zero scheduling
       races, otherwise false mismatches dominate and mask real bugs.
+
+- Coverage regression capture (2026-02-27): implicit covergroup event sampling.
+  - Context:
+    - User repro showed `covergroup cg @(posedge clk)` with no explicit
+      `cg.sample()` produced a coverage report with `0 hits` for all
+      coverpoints.
+  - Realizations / surprises:
+    - Existing `circt-sim` coverage tests mostly validate explicit sampling
+      (`cg.sample()`), while the event-driven sampling path had no dedicated
+      end-to-end regression in `test/Tools/circt-sim`.
+    - The best CI-stable way to lock the bug in place is an expected-fail test
+      that asserts non-zero hits from implicit sampling and flips to XPASS once
+      fixed.
+  - Added regression:
+    - `test/Tools/circt-sim/coverage-event-implicit-sample.sv`
+      - `XFAIL: *`
+      - checks that `cp_addr` and `cp_we` report non-zero hits when sampling is
+        driven only by `@(posedge clk)`.
+
+- Coverage code audit (2026-02-27): additional bugs in cross/options paths.
+  - Scope:
+    - Audited ImportVerilog coverage lowering, MooreToCore coverage conversion,
+      runtime cross accounting, and circt-sim runtime-call interception.
+  - Key findings:
+    - Cross bin accounting in runtime is keyed only by value tuple, not by
+      cross index, so multiple crosses with equal arity can interfere.
+    - Cross named-bin filters are shallow-copied in runtime (pointer fields),
+      while lowering passes stack-allocated filter storage, creating dangling
+      filter pointers after init returns.
+    - Interpreter path currently drops cross named-bin filters entirely
+      (`__moore_cross_add_named_bin(..., nullptr, numFilters)`), making
+      filtered named bins behave as unfiltered.
+    - Covergroup/coverpoint options parsed into Moore attrs are not propagated
+      to runtime in MooreToCore conversion (`goal`, `weight`, `at_least`,
+      `auto_bin_max`, `per_instance`, etc. effectively default).
+    - Cross sampling is called unconditionally with all values even when
+      coverpoint `iff` guards suppress some coverpoint samples.
+
+- Coverage regression additions from audit (2026-02-27).
+  - Added XFAIL regressions to lock current failures in place:
+    - `test/Tools/circt-sim/coverage-cross-equal-arity-isolation.sv`
+      - catches cross-bin map contamination between same-arity crosses.
+    - `test/Tools/circt-sim/coverage-cross-named-bin-filters-interpret.sv`
+      - catches loss of named cross-bin filters in interpret mode.
+    - `test/Tools/circt-sim/coverage-option-at-least-propagation.sv`
+      - catches missing runtime propagation of `coverpoint option.at_least`.
+  - Notes:
+    - All three are `XFAIL: *` to keep CI green until implementation catches up.
+    - Local execution is pending availability of `circt-verilog`/`circt-sim`
+      binaries in `PATH`.
+
+- Coverage semantic gap repro + fix plan (2026-02-27): method query paths.
+  - Reproduced with standalone SV snippets under `circt-sim --mode interpret`:
+    - `cg_inst.cp.get_inst_coverage()` and `cg_inst.cp.get_coverage()` printed
+      `x` before fix.
+    - `cg_inst.xab.get_inst_coverage()` and `cg_inst.xab.get_coverage()`
+      printed `x` before fix.
+    - Coverage report still showed non-zero hits, confirming sampling worked and
+      query wiring was the broken path.
+  - Root cause:
+    - ImportVerilog handled covergroup methods, but not coverpoint/cross
+      coverage query methods, so query expressions lowered to invalid/unknown
+      values.
+    - LLHD interpreter lacked handlers for coverpoint/cross runtime query
+      helpers even when those symbols are emitted.
+  - Changes made:
+    - `lib/Conversion/ImportVerilog/Expressions.cpp`
+      - added lowering for coverpoint methods:
+        - `get_coverage` -> `__moore_coverpoint_get_coverage(cg, cp_idx)`
+        - `get_inst_coverage` -> `__moore_coverpoint_get_inst_coverage(cg, cp_idx)`
+      - added lowering for cross methods:
+        - `get_coverage` -> `__moore_cross_get_coverage(cg, cross_idx)`
+        - `get_inst_coverage` -> `__moore_cross_get_inst_coverage(cg, cross_idx)`
+      - both resolve indices from enclosing covergroup body order.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - added dispatch for:
+        - `__moore_coverpoint_get_coverage`
+        - `__moore_coverpoint_get_inst_coverage`
+        - `__moore_cross_get_coverage`
+        - `__moore_cross_get_inst_coverage`
+  - New regressions:
+    - `test/Tools/circt-sim/coverpoint-get-inst-coverage.sv`
+      - checks numeric coverpoint `get_coverage` and `get_inst_coverage`
+        values (0/50/100) instead of `x`.
+    - `test/Tools/circt-sim/cross-get-inst-coverage.sv`
+      - checks numeric cross `get_coverage` and `get_inst_coverage` values.
+    - removed stale TODO comments in:
+      - `test/Tools/circt-sim/syscall-covergroup.sv`
+      - `test/Tools/circt-sim/syscall-coverage.sv`
+
+- Follow-up correction (2026-02-27): keep bug-revealing tests, do not delete.
+  - Two new semantic tests were initially removed after discovering they
+    currently fail in frontend parsing, not runtime.
+  - Restored as expected-fail bug trackers:
+    - `test/Tools/circt-sim/coverpoint-get-inst-coverage.sv`
+    - `test/Tools/circt-sim/cross-get-inst-coverage.sv`
+  - Current failure mode (verified):
+    - `error: expression of type cg has no member fields`
+    - Triggered by valid SV-style member method access:
+      `cg_inst.cp.get_inst_coverage()` and `cg_inst.xab.get_inst_coverage()`.
+
+- Coverage regression execution update (2026-02-27): direct run with `build_clang_test` tools.
+  - Environment notes:
+    - `llvm-lit` remained blocked by missing `FileCheck` in `build_clang_test/bin`.
+    - Used direct `circt-verilog` + `circt-sim` invocations for repro checks.
+  - Repro confirmations:
+    - `test/Tools/circt-sim/coverage-event-implicit-sample.sv`
+      - simulation completed and coverage report still showed `cp_addr: 0 hits` and
+        `cp_we: 0 hits` despite `@(posedge clk)` sampling event.
+    - `test/Tools/circt-sim/coverage-option-at-least-propagation.sv`
+      - printed `inst_cov=100` after one hit with `option.at_least = 2`
+        (expected behavior is `inst_cov=0`).
+  - Frontend blocker still present:
+    - `test/Tools/circt-sim/coverage-cross-equal-arity-isolation.sv`
+    - `test/Tools/circt-sim/coverage-cross-named-bin-filters-interpret.sv`
+    - both currently fail in `circt-verilog` with:
+      - `error: expression of type cg has no member fields`
+      - for `cg_inst.xab.get_inst_coverage()` member access.
+
+- Runtime regression additions (2026-02-27): cross-specific bug capture in gtests.
+  - Added disabled regression tests in `unittests/Runtime/MooreRuntimeTest.cpp`:
+    - `MooreRuntimeCrossCoverageTest.DISABLED_CrossBinsIsolatedPerCrossWithSameArity`
+    - `MooreRuntimeCrossCoverageTest.DISABLED_CrossNamedBinFiltersAreDeepCopied`
+  - Build/run notes:
+    - `ninja -C build_clang_test MooreRuntimeTests` initially failed due ccache temp
+      permissions under `/run/user/...`; reran with `CCACHE_DISABLE=1`.
+    - Running disabled tests explicitly with `--gtest_also_run_disabled_tests`
+      reproduces both runtime bugs:
+      - same-arity cross isolation test observed `bins_hit=4` and `coverage=100`
+        for each cross instead of expected `2` and `50`.
+      - filter deep-copy test observed `__moore_cross_is_ignored == false` and
+        `bins_hit=1` after mutating caller-owned filter memory; expected ignored
+        sample with `bins_hit=0`.
+  - Realization:
+    - These runtime regressions are valuable now because they isolate runtime
+      correctness independently of current frontend cross-method lookup failures.
+
+- Coverage implicit-sampling bug fix (2026-02-27): late `new` assignment path.
+  - TDD repro:
+    - Added `test/Tools/circt-sim/coverage-event-implicit-sample-late-new.sv` for:
+      - `cg cov;` followed by `cov = new;` in an `initial` block.
+    - Before fix, direct run with `build_clang_test/bin/circt-verilog` +
+      `build_clang_test/bin/circt-sim` reported:
+      - `cp_addr: 0 hits`
+      - `cp_we: 0 hits`
+      - despite declared sampling event `@(posedge clk)`.
+  - Root cause:
+    - ImportVerilog synthesized implicit sampling procedures only when the
+      covergroup variable declaration initializer was `new`.
+    - If instantiation happened later via assignment, no sampling process was
+      emitted, so implicit event sampling never occurred.
+  - Fix:
+    - `lib/Conversion/ImportVerilog/Structure.cpp`
+      - changed implicit sampling process synthesis trigger from
+        declaration-initializer `new` to declared variable type:
+        any `covergroup`-typed variable with `getCoverageEvent()` now gets the
+        synthesized `always` sampling procedure.
+      - behavior is now consistent for both:
+        - `cg cov = new;`
+        - `cg cov; ... cov = new;`
+  - Regression coverage:
+    - Existing test `test/Tools/circt-sim/coverage-event-implicit-sample.sv`
+      now passes in this tree and no longer needs `XFAIL`.
+    - New test `test/Tools/circt-sim/coverage-event-implicit-sample-late-new.sv`
+      passes after fix.
+  - Validation:
+    - `build_clang_test/bin/llvm-lit -sv`
+      on both tests passed (2/2).
+  - Realization:
+    - Presence of a sampling event on the covergroup type, not placement of
+      `new`, is the correct condition for emitting implicit sampling wiring.
+
+- Coverage implicit-sampling follow-up (2026-02-27): avoided alias overcount regression.
+  - Surprise during post-fix audit:
+    - Broad "all covergroup vars with sampling_event" synthesis caused
+      overcount when two handles alias the same instance (`b = a`).
+    - Repro (`/tmp/cov_alias_double_sample.sv`) showed 8 hits for 4 events
+      before this adjustment.
+  - Adjustment:
+    - Added `Context::covergroupImplicitSamplingVars` to track which variables
+      already have synthesized implicit sampling procedures.
+    - Restored declaration-side synthesis in `Structure.cpp` to
+      initializer-only (`cg var = new;`) and record the variable in that set.
+    - Added assignment-side synthesis in `Expressions.cpp` for `var = new;`
+      (`AssignmentExpression`), also recording in that set.
+    - Result: late `new` works, but alias assignment (`b = a`) no longer
+      synthesizes an extra sampling process for `b`.
+  - Validation (current environment):
+    - `circt-verilog` IR checks:
+      - declaration `new` test contains implicit sample call sites.
+      - late `new` test contains implicit sample call sites.
+      - alias repro now lowers to a single implicit `__moore_coverpoint_sample`
+        call site (no duplicate sampling process).
+  - Environment blocker note:
+    - `circt-sim` binary is currently unavailable due unrelated dirty-tree
+      compile failures in UVM fast-path files; avoided touching those files.
+
+- Coverage options propagation bug root cause + fix (2026-02-27).
+  - Repro:
+    - `test/Tools/circt-sim/coverage-option-at-least-propagation.sv`
+      produced `inst_cov=100` after a single hit with `option.at_least = 2`.
+  - Root cause:
+    - `MooreToCore` now emits option setter runtime calls
+      (`__moore_covergroup_set_*`, `__moore_coverpoint_set_*`), but
+      `tools/circt-sim/LLHDProcessInterpreter.cpp` coverage dispatch only
+      handled create/init/sample/add_bin/get_coverage-style calls.
+    - Option setter calls were not dispatched in interpret mode, so runtime
+      option state remained default.
+  - Fix:
+    - Added explicit interpreter handlers for:
+      - `__moore_covergroup_set_weight`
+      - `__moore_covergroup_set_goal`
+      - `__moore_covergroup_set_per_instance`
+      - `__moore_covergroup_set_at_least`
+      - `__moore_covergroup_set_comment`
+      - `__moore_coverpoint_set_weight`
+      - `__moore_coverpoint_set_goal`
+      - `__moore_coverpoint_set_at_least`
+      - `__moore_coverpoint_set_comment`
+      - `__moore_coverpoint_set_auto_bin_max`
+    - Added explicit interpreter handlers for:
+      - `__moore_coverpoint_get_coverage`
+      - `__moore_coverpoint_get_inst_coverage`
+      to avoid relying on fallback dispatch for these methods.
+  - Regression tests:
+    - Removed `XFAIL` from
+      `test/Tools/circt-sim/coverage-option-at-least-propagation.sv`.
+    - Added
+      `test/Tools/circt-sim/coverage-option-auto-bin-max-propagation.sv`.
+  - Validation status:
+    - Updated `LLHDProcessInterpreter.cpp` compiles as an object target.
+    - Full `circt-sim` link/run validation currently blocked by unrelated,
+      pre-existing `circt-sim.cpp`↔`LLHDProcessInterpreter.h` API mismatch
+      errors in this dirty tree.
+  - Added compile-stage regressions (do not depend on `circt-sim` binary):
+    - `test/Conversion/ImportVerilog/coverage-event-late-new-lowering.sv`
+      - asserts late `cov = new;` emits implicit `__moore_coverpoint_sample`.
+    - `test/Conversion/ImportVerilog/coverage-event-alias-single-sample-lowering.sv`
+      - asserts alias case emits a single implicit sample call site.
+  - Lit status:
+    - `llvm-lit -sv` on both new ImportVerilog tests passed.
+
+- Coverage fail-loud audit follow-up (2026-02-27): call-indirect + wrapper absorption gaps.
+  - TDD repros added before code changes:
+    - `test/Tools/circt-sim/coverage-unhandled-runtime-call-error-call-indirect.mlir`
+      - unresolved `func.call_indirect` target to `@__moore_cross_get_bins_hit`
+        (via vtable entry to `llvm.func`) previously returned X/success silently.
+    - `test/Tools/circt-sim/coverage-unhandled-runtime-call-error-func-wrapper.mlir`
+      - nested `func.call @call_cov` -> inner `llvm.call @__moore_cross_get_bins_hit`
+        previously emitted error but was absorbed with
+        `WARNING: func.call ... failed internally (absorbing)` and simulation success.
+    - `test/Tools/circt-sim/aot-coverage-unhandled-runtime-call-error-func-wrapper.mlir`
+      - same wrapper case in AOT/native mode previously returned default values
+        without hard failure.
+  - Root causes found:
+    - `LLHDProcessInterpreterCallIndirect.cpp` unresolved `!funcOp` fallback set X and
+      returned success with no coverage-prefix guard.
+    - `LLHDProcessInterpreter.cpp` `interpretFuncCall` and
+      `interpretFuncCallCachedPath` failure paths intentionally absorbed internal
+      failures, which also swallowed unhandled-coverage failures from nested calls.
+    - AOT native dispatch could bypass strict coverage error handling in wrapper
+      functions that directly call coverage runtime symbols.
+  - Fixes:
+    - Added shared coverage helper APIs:
+      - `isCoverageRuntimeCallee(...)`
+      - `shouldPropagateCoverageRuntimeFailure(...)`
+      - `functionHasDirectCoverageRuntimeCall(...)` (+ per-function cache)
+    - Added fail-loud coverage checks to additional symbol-miss/external fallback
+      branches in `interpretFuncCall` / `interpretLLVMCall`.
+    - Added fail-loud guard in `interpretFuncCallIndirect` unresolved-function path.
+    - Added sticky per-process flag `sawUnhandledCoverageRuntimeCall` in
+      `ProcessExecutionState`; set at all unhandled-coverage error emit sites;
+      wrapper paths now propagate failure instead of absorbing.
+    - Disabled native func.call dispatch for functions with direct coverage runtime
+      calls so AOT wrappers still execute through strict interpreted checks.
+  - Test maintenance:
+    - Updated `test/Tools/circt-sim/syscall-covergroup.sv` to construct covergroup
+      instance at module scope (`cg cg_inst;` + `cg_inst = new();`) so it remains
+      valid under the local implicit-event fail-loud rule.
+  - Validation:
+    - `ninja -C build_clang_test circt-sim circt-sim-compile` (incremental) passed.
+    - New regressions:
+      - `coverage-unhandled-runtime-call-error-call-indirect.mlir` passed.
+      - `coverage-unhandled-runtime-call-error-func-wrapper.mlir` passed.
+      - `aot-coverage-unhandled-runtime-call-error-func-wrapper.mlir` passed.
+    - Broader coverage sweep passed:
+      - `coverage-dispatch-parity.test`
+      - `coverage-*.sv`
+      - `coverage-*.mlir`
+      - `syscall-covergroup.sv`
+      - `syscall-coverage.sv`
+    - Focused historical coverage-event/error suite passed:
+      - `coverage-unhandled-runtime-call-error*.mlir`
+      - `coverage-event-implicit-sample*.sv`
+      - `test/Conversion/ImportVerilog/coverage-event-*-new-error.sv`

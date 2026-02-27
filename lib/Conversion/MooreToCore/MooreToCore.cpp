@@ -4708,6 +4708,9 @@ struct CovergroupDeclOpConversion
 
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
     auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    auto i1Ty = IntegerType::get(ctx, 1);
+    auto f64Ty = Float64Type::get(ctx);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
 
     // Get covergroup name
@@ -4773,8 +4776,53 @@ struct CovergroupDeclOpConversion
         auto initCpFn = getOrCreateRuntimeFunc(
             mod, rewriter, "__moore_coverpoint_init", initCpFnTy);
 
+        // Covergroup option setters.
+        auto setCgWeightFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+        auto setCgWeightFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_covergroup_set_weight", setCgWeightFnTy);
+        auto setCgGoalFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, f64Ty});
+        auto setCgGoalFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_covergroup_set_goal", setCgGoalFnTy);
+        auto setCgPerInstanceFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i1Ty});
+        auto setCgPerInstanceFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_covergroup_set_per_instance",
+            setCgPerInstanceFnTy);
+        auto setCgAtLeastFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i64Ty});
+        auto setCgAtLeastFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_covergroup_set_at_least", setCgAtLeastFnTy);
+        auto setCgCommentFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy});
+        auto setCgCommentFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_covergroup_set_comment", setCgCommentFnTy);
+
+        // Coverpoint option setters.
+        auto setCpWeightFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, i64Ty});
+        auto setCpWeightFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_set_weight", setCpWeightFnTy);
+        auto setCpGoalFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, f64Ty});
+        auto setCpGoalFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_set_goal", setCpGoalFnTy);
+        auto setCpAtLeastFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, i64Ty});
+        auto setCpAtLeastFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_set_at_least", setCpAtLeastFnTy);
+        auto setCpCommentFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy});
+        auto setCpCommentFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_set_comment", setCpCommentFnTy);
+        auto setCpAutoBinMaxFnTy =
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, i64Ty});
+        auto setCpAutoBinMaxFn = getOrCreateRuntimeFunc(
+            mod, rewriter, "__moore_coverpoint_set_auto_bin_max",
+            setCpAutoBinMaxFnTy);
+
         // Get or create illegal/ignore bin functions
-        auto i64Ty = IntegerType::get(ctx, 64);
         // __moore_coverpoint_add_bin(cg, cp_index, name, type, low, high)
         auto addBinFnTy =
             LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i32Ty, i64Ty, i64Ty});
@@ -4806,6 +4854,47 @@ struct CovergroupDeclOpConversion
             ValueRange{cgNamePtr, numCpConst});
         Value cgHandle = createCall.getResult();
 
+        // Apply covergroup options parsed during ImportVerilog lowering.
+        if (auto weightAttr = op.getWeightAttr()) {
+          auto weightConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(weightAttr.getInt()));
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(setCgWeightFn),
+                               ValueRange{cgHandle, weightConst});
+        }
+        if (auto goalAttr = op.getGoalAttr()) {
+          auto goalConst = LLVM::ConstantOp::create(
+              rewriter, loc, f64Ty,
+              rewriter.getFloatAttr(f64Ty, static_cast<double>(goalAttr.getInt())));
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(setCgGoalFn),
+                               ValueRange{cgHandle, goalConst});
+        }
+        if (op.getPerInstance()) {
+          auto trueI1 = LLVM::ConstantOp::create(
+              rewriter, loc, i1Ty, rewriter.getBoolAttr(true));
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(setCgPerInstanceFn),
+                               ValueRange{cgHandle, trueI1});
+        }
+        if (auto atLeastAttr = op.getAtLeastAttr()) {
+          auto atLeastConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty,
+              rewriter.getI64IntegerAttr(atLeastAttr.getInt()));
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(setCgAtLeastFn),
+                               ValueRange{cgHandle, atLeastConst});
+        }
+        if (auto commentAttr = op.getCommentAttr()) {
+          std::string cgCommentGlobal = ("__cg_comment_" + cgName).str();
+          Value commentPtr =
+              createGlobalStringConstant(loc, mod, rewriter, commentAttr.getValue(),
+                                         cgCommentGlobal);
+          LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                               SymbolRefAttr::get(setCgCommentFn),
+                               ValueRange{cgHandle, commentPtr});
+        }
+
         // Track runtime bin indices for each coverpoint/bin symbol pair so
         // cross bin filters that target @cp::@bin can populate bin_indices.
         llvm::StringMap<SmallVector<int32_t, 4>> cpBinNameToIndices;
@@ -4825,6 +4914,50 @@ struct CovergroupDeclOpConversion
           LLVM::CallOp::create(rewriter, loc, TypeRange{},
                                SymbolRefAttr::get(initCpFn),
                                ValueRange{cgHandle, idxConst, cpNamePtr});
+
+          // Apply coverpoint options parsed during ImportVerilog lowering.
+          if (auto cpWeightAttr = cp.getWeightAttr()) {
+            auto cpWeightConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(cpWeightAttr.getInt()));
+            LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                 SymbolRefAttr::get(setCpWeightFn),
+                                 ValueRange{cgHandle, idxConst, cpWeightConst});
+          }
+          if (auto cpGoalAttr = cp.getGoalAttr()) {
+            auto cpGoalConst = LLVM::ConstantOp::create(
+                rewriter, loc, f64Ty,
+                rewriter.getFloatAttr(f64Ty, static_cast<double>(cpGoalAttr.getInt())));
+            LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                 SymbolRefAttr::get(setCpGoalFn),
+                                 ValueRange{cgHandle, idxConst, cpGoalConst});
+          }
+          if (auto cpAtLeastAttr = cp.getAtLeastAttr()) {
+            auto cpAtLeastConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(cpAtLeastAttr.getInt()));
+            LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                 SymbolRefAttr::get(setCpAtLeastFn),
+                                 ValueRange{cgHandle, idxConst, cpAtLeastConst});
+          }
+          if (auto cpCommentAttr = cp.getCommentAttr()) {
+            std::string cpCommentGlobal =
+                ("__cp_comment_" + cgName + "_" + cpName).str();
+            Value cpCommentPtr = createGlobalStringConstant(
+                loc, mod, rewriter, cpCommentAttr.getValue(), cpCommentGlobal);
+            LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                                 SymbolRefAttr::get(setCpCommentFn),
+                                 ValueRange{cgHandle, idxConst, cpCommentPtr});
+          }
+          if (auto cpAutoBinMaxAttr = cp.getAutoBinMaxAttr()) {
+            auto cpAutoBinMaxConst = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(cpAutoBinMaxAttr.getInt()));
+            LLVM::CallOp::create(
+                rewriter, loc, TypeRange{},
+                SymbolRefAttr::get(setCpAutoBinMaxFn),
+                ValueRange{cgHandle, idxConst, cpAutoBinMaxConst});
+          }
 
           int32_t cpBinIndex = 0;
 
@@ -4937,10 +5070,10 @@ struct CovergroupDeclOpConversion
 
           // Define the MooreCrossBinsofFilter struct type:
           // { i32 cp_index, ptr bin_indices, i32 num_bins,
-          //   ptr values, i32 num_values, i1 negate }
+          //   ptr values, i32 num_values, ptr ranges, i32 num_ranges, i1 negate }
           auto i1Ty = IntegerType::get(ctx, 1);
           auto filterStructTy = LLVM::LLVMStructType::getLiteral(
-              ctx, {i32Ty, ptrTy, i32Ty, ptrTy, i32Ty, i1Ty});
+              ctx, {i32Ty, ptrTy, i32Ty, ptrTy, i32Ty, ptrTy, i32Ty, i1Ty});
 
           for (auto cross : crosses) {
             StringRef crossName = cross.getSymName();
@@ -5092,6 +5225,14 @@ struct CovergroupDeclOpConversion
                   auto field5Ptr = LLVM::GEPOp::create(
                       rewriter, loc, ptrTy, filterStructTy, filterPtr,
                       field5Indices);
+                  SmallVector<LLVM::GEPArg> field6Indices = {0, 6};
+                  auto field6Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field6Indices);
+                  SmallVector<LLVM::GEPArg> field7Indices = {0, 7};
+                  auto field7Ptr = LLVM::GEPOp::create(
+                      rewriter, loc, ptrTy, filterStructTy, filterPtr,
+                      field7Indices);
 
                   // Group separator entries encode OR between conjunction groups.
                   if (entry.isSeparator) {
@@ -5104,7 +5245,9 @@ struct CovergroupDeclOpConversion
                     LLVM::StoreOp::create(rewriter, loc, zeroI32, field2Ptr);
                     LLVM::StoreOp::create(rewriter, loc, nullPtr, field3Ptr);
                     LLVM::StoreOp::create(rewriter, loc, zeroI32, field4Ptr);
-                    LLVM::StoreOp::create(rewriter, loc, falseI1, field5Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, nullPtr, field5Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, zeroI32, field6Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, falseI1, field7Ptr);
                     continue;
                   }
 
@@ -5202,11 +5345,60 @@ struct CovergroupDeclOpConversion
                     LLVM::StoreOp::create(rewriter, loc, zeroI32, field4Ptr);
                   }
 
-                  // Store negate field (field 5).
+                  // Handle intersect ranges (field 5 and 6).
+                  auto intersectRanges = binsof.getIntersectRanges();
+                  if (intersectRanges && !intersectRanges->empty()) {
+                    auto flattened = *intersectRanges;
+                    int32_t numRanges = flattened.size() / 2;
+                    if (numRanges > 0) {
+                      auto rangesArrayTy =
+                          LLVM::LLVMArrayType::get(i64Ty, numRanges * 2);
+                      auto rangesAlloca = LLVM::AllocaOp::create(
+                          rewriter, loc, ptrTy, rangesArrayTy,
+                          LLVM::ConstantOp::create(
+                              rewriter, loc, i32Ty,
+                              rewriter.getI32IntegerAttr(1)));
+
+                      for (int32_t ri = 0; ri < numRanges; ++ri) {
+                        int64_t low = flattened[ri * 2];
+                        int64_t high = flattened[ri * 2 + 1];
+                        auto lowConst = LLVM::ConstantOp::create(
+                            rewriter, loc, i64Ty,
+                            rewriter.getI64IntegerAttr(low));
+                        auto highConst = LLVM::ConstantOp::create(
+                            rewriter, loc, i64Ty,
+                            rewriter.getI64IntegerAttr(high));
+                        SmallVector<LLVM::GEPArg> lowGepIndices = {0, ri * 2};
+                        auto lowPtr = LLVM::GEPOp::create(
+                            rewriter, loc, ptrTy, rangesArrayTy, rangesAlloca,
+                            lowGepIndices);
+                        LLVM::StoreOp::create(rewriter, loc, lowConst, lowPtr);
+                        SmallVector<LLVM::GEPArg> highGepIndices = {0, ri * 2 + 1};
+                        auto highPtr = LLVM::GEPOp::create(
+                            rewriter, loc, ptrTy, rangesArrayTy, rangesAlloca,
+                            highGepIndices);
+                        LLVM::StoreOp::create(rewriter, loc, highConst, highPtr);
+                      }
+
+                      LLVM::StoreOp::create(rewriter, loc, rangesAlloca, field5Ptr);
+                      auto numRangesConst = LLVM::ConstantOp::create(
+                          rewriter, loc, i32Ty,
+                          rewriter.getI32IntegerAttr(numRanges));
+                      LLVM::StoreOp::create(rewriter, loc, numRangesConst, field6Ptr);
+                    } else {
+                      LLVM::StoreOp::create(rewriter, loc, nullPtr, field5Ptr);
+                      LLVM::StoreOp::create(rewriter, loc, zeroI32, field6Ptr);
+                    }
+                  } else {
+                    LLVM::StoreOp::create(rewriter, loc, nullPtr, field5Ptr);
+                    LLVM::StoreOp::create(rewriter, loc, zeroI32, field6Ptr);
+                  }
+
+                  // Store negate field (field 7).
                   bool isNegated = binsof.getNegate();
                   auto negateBool = LLVM::ConstantOp::create(
                       rewriter, loc, i1Ty, rewriter.getBoolAttr(isNegated));
-                  LLVM::StoreOp::create(rewriter, loc, negateBool, field5Ptr);
+                  LLVM::StoreOp::create(rewriter, loc, negateBool, field7Ptr);
                 }
 
                 filtersPtr = filtersAlloca;
@@ -5385,6 +5577,7 @@ struct CovergroupSampleOpConversion
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
     auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i8Ty = IntegerType::get(ctx, 8);
     auto i32Ty = IntegerType::get(ctx, 32);
     auto i64Ty = IntegerType::get(ctx, 64);
     auto voidTy = LLVM::LLVMVoidType::get(ctx);
@@ -5403,15 +5596,35 @@ struct CovergroupSampleOpConversion
     auto crossSampleFn = getOrCreateRuntimeFunc(mod, rewriter,
                                                 "__moore_cross_sample",
                                                 crossSampleFnTy);
+    // void __moore_cross_sample_masked(void *cg, int64_t *cp_values,
+    //                                  uint8_t *cp_valid_mask,
+    //                                  int32_t num_values)
+    auto crossSampleMaskedFnTy =
+        LLVM::LLVMFunctionType::get(voidTy, {ptrTy, ptrTy, ptrTy, i32Ty});
+    auto crossSampleMaskedFn =
+        getOrCreateRuntimeFunc(mod, rewriter, "__moore_cross_sample_masked",
+                               crossSampleMaskedFnTy);
 
     // Get the covergroup handle.
     Value cgHandle = adaptor.getCovergroup();
 
     // Get iff conditions (may be empty if no iff conditions were provided).
     auto iffConditions = adaptor.getIffConditions();
+    auto normalizeIffCond = [&](Value cond) -> Value {
+      if (cond.getType().isInteger(1))
+        return cond;
+      if (cond.getType().isIntOrIndex()) {
+        auto zero =
+            hw::ConstantOp::create(rewriter, loc, cond.getType(), 0);
+        return comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ne,
+                                    cond, zero);
+      }
+      return hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
+    };
 
     // Collect i64 values for cross sampling
     SmallVector<Value> i64Values;
+    SmallVector<Value> cpValidMaskValues;
     int32_t numValues = adaptor.getValues().size();
 
     // Sample each value.
@@ -5451,6 +5664,11 @@ struct CovergroupSampleOpConversion
       }
 
       i64Values.push_back(i64Val);
+      Value cpValidCond =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      if (cpIndex < static_cast<int32_t>(iffConditions.size()))
+        cpValidCond = normalizeIffCond(iffConditions[cpIndex]);
+      cpValidMaskValues.push_back(cpValidCond);
 
       auto idxConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIndex));
@@ -5459,17 +5677,7 @@ struct CovergroupSampleOpConversion
       // IEEE 1800-2017 Section 19.5: coverpoint iff guard - only sample
       // when the iff condition is true (nonzero).
       if (cpIndex < static_cast<int32_t>(iffConditions.size())) {
-        Value iffCond = iffConditions[cpIndex];
-        // The iff condition should be i1 (two-valued bool from ImportVerilog).
-        // If it's a wider integer, compare != 0 to get i1.
-        if (!iffCond.getType().isInteger(1)) {
-          if (iffCond.getType().isIntOrIndex()) {
-            auto zero = hw::ConstantOp::create(
-                rewriter, loc, iffCond.getType(), 0);
-            iffCond = comb::ICmpOp::create(
-                rewriter, loc, comb::ICmpPredicate::ne, iffCond, zero);
-          }
-        }
+        Value iffCond = cpValidCond;
         // Use cf dialect to implement the conditional. SCF ops are illegal
         // inside llhd.process, so we use basic blocks with branches.
         // Split the current block to create a merge point after the
@@ -5516,12 +5724,32 @@ struct CovergroupSampleOpConversion
         LLVM::StoreOp::create(rewriter, loc, i64Values[i], elemPtr);
       }
 
-      // Call __moore_cross_sample
+      // Call __moore_cross_sample (or masked variant when iff guards exist).
       auto numValuesConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numValues));
-      LLVM::CallOp::create(rewriter, loc, TypeRange{},
-                           SymbolRefAttr::get(crossSampleFn),
-                           ValueRange{cgHandle, valuesAlloca, numValuesConst});
+      if (!iffConditions.empty()) {
+        auto maskArrayTy = LLVM::LLVMArrayType::get(i8Ty, numValues);
+        auto maskAlloca = LLVM::AllocaOp::create(
+            rewriter, loc, ptrTy, maskArrayTy,
+            LLVM::ConstantOp::create(rewriter, loc, i32Ty,
+                                     rewriter.getI32IntegerAttr(1)));
+        for (int32_t i = 0; i < numValues; ++i) {
+          SmallVector<LLVM::GEPArg> gepIndices = {0, i};
+          auto elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, maskArrayTy,
+                                             maskAlloca, gepIndices);
+          Value maskI8 =
+              arith::ExtUIOp::create(rewriter, loc, i8Ty, cpValidMaskValues[i]);
+          LLVM::StoreOp::create(rewriter, loc, maskI8, elemPtr);
+        }
+        LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                             SymbolRefAttr::get(crossSampleMaskedFn),
+                             ValueRange{cgHandle, valuesAlloca, maskAlloca,
+                                        numValuesConst});
+      } else {
+        LLVM::CallOp::create(rewriter, loc, TypeRange{},
+                             SymbolRefAttr::get(crossSampleFn),
+                             ValueRange{cgHandle, valuesAlloca, numValuesConst});
+      }
     }
 
     rewriter.eraseOp(op);
@@ -6811,35 +7039,6 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
     if (!init) {
       auto elementType = refType.getNestedType();
       if (isFourStateStructType(elementType)) {
-        auto hasWriteUse = [&](Value ref) -> bool {
-          SmallVector<Value, 8> worklist{ref};
-          llvm::SmallDenseSet<Value, 16> visitedRefs;
-          llvm::SmallDenseSet<Operation *, 32> visitedOps;
-
-          while (!worklist.empty()) {
-            Value cur = worklist.pop_back_val();
-            if (!visitedRefs.insert(cur).second)
-              continue;
-            for (OpOperand &use : cur.getUses()) {
-              auto *user = use.getOwner();
-              if (!visitedOps.insert(user).second)
-                continue;
-
-              if (isa<BlockingAssignOp, NonBlockingAssignOp,
-                      DelayedNonBlockingAssignOp, ContinuousAssignOp,
-                      DelayedContinuousAssignOp, ForceAssignOp,
-                      ReleaseAssignOp>(user) &&
-                  use.getOperandNumber() == 0)
-                return true;
-
-              for (Value result : user->getResults())
-                if (isa<moore::RefType>(result.getType()))
-                  worklist.push_back(result);
-            }
-          }
-          return false;
-        };
-
         auto structTy = cast<hw::StructType>(elementType);
         auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
         auto unknownTy =
@@ -6849,19 +7048,10 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
 
         auto valueZero =
             hw::ConstantOp::create(rewriter, loc, IntegerAttr::get(valueTy, 0));
-        bool writtenState = hasWriteUse(op.getResult());
-        bool forceUnknownInit = !writtenState || unknownTy.getWidth() == 1;
-        if (forceUnknownInit) {
-          auto unknownOnes = hw::ConstantOp::create(
-              rewriter, loc,
-              IntegerAttr::get(unknownTy,
-                               APInt::getAllOnes(unknownTy.getWidth())));
-          init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
-        } else {
-          auto unknownZero = hw::ConstantOp::create(
-              rewriter, loc, IntegerAttr::get(unknownTy, 0));
-          init = createFourStateStruct(rewriter, loc, valueZero, unknownZero);
-        }
+        auto unknownOnes = hw::ConstantOp::create(
+            rewriter, loc,
+            IntegerAttr::get(unknownTy, APInt::getAllOnes(unknownTy.getWidth())));
+        init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
       } else {
         init = createZeroValue(elementType, loc, rewriter);
       }
@@ -10962,26 +11152,48 @@ struct WildcardEqOpConversion : public OpConversionPattern<SourceOp> {
           rewriter, loc, rhsUnk.getType(), -1);
       Value rhsMask =
           comb::XorOp::create(rewriter, loc, rhsUnk, allOnes, false);
-      Value maskedLhs =
-          comb::AndOp::create(rewriter, loc, lhsVal, rhsMask, false);
-      Value maskedRhs =
-          comb::AndOp::create(rewriter, loc, rhsVal, rhsMask, false);
 
-      auto cmpPred =
-          pred == ICmpPredicate::wne ? ICmpPredicate::ne : ICmpPredicate::eq;
-      Value cmpVal =
-          comb::ICmpOp::create(rewriter, loc, cmpPred, maskedLhs, maskedRhs);
-
+      // Unknowns on LHS only matter when compared against concrete RHS bits.
+      Value lhsRelevantUnk =
+          comb::AndOp::create(rewriter, loc, lhsUnk, rhsMask, false);
       Value zeroUnk =
-          hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
+          hw::ConstantOp::create(rewriter, loc, lhsRelevantUnk.getType(), 0);
       Value lhsHasUnk = comb::ICmpOp::create(
-          rewriter, loc, comb::ICmpPredicate::ne, lhsUnk, zeroUnk);
-      Value zero = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
-                                          0);
-      Value resultVal =
-          comb::MuxOp::create(rewriter, loc, lhsHasUnk, zero, cmpVal);
+          rewriter, loc, comb::ICmpPredicate::ne, lhsRelevantUnk, zeroUnk);
+
+      // Known mismatches dominate wildcard comparison results:
+      // - if known compared bits mismatch: eq=0, ne=1
+      // - otherwise unknown compared bits produce X
+      Value notRelevantUnk =
+          comb::XorOp::create(rewriter, loc, lhsRelevantUnk, allOnes, false);
+      Value knownMask =
+          comb::AndOp::create(rewriter, loc, rhsMask, notRelevantUnk, false);
+      Value knownLhs =
+          comb::AndOp::create(rewriter, loc, lhsVal, knownMask, false);
+      Value knownRhs =
+          comb::AndOp::create(rewriter, loc, rhsVal, knownMask, false);
+      Value knownEq = comb::ICmpOp::create(rewriter, loc, ICmpPredicate::eq,
+                                           knownLhs, knownRhs);
+
+      Value one = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(),
+                                         1);
+      Value noUnk =
+          comb::XorOp::create(rewriter, loc, lhsHasUnk, one, false);
+      Value knownMismatch =
+          comb::XorOp::create(rewriter, loc, knownEq, one, false);
+      Value resultUnknown =
+          comb::AndOp::create(rewriter, loc, lhsHasUnk, knownEq, false);
+
+      Value resultVal;
+      if constexpr (pred == ICmpPredicate::wne) {
+        resultVal = knownMismatch;
+      } else {
+        Value noMismatchNoUnk =
+            comb::AndOp::create(rewriter, loc, knownEq, noUnk, false);
+        resultVal = noMismatchNoUnk;
+      }
       Value result =
-          createFourStateStruct(rewriter, loc, resultVal, lhsHasUnk);
+          createFourStateStruct(rewriter, loc, resultVal, resultUnknown);
       rewriter.replaceOp(op, result);
       return success();
     }
@@ -11041,11 +11253,49 @@ struct CaseXZEqOpConversion : public OpConversionPattern<SourceOp> {
     Value lhs = adaptor.getLhs();
     Value rhs = adaptor.getRhs();
 
-    // Handle 4-state struct types by extracting the value component
-    if (isFourStateStructType(lhs.getType()))
-      lhs = extractFourStateValue(rewriter, loc, lhs);
-    if (isFourStateStructType(rhs.getType()))
-      rhs = extractFourStateValue(rewriter, loc, rhs);
+    if (isFourStateStructType(lhs.getType()) &&
+        isFourStateStructType(rhs.getType())) {
+      Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+      Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+      Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+      Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+
+      // casex: ignore all X/Z bits in either operand.
+      // casez: ignore only Z bits (state 11), and compare unknown masks on
+      // non-ignored bits so X remains significant.
+      Value ignoredBits;
+      if constexpr (withoutX) {
+        Value lhsZ = comb::AndOp::create(rewriter, loc, lhsVal, lhsUnk, false);
+        Value rhsZ = comb::AndOp::create(rewriter, loc, rhsVal, rhsUnk, false);
+        ignoredBits =
+            comb::OrOp::create(rewriter, loc, lhsZ, rhsZ, false);
+      } else {
+        ignoredBits =
+            comb::OrOp::create(rewriter, loc, lhsUnk, rhsUnk, false);
+      }
+
+      Value allOnes = hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), -1);
+      Value mask = comb::XorOp::create(rewriter, loc, ignoredBits, allOnes,
+                                       false);
+      Value lhsMaskedVal = comb::AndOp::create(rewriter, loc, lhsVal, mask, false);
+      Value rhsMaskedVal = comb::AndOp::create(rewriter, loc, rhsVal, mask, false);
+      Value valEq = comb::ICmpOp::create(rewriter, loc, ICmpPredicate::ceq,
+                                         lhsMaskedVal, rhsMaskedVal);
+      if constexpr (withoutX) {
+        Value lhsMaskedUnk =
+            comb::AndOp::create(rewriter, loc, lhsUnk, mask, false);
+        Value rhsMaskedUnk =
+            comb::AndOp::create(rewriter, loc, rhsUnk, mask, false);
+        Value unkEq = comb::ICmpOp::create(rewriter, loc, ICmpPredicate::ceq,
+                                           lhsMaskedUnk, rhsMaskedUnk);
+        rewriter.replaceOp(op,
+                           comb::AndOp::create(rewriter, loc, valEq, unkEq,
+                                               false));
+      } else {
+        rewriter.replaceOp(op, valEq);
+      }
+      return success();
+    }
 
     // If we have detected any bits to be ignored, mask them in the operands for
     // the comparison.
@@ -14836,39 +15086,63 @@ struct FormatIntOpConversion : public OpConversionPattern<FormatIntOp> {
     bool isLeftAligned = adaptor.getAlignment() == IntAlign::Left;
     BoolAttr isLeftAlignedAttr = rewriter.getBoolAttr(isLeftAligned);
 
-    // Get the input value, handling 4-state types which are lowered to
-    // {value, unknown} structs. For formatting purposes, we extract just
-    // the 'value' field since sim::Format*Op expects an integer.
+    // Get the input value. 4-state values are lowered to
+    // !hw.struct<value: iN, unknown: iN>; preserve both lanes by bitcasting
+    // to i2N and tagging the sim format op with the logical width.
     Value inputValue = adaptor.getValue();
+    IntegerAttr fourStateWidthAttr = nullptr;
     Type inputType = inputValue.getType();
     if (auto structType = dyn_cast<hw::StructType>(inputType)) {
-      // Extract the 'value' field from the 4-state struct representation
-      inputValue = hw::StructExtractOp::create(rewriter, loc, inputValue, "value");
+      auto elements = structType.getElements();
+      bool isFourStateStruct =
+          elements.size() == 2 && elements[0].name.getValue() == "value" &&
+          elements[1].name.getValue() == "unknown";
+      if (isFourStateStruct) {
+        int64_t valueWidth = hw::getBitWidth(elements[0].type);
+        int64_t unknownWidth = hw::getBitWidth(elements[1].type);
+        int64_t packedWidth = hw::getBitWidth(structType);
+        if (valueWidth > 0 && valueWidth == unknownWidth && packedWidth > 0) {
+          fourStateWidthAttr =
+              rewriter.getI32IntegerAttr(static_cast<int32_t>(valueWidth));
+          auto packedTy =
+              rewriter.getIntegerType(static_cast<unsigned>(packedWidth));
+          inputValue =
+              hw::BitcastOp::create(rewriter, loc, packedTy, inputValue);
+        } else {
+          inputValue =
+              hw::StructExtractOp::create(rewriter, loc, inputValue, "value");
+        }
+      } else {
+        inputValue =
+            hw::StructExtractOp::create(rewriter, loc, inputValue, "value");
+      }
     }
 
     switch (op.getFormat()) {
     case IntFormat::Decimal:
       rewriter.replaceOpWithNewOp<sim::FormatDecOp>(
           op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr,
-          adaptor.getIsSignedAttr());
+          fourStateWidthAttr, adaptor.getIsSignedAttr());
       return success();
     case IntFormat::Binary:
       rewriter.replaceOpWithNewOp<sim::FormatBinOp>(
-          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr);
+          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr,
+          fourStateWidthAttr);
       return success();
     case IntFormat::Octal:
       rewriter.replaceOpWithNewOp<sim::FormatOctOp>(
-          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr);
+          op, inputValue, isLeftAlignedAttr, padCharAttr, widthAttr,
+          fourStateWidthAttr);
       return success();
     case IntFormat::HexLower:
       rewriter.replaceOpWithNewOp<sim::FormatHexOp>(
           op, inputValue, rewriter.getBoolAttr(false),
-          isLeftAlignedAttr, padCharAttr, widthAttr);
+          isLeftAlignedAttr, padCharAttr, widthAttr, fourStateWidthAttr);
       return success();
     case IntFormat::HexUpper:
       rewriter.replaceOpWithNewOp<sim::FormatHexOp>(
           op, inputValue, rewriter.getBoolAttr(true), isLeftAlignedAttr,
-          padCharAttr, widthAttr);
+          padCharAttr, widthAttr, fourStateWidthAttr);
       return success();
     }
     return rewriter.notifyMatchFailure(op, "unsupported int format");

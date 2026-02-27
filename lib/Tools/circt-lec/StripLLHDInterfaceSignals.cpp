@@ -461,6 +461,22 @@ static Value unwrapStoredValue(Value value) {
   return value;
 }
 
+// Prefer an unwrapped value when it preserves the expected semantic type.
+// LLHD drives may carry unrealized casts from packed integers to aggregate HW
+// types; blindly unwrapping those can break probe replacement type checks.
+static Value getStoredValueForExpectedType(Value value, Type expectedType) {
+  if (!value)
+    return {};
+  Value unwrapped = unwrapStoredValue(value);
+  if (!expectedType)
+    return unwrapped ? unwrapped : value;
+  if (unwrapped && unwrapped.getType() == expectedType)
+    return unwrapped;
+  if (value.getType() == expectedType)
+    return value;
+  return unwrapped ? unwrapped : value;
+}
+
 static Value findInsertedValue(Value value, ArrayRef<int64_t> path) {
   auto insert = value.getDefiningOp<LLVM::InsertValueOp>();
   if (!insert)
@@ -2350,7 +2366,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     llhd::DriveOp driveOp = drives.front();
     if (drivePaths.lookup(driveOp).empty() && !driveOp.getEnable() &&
         isZeroTimeLike(driveOp)) {
-      Value drivenValue = unwrapStoredValue(driveOp.getValue());
+      Value drivenValue = getStoredValueForExpectedType(
+          driveOp.getValue(), sigOp.getType().getNestedType());
       if (!drivenValue)
         return driveOp.emitError("unsupported LLHD drive value in LEC");
 
@@ -2403,7 +2420,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     };
     if (drivePaths.lookup(driveOp).empty() && !driveOp.getEnable() &&
         isZeroTimeLike(driveOp) && isRegisterStateValue(driveOp.getValue())) {
-      Value drivenValue = unwrapStoredValue(driveOp.getValue());
+      Value drivenValue = getStoredValueForExpectedType(
+          driveOp.getValue(), sigOp.getType().getNestedType());
       if (!drivenValue)
         return driveOp.emitError("unsupported LLHD register-state drive value");
 
@@ -2530,11 +2548,16 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             if (!driveOp || driveOp.getSignal() != sigOp.getResult())
               continue;
             OpBuilder driveBuilder(driveOp);
-            Value driveValue = unwrapStoredValue(driveOp.getValue());
+            auto pathIt = drivePaths.find(driveOp);
+            Value driveValue =
+                getStoredValueForExpectedType(driveOp.getValue(),
+                                             pathIt != drivePaths.end() &&
+                                                     !pathIt->second.empty()
+                                                 ? Type()
+                                                 : sigOp.getType().getNestedType());
             if (!driveValue)
               return driveOp.emitError("failed to resolve LLHD drive value");
             Value next = driveValue;
-            auto pathIt = drivePaths.find(driveOp);
             if (pathIt != drivePaths.end() && !pathIt->second.empty()) {
               next = updatePath(updatePath, driveBuilder, resolved,
                                 pathIt->second, driveValue, driveOp.getLoc());
@@ -2701,7 +2724,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     if (!isLocalSignal && drives.size() == 1 &&
         drivePaths.lookup(drives.front()).empty() &&
         !drives.front().getEnable() && isZeroTimeLike(drives.front())) {
-      if (Value drivenValue = unwrapStoredValue(drives.front().getValue()))
+      if (Value drivenValue = getStoredValueForExpectedType(
+              drives.front().getValue(), sigOp.getType().getNestedType()))
         current = drivenValue;
     }
     for (auto it = singleBlock->begin(); it != singleBlock->end();) {
@@ -2711,7 +2735,9 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         if (pathIt == drivePaths.end())
           continue;
         OpBuilder driveBuilder(driveOp);
-        Value driveValue = unwrapStoredValue(driveOp.getValue());
+        Value driveValue = getStoredValueForExpectedType(
+            driveOp.getValue(),
+            pathIt->second.empty() ? sigOp.getType().getNestedType() : Type());
         if (!driveValue)
           return driveOp.emitError("unsupported LLHD drive value in LEC");
         Value next = driveValue;
@@ -2800,7 +2826,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       if (!isLocalSignal && drives.size() == 1) {
         llhd::DriveOp driveOp = drives.front();
         if (!driveOp.getEnable() && isZeroTimeLike(driveOp)) {
-          Value driveValue = unwrapStoredValue(driveOp.getValue());
+          Value driveValue = getStoredValueForExpectedType(
+              driveOp.getValue(), sigOp.getType().getNestedType());
           if (!driveValue)
             return driveOp.emitError("failed to resolve LLHD drive value");
 
@@ -2899,7 +2926,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
               if (driveOp.getSignal() != sigOp.getResult())
                 continue;
-              Value driveValue = unwrapStoredValue(driveOp.getValue());
+              Value driveValue = getStoredValueForExpectedType(
+                  driveOp.getValue(), sigOp.getType().getNestedType());
               if (!driveValue)
                 return driveOp.emitError("failed to resolve LLHD drive value");
               if (Value enable = driveOp.getEnable();
@@ -2961,7 +2989,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           Operation *op = &*it++;
           if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
             if (driveOp.getSignal() == sigOp.getResult()) {
-              Value driveValue = unwrapStoredValue(driveOp.getValue());
+              Value driveValue = getStoredValueForExpectedType(
+                  driveOp.getValue(), sigOp.getType().getNestedType());
               if (!driveValue)
                 return driveOp.emitError(
                     "failed to resolve LLHD drive value");

@@ -1221,6 +1221,22 @@ struct StmtVisitor {
       return failure();
     }
 
+    if (const auto *init = var.getInitializer()) {
+      if (init->as_if<slang::ast::NewCovergroupExpression>()) {
+        const auto &canonicalVarType = var.getDeclaredType()->getType();
+        if (auto *cgType = canonicalVarType.getCanonicalType().as_if<
+                slang::ast::CovergroupType>()) {
+          if (cgType->getCoverageEvent()) {
+            mlir::emitError(loc)
+                << "implicit covergroup event sampling for local variables is "
+                   "not supported; declare the covergroup variable at module "
+                   "scope or call sample() explicitly";
+            return failure();
+          }
+        }
+      }
+    }
+
     if (isStatic) {
       // Static function-local variables are stored as global variables.
       // Check if already converted (handles multiple calls to the same function).
@@ -3761,12 +3777,8 @@ struct StmtVisitor {
     }
 
     if (subroutine.name == "$exit") {
-      // Per IEEE 1800-2017, $exit terminates the calling program block.
-      // Since programs are not yet supported, treat as $finish(0).
-      moore::FinishBIOp::create(builder, loc, 0);
-      moore::UnreachableOp::create(builder, loc);
-      setTerminated();
-      return true;
+      mlir::emitError(loc) << "$exit is only valid in program blocks";
+      return failure();
     }
 
     // Display and Write Tasks (`$display[boh]?` or `$write[boh]?`)

@@ -77,3 +77,15 @@
 - OpenTitan status progression:
   - `otp_ctrl_sec_cm` moved from `CIRCT_BMC_ERROR` (crash/legalization blockers) to `FAIL (SAT)`.
   - This confirms the conversion/runtime blockers are removed for this lane; next gap is SAT quality under LLHD abstraction warnings (process/interface inputs still unconstrained and may yield spurious witnesses).
+- Continued manual writeup with entries 91-130, focusing on PyRTG TODOs, AVIP runner guards, and Yosys-SVA policy-related unsupported flows.
+- Continued manual writeup with entries 131-160, covering MooreRuntime TODOs and additional connectivity/formal script gaps.
+- Continued manual writeup with entries 161-230, including circt-mut native parity gaps, PyCDE TODOs, and many scanner false positives in test fixtures/valgrind metadata.
+- Continued manual writeup with entries 231-260 in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+- This block covered LLHD deseq/control-flow TODOs, Verilog LSP macro/location gaps, SystemC copy-from-upstream debt, and additional false positives (`AnyInteger`, `record_xxx_access`).
+- Next manual entry to process is 261.
+- Continued manual writeup with entries 261-290 in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+- This block focused on Synth transform TODOs (cut rewriter/tech mapping/pipeline), LEC construction debt, and additional scanner false positives in FIRRTL analysis API lines.
+- Next manual entry to process is 291.
+- Continued manual writeup with entries 291-320 in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+- This block covered Synth/Kanagawa TODOs, dependency/debug-info TODOs, UVM phase TBDs, and false-positive `anyInstance...` strings in `lib/Analysis/TestPasses.cpp`.
+- Next manual entry to process is 321.

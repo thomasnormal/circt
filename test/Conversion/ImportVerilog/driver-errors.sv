@@ -1,14 +1,12 @@
 // RUN: circt-translate --import-verilog --verify-diagnostics --split-input-file %s
 // REQUIRES: slang
 
-// Test: multiple continuous assignments to the same variable are reported as a
-// warning for compatibility with mainstream simulator behavior.
+// Test: multiple continuous assignments to the same variable are rejected.
 
 module MultipleContAssign;
   int v;
-  // expected-remark @below {{also assigned here}}
   assign v = 12;
-  // expected-warning @below {{cannot have multiple continuous assignments to variable 'v'}}
+  // expected-error @below {{multiple continuous assignments to variable 'v'}}
   assign v = 13;
 endmodule
 
@@ -21,10 +19,19 @@ endmodule
 module MixedContProcAssign;
   wire clk = 0;
   int v;
-  // expected-remark @below {{also assigned here}}
   assign v = 12;
   // expected-error @below {{cannot mix continuous and procedural assignments to variable 'v'}}
   always @(posedge clk) v <= ~v;
+endmodule
+
+// -----
+
+// Test: disjoint continuous and procedural assignments are legal.
+
+module DisjointContProcAssign;
+  logic [1:0] v;
+  assign v[0] = 1'b1;
+  always_comb v[1] = 1'b0;
 endmodule
 
 // -----
@@ -55,4 +62,71 @@ module DifferentVarsContAssign;
   int a, b;
   assign a = 1;
   assign b = 2;
+endmodule
+
+// -----
+
+// Test: multiple continuous assignments to disjoint constant indices are legal.
+
+module DisjointElementContAssign;
+  logic [1:0][7:0] v;
+  for (genvar i = 0; i < 2; i++) begin : g
+    assign v[i] = 8'(i);
+  end
+endmodule
+
+// -----
+
+// Test: mixed struct field and indexed element assignments with disjoint paths
+// are legal.
+
+module DisjointStructPathContAssign;
+  typedef struct packed {
+    logic valid;
+    logic [1:0][7:0] key;
+  } key_out_t;
+
+  key_out_t key_o;
+  logic [1:0][7:0] key_state_q;
+  logic invalid_stage_sel_o;
+  logic [1:0][7:0] entropy_i;
+
+  assign key_o.valid = 1'b1;
+  for (genvar i = 0; i < 2; i++) begin : g
+    assign key_o.key[i] = invalid_stage_sel_o ? {8{entropy_i[i][0]}}
+                                               : key_state_q[i];
+  end
+endmodule
+
+// -----
+
+// Test: multiple continuous assignments to the same selected path are rejected.
+
+module OverlapElementContAssign;
+  logic [1:0][7:0] v;
+  assign v[0] = 8'hAA;
+  // expected-error @below {{multiple continuous assignments to variable 'v'}}
+  assign v[0] = 8'h55;
+endmodule
+
+// -----
+
+// Test: disjoint range and element assignments are legal.
+
+module DisjointRangeElementContAssign;
+  logic [5:0] v;
+  assign v[1:0] = 2'b11;
+  assign v[2] = 1'b0;
+  assign v[3] = 1'b1;
+endmodule
+
+// -----
+
+// Test: overlapping range and element assignments are rejected.
+
+module OverlapRangeElementContAssign;
+  logic [5:0] v;
+  assign v[3:1] = 3'b101;
+  // expected-error @below {{multiple continuous assignments to variable 'v'}}
+  assign v[2] = 1'b0;
 endmodule

@@ -436,6 +436,11 @@ struct ProcessExecutionState {
   /// Last operation executed by this process (for diagnostics).
   mlir::Operation *lastOp = nullptr;
 
+  /// Sticky flag set when an unhandled coverage runtime call error was emitted
+  /// in this process. Enclosing wrappers should propagate failure instead of
+  /// absorbing it into zero/default results.
+  bool sawUnhandledCoverageRuntimeCall = false;
+
   /// Total operations executed by this process.
   size_t totalSteps = 0;
 
@@ -1772,6 +1777,19 @@ private:
   /// Interpret a func.call operation.
   mlir::LogicalResult interpretFuncCall(ProcessId procId,
                                          mlir::func::CallOp callOp);
+
+  /// Return true when `calleeName` belongs to Moore coverage runtime APIs that
+  /// must fail loudly if unhandled.
+  static bool isCoverageRuntimeCallee(llvm::StringRef calleeName);
+
+  /// Return true when the most recent failing op for `procId` was a coverage
+  /// runtime call, so enclosing wrappers should propagate failure.
+  bool shouldPropagateCoverageRuntimeFailure(ProcessId procId) const;
+
+  /// Return true if `funcOp` contains direct calls to coverage runtime APIs.
+  /// Such functions are forced through interpreted dispatch to preserve strict
+  /// missing-handler diagnostics.
+  bool functionHasDirectCoverageRuntimeCall(mlir::func::FuncOp funcOp);
 
   /// Fast path for func.call operations with cached no-interception result.
   /// Skips all UVM string-matching interceptors and goes straight to
@@ -4162,6 +4180,7 @@ private:
     void *nativeFuncPtr = nullptr; // compiled native function (Phase F1)
   };
   llvm::DenseMap<mlir::Operation *, FuncCallCacheEntry> funcCallCache;
+  llvm::DenseMap<mlir::Operation *, bool> funcDirectCoverageRuntimeCallCache;
 
   uint64_t funcCallCacheHits = 0;
   uint64_t funcCallCacheMisses = 0;

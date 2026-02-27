@@ -792,13 +792,37 @@ extern "C" void __circt_sim_set_tls_normalize(NormalizeVirtualPtrFn fn) {
   circtSimTlsNormalize = fn;
 }
 
+static bool isTruthyEnvValue(const char *value) {
+  if (!value)
+    return false;
+  auto equalsIgnoreCase = [](const char *lhs, const char *rhs) {
+    if (!lhs || !rhs)
+      return false;
+    while (*lhs && *rhs) {
+      unsigned char lc = static_cast<unsigned char>(*lhs);
+      unsigned char rc = static_cast<unsigned char>(*rhs);
+      if (std::tolower(lc) != std::tolower(rc))
+        return false;
+      ++lhs;
+      ++rhs;
+    }
+    return *lhs == '\0' && *rhs == '\0';
+  };
+  return equalsIgnoreCase(value, "1") || equalsIgnoreCase(value, "true") ||
+         equalsIgnoreCase(value, "yes") || equalsIgnoreCase(value, "on");
+}
+
+static bool isAotPtrTraceEnabled() {
+  return isTruthyEnvValue(std::getenv("CIRCT_AOT_TRACE_PTR"));
+}
+
 /// Classify and optionally translate a pointer that might be an interpreter
 /// virtual address rather than a real host pointer.
 ///
 /// Three ranges:
 ///   1. Tagged FuncId (0xF0000000–0xFFFFFFFF): never a data pointer — trap.
 ///   2. Interpreter virtual address (0x10000000–0x1FFFFFFF): attempt TLS
-///      context translation (TODO Phase 1.2); for now log and return as-is.
+///      context translation and emit trace diagnostics when enabled.
 ///   3. Everything else: real host pointer — return unchanged.
 static void *normalizeHostPtr(void *ptr, const char *funcName) {
   if (!ptr)
@@ -809,24 +833,30 @@ static void *normalizeHostPtr(void *ptr, const char *funcName) {
   // Range 1: tagged FuncId — never a valid data pointer.
   if (addr >= 0xF0000000ULL && addr < 0x100000000ULL) {
     fprintf(stderr,
-            "[AOT] %s: tagged FuncId pointer %p — not a data pointer\n",
+            "[AOT PTR] %s: class=tagged_funcid ptr=%p - not a data pointer\n",
             funcName, ptr);
     __builtin_trap();
   }
 
   // Range 2: interpreter virtual address — try TLS context translation.
   if (addr >= 0x10000000ULL && addr < 0x20000000ULL) {
+    bool hasTlsCallback = circtSimTlsNormalize && circtSimTlsCtx;
     if (circtSimTlsNormalize && circtSimTlsCtx) {
       void *hostPtr = circtSimTlsNormalize(circtSimTlsCtx, addr);
-      if (hostPtr)
+      if (hostPtr) {
+        if (isAotPtrTraceEnabled()) {
+          fprintf(stderr,
+                  "[AOT PTR] %s: class=virtual ptr=%p -> host=%p "
+                  "(tls-normalize)\n",
+                  funcName, ptr, hostPtr);
+        }
         return hostPtr;
+      }
     }
-    // Fallback: warn if tracing enabled.
-    static bool trace = std::getenv("CIRCT_AOT_TRACE_PTR") != nullptr;
-    if (trace) {
+    if (isAotPtrTraceEnabled()) {
       fprintf(stderr,
-              "[AOT PTR] %s: virtual address %p — could not normalize\n",
-              funcName, ptr);
+              "[AOT PTR] %s: class=virtual ptr=%p unresolved (%s)\n", funcName,
+              ptr, hasTlsCallback ? "tls-miss" : "no-tls-callback");
     }
     return ptr;
   }
@@ -4819,6 +4849,10 @@ struct CrossNamedBin {
   std::string name;
   int32_t kind; // MooreCrossBinKind
   std::vector<MooreCrossBinsofFilter> filters;
+  // Own copied filter payloads so pointer fields in `filters` remain valid.
+  std::vector<std::vector<int32_t>> ownedBinIndices;
+  std::vector<std::vector<int64_t>> ownedValues;
+  std::vector<std::vector<int64_t>> ownedRanges;
   int64_t hit_count = 0;
 };
 
@@ -4832,9 +4866,9 @@ struct CrossItemData {
 /// Structure to store cross coverage data for a covergroup.
 struct CrossCoverageData {
   std::vector<MooreCrossCoverage> crosses;
-  /// Map from cross index to a map of value tuples to hit counts.
-  /// The key is a vector of int64_t values (one per coverpoint in the cross).
-  std::map<std::vector<int64_t>, int64_t> crossBins;
+  /// Per-cross map of value tuples to hit counts.
+  /// Indexed by cross index, each map key is one tuple for that cross.
+  std::vector<std::map<std::vector<int64_t>, int64_t>> crossBinsByIndex;
   /// Named bins for each cross (indexed by cross index).
   std::vector<CrossItemData> crossItemData;
 };
@@ -4859,8 +4893,9 @@ bool matchesBinsofFilter(const MooreCrossBinsofFilter &filter, int64_t value,
                          MooreCovergroup *covergroup) {
   bool matches = false;
 
-  // If no specific bins or values are specified, the filter matches all values
-  if (filter.num_bins == 0 && filter.num_values == 0) {
+  // If no specific bins, values, or ranges are specified, match all values.
+  if (filter.num_bins == 0 && filter.num_values == 0 &&
+      filter.num_ranges == 0) {
     matches = true;
   } else {
     // Check if value matches any of the specified bin indices
@@ -4900,6 +4935,20 @@ bool matchesBinsofFilter(const MooreCrossBinsofFilter &filter, int64_t value,
     if (filter.num_values > 0 && filter.values) {
       for (int32_t i = 0; i < filter.num_values; ++i) {
         if (value == filter.values[i]) {
+          matches = true;
+          break;
+        }
+      }
+    }
+
+    // Check if value matches any of the intersect ranges.
+    if (filter.num_ranges > 0 && filter.ranges) {
+      for (int32_t i = 0; i < filter.num_ranges; ++i) {
+        int64_t low = filter.ranges[i * 2];
+        int64_t high = filter.ranges[i * 2 + 1];
+        if (low > high)
+          std::swap(low, high);
+        if (value >= low && value <= high) {
           matches = true;
           break;
         }
@@ -4996,26 +5045,23 @@ extern "C" int32_t __moore_cross_create(void *cg, const char *name,
   int32_t crossIndex = static_cast<int32_t>(crossData.crosses.size());
   crossData.crosses.push_back(cross);
 
+  // Keep per-cross hit map aligned with cross indices.
+  crossData.crossBinsByIndex.push_back({});
+
   // Also create the CrossItemData for this cross
   crossData.crossItemData.push_back(CrossItemData());
 
   return crossIndex;
 }
 
-extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
-                                     int32_t num_values) {
-  if (coverageSamplingStopped)
-    return;
-
-  auto *covergroup = static_cast<MooreCovergroup *>(cg);
-  if (!covergroup || !cp_values)
-    return;
-
+static void sampleCrossesImpl(MooreCovergroup *covergroup, int64_t *cp_values,
+                              const uint8_t *cpValidMask,
+                              int32_t num_values) {
   auto it = crossCoverageData.find(covergroup);
   if (it == crossCoverageData.end())
     return;
 
-  // For each cross, record the combination of values
+  // For each cross, record the combination of values.
   for (size_t crossIdx = 0; crossIdx < it->second.crosses.size(); ++crossIdx) {
     auto &cross = it->second.crosses[crossIdx];
     std::vector<int64_t> valueKey;
@@ -5028,68 +5074,97 @@ extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
         validSample = false;
         break;
       }
+      if (cpValidMask && cpValidMask[cpIdx] == 0) {
+        validSample = false;
+        break;
+      }
       valueKey.push_back(cp_values[cpIdx]);
     }
 
-    if (validSample) {
-      // Check if this sample matches any named cross bins
-      if (crossIdx < it->second.crossItemData.size()) {
-        auto &itemData = it->second.crossItemData[crossIdx];
+    if (!validSample)
+      continue;
 
-        // Check for illegal bins first
-        bool isIllegal = false;
-        const char *illegalBinName = nullptr;
-        for (auto &namedBin : itemData.namedBins) {
-          if (namedBin.kind == MOORE_CROSS_BIN_ILLEGAL) {
-            if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
-              isIllegal = true;
-              illegalBinName = namedBin.name.c_str();
-              namedBin.hit_count++;
+    // Check if this sample matches any named cross bins
+    if (crossIdx < it->second.crossItemData.size()) {
+      auto &itemData = it->second.crossItemData[crossIdx];
 
-              // Invoke the callback if registered
-              if (illegalCrossBinCallback) {
-                illegalCrossBinCallback(covergroup->name, cross.name,
-                                        illegalBinName, valueKey.data(),
-                                        cross.num_cps,
-                                        illegalCrossBinCallbackUserData);
-              }
-              break;
+      // Check for illegal bins first
+      bool isIllegal = false;
+      const char *illegalBinName = nullptr;
+      for (auto &namedBin : itemData.namedBins) {
+        if (namedBin.kind == MOORE_CROSS_BIN_ILLEGAL) {
+          if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
+            isIllegal = true;
+            illegalBinName = namedBin.name.c_str();
+            namedBin.hit_count++;
+
+            // Invoke the callback if registered
+            if (illegalCrossBinCallback) {
+              illegalCrossBinCallback(covergroup->name, cross.name,
+                                      illegalBinName, valueKey.data(),
+                                      cross.num_cps,
+                                      illegalCrossBinCallbackUserData);
             }
+            break;
           }
         }
-
-        // Check for ignore bins - skip sampling if matched
-        bool isIgnored = false;
-        for (const auto &namedBin : itemData.namedBins) {
-          if (namedBin.kind == MOORE_CROSS_BIN_IGNORE) {
-            if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
-              isIgnored = true;
-              break;
-            }
-          }
-        }
-
-        // Update hit counts for normal named bins
-        if (!isIllegal && !isIgnored) {
-          for (auto &namedBin : itemData.namedBins) {
-            if (namedBin.kind == MOORE_CROSS_BIN_NORMAL) {
-              if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
-                namedBin.hit_count++;
-              }
-            }
-          }
-        }
-
-        // Only record the cross bin if not ignored
-        if (!isIgnored) {
-          it->second.crossBins[valueKey]++;
-        }
-      } else {
-        // No named bins defined, just record the sample
-        it->second.crossBins[valueKey]++;
       }
+
+      // Check for ignore bins - skip sampling if matched
+      bool isIgnored = false;
+      for (const auto &namedBin : itemData.namedBins) {
+        if (namedBin.kind == MOORE_CROSS_BIN_IGNORE) {
+          if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
+            isIgnored = true;
+            break;
+          }
+        }
+      }
+
+      // Update hit counts for normal named bins
+      if (!isIllegal && !isIgnored) {
+        for (auto &namedBin : itemData.namedBins) {
+          if (namedBin.kind == MOORE_CROSS_BIN_NORMAL) {
+            if (matchesNamedCrossBin(namedBin, valueKey, covergroup, cross)) {
+              namedBin.hit_count++;
+            }
+          }
+        }
+      }
+
+      // Only record the cross bin if not ignored
+      if (!isIgnored)
+        it->second.crossBinsByIndex[crossIdx][valueKey]++;
+    } else {
+      // No named bins defined, just record the sample
+      it->second.crossBinsByIndex[crossIdx][valueKey]++;
     }
   }
+}
+
+extern "C" void __moore_cross_sample(void *cg, int64_t *cp_values,
+                                     int32_t num_values) {
+  if (coverageSamplingStopped)
+    return;
+
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || !cp_values)
+    return;
+
+  sampleCrossesImpl(covergroup, cp_values, /*cpValidMask=*/nullptr, num_values);
+}
+
+extern "C" void __moore_cross_sample_masked(void *cg, int64_t *cp_values,
+                                            const uint8_t *cp_valid_mask,
+                                            int32_t num_values) {
+  if (coverageSamplingStopped)
+    return;
+
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || !cp_values || !cp_valid_mask)
+    return;
+
+  sampleCrossesImpl(covergroup, cp_values, cp_valid_mask, num_values);
 }
 
 extern "C" double __moore_cross_get_coverage(void *cg, int32_t cross_index) {
@@ -5134,13 +5209,11 @@ extern "C" double __moore_cross_get_coverage(void *cg, int32_t cross_index) {
 
   // Count actual cross bins hit for this specific cross
   // A bin is considered covered only if its hit count >= at_least
-  for (const auto &kv : it->second.crossBins) {
-    // Check if this bin belongs to this cross by comparing size
-    if (kv.first.size() == static_cast<size_t>(cross.num_cps)) {
-      // Check if this bin meets the at_least threshold
-      if (kv.second >= atLeast) {
+  if (cross_index < static_cast<int32_t>(it->second.crossBinsByIndex.size())) {
+    for (const auto &kv : it->second.crossBinsByIndex[cross_index]) {
+      // Check if this bin meets the at_least threshold.
+      if (kv.second >= atLeast)
         binsHit++;
-      }
     }
   }
 
@@ -5167,11 +5240,11 @@ extern "C" int64_t __moore_cross_get_bins_hit(void *cg, int32_t cross_index) {
       cross_index >= static_cast<int32_t>(it->second.crosses.size()))
     return 0;
 
-  const auto &cross = it->second.crosses[cross_index];
   int64_t binsHit = 0;
 
-  for (const auto &kv : it->second.crossBins) {
-    if (kv.first.size() == static_cast<size_t>(cross.num_cps)) {
+  if (cross_index < static_cast<int32_t>(it->second.crossBinsByIndex.size())) {
+    for (const auto &kv : it->second.crossBinsByIndex[cross_index]) {
+      (void)kv;
       binsHit++;
     }
   }
@@ -5202,11 +5275,44 @@ extern "C" int32_t __moore_cross_add_named_bin(void *cg, int32_t cross_index,
   namedBin.kind = kind;
   namedBin.hit_count = 0;
 
-  // Copy filters
+  // Deep-copy filters and their pointed-to payloads.
   if (filters && num_filters > 0) {
+    namedBin.ownedBinIndices.reserve(num_filters);
+    namedBin.ownedValues.reserve(num_filters);
+    namedBin.ownedRanges.reserve(num_filters);
     namedBin.filters.reserve(num_filters);
     for (int32_t i = 0; i < num_filters; ++i) {
-      namedBin.filters.push_back(filters[i]);
+      MooreCrossBinsofFilter copied = filters[i];
+
+      if (copied.num_bins > 0 && copied.bin_indices) {
+        auto &owned = namedBin.ownedBinIndices.emplace_back(
+            copied.bin_indices, copied.bin_indices + copied.num_bins);
+        copied.bin_indices = owned.data();
+      } else {
+        copied.bin_indices = nullptr;
+        copied.num_bins = 0;
+      }
+
+      if (copied.num_values > 0 && copied.values) {
+        auto &owned = namedBin.ownedValues.emplace_back(
+            copied.values, copied.values + copied.num_values);
+        copied.values = owned.data();
+      } else {
+        copied.values = nullptr;
+        copied.num_values = 0;
+      }
+
+      if (copied.num_ranges > 0 && copied.ranges) {
+        int32_t flattened = copied.num_ranges * 2;
+        auto &owned = namedBin.ownedRanges.emplace_back(
+            copied.ranges, copied.ranges + flattened);
+        copied.ranges = owned.data();
+      } else {
+        copied.ranges = nullptr;
+        copied.num_ranges = 0;
+      }
+
+      namedBin.filters.push_back(copied);
     }
   }
 
@@ -5372,7 +5478,8 @@ extern "C" void __moore_covergroup_reset(void *cg) {
   // Reset cross coverage data
   auto crossIt = crossCoverageData.find(covergroup);
   if (crossIt != crossCoverageData.end()) {
-    crossIt->second.crossBins.clear();
+    for (auto &perCrossBins : crossIt->second.crossBinsByIndex)
+      perCrossBins.clear();
     // Reset named cross bin hit counts
     for (auto &itemData : crossIt->second.crossItemData) {
       for (auto &namedBin : itemData.namedBins) {

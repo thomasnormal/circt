@@ -1530,7 +1530,7 @@ def main() -> int:
         args.assertion_granular_max, "--assertion-granular-max"
     )
     auto_timeout_assertion_granular_raw = os.environ.get(
-        "BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR", "0"
+        "BMC_AUTO_TIMEOUT_ASSERTION_GRANULAR", "1"
     ).strip()
     if auto_timeout_assertion_granular_raw not in {"0", "1"}:
         fail(
@@ -1824,6 +1824,16 @@ def main() -> int:
             for group_index, group_key in enumerate(sorted(grouped_case_lines)):
                 stopat_selectors, blackbox_modules = group_key
                 group_cases = grouped_case_lines[group_key]
+                expected_case_entries: list[tuple[str, str]] = []
+                for case_line in group_cases:
+                    parts = case_line.split("\t")
+                    case_id = parts[0].strip() if parts else ""
+                    if not case_id:
+                        continue
+                    case_path = parts[4].strip() if len(parts) > 4 else case_id
+                    if not case_path:
+                        case_path = case_id
+                    expected_case_entries.append((case_id, case_path))
                 group_contract_fingerprint_list = sorted(
                     grouped_contract_fingerprints.get(group_key, set())
                 )
@@ -1938,11 +1948,19 @@ def main() -> int:
                 # clocks; default to interleaved multi-clock BMC unless the
                 # caller already pinned a policy.
                 cmd_env.setdefault("BMC_ALLOW_MULTI_CLOCK", "1")
+                # OpenTitan FPV cases frequently hit 4-state-input timeout
+                # paths; default-enable the pairwise retry that adds
+                # --assume-known-inputs unless explicitly disabled.
+                cmd_env.setdefault("BMC_AUTO_ASSUME_KNOWN_INPUTS", "1")
                 policy_passes: list[str] = []
                 if stopat_selectors:
                     selector_list = ",".join(stopat_selectors)
+                    stopat_pass = (
+                        f"--hw-stopat-symbolic=targets={selector_list} "
+                        "allow-unmatched=1"
+                    )
                     policy_passes.append(
-                        f"--hw-stopat-symbolic=targets={selector_list}"
+                        shlex.quote(stopat_pass)
                     )
                 if blackbox_modules:
                     module_list = ",".join(blackbox_modules)
@@ -1996,6 +2014,29 @@ def main() -> int:
                 primary_rc = subprocess.run(cmd, check=False, env=cmd_env).returncode
                 if not group_results_path.exists():
                     pairwise_rc = max(pairwise_rc, primary_rc if primary_rc else 1)
+                    if expected_case_entries:
+                        write_result_rows(
+                            group_results_path,
+                            [
+                                (
+                                    "ERROR",
+                                    case_id,
+                                    case_path,
+                                    "opentitan",
+                                    mode_label,
+                                    "CIRCT_BMC_ERROR",
+                                    "pairwise_missing_case_result",
+                                )
+                                for case_id, case_path in expected_case_entries
+                            ],
+                        )
+                    print(
+                        "opentitan FPV BMC: missing group results file: "
+                        f"group={group_index} expected_cases={len(expected_case_entries)} "
+                        f"returncode={primary_rc}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     continue
 
                 primary_rows = read_result_rows(group_results_path)
@@ -2302,6 +2343,40 @@ def main() -> int:
                                     f"cases={len(recovered_case_ids)}",
                                     flush=True,
                                 )
+
+                observed_case_ids = {
+                    row[1].strip()
+                    for row in effective_rows
+                    if len(row) > 1 and row[1].strip()
+                }
+                missing_case_entries = [
+                    (case_id, case_path)
+                    for case_id, case_path in expected_case_entries
+                    if case_id not in observed_case_ids
+                ]
+                if missing_case_entries:
+                    pairwise_rc = max(pairwise_rc, 1)
+                    print(
+                        "opentitan FPV BMC: incomplete case results detected: "
+                        f"group={group_index} expected_cases={len(expected_case_entries)} "
+                        f"observed_rows={len(effective_rows)} "
+                        f"missing_cases={len(missing_case_entries)}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    for case_id, case_path in missing_case_entries:
+                        effective_rows.append(
+                            (
+                                "ERROR",
+                                case_id,
+                                case_path,
+                                "opentitan",
+                                mode_label,
+                                "CIRCT_BMC_ERROR",
+                                "pairwise_missing_case_result",
+                            )
+                        )
+                    write_result_rows(group_results_path, effective_rows)
 
         merge_plain_files(drop_case_files, args.drop_remark_cases_file)
         merge_plain_files(drop_reason_files, args.drop_remark_reasons_file)

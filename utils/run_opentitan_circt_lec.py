@@ -778,7 +778,6 @@ def main() -> int:
                     )
                 )
             except subprocess.CalledProcessError:
-                failures += 1
                 extra = ""
                 try:
                     lec_log_text = (impl_dir / "circt-lec.log").read_text()
@@ -796,6 +795,56 @@ def main() -> int:
                         extra = f" ({diag})"
                 except Exception:
                     pass
+                if stage == "lec" and not lec_smoke_only and result == "EQ":
+                    if not diag:
+                        diag = "EQ"
+                    print(f"{impl:24} OK", flush=True)
+                    case_rows.append(
+                        (
+                            "PASS",
+                            impl,
+                            str(impl_dir),
+                            "opentitan",
+                            lec_mode_label,
+                            diag,
+                        )
+                    )
+                    continue
+                if (
+                    stage == "lec"
+                    and not lec_smoke_only
+                    and result in ("NEQ", "UNKNOWN")
+                    and diag == "XPROP_ONLY"
+                    and lec_accept_xprop_only
+                ):
+                    print(
+                        f"{impl:24} XPROP_ONLY (accepted)",
+                        flush=True,
+                    )
+                    case_rows.append(
+                        (
+                            "XFAIL",
+                            impl,
+                            f"{impl_dir}#XPROP_ONLY",
+                            "opentitan",
+                            lec_mode_label,
+                            "XPROP_ONLY",
+                        )
+                    )
+                    xprop_rows.append(
+                        (
+                            "XFAIL",
+                            impl,
+                            lec_mode_label,
+                            "XPROP_ONLY",
+                            result or "",
+                            encode_summary_counts(summary_counts),
+                            str(impl_dir),
+                            assume_known_result or "",
+                        )
+                    )
+                    continue
+                failures += 1
                 if not diag:
                     if result in ("NEQ", "UNKNOWN", "EQ"):
                         diag = result

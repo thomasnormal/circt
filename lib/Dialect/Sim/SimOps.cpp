@@ -197,6 +197,8 @@ OpFoldResult FormatLiteralOp::fold(FoldAdaptor adaptor) {
 // --- FormatDecOp ---
 
 StringAttr FormatDecOp::formatConstant(Attribute constVal) {
+  if (getFourStateWidth().has_value())
+    return {};
   auto intAttr = llvm::dyn_cast<IntegerAttr>(constVal);
   if (!intAttr)
     return {};
@@ -219,6 +221,8 @@ StringAttr FormatDecOp::formatConstant(Attribute constVal) {
 }
 
 OpFoldResult FormatDecOp::fold(FoldAdaptor adaptor) {
+  if (getFourStateWidth().has_value())
+    return {};
   if (getValue().getType().getIntOrFloatBitWidth() == 0)
     return StringAttr::get(getContext(), "0");
   return {};
@@ -227,12 +231,16 @@ OpFoldResult FormatDecOp::fold(FoldAdaptor adaptor) {
 // --- FormatHexOp ---
 
 StringAttr FormatHexOp::formatConstant(Attribute constVal) {
+  if (getFourStateWidth().has_value())
+    return {};
   return formatIntegersByRadix(constVal.getContext(), 16, constVal,
                                getIsHexUppercase(), getIsLeftAligned(),
                                getPaddingChar(), getSpecifierWidth());
 }
 
 OpFoldResult FormatHexOp::fold(FoldAdaptor adaptor) {
+  if (getFourStateWidth().has_value())
+    return {};
   if (getValue().getType().getIntOrFloatBitWidth() == 0)
     return formatIntegersByRadix(
         getContext(), 16, IntegerAttr::get(getValue().getType(), 0), false,
@@ -243,12 +251,16 @@ OpFoldResult FormatHexOp::fold(FoldAdaptor adaptor) {
 // --- FormatOctOp ---
 
 StringAttr FormatOctOp::formatConstant(Attribute constVal) {
+  if (getFourStateWidth().has_value())
+    return {};
   return formatIntegersByRadix(constVal.getContext(), 8, constVal, false,
                                getIsLeftAligned(), getPaddingChar(),
                                getSpecifierWidth());
 }
 
 OpFoldResult FormatOctOp::fold(FoldAdaptor adaptor) {
+  if (getFourStateWidth().has_value())
+    return {};
   if (getValue().getType().getIntOrFloatBitWidth() == 0)
     return formatIntegersByRadix(
         getContext(), 8, IntegerAttr::get(getValue().getType(), 0), false,
@@ -259,12 +271,16 @@ OpFoldResult FormatOctOp::fold(FoldAdaptor adaptor) {
 // --- FormatBinOp ---
 
 StringAttr FormatBinOp::formatConstant(Attribute constVal) {
+  if (getFourStateWidth().has_value())
+    return {};
   return formatIntegersByRadix(constVal.getContext(), 2, constVal, false,
                                getIsLeftAligned(), getPaddingChar(),
                                getSpecifierWidth());
 }
 
 OpFoldResult FormatBinOp::fold(FoldAdaptor adaptor) {
+  if (getFourStateWidth().has_value())
+    return {};
   if (getValue().getType().getIntOrFloatBitWidth() == 0)
     return formatIntegersByRadix(
         getContext(), 2, IntegerAttr::get(getValue().getType(), 0), false,

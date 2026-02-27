@@ -63,6 +63,28 @@ static moore::Edge convertEdgeKind(const slang::ast::EdgeKind edge) {
   llvm_unreachable("all edge kinds handled");
 }
 
+/// Get the current time precision as femtoseconds.
+static uint64_t getTimePrecisionInFemtoseconds(Context &context) {
+  static_assert(int(slang::TimeUnit::Seconds) == 0);
+  static_assert(int(slang::TimeUnit::Milliseconds) == 1);
+  static_assert(int(slang::TimeUnit::Microseconds) == 2);
+  static_assert(int(slang::TimeUnit::Nanoseconds) == 3);
+  static_assert(int(slang::TimeUnit::Picoseconds) == 4);
+  static_assert(int(slang::TimeUnit::Femtoseconds) == 5);
+
+  static_assert(int(slang::TimeScaleMagnitude::One) == 1);
+  static_assert(int(slang::TimeScaleMagnitude::Ten) == 10);
+  static_assert(int(slang::TimeScaleMagnitude::Hundred) == 100);
+
+  auto exp = static_cast<unsigned>(context.timeScale.precision.unit);
+  assert(exp <= 5);
+  exp = 5 - exp;
+  auto scale = static_cast<uint64_t>(context.timeScale.precision.magnitude);
+  while (exp-- > 0)
+    scale *= 1000;
+  return scale;
+}
+
 // NOLINTBEGIN(misc-no-recursion)
 namespace {
 
@@ -1953,6 +1975,15 @@ struct DelayControlVisitor {
     return success();
   }
 
+  // Handle `#1step` delays as a single tick of the current time precision.
+  LogicalResult visit(const slang::ast::OneStepDelayControl &) {
+    auto delay =
+        moore::ConstantTimeOp::create(builder, loc,
+                                      getTimePrecisionInFemtoseconds(context));
+    moore::WaitDelayOp::create(builder, loc, delay);
+    return success();
+  }
+
   // Emit an error for all other timing controls.
   template <typename T>
   LogicalResult visit(T &&ctrl) {
@@ -2248,6 +2279,77 @@ struct LTLClockControlVisitor {
 
 } // namespace
 
+static LogicalResult
+emitRepeatedTimingControl(Context &context, Location loc, Value count,
+                          llvm::function_ref<LogicalResult()> emitBody) {
+  auto &builder = context.builder;
+
+  // Verify the count is an integer type.
+  auto countIntType = dyn_cast<moore::IntType>(count.getType());
+  if (!countIntType) {
+    return mlir::emitError(loc) << "repeat event count must have integer type, "
+                                   "but got "
+                                << count.getType();
+  }
+
+  // Get the parent region to create blocks in.
+  Region *parentRegion = builder.getInsertionBlock()->getParent();
+
+  // Create the blocks for the loop: check, body, step, exit.
+  auto *exitBlock = new Block();
+  auto *stepBlock = new Block();
+  auto *bodyBlock = new Block();
+  auto *checkBlock = new Block();
+
+  // Insert blocks in forward order after current insertion point.
+  parentRegion->getBlocks().insert(
+      std::next(builder.getInsertionBlock()->getIterator()), checkBlock);
+  parentRegion->getBlocks().insert(std::next(checkBlock->getIterator()),
+                                   bodyBlock);
+  parentRegion->getBlocks().insert(std::next(bodyBlock->getIterator()),
+                                   stepBlock);
+  parentRegion->getBlocks().insert(std::next(stepBlock->getIterator()),
+                                   exitBlock);
+
+  // Add the counter argument to the check block.
+  auto currentCount = checkBlock->addArgument(count.getType(), count.getLoc());
+
+  // Branch to the check block with the initial count.
+  cf::BranchOp::create(builder, loc, checkBlock, count);
+
+  // Generate the loop condition check: while (count != 0).
+  builder.setInsertionPointToEnd(checkBlock);
+  auto cond = context.convertToBool(currentCount);
+  if (!cond)
+    return failure();
+  cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
+  cf::CondBranchOp::create(builder, loc, cond, bodyBlock, exitBlock);
+
+  // Generate the loop body.
+  builder.setInsertionPointToEnd(bodyBlock);
+  if (failed(emitBody()))
+    return failure();
+  // Branch to the step block (unless the body was terminated).
+  if (builder.getInsertionBlock())
+    cf::BranchOp::create(builder, loc, stepBlock);
+
+  // Decrement the counter and branch back to the check block.
+  builder.setInsertionPointToEnd(stepBlock);
+  auto one = moore::ConstantOp::create(builder, count.getLoc(), countIntType, 1);
+  Value nextCount =
+      moore::SubOp::create(builder, count.getLoc(), currentCount, one);
+  cf::BranchOp::create(builder, loc, checkBlock, nextCount);
+
+  // Continue inserting in the exit block.
+  if (exitBlock->hasNoPredecessors()) {
+    exitBlock->erase();
+    builder.clearInsertionPoint();
+  } else {
+    builder.setInsertionPointToEnd(exitBlock);
+  }
+  return success();
+}
+
 // Entry point to timing control handling. This deals with the layer of repeats
 // that a timing control may be wrapped in, and also handles the implicit event
 // control which may appear at that point. For any event control a `WaitEventOp`
@@ -2276,71 +2378,57 @@ static LogicalResult handleRoot(Context &context,
     if (!count)
       return failure();
 
-    // Verify the count is an integer type.
-    auto countIntType = dyn_cast<moore::IntType>(count.getType());
-    if (!countIntType) {
+    return emitRepeatedTimingControl(context, loc, count, [&]() {
+      return handleRoot(context, repeatedCtrl.event, implicitWaitOp);
+    });
+  }
+
+    // Handle cycle delay control (`##N`) by waiting on the default (or global)
+    // clocking event N times.
+  case TimingControlKind::CycleDelay: {
+    auto &cycleCtrl = ctrl.as<slang::ast::CycleDelayControl>();
+
+    auto count = context.convertRvalueExpression(cycleCtrl.expr);
+    if (!count)
+      return failure();
+
+    if (!context.currentScope)
       return mlir::emitError(loc)
-             << "repeat event count must have integer type, but got "
-             << count.getType();
+             << "cycle delay requires an enclosing scope";
+
+    const slang::ast::TimingControl *clockEvent = nullptr;
+    if (auto *clocking =
+            context.compilation.getDefaultClocking(*context.currentScope)) {
+      if (auto *clockBlock =
+              clocking->as_if<slang::ast::ClockingBlockSymbol>())
+        clockEvent = &clockBlock->getEvent();
+      else
+        return mlir::emitError(loc)
+               << "unsupported default clocking symbol kind for cycle delay";
     }
-
-    // Get the parent region to create blocks in.
-    Region *parentRegion = builder.getInsertionBlock()->getParent();
-
-    // Create the blocks for the loop: check, body, step, exit.
-    auto *exitBlock = new Block();
-    auto *stepBlock = new Block();
-    auto *bodyBlock = new Block();
-    auto *checkBlock = new Block();
-
-    // Insert blocks in forward order after current insertion point.
-    parentRegion->getBlocks().insert(
-        std::next(builder.getInsertionBlock()->getIterator()), checkBlock);
-    parentRegion->getBlocks().insert(
-        std::next(checkBlock->getIterator()), bodyBlock);
-    parentRegion->getBlocks().insert(
-        std::next(bodyBlock->getIterator()), stepBlock);
-    parentRegion->getBlocks().insert(
-        std::next(stepBlock->getIterator()), exitBlock);
-
-    // Add the counter argument to the check block.
-    auto currentCount = checkBlock->addArgument(count.getType(), count.getLoc());
-
-    // Branch to the check block with the initial count.
-    cf::BranchOp::create(builder, loc, checkBlock, count);
-
-    // Generate the loop condition check: while (count != 0).
-    builder.setInsertionPointToEnd(checkBlock);
-    auto cond = context.convertToBool(currentCount);
-    if (!cond)
-      return failure();
-    cond = moore::ToBuiltinBoolOp::create(builder, loc, cond);
-    cf::CondBranchOp::create(builder, loc, cond, bodyBlock, exitBlock);
-
-    // Generate the loop body: wait for the event.
-    builder.setInsertionPointToEnd(bodyBlock);
-    if (failed(handleRoot(context, repeatedCtrl.event, implicitWaitOp)))
-      return failure();
-    // Branch to the step block (unless the body was terminated).
-    if (builder.getInsertionBlock())
-      cf::BranchOp::create(builder, loc, stepBlock);
-
-    // Decrement the counter and branch back to the check block.
-    builder.setInsertionPointToEnd(stepBlock);
-    auto one =
-        moore::ConstantOp::create(builder, count.getLoc(), countIntType, 1);
-    Value nextCount =
-        moore::SubOp::create(builder, count.getLoc(), currentCount, one);
-    cf::BranchOp::create(builder, loc, checkBlock, nextCount);
-
-    // Continue inserting in the exit block.
-    if (exitBlock->hasNoPredecessors()) {
-      exitBlock->erase();
-      builder.clearInsertionPoint();
-    } else {
-      builder.setInsertionPointToEnd(exitBlock);
+    if (!clockEvent) {
+      if (auto *globalClocking = context.compilation.getGlobalClockingAndNoteUse(
+              *context.currentScope)) {
+        if (auto *clockBlock =
+                globalClocking->as_if<slang::ast::ClockingBlockSymbol>())
+          clockEvent = &clockBlock->getEvent();
+        else
+          return mlir::emitError(loc)
+                 << "unsupported global clocking symbol kind for cycle delay";
+      }
     }
-    return success();
+    if (!clockEvent)
+      return mlir::emitError(loc)
+             << "cycle delay requires a default or global clocking event";
+
+    auto *signalCtrl = getCanonicalSignalEventControlForAssertions(*clockEvent);
+    if (!signalCtrl)
+      return mlir::emitError(loc)
+             << "unsupported clocking event kind for cycle delay";
+
+    return emitRepeatedTimingControl(context, loc, count, [&]() {
+      return handleRoot(context, *signalCtrl, implicitWaitOp);
+    });
   }
 
     // Handle implicit events, i.e. `@*` and `@(*)`. This implicitly includes
@@ -2403,8 +2491,7 @@ static LogicalResult handleRoot(Context &context,
     // Handle delay control.
   case TimingControlKind::Delay:
   case TimingControlKind::Delay3:
-  case TimingControlKind::OneStepDelay:
-  case TimingControlKind::CycleDelay: {
+  case TimingControlKind::OneStepDelay: {
     DelayControlVisitor visitor{context, loc, builder};
     return ctrl.visit(visitor);
   }

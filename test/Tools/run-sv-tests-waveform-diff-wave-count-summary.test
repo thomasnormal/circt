@@ -1,0 +1,22 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/sv-tests/tests/chapter-1 %t/bin
+// RUN: printf '// :type: simulation\nmodule top;\nendmodule\n' > %t/sv-tests/tests/chapter-1/case_a.sv
+// RUN: printf '// :type: simulation\nmodule top;\nendmodule\n' > %t/sv-tests/tests/chapter-1/case_b.sv
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\necho "hw.module @top()"\n' > %t/bin/fake-circt-verilog
+// RUN: chmod +x %t/bin/fake-circt-verilog
+// RUN: printf '#!/usr/bin/env bash\nset -euo pipefail\nvcd=""\nfor arg in "$@"; do\n  if [[ "$arg" == --vcd=* ]]; then\n    vcd="${arg#--vcd=}"\n  fi\ndone\n[[ -n "$vcd" ]]\nmkdir -p "$(dirname "$vcd")"\ncat > "$vcd" <<'\''VCD'\''\n$timescale 1ns $end\n$scope module top $end\n$var wire 1 ! a $end\n$upscope $end\n$enddefinitions $end\n#0\n0!\n#1\n1!\nVCD\necho "[circt-sim] Simulation completed at time 1 fs"\n' > %t/bin/fake-circt-sim
+// RUN: chmod +x %t/bin/fake-circt-sim
+// RUN: printf '#!/usr/bin/env python3\nprint("lhs_signals=1 rhs_signals=1 signals_compared=1 signals_only_lhs=0 signals_only_rhs=0 signals_mismatched=0 ambiguous_lhs=0 ambiguous_rhs=0 timescale_match=1")\n' > %t/bin/fake-compare.py
+// RUN: chmod +x %t/bin/fake-compare.py
+// RUN: env CIRCT_VERILOG=%t/bin/fake-circt-verilog CIRCT_SIM=%t/bin/fake-circt-sim COMPARE_VCD_TOOL=%t/bin/fake-compare.py MAX_TESTS=1 REQUIRE_XCELIUM=0 XRUN= %S/../../utils/run_sv_tests_waveform_diff.sh %t/sv-tests %t/out > %t/log.txt 2>&1
+// RUN: not grep -q "Broken pipe" %t/log.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+// RUN: FileCheck %s --check-prefix=MATRIX < %t/out/lanes/interpret_off/matrix.tsv
+//
+// LOG: [sv-tests-wave] selected=1
+// LOG: [sv-tests-wave] max_tests_reached=1
+// LOG: [sv-tests-wave] waves_upper_bound=4 waves_produced=3
+// LOG: [sv-tests-wave] lane_vcd_counts=interpret_off:1 interpret_on:1 compile_aot:1 xcelium:0
+//
+// MATRIX: avip{{[[:space:]]+}}seed{{[[:space:]]+}}compile_status
+// MATRIX: chapter-1__case_a{{[[:space:]]+}}1{{[[:space:]]+}}OK

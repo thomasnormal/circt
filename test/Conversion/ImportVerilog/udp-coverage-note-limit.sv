@@ -1,5 +1,7 @@
 // RUN: circt-verilog --no-uvm-auto-include --lint-only -Wudp-coverage %s 2>&1 | FileCheck %s --check-prefix=DEFAULT
 // RUN: circt-verilog --no-uvm-auto-include --lint-only -Wudp-coverage --max-udp-coverage-notes=2 %s 2>&1 | FileCheck %s --check-prefix=LIMIT2
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=IR-DIAG
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s --check-prefix=IR
 // REQUIRES: slang
 
 // DEFAULT: warning: primitive does not specify outputs for all edges of all inputs
@@ -14,6 +16,9 @@
 // LIMIT2-NEXT: (0x) 0
 // LIMIT2-NEXT: (10) 0
 // LIMIT2-NEXT: ...and more
+
+// IR-DIAG-NOT: dropping user-defined primitive instance `u` of `p`
+// IR-LABEL: moore.module @top
 
 primitive p(q, clk, d);
   output q;

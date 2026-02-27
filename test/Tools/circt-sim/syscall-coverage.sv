@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// TODO: get_inst_coverage() returns x instead of numeric value — coverage query not wired.
 // Test covergroup get_coverage() and get_inst_coverage()
 module top;
   int val;
