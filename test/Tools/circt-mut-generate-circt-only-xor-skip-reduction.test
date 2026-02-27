@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [3:0] a,b,c, output logic y0,y1);\n  assign y0 = ^a;\n  assign y1 = (b ^ c);\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 60 --seed 0 --cfg planner_policy=legacy > %t/log.txt
+// RUN: grep -q 'NATIVE_XOR_TO_OR@1' %t/mutations.txt
+// RUN: not grep -q 'NATIVE_XOR_TO_OR@2' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 60

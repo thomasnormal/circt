@@ -414,6 +414,31 @@ static void collectBinaryShiftSites(StringRef text, StringRef token,
   }
 }
 
+static void collectBinaryXorSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                  SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (text[i] != '^')
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (prev == '=' || next == '=')
+      continue;
+    if (prev == '~' || next == '~')
+      continue;
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+    sites.push_back({i});
+  }
+}
+
 static void collectBinaryArithmeticSites(StringRef text, char needle,
                                          ArrayRef<uint8_t> codeMask,
                                          SmallVectorImpl<SiteInfo> &sites) {
@@ -563,7 +588,7 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "XOR_TO_OR") {
-    collectLiteralTokenSites(designText, "^", codeMask, sites);
+    collectBinaryXorSites(designText, codeMask, sites);
     return;
   }
   if (op == "UNARY_NOT_DROP") {

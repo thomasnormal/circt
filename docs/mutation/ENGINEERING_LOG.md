@@ -42,3 +42,12 @@
   - Added native operators `CASEEQ_TO_EQ` and `CASENEQ_TO_NEQ`.
   - Tightened comparator site detection in both planner and mutator so `EQ_TO_NEQ`/`NEQ_TO_EQ` no longer target `===`/`!==` sites.
   - Extended `arith`/`inv`/`invert`/`balanced` mode mappings to include 4-state compare mutations.
+
+## 2026-02-27 (binary XOR-only tightening)
+
+- realizations:
+  - Mutating reduction XOR (`^a`) as if it were binary XOR is structurally valid textually but semantically a different fault class, and it skews campaigns toward less realistic operator substitutions.
+
+- changes made:
+  - Tightened `XOR_TO_OR` site detection in planner and mutator to binary XOR only.
+  - Added guards for XNOR and assignment forms (`^~`, `~^`, `^=`), and ensured site-index parity between planner and mutator.

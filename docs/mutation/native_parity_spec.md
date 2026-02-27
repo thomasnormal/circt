@@ -96,6 +96,8 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   as `[W-1:0]`.
 - Shift site detection (`SHL_TO_SHR`, `SHR_TO_SHL`) excludes triple-shift and
   shift-assignment spellings (`<<<`, `>>>`, `<<=`, `>>=`).
+- `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign
+  forms like `^a`, `^~`, `~^`, `^=`).
 - Mutation application must use the same site-index contract (code-only spans),
   otherwise `NATIVE_<OP>@<n>` can target different textual occurrences.
 
