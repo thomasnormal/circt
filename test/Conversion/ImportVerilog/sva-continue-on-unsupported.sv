@@ -1,4 +1,4 @@
-// RUN: not circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=ERR
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s 2>&1 | FileCheck %s --check-prefix=ERR
 // RUN: circt-verilog --no-uvm-auto-include --sva-continue-on-unsupported --ir-moore %s 2>&1 | FileCheck %s --check-prefix=WARN
 // RUN: circt-verilog --no-uvm-auto-include --sva-continue-on-unsupported --ir-moore %s | FileCheck %s --check-prefix=IR
 // REQUIRES: slang
@@ -10,16 +10,15 @@ module SvaContinueOnUnsupported(input logic clk, a);
   cg_t cg;
   initial cg = new();
 
-  // Covergroup-handle sampled value for `$rose` is currently unsupported.
+  // Covergroup-handle sampled value for `$rose` should lower as handle truthiness.
   bad_assert: assert property (@(posedge clk)
       $rose(cg));
 endmodule
 
-// ERR: error: unsupported sampled value type for $rose
+// ERR-NOT: error: unsupported sampled value type for $rose
 
-// WARN: warning: unsupported sampled value type for $rose
-// WARN: warning: skipping unsupported SVA assertion in continue mode: property lowering failed
+// WARN-NOT: warning: unsupported sampled value type for $rose
+// WARN-NOT: warning: skipping unsupported SVA assertion in continue mode: property lowering failed
 
-// IR: verif.assert
-// IR-SAME: {circt.unsupported_sva
-// IR-SAME: circt.unsupported_sva_reason = "property lowering failed"
+// IR: verif.clocked_assert
+// IR-NOT: circt.unsupported_sva

@@ -467,6 +467,13 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
     return nonNull;
   }
 
+  if (isa<moore::CovergroupHandleType>(value.getType())) {
+    Value boolVal = moore::BoolCastOp::create(builder, loc, value).getResult();
+    if (boolVal.getType() != i1Ty)
+      boolVal = context.materializeConversion(i1Ty, boolVal, false, loc);
+    return boolVal;
+  }
+
   if (auto arrayTy = dyn_cast<moore::UnpackedArrayType>(value.getType())) {
     Value anySet = moore::ConstantOp::create(builder, loc, i1Ty, 0);
     auto idxTy = moore::IntType::get(builder.getContext(), 32,
@@ -3763,11 +3770,15 @@ Value Context::convertAssertionCallExpression(
     bool isClassHandleEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         isa<moore::ClassHandleType>(value.getType());
+    bool isCovergroupHandleEdgeSample =
+        (funcName == "$rose" || funcName == "$fell") &&
+        isa<moore::CovergroupHandleType>(value.getType());
     bool isVirtualInterfaceEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         isa<moore::VirtualInterfaceType>(value.getType());
-    bool isHandleEdgeSample =
-        isClassHandleEdgeSample || isVirtualInterfaceEdgeSample;
+    bool isHandleEdgeSample = isClassHandleEdgeSample ||
+                              isVirtualInterfaceEdgeSample ||
+                              isCovergroupHandleEdgeSample;
     auto emitUnsupportedNonConcurrentSampledPlaceholder = [&]() -> Value {
       if (!(options.continueOnUnsupportedSVA && !inAssertionExpr))
         return {};

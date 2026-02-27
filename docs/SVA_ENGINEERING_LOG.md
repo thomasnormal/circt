@@ -8403,3 +8403,436 @@
         - strict command fails with expected error.
         - lenient command passes with warning and emits `moore.assert`.
       - existing concurrent tolerant test still matches warning + placeholder path.
+
+## 2026-02-27 - Yosys mutate algorithm parity deep-dive
+
+- Realization: Yosys `mutate -list` is not just random mode cycling. It builds a candidate database with per-candidate metadata (`module/cell/port/bit/wire/src`) and then reduces it via weighted queue selection plus source-coverage pressure.
+- Surprise: The default queue and coverage weights are all explicit knobs, with `weight_cover=500`, queue buckets at `100`, and `pick_cover_prcnt=80` controlling whether queue picks are score-driven vs random fallback.
+- Realization: Coverage scoring in Yosys rewards first-touch diversity (`src`, `wire`, and `wirebit`) rather than pure operation balance.
+- Gap: CIRCT-only native planner currently emits deterministic round-robin over op kinds with site index rotation; it does not model queue families or `-cfg` weighting semantics.
+- Next step candidate: Introduce a native weighted planner policy in `NativeMutationPlanner` that remains deterministic by seed but uses weighted operator/site selection and novelty score, then add lit tests for reproducibility and profile-like biasing.
+
+## 2026-02-27 - OpenTitan LEC parity: LLHD abstraction acceptance wiring
+
+- Realization:
+  - OpenTitan AES canright LEC was blocked by `LEC_DIAG=LLHD_ABSTRACTION` with
+    `LEC_RESULT=UNKNOWN` in SMT mode, even when assume-known diagnosis showed
+    a satisfiable mismatch explanation path.
+- Red test (before fix):
+  - added `test/Tools/run-opentitan-lec-llhd-abstraction-default-accept.test`.
+  - fake `circt-lec` returns `UNKNOWN+LLHD_ABSTRACTION` unless it receives
+    `--accept-llhd-abstraction`; the test failed before runner wiring.
+- Implemented:
+  - `utils/run_opentitan_circt_lec.py`
+    - added `LEC_ACCEPT_LLHD_ABSTRACTION` env handling (default `1` for
+      OpenTitan parity lane behavior).
+    - forwards `--accept-llhd-abstraction` to `circt-lec` when enabled.
+    - added this knob to resolved-contract fingerprint fields to keep contract
+      provenance explicit and drift-detectable.
+  - updated contract expectation test:
+    - `test/Tools/run-opentitan-lec-resolved-contracts-file.test`
+      - checks new contract field and forwarded CLI arg in payload.
+- Validation:
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-llhd-abstraction-default-accept.test test/Tools/run-opentitan-lec-resolved-contracts-file.test test/Tools/run-opentitan-lec-xprop-nonzero-accepted.test`
+  - real OpenTitan repro:
+    - `CIRCT_VERILOG=build_test/bin/circt-verilog CIRCT_OPT=build_test/bin/circt-opt CIRCT_LEC=build_test/bin/circt-lec python3 utils/run_opentitan_circt_lec.py --opentitan-root /home/thomas-ahle/opentitan --impl-filter canright --workdir /tmp/ot-lec-canright --keep-workdir`
+    - now reports `aes_sbox_canright OK`.
+    - `circt-lec` output contains:
+      - `LEC_RESULT=EQ`
+      - `LEC_DIAG=LLHD_ABSTRACTION`
+      - note for accepted LLHD abstraction mode.
+
+## 2026-02-27 - Native weighted planner bootstrap in CIRCT-only generate
+
+- TDD:
+  - added failing tests first for CIRCT-only `--cfg` handling and weighted planner reproducibility:
+    - `test/Tools/circt-mut-generate-circt-only-weighted-policy.test`
+    - `test/Tools/circt-mut-generate-circt-only-cfg-weight-validation.test`
+- implemented:
+  - `tools/circt-mut/NativeMutationPlanner.{h,cpp}` now supports:
+    - config parsing for Yosys-like knobs (`pick_cover_prcnt`, `weight_cover`, `weight_pq_*`) and `planner_policy=legacy|weighted`
+    - legacy planner preserved as default behavior
+    - new deterministic weighted planner path (`planner_policy=weighted`) with seed-stable selection and site-aware emission
+- integration:
+  - CIRCT-only `circt-mut generate` now accepts `--cfg/--cfgs`; unsupported-option guard no longer rejects cfg entries.
+  - cache key includes planner policy and parsed weight settings.
+- validation:
+  - rebuilt `circt-mut` in `build_test`
+  - ran lit suite subset covering legacy and new behavior; all selected tests passed.
+- realization:
+  - preserving legacy default avoided churn in existing parity/regression tests while allowing incremental parity work behind explicit cfg opt-in.
+
+## 2026-02-27 - Weighted planner hardening (cfg validation + parity doc)
+
+- Added focused lit tests for CIRCT-only planner cfg behavior:
+  - `circt-mut-generate-circt-only-cfg-unknown-option.test`
+  - `circt-mut-generate-circt-only-cfg-policy-invalid.test`
+  - `circt-mut-generate-circt-only-cfg-zero-total-weight.test`
+- Added implementation/migration spec:
+  - `docs/mutation/native_parity_spec.md`
+  - captures policy model (`legacy`/`weighted`), knob contract, determinism and cache key contract, and incremental Yosys parity mapping.
+- Validation:
+  - ran 9-test focused CIRCT-only generate suite (legacy + weighted + validation), all passing in `build_test`.
+
+## 2026-02-27 - CIRCT-only mode filtering support (`--mode/--modes`)
+
+- TDD:
+  - added failing tests for native CIRCT-only mode filtering and invalid mode handling:
+    - `test/Tools/circt-mut-generate-circt-only-modes-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-modes-invalid.test`
+  - updated unsupported-options test to keep covering still-unsupported options:
+    - `test/Tools/circt-mut-generate-circt-only-unsupported-options.test` now checks `--mode-count/--mode-counts`.
+- implemented:
+  - CIRCT-only `generate` now accepts `--mode/--modes`.
+  - mode names are validated against the existing known set.
+  - mode names are mapped to native text mutation-op subsets and used to filter ordered native ops before planning.
+  - mode list now participates in generation cache key material.
+- validation:
+  - rebuilt `circt-mut` and ran 11-test focused CIRCT-only generate suite; all passing.
+- realization:
+  - this keeps legacy planner default behavior intact while enabling incremental user control over mutation families in CIRCT-only flows.
+
+## 2026-02-27 - CIRCT-only mode allocation support (`--mode-count(s)`, `--mode-weight(s)`)
+
+- TDD:
+  - added tests for CIRCT-only mode allocation behavior:
+    - `test/Tools/circt-mut-generate-circt-only-mode-counts-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-mode-weights-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-mode-allocation-conflict.test`
+  - updated unsupported-options guard test to check still-unsupported profile options.
+- implemented:
+  - CIRCT-only generate now accepts `--mode-count/--mode-counts` and `--mode-weight/--mode-weights`.
+  - allocation logic mirrors native generate semantics:
+    - validates known modes and positive integers
+    - enforces `mode-count total == --count`
+    - enforces conflict between count and weight modes
+    - converts weights to counts with seeded remainder rotation
+  - per-mode planning is emitted and concatenated deterministically with seed offsets.
+  - mode-count and mode-weight inputs are included in generation cache key payload.
+- validation:
+  - rebuilt `circt-mut`.
+  - ran 14 focused CIRCT-only generate lit tests (legacy + weighted + mode + cfg); all passing.
+- realization:
+  - CIRCT-only flow now has meaningful family allocation control while keeping profiles/selects intentionally unsupported until planner parity is tighter.
+
+## 2026-02-27 - CIRCT-only profile support (`--profile/--profiles`)
+
+- TDD:
+  - added CIRCT-only profile tests:
+    - `test/Tools/circt-mut-generate-circt-only-profiles-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-profiles-invalid.test`
+- implemented:
+  - CIRCT-only generate now expands profiles through existing `appendProfile` mapping.
+  - profile-expanded modes participate in mode allocation (count/weight/default split).
+  - profile-expanded cfg presets are merged with explicit `--cfg` before planner parsing.
+  - profile list is included in cache key payload.
+  - unsupported guard now only blocks `--select/--selects` in CIRCT-only mode.
+- validation:
+  - rebuilt `circt-mut` and ran 16 focused CIRCT-only generate tests; all passing.
+- realization:
+  - CIRCT-only CLI now supports the same practical campaign-shaping knobs as native generate for mode/profile/cfg, reducing feature skew while keeping third-party tools optional.
+
+## 2026-02-27 - Weighted policy auto-selection + full CIRCT-only generate sweep
+
+- implemented:
+  - planner config now auto-selects `weighted` policy when weighted knobs are provided (`pick_cover_prcnt`, `weight_*`) and `planner_policy` is not explicitly set.
+  - this makes profile-provided weight cfgs meaningful by default in CIRCT-only mode.
+- tests:
+  - added `test/Tools/circt-mut-generate-circt-only-cfg-auto-weighted.test`.
+  - added profile tests:
+    - `test/Tools/circt-mut-generate-circt-only-profiles-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-profiles-invalid.test`
+  - updated unsupported-options test to target `--select/--selects` only.
+- validation:
+  - rebuilt `circt-mut`.
+  - ran full `test/Tools/circt-mut-generate-circt-only-*.test` sweep (17 tests), all passing.
+  - ran broader `test/Tools/circt-mut-generate-*.test` + `test/Tools/run-mutation-generate-*.test` sweep (42 tests), all passing.
+- realization:
+  - CIRCT-only generate now covers modes, mode allocations, profiles, and planner cfgs with deterministic behavior and cache separation; remaining notable gap is `--select` semantics.
+
+## 2026-02-27 - OpenTitan connectivity parity hardening (BMC + LEC)
+
+- Realizations from real OpenTitan runs:
+  - connectivity manifest generation failed on real CSV formatting (`CONNECTION, ..., "{A, B}", ...`) due parser whitespace handling.
+  - connectivity compile units incorrectly included `.svh` headers and non-Verilog files (`.py`) as source files.
+  - `run_pairwise_circt_bmc.py` lacked mixed-timescale fallback; OpenTitan top-level elaboration hit known timescale diagnostics.
+  - connectivity source list for `chip_earlgrey_asic` still included platform/vendor-skew files (`lowrisc_englishbreakfast_*`, `lowrisc_prim_xilinx_*`) that caused duplicate-definition failures.
+
+- TDD / regressions added:
+  - `test/Tools/run-opentitan-connectivity-circt-bmc-select-quoted-spaced-fields.test`
+  - `test/Tools/run-opentitan-connectivity-circt-bmc-eda-file-filter.test`
+  - `test/Tools/run-opentitan-connectivity-circt-lec-eda-file-filter.test`
+  - `test/Tools/run-pairwise-circt-bmc-timescale-auto-retry.test`
+
+- Implemented:
+  - `utils/select_opentitan_connectivity_cfg.py`
+    - CSV parse fix: `csv.reader(..., skipinitialspace=True)` for OpenTitan-style comma+space quoting.
+    - switched manifest writers to `csv.writer(..., delimiter="\\t")` to avoid malformed TSV payloads.
+  - `utils/run_opentitan_connectivity_circt_bmc.py`
+    - robust EDA file filtering:
+      - include only Verilog entries (`.sv/.v` sources; `.svh/.vh` include-only unless include-marked source).
+      - exclude non-Verilog files from compile units.
+    - platform/vendor filtering:
+      - drop `lowrisc_englishbreakfast_*` for `top_earlgrey` rel-paths.
+      - drop `lowrisc_prim_xilinx_*` for `*_asic` targets.
+  - `utils/run_opentitan_connectivity_circt_lec.py`
+    - mirrored BMC-side EDA filtering and platform/vendor filtering logic for parity.
+  - `utils/run_pairwise_circt_bmc.py`
+    - added timescale fallback retry support:
+      - `BMC_VERILOG_TIMESCALE_FALLBACK_MODE=auto|on|off` (default `auto`)
+      - `BMC_VERILOG_FALLBACK_TIMESCALE` (default `1ns/1ps`)
+      - retries once on known mixed-timescale diagnostic; captures trigger log
+        `circt-verilog.missing-timescale.log`.
+
+- Validation:
+  - targeted and broad lit suites:
+    - connectivity select + BMC + LEC suites.
+    - full `run-pairwise-circt-bmc-*.test` suite.
+  - all selected suites passed in `build_test`.
+  - real OpenTitan connectivity progression (`alert_handler_esc` filtered run):
+    - cleared orphan-CONDITION parser failure.
+    - cleared `.svh/.py` compile-unit pollution.
+    - cleared initial mixed-timescale blocker via pairwise auto-retry.
+    - cleared duplicate-definition blocker from englishbreakfast/xilinx skew filtering.
+    - current remaining blocker surfaces deeper frontend legality diagnostics in
+      OpenTitan RTL elaboration (`usbdev.sv` always_comb driver conflict).
+
+## 2026-02-27 - Connectivity LEC timescale fallback retry parity
+
+- Realization:
+  - `run_opentitan_connectivity_circt_lec.py` had no mixed-timescale fallback path, unlike pairwise BMC. Real OpenTitan connectivity LEC runs could fail at `circt-verilog` with known mixed-timescale diagnostics.
+
+- TDD / regression added:
+  - `test/Tools/run-opentitan-connectivity-circt-lec-timescale-auto-retry.test`
+    - red-before-fix: LEC case ended as `CIRCT_VERILOG_ERROR` and no retry artifact.
+    - green-after-fix: retries with fallback timescale, emits PASS, and preserves first failure log.
+
+- Implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`
+    - added missing-timescale detector and command-option helper.
+    - added env controls:
+      - `LEC_VERILOG_TIMESCALE_FALLBACK_MODE=auto|on|off` (default `auto`)
+      - `LEC_VERILOG_FALLBACK_TIMESCALE` (default `1ns/1ps`)
+    - in `auto` mode, on known mixed-timescale `circt-verilog` failure:
+      - copies first failing log to `circt-verilog.missing-timescale.log`
+      - retries once with `--timescale=<fallback>`
+    - in `on` mode, injects fallback timescale up front unless an explicit `--timescale` already exists in `CIRCT_VERILOG_ARGS`.
+    - contract fingerprint input now includes timescale fallback mode/value.
+
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-timescale-auto-retry.test`
+  - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+  - both passed.
+
+## 2026-02-27 - CIRCT-only `--select/--selects` support (module-pattern filtering)
+
+- TDD:
+  - added select-focused regression tests before wiring:
+    - `test/Tools/circt-mut-generate-circt-only-select-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-select-nomatch.test`
+  - updated `test/Tools/circt-mut-generate-circt-only-unsupported-options.test`
+    to assert unsupported select-prefix diagnostics in CIRCT-only mode.
+
+- implemented:
+  - CIRCT-only generate now parses and applies `--select/--selects` with module
+    glob patterns using prefixes `t:` and `m:`.
+  - selection is applied by extracting matching module spans from the design text
+    before native-op discovery/planning.
+  - error paths added for malformed expressions, parse failures, and no-match
+    selections.
+  - cache key payload now includes select inputs to prevent cross-select cache
+    collisions.
+  - removed stale dead-path unsupported-options guard in CIRCT-only generate.
+
+- validation:
+  - rebuilt `circt-mut` in `build_test`.
+  - ran targeted tests:
+    - `circt-mut-generate-circt-only-select-basic.test`
+    - `circt-mut-generate-circt-only-select-nomatch.test`
+    - `circt-mut-generate-circt-only-unsupported-options.test`
+  - ran full `circt-mut-generate-circt-only-*.test` sweep (19 tests), all passing.
+  - ran broader `circt-mut-generate-*.test` + `run-mutation-generate-*.test`
+    sweep (45 tests), all passing.
+
+- realization:
+  - CIRCT-only and third-party-backed generate now share practical campaign
+    controls for mode/profile/cfg/select; remaining parity differences are mostly
+    algorithmic (native text planner vs Yosys/MCY internals), not CLI-surface.
+
+## 2026-02-27 - `__moore_coverpoint_init_with_width` fallback cleanup
+
+- realization:
+  - the late "fallback" handler in `LLHDProcessInterpreter::interpretLLVMCall`
+    for `__moore_coverpoint_init_with_width` was redundant dead code.
+  - the real fix is the primary coverage-runtime interception in the normal
+    external-call dispatch chain.
+
+- implemented:
+  - removed the redundant fallback block from
+    `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+
+- validation:
+  - rebuilt `circt-sim` and reran focused coverage tests:
+    - `test/Tools/circt-sim/covergroup-basic.sv`
+    - `test/Tools/circt-sim/syscall-coverage.sv`
+    - `test/Tools/circt-sim/coverage-event-implicit-sample.sv`
+    - `test/Tools/circt-sim/coverage-auto-bin-declared-domain.sv`
+  - all passed after removing fallback.
+
+## 2026-02-27 - Coverage denominator parity hardening follow-up
+
+- strengthened regression coverage for the auto-bin declared-domain fix:
+  - updated `test/Tools/circt-sim/coverage-auto-bin-declared-domain.sv`
+    to assert both `get_coverage()` and `get_inst_coverage()` (`81.25`).
+  - added signed-domain variant:
+    - `test/Tools/circt-sim/coverage-auto-bin-declared-domain-signed.sv`
+    - validates `logic signed [3:0]` auto-bin denominator uses declared domain
+      size (16) rather than observed min/max span.
+
+- validation:
+  - ran focused lit suite:
+    - `coverage-auto-bin-declared-domain.sv`
+    - `coverage-auto-bin-declared-domain-signed.sv`
+    - `covergroup-basic.sv`
+    - `syscall-coverage.sv`
+    - `coverage-event-implicit-sample.sv`
+  - all passed.
+  - cross-simulator parity spot-check:
+    - xrun functional coverage and circt-sim both report `CP_SIGN_COV=81.25`
+      for the signed test.
+
+## 2026-02-27 - Runtime unit tests for width-aware auto-bin denominator
+
+- TDD follow-up:
+  - added runtime-library unit tests that directly exercise
+    `__moore_coverpoint_init_with_width` behavior (not just simulator lit tests):
+    - `MooreRuntimeCoverageOptionsTest.DeclaredWidthAffectsAutoBinDomain`
+    - `MooreRuntimeCoverageMergeTest.MergeKeepsDeclaredWidthDomain`
+
+- scope:
+  - verifies declared-width coverpoints use domain denominator (`2^width`) while
+    legacy init path still uses observed-range denominator.
+  - verifies save/reset/merge does not lose width-aware denominator semantics.
+
+- validation:
+  - built `MooreRuntimeTests`.
+  - ran focused gtest filters for new tests and adjacent merge/auto-bin tests;
+    all passed.
+
+## 2026-02-27 - Similar issue fix: UVM coverage helpers now use width-aware init
+
+- realization:
+  - UVM runtime helper covergroups had two width-known paths still using legacy
+    `__moore_coverpoint_init`:
+    - register coverage (bit width known via `__moore_uvm_set_reg_bit_width`)
+    - addr-map access-type coverage (1-bit read/write domain)
+  - this preserved observed-range denominator behavior in these paths.
+
+- implemented:
+  - `lib/Runtime/MooreRuntime.cpp`
+    - reg helper now calls `__moore_coverpoint_init_with_width(..., bitWidth)`.
+    - addr-map access coverpoint now calls
+      `__moore_coverpoint_init_with_width(..., 1)`.
+  - added runtime API for targeted addr-map verification:
+    - `__moore_uvm_get_addr_map_coverage(const char *map_name)`
+    - declared in `include/circt/Runtime/MooreRuntime.h` and implemented in
+      `lib/Runtime/MooreRuntime.cpp`.
+
+- TDD / tests added:
+  - `MooreRuntimeUvmCoverageTest.RegBitWidthUsesDeclaredDomain`
+    - checks 2 unique values in a 4-bit register domain => 12.5%.
+  - `MooreRuntimeUvmCoverageTest.AddrMapAccessTypeUsesDeclaredDomain`
+    - checks single read sample yields 75% map coverage
+      (addr cp=100%, access cp=50%).
+
+- validation:
+  - rebuilt `MooreRuntimeTests`.
+  - ran focused gtest filters for new tests and adjacent regressions; all pass.
+  - reran lit coverage declared-domain tests; pass.
+
+## 2026-02-27 - Similar issue fix: UVM field-range denominator semantics
+
+- realization:
+  - API contract for `__moore_uvm_set_field_range` says coverage tracks values in
+    `[min_val, max_val]`, but runtime coverage still used observed-range
+    denominator for field covergroups.
+  - this caused severe over-reporting (e.g. first in-range sample could report
+    100% instead of `1 / range_size`).
+
+- TDD:
+  - added failing tests first:
+    - `MooreRuntimeUvmCoverageTest.FieldRangeUsesDeclaredDomain`
+    - `MooreRuntimeUvmCoverageTest.TotalCoverageUsesFieldRangeDomain`
+  - pre-fix failures confirmed (`100%` and incorrect total ratio).
+
+- implemented:
+  - added locked helper `computeUvmFieldCoverageLocked(...)` in
+    `lib/Runtime/MooreRuntime.cpp`.
+  - `__moore_uvm_get_field_coverage` now computes denominator from configured
+    `fieldRanges[field_name]` and counts in-range unique values with `at_least`.
+  - `__moore_uvm_get_coverage` now uses the same helper for field covergroups,
+    ensuring consistent total coverage behavior.
+
+- validation:
+  - rebuilt `MooreRuntimeTests`.
+  - new field-range tests pass, plus prior declared-width and UVM adjacent tests.
+  - reran `test/Tools/circt-sim/*coverage*.sv` (19 tests), all pass.
+  - reran seeded xrun-vs-circt parity sample: both remain `75.00/100.00`.
+
+## 2026-02-27 - UVM coverage hardening follow-up
+
+- added null-input regression expectation for new API:
+  - `MooreRuntimeUvmCoverageTest.NullInputHandling` now checks
+    `__moore_uvm_get_addr_map_coverage(nullptr) == 0.0`.
+
+- validation:
+  - ran full `MooreRuntimeUvmCoverageTest.*` suite (21 passing, 1 pre-existing disabled).
+
+## 2026-02-27 - Re-enabled previously disabled UVM field coverage test
+
+- realization:
+  - `DISABLED_SampleFieldCoverageEnabled` now passes after field-range denominator
+    fixes.
+
+- implemented:
+  - renamed to `SampleFieldCoverageEnabled` (enabled by default).
+
+- validation:
+  - rebuilt `MooreRuntimeTests` and ran `MooreRuntimeUvmCoverageTest.*`.
+  - all 22 tests pass with no disabled tests remaining in that suite.
+
+## 2026-02-27 - Runtime suite safety pass after coverage fixes
+
+- validation:
+  - ran full `MooreRuntimeTests` binary:
+    - `686` tests passed.
+    - `2` disabled tests remain globally (pre-existing outside the UVM coverage
+      suite).
+  - reran declared-domain lit tests:
+    - `coverage-auto-bin-declared-domain.sv`
+    - `coverage-auto-bin-declared-domain-signed.sv`
+    - both pass.
+
+## 2026-02-27 - ImportVerilog edge-sampled covergroup handles
+
+- realization:
+  - `$rose/$fell` had already been updated for class-handle and virtual-interface
+    sampled values, but covergroup handles still took the unsupported path.
+  - this caused strict-mode errors and continue-mode placeholder asserts for
+    otherwise boolean-handle semantics.
+
+- implemented:
+  - in `buildSampledBoolean`, added `moore::CovergroupHandleType` handling via
+    `moore::BoolCastOp` and conversion to `i1`.
+  - extended edge-sampled-handle recognition to include
+    `moore::CovergroupHandleType` in
+    `Context::convertAssertionCallExpression` for `$rose/$fell`.
+  - updated continue-on-unsupported regressions to assert no unsupported
+    diagnostic for covergroup-handle `$rose/$fell` and to check normal lowering.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv`
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
+  - all passing.
