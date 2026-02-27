@@ -93,3 +93,22 @@
   - Extended `test/Conversion/MooreToCore/string-ops.mlir` with
     `@FStringToStringSelect`.
   - Verified with focused `llvm-lit` run for that test file.
+
+### Sim: distinguish empty native module-init skips from unsupported skips
+- Repro:
+  - `circt-compile -v` on a module with no cloneable native-init ops
+    (`hw.module @top { hw.output }`) reported:
+    `Native module init modules: 0 emitted / 1 total`
+    but no skip-reason telemetry.
+- Root cause:
+  - Native module-init synthesis only incremented `skipReasons` when
+    `unsupported == true`; the `opsToClone.empty()` path was silently skipped.
+- Fix:
+  - Record a dedicated skip reason (`empty`) when a module has no cloneable
+    native-init ops and was not rejected as unsupported.
+- Tests:
+  - Added `test/Tools/circt-sim/aot-native-module-init-empty-telemetry.mlir`.
+  - Verified with focused `llvm-lit` runs for:
+    - `aot-native-module-init-empty-telemetry.mlir`
+    - `aot-native-module-init-skip-telemetry.mlir`
+    - `--filter 'Tools/circt-sim/aot-native-module-init'`

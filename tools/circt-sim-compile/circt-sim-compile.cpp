@@ -1500,6 +1500,8 @@ synthesizeNativeModuleInitFunctions(ModuleOp sourceModule,
         if (skipReason.empty())
           skipReason = "unsupported:unknown";
         ++stats.skipReasons[skipReason];
+      } else {
+        ++stats.skipReasons["empty"];
       }
       continue;
     }
