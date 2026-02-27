@@ -26,7 +26,8 @@ using namespace hw;
 
 static bool noI0Type(TypeRange types) {
   return llvm::none_of(
-      types, [](Type type) { return ExportVerilog::isZeroBitType(type); });
+      types,
+      [](mlir::Type type) { return ExportVerilog::isZeroBitType(type); });
 }
 
 static bool noI0TypedValue(ValueRange values) {
@@ -34,8 +35,8 @@ static bool noI0TypedValue(ValueRange values) {
 }
 
 /// Flatten the given value ranges into a single vector of values.
-static SmallVector<Value> flattenValues(ArrayRef<ValueRange> values) {
-  SmallVector<Value> result;
+static SmallVector<mlir::Value> flattenValues(ArrayRef<ValueRange> values) {
+  SmallVector<mlir::Value> result;
   for (const auto &vals : values)
     llvm::append_range(result, vals);
   return result;
@@ -46,7 +47,7 @@ namespace {
 class PruneTypeConverter : public mlir::TypeConverter {
 public:
   PruneTypeConverter() {
-    addConversion([&](Type type, SmallVectorImpl<Type> &results) {
+    addConversion([&](mlir::Type type, SmallVectorImpl<mlir::Type> &results) {
       if (!ExportVerilog::isZeroBitType(type))
         results.push_back(type);
       return success();
@@ -64,7 +65,8 @@ public:
   LogicalResult
   matchAndRewrite(TOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value> flattenedOperands = flattenValues(adaptor.getOperands());
+    SmallVector<mlir::Value> flattenedOperands =
+        flattenValues(adaptor.getOperands());
 
     // flattenedOperands may be empty (in case all operands are i0 typed and
     // have already been pruned. Then the 1:N adaptor will reflect this as no
@@ -145,7 +147,8 @@ public:
   LogicalResult
   matchAndRewrite(comb::ParityOp op, OneToNOpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    SmallVector<Value> flattenedOperands = flattenValues(adaptor.getOperands());
+    SmallVector<mlir::Value> flattenedOperands =
+        flattenValues(adaptor.getOperands());
     if (!flattenedOperands.empty() && noI0TypedValue(flattenedOperands))
       return failure();
 
@@ -175,7 +178,7 @@ public:
       return success();
     }
 
-    SmallVector<Value> materializedOperands =
+    SmallVector<mlir::Value> materializedOperands =
         flattenValues(adaptor.getOperands());
 
     // If the materializedOperands are the same as the original operands, then
