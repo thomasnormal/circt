@@ -1,7 +1,7 @@
 //===----------------------------------------------------------------------===//
 // UVM Reporting Test - Tests for enhanced UVM reporting functionality
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 // REQUIRES: slang
 //
 // This test verifies the UVM reporting infrastructure including:
@@ -37,8 +37,8 @@ package reporting_test_pkg;
       target_id = id;
     endfunction
 
-    // Override catch_action to demote specific errors to warnings
-    virtual function uvm_action_type_e catch_action();
+    // Override catch to demote specific errors to warnings
+    virtual function action_e catch();
       if (get_id() == target_id && get_severity() == UVM_ERROR) begin
         // Demote error to warning by catching it
         catch_count++;
@@ -112,7 +112,7 @@ package reporting_test_pkg;
 
       // Test verbosity configuration for IDs
       handler.set_id_verbosity("VERBOSE_ID", UVM_DEBUG);
-      if (handler.get_id_verbosity("VERBOSE_ID") != UVM_DEBUG)
+      if (handler.get_verbosity_level(UVM_INFO, "VERBOSE_ID") != UVM_DEBUG)
         `uvm_error("HANDLER_TEST", "get_id_verbosity mismatch")
 
       // Test file handle configuration (just exercise the API)
@@ -142,7 +142,7 @@ package reporting_test_pkg;
     endfunction
 
     virtual task run_phase(uvm_phase phase);
-      uvm_report_server server;
+      uvm_default_report_server server;
       int count;
 
       phase.raise_objection(this, "Starting report_server_test");
@@ -150,7 +150,11 @@ package reporting_test_pkg;
       `uvm_info("SERVER_TEST", "Testing uvm_report_server", UVM_LOW)
 
       // Get the report server singleton
-      server = uvm_report_server::get_server();
+      if (!$cast(server, uvm_report_server::get_server())) begin
+        `uvm_error("SERVER_TEST", "Failed to cast report server to uvm_default_report_server")
+        phase.drop_objection(this, "Finished report_server_test");
+        return;
+      end
 
       // Test max quit count
       server.set_max_quit_count(20);
@@ -159,7 +163,7 @@ package reporting_test_pkg;
 
       // Also test via component method
       set_report_max_quit_count(15);
-      if (get_report_max_quit_count() != 15)
+      if (server.get_max_quit_count() != 15)
         `uvm_error("SERVER_TEST", "component max_quit_count methods failed")
 
       // Reset counts for clean testing
@@ -172,11 +176,11 @@ package reporting_test_pkg;
       `uvm_warning("SERVER_TEST", "Test warning message")
 
       // Check severity counts
-      if (server.get_info_count() < 2)
-        `uvm_error("SERVER_TEST", $sformatf("Expected at least 2 info, got %0d", server.get_info_count()))
+      if (server.get_severity_count(UVM_INFO) < 2)
+        `uvm_error("SERVER_TEST", $sformatf("Expected at least 2 info, got %0d", server.get_severity_count(UVM_INFO)))
 
-      if (server.get_warning_count() < 1)
-        `uvm_error("SERVER_TEST", $sformatf("Expected at least 1 warning, got %0d", server.get_warning_count()))
+      if (server.get_severity_count(UVM_WARNING) < 1)
+        `uvm_error("SERVER_TEST", $sformatf("Expected at least 1 warning, got %0d", server.get_severity_count(UVM_WARNING)))
 
       // Test ID count
       count = server.get_id_count("SERVER_TEST");
@@ -287,6 +291,31 @@ package reporting_test_pkg;
       super.new(name, parent);
     endfunction
 
+    function int get_catcher_count();
+      uvm_report_catcher catcher;
+      uvm_report_cb_iter iter = new(null);
+      int count = 0;
+      catcher = iter.first();
+      while (catcher != null) begin
+        count++;
+        catcher = iter.next();
+      end
+      return count;
+    endfunction
+
+    function void clear_catchers();
+      uvm_report_catcher catcher;
+      uvm_report_catcher to_remove[$];
+      uvm_report_cb_iter iter = new(null);
+      catcher = iter.first();
+      while (catcher != null) begin
+        to_remove.push_back(catcher);
+        catcher = iter.next();
+      end
+      foreach (to_remove[i])
+        uvm_report_cb::delete(null, to_remove[i]);
+    endfunction
+
     virtual task run_phase(uvm_phase phase);
       error_demote_catcher catcher1;
       error_demote_catcher catcher2;
@@ -297,37 +326,43 @@ package reporting_test_pkg;
       `uvm_info("CATCHER_TEST", "Testing uvm_report_catcher", UVM_LOW)
 
       // Clear any existing catchers
-      uvm_report_catcher::clear_catchers();
+      clear_catchers();
 
       // Verify initial state
-      if (uvm_report_catcher::get_catcher_count() != 0)
+      if (get_catcher_count() != 0)
         `uvm_error("CATCHER_TEST", "Expected 0 catchers initially")
 
       // Create and add catchers
       catcher1 = new("catcher1");
       catcher1.set_target_id("DEMOTE_ME");
-      uvm_report_catcher::add(catcher1);
+      uvm_report_cb::add(null, catcher1);
 
       catcher2 = new("catcher2");
       catcher2.set_target_id("ALSO_DEMOTE");
-      uvm_report_catcher::add(catcher2);
+      uvm_report_cb::add(null, catcher2);
 
       // Verify catcher count
-      if (uvm_report_catcher::get_catcher_count() != 2)
+      if (get_catcher_count() != 2)
         `uvm_error("CATCHER_TEST", "Expected 2 catchers")
 
       // Summarize catchers
-      uvm_report_catcher::summarize_catchers();
+      uvm_report_catcher::summarize();
 
       // Test catcher processing (this would normally be called internally)
       // Process a message that should be caught
       begin
-        uvm_action_type_e result;
-        result = uvm_report_catcher::process_all_report_catchers(
-          UVM_ERROR, "DEMOTE_ME", "Test error to demote",
-          UVM_LOW, "test.sv", 50
+        int thrown;
+        uvm_report_message msg;
+        msg = uvm_report_message::new_report_message("catch_test_demote");
+        msg.set_report_message(
+          UVM_ERROR, "DEMOTE_ME", "Test error to demote", UVM_LOW, "test.sv", 50, ""
         );
-        if (result != CAUGHT)
+        msg.set_report_object(this);
+        msg.set_report_handler(get_report_handler());
+        msg.set_report_server(uvm_report_server::get_server());
+        msg.set_action(UVM_DISPLAY);
+        thrown = uvm_report_catcher::process_all_report_catchers(msg);
+        if (thrown != 0)
           `uvm_error("CATCHER_TEST", "Expected message to be caught")
         if (catcher1.catch_count != 1)
           `uvm_error("CATCHER_TEST", "Expected catcher1 to catch 1 message")
@@ -335,23 +370,29 @@ package reporting_test_pkg;
 
       // Process a message that should NOT be caught
       begin
-        uvm_action_type_e result;
-        result = uvm_report_catcher::process_all_report_catchers(
-          UVM_ERROR, "OTHER_ID", "Test error to pass through",
-          UVM_LOW, "test.sv", 60
+        int thrown;
+        uvm_report_message msg;
+        msg = uvm_report_message::new_report_message("catch_test_throw");
+        msg.set_report_message(
+          UVM_ERROR, "OTHER_ID", "Test error to pass through", UVM_LOW, "test.sv", 60, ""
         );
-        if (result != THROW)
+        msg.set_report_object(this);
+        msg.set_report_handler(get_report_handler());
+        msg.set_report_server(uvm_report_server::get_server());
+        msg.set_action(UVM_DISPLAY);
+        thrown = uvm_report_catcher::process_all_report_catchers(msg);
+        if (thrown != 1)
           `uvm_error("CATCHER_TEST", "Expected message to be thrown")
       end
 
       // Test remove
-      uvm_report_catcher::remove(catcher1);
-      if (uvm_report_catcher::get_catcher_count() != 1)
+      uvm_report_cb::delete(null, catcher1);
+      if (get_catcher_count() != 1)
         `uvm_error("CATCHER_TEST", "Expected 1 catcher after remove")
 
       // Test clear
-      uvm_report_catcher::clear_catchers();
-      if (uvm_report_catcher::get_catcher_count() != 0)
+      clear_catchers();
+      if (get_catcher_count() != 0)
         `uvm_error("CATCHER_TEST", "Expected 0 catchers after clear")
 
       `uvm_info("CATCHER_TEST", "uvm_report_catcher tests passed", UVM_LOW)
