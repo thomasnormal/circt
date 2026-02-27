@@ -598,6 +598,8 @@ static void collectSitesForOp(StringRef designText, StringRef op,
   if (op == "CONST0_TO_1") {
     collectLiteralTokenSites(designText, "1'b0", codeMask, sites);
     collectLiteralTokenSites(designText, "1'd0", codeMask, sites);
+    collectLiteralTokenSites(designText, "1'h0", codeMask, sites);
+    collectLiteralTokenSites(designText, "'0", codeMask, sites);
     llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
       return a.pos < b.pos;
     });
@@ -606,6 +608,8 @@ static void collectSitesForOp(StringRef designText, StringRef op,
   if (op == "CONST1_TO_0") {
     collectLiteralTokenSites(designText, "1'b1", codeMask, sites);
     collectLiteralTokenSites(designText, "1'd1", codeMask, sites);
+    collectLiteralTokenSites(designText, "1'h1", codeMask, sites);
+    collectLiteralTokenSites(designText, "'1", codeMask, sites);
     llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
       return a.pos < b.pos;
     });
