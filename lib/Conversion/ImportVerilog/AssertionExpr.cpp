@@ -458,6 +458,15 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
     return nonNull;
   }
 
+  if (auto vifTy = dyn_cast<moore::VirtualInterfaceType>(value.getType())) {
+    Value nullVal = moore::VirtualInterfaceNullOp::create(builder, loc, vifTy);
+    Value nonNull = moore::VirtualInterfaceCmpOp::create(
+        builder, loc, moore::VirtualInterfaceCmpPredicate::ne, value, nullVal);
+    if (nonNull.getType() != i1Ty)
+      nonNull = context.materializeConversion(i1Ty, nonNull, false, loc);
+    return nonNull;
+  }
+
   if (auto arrayTy = dyn_cast<moore::UnpackedArrayType>(value.getType())) {
     Value anySet = moore::ConstantOp::create(builder, loc, i1Ty, 0);
     auto idxTy = moore::IntType::get(builder.getContext(), 32,
@@ -3754,6 +3763,11 @@ Value Context::convertAssertionCallExpression(
     bool isClassHandleEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         isa<moore::ClassHandleType>(value.getType());
+    bool isVirtualInterfaceEdgeSample =
+        (funcName == "$rose" || funcName == "$fell") &&
+        isa<moore::VirtualInterfaceType>(value.getType());
+    bool isHandleEdgeSample =
+        isClassHandleEdgeSample || isVirtualInterfaceEdgeSample;
     auto emitUnsupportedNonConcurrentSampledPlaceholder = [&]() -> Value {
       if (!(options.continueOnUnsupportedSVA && !inAssertionExpr))
         return {};
@@ -3771,7 +3785,7 @@ Value Context::convertAssertionCallExpression(
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
         !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
-        !isClassHandleEdgeSample &&
+        !isHandleEdgeSample &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
          isa<moore::QueueType>(value.getType()) ||
@@ -3788,7 +3802,7 @@ Value Context::convertAssertionCallExpression(
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
         !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
-        !isClassHandleEdgeSample &&
+        !isHandleEdgeSample &&
         !isSimpleBitVectorCastable(value.getType())) {
       if (auto fallback = emitUnsupportedNonConcurrentSampledPlaceholder())
         return fallback;
@@ -3800,7 +3814,7 @@ Value Context::convertAssertionCallExpression(
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
         !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
-        !isClassHandleEdgeSample &&
+        !isHandleEdgeSample &&
         !isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
     if (!value)
@@ -3808,7 +3822,7 @@ Value Context::convertAssertionCallExpression(
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
         !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
-        !isClassHandleEdgeSample &&
+        !isHandleEdgeSample &&
         !isa<moore::IntType>(value.getType())) {
       emitUnsupportedSvaDiagnostic(*this, loc)
           << "unsupported sampled value type for " << funcName;
