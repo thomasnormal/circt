@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top #(parameter int W = 8)(input logic [W-1:0] a, output logic [W-1:0] y);\n  assign y = a;\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 8 --seed 0 --cfg planner_policy=weighted --cfg pick_cover_prcnt=100 > %t/log.txt
+// RUN: not grep -q 'NATIVE_SUB_TO_ADD' %t/mutations.txt
+// RUN: not grep -q 'NATIVE_ADD_TO_SUB' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 8

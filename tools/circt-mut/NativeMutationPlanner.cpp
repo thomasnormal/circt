@@ -25,7 +25,8 @@ namespace circt::mut {
 static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
-    "XOR_TO_OR",        "UNARY_NOT_DROP", "CONST0_TO_1",     "CONST1_TO_0"};
+    "XOR_TO_OR",        "UNARY_NOT_DROP", "CONST0_TO_1",     "CONST1_TO_0",
+    "ADD_TO_SUB",       "SUB_TO_ADD"};
 
 namespace {
 
@@ -312,6 +313,89 @@ static void collectUnaryNotDropSites(StringRef text,
   }
 }
 
+static size_t findPrevCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t pos) {
+  if (pos == 0)
+    return StringRef::npos;
+  size_t i = pos;
+  while (i > 0) {
+    --i;
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (std::isspace(static_cast<unsigned char>(text[i])))
+      continue;
+    return i;
+  }
+  return StringRef::npos;
+}
+
+static size_t findNextCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t pos) {
+  for (size_t i = pos, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (std::isspace(static_cast<unsigned char>(text[i])))
+      continue;
+    return i;
+  }
+  return StringRef::npos;
+}
+
+static bool isOperandEndChar(char c) {
+  return isAlnum(c) || c == '_' || c == ')' || c == ']' || c == '}' ||
+         c == '\'';
+}
+
+static bool isOperandStartChar(char c) {
+  return isAlnum(c) || c == '_' || c == '(' || c == '[' || c == '{' ||
+         c == '\'' || c == '~' || c == '!' || c == '$';
+}
+
+static void collectBinaryArithmeticSites(StringRef text, char needle,
+                                         ArrayRef<uint8_t> codeMask,
+                                         SmallVectorImpl<SiteInfo> &sites) {
+  assert((needle == '+' || needle == '-') &&
+         "expected binary arithmetic token");
+  int bracketDepth = 0;
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      if (bracketDepth > 0)
+        --bracketDepth;
+      continue;
+    }
+    if (ch != needle)
+      continue;
+    if (bracketDepth > 0)
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (prev == needle || next == needle)
+      continue;
+    if (prev == '=' || next == '=')
+      continue;
+    if (needle == '-' && next == '>')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectRelationalComparatorSites(StringRef text, StringRef token,
                                              ArrayRef<uint8_t> codeMask,
                                              SmallVectorImpl<SiteInfo> &sites) {
@@ -431,6 +515,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     });
     return;
   }
+  if (op == "ADD_TO_SUB") {
+    collectBinaryArithmeticSites(designText, '+', codeMask, sites);
+    return;
+  }
+  if (op == "SUB_TO_ADD") {
+    collectBinaryArithmeticSites(designText, '-', codeMask, sites);
+    return;
+  }
 }
 
 static uint64_t countNativeMutationSitesForOp(StringRef designText,
@@ -456,6 +548,8 @@ static std::string getOpFamily(StringRef op) {
     return "logic";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
+  if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD")
+    return "arithmetic";
   return "misc";
 }
 
