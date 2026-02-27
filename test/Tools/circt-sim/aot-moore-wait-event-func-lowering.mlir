@@ -1,6 +1,7 @@
 // RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
+// RUN: env CIRCT_AOT_STATS=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=STATS
 
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
@@ -9,6 +10,10 @@
 // SIM: out=1
 //
 // COMPILED: out=1
+//
+// STATS: wait_event_count:                 1
+// STATS: fork_count:                       0
+// STATS: join_count:                       0
 
 llvm.mlir.global internal @g_evt(false) : i1
 
