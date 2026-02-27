@@ -3675,10 +3675,12 @@ static LogicalResult processInput(MLIRContext &context,
     uint32_t arenaGlobals = 0;
     uint32_t arenaSizeBytes = 0;
     uint32_t globalPatchCount = 0;
+    uint64_t globalPatchBytes = 0;
     if (const CompiledModuleLoader *loader = simContext.getCompiledLoader()) {
       arenaGlobals = loader->getNumArenaGlobals();
       arenaSizeBytes = loader->getArenaSize();
       globalPatchCount = loader->getNumGlobalPatches();
+      globalPatchBytes = loader->getGlobalPatchBytes();
     }
     uint64_t parseWallMs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(parseDoneTime -
@@ -3708,6 +3710,9 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t entryCallsTotal = entryCallsNative + entryCallsTrampoline;
     uint64_t indirectCallsTotal = indirectCallsNative + indirectCallsTrampoline;
     uint64_t mutableGlobalsTotal = arenaGlobals + globalPatchCount;
+    uint64_t mutableBytesArena = arenaSizeBytes;
+    uint64_t mutableBytesPatch = globalPatchBytes;
+    uint64_t mutableBytesTotal = mutableBytesArena + mutableBytesPatch;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] parse_ms:                         "
                  << parseWallMs << "\n";
@@ -3727,12 +3732,20 @@ static LogicalResult processInput(MLIRContext &context,
                  << arenaSizeBytes << "\n";
     llvm::errs() << "[circt-sim] global_patch_count:               "
                  << globalPatchCount << "\n";
+    llvm::errs() << "[circt-sim] global_patch_bytes:               "
+                 << globalPatchBytes << "\n";
     llvm::errs() << "[circt-sim] mutable_globals_total:            "
                  << mutableGlobalsTotal << "\n";
     llvm::errs() << "[circt-sim] mutable_globals_arena:            "
                  << arenaGlobals << "\n";
     llvm::errs() << "[circt-sim] mutable_globals_patch:            "
                  << globalPatchCount << "\n";
+    llvm::errs() << "[circt-sim] mutable_bytes_total:              "
+                 << mutableBytesTotal << "\n";
+    llvm::errs() << "[circt-sim] mutable_bytes_arena:              "
+                 << mutableBytesArena << "\n";
+    llvm::errs() << "[circt-sim] mutable_bytes_patch:              "
+                 << mutableBytesPatch << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
     llvm::errs() << "[circt-sim] Interpreter process invocations:  "
