@@ -3735,6 +3735,7 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t eventActivationsPerS = deltaCyclesPerS;
     uint64_t signalUpdatesPerS = scalePerSecond(signalUpdatesTotal);
     uint64_t edgesDetectedPerS = scalePerSecond(edgesDetectedTotal);
+    uint64_t simulatedFsPerS = scalePerSecond(simulatedTimeFs);
     uint64_t simulatedNsPerS = scalePerSecond(simulatedTimeFs) / 1000000;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] parse_ms:                         "
@@ -3791,6 +3792,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << signalUpdatesPerS << "\n";
     llvm::errs() << "[circt-sim] edges_detected_per_s:             "
                  << edgesDetectedPerS << "\n";
+    llvm::errs() << "[circt-sim] simulated_fs_per_s:               "
+                 << simulatedFsPerS << "\n";
     llvm::errs() << "[circt-sim] simulated_ns_per_s:               "
                  << simulatedNsPerS << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
