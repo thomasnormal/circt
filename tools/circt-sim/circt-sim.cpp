@@ -956,6 +956,11 @@ public:
     return scheduler.getStatistics();
   }
 
+  /// Get the currently loaded compiled-module loader, if any.
+  const CompiledModuleLoader *getCompiledLoader() const {
+    return compiledLoader.get();
+  }
+
   /// Get simulation-control statistics collected during simulation.
   const SimulationControl::Statistics &getControlStats() const {
     return control.getStatistics();
@@ -3667,6 +3672,14 @@ static LogicalResult processInput(MLIRContext &context,
   }
   if (aotStats) {
     auto &interp = *simContext.getInterpreter();
+    uint32_t arenaGlobals = 0;
+    uint32_t arenaSizeBytes = 0;
+    uint32_t globalPatchCount = 0;
+    if (const CompiledModuleLoader *loader = simContext.getCompiledLoader()) {
+      arenaGlobals = loader->getNumArenaGlobals();
+      arenaSizeBytes = loader->getArenaSize();
+      globalPatchCount = loader->getNumGlobalPatches();
+    }
     uint64_t parseWallMs = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(parseDoneTime -
                                                                startTime)
@@ -3707,6 +3720,12 @@ static LogicalResult processInput(MLIRContext &context,
                  << runWallMs << "\n";
     llvm::errs() << "[circt-sim] total_ms:                         "
                  << totalWallMs << "\n";
+    llvm::errs() << "[circt-sim] arena_globals:                    "
+                 << arenaGlobals << "\n";
+    llvm::errs() << "[circt-sim] arena_size_bytes:                 "
+                 << arenaSizeBytes << "\n";
+    llvm::errs() << "[circt-sim] global_patch_count:               "
+                 << globalPatchCount << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
     llvm::errs() << "[circt-sim] Interpreter process invocations:  "
