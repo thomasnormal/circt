@@ -9,11 +9,14 @@
 #include "circt/Conversion/CombToSMT.h"
 #include "circt/Conversion/HWToSMT.h"
 #include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/Seq/SeqOps.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/SMT/IR/SMTOps.h"
 #include "mlir/Pass/Pass.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/DialectConversion.h"
 
 namespace circt {
@@ -30,6 +33,74 @@ using namespace comb;
 //===----------------------------------------------------------------------===//
 
 namespace {
+/// Rewrite comb.extract (...)->i0 to a canonical i0 constant.
+struct NormalizeZeroWidthExtract : OpRewritePattern<ExtractOp> {
+  using OpRewritePattern<ExtractOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ExtractOp op,
+                                PatternRewriter &rewriter) const override {
+    auto type = dyn_cast<IntegerType>(op.getType());
+    if (!type || type.getWidth() != 0)
+      return failure();
+    auto zeroAttr = rewriter.getIntegerAttr(type, 0);
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, zeroAttr);
+    return success();
+  }
+};
+
+/// Rewrite comb.mux on i0 to a representative operand (both values are equal).
+struct NormalizeZeroWidthMux : OpRewritePattern<MuxOp> {
+  using OpRewritePattern<MuxOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(MuxOp op,
+                                PatternRewriter &rewriter) const override {
+    auto type = dyn_cast<IntegerType>(op.getType());
+    if (!type || type.getWidth() != 0)
+      return failure();
+    rewriter.replaceOp(op, op.getTrueValue());
+    return success();
+  }
+};
+
+/// Rewrite comb.icmp on i0 operands to an i1 hw.constant.
+struct NormalizeZeroWidthICmp : OpRewritePattern<ICmpOp> {
+  using OpRewritePattern<ICmpOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ICmpOp op,
+                                PatternRewriter &rewriter) const override {
+    auto lhsType = dyn_cast<IntegerType>(op.getLhs().getType());
+    if (!lhsType || lhsType.getWidth() != 0)
+      return failure();
+
+    bool result;
+    switch (op.getPredicate()) {
+    case ICmpPredicate::eq:
+    case ICmpPredicate::ceq:
+    case ICmpPredicate::weq:
+    case ICmpPredicate::sge:
+    case ICmpPredicate::sle:
+    case ICmpPredicate::uge:
+    case ICmpPredicate::ule:
+      result = true;
+      break;
+    case ICmpPredicate::ne:
+    case ICmpPredicate::cne:
+    case ICmpPredicate::wne:
+    case ICmpPredicate::sgt:
+    case ICmpPredicate::slt:
+    case ICmpPredicate::ugt:
+    case ICmpPredicate::ult:
+      result = false;
+      break;
+    }
+
+    auto cst = hw::ConstantOp::create(rewriter, op.getLoc(),
+                                      rewriter.getI1Type(), result ? 1 : 0);
+    rewriter.replaceOp(op, cst.getResult());
+    return success();
+  }
+};
+
 /// Lower a comb::ReplicateOp operation to smt::RepeatOp
 struct CombReplicateOpConversion : OpConversionPattern<ReplicateOp> {
   using OpConversionPattern<ReplicateOp>::OpConversionPattern;
@@ -111,6 +182,34 @@ struct IcmpOpConversion : OpConversionPattern<ICmpOp> {
   LogicalResult
   matchAndRewrite(ICmpOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto lhsType = dyn_cast<IntegerType>(op.getLhs().getType());
+    if (lhsType && lhsType.getWidth() == 0) {
+      // i0 has a single value; all comparisons collapse to constants.
+      bool result;
+      switch (adaptor.getPredicate()) {
+      case ICmpPredicate::eq:
+      case ICmpPredicate::ceq:
+      case ICmpPredicate::weq:
+      case ICmpPredicate::sge:
+      case ICmpPredicate::sle:
+      case ICmpPredicate::uge:
+      case ICmpPredicate::ule:
+        result = true;
+        break;
+      case ICmpPredicate::ne:
+      case ICmpPredicate::cne:
+      case ICmpPredicate::wne:
+      case ICmpPredicate::sgt:
+      case ICmpPredicate::slt:
+      case ICmpPredicate::ugt:
+      case ICmpPredicate::ult:
+        result = false;
+        break;
+      }
+      rewriter.replaceOpWithNewOp<smt::BVConstantOp>(op, APInt(1, result));
+      return success();
+    }
+
     // SMT lowering is 2-state; treat case/wild equality as eq/ne.
     auto predicate = adaptor.getPredicate();
     if (predicate == ICmpPredicate::weq || predicate == ICmpPredicate::ceq)
@@ -178,10 +277,19 @@ struct ExtractOpConversion : OpConversionPattern<ExtractOp> {
   LogicalResult
   matchAndRewrite(ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<IntegerType>(op.getType());
+    if (resultType && resultType.getWidth() == 0) {
+      auto zeroAttr = rewriter.getIntegerAttr(resultType, 0);
+      rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, zeroAttr);
+      return success();
+    }
+
+    Type convertedType = typeConverter->convertType(op.getResult().getType());
+    if (!convertedType)
+      return rewriter.notifyMatchFailure(op, "unsupported extract result type");
 
     rewriter.replaceOpWithNewOp<smt::ExtractOp>(
-        op, typeConverter->convertType(op.getResult().getType()),
-        adaptor.getLowBitAttr(), adaptor.getInput());
+        op, convertedType, adaptor.getLowBitAttr(), adaptor.getInput());
     return success();
   }
 };
@@ -193,6 +301,12 @@ struct MuxOpConversion : OpConversionPattern<MuxOp> {
   LogicalResult
   matchAndRewrite(MuxOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    auto resultType = dyn_cast<IntegerType>(op.getType());
+    if (resultType && resultType.getWidth() == 0) {
+      rewriter.replaceOp(op, adaptor.getTrueValue());
+      return success();
+    }
+
     Value condition = typeConverter->materializeTargetConversion(
         rewriter, op.getLoc(), smt::BoolType::get(getContext()),
         adaptor.getCond());
@@ -415,6 +529,14 @@ void circt::populateCombToSMTConversionPatterns(TypeConverter &converter,
 }
 
 void ConvertCombToSMTPass::runOnOperation() {
+  {
+    RewritePatternSet normalizePatterns(&getContext());
+    normalizePatterns
+        .add<NormalizeZeroWidthExtract, NormalizeZeroWidthMux,
+             NormalizeZeroWidthICmp>(&getContext());
+    (void)applyPatternsGreedily(getOperation(), std::move(normalizePatterns));
+  }
+
   ConversionTarget target(getContext());
   target.addIllegalDialect<hw::HWDialect>();
   target.addIllegalOp<seq::FromClockOp>();
