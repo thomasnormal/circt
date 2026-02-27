@@ -18820,6 +18820,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
 
 LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
                                                      llhd::WaitOp waitOp) {
+  ++llhdWaitCount;
   auto &state = processStates[procId];
 
   // Handle yield operands - these become the process result values
