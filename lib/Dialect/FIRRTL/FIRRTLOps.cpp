@@ -4406,6 +4406,8 @@ static FlatSymbolRefAttr getDomainTypeName(Value value) {
       return getDomainTypeNameOfResult(instance, result.getResultNumber());
     if (auto anonDomain = dyn_cast<DomainCreateAnonOp>(op))
       return anonDomain.getDomainAttr();
+    if (auto domain = dyn_cast<DomainCreateOp>(op))
+      return domain.getDomainAttr();
     return {};
   }
 
@@ -7239,6 +7241,20 @@ LogicalResult BindOp::verifyInnerRefs(hw::InnerRefNamespace &ns) {
 
 LogicalResult
 DomainCreateAnonOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
+  auto circuitOp = getOperation()->getParentOfType<CircuitOp>();
+  auto domain = getDomainAttr();
+  if (!symbolTable.lookupSymbolIn<DomainOp>(circuitOp, domain))
+    return emitOpError() << "references undefined domain '" << domain << "'";
+
+  return success();
+}
+
+void DomainCreateOp::getAsmResultNames(OpAsmSetValueNameFn setNameFn) {
+  genericAsmResultNames(*this, setNameFn);
+}
+
+LogicalResult
+DomainCreateOp::verifySymbolUses(SymbolTableCollection &symbolTable) {
   auto circuitOp = getOperation()->getParentOfType<CircuitOp>();
   auto domain = getDomainAttr();
   if (!symbolTable.lookupSymbolIn<DomainOp>(circuitOp, domain))
