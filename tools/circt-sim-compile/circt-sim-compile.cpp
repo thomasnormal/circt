@@ -75,6 +75,7 @@
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
+#include <unordered_set>
 
 using namespace mlir;
 using namespace circt;
@@ -134,6 +135,19 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
 
   bool compilable = true;
   funcOp.walk([&](Operation *op) {
+    if (auto gepOp = dyn_cast<LLVM::GEPOp>(op)) {
+      Type elemTy = gepOp.getElemType();
+      if (LLVM::isCompatibleType(elemTy))
+        return WalkResult::advance();
+      Type convertedElemTy =
+          convertToLLVMCompatibleType(elemTy, funcOp.getContext());
+      if (convertedElemTy && LLVM::isCompatibleType(convertedElemTy))
+        return WalkResult::advance();
+      if (rejectionReason)
+        *rejectionReason = "llvm.getelementptr:elem_type";
+      compilable = false;
+      return WalkResult::interrupt();
+    }
     if (isa<arith::ArithDialect, cf::ControlFlowDialect, LLVM::LLVMDialect,
             func::FuncDialect, scf::SCFDialect>(op->getDialect()))
       return WalkResult::advance();
@@ -143,9 +157,24 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
             comb::DivUOp, comb::DivSOp, comb::ModUOp, comb::ModSOp,
             comb::MulOp, comb::MuxOp, comb::ConcatOp,
             comb::ReplicateOp,
-            comb::ShlOp, comb::ShrUOp, comb::ShrSOp,
+            comb::ShlOp, comb::ShrUOp, comb::ShrSOp, comb::ParityOp,
             hw::StructCreateOp, hw::StructExtractOp,
             hw::AggregateConstantOp>(op))
+      return WalkResult::advance();
+    // Allow print-format metadata; lowered to llvm.call @printf in Phase 0.
+    if (isa<sim::FormatLiteralOp, sim::FormatHexOp, sim::FormatDecOp,
+            sim::FormatBinOp, sim::FormatOctOp, sim::FormatCharOp,
+            sim::FormatScientificOp, sim::FormatFloatOp,
+            sim::FormatGeneralOp, sim::FormatStringConcatOp,
+            sim::FormatDynStringOp, sim::PrintFormattedProcOp>(op))
+      return WalkResult::advance();
+    // Sim control ops are kept compilable for trampoline demotion.
+    if (isa<sim::TerminateOp, sim::PauseOp, sim::ClockedTerminateOp,
+            sim::ClockedPauseOp>(op))
+      return WalkResult::advance();
+    // Fork-family ops are currently interpreter-executed via demoted funcs.
+    if (isa<sim::SimForkOp, sim::SimForkTerminatorOp, sim::SimWaitForkOp,
+            sim::SimDisableForkOp>(op))
       return WalkResult::advance();
     if (auto sigOp = dyn_cast<llhd::SignalOp>(op)) {
       auto refTy = dyn_cast<llhd::RefType>(sigOp.getResult().getType());
@@ -176,6 +205,17 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
           isa<IntegerType>(arrayGetOp.getIndex().getType()) &&
           LLVM::isCompatibleType(arrayGetOp.getResult().getType()))
         return WalkResult::advance();
+      if (auto aggConst =
+              arrayGetOp.getInput().getDefiningOp<hw::AggregateConstantOp>()) {
+        auto arrayTy = dyn_cast<hw::ArrayType>(aggConst.getType());
+        auto elemTy =
+            arrayTy ? dyn_cast<IntegerType>(arrayTy.getElementType())
+                    : IntegerType();
+        auto resultTy = dyn_cast<IntegerType>(arrayGetOp.getResult().getType());
+        if (arrayTy && elemTy && resultTy && resultTy == elemTy &&
+            isa<IntegerType>(arrayGetOp.getIndex().getType()))
+          return WalkResult::advance();
+      }
     }
     if (auto currentTimeOp = dyn_cast<llhd::CurrentTimeOp>(op)) {
       bool allResultsDead = true;
@@ -489,6 +529,31 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
       if (onlyTimeToIntUsers)
         return WalkResult::advance();
     }
+    if (auto waitEventOp = dyn_cast<moore::WaitEventOp>(op)) {
+      bool hasDetect = false;
+      bool supported = true;
+      for (auto detectOp : waitEventOp.getBody().getOps<moore::DetectEventOp>()) {
+        hasDetect = true;
+        if (detectOp.getCondition()) {
+          supported = false;
+          break;
+        }
+      }
+      if (hasDetect && supported)
+        return WalkResult::advance();
+      if (rejectionReason)
+        *rejectionReason = "moore.wait_event";
+      compilable = false;
+      return WalkResult::interrupt();
+    }
+    if (auto detectEventOp = dyn_cast<moore::DetectEventOp>(op)) {
+      if (!detectEventOp.getCondition())
+        return WalkResult::advance();
+      if (rejectionReason)
+        *rejectionReason = "moore.detect_event:condition";
+      compilable = false;
+      return WalkResult::interrupt();
+    }
     // Allow unrealized_conversion_cast only when types match (foldable).
     if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
       bool allResultsDead = true;
@@ -513,6 +578,34 @@ static bool isFuncBodyCompilable(func::FuncOp funcOp,
         // rewrites function ref arguments to !llvm.ptr and lets these fold.
         if ((isa<LLVM::LLVMPointerType>(inTy) && isa<llhd::RefType>(outTy)) ||
             (isa<llhd::RefType>(inTy) && isa<LLVM::LLVMPointerType>(outTy)))
+          return WalkResult::advance();
+        auto isMooreSingleBit = [](Type ty) {
+          if (auto intTy = dyn_cast<moore::IntType>(ty))
+            return intTy.getBitSize() == 1;
+          return false;
+        };
+        auto isSameWidthIntegerMooreIntPair = [](Type lhs, Type rhs) {
+          if (auto lhsInt = dyn_cast<IntegerType>(lhs)) {
+            if (auto rhsMooreInt = dyn_cast<moore::IntType>(rhs))
+              return lhsInt.getWidth() == rhsMooreInt.getBitSize();
+          }
+          if (auto lhsMooreInt = dyn_cast<moore::IntType>(lhs)) {
+            if (auto rhsInt = dyn_cast<IntegerType>(rhs))
+              return lhsMooreInt.getBitSize() == rhsInt.getWidth();
+          }
+          return false;
+        };
+        if ((isa<IntegerType>(inTy) &&
+             (isa<moore::EventType>(outTy) || isMooreSingleBit(outTy))) ||
+            ((isa<moore::EventType>(inTy) || isMooreSingleBit(inTy)) &&
+             isa<IntegerType>(outTy) &&
+             cast<IntegerType>(outTy).getWidth() == 1))
+          return WalkResult::advance();
+        // Accept iN <-> !moore.iN bridge casts used under moore.wait_event
+        // detect_event lowering. Such functions are demoted to trampolines
+        // before LLVM translation.
+        if (castOp->getParentOfType<moore::WaitEventOp>() &&
+            isSameWidthIntegerMooreIntPair(inTy, outTy))
           return WalkResult::advance();
         // Accept simple pointer/integer cast pairs.
         if ((isa<LLVM::LLVMPointerType>(inTy) && isa<IntegerType>(outTy)) ||
@@ -1213,6 +1306,87 @@ static void canonicalizeFourStateStructABIs(ModuleOp moduleOp) {
   }
 }
 
+/// Rewrite cf block arguments carrying 4-state hw.struct boundary types to
+/// LLVM-compatible aggregate types. This closes a residual lowering gap where
+/// merged block-arg values (from cf.br/cf.cond_br) kept hw.struct_create alive
+/// even after function-boundary ABI canonicalization.
+static void canonicalizeFourStateCFBlockArguments(ModuleOp moduleOp) {
+  auto *ctx = moduleOp.getContext();
+  IRRewriter rewriter(ctx);
+
+  for (auto funcOp : moduleOp.getOps<func::FuncOp>()) {
+    if (funcOp.isExternal())
+      continue;
+
+    SmallVector<std::pair<BlockArgument, Type>> argsToRewrite;
+    for (Block &block : funcOp.getBody()) {
+      for (BlockArgument arg : block.getArguments()) {
+        Type oldTy = arg.getType();
+        if (!isFourStateBoundaryStructType(oldTy))
+          continue;
+        Type newTy = convertFourStateBoundaryType(oldTy, ctx);
+        if (!newTy || newTy == oldTy)
+          continue;
+        argsToRewrite.push_back({arg, newTy});
+      }
+    }
+
+    for (auto [arg, newTy] : argsToRewrite) {
+      Type oldTy = arg.getType();
+      Block *block = arg.getOwner();
+      unsigned argIndex = arg.getArgNumber();
+
+      for (Block *pred : block->getPredecessors()) {
+        Operation *term = pred->getTerminator();
+        if (auto br = dyn_cast<cf::BranchOp>(term)) {
+          if (br.getDest() != block ||
+              argIndex >= br.getDestOperands().size())
+            continue;
+          Value operand = br.getDestOperands()[argIndex];
+          if (operand.getType() == newTy)
+            continue;
+          rewriter.setInsertionPoint(br);
+          auto cast = rewriter.create<UnrealizedConversionCastOp>(
+              br.getLoc(), TypeRange{newTy}, ValueRange{operand});
+          br.getDestOperandsMutable()[argIndex].set(cast.getResult(0));
+          continue;
+        }
+        if (auto condBr = dyn_cast<cf::CondBranchOp>(term)) {
+          if (condBr.getTrueDest() == block &&
+              argIndex < condBr.getNumTrueOperands()) {
+            Value operand = condBr.getTrueDestOperands()[argIndex];
+            if (operand.getType() != newTy) {
+              rewriter.setInsertionPoint(condBr);
+              auto cast = rewriter.create<UnrealizedConversionCastOp>(
+                  condBr.getLoc(), TypeRange{newTy}, ValueRange{operand});
+              condBr.getTrueDestOperandsMutable()[argIndex].set(
+                  cast.getResult(0));
+            }
+          }
+          if (condBr.getFalseDest() == block &&
+              argIndex < condBr.getNumFalseOperands()) {
+            Value operand = condBr.getFalseDestOperands()[argIndex];
+            if (operand.getType() != newTy) {
+              rewriter.setInsertionPoint(condBr);
+              auto cast = rewriter.create<UnrealizedConversionCastOp>(
+                  condBr.getLoc(), TypeRange{newTy}, ValueRange{operand});
+              condBr.getFalseDestOperandsMutable()[argIndex].set(
+                  cast.getResult(0));
+            }
+          }
+        }
+      }
+
+      arg.setType(newTy);
+      rewriter.setInsertionPointToStart(block);
+      auto bridgeCast = rewriter.create<UnrealizedConversionCastOp>(
+          funcOp.getLoc(), TypeRange{oldTy}, ValueRange{arg});
+      arg.replaceAllUsesExcept(bridgeCast.getResult(0),
+                               bridgeCast.getOperation());
+    }
+  }
+}
+
 /// Synthesize optional native module-init functions from hw.module top-level
 /// LLVM-style init ops. Returns synthesis stats including skip reasons.
 static NativeModuleInitSynthesisStats
@@ -1654,6 +1828,297 @@ static LLVM::FCmpPredicate convertCmpFPredicate(arith::CmpFPredicate pred) {
   llvm_unreachable("unhandled arith::CmpFPredicate");
 }
 
+static void appendEscapedPrintfLiteral(llvm::StringRef literal,
+                                       llvm::SmallString<128> &out) {
+  for (char c : literal) {
+    if (c == '%')
+      out.push_back('%');
+    out.push_back(c);
+  }
+}
+
+static Value convertIntegerForPrintf(IRRewriter &rewriter, Location loc,
+                                     Value value, unsigned targetWidth,
+                                     bool isSigned) {
+  auto srcTy = dyn_cast<IntegerType>(value.getType());
+  if (!srcTy)
+    return {};
+  auto dstTy = IntegerType::get(rewriter.getContext(), targetWidth);
+  if (srcTy.getWidth() == targetWidth)
+    return value;
+  if (srcTy.getWidth() < targetWidth) {
+    if (isSigned)
+      return arith::ExtSIOp::create(rewriter, loc, dstTy, value);
+    return arith::ExtUIOp::create(rewriter, loc, dstTy, value);
+  }
+  return arith::TruncIOp::create(rewriter, loc, dstTy, value);
+}
+
+/// Recursively collect printf fragments from sim.fmt.* producer trees.
+///
+/// This is intentionally conservative: unsupported fragments are rendered as a
+/// placeholder string instead of failing the whole function compilation.
+static LogicalResult collectPrintfFormatFragments(
+    Value fmtValue, llvm::SmallString<128> &formatStr,
+    llvm::SmallVectorImpl<Value> &printfArgs, IRRewriter &rewriter,
+    MLIRContext &mlirContext, llvm::SmallPtrSetImpl<Operation *> &visited) {
+  auto ptrTy = LLVM::LLVMPointerType::get(&mlirContext);
+  auto i32Ty = IntegerType::get(&mlirContext, 32);
+  auto i64Ty = IntegerType::get(&mlirContext, 64);
+  auto f64Ty = Float64Type::get(&mlirContext);
+
+  Operation *defOp = fmtValue.getDefiningOp();
+  if (!defOp) {
+    formatStr.append("<unsupported>");
+    return success();
+  }
+  if (!visited.insert(defOp).second) {
+    formatStr.append("<cyclic_fmt>");
+    return success();
+  }
+
+  auto loc = defOp->getLoc();
+
+  if (auto litOp = dyn_cast<sim::FormatLiteralOp>(defOp)) {
+    appendEscapedPrintfLiteral(litOp.getLiteral(), formatStr);
+    return success();
+  }
+  if (auto concatOp = dyn_cast<sim::FormatStringConcatOp>(defOp)) {
+    for (Value input : concatOp.getInputs())
+      if (failed(collectPrintfFormatFragments(input, formatStr, printfArgs,
+                                              rewriter, mlirContext, visited)))
+        return failure();
+    return success();
+  }
+  if (auto decOp = dyn_cast<sim::FormatDecOp>(defOp)) {
+    formatStr.append(decOp.getIsSigned() ? "%lld" : "%llu");
+    Value value = convertIntegerForPrintf(rewriter, loc, decOp.getValue(),
+                                          /*targetWidth=*/64,
+                                          /*isSigned=*/decOp.getIsSigned());
+    if (!value) {
+      formatStr.append("<unsupported>");
+      return success();
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto hexOp = dyn_cast<sim::FormatHexOp>(defOp)) {
+    formatStr.append(hexOp.getIsHexUppercase() ? "%llX" : "%llx");
+    Value value = convertIntegerForPrintf(rewriter, loc, hexOp.getValue(),
+                                          /*targetWidth=*/64,
+                                          /*isSigned=*/false);
+    if (!value) {
+      formatStr.append("<unsupported>");
+      return success();
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto octOp = dyn_cast<sim::FormatOctOp>(defOp)) {
+    formatStr.append("%llo");
+    Value value = convertIntegerForPrintf(rewriter, loc, octOp.getValue(),
+                                          /*targetWidth=*/64,
+                                          /*isSigned=*/false);
+    if (!value) {
+      formatStr.append("<unsupported>");
+      return success();
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto binOp = dyn_cast<sim::FormatBinOp>(defOp)) {
+    // printf has no binary conversion, so keep the common hex fallback.
+    formatStr.append("%llx");
+    Value value = convertIntegerForPrintf(rewriter, loc, binOp.getValue(),
+                                          /*targetWidth=*/64,
+                                          /*isSigned=*/false);
+    if (!value) {
+      formatStr.append("<unsupported>");
+      return success();
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto charOp = dyn_cast<sim::FormatCharOp>(defOp)) {
+    formatStr.append("%c");
+    Value value = convertIntegerForPrintf(rewriter, loc, charOp.getValue(),
+                                          /*targetWidth=*/32,
+                                          /*isSigned=*/false);
+    if (!value) {
+      formatStr.append("<unsupported>");
+      return success();
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto expOp = dyn_cast<sim::FormatScientificOp>(defOp)) {
+    formatStr.append("%e");
+    Value value = expOp.getValue();
+    if (value.getType() != f64Ty) {
+      if (isa<Float32Type>(value.getType()))
+        value = arith::ExtFOp::create(rewriter, loc, f64Ty, value);
+      else {
+        formatStr.append("<unsupported>");
+        return success();
+      }
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto floatOp = dyn_cast<sim::FormatFloatOp>(defOp)) {
+    formatStr.append("%f");
+    Value value = floatOp.getValue();
+    if (value.getType() != f64Ty) {
+      if (isa<Float32Type>(value.getType()))
+        value = arith::ExtFOp::create(rewriter, loc, f64Ty, value);
+      else {
+        formatStr.append("<unsupported>");
+        return success();
+      }
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto genOp = dyn_cast<sim::FormatGeneralOp>(defOp)) {
+    formatStr.append("%g");
+    Value value = genOp.getValue();
+    if (value.getType() != f64Ty) {
+      if (isa<Float32Type>(value.getType()))
+        value = arith::ExtFOp::create(rewriter, loc, f64Ty, value);
+      else {
+        formatStr.append("<unsupported>");
+        return success();
+      }
+    }
+    printfArgs.push_back(value);
+    return success();
+  }
+  if (auto dynStrOp = dyn_cast<sim::FormatDynStringOp>(defOp)) {
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(dynStrOp.getValue().getType())) {
+      auto fields = structTy.getBody();
+      if (fields.size() == 2 && isa<LLVM::LLVMPointerType>(fields[0]) &&
+          isa<IntegerType>(fields[1])) {
+        formatStr.append("%.*s");
+        Value len = LLVM::ExtractValueOp::create(
+            rewriter, loc, fields[1], dynStrOp.getValue(),
+            ArrayRef<int64_t>{1});
+        len = convertIntegerForPrintf(rewriter, loc, len,
+                                      /*targetWidth=*/32,
+                                      /*isSigned=*/false);
+        if (!len) {
+          formatStr.append("<unsupported>");
+          return success();
+        }
+        Value ptr = LLVM::ExtractValueOp::create(
+            rewriter, loc, fields[0], dynStrOp.getValue(),
+            ArrayRef<int64_t>{0});
+        if (ptr.getType() != ptrTy)
+          ptr = LLVM::BitcastOp::create(rewriter, loc, ptrTy, ptr);
+        printfArgs.push_back(len);
+        printfArgs.push_back(ptr);
+        return success();
+      }
+    }
+    formatStr.append("<dyn_string>");
+    return success();
+  }
+
+  formatStr.append("<unsupported>");
+  return success();
+}
+
+static LogicalResult lowerSimProcPrintOps(ModuleOp microModule,
+                                          IRRewriter &rewriter,
+                                          MLIRContext &mlirContext) {
+  llvm::SmallVector<sim::PrintFormattedProcOp> printOps;
+  microModule.walk(
+      [&](sim::PrintFormattedProcOp op) { printOps.push_back(op); });
+  if (printOps.empty())
+    return success();
+
+  auto ptrTy = LLVM::LLVMPointerType::get(&mlirContext);
+  auto voidTy = LLVM::LLVMVoidType::get(&mlirContext);
+  auto i8Ty = IntegerType::get(&mlirContext, 8);
+  static uint64_t formatGlobalCounter = 0;
+
+  for (sim::PrintFormattedProcOp printOp : printOps) {
+    if (!printOp || !printOp->getBlock())
+      continue;
+
+    rewriter.setInsertionPoint(printOp);
+    auto loc = printOp.getLoc();
+
+    llvm::SmallString<128> formatStr;
+    llvm::SmallVector<Value> printfArgs;
+    llvm::SmallPtrSet<Operation *, 16> visited;
+    if (failed(collectPrintfFormatFragments(printOp.getInput(), formatStr,
+                                            printfArgs, rewriter, mlirContext,
+                                            visited)))
+      return failure();
+
+    if (formatStr.empty()) {
+      rewriter.eraseOp(printOp);
+      continue;
+    }
+
+    auto printfFn = LLVM::lookupOrCreateFn(
+        rewriter, microModule, "printf", {ptrTy}, voidTy,
+        /*isVarArg=*/true);
+    if (failed(printfFn))
+      return failure();
+
+    llvm::SmallVector<char> formatBytes(formatStr.begin(), formatStr.end());
+    formatBytes.push_back('\0');
+
+    llvm::SmallString<64> globalName;
+    globalName.append("__circt_sim_printf_fmt_");
+    globalName.append(llvm::utostr(++formatGlobalCounter));
+
+    LLVM::GlobalOp global;
+    {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToStart(microModule.getBody());
+      auto globalType = LLVM::LLVMArrayType::get(i8Ty, formatBytes.size());
+      global = LLVM::GlobalOp::create(
+          rewriter, loc, globalType, /*isConstant=*/true,
+          LLVM::Linkage::Internal, globalName,
+          rewriter.getStringAttr(
+              StringRef(formatBytes.data(), formatBytes.size())));
+    }
+
+    Value formatPtr = LLVM::AddressOfOp::create(rewriter, loc, global);
+    llvm::SmallVector<Value> callArgs;
+    callArgs.push_back(formatPtr);
+    callArgs.append(printfArgs.begin(), printfArgs.end());
+    LLVM::CallOp::create(rewriter, loc, *printfFn, callArgs);
+    rewriter.eraseOp(printOp);
+  }
+
+  // Format ops are compile-time metadata once print ops are lowered.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    llvm::SmallVector<Operation *> deadFmtOps;
+    microModule.walk([&](Operation *op) {
+      if (!op->use_empty())
+        return;
+      if (isa<sim::FormatLiteralOp, sim::FormatHexOp, sim::FormatDecOp,
+              sim::FormatBinOp, sim::FormatOctOp, sim::FormatCharOp,
+              sim::FormatScientificOp, sim::FormatFloatOp,
+              sim::FormatGeneralOp, sim::FormatStringConcatOp,
+              sim::FormatDynStringOp>(op))
+        deadFmtOps.push_back(op);
+    });
+    if (deadFmtOps.empty())
+      break;
+    changed = true;
+    for (Operation *op : deadFmtOps)
+      op->erase();
+  }
+
+  return success();
+}
+
 static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
                                     MLIRContext &mlirContext) {
   IRRewriter rewriter(&mlirContext);
@@ -1819,6 +2284,141 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
     return {};
   };
 
+  auto lowerMooreWaitEventOps = [&]() {
+    auto ptrTy = LLVM::LLVMPointerType::get(&mlirContext);
+    auto i32Ty = rewriter.getI32Type();
+    ensurePrivateFuncDecl("__moore_wait_event",
+                          rewriter.getFunctionType({i32Ty, ptrTy}, {}));
+
+    auto traceDetectSignalPtr = [&](Value seed, const auto &self) -> Value {
+      llvm::SmallVector<Value, 8> stack;
+      llvm::SmallDenseSet<Value, 16> seen;
+      stack.push_back(seed);
+      while (!stack.empty()) {
+        Value value = stack.pop_back_val();
+        if (!value || !seen.insert(value).second)
+          continue;
+        if (isa<LLVM::LLVMPointerType>(value.getType()))
+          return value;
+        if (isa<llhd::RefType, moore::RefType>(value.getType()))
+          return value;
+
+        Operation *defOp = value.getDefiningOp();
+        if (!defOp)
+          continue;
+
+        if (auto loadOp = dyn_cast<LLVM::LoadOp>(defOp))
+          return loadOp.getAddr();
+        if (auto probeOp = dyn_cast<llhd::ProbeOp>(defOp)) {
+          stack.push_back(probeOp.getSignal());
+          continue;
+        }
+        if (auto readOp = dyn_cast<moore::ReadOp>(defOp)) {
+          stack.push_back(readOp.getInput());
+          continue;
+        }
+        if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+          for (Value input : castOp.getInputs())
+            stack.push_back(input);
+          continue;
+        }
+        if (auto bitcastOp = dyn_cast<LLVM::BitcastOp>(defOp)) {
+          stack.push_back(bitcastOp.getArg());
+          continue;
+        }
+        if (auto addrCastOp = dyn_cast<LLVM::AddrSpaceCastOp>(defOp)) {
+          stack.push_back(addrCastOp.getArg());
+          continue;
+        }
+        if (auto intToPtrOp = dyn_cast<LLVM::IntToPtrOp>(defOp)) {
+          stack.push_back(intToPtrOp.getArg());
+          continue;
+        }
+        if (auto structExtractOp = dyn_cast<hw::StructExtractOp>(defOp)) {
+          stack.push_back(structExtractOp.getInput());
+          continue;
+        }
+        if (auto arrayGetOp = dyn_cast<hw::ArrayGetOp>(defOp)) {
+          stack.push_back(arrayGetOp.getInput());
+          continue;
+        }
+        for (Value operand : defOp->getOperands())
+          stack.push_back(operand);
+      }
+      return Value();
+    };
+
+    llvm::SmallVector<moore::WaitEventOp> waitOps;
+    microModule.walk([&](moore::WaitEventOp waitOp) { waitOps.push_back(waitOp); });
+
+    for (auto waitOp : waitOps) {
+      Block &body = waitOp.getBody().front();
+      llvm::SmallVector<moore::DetectEventOp> detectOps;
+      bool supported = true;
+      for (auto detectOp : body.getOps<moore::DetectEventOp>()) {
+        detectOps.push_back(detectOp);
+        if (detectOp.getCondition())
+          supported = false;
+      }
+      if (!supported || detectOps.empty())
+        continue;
+
+      rewriter.setInsertionPoint(waitOp);
+      IRMapping map;
+      for (Operation &nested : body) {
+        if (isa<moore::DetectEventOp>(nested))
+          continue;
+        rewriter.clone(nested, map);
+      }
+
+      for (auto detectOp : detectOps) {
+        Value input = detectOp.getInput();
+        if (Value mapped = map.lookupOrNull(input))
+          input = mapped;
+        Value signalPtr = traceDetectSignalPtr(input, traceDetectSignalPtr);
+        if (!signalPtr) {
+          signalPtr = LLVM::ZeroOp::create(rewriter, waitOp.getLoc(), ptrTy);
+        } else if (signalPtr.getType() != ptrTy) {
+          signalPtr = UnrealizedConversionCastOp::create(
+                          rewriter, waitOp.getLoc(), TypeRange{ptrTy},
+                          ValueRange{signalPtr})
+                          .getResult(0);
+        }
+
+        int32_t edgeKind = 0;
+        switch (detectOp.getEdge()) {
+        case moore::Edge::AnyChange:
+          edgeKind = 0;
+          break;
+        case moore::Edge::PosEdge:
+          edgeKind = 1;
+          break;
+        case moore::Edge::NegEdge:
+          edgeKind = 2;
+          break;
+        case moore::Edge::BothEdges:
+          edgeKind = 3;
+          break;
+        }
+        Value edgeVal = arith::ConstantOp::create(
+            rewriter, waitOp.getLoc(), rewriter.getI32IntegerAttr(edgeKind));
+        func::CallOp::create(rewriter, waitOp.getLoc(), "__moore_wait_event",
+                             TypeRange{}, ValueRange{edgeVal, signalPtr});
+      }
+
+      rewriter.eraseOp(waitOp);
+    }
+  };
+
+  // Lower moore.wait_event in func.func context to runtime calls before the
+  // generic LLVM-compatibility rewrites.
+  lowerMooreWaitEventOps();
+
+  // Lower sim.proc.print + sim.fmt.* fragments early, before generic
+  // arith/cf/func rewriting.
+  if (failed(lowerSimProcPrintOps(microModule, rewriter, mlirContext)))
+    return false;
+
   // Phase 0: Lower hw.constant → arith.constant, comb ops → arith ops,
   // and resolve unrealized_conversion_cast before the main arith→LLVM pass.
   {
@@ -1832,11 +2432,11 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
               comb::ModUOp, comb::ModSOp, comb::MulOp,
               comb::MuxOp,
               comb::ConcatOp, comb::ReplicateOp, comb::ShlOp,
-              comb::ShrUOp, comb::ShrSOp, llhd::ConstantTimeOp,
+              comb::ShrUOp, comb::ShrSOp, comb::ParityOp, llhd::ConstantTimeOp,
               llhd::CurrentTimeOp, llhd::TimeToIntOp, llhd::IntToTimeOp,
               llhd::SignalOp, llhd::DriveOp, llhd::ProbeOp, llhd::SigExtractOp,
               llhd::SigStructExtractOp,
-              UnrealizedConversionCastOp>(op))
+              UnrealizedConversionCastOp, LLVM::GEPOp>(op))
         preOps.push_back(op);
     });
     for (auto *op : preOps) {
@@ -2108,31 +2708,78 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
         auto arrayCreateOp =
             arrayGetOp.getInput().getDefiningOp<hw::ArrayCreateOp>();
         auto idxTy = dyn_cast<IntegerType>(arrayGetOp.getIndex().getType());
-        if (!arrayCreateOp || !idxTy ||
-            !LLVM::isCompatibleType(arrayGetOp.getResult().getType()))
+        if (!idxTy || !LLVM::isCompatibleType(arrayGetOp.getResult().getType()))
           continue;
-        unsigned numElems = arrayCreateOp.getNumOperands();
-        if (numElems == 0)
-          continue;
-        auto getElemForLogicalIndex = [&](unsigned idx) -> Value {
-          unsigned opIdx = numElems - 1 - idx;
-          return arrayCreateOp.getOperand(opIdx);
+
+        auto buildArrayGetSelectChain =
+            [&](unsigned numElems, const auto &getElemForLogicalIndex) -> Value {
+          if (numElems == 0)
+            return Value();
+          Value result = getElemForLogicalIndex(0);
+          if (!result)
+            return Value();
+          for (unsigned idx = 1; idx < numElems; ++idx) {
+            auto idxConst = arith::ConstantOp::create(
+                rewriter, loc, rewriter.getIntegerAttr(idxTy, idx));
+            auto cmp = arith::CmpIOp::create(
+                rewriter, loc, arith::CmpIPredicate::eq, arrayGetOp.getIndex(),
+                idxConst);
+            Value candidate = getElemForLogicalIndex(idx);
+            if (!candidate)
+              return Value();
+            result = LLVM::SelectOp::create(
+                rewriter, loc, arrayGetOp.getResult().getType(), cmp, candidate,
+                result);
+          }
+          return result;
         };
-        Value result = getElemForLogicalIndex(0);
-        for (unsigned idx = 1; idx < numElems; ++idx) {
-          auto idxConst = arith::ConstantOp::create(
-              rewriter, loc, rewriter.getIntegerAttr(idxTy, idx));
-          auto cmp = arith::CmpIOp::create(
-              rewriter, loc, arith::CmpIPredicate::eq, arrayGetOp.getIndex(),
-              idxConst);
-          Value candidate = getElemForLogicalIndex(idx);
-          result = LLVM::SelectOp::create(
-              rewriter, loc, arrayGetOp.getResult().getType(), cmp, candidate,
-              result);
+
+        if (arrayCreateOp) {
+          unsigned numElems = arrayCreateOp.getNumOperands();
+          auto getElemForLogicalIndex = [&](unsigned idx) -> Value {
+            unsigned opIdx = numElems - 1 - idx;
+            return arrayCreateOp.getOperand(opIdx);
+          };
+          Value result = buildArrayGetSelectChain(numElems, getElemForLogicalIndex);
+          if (!result)
+            continue;
+          arrayGetOp.replaceAllUsesWith(result);
+          rewriter.eraseOp(arrayGetOp);
+          continue;
         }
-        arrayGetOp.replaceAllUsesWith(result);
-        rewriter.eraseOp(arrayGetOp);
-        continue;
+
+        if (auto aggConst =
+                arrayGetOp.getInput().getDefiningOp<hw::AggregateConstantOp>()) {
+          auto arrayTy = dyn_cast<hw::ArrayType>(aggConst.getType());
+          auto elemTy =
+              arrayTy ? dyn_cast<IntegerType>(arrayTy.getElementType())
+                      : IntegerType();
+          auto resultTy =
+              dyn_cast<IntegerType>(arrayGetOp.getResult().getType());
+          if (!arrayTy || !elemTy || !resultTy || resultTy != elemTy)
+            continue;
+          auto fields = aggConst.getFields();
+          if (fields.size() != arrayTy.getNumElements())
+            continue;
+          unsigned numElems = arrayTy.getNumElements();
+          auto getElemForLogicalIndex = [&](unsigned idx) -> Value {
+            unsigned fieldIdx = numElems - 1 - idx;
+            if (fieldIdx >= fields.size())
+              return Value();
+            auto intAttr = dyn_cast<IntegerAttr>(fields[fieldIdx]);
+            if (!intAttr)
+              return Value();
+            return arith::ConstantOp::create(rewriter, loc, intAttr).getResult();
+          };
+          Value result = buildArrayGetSelectChain(numElems, getElemForLogicalIndex);
+          if (!result)
+            continue;
+          arrayGetOp.replaceAllUsesWith(result);
+          rewriter.eraseOp(arrayGetOp);
+          if (aggConst->use_empty())
+            rewriter.eraseOp(aggConst);
+          continue;
+        }
       } else if (auto extractOp = dyn_cast<comb::ExtractOp>(op)) {
         Value input = extractOp.getInput();
         unsigned lowBit = extractOp.getLowBit();
@@ -2313,6 +2960,26 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
         }
         repOp.replaceAllUsesWith(result);
         rewriter.eraseOp(repOp);
+      } else if (auto parityOp = dyn_cast<comb::ParityOp>(op)) {
+        Value val = parityOp.getInput();
+        auto inIntTy = dyn_cast<IntegerType>(val.getType());
+        auto outIntTy = dyn_cast<IntegerType>(parityOp.getResult().getType());
+        if (!inIntTy || !outIntTy)
+          continue;
+        unsigned width = inIntTy.getWidth();
+        for (unsigned half = width / 2; half > 0; half /= 2) {
+          auto shiftAmt = rewriter.create<arith::ConstantOp>(
+              loc, rewriter.getIntegerAttr(val.getType(), half));
+          auto shifted = rewriter.create<arith::ShRUIOp>(loc, val, shiftAmt);
+          val = rewriter.create<arith::XOrIOp>(loc, val, shifted);
+        }
+        Value result = val;
+        if (inIntTy.getWidth() > outIntTy.getWidth())
+          result = rewriter.create<arith::TruncIOp>(loc, outIntTy, val);
+        else if (inIntTy.getWidth() < outIntTy.getWidth())
+          result = rewriter.create<arith::ExtUIOp>(loc, outIntTy, val);
+        parityOp.replaceAllUsesWith(result);
+        rewriter.eraseOp(parityOp);
       } else if (auto bitcastOp = dyn_cast<hw::BitcastOp>(op)) {
         // If both types are the same, just fold away.
         if (bitcastOp.getInput().getType() ==
@@ -2531,6 +3198,29 @@ static bool lowerFuncArithCfToLLVM(ModuleOp microModule,
           rewriter.eraseOp(castOp);
         }
         // Otherwise leave in place — will be stripped later if unresolvable.
+      } else if (auto gepOp = dyn_cast<LLVM::GEPOp>(op)) {
+        Type elemTy = gepOp.getElemType();
+        if (LLVM::isCompatibleType(elemTy))
+          continue;
+        Type convertedElemTy = convertToLLVMCompatibleType(elemTy, &mlirContext);
+        if (!convertedElemTy || !LLVM::isCompatibleType(convertedElemTy))
+          continue;
+
+        SmallVector<LLVM::GEPArg> gepIndices;
+        gepIndices.reserve(gepOp.getIndices().size());
+        for (auto idx : gepOp.getIndices()) {
+          if (auto value = idx.dyn_cast<Value>()) {
+            gepIndices.push_back(value);
+            continue;
+          }
+          auto intAttr = idx.get<IntegerAttr>();
+          gepIndices.push_back(static_cast<int32_t>(intAttr.getInt()));
+        }
+        auto newGep = LLVM::GEPOp::create(rewriter, loc, gepOp.getType(),
+                                          convertedElemTy, gepOp.getBase(),
+                                          gepIndices, gepOp.getNoWrapFlags());
+        gepOp.replaceAllUsesWith(newGep.getResult());
+        rewriter.eraseOp(gepOp);
       }
     }
 
@@ -3116,9 +3806,17 @@ static StripNonLLVMResult stripNonLLVMFunctions(ModuleOp microModule) {
 /// Count how many uint64_t slots a type needs when flattened for trampoline ABI.
 /// Returns 0 if the type can't be handled.
 static unsigned countTrampolineSlots(Type ty) {
-  if (isa<IntegerType>(ty) || isa<LLVM::LLVMPointerType>(ty) ||
-      isa<FloatType>(ty))
+  if (auto intTy = dyn_cast<IntegerType>(ty))
+    return (intTy.getWidth() + 63) / 64;
+  if (isa<LLVM::LLVMPointerType>(ty) ||
+      (isa<FloatType>(ty) && cast<FloatType>(ty).getWidth() <= 64))
     return 1;
+  if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(ty)) {
+    unsigned elemSlots = countTrampolineSlots(arrayTy.getElementType());
+    if (elemSlots == 0)
+      return 0;
+    return elemSlots * arrayTy.getNumElements();
+  }
   if (auto structTy = dyn_cast<LLVM::LLVMStructType>(ty)) {
     unsigned total = 0;
     for (Type fieldTy : structTy.getBody()) {
@@ -3137,6 +3835,17 @@ static unsigned countTrampolineSlots(Type ty) {
 static unsigned emitPackValue(OpBuilder &builder, Location loc, Value val,
                               Type ty, Value argsArray, unsigned slotIdx,
                               Type i64Ty, Type ptrTy) {
+  if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(ty)) {
+    Type elemTy = arrayTy.getElementType();
+    for (unsigned elemIdx = 0; elemIdx < arrayTy.getNumElements(); ++elemIdx) {
+      Value elem = LLVM::ExtractValueOp::create(
+          builder, loc, val, ArrayRef<int64_t>{(int64_t)elemIdx});
+      slotIdx = emitPackValue(builder, loc, elem, elemTy, argsArray, slotIdx,
+                              i64Ty, ptrTy);
+    }
+    return slotIdx;
+  }
+
   if (auto structTy = dyn_cast<LLVM::LLVMStructType>(ty)) {
     for (auto [fieldIdx, fieldTy] : llvm::enumerate(structTy.getBody())) {
       Value field = LLVM::ExtractValueOp::create(
@@ -3145,6 +3854,36 @@ static unsigned emitPackValue(OpBuilder &builder, Location loc, Value val,
                               i64Ty, ptrTy);
     }
     return slotIdx;
+  }
+
+  auto getSlotPtr = [&](unsigned idx) -> Value {
+    if (idx == 0)
+      return argsArray;
+    auto idxVal = LLVM::ConstantOp::create(builder, loc, i64Ty,
+                                           builder.getI64IntegerAttr(idx));
+    return LLVM::GEPOp::create(builder, loc, ptrTy, i64Ty, argsArray,
+                               ValueRange{idxVal});
+  };
+
+  if (auto intTy = dyn_cast<IntegerType>(ty)) {
+    unsigned width = intTy.getWidth();
+    if (width > 64) {
+      unsigned chunks = (width + 63) / 64;
+      for (unsigned chunk = 0; chunk < chunks; ++chunk) {
+        Value packedChunk;
+        if (chunk == 0) {
+          packedChunk = LLVM::TruncOp::create(builder, loc, i64Ty, val);
+        } else {
+          auto shiftAmt = LLVM::ConstantOp::create(
+              builder, loc, ty, builder.getIntegerAttr(ty, chunk * 64));
+          Value shifted = LLVM::LShrOp::create(builder, loc, ty, val, shiftAmt);
+          packedChunk = LLVM::TruncOp::create(builder, loc, i64Ty, shifted);
+        }
+        Value slot = getSlotPtr(slotIdx++);
+        LLVM::StoreOp::create(builder, loc, packedChunk, slot);
+      }
+      return slotIdx;
+    }
   }
 
   // Scalar: pack into one slot.
@@ -3158,20 +3897,20 @@ static unsigned emitPackValue(OpBuilder &builder, Location loc, Value val,
       packed = val;
     else
       packed = LLVM::TruncOp::create(builder, loc, i64Ty, val);
+  } else if (auto floatTy = dyn_cast<FloatType>(ty)) {
+    unsigned width = floatTy.getWidth();
+    if (width == 64) {
+      packed = LLVM::BitcastOp::create(builder, loc, i64Ty, val);
+    } else {
+      auto intTy = IntegerType::get(builder.getContext(), width);
+      Value bits = LLVM::BitcastOp::create(builder, loc, intTy, val);
+      packed = LLVM::ZExtOp::create(builder, loc, i64Ty, bits);
+    }
   } else {
-    // Float/double: bitcast to i64.
     packed = LLVM::BitcastOp::create(builder, loc, i64Ty, val);
   }
 
-  Value slot;
-  if (slotIdx == 0) {
-    slot = argsArray;
-  } else {
-    auto idxVal = LLVM::ConstantOp::create(builder, loc, i64Ty,
-                                            builder.getI64IntegerAttr(slotIdx));
-    slot = LLVM::GEPOp::create(builder, loc, ptrTy, i64Ty, argsArray,
-                                ValueRange{idxVal});
-  }
+  Value slot = getSlotPtr(slotIdx);
   LLVM::StoreOp::create(builder, loc, packed, slot);
   return slotIdx + 1;
 }
@@ -3181,6 +3920,20 @@ static unsigned emitPackValue(OpBuilder &builder, Location loc, Value val,
 static std::pair<Value, unsigned>
 emitUnpackValue(OpBuilder &builder, Location loc, Type ty, Value retsArray,
                 unsigned slotIdx, Type i64Ty, Type ptrTy) {
+  if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(ty)) {
+    Type elemTy = arrayTy.getElementType();
+    Value result = LLVM::UndefOp::create(builder, loc, arrayTy);
+    for (unsigned elemIdx = 0; elemIdx < arrayTy.getNumElements(); ++elemIdx) {
+      auto [elemVal, nextSlot] =
+          emitUnpackValue(builder, loc, elemTy, retsArray, slotIdx, i64Ty,
+                          ptrTy);
+      result = LLVM::InsertValueOp::create(
+          builder, loc, result, elemVal, ArrayRef<int64_t>{(int64_t)elemIdx});
+      slotIdx = nextSlot;
+    }
+    return {result, slotIdx};
+  }
+
   if (auto structTy = dyn_cast<LLVM::LLVMStructType>(ty)) {
     Value result = LLVM::UndefOp::create(builder, loc, structTy);
     for (auto [fieldIdx, fieldTy] : llvm::enumerate(structTy.getBody())) {
@@ -3194,16 +3947,41 @@ emitUnpackValue(OpBuilder &builder, Location loc, Type ty, Value retsArray,
     return {result, slotIdx};
   }
 
-  // Scalar: read one slot.
-  Value slot;
-  if (slotIdx == 0) {
-    slot = retsArray;
-  } else {
+  auto getSlotPtr = [&](unsigned idx) -> Value {
+    if (idx == 0)
+      return retsArray;
     auto idxVal = LLVM::ConstantOp::create(builder, loc, i64Ty,
-                                            builder.getI64IntegerAttr(slotIdx));
-    slot = LLVM::GEPOp::create(builder, loc, ptrTy, i64Ty, retsArray,
-                                ValueRange{idxVal});
+                                           builder.getI64IntegerAttr(idx));
+    return LLVM::GEPOp::create(builder, loc, ptrTy, i64Ty, retsArray,
+                               ValueRange{idxVal});
+  };
+
+  if (auto intTy = dyn_cast<IntegerType>(ty)) {
+    unsigned width = intTy.getWidth();
+    if (width > 64) {
+      unsigned chunks = (width + 63) / 64;
+      Value result = LLVM::ConstantOp::create(
+          builder, loc, ty, builder.getIntegerAttr(ty, 0));
+      for (unsigned chunk = 0; chunk < chunks; ++chunk) {
+        Value slot = getSlotPtr(slotIdx++);
+        Value raw = LLVM::LoadOp::create(builder, loc, i64Ty, slot);
+        Value chunkVal = LLVM::ZExtOp::create(builder, loc, ty, raw);
+        if (chunk != 0) {
+          auto shiftAmt = LLVM::ConstantOp::create(
+              builder, loc, ty, builder.getIntegerAttr(ty, chunk * 64));
+          chunkVal = LLVM::ShlOp::create(builder, loc, ty, chunkVal, shiftAmt);
+        }
+        if (chunk == 0)
+          result = chunkVal;
+        else
+          result = LLVM::OrOp::create(builder, loc, ty, result, chunkVal);
+      }
+      return {result, slotIdx};
+    }
   }
+
+  // Scalar: read one slot.
+  Value slot = getSlotPtr(slotIdx);
   Value raw = LLVM::LoadOp::create(builder, loc, i64Ty, slot);
 
   Value result;
@@ -3216,6 +3994,15 @@ emitUnpackValue(OpBuilder &builder, Location loc, Type ty, Value retsArray,
       result = raw;
     else
       result = LLVM::ZExtOp::create(builder, loc, ty, raw);
+  } else if (auto floatTy = dyn_cast<FloatType>(ty)) {
+    unsigned width = floatTy.getWidth();
+    if (width == 64) {
+      result = LLVM::BitcastOp::create(builder, loc, ty, raw);
+    } else {
+      auto intTy = IntegerType::get(builder.getContext(), width);
+      Value bits = LLVM::TruncOp::create(builder, loc, intTy, raw);
+      result = LLVM::BitcastOp::create(builder, loc, ty, bits);
+    }
   } else {
     result = LLVM::BitcastOp::create(builder, loc, ty, raw);
   }
@@ -3382,8 +4169,9 @@ static unsigned initializeTaggedVtableGlobals(
 ///
 /// This allows compiled code to call functions that weren't compiled (e.g.,
 /// functions containing unsupported ops) without crashing at runtime.
-static llvm::SmallVector<std::string>
-generateTrampolines(ModuleOp microModule) {
+static FailureOr<llvm::SmallVector<std::string>>
+generateTrampolines(ModuleOp microModule, ModuleOp originalModule,
+                    const llvm::StringSet<> &forcedTrampolineNames) {
   llvm::SmallVector<std::string> trampolineNames;
   auto *mlirCtx = microModule.getContext();
   OpBuilder builder(mlirCtx);
@@ -3424,6 +4212,13 @@ generateTrampolines(ModuleOp microModule) {
 
   // Collect external functions that need trampolines.
   llvm::SmallVector<LLVM::LLVMFuncOp> externals;
+  bool sawUnsupportedReferencedExternal = false;
+  auto formatType = [](Type ty) {
+    std::string out;
+    llvm::raw_string_ostream os(out);
+    ty.print(os);
+    return os.str();
+  };
   for (auto funcOp : microModule.getOps<LLVM::LLVMFuncOp>()) {
     if (!funcOp.isExternal())
       continue;
@@ -3432,31 +4227,67 @@ generateTrampolines(ModuleOp microModule) {
     if (name.starts_with("__circt_sim_") || name.starts_with("__moore_") ||
         name.starts_with("__arc_sched_") || name.starts_with("llvm."))
       continue;
-    // Skip vararg functions (can't pack cleanly).
-    if (funcOp.isVarArg())
+
+    bool needsTrampoline = false;
+    if (forcedTrampolineNames.contains(name))
+      needsTrampoline = true;
+    if (!needsTrampoline) {
+      if (auto origFunc = originalModule.lookupSymbol<func::FuncOp>(name))
+        needsTrampoline = !origFunc.isExternal();
+    }
+    if (!needsTrampoline) {
+      if (auto origLLVMFunc =
+              originalModule.lookupSymbol<LLVM::LLVMFuncOp>(name))
+        needsTrampoline = !origLLVMFunc.isExternal();
+    }
+    // Host/runtime extern declarations (e.g. printf, memcpy, libm) must stay
+    // as direct extern calls and must not be converted to interpreter
+    // trampolines.
+    if (!needsTrampoline)
       continue;
-    // Skip functions with types we can't flatten into uint64_t slots.
+
+    if (funcOp.isVarArg()) {
+      funcOp.emitError()
+          << "cannot generate interpreter trampoline for referenced external "
+             "vararg function";
+      sawUnsupportedReferencedExternal = true;
+      continue;
+    }
+
+    // Reject functions with types we can't flatten into uint64_t slots.
     auto funcTy = funcOp.getFunctionType();
     bool hasUnsupported = false;
-    unsigned totalArgSlots = 0;
+    std::string unsupportedReason;
     for (unsigned i = 0; i < funcTy.getNumParams(); ++i) {
-      unsigned slots = countTrampolineSlots(funcTy.getParamType(i));
+      Type paramTy = funcTy.getParamType(i);
+      unsigned slots = countTrampolineSlots(paramTy);
       if (slots == 0) {
         hasUnsupported = true;
+        unsupportedReason = ("parameter " + std::to_string(i) + " has type " +
+                             formatType(paramTy));
         break;
       }
-      totalArgSlots += slots;
     }
-    unsigned totalRetSlots = 0;
     if (!hasUnsupported && !isa<LLVM::LLVMVoidType>(funcTy.getReturnType())) {
-      totalRetSlots = countTrampolineSlots(funcTy.getReturnType());
+      Type retTy = funcTy.getReturnType();
+      unsigned totalRetSlots = countTrampolineSlots(retTy);
       if (totalRetSlots == 0)
         hasUnsupported = true;
+      if (hasUnsupported)
+        unsupportedReason = ("return type " + formatType(retTy));
     }
-    if (hasUnsupported)
+    if (hasUnsupported) {
+      funcOp.emitError()
+          << "cannot generate interpreter trampoline for referenced external "
+             "function: unsupported trampoline ABI ("
+          << unsupportedReason << ")";
+      sawUnsupportedReferencedExternal = true;
       continue;
+    }
     externals.push_back(funcOp);
   }
+  if (sawUnsupportedReferencedExternal)
+    return failure();
 
   unsigned funcId = 0;
   for (auto funcOp : externals) {
@@ -3556,7 +4387,7 @@ generateTrampolines(ModuleOp microModule) {
     ++funcId;
   }
 
-  return trampolineNames;
+  return success(trampolineNames);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3676,10 +4507,26 @@ static void flattenAggregateFunctionABIs(ModuleOp moduleOp) {
 
   // Phase 3: Rewrite call sites.
   SmallVector<LLVM::CallOp> callsToRewrite;
+  SmallVector<LLVM::CallOp> indirectCallsToRewrite;
   moduleOp.walk([&](LLVM::CallOp callOp) {
     auto callee = callOp.getCallee();
-    if (!callee)
-      return; // Indirect call — skip.
+    if (!callee) {
+      auto oldType = callOp.getCalleeFunctionType();
+      bool needsRewrite = false;
+      for (Type argTy : oldType.getParams()) {
+        if (isAggregateType(argTy)) {
+          needsRewrite = true;
+          break;
+        }
+      }
+      Type oldRetTy = oldType.getReturnType();
+      if (!needsRewrite && !isa<LLVM::LLVMVoidType>(oldRetTy) &&
+          isAggregateType(oldRetTy))
+        needsRewrite = true;
+      if (needsRewrite)
+        indirectCallsToRewrite.push_back(callOp);
+      return;
+    }
     if (rewriteMap.count(*callee))
       callsToRewrite.push_back(callOp);
   });
@@ -3731,6 +4578,74 @@ static void flattenAggregateFunctionABIs(ModuleOp moduleOp) {
       auto newCall = builder.create<LLVM::CallOp>(loc, callOp.getResultTypes(),
                                                   callee, newOperands);
       // LLVM::CallOp has at most one result; use getResult() with no args.
+      if (callOp.getNumResults() > 0)
+        callOp.getResult().replaceAllUsesWith(newCall.getResult());
+    }
+    callOp.erase();
+  }
+
+  // Rewrite indirect calls using aggregate args/returns to the flattened ABI.
+  for (auto callOp : indirectCallsToRewrite) {
+    auto oldFuncType = callOp.getCalleeFunctionType();
+    bool hasAggregateReturn =
+        !isa<LLVM::LLVMVoidType>(oldFuncType.getReturnType()) &&
+        isAggregateType(oldFuncType.getReturnType());
+
+    SmallVector<Type> newParams;
+    if (hasAggregateReturn)
+      newParams.push_back(ptrTy);
+    for (Type argTy : oldFuncType.getParams())
+      newParams.push_back(isAggregateType(argTy) ? ptrTy : argTy);
+
+    Type newRetType =
+        hasAggregateReturn ? voidTy : oldFuncType.getReturnType();
+    auto newFuncType = LLVM::LLVMFunctionType::get(
+        newRetType, newParams, oldFuncType.isVarArg());
+
+    auto argOperands = callOp.getArgOperands();
+    if (argOperands.size() != oldFuncType.getNumParams())
+      continue;
+
+    OpBuilder builder(callOp);
+    Location loc = callOp.getLoc();
+    Value one = builder.create<LLVM::ConstantOp>(loc, builder.getI64Type(),
+                                                 builder.getI64IntegerAttr(1));
+
+    SmallVector<Value> newOperands;
+    // For indirect calls, `callee_operands` stores the callee as operand 0 and
+    // then the call arguments. We rebuild arguments below, so only copy callee.
+    auto calleeOperands = callOp.getCalleeOperands();
+    if (calleeOperands.empty())
+      continue;
+    newOperands.push_back(calleeOperands.front());
+
+    Value retBuf;
+    if (hasAggregateReturn) {
+      Type retTy = oldFuncType.getReturnType();
+      retBuf = builder.create<LLVM::AllocaOp>(loc, ptrTy, retTy, one);
+      newOperands.push_back(retBuf);
+    }
+
+    for (unsigned i = 0; i < oldFuncType.getNumParams(); ++i) {
+      Value operand = argOperands[i];
+      Type oldArgTy = oldFuncType.getParams()[i];
+      if (isAggregateType(oldArgTy)) {
+        Value buf = builder.create<LLVM::AllocaOp>(loc, ptrTy, oldArgTy, one);
+        builder.create<LLVM::StoreOp>(loc, operand, buf);
+        newOperands.push_back(buf);
+      } else {
+        newOperands.push_back(operand);
+      }
+    }
+
+    if (hasAggregateReturn) {
+      builder.create<LLVM::CallOp>(loc, newFuncType, newOperands);
+      Value result =
+          builder.create<LLVM::LoadOp>(loc, oldFuncType.getReturnType(), retBuf);
+      if (callOp.getNumResults() > 0)
+        callOp.getResult().replaceAllUsesWith(result);
+    } else {
+      auto newCall = builder.create<LLVM::CallOp>(loc, newFuncType, newOperands);
       if (callOp.getNumResults() > 0)
         callOp.getResult().replaceAllUsesWith(newCall.getResult());
     }
@@ -5791,6 +6706,132 @@ static LogicalResult linkToSharedObject(llvm::StringRef objectPath,
 // Main compilation pipeline
 //===----------------------------------------------------------------------===//
 
+static void debugProbePtrLikeTypes(ModuleOp moduleOp) {
+  std::unordered_set<const void *> seenTypes;
+  uint64_t probeCount = 0;
+
+  auto probeType = [&](Type type, Operation *owner, llvm::StringRef kind,
+                       const auto &self) -> void {
+    if (!type)
+      return;
+    const void *opaque = type.getAsOpaquePointer();
+    if (!seenTypes.insert(opaque).second)
+      return;
+
+    if (auto ptrLike = dyn_cast<PtrLikeTypeInterface>(type)) {
+      ++probeCount;
+      llvm::errs() << "[circt-sim-compile] ptrlike-probe #" << probeCount
+                   << " op=" << owner->getName().getStringRef()
+                   << " kind=" << kind << " type=";
+      type.print(llvm::errs());
+      llvm::errs() << "\n";
+      (void)ptrLike.getMemorySpace();
+    }
+
+    if (auto fnTy = dyn_cast<FunctionType>(type)) {
+      for (Type in : fnTy.getInputs())
+        self(in, owner, kind, self);
+      for (Type out : fnTy.getResults())
+        self(out, owner, kind, self);
+      return;
+    }
+    if (auto llvmFnTy = dyn_cast<LLVM::LLVMFunctionType>(type)) {
+      self(llvmFnTy.getReturnType(), owner, kind, self);
+      for (Type param : llvmFnTy.getParams())
+        self(param, owner, kind, self);
+      return;
+    }
+    if (auto llvmStructTy = dyn_cast<LLVM::LLVMStructType>(type)) {
+      if (!llvmStructTy.isOpaque()) {
+        for (Type fieldTy : llvmStructTy.getBody())
+          self(fieldTy, owner, kind, self);
+      }
+      return;
+    }
+    if (auto llvmArrayTy = dyn_cast<LLVM::LLVMArrayType>(type)) {
+      self(llvmArrayTy.getElementType(), owner, kind, self);
+      return;
+    }
+    if (auto vectorTy = dyn_cast<VectorType>(type)) {
+      self(vectorTy.getElementType(), owner, kind, self);
+      return;
+    }
+    if (auto tupleTy = dyn_cast<TupleType>(type)) {
+      for (Type elementTy : tupleTy.getTypes())
+        self(elementTy, owner, kind, self);
+      return;
+    }
+  };
+
+  moduleOp.walk([&](Operation *op) {
+    for (Type operandTy : op->getOperandTypes())
+      probeType(operandTy, op, "operand", probeType);
+    for (Type resultTy : op->getResultTypes())
+      probeType(resultTy, op, "result", probeType);
+    for (Region &region : op->getRegions())
+      for (Block &block : region)
+        for (BlockArgument arg : block.getArguments())
+          probeType(arg.getType(), op, "block_arg", probeType);
+    for (NamedAttribute attr : op->getAttrs())
+      if (auto typeAttr = dyn_cast<TypeAttr>(attr.getValue()))
+        probeType(typeAttr.getValue(), op, "type_attr", probeType);
+  });
+
+  llvm::errs() << "[circt-sim-compile] ptrlike-probe complete: " << probeCount
+               << " unique ptr-like types\n";
+}
+
+static LogicalResult debugTranslateBisection(ModuleOp microModule,
+                                             MLIRContext &mlirContext) {
+  llvm::SmallVector<std::string> definedFunctionNames;
+  for (auto funcOp : microModule.getOps<LLVM::LLVMFuncOp>()) {
+    if (!funcOp.isExternal())
+      definedFunctionNames.push_back(funcOp.getSymName().str());
+  }
+
+  llvm::errs() << "[circt-sim-compile] translate-bisect: "
+               << definedFunctionNames.size() << " defined functions\n";
+
+  registerBuiltinDialectTranslation(mlirContext);
+  registerLLVMDialectTranslation(mlirContext);
+
+  for (const auto &targetName : definedFunctionNames) {
+    auto cloned = cast<ModuleOp>(microModule.clone());
+    for (auto funcOp : cloned.getOps<LLVM::LLVMFuncOp>()) {
+      if (funcOp.isExternal())
+        continue;
+      if (funcOp.getSymName() != targetName) {
+        Region &body = funcOp.getBody();
+        while (!body.empty())
+          body.front().erase();
+      }
+    }
+
+    if (failed(mlir::verify(cloned))) {
+      llvm::errs() << "[circt-sim-compile] translate-bisect: verify failed for "
+                   << targetName << "\n";
+      cloned.erase();
+      return failure();
+    }
+
+    llvm::errs() << "[circt-sim-compile] translate-bisect: translating "
+                 << targetName << "\n";
+    llvm::LLVMContext llvmContext;
+    auto llvmModule = translateModuleToLLVMIR(cloned, llvmContext);
+    cloned.erase();
+    if (!llvmModule) {
+      llvm::errs() << "[circt-sim-compile] translate-bisect: translation "
+                      "returned null for "
+                   << targetName << "\n";
+      return failure();
+    }
+  }
+
+  llvm::errs() << "[circt-sim-compile] translate-bisect: all functions "
+                  "translated successfully\n";
+  return success();
+}
+
 static LogicalResult compile(MLIRContext &mlirContext) {
   auto startTime = std::chrono::steady_clock::now();
 
@@ -5989,6 +7030,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
         std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_HIERARCHY") != nullptr;
     bool allowNativeUvmPhaseGraph = aggressiveNativeUvm ||
         std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_GRAPH") != nullptr;
+    bool allowNativeUvmPhaseState = aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_STATE") != nullptr;
     bool allowNativeUvmFactory =
         std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_FACTORY") != nullptr;
     bool allowNativeUvmReporting = aggressiveNativeUvm ||
@@ -6004,6 +7047,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                               allowNativeUvmTypeInfo,
                               allowNativeUvmAccessors, allowNativeUvmHierarchy,
                               allowNativeUvmPhaseGraph,
+                              allowNativeUvmPhaseState,
                               allowNativeUvmFactory, allowNativeUvmReporting,
                               allowNativeUvmRandom,
                               allowNativeUvmSingletonGetters](
@@ -6042,6 +7086,11 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       if (name.ends_with("::die"))
         return true;
       // Phase-graph/state mutators have interpreter-side cache/update logic.
+      if (!allowNativeUvmPhaseState &&
+          (name.contains("uvm_phase::set_state") ||
+           name.contains("uvm_phase::get_domain") ||
+           name.contains("uvm_phase::get_full_name")))
+        return true;
       if (!allowNativeUvmPhaseGraph &&
           (name.contains("uvm_phase::") ||
            name.contains("uvm_component::set_domain")))
@@ -6141,11 +7190,86 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       });
       return found;
     };
+    auto callsSuspendingMooreRuntime = [](func::FuncOp funcOp) {
+      bool found = false;
+      funcOp.walk([&](Operation *op) {
+        auto isSuspendingRuntimeName = [](StringRef callee) {
+          return callee == "__moore_wait_event" ||
+                 callee == "__moore_wait_condition" ||
+                 callee == "__moore_process_await";
+        };
+        if (auto llvmCall = dyn_cast<LLVM::CallOp>(op)) {
+          if (auto callee = llvmCall.getCallee();
+              callee && isSuspendingRuntimeName(*callee)) {
+            found = true;
+            return WalkResult::interrupt();
+          }
+        }
+        if (auto funcCall = dyn_cast<func::CallOp>(op)) {
+          if (isSuspendingRuntimeName(funcCall.getCallee())) {
+            found = true;
+            return WalkResult::interrupt();
+          }
+        }
+        return WalkResult::advance();
+      });
+      return found;
+    };
+    auto hasSuspendingMooreWaitEvent = [](func::FuncOp funcOp) {
+      bool found = false;
+      funcOp.walk([&](moore::WaitEventOp) {
+        found = true;
+        return WalkResult::interrupt();
+      });
+      return found;
+    };
+    auto hasSimControlOp = [](func::FuncOp funcOp) {
+      bool found = false;
+      funcOp.walk([&](Operation *op) {
+        if (isa<sim::TerminateOp, sim::PauseOp, sim::ClockedTerminateOp,
+                sim::ClockedPauseOp>(op)) {
+          found = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+      return found;
+    };
+    auto hasSimForkFamilyOp = [](func::FuncOp funcOp) {
+      bool found = false;
+      funcOp.walk([&](Operation *op) {
+        if (isa<sim::SimForkOp, sim::SimForkTerminatorOp, sim::SimWaitForkOp,
+                sim::SimDisableForkOp>(op)) {
+          found = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+      return found;
+    };
+    auto hasUvmBuildPhaseSingletonGlobalAccess = [](func::FuncOp funcOp) {
+      bool found = false;
+      funcOp.walk([&](LLVM::AddressOfOp addrOp) {
+        // Root-cause parity guard: build-phase singleton getters (generated
+        // short-name wrappers like get_2160) can diverge when executed natively
+        // before the phase graph is fully materialized.
+        if (addrOp.getGlobalName().contains("uvm_build_phase::m_inst")) {
+          found = true;
+          return WalkResult::interrupt();
+        }
+        return WalkResult::advance();
+      });
+      return found;
+    };
     microModule.walk([&](func::FuncOp funcOp) {
       if (funcOp.isExternal())
         return;
       if (isInterceptedFunc(funcOp.getSymName()) ||
-          (!allowNativeMooreDelayCallers && callsMooreDelay(funcOp)))
+          (!allowNativeMooreDelayCallers && callsMooreDelay(funcOp)) ||
+          callsSuspendingMooreRuntime(funcOp) ||
+          hasSuspendingMooreWaitEvent(funcOp) ||
+          hasSimControlOp(funcOp) || hasSimForkFamilyOp(funcOp) ||
+          hasUvmBuildPhaseSingletonGlobalAccess(funcOp))
         toDemote.push_back(funcOp);
     });
     for (auto funcOp : toDemote) {
@@ -6183,6 +7307,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   if (!lowerSCFToCF(microModule))
     llvm::errs() << "[circt-sim-compile] Warning: SCF->CF lowering failed; "
                     "falling back to residual-op stripping\n";
+
+  // Canonicalize 4-state block arguments after SCF->CF. This ensures merged
+  // CF values are LLVM-typed before arith/cf/func lowering.
+  canonicalizeFourStateCFBlockArguments(microModule);
 
   // Lower arith/cf/func → LLVM dialect.
   if (!lowerFuncArithCfToLLVM(microModule, mlirContext)) {
@@ -6248,6 +7376,9 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // This must happen BEFORE trampoline generation so we can ensure all
   // vtable functions have either compiled bodies or trampolines.
   auto allFuncEntryNames = collectVtableFuncIds(*module);
+  llvm::StringSet<> forcedTrampolineNames;
+  for (const auto &name : allFuncEntryNames)
+    forcedTrampolineNames.insert(name);
   auto taggedVtableAssignments = collectTaggedVtableAssignments(*module);
   llvm::errs() << "[circt-sim-compile] Collected " << allFuncEntryNames.size()
                << " vtable FuncIds\n";
@@ -6326,7 +7457,14 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   // Generate trampolines for uncompiled functions referenced by compiled code.
   // This now includes vtable functions that aren't compiled.
-  auto trampolineNames = generateTrampolines(microModule);
+  auto trampolineNamesOr =
+      generateTrampolines(microModule, *module, forcedTrampolineNames);
+  if (failed(trampolineNamesOr)) {
+    llvm::errs() << "[circt-sim-compile] Failed to generate trampolines\n";
+    microModule.erase();
+    return failure();
+  }
+  auto trampolineNames = *trampolineNamesOr;
   if (!trampolineNames.empty()) {
     llvm::errs() << "[circt-sim-compile] Generated " << trampolineNames.size()
                  << " interpreter trampolines\n";
@@ -6353,6 +7491,27 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
     llvm::errs() << "[circt-sim-compile] lower: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
+  }
+
+  if (const char *dumpPath = std::getenv("CIRCT_AOT_DUMP_PRE_TRANSLATE_MLIR")) {
+    std::error_code ec;
+    llvm::raw_fd_ostream os(dumpPath, ec, llvm::sys::fs::OF_None);
+    if (ec) {
+      llvm::errs() << "[circt-sim-compile] Failed to open pre-translate dump "
+                   << dumpPath << ": " << ec.message() << "\n";
+    } else {
+      microModule.print(os);
+      os.flush();
+      llvm::errs() << "[circt-sim-compile] Wrote pre-translate MLIR to "
+                   << dumpPath << "\n";
+    }
+  }
+  if (std::getenv("CIRCT_AOT_DEBUG_PTRLIKE_SCAN"))
+    debugProbePtrLikeTypes(microModule);
+  if (std::getenv("CIRCT_AOT_DEBUG_TRANSLATE_BISECT")) {
+    (void)debugTranslateBisection(microModule, mlirContext);
+    microModule.erase();
+    return failure();
   }
 
   // Translate MLIR LLVM dialect → LLVM IR.
