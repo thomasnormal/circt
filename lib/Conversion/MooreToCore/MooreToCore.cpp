@@ -15875,6 +15875,40 @@ struct FormatStringToStringOpConversion
     if (!defOp)
       return createEmptyString(rewriter, loc, ctx);
 
+    // Pass-through conversion casts inserted during type conversion.
+    if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(defOp)) {
+      if (!castOp.getInputs().empty())
+        return convertFormatStringToStringStatic(castOp.getInputs().front(), loc,
+                                                 rewriter, mod);
+      return createEmptyString(rewriter, loc, ctx);
+    }
+
+    // Handle conditional format string selection.
+    if (auto muxOp = dyn_cast<comb::MuxOp>(defOp)) {
+      Value trueStr = convertFormatStringToStringStatic(muxOp.getTrueValue(), loc,
+                                                        rewriter, mod);
+      if (!trueStr)
+        trueStr = createEmptyString(rewriter, loc, ctx);
+      Value falseStr = convertFormatStringToStringStatic(
+          muxOp.getFalseValue(), loc, rewriter, mod);
+      if (!falseStr)
+        falseStr = createEmptyString(rewriter, loc, ctx);
+      return arith::SelectOp::create(rewriter, loc, muxOp.getCond(), trueStr,
+                                     falseStr);
+    }
+    if (auto selectOp = dyn_cast<arith::SelectOp>(defOp)) {
+      Value trueStr = convertFormatStringToStringStatic(
+          selectOp.getTrueValue(), loc, rewriter, mod);
+      if (!trueStr)
+        trueStr = createEmptyString(rewriter, loc, ctx);
+      Value falseStr = convertFormatStringToStringStatic(
+          selectOp.getFalseValue(), loc, rewriter, mod);
+      if (!falseStr)
+        falseStr = createEmptyString(rewriter, loc, ctx);
+      return arith::SelectOp::create(rewriter, loc, selectOp.getCondition(),
+                                     trueStr, falseStr);
+    }
+
     // Case 1: Format literal - create string from the literal value
     if (auto literalOp = dyn_cast<sim::FormatLiteralOp>(defOp)) {
       StringRef literal = literalOp.getLiteral();
