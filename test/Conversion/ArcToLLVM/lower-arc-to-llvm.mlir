@@ -398,7 +398,6 @@ func.func @SimTerminateFailureVerbose() {
   return
 }
 
-
 // CHECK-LABEL: llvm.func @Time
 // CHECK-SAME: (%arg0: !llvm.ptr)
 // CHECK-SAME: -> !llvm.struct<(i64, i64, i64)>
