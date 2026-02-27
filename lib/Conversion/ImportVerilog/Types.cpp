@@ -104,6 +104,32 @@ struct TypeVisitor {
         cast<moore::UnpackedType>(innerType));
   }
 
+  Type visit(const slang::ast::DPIOpenArrayType &type) {
+    auto innerType = type.elementType.visit(*this);
+    if (!innerType)
+      return {};
+
+    if (type.isPacked) {
+      auto packedType = dyn_cast<moore::PackedType>(innerType);
+      if (!packedType) {
+        mlir::emitError(loc) << "packed DPI open array element type must be "
+                                "packed, got "
+                             << innerType;
+        return {};
+      }
+      return moore::OpenArrayType::get(packedType);
+    }
+
+    auto unpackedType = dyn_cast<moore::UnpackedType>(innerType);
+    if (!unpackedType) {
+      mlir::emitError(loc) << "DPI open array element type must be unpacked, "
+                              "got "
+                           << innerType;
+      return {};
+    }
+    return moore::OpenUnpackedArrayType::get(unpackedType);
+  }
+
   // Handle type defs.
   Type visit(const slang::ast::TypeAliasType &type) {
     // Use getCanonicalType() to fully resolve the underlying type.

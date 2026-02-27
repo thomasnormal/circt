@@ -26,14 +26,19 @@
 #include "mlir/Tools/mlir-translate/Translation.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/SourceMgr.h"
+#include <cctype>
 
 #include "slang/ast/Compilation.h"
 #include "slang/analysis/AnalysisManager.h"
 #include "slang/ast/SystemSubroutine.h"
 #include "slang/diagnostics/AnalysisDiags.h"
 #include "slang/diagnostics/DiagnosticClient.h"
+#include "slang/diagnostics/DeclarationsDiags.h"
 #include "slang/diagnostics/ExpressionsDiags.h"
+#include "slang/diagnostics/PreprocessorDiags.h"
+#include "slang/diagnostics/StatementsDiags.h"
 #include "slang/driver/Driver.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxPrinter.h"
@@ -83,6 +88,653 @@ Location Context::convertLocation(slang::SourceRange range) {
 }
 
 namespace {
+static bool isIdentifierChar(char c) {
+  unsigned char uc = static_cast<unsigned char>(c);
+  return std::isalnum(uc) || c == '_' || c == '$';
+}
+
+/// Skip whitespace and comments. Returns std::nullopt for unterminated block
+/// comments.
+static std::optional<size_t> skipTrivia(StringRef text, size_t i) {
+  while (i < text.size()) {
+    if (std::isspace(static_cast<unsigned char>(text[i]))) {
+      ++i;
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < text.size() &&
+             !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 >= text.size())
+        return std::nullopt;
+      i += 2;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+/// Scan from `openIdx` (which must point at `openChar`) to the matching
+/// `closeChar`, skipping over strings and comments. Returns std::nullopt on
+/// malformed / unterminated input.
+static std::optional<size_t> scanBalanced(StringRef text, size_t openIdx,
+                                          char openChar, char closeChar) {
+  if (openIdx >= text.size() || text[openIdx] != openChar)
+    return std::nullopt;
+
+  size_t depth = 1;
+  for (size_t i = openIdx + 1; i < text.size(); ++i) {
+    char c = text[i];
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      continue;
+    }
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < text.size() &&
+             !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 >= text.size())
+        return std::nullopt;
+      ++i;
+      continue;
+    }
+    if (c == '"') {
+      ++i;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"')
+          break;
+        ++i;
+      }
+      if (i >= text.size())
+        return std::nullopt;
+      continue;
+    }
+
+    if (c == openChar) {
+      ++depth;
+      continue;
+    }
+    if (c == closeChar) {
+      if (--depth == 0)
+        return i;
+    }
+  }
+  return std::nullopt;
+}
+
+/// Return true for format specifiers where slang rejects width modifiers but
+/// major simulators accept and ignore them.
+static bool isWidthIgnoredFormatSpecifier(char c) {
+  switch (std::tolower(static_cast<unsigned char>(c))) {
+  case 'c':
+  case 'p':
+  case 'u':
+  case 'z':
+  case 'v':
+  case 'm':
+  case 'l':
+    return true;
+  default:
+    return false;
+  }
+}
+
+/// Map compatibility-only format specifiers to a supported equivalent.
+static char mapFormatSpecifierCompat(char c) {
+  switch (c) {
+  case 'n':
+    return 'u';
+  case 'N':
+    return 'U';
+  default:
+    return c;
+  }
+}
+
+/// Rewrite unsupported width / alignment modifiers for a subset of format
+/// specifiers inside a *string literal body*.
+static std::string rewriteFormatWidthCompatLiteral(StringRef literal,
+                                                   bool &changed) {
+  std::string out;
+  out.reserve(literal.size());
+
+  for (size_t i = 0; i < literal.size();) {
+    if (literal[i] != '%') {
+      out.push_back(literal[i]);
+      ++i;
+      continue;
+    }
+
+    size_t start = i++;
+    if (i >= literal.size()) {
+      out.push_back('%');
+      break;
+    }
+    if (literal[i] == '%') {
+      out.append("%%");
+      ++i;
+      continue;
+    }
+
+    bool leftJustify = false;
+    bool zeroPad = false;
+    while (i < literal.size()) {
+      if (literal[i] == '-' && !leftJustify) {
+        leftJustify = true;
+        ++i;
+        continue;
+      }
+      if (literal[i] == '0' && !zeroPad) {
+        zeroPad = true;
+        ++i;
+        continue;
+      }
+      break;
+    }
+
+    size_t widthStart = i;
+    while (i < literal.size() &&
+           std::isdigit(static_cast<unsigned char>(literal[i])))
+      ++i;
+    bool hasWidth = i > widthStart;
+
+    bool hasPrecision = false;
+    if (i < literal.size() && literal[i] == '.') {
+      hasPrecision = true;
+      ++i;
+      while (i < literal.size() &&
+             std::isdigit(static_cast<unsigned char>(literal[i])))
+        ++i;
+    }
+
+    if (i >= literal.size()) {
+      out.append(literal.substr(start));
+      break;
+    }
+
+    char spec = literal[i];
+    char compatSpec = mapFormatSpecifierCompat(spec);
+    bool mappedSpecifier = compatSpec != spec;
+    if (mappedSpecifier)
+      changed = true;
+    spec = compatSpec;
+
+    if (!hasPrecision && isWidthIgnoredFormatSpecifier(spec) &&
+        (leftJustify || zeroPad || hasWidth)) {
+      changed = true;
+      out.push_back('%');
+      out.push_back(spec);
+      ++i;
+      continue;
+    }
+
+    if (mappedSpecifier) {
+      out.append(literal.substr(start, i - start));
+      out.push_back(spec);
+      ++i;
+      continue;
+    }
+
+    out.append(literal.substr(start, i - start + 1));
+    ++i;
+  }
+
+  return out;
+}
+
+/// Rewrite format-width compatibility in all string literals in `text`.
+static std::string rewriteFormatWidthCompatLiterals(StringRef text,
+                                                    bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  for (size_t i = 0; i < text.size();) {
+    char c = text[i];
+
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (c != '"') {
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+
+    size_t strStart = i++;
+    while (i < text.size()) {
+      if (text[i] == '\\' && i + 1 < text.size()) {
+        i += 2;
+        continue;
+      }
+      if (text[i] == '"')
+        break;
+      ++i;
+    }
+    if (i >= text.size()) {
+      out.append(text.substr(strStart));
+      break;
+    }
+
+    size_t strEnd = i;
+    bool literalChanged = false;
+    StringRef literal = text.slice(strStart + 1, strEnd);
+    auto rewrittenLiteral = rewriteFormatWidthCompatLiteral(literal,
+                                                            literalChanged);
+    if (!literalChanged) {
+      out.append(text.substr(strStart, strEnd - strStart + 1));
+    } else {
+      changed = true;
+      out.push_back('"');
+      out += rewrittenLiteral;
+      out.push_back('"');
+    }
+
+    i = strEnd + 1;
+  }
+
+  return out;
+}
+
+static bool isFormatSystemTaskName(StringRef name) {
+  return llvm::StringSwitch<bool>(name.lower())
+      .Cases({"display", "displayb", "displayh", "displayo"}, true)
+      .Cases({"write", "writeb", "writeh", "writeo"}, true)
+      .Cases({"strobe", "strobeb", "strobeh", "strobeo"}, true)
+      .Cases({"monitor", "monitorb", "monitorh", "monitoro"}, true)
+      .Cases({"fdisplay", "fdisplayb", "fdisplayh", "fdisplayo"}, true)
+      .Cases({"fwrite", "fwriteb", "fwriteh", "fwriteo"}, true)
+      .Cases({"fstrobe", "fstrobeb", "fstrobeh", "fstrobeo"}, true)
+      .Cases({"fmonitor", "fmonitorb", "fmonitorh", "fmonitoro"}, true)
+      .Cases({"swrite", "sformat", "sformatf"}, true)
+      .Default(false);
+}
+
+/// Apply format-width compatibility rewrites to argument lists of format
+/// system calls only, preserving all other string literals unchanged.
+static std::string rewriteFormatWidthCompat(StringRef text, bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  for (size_t i = 0; i < text.size();) {
+    char c = text[i];
+
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (c == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (c != '$') {
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+
+    size_t nameStart = i + 1;
+    if (nameStart >= text.size() || !isIdentifierChar(text[nameStart])) {
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    size_t nameEnd = nameStart + 1;
+    while (nameEnd < text.size() && isIdentifierChar(text[nameEnd]))
+      ++nameEnd;
+
+    StringRef callName = text.slice(nameStart, nameEnd);
+    if (!isFormatSystemTaskName(callName)) {
+      out.append(text.substr(i, nameEnd - i));
+      i = nameEnd;
+      continue;
+    }
+
+    auto maybeOpenParen = skipTrivia(text, nameEnd);
+    if (!maybeOpenParen || *maybeOpenParen >= text.size() ||
+        text[*maybeOpenParen] != '(') {
+      out.append(text.substr(i, nameEnd - i));
+      i = nameEnd;
+      continue;
+    }
+
+    auto maybeCloseParen = scanBalanced(text, *maybeOpenParen, '(', ')');
+    if (!maybeCloseParen) {
+      out.append(text.substr(i));
+      break;
+    }
+
+    out.append(text.substr(i, *maybeOpenParen + 1 - i));
+    bool argsChanged = false;
+    StringRef args = text.slice(*maybeOpenParen + 1, *maybeCloseParen);
+    auto rewrittenArgs = rewriteFormatWidthCompatLiterals(args, argsChanged);
+    if (!argsChanged) {
+      out.append(args);
+    } else {
+      changed = true;
+      out += rewrittenArgs;
+    }
+    out.push_back(')');
+    i = *maybeCloseParen + 1;
+  }
+
+  return out;
+}
+
+/// Rewrite UDP table `z` symbols to `x` for parser compatibility.
+///
+/// IEEE 1800-2023 §29.3.5 describes `z` in UDP table entries as illegal and
+/// states that `z` values passed to UDP inputs are treated like `x`. Some
+/// simulators accept `z` in table rows as a compatibility extension. Slang
+/// rejects these rows during parsing, so canonicalize `z/Z` to `x/X` only
+/// within `primitive ... table ... endtable ... endprimitive` regions.
+static std::string rewriteUDPZCompat(StringRef text, bool &changed) {
+  auto isWordStart = [](char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+  };
+  auto isWordBody = [](char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$';
+  };
+
+  std::string out;
+  out.reserve(text.size());
+
+  bool inPrimitive = false;
+  bool inTable = false;
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.substr(start, i - start));
+      continue;
+    }
+
+    if (isWordStart(text[i])) {
+      size_t start = i++;
+      while (i < text.size() && isWordBody(text[i]))
+        ++i;
+      StringRef word = text.slice(start, i);
+      if (word == "primitive") {
+        inPrimitive = true;
+        inTable = false;
+      } else if (word == "endprimitive") {
+        inPrimitive = false;
+        inTable = false;
+      } else if (inPrimitive && word == "table") {
+        inTable = true;
+      } else if (inPrimitive && word == "endtable") {
+        inTable = false;
+      }
+      if (inPrimitive && inTable && (word == "z" || word == "Z")) {
+        out.push_back(word.front() == 'z' ? 'x' : 'X');
+        changed = true;
+      } else {
+        out.append(word);
+      }
+      continue;
+    }
+
+    char c = text[i++];
+    if (inPrimitive && inTable && (c == 'z' || c == 'Z')) {
+      out.push_back(c == 'z' ? 'x' : 'X');
+      changed = true;
+    } else {
+      out.push_back(c);
+    }
+  }
+
+  return out;
+}
+
+/// Rewrite `this.` references inside a randomize-with inline constraint body.
+/// This is a compatibility workaround for class randomize calls on array
+/// elements where slang currently resolves `this` to the array symbol instead
+/// of the element handle.
+static std::string rewriteConstraintThisDot(StringRef body, bool &changed) {
+  std::string out;
+  out.reserve(body.size());
+
+  for (size_t i = 0; i < body.size();) {
+    char c = body[i];
+
+    if (c == '/' && i + 1 < body.size() && body[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < body.size() && body[i] != '\n')
+        ++i;
+      out.append(body.substr(start, i - start));
+      continue;
+    }
+    if (c == '/' && i + 1 < body.size() && body[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < body.size() &&
+             !(body[i] == '*' && body[i + 1] == '/'))
+        ++i;
+      if (i + 1 < body.size())
+        i += 2;
+      out.append(body.substr(start, i - start));
+      continue;
+    }
+    if (c == '"') {
+      size_t start = i++;
+      while (i < body.size()) {
+        if (body[i] == '\\' && i + 1 < body.size()) {
+          i += 2;
+          continue;
+        }
+        if (body[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(body.substr(start, i - start));
+      continue;
+    }
+
+    if (i + 4 <= body.size() && body.substr(i, 4) == "this" &&
+        (i == 0 || !isIdentifierChar(body[i - 1])) &&
+        (i + 4 == body.size() || !isIdentifierChar(body[i + 4]))) {
+      auto maybeJ = skipTrivia(body, i + 4);
+      if (maybeJ && *maybeJ < body.size() && body[*maybeJ] == '.') {
+        changed = true;
+        i = *maybeJ + 1;
+        continue;
+      }
+    }
+
+    out.push_back(c);
+    ++i;
+  }
+
+  return out;
+}
+
+/// Apply `this.` inline-constraint compatibility rewrites for class randomize
+/// calls, i.e. `obj.randomize(...) with { ... }`.
+static std::string rewriteRandomizeInlineConstraints(StringRef text,
+                                                     bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  auto matchRandomizeAfterDot = [&](size_t dotIdx) -> std::optional<size_t> {
+    if (dotIdx >= text.size() || text[dotIdx] != '.')
+      return std::nullopt;
+    auto maybeNameStart = skipTrivia(text, dotIdx + 1);
+    if (!maybeNameStart)
+      return std::nullopt;
+    size_t nameStart = *maybeNameStart;
+    constexpr StringLiteral token = "randomize";
+    if (nameStart + token.size() > text.size())
+      return std::nullopt;
+    if (text.substr(nameStart, token.size()) != token)
+      return std::nullopt;
+    size_t end = nameStart + token.size();
+    if (end < text.size() && isIdentifierChar(text[end]))
+      return std::nullopt;
+    return end;
+  };
+
+  for (size_t i = 0; i < text.size();) {
+    auto maybeAfterName = matchRandomizeAfterDot(i);
+    if (!maybeAfterName) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    size_t afterName = *maybeAfterName;
+    auto maybeOpenParen = skipTrivia(text, afterName);
+    if (!maybeOpenParen) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+    size_t openParen = *maybeOpenParen;
+    if (openParen >= text.size() || text[openParen] != '(') {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    auto closeParen = scanBalanced(text, openParen, '(', ')');
+    if (!closeParen) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    auto maybeAfterCall = skipTrivia(text, *closeParen + 1);
+    if (!maybeAfterCall) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+    size_t afterCall = *maybeAfterCall;
+    if (afterCall + 4 > text.size() || text.substr(afterCall, 4) != "with" ||
+        (afterCall + 4 < text.size() && isIdentifierChar(text[afterCall + 4]))) {
+      out.append(text.substr(i, *closeParen + 1 - i));
+      i = *closeParen + 1;
+      continue;
+    }
+
+    auto maybeOpenBrace = skipTrivia(text, afterCall + 4);
+    if (!maybeOpenBrace) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+    size_t openBrace = *maybeOpenBrace;
+    if (openBrace >= text.size() || text[openBrace] != '{') {
+      out.append(text.substr(i, *closeParen + 1 - i));
+      i = *closeParen + 1;
+      continue;
+    }
+
+    auto closeBrace = scanBalanced(text, openBrace, '{', '}');
+    if (!closeBrace) {
+      out.append(text.substr(i, openBrace + 1 - i));
+      i = openBrace + 1;
+      continue;
+    }
+
+    out.append(text.substr(i, openBrace + 1 - i));
+    bool blockChanged = false;
+    auto body = text.slice(openBrace + 1, *closeBrace);
+    out += rewriteConstraintThisDot(body, blockChanged);
+    changed |= blockChanged;
+    out.push_back('}');
+    i = *closeBrace + 1;
+  }
+
+  return out;
+}
+
 /// A converter that can be plugged into a slang `DiagnosticEngine` as a client
 /// that will map slang diagnostics to their MLIR counterpart and emit them.
 class MlirDiagnosticClient : public slang::DiagnosticClient {
@@ -194,6 +846,57 @@ setDiagnosticSeverity(slang::driver::Driver &driver,
     driver.diagEngine.setSeverity(code, severity);
 }
 
+static bool
+isBindUnknownModuleDiagnostic(const slang::Diagnostic &diag,
+                              const slang::SourceManager &sourceManager) {
+  if (diag.code != slang::diag::UnknownModule)
+    return false;
+
+  auto loc = sourceManager.getFullyOriginalLoc(diag.location);
+  if (!loc)
+    loc = diag.location;
+  if (!loc || !loc.buffer().valid())
+    return false;
+
+  auto text = sourceManager.getSourceText(loc.buffer());
+  if (text.empty())
+    return false;
+  auto offset = std::min<size_t>(loc.offset(), text.size() - 1);
+
+  auto lineStart = text.rfind('\n', offset);
+  if (lineStart == std::string_view::npos)
+    lineStart = 0;
+  else
+    ++lineStart;
+  auto lineEnd = text.find('\n', offset);
+  if (lineEnd == std::string_view::npos)
+    lineEnd = text.size();
+
+  auto startsWithBindKeyword = [](StringRef fragment) {
+    fragment = fragment.ltrim();
+    if (!fragment.consume_front("bind"))
+      return false;
+    return fragment.empty() || !isIdentifierChar(fragment.front());
+  };
+
+  auto line = StringRef(text.data() + lineStart, lineEnd - lineStart);
+  if (startsWithBindKeyword(line))
+    return true;
+
+  // Slang may place UnknownModule on the bind-target token instead of the
+  // `bind` keyword (for example in multiline bind statements). Re-check the
+  // statement prefix before the failing token.
+  size_t stmtStart = text.rfind(';', offset);
+  stmtStart = stmtStart == std::string_view::npos ? 0 : stmtStart + 1;
+  size_t prefixEnd = offset < stmtStart ? stmtStart : offset;
+  auto statementPrefix =
+      StringRef(text.data() + stmtStart, prefixEnd - stmtStart);
+  if (auto triviaEnd = skipTrivia(statementPrefix, 0))
+    return startsWithBindKeyword(statementPrefix.drop_front(*triviaEnd));
+
+  return false;
+}
+
 static void
 applySlangDiagnosticSeverityPolicy(slang::driver::Driver &driver,
                                    const ImportVerilogOptions &options) {
@@ -207,6 +910,10 @@ applySlangDiagnosticSeverityPolicy(slang::driver::Driver &driver,
   // default. Most tools (VCS, Xcelium, yosys) accept these and handle them
   // at runtime, while slang treats them as hard errors.
   setDiagnosticSeverity(driver, {slang::diag::IndexOOB, slang::diag::RangeOOB},
+                        slang::DiagnosticSeverity::Warning);
+  // Allow standalone bind files that reference external design modules.
+  // Non-bind unresolved modules are re-promoted to hard errors below.
+  setDiagnosticSeverity(driver, {slang::diag::UnknownModule},
                         slang::DiagnosticSeverity::Warning);
 
   // CIRCT historically did not run slang's full analysis pass. Running it now
@@ -223,6 +930,7 @@ applySlangDiagnosticSeverityPolicy(slang::driver::Driver &driver,
           slang::diag::BlockingDelayInTask,
           slang::diag::ClockVarTargetAssign,
           slang::diag::DifferentClockInClockingBlock,
+          slang::diag::EnumValueSizeMismatch,
           slang::diag::GFSVMatchItems,
           slang::diag::ImplicitConnNetInconsistent,
           slang::diag::InterconnectPortVar,
@@ -235,10 +943,15 @@ applySlangDiagnosticSeverityPolicy(slang::driver::Driver &driver,
           slang::diag::NTResolveArgModify,
           slang::diag::NoInferredClock,
           slang::diag::NoUniqueClock,
+          slang::diag::RandCInSoft,
+          slang::diag::RandCInSolveBefore,
           slang::diag::SampledValueFuncClock,
           slang::diag::SeqMethodEndClock,
+          slang::diag::DirectiveInsideDesignElement,
           slang::diag::UserDefPortMixedConcat,
           slang::diag::UserDefPortTwoSided,
+          slang::diag::VirtualIfaceConfigRule,
+          slang::diag::VirtualIfaceDefparam,
       },
       slang::DiagnosticSeverity::Warning);
 
@@ -329,8 +1042,32 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
     auto name = mlirBuffer->getBufferIdentifier();
     if (!name.empty() && !seenBuffers.insert(name).second)
       continue; // Slang doesn't like listing the same buffer twice
-    auto slangBuffer =
-        driver.sourceManager.assignText(name, mlirBuffer->getBuffer());
+    auto text = mlirBuffer->getBuffer();
+    StringRef rewrittenText = text;
+    std::string rewrittenStorage;
+    auto applyRewrite = [&](auto &&rewriteFn, bool enabled) {
+      if (!enabled)
+        return;
+      bool rewritten = false;
+      auto candidate = rewriteFn(rewrittenText, rewritten);
+      if (!rewritten)
+        return;
+      rewrittenStorage = std::move(candidate);
+      rewrittenText = rewrittenStorage;
+    };
+    applyRewrite(rewriteRandomizeInlineConstraints,
+                 rewrittenText.contains("randomize") &&
+                     rewrittenText.contains("this"));
+    applyRewrite(rewriteFormatWidthCompat,
+                 rewrittenText.contains('"') && rewrittenText.contains('%'));
+    applyRewrite(rewriteUDPZCompat,
+                 rewrittenText.contains("primitive") &&
+                     rewrittenText.contains("table") &&
+                     (rewrittenText.contains('z') ||
+                      rewrittenText.contains('Z')));
+    text = rewrittenText;
+
+    auto slangBuffer = driver.sourceManager.assignText(name, text);
     driver.sourceLoader.addBuffer(slangBuffer);
   }
 
@@ -489,6 +1226,14 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   driver.options.compilationFlags.emplace(
       slang::ast::CompilationFlags::AllowUseBeforeDeclare,
       options.allowUseBeforeDeclare.value_or(true));
+  // Match mainstream simulator behavior for implicit enum conversions.
+  driver.options.compilationFlags.emplace(
+      slang::ast::CompilationFlags::RelaxEnumConversions,
+      options.relaxEnumConversions.value_or(true));
+  // Match mainstream simulator behavior for mixed string/integral contexts.
+  driver.options.compilationFlags.emplace(
+      slang::ast::CompilationFlags::RelaxStringConversions,
+      options.relaxStringConversions.value_or(true));
   // Enable AllowUnnamedGenerate by default — references to implicit genblk
   // names are accepted by all major tools.
   driver.options.compilationFlags.emplace(
@@ -559,8 +1304,10 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
   // Use dependent lookup so older versions compile without this enum member.
   auto applyAllowVirtualIfaceWithOverride = [&]<typename FlagEnum>() {
     if constexpr (requires { FlagEnum::AllowVirtualIfaceWithOverride; }) {
-      applyCompilationFlagOverride(FlagEnum::AllowVirtualIfaceWithOverride,
-                                   options.allowVirtualIfaceWithOverride);
+      // Enable by default for compatibility with mainstream simulator behavior
+      // on bind/defparam-targeted interface instances.
+      driver.options.compilationFlags[FlagEnum::AllowVirtualIfaceWithOverride] =
+          options.allowVirtualIfaceWithOverride.value_or(true);
     }
   };
   applyAllowVirtualIfaceWithOverride
@@ -619,9 +1366,19 @@ LogicalResult ImportDriver::importVerilog(ModuleOp module) {
       std::make_shared<slang::ast::NonConstantFunction>(
           "$initstate", compilation->getBitType()));
 
-  for (auto &diag : compilation->getAllDiagnostics())
+  bool hasBlockingDiagnostics = !parseSuccess;
+  for (auto &diag : compilation->getAllDiagnostics()) {
+    if (diag.code == slang::diag::UnknownModule &&
+        !isBindUnknownModuleDiagnostic(diag, driver.sourceManager)) {
+      mlir::emitError(convertLocation(mlirContext, driver.sourceManager,
+                                      diag.location))
+          << driver.diagEngine.formatMessage(diag);
+      hasBlockingDiagnostics = true;
+      continue;
+    }
     driver.diagEngine.issue(diag);
-  if (!parseSuccess || driver.diagEngine.getNumErrors() > 0)
+  }
+  if (hasBlockingDiagnostics || driver.diagEngine.getNumErrors() > 0)
     return failure();
 
   // Run slang's semantic analysis checks in all modes except parse-only.
@@ -822,18 +1579,23 @@ void circt::populateVerilogToMoorePipeline(OpPassManager &pm) {
 }
 
 /// Convert Moore dialect IR into core dialect IR
-void circt::populateMooreToCorePipeline(OpPassManager &pm) {
+void circt::populateMooreToCorePipeline(OpPassManager &pm,
+                                        bool skipPostCleanup) {
   // Perform the conversion.
   pm.addPass(createConvertMooreToCorePass());
+
+  if (skipPostCleanup)
+    return;
 
   {
     // Conversion to the core dialects likely uncovers new canonicalization
     // opportunities.
     auto &anyPM = pm.nestAny();
     anyPM.addPass(mlir::createCSEPass());
-    // Use the bottom-up canonicalizer with a rewrite cap to avoid pathological
-    // behavior consuming unbounded memory/time in large imports.
-    anyPM.addPass(circt::createBottomUpSimpleCanonicalizerPass());
+    // Use top-down traversal here to avoid a bottom-up comb canonicalization
+    // ordering issue that can introduce non-dominating values in large nested
+    // mux/boolean expressions.
+    anyPM.addPass(circt::createSimpleCanonicalizerPass());
   }
 }
 
