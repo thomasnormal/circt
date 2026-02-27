@@ -129,3 +129,16 @@
   - `llvm-lit --filter 'Runtime/uvm/uvm_simple_test.sv' test/Runtime/uvm` now passes.
   - `llvm-lit --filter 'Runtime/uvm/' test/Runtime/uvm` improved to 8 passing / 9 failing
     (remaining failures are API-compatibility mismatches in the test corpus).
+
+### UVM: resolve `check(...)` helper override clash in `config_db_test`
+- Repro:
+  - `Runtime/uvm/config_db_test.sv` failed against `uvm-core` with:
+    `virtual method 'check' has different number of arguments from its superclass method`.
+- Root cause:
+  - The test class extends `uvm_test` and declared `check(bit,string)`, which
+    conflicts with inherited `uvm_component::check()`.
+- Fix:
+  - Renamed the local helper to `check_result(...)` and updated all call sites.
+- Tests:
+  - `llvm-lit --filter 'Runtime/uvm/config_db_test.sv' test/Runtime/uvm` passes.
+  - Full UVM parse subset now: 9 passing / 8 failing.
