@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top;\n  string s = "fake == token";\n  // fake == token in comment\n  logic a, b, y;\n  assign y = (a == b);\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_EQ_TO_NEQ@1\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: string s = "fake == token";
+// MUTANT: // fake == token in comment
+// MUTANT: assign y = (a != b);

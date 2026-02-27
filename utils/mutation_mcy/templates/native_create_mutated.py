@@ -19,55 +19,197 @@ op = label
 if op.startswith('NATIVE_'):
     op = op[len('NATIVE_'):]
 
+site_index = 1
+if '@' in op:
+    op_base, site_suffix = op.rsplit('@', maxsplit=1)
+    if site_suffix.isdigit() and int(site_suffix) > 0:
+        op = op_base
+        site_index = int(site_suffix)
+
 changed = False
+code_mask = []
 
 
-def replace_once(pattern, repl):
-    global changed
-    new_text, count = re.subn(pattern, repl, text, count=1)
-    return new_text, count
+def build_code_mask(source: str):
+    mask = [True] * len(source)
+    state = "normal"
+    escape = False
+    i = 0
+    n = len(source)
+    while i < n:
+        ch = source[i]
+        if state == "normal":
+            if ch == "/" and i + 1 < n and source[i + 1] == "/":
+                mask[i] = False
+                mask[i + 1] = False
+                i += 2
+                state = "line_comment"
+                continue
+            if ch == "/" and i + 1 < n and source[i + 1] == "*":
+                mask[i] = False
+                mask[i + 1] = False
+                i += 2
+                state = "block_comment"
+                continue
+            if ch == '"':
+                mask[i] = False
+                state = "string"
+                escape = False
+                i += 1
+                continue
+            i += 1
+            continue
+        if state == "line_comment":
+            if ch != "\n":
+                mask[i] = False
+            else:
+                state = "normal"
+            i += 1
+            continue
+        if state == "block_comment":
+            mask[i] = False
+            if ch == "*" and i + 1 < n and source[i + 1] == "/":
+                mask[i + 1] = False
+                i += 2
+                state = "normal"
+                continue
+            i += 1
+            continue
+        if state == "string":
+            mask[i] = False
+            if escape:
+                escape = False
+                i += 1
+                continue
+            if ch == "\\":
+                escape = True
+                i += 1
+                continue
+            if ch == '"':
+                state = "normal"
+            i += 1
+            continue
+    return mask
 
+
+def is_code_at(pos: int) -> bool:
+    return 0 <= pos < len(code_mask) and code_mask[pos]
+
+
+def is_code_span(start: int, end: int) -> bool:
+    if start < 0 or end > len(code_mask) or start >= end:
+        return False
+    return all(code_mask[i] for i in range(start, end))
+
+
+def replace_nth(pattern, repl, nth: int):
+    global text
+    if nth < 1:
+        return False
+    matches = [m for m in re.finditer(pattern, text) if is_code_span(m.start(), m.end())]
+    if len(matches) < nth:
+        return False
+    match = matches[nth - 1]
+    replacement = repl(match) if callable(repl) else repl
+    text = text[:match.start()] + replacement + text[match.end():]
+    return True
+
+
+def find_relational_comparator_token(token: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    saw_plain_assign = False
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        nxt = text[i + 1] if is_code_at(i + 1) else ''
+
+        if ch == ';':
+            saw_plain_assign = False
+            i += 1
+            continue
+        if ch == '(':
+            paren_depth += 1
+        elif ch == ')':
+            paren_depth = max(paren_depth - 1, 0)
+        elif ch == '[':
+            bracket_depth += 1
+        elif ch == ']':
+            bracket_depth = max(bracket_depth - 1, 0)
+        elif ch == '{':
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth = max(brace_depth - 1, 0)
+
+        if ch == '=':
+            prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ''
+            if prev not in ('=', '!', '<', '>') and nxt != '=':
+                saw_plain_assign = True
+
+        if is_code_span(i, i + len(token)) and text.startswith(token, i):
+            prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ''
+            if token == '<=' and prev == '<':
+                i += 1
+                continue
+            if token == '>=' and prev == '>':
+                i += 1
+                continue
+            if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0 or saw_plain_assign:
+                seen += 1
+                if seen == nth:
+                    return i
+        i += 1
+    return -1
+
+
+code_mask = build_code_mask(text)
 
 if op == 'EQ_TO_NEQ':
-    text, count = replace_once(r'==', '!=')
-    changed = count > 0
+    changed = replace_nth(r'==', '!=', site_index)
 elif op == 'NEQ_TO_EQ':
-    text, count = replace_once(r'!=', '==')
-    changed = count > 0
+    changed = replace_nth(r'!=', '==', site_index)
 elif op == 'LT_TO_LE':
-    text, count = replace_once(r'(?<![<>=!])<(?![<>=])', '<=')
-    changed = count > 0
+    changed = replace_nth(r'(?<![<>=!])<(?![<>=])', '<=', site_index)
 elif op == 'GT_TO_GE':
-    text, count = replace_once(r'(?<![<>=!])>(?![<>=])', '>=')
-    changed = count > 0
+    changed = replace_nth(r'(?<![<>=!])>(?![<>=])', '>=', site_index)
 elif op == 'LE_TO_LT':
-    text, count = replace_once(r'<=', '<')
-    changed = count > 0
+    idx = find_relational_comparator_token('<=', site_index)
+    if idx >= 0:
+        text = text[:idx] + '<' + text[idx + 2:]
+        changed = True
 elif op == 'GE_TO_GT':
-    text, count = replace_once(r'>=', '>')
-    changed = count > 0
+    idx = find_relational_comparator_token('>=', site_index)
+    if idx >= 0:
+        text = text[:idx] + '>' + text[idx + 2:]
+        changed = True
 elif op == 'AND_TO_OR':
-    text, count = replace_once(r'&&', '||')
-    changed = count > 0
+    changed = replace_nth(r'&&', '||', site_index)
 elif op == 'OR_TO_AND':
-    text, count = replace_once(r'\|\|', '&&')
-    changed = count > 0
+    changed = replace_nth(r'\|\|', '&&', site_index)
 elif op == 'XOR_TO_OR':
-    text, count = replace_once(r'\^', '|')
-    changed = count > 0
+    changed = replace_nth(r'\^', '|', site_index)
 elif op == 'UNARY_NOT_DROP':
-    text, count = replace_once(r'!\s*(?=[A-Za-z_(])', '')
-    changed = count > 0
+    changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
 elif op == 'CONST0_TO_1':
-    text, count = replace_once(r"1'b0", "1'b1")
-    if count == 0:
-        text, count = replace_once(r"1'd0", "1'd1")
-    changed = count > 0
+    changed = replace_nth(
+        r"1'b0|1'd0",
+        lambda m: "1'b1" if m.group(0).endswith("b0") else "1'd1",
+        site_index,
+    )
 elif op == 'CONST1_TO_0':
-    text, count = replace_once(r"1'b1", "1'b0")
-    if count == 0:
-        text, count = replace_once(r"1'd1", "1'd0")
-    changed = count > 0
+    changed = replace_nth(
+        r"1'b1|1'd1",
+        lambda m: "1'b0" if m.group(0).endswith("b1") else "1'd0",
+        site_index,
+    )
 
 if not changed:
     m = re.search(r'assign\s+([^=]+?)\s*=\s*(.+?);', text, re.S)
