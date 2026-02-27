@@ -228,3 +228,28 @@
   - `llvm-lit -sv --filter 'Runtime/uvm/uvm_reporting_test.sv' test/Runtime/uvm`
   - `llvm-lit -sv --filter 'Runtime/uvm/' test/Runtime/uvm`
     - now 12 passing / 5 failing (previously 11 / 6).
+
+### Sim/MooreToCore: fix `$swrite` integer formatting from packed four-state payloads
+- Repro:
+  - `llvm-lit -sv --filter 'Tools/circt-sim/syscall-swrite.sv' test/Tools/circt-sim`
+  - Observed:
+    - `swrite=value=180388626432 hex=2a00000000`
+  - Expected:
+    - `swrite=value=42 hex=2a`
+- Root cause:
+  - In `FormatStringToStringOpConversion`, formatted integer ops
+    (`sim.fmt.dec/hex/oct/bin`) were lowered to runtime string conversion calls
+    using the raw packed four-state integer payload when `fourStateWidth` was
+    present.
+  - The packed encoding stores `{value,unknown}` bits in one integer, so
+    passing it directly shifted the logical value by the unknown-width amount.
+- Fix:
+  - Added unpacking for packed four-state operands in
+    `convertFormatStringToStringStatic` before integer-to-string runtime calls:
+    - detect `packedWidth == 2 * fourStateWidth`
+    - shift right by `fourStateWidth`
+    - truncate to `fourStateWidth`
+  - Reused the existing integer-to-i64 conversion path after unpacking.
+- Tests:
+  - Rebuilt `circt-verilog` target.
+  - `llvm-lit -sv --filter 'Tools/circt-sim/syscall-swrite.sv' test/Tools/circt-sim` now passes.
