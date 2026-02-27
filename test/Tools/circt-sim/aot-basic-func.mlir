@@ -30,6 +30,9 @@
 // AOTSTATS-DAG: [circt-sim] arena_globals:                    0
 // AOTSTATS-DAG: [circt-sim] arena_size_bytes:                 0
 // AOTSTATS-DAG: [circt-sim] global_patch_count:               0
+// AOTSTATS-DAG: [circt-sim] mutable_globals_total:            0
+// AOTSTATS-DAG: [circt-sim] mutable_globals_arena:            0
+// AOTSTATS-DAG: [circt-sim] mutable_globals_patch:            0
 // AOTSTATS-DAG: [circt-sim] yield_count_total:                2
 // AOTSTATS: out=200
 
