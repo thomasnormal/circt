@@ -12513,38 +12513,49 @@ MooreSignalHandle lookupSignalWithAlternatives(const std::string &path) {
     return MOORE_INVALID_SIGNAL_HANDLE;
   }
 
-  // Try just the signal name (last component)
-  const std::string &signalName = components.back();
-  it = signalRegistry.signals.find(signalName);
-  if (it != signalRegistry.signals.end()) {
-    return it->second.handle;
-  }
+  auto lookupFromComponents =
+      [&](const std::vector<std::string> &parts) -> MooreSignalHandle {
+    if (parts.empty())
+      return MOORE_INVALID_SIGNAL_HANDLE;
 
-  // Try partial paths from the end
-  for (size_t i = components.size() - 1; i > 0; --i) {
-    std::string partialPath;
-    for (size_t j = i; j < components.size(); ++j) {
-      if (!partialPath.empty()) {
-        partialPath += ".";
+    // Try just the signal name (last component)
+    auto signalIt = signalRegistry.signals.find(parts.back());
+    if (signalIt != signalRegistry.signals.end())
+      return signalIt->second.handle;
+
+    // Try partial paths from the end.
+    for (size_t i = parts.size(); i-- > 0;) {
+      std::string partialPath;
+      for (size_t j = i; j < parts.size(); ++j) {
+        if (!partialPath.empty())
+          partialPath += ".";
+        partialPath += parts[j];
       }
-      partialPath += components[j];
+      auto partialIt = signalRegistry.signals.find(partialPath);
+      if (partialIt != signalRegistry.signals.end())
+        return partialIt->second.handle;
     }
-    it = signalRegistry.signals.find(partialPath);
-    if (it != signalRegistry.signals.end()) {
-      return it->second.handle;
-    }
-  }
+    return MOORE_INVALID_SIGNAL_HANDLE;
+  };
 
-  // Handle array indices - try base name without indices
-  std::vector<int64_t> indices;
-  std::string baseName = parseArrayIndices(signalName, indices);
-  if (!indices.empty()) {
-    it = signalRegistry.signals.find(baseName);
-    if (it != signalRegistry.signals.end()) {
-      // TODO: Handle array element access via index calculation
-      return it->second.handle;
-    }
+  // Try raw components first.
+  if (MooreSignalHandle found = lookupFromComponents(components);
+      found != MOORE_INVALID_SIGNAL_HANDLE)
+    return found;
+
+  // Strip any array indices and retry (e.g. top.dut.mem[3] -> top.dut.mem).
+  std::vector<std::string> baseComponents;
+  baseComponents.reserve(components.size());
+  bool hadIndices = false;
+  for (const auto &component : components) {
+    std::vector<int64_t> indices;
+    auto baseName = parseArrayIndices(component, indices);
+    if (!indices.empty())
+      hadIndices = true;
+    baseComponents.push_back(baseName);
   }
+  if (hadIndices)
+    return lookupFromComponents(baseComponents);
 
   return MOORE_INVALID_SIGNAL_HANDLE;
 }
