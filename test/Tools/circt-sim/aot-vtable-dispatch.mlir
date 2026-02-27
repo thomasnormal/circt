@@ -1,19 +1,19 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=COMPILED
 
 // Test vtable dispatch through AOT-compiled functions.
 //
 // Two pure-arithmetic functions are registered as vtable entries and compiled
-// by circt-sim-compile. The simulation dispatches via call_indirect through
+// by circt-compile. The simulation dispatches via call_indirect through
 // the vtable. Output must be identical in interpreted and compiled modes.
 //
 // Vtable layout: !llvm.array<2 x ptr>
 //   slot 0: @"math::add42"  -> arg + 42
 //   slot 1: @"math::mul100" -> arg * 100
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] 2 functions + 0 processes ready for codegen
 //
 // SIM: add42(5) = 47
 // SIM: mul100(3) = 300
@@ -25,7 +25,7 @@
 // COMPILED: add42(5) = 47
 // COMPILED: mul100(3) = 300
 
-// Pure arithmetic — compilable by circt-sim-compile.
+// Pure arithmetic — compilable by circt-compile.
 func.func private @"math::add42"(%a: i32) -> i32 {
   %c42 = arith.constant 42 : i32
   %r = arith.addi %a, %c42 : i32

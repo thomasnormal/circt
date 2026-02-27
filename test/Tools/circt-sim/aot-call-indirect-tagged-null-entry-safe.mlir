@@ -1,12 +1,12 @@
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so | FileCheck %s --check-prefix=COMPILED
 
 // Regression: tagged call_indirect lowering must not call null entry-table
 // slots. Missing vtable symbols are represented as null entries in
 // @__circt_sim_func_entries and should fail safely instead of crashing.
 //
-// COMPILE: [circt-sim-compile] LowerTaggedIndirectCalls: lowered 1 indirect calls
+// COMPILE: [circt-compile] LowerTaggedIndirectCalls: lowered 1 indirect calls
 // SIM: dyn=x
 // COMPILED: dyn=0
 

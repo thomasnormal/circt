@@ -1,11 +1,11 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 // RUN: env CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=NATIVE
 
-// COMPILE: [circt-sim-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
-// COMPILE: [circt-sim-compile] Native module init functions: 1
-// COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
+// COMPILE: [circt-compile] Native module init functions: 1
+// COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // SIM: out=123
 //

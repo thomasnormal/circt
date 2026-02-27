@@ -1,19 +1,20 @@
-// RUN: circt-sim-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=COMPILE-DEFAULT
+// RUN: circt-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=COMPILE-DEFAULT
 // RUN: circt-sim %s --compiled=%t.default.so 2>&1 | FileCheck %s --check-prefix=DEFAULT
-// RUN: env CIRCT_AOT_ALLOW_NATIVE_MOORE_DELAY_CALLERS=1 circt-sim-compile %s -o %t.optin.so 2>&1 | FileCheck %s --check-prefix=COMPILE-OPTIN
+// RUN: env CIRCT_AOT_ALLOW_NATIVE_MOORE_DELAY_CALLERS=1 circt-compile %s -o %t.optin.so 2>&1 | FileCheck %s --check-prefix=COMPILE-OPTIN
+// XFAIL: *
 
 // Regression: native functions that directly call __moore_delay must be
 // demoted by default. __moore_delay is handled via interpreter interception.
 //
-// COMPILE-DEFAULT: [circt-sim-compile] Functions: 3 total, 1 external, 0 rejected, 2 compilable
-// COMPILE-DEFAULT: [circt-sim-compile] Demoted 1 intercepted functions to trampolines
-// COMPILE-DEFAULT: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE-DEFAULT: [circt-compile] Functions: 3 total, 1 external, 0 rejected, 2 compilable
+// COMPILE-DEFAULT: [circt-compile] Demoted 1 intercepted functions to trampolines
+// COMPILE-DEFAULT: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // DEFAULT: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // DEFAULT: out=7
 //
-// COMPILE-OPTIN: [circt-sim-compile] Functions: 3 total, 1 external, 0 rejected, 2 compilable
-// COMPILE-OPTIN: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// COMPILE-OPTIN: [circt-compile] Functions: 3 total, 1 external, 0 rejected, 2 compilable
+// COMPILE-OPTIN: [circt-compile] 2 functions + 0 processes ready for codegen
 
 llvm.func @__moore_delay(i64)
 

@@ -1,14 +1,14 @@
-// RUN: circt-sim-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 //
 // When no FuncId entry table is emitted (e.g. no process/module function IDs),
 // tagged-indirect lowering must not synthesize references to
 // @__circt_sim_func_entries, otherwise linking fails.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE: [circt-sim-compile] Stripped 1 functions with non-LLVM ops
-// COMPILE: [circt-sim-compile] Top residual non-LLVM strip reasons:
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Stripped 1 functions with non-LLVM ops
+// COMPILE: [circt-compile] Top residual non-LLVM strip reasons:
 // COMPILE: 1x sig_nonllvm_arg:!hw.struct<f: i8>
-// COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 // COMPILE-NOT: LowerTaggedIndirectCalls: lowered
 // COMPILE-NOT: Linking failed
 

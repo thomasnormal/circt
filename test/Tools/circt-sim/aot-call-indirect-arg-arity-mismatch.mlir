@@ -1,11 +1,11 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
 //
 // Regression: compiled call_indirect dispatch must not read past provided
 // argument values when the resolved callee expects more args than the call-site
 // function type provides.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // RUNTIME-NOT: Assertion
 // RUNTIME: r=5
 

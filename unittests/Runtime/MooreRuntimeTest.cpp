@@ -1864,15 +1864,22 @@ TEST(MooreRuntimeRandomizeTest, RandomizeBasicOddSize) {
 TEST(MooreRuntimeRandomizeTest, RandomizeBytesSmallSizes) {
   uint8_t buffer1[1] = {0};
   uint8_t buffer5[5] = {0, 0, 0, 0, 0};
+  uint8_t reference[12] = {0};
 
   // Validate exact byte mapping from RNG words for odd sizes.
+  // Use process::srandom semantics (stateful stream seeding) and derive the
+  // expected words from a 3-word reference randomization.
   constexpr int32_t kSeed = 2026;
-  (void)__moore_urandom_seeded(kSeed);
-  uint32_t expectedWord0 = __moore_urandom();
-  uint32_t expectedWord1 = __moore_urandom();
-  uint32_t expectedWord2 = __moore_urandom();
+  __moore_process_srandom(0, kSeed);
+  ASSERT_EQ(__moore_randomize_bytes(reference, sizeof(reference)), 1);
+  uint32_t expectedWord0 = 0;
+  uint32_t expectedWord1 = 0;
+  uint32_t expectedWord2 = 0;
+  std::memcpy(&expectedWord0, reference + 0, sizeof(uint32_t));
+  std::memcpy(&expectedWord1, reference + 4, sizeof(uint32_t));
+  std::memcpy(&expectedWord2, reference + 8, sizeof(uint32_t));
 
-  (void)__moore_urandom_seeded(kSeed);
+  __moore_process_srandom(0, kSeed);
   EXPECT_EQ(__moore_randomize_bytes(buffer1, 1), 1);
   EXPECT_EQ(__moore_randomize_bytes(buffer5, 5), 1);
 
@@ -1900,14 +1907,15 @@ TEST(MooreRuntimeRandomizeTest, RandomizeBasicSeededConsistency) {
     int32_t d;
   };
 
-  TestClass obj1, obj2;
+  TestClass obj1 = {};
+  TestClass obj2 = {};
 
   // Seed, then randomize
-  __moore_urandom_seeded(12345);
+  __moore_process_srandom(0, 12345);
   __moore_randomize_basic(&obj1, sizeof(TestClass));
 
   // Re-seed with same value, then randomize again
-  __moore_urandom_seeded(12345);
+  __moore_process_srandom(0, 12345);
   __moore_randomize_basic(&obj2, sizeof(TestClass));
 
   // Both objects should have identical random values
@@ -2065,10 +2073,10 @@ TEST(MooreRuntimeDistTest, RandomizeWithDistSeededConsistency) {
   int64_t weights[] = {10, 20, 30};
   int64_t perRange[] = {0, 0, 0};
 
-  __moore_urandom_seeded(54321);
+  __moore_process_srandom(0, 54321);
   int64_t result1 = randomizeWithDist(ranges, weights, perRange, 3);
 
-  __moore_urandom_seeded(54321);
+  __moore_process_srandom(0, 54321);
   int64_t result2 = randomizeWithDist(ranges, weights, perRange, 3);
 
   EXPECT_EQ(result1, result2);
@@ -2948,10 +2956,10 @@ TEST(MooreRuntimeConstraintTest, RandomizeWithRangeSingleValue) {
 
 TEST(MooreRuntimeConstraintTest, RandomizeWithRangeSeeded) {
   // Test reproducibility with seeding
-  __moore_urandom_seeded(12345);
+  __moore_process_srandom(0, 12345);
   int64_t val1 = __moore_randomize_with_range(0, 1000);
 
-  __moore_urandom_seeded(12345);
+  __moore_process_srandom(0, 12345);
   int64_t val2 = __moore_randomize_with_range(0, 1000);
 
   EXPECT_EQ(val1, val2);
@@ -2989,10 +2997,10 @@ TEST(MooreRuntimeConstraintTest, RandomizeWithModuloInvalidMod) {
 
 TEST(MooreRuntimeConstraintTest, RandomizeWithModuloSeeded) {
   // Test reproducibility with seeding
-  __moore_urandom_seeded(54321);
+  __moore_process_srandom(0, 54321);
   int64_t val1 = __moore_randomize_with_modulo(13, 7);
 
-  __moore_urandom_seeded(54321);
+  __moore_process_srandom(0, 54321);
   int64_t val2 = __moore_randomize_with_modulo(13, 7);
 
   EXPECT_EQ(val1, val2);
@@ -3165,7 +3173,7 @@ TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintAlwaysSatisfied
 
 TEST(MooreRuntimeConstraintIterationTest, RandomizeWithConstraintSpecificValue) {
   __moore_constraint_reset_stats();
-  __moore_urandom_seeded(42); // Seed for reproducibility
+  __moore_process_srandom(0, 42); // Seed for reproducibility
 
   // Looking for a specific value - may take several iterations
   int64_t target = 50;

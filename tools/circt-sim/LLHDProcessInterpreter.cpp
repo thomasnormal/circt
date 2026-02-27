@@ -65,6 +65,7 @@ unsigned g_lastFuncProcId = 0;
 #include <dlfcn.h>
 #include <limits>
 #include <sstream>
+#include <unordered_set>
 
 #define DEBUG_TYPE "llhd-interpreter"
 
@@ -4556,7 +4557,7 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
 
   // Compute canonical module-scoped name for AOT compiled process matching.
   // Format: "<hw_module_sym>.process_<local_index>" — must match the naming
-  // in circt-sim-compile's compileProcessBodies().
+  // in circt-compile's compileProcessBodies().
   if (auto hwModule = processOp->getParentOfType<hw::HWModuleOp>()) {
     std::string moduleSym = hwModule.getSymName().str();
     unsigned localIndex = 0;
@@ -11176,46 +11177,10 @@ void LLHDProcessInterpreter::checkMemoryEventWaiters() {
   llvm::SmallVector<ProcessId, 4> toWake;
 
   for (auto &[procId, waiter] : memoryEventWaiters) {
-    // Find the memory block containing this address
-    MemoryBlock *block = nullptr;
-    uint64_t offset = 0;
     uint64_t addr = waiter.address;
-
-    // Check module-level allocas first (by address)
-    for (auto &[val, memBlock] : moduleLevelAllocas) {
-      uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
-      if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + memBlock.size) {
-        block = &memBlock;
-        offset = addr - blockAddr;
-        break;
-      }
-    }
-
-    // Check global and malloc blocks via O(log n) range index
-    if (!block) {
-      uint64_t rangeOffset = 0;
-      block = findBlockByAddress(addr, rangeOffset);
-      if (block) offset = rangeOffset;
-    }
-
-    // Also check process-local memory blocks
-    if (!block) {
-      auto procStateIt = processStates.find(procId);
-      if (procStateIt != processStates.end()) {
-        auto &procState = procStateIt->second;
-        for (auto &[val, memBlock] : procState.memoryBlocks) {
-          auto addrIt = procState.valueMap.find(val);
-          if (addrIt != procState.valueMap.end()) {
-            uint64_t blockAddr = addrIt->second.getUInt64();
-            if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-              block = &memBlock;
-              offset = addr - blockAddr;
-              break;
-            }
-          }
-        }
-      }
-    }
+    uint64_t offset = 0;
+    // Parent-aware lookup: fork children may wait on parent-frame addresses.
+    MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
 
     if (!block || !block->initialized) {
       LLVM_DEBUG(llvm::dbgs() << "  Memory event waiter: block not found for "
@@ -12068,9 +12033,27 @@ void LLHDProcessInterpreter::registerProcessState(
   initializeNativeThunkRootRegion(insertResult.first->second);
 
   // If an explicit seed was provided (e.g. from a parent RNG during fork),
-  // use it; otherwise fall back to the default deterministic seed.
-  uint32_t seed = initialSeed.value_or(static_cast<uint32_t>(procId) ^ 0xC0FFEEu);
+  // use it; otherwise start from the simulation's initial random seed.
+  uint32_t seed = 0;
+  if (initialSeed) {
+    seed = *initialSeed;
+  } else {
+    seed = static_cast<uint32_t>(__moore_get_initial_random_seed());
+  }
   insertResult.first->second.randomGenerator.seed(seed);
+  // xrun-compatible legacy streams used by $random/$urandom.
+  // If there is no explicit seed configuration, default to xrun's fixed
+  // bootstrap streams for deterministic unseeded behavior.
+  const char *envSeed = std::getenv("CIRCT_SIM_RANDOM_SEED");
+  if (!initialSeed && !envSeed) {
+    insertResult.first->second.legacyRandomState = 0;
+    insertResult.first->second.legacyUrandomState =
+        __moore_xrun_urandom_state_from_seed(0);
+  } else {
+    insertResult.first->second.legacyRandomState = seed;
+    insertResult.first->second.legacyUrandomState =
+        __moore_xrun_urandom_state_from_seed(static_cast<int32_t>(seed));
+  }
 
   uint64_t handle =
       reinterpret_cast<uint64_t>(&insertResult.first->second);
@@ -20285,7 +20268,9 @@ bool LLHDProcessInterpreter::isCoverageRuntimeCallee(
   return calleeName.starts_with("__moore_coverage_") ||
          calleeName.starts_with("__moore_covergroup_") ||
          calleeName.starts_with("__moore_coverpoint_") ||
-         calleeName.starts_with("__moore_cross_");
+         calleeName.starts_with("__moore_cross_") ||
+         (calleeName.starts_with("__moore_uvm_") &&
+          calleeName.contains("coverage"));
 }
 
 bool LLHDProcessInterpreter::shouldPropagateCoverageRuntimeFailure(
@@ -20653,7 +20638,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // Intercept get_core_state - reads global m_uvm_core_state.
-  if (calleeName == "uvm_pkg::get_core_state" && callOp.getNumResults() >= 1) {
+  // Keep this fast path opt-in: several AVIP UVM bring-up scenarios rely on
+  // canonical call semantics here, and eager interception can trap startup in
+  // a zero-time polling loop.
+  static bool enableGetCoreStateFastPath = []() {
+    const char *env =
+        std::getenv("CIRCT_SIM_ENABLE_UVM_GET_CORE_STATE_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (enableGetCoreStateFastPath && calleeName == "uvm_pkg::get_core_state" &&
+      callOp.getNumResults() >= 1) {
     auto it = globalAddresses.find("uvm_pkg::m_uvm_core_state");
     if (it != globalAddresses.end()) {
       uint64_t globalAddr = it->getValue();
@@ -21873,8 +21867,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     uint64_t seqrQueueAddr = 0;
     bool resolvedSeqrQueueHint = resolveUvmSequencerQueueAddress(
         procId, portAddr, callOp.getOperation(), seqrQueueAddr);
-    bool allowGlobalFallbackSearch =
-        (seqrQueueAddr == 0 || !sequencerItemFifo.contains(seqrQueueAddr));
+    // Use global FIFO fallback only when queue routing is completely
+    // unresolved. If we already have a queue hint, keep the waiter bound
+    // to that queue even before the first push creates FIFO state.
+    bool allowGlobalFallbackSearch = (seqrQueueAddr == 0);
     if (resolvedSeqrQueueHint && seqrQueueAddr != 0)
       cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
 
@@ -21976,9 +21972,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto &pState = processStates[procId];
     pState.waiting = true;
     pState.sequencerGetRetryCallOp = callOp.getOperation();
-    uint64_t waitQueueAddr =
-        (resolvedSeqrQueueHint && !allowGlobalFallbackSearch) ? seqrQueueAddr
-                                                              : 0;
+    uint64_t waitQueueAddr = allowGlobalFallbackSearch ? 0 : seqrQueueAddr;
     // Park the process on an empty sensitivity list and resume it only from
     // sequencer push wakeups. This avoids unrelated event wakeups repeatedly
     // re-entering empty get_next_item loops.
@@ -22259,8 +22253,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       callOp.getNumOperands() >= 1 && callOp.getNumResults() == 0) {
     uint32_t seed = static_cast<uint32_t>(
         getValue(procId, callOp.getOperand(0)).getUInt64());
-    pendingSrandomSeed = seed;
-    std::srand(static_cast<unsigned>(seed));
+    pendingSrandomSeeds[procId] = seed;
     LLVM_DEBUG(llvm::dbgs() << "  func.call @" << calleeName
                             << ": setting pending seed " << seed
                             << " (legacy stub, no object ptr)\n");
@@ -22466,6 +22459,30 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     args.push_back(getValue(procId, operand));
   }
 
+  static bool tracePhasePtrs = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_PTRS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto shouldTracePhaseCall = [&](llvm::StringRef name) {
+    return name == "get_common_domain" || name == "get_2160" ||
+           name.contains("uvm_pkg::uvm_phase::add") ||
+           name.contains("uvm_pkg::uvm_phase::find");
+  };
+  auto maybeTracePhaseArgs = [&](llvm::StringRef name) {
+    if (!tracePhasePtrs || !shouldTracePhaseCall(name))
+      return;
+    llvm::errs() << "[PHASE-PTR] call proc=" << procId << " fn=" << name;
+    for (size_t i = 0; i < std::min<size_t>(args.size(), 3); ++i) {
+      if (args[i].isX())
+        llvm::errs() << " a" << i << "=X";
+      else
+        llvm::errs() << " a" << i << "="
+                     << llvm::format_hex(args[i].getUInt64(), 16);
+    }
+    llvm::errs() << "\n";
+  };
+  maybeTracePhaseArgs(calleeName);
+
   if (traceI3CConfigHandles && !args.empty() && !args.front().isX() &&
       calleeName.contains("i3c_") && calleeName.contains("_bfm::") &&
       (calleeName.contains("detectEdge_scl") ||
@@ -22631,15 +22648,24 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 
   // Intercept get_adjacent_successor_nodes to avoid the 1M ops limit.
-  // The interpreted version runs a fixed-point loop that can exceed the op limit
-  // on complex phase graphs. We reimplement it directly using native assoc array
-  // operations, which is both faster and avoids the convergence issue.
+  // Keep this path opt-in only: incorrect graph flattening here can break
+  // UVM phase construction during interpreted bring-up.
+  static const bool enableAdjacentSuccessorFastPath = []() {
+    const char *env =
+        std::getenv("CIRCT_SIM_ENABLE_ADJACENT_SUCCESSOR_FASTPATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  // The interpreted version runs a fixed-point loop that can exceed the op
+  // limit on complex phase graphs. We reimplement it directly using native
+  // assoc array operations, which is both faster and avoids the convergence
+  // issue when explicitly enabled.
   //
   // Algorithm: starting from phase->m_successors (field [11]), collect all
   // terminal nodes (phase_type == 1 = UVM_PHASE_NODE). Non-terminal nodes
   // are replaced with their own successors recursively until only terminals
   // remain. Result is stored as a dynamic array in %arg1.
-  if (calleeName.contains("get_adjacent_successor_nodes")) {
+  if (enableAdjacentSuccessorFastPath &&
+      calleeName.contains("get_adjacent_successor_nodes")) {
     // Read %arg0 (phase pointer) and %arg1 (output dyn_array pointer)
     InterpretedValue arg0Val = args[0];
     InterpretedValue arg1Val = args[1];
@@ -23728,7 +23754,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     arg0Val = args[0].getUInt64();
 
   // Check if recursion depth exceeded for this (func, arg0) pair
-  constexpr unsigned maxRecursionDepth = 20;
+  unsigned maxRecursionDepth = 20;
+  if (funcOp.getName().contains("uvm_pkg::uvm_phase::m_find_") ||
+      funcOp.getName().contains("uvm_pkg::uvm_phase::find"))
+    maxRecursionDepth = 512;
   auto &depthMap = state.recursionVisited[funcKey];
   if (hasArg0 && state.callDepth > 0) {
     unsigned &depth = depthMap[arg0Val];
@@ -24018,6 +24047,18 @@ func_call_interpreted_fallback:
     setValue(procId, result, retVal);
   }
 
+  if (tracePhasePtrs && shouldTracePhaseCall(calleeName) &&
+      !returnValues.empty()) {
+    const auto &rv = returnValues.front();
+    llvm::errs() << "[PHASE-PTR] ret  proc=" << procId << " fn=" << calleeName
+                 << " r0=";
+    if (rv.isX())
+      llvm::errs() << "X";
+    else
+      llvm::errs() << llvm::format_hex(rv.getUInt64(), 16);
+    llvm::errs() << "\n";
+  }
+
   if (!disableTypeNameCache && calleeName.contains("get_type_name") &&
       !calleeName.contains("get_type_name_enabled") && !returnValues.empty())
     cachedTypeNameByCallee[calleeName] = returnValues.front();
@@ -24075,7 +24116,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   if (hasArg0)
     arg0Val = args[0].getUInt64();
 
-  constexpr unsigned maxRecursionDepth = 20;
+  unsigned maxRecursionDepth = 20;
+  if (funcOp.getName().contains("uvm_pkg::uvm_phase::m_find_") ||
+      funcOp.getName().contains("uvm_pkg::uvm_phase::find"))
+    maxRecursionDepth = 512;
   auto &depthMap = state.recursionVisited[funcKey];
   if (hasArg0 && state.callDepth > 0) {
     unsigned &depth = depthMap[arg0Val];
@@ -28735,53 +28779,10 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
         return;
       }
 
-      // Find the memory block and read current value
-      MemoryBlock *block = nullptr;
+      // Parent-aware lookup keeps forked call-stack waits aligned with memory
+      // owned by outer frames.
       uint64_t offset = 0;
-
-      // First try module-level allocas (accessible from all processes)
-      // Check by value directly first
-      auto moduleLevelIt = moduleLevelAllocas.find(memPtr);
-      if (moduleLevelIt != moduleLevelAllocas.end()) {
-        block = &moduleLevelIt->second;
-        offset = 0;
-      }
-
-      // If not found by value, check by address
-      if (!block) {
-        for (auto &[val, memBlock] : moduleLevelAllocas) {
-          uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
-          if (blockAddr != 0 &&
-              addr >= blockAddr && addr < blockAddr + memBlock.size) {
-            block = &memBlock;
-            offset = addr - blockAddr;
-            break;
-          }
-        }
-      }
-
-      // Check global and malloc blocks via O(log n) range index
-      if (!block) {
-        uint64_t rangeOffset = 0;
-        block = findBlockByAddress(addr, rangeOffset);
-        if (block) offset = rangeOffset;
-      }
-
-      // Also check process-local memory blocks
-      if (!block) {
-        auto &procState = processStates[procId];
-        for (auto &[val, memBlock] : procState.memoryBlocks) {
-          auto addrIt = procState.valueMap.find(val);
-          if (addrIt != procState.valueMap.end()) {
-            uint64_t blockAddr = addrIt->second.getUInt64();
-            if (addr >= blockAddr && addr < blockAddr + memBlock.size) {
-              block = &memBlock;
-              offset = addr - blockAddr;
-              break;
-            }
-          }
-        }
-      }
+      MemoryBlock *block = findMemoryBlockByAddress(addr, procId, &offset);
 
       if (!block || !block->initialized) {
         return;
@@ -29099,6 +29100,8 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   if (!ptr)
     return nullptr;
   bool tracePtr = isAotPtrTraceEnabled();
+  constexpr uint64_t kVirtualLo = 0x10000000ULL;
+  constexpr uint64_t kVirtualHi = 0x20000000ULL;
 
   uint64_t addr = reinterpret_cast<uint64_t>(ptr);
   if (validAssocArrayAddresses.contains(addr)) {
@@ -29116,9 +29119,18 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   if (!block)
     block = findMemoryBlockByAddress(addr, static_cast<ProcessId>(-1), &offset);
   if (!block || !block->initialized || offset >= block->size) {
-    if (tracePtr && addr >= 0x10000000ULL && addr < 0x20000000ULL) {
+    if (addr >= kVirtualLo && addr < kVirtualHi) {
+      // Unmapped pointer in the interpreter virtual range: report null so the
+      // runtime doesn't treat it as a host pointer.
+      if (tracePtr) {
+        llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
+                     << "class=virtual-unmapped ptr=" << ptr << "\n";
+      }
+      return nullptr;
+    }
+    if (tracePtr) {
       llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
-                   << "class=virtual-unmapped ptr=" << ptr << "\n";
+                   << "class=host-direct ptr=" << ptr << "\n";
     }
     return const_cast<void *>(ptr);
   }
@@ -29126,7 +29138,7 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   // Some native call sites pass the virtual address of a pointer slot.
   // For globals in the virtual-address range, recover the pointed-to host
   // pointer when the slot value looks dereferenceable.
-  if (addr >= 0x10000000ULL && addr < 0x20000000ULL &&
+  if (addr >= kVirtualLo && addr < kVirtualHi &&
       offset + sizeof(uint64_t) <= block->size) {
     uint64_t pointee = 0;
     std::memcpy(&pointee, block->bytes() + offset, sizeof(pointee));
@@ -29146,7 +29158,7 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   }
 
   void *mapped = static_cast<void *>(block->bytes() + offset);
-  if (tracePtr && addr >= 0x10000000ULL && addr < 0x20000000ULL) {
+  if (tracePtr && addr >= kVirtualLo && addr < kVirtualHi) {
     llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
                  << "class=virtual-direct ptr=" << ptr << " -> host=" << mapped
                  << "\n";
@@ -29205,6 +29217,129 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return std::nullopt;
     return addrOfOp.getGlobalName().str();
   };
+  auto findDirectCoverageRuntimeCalleeInSymbol = [&](StringRef symbolName)
+      -> std::optional<std::string> {
+    ModuleOp moduleOp = callOp->getParentOfType<ModuleOp>();
+    if (!moduleOp && rootModule)
+      moduleOp = rootModule;
+    if (!moduleOp)
+      return std::nullopt;
+
+    auto tryGetDirectSymbolFromCalleeValue =
+        [&](Value calleeValue) -> std::optional<std::string> {
+      Value base = calleeValue;
+      if (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getNumOperands() == 1)
+          base = castOp.getOperand(0);
+      }
+      auto addrOfOp = base.getDefiningOp<LLVM::AddressOfOp>();
+      if (!addrOfOp)
+        return std::nullopt;
+      return addrOfOp.getGlobalName().str();
+    };
+
+    constexpr size_t kMaxVisitedSymbols = 128;
+    std::unordered_set<std::string> visitedSymbols;
+    SmallVector<std::string, 8> worklist;
+    worklist.push_back(symbolName.str());
+
+    while (!worklist.empty() && visitedSymbols.size() < kMaxVisitedSymbols) {
+      std::string currentSymbol = std::move(worklist.back());
+      worklist.pop_back();
+      if (!visitedSymbols.insert(currentSymbol).second)
+        continue;
+
+      if (isCoverageRuntimeCallee(currentSymbol))
+        return currentSymbol;
+
+      auto enqueueSymbol = [&](StringRef calleeName) {
+        if (calleeName.empty() || isCoverageRuntimeCallee(calleeName))
+          return;
+        if (visitedSymbols.size() >= kMaxVisitedSymbols)
+          return;
+        if (visitedSymbols.count(calleeName.str()))
+          return;
+        worklist.push_back(calleeName.str());
+      };
+
+      if (auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(currentSymbol)) {
+        std::optional<std::string> hit;
+        funcOp.walk([&](Operation *nestedOp) {
+          if (auto llvmCall = dyn_cast<LLVM::CallOp>(nestedOp)) {
+            if (auto callee = llvmCall.getCallee()) {
+              if (isCoverageRuntimeCallee(*callee)) {
+                hit = callee->str();
+                return WalkResult::interrupt();
+              }
+              enqueueSymbol(*callee);
+            } else {
+              auto calleeOperands = llvmCall.getCalleeOperands();
+              if (!calleeOperands.empty()) {
+                if (auto directCallee = tryGetDirectSymbolFromCalleeValue(
+                        calleeOperands.front())) {
+                  if (isCoverageRuntimeCallee(*directCallee)) {
+                    hit = *directCallee;
+                    return WalkResult::interrupt();
+                  }
+                  enqueueSymbol(*directCallee);
+                }
+              }
+            }
+          } else if (auto funcCall = dyn_cast<func::CallOp>(nestedOp)) {
+            if (isCoverageRuntimeCallee(funcCall.getCallee())) {
+              hit = funcCall.getCallee().str();
+              return WalkResult::interrupt();
+            }
+            enqueueSymbol(funcCall.getCallee());
+          } else if (auto callIndirect =
+                         dyn_cast<func::CallIndirectOp>(nestedOp)) {
+            if (auto directCallee =
+                    tryGetDirectSymbolFromCalleeValue(callIndirect.getCallee())) {
+              if (isCoverageRuntimeCallee(*directCallee)) {
+                hit = *directCallee;
+                return WalkResult::interrupt();
+              }
+              enqueueSymbol(*directCallee);
+            }
+          }
+          return WalkResult::advance();
+        });
+        if (hit)
+          return hit;
+      }
+
+      if (auto llvmFuncOp =
+              moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(currentSymbol)) {
+        std::optional<std::string> hit;
+        llvmFuncOp.walk([&](LLVM::CallOp nestedCall) {
+          if (auto callee = nestedCall.getCallee()) {
+            if (isCoverageRuntimeCallee(*callee)) {
+              hit = callee->str();
+              return WalkResult::interrupt();
+            }
+            enqueueSymbol(*callee);
+          } else {
+            auto calleeOperands = nestedCall.getCalleeOperands();
+            if (!calleeOperands.empty()) {
+              if (auto directCallee = tryGetDirectSymbolFromCalleeValue(
+                      calleeOperands.front())) {
+                if (isCoverageRuntimeCallee(*directCallee)) {
+                  hit = *directCallee;
+                  return WalkResult::interrupt();
+                }
+                enqueueSymbol(*directCallee);
+              }
+            }
+          }
+          return WalkResult::advance();
+        });
+        if (hit)
+          return hit;
+      }
+    }
+
+    return std::nullopt;
+  };
 
   if (!callee) {
     // Indirect call - try to resolve through vtable
@@ -29238,6 +29373,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         return callOp.emitError()
                << "unhandled coverage runtime call in interpreter: "
                << *directIndirectCalleeName;
+      }
+      if (directIndirectCalleeName) {
+        if (auto wrappedCoverageCallee =
+                findDirectCoverageRuntimeCalleeInSymbol(*directIndirectCalleeName)) {
+          processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+          return callOp.emitError()
+                 << "unhandled coverage runtime call in interpreter: "
+                 << *wrappedCoverageCallee;
+        }
       }
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect call could not be resolved\n");
       for (Value result : callOp.getResults()) {
@@ -29906,6 +30050,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "malloc") {
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
         constexpr uint64_t kMaxRuntimeAllocBytes = 64ull * 1024ull * 1024ull;
+        constexpr uint64_t kVirtualMallocLo = 0x10000000ULL;
+        constexpr uint64_t kVirtualMallocHi = 0xF0000000ULL;
         InterpretedValue sizeArg = getValue(procId, callOp.getOperand(0));
         uint64_t size = sizeArg.isX() ? 256 : sizeArg.getUInt64();  // Default size if X
 
@@ -29914,30 +30060,60 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           return success();
         }
 
-        // Use real calloc so native AOT code can dereference these pointers.
-        void *ptr = std::calloc(1, size);
-        if (!ptr) {
-          setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
-          return success();
-        }
-        uint64_t addr = reinterpret_cast<uint64_t>(ptr);
+        bool forceHostMalloc =
+            std::getenv("CIRCT_SIM_FORCE_HOST_MALLOC") != nullptr;
+        bool forceVirtualMalloc =
+            !forceHostMalloc &&
+            std::getenv("CIRCT_SIM_FORCE_VIRTUAL_MALLOC") != nullptr;
+        bool compiledExecutionActive =
+            compiledLoaderForModuleInit != nullptr || !nativeFuncPtrs.empty() ||
+            aotDepth != 0;
+        bool useHostMalloc =
+            forceHostMalloc || (!forceVirtualMalloc && compiledExecutionActive);
 
-        // Create a memory block aliased to the calloc'd storage
         MemoryBlock block;
-        block.aliasedStorage = static_cast<uint8_t *>(ptr);
-        block.size = size;
-        block.elementBitWidth = 64;
-        block.initialized = true;
+        uint64_t addr = 0;
 
-        // Store the block - use the address as a key
-        // We need to track malloc'd blocks separately so findMemoryBlock can find them
+        if (useHostMalloc) {
+          // Compiled/native paths may dereference malloc pointers directly.
+          void *ptr = std::calloc(1, size);
+          if (!ptr) {
+            setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+            return success();
+          }
+          addr = reinterpret_cast<uint64_t>(ptr);
+          block.aliasedStorage = static_cast<uint8_t *>(ptr);
+          block.size = size;
+          block.elementBitWidth = 64;
+          block.initialized = true;
+        } else {
+          // Pure interpreted mode: keep pointers in the legacy virtual range.
+          auto alignUp16 = [](uint64_t value) -> uint64_t {
+            return (value + 15ULL) & ~15ULL;
+          };
+          uint64_t alignedBase = alignUp16(nextGlobalAddress);
+          uint64_t endAddr = 0;
+          bool overflow = __builtin_add_overflow(alignedBase, size, &endAddr);
+          if (overflow || alignedBase < kVirtualMallocLo || endAddr >= kVirtualMallocHi) {
+            setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
+            return success();
+          }
+          nextGlobalAddress = alignUp16(endAddr + 1);
+          addr = alignedBase;
+          block = MemoryBlock(size, /*elemBits=*/64);
+          block.initialized = true;
+        }
+
+        // Track malloc'd blocks so pointer-based loads/stores can resolve them.
         mallocBlocks[addr] = std::move(block);
-        noteMallocBlockAllocated(addr, block.size);
+        noteMallocBlockAllocated(addr, size);
 
         setValue(procId, callOp.getResult(), InterpretedValue(addr, 64));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: malloc(" << size
-                                << ") = 0x" << llvm::format_hex(addr, 16) << "\n");
+                                << ") = 0x" << llvm::format_hex(addr, 16)
+                                << (useHostMalloc ? " [host]" : " [virtual]")
+                                << "\n");
       }
       return success();
     }
@@ -30660,6 +30836,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               std::ostringstream oss;
               oss << it->second.randomGenerator;
               stateStr = oss.str();
+              stateStr += "|LR=" + std::to_string(it->second.legacyRandomState);
+              stateStr += "|LU=" + std::to_string(it->second.legacyUrandomState);
             }
           }
         }
@@ -30714,8 +30892,25 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   resolvePointerToString(ptrVal, static_cast<int64_t>(lenVal));
 
               if (!stateStr.empty()) {
-                std::istringstream iss(stateStr);
-                iss >> it->second.randomGenerator;
+                size_t lrPos = stateStr.rfind("|LR=");
+                size_t luPos = stateStr.rfind("|LU=");
+                if (lrPos != std::string::npos && luPos != std::string::npos &&
+                    lrPos < luPos) {
+                  std::istringstream iss(stateStr.substr(0, lrPos));
+                  iss >> it->second.randomGenerator;
+                  std::string randomPart =
+                      stateStr.substr(lrPos + 4, luPos - (lrPos + 4));
+                  std::string urandomPart = stateStr.substr(luPos + 4);
+                  it->second.legacyRandomState = static_cast<uint32_t>(
+                      static_cast<int32_t>(
+                          std::strtol(randomPart.c_str(), nullptr, 10)));
+                  it->second.legacyUrandomState = static_cast<uint32_t>(
+                      static_cast<int32_t>(
+                          std::strtol(urandomPart.c_str(), nullptr, 10)));
+                } else {
+                  std::istringstream iss(stateStr);
+                  iss >> it->second.randomGenerator;
+                }
               }
             }
           }
@@ -30724,22 +30919,35 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
-    // Handle __moore_process_srandom - seed the process RNG.
-    // Implements SystemVerilog process::srandom().
+    // Handle __moore_process_srandom.
+    // Implements SystemVerilog process::srandom():
+    // - reseed process randomization/get_randstate stream
+    // - reseed legacy $urandom stream
+    // - do not rewind legacy $random stream (xrun parity)
     if (calleeName == "__moore_process_srandom") {
       if (callOp.getNumOperands() >= 2) {
         InterpretedValue handleVal = getValue(procId, callOp.getOperand(0));
         InterpretedValue seedVal = getValue(procId, callOp.getOperand(1));
 
-        if (!handleVal.isX() && !seedVal.isX()) {
-          ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
-          if (targetId != InvalidProcessId) {
-            auto it = processStates.find(targetId);
-            if (it != processStates.end()) {
-              it->second.randomGenerator.seed(
-                  static_cast<uint32_t>(seedVal.getUInt64()));
-            }
+        if (!seedVal.isX()) {
+          uint32_t seedU32 = static_cast<uint32_t>(seedVal.getUInt64());
+          ProcessId targetId = procId;
+          if (!handleVal.isX()) {
+            ProcessId resolved = resolveProcessHandle(handleVal.getUInt64());
+            if (resolved != InvalidProcessId)
+              targetId = resolved;
           }
+          auto it = processStates.find(targetId);
+          if (it != processStates.end())
+            it->second.randomGenerator.seed(seedU32);
+          if (it != processStates.end())
+            it->second.legacyUrandomState =
+                __moore_xrun_urandom_state_from_seed(static_cast<int32_t>(seedU32));
+          // Keep native runtime RNG in sync for mixed interpreted/native
+          // call paths (e.g. __moore_randomize_bytes on host pointers).
+          int64_t runtimeHandle =
+              handleVal.isX() ? 0 : static_cast<int64_t>(handleVal.getUInt64());
+          __moore_process_srandom(runtimeHandle, static_cast<int32_t>(seedU32));
         }
       }
       return success();
@@ -30779,7 +30987,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(0)).getUInt64();
 
         std::string stateStr;
-        auto &rng = getObjectRng(objAddr);
+        auto &rng = getObjectRng(objAddr, procId);
         std::ostringstream oss;
         oss << rng;
         stateStr = oss.str();
@@ -30829,7 +31037,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           if (!stateStr.empty()) {
             std::istringstream iss(stateStr);
-            auto &rng = getObjectRng(objAddr);
+            auto &rng = getObjectRng(objAddr, procId);
             iss >> rng;
           }
         }
@@ -31694,6 +31902,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // The runtime determines string vs integer keys from the array header.
     if (calleeName == "__moore_assoc_get_ref") {
       if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        static const bool traceAssocStr = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_ASSOC_STR");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
         InterpretedValue arrayVal = getValue(procId, callOp.getOperand(0));
         InterpretedValue keyVal = getValue(procId, callOp.getOperand(1));
         InterpretedValue valueSizeVal = getValue(procId, callOp.getOperand(2));
@@ -31813,7 +32025,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
               strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
             }
+            if (traceAssocStr)
+              llvm::errs() << "[ASSOC-STR] get_ref array=0x"
+                           << llvm::format_hex(arrayAddr, 16) << " key_ptr=0x"
+                           << llvm::format_hex(strPtrVal, 16)
+                           << " key_len=" << strLen
+                           << " value_size=" << valueSize << "\n";
             if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+              if (traceAssocStr)
+                llvm::errs() << "[ASSOC-STR] get_ref key unreadable\n";
               LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref "
                                          "string key not readable\n");
               setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
@@ -31822,6 +32042,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             keyString.data = keyStorage.data();
             keyString.len = keyStorage.size();
             keyPtr = &keyString;
+            if (traceAssocStr)
+              llvm::errs() << "[ASSOC-STR] get_ref key=\""
+                           << llvm::StringRef(keyString.data, keyString.len)
+                           << "\"\n";
 
             LLVM_DEBUG({
               llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref string key: ptr=0x"
@@ -31857,6 +32081,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         });
         void *resultPtr = __moore_assoc_get_ref(arrayPtr, keyPtr, effectiveSize);
         uint64_t resultVal = reinterpret_cast<uint64_t>(resultPtr);
+        if (traceAssocStr && arrayPtr &&
+            static_cast<AssocArrayHeader *>(arrayPtr)->type ==
+                AssocArrayType_StringKey)
+          llvm::errs() << "[ASSOC-STR] get_ref result=0x"
+                       << llvm::format_hex(resultVal, 16)
+                       << " effective_size=" << effectiveSize << "\n";
 
         if (resultPtr && effectiveSize > 0) {
           size_t size = static_cast<size_t>(effectiveSize);
@@ -31880,6 +32110,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (array: ptr, key: ptr) -> i32
     if (calleeName == "__moore_assoc_exists") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        static const bool traceAssocStr = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_ASSOC_STR");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
 
@@ -31950,12 +32184,23 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               strPtrVal |= static_cast<uint64_t>(keyBuffer[i]) << (i * 8);
               strLen |= static_cast<int64_t>(keyBuffer[8 + i]) << (i * 8);
             }
+            if (traceAssocStr)
+              llvm::errs() << "[ASSOC-STR] exists array=0x"
+                           << llvm::format_hex(arrayAddr, 16) << " key_ptr=0x"
+                           << llvm::format_hex(strPtrVal, 16)
+                           << " key_len=" << strLen << "\n";
             if (!tryReadStringKey(procId, strPtrVal, strLen, keyStorage)) {
+              if (traceAssocStr)
+                llvm::errs() << "[ASSOC-STR] exists key unreadable\n";
               LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists "
                                          "string key not readable\n");
               setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
               return success();
             }
+            if (traceAssocStr)
+              llvm::errs() << "[ASSOC-STR] exists key=\""
+                           << llvm::StringRef(keyStorage.data(), keyStorage.size())
+                           << "\"\n";
             keyString.data = keyStorage.data();
             keyString.len = keyStorage.size();
             keyPtr = &keyString;
@@ -31963,8 +32208,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }
 
         int32_t result = __moore_assoc_exists(arrayPtr, keyPtr);
-
-        // Debug: trace assoc_exists calls with string keys to diagnose NOCHILD
+        if (traceAssocStr && arrayPtr &&
+            static_cast<AssocArrayHeader *>(arrayPtr)->type ==
+                AssocArrayType_StringKey)
+          llvm::errs() << "[ASSOC-STR] exists result=" << result << "\n";
         setValue(procId, callOp.getResult(), InterpretedValue(static_cast<uint64_t>(result), 32));
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists(0x"
@@ -32600,11 +32847,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t semAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         int32_t keyCount = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
+        auto semId = static_cast<SemaphoreId>(semAddr);
 
         // Create the semaphore with the given initial key count,
         // using the object address as the semaphore ID
-        syncPrimitivesManager.getOrCreateSemaphore(
-            static_cast<SemaphoreId>(semAddr), keyCount);
+        syncPrimitivesManager.getOrCreateSemaphore(semId, keyCount);
 
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_semaphore_create(0x"
                                 << llvm::format_hex(semAddr, 16) << ", "
@@ -33670,11 +33917,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // process::get_randstate()/set_randstate() produces reproducible sequences.
     if (calleeName == "__moore_urandom") {
       auto &state = processStates[procId];
-      uint32_t result = state.randomGenerator();
+      uint32_t result = __moore_xrun_urandom_next(&state.legacyUrandomState);
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, result)));
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_urandom() = " << result
-                               << " [per-process RNG, pid=" << procId << "]\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_urandom() = " << result
+                 << " [xrun-compat legacy stream, pid=" << procId << "]\n");
       return success();
     }
 
@@ -33693,8 +33941,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         result = minVal;
       } else {
         auto &state = processStates[procId];
-        std::uniform_int_distribution<uint32_t> dist(minVal, maxVal);
-        result = dist(state.randomGenerator);
+        uint64_t span = static_cast<uint64_t>(maxVal) - minVal + 1ull;
+        uint64_t draw =
+            static_cast<uint64_t>(__moore_xrun_urandom_next(&state.legacyUrandomState));
+        result = minVal + static_cast<uint32_t>(draw % span);
       }
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, result)));
@@ -33709,45 +33959,44 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // IEEE 1800-2017 §18.13: $random uses the calling process's RNG state.
     if (calleeName == "__moore_random") {
       auto &state = processStates[procId];
-      int32_t result = static_cast<int32_t>(state.randomGenerator());
+      int32_t result = __moore_xrun_random_next(&state.legacyRandomState);
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
-      LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_random() = " << result
-                               << " [per-process RNG, pid=" << procId << "]\n");
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_random() = " << result
+                 << " [xrun-compat legacy stream, pid=" << procId << "]\n");
       return success();
     }
 
     // ---- __moore_urandom_seeded ----
-    // Seeds the calling process's RNG and returns a value from it.
+    // xrun-compatible seeded $urandom:
+    // pure in the seed argument (no process RNG mutation).
     if (calleeName == "__moore_urandom_seeded") {
       int32_t seed = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(0)).getUInt64());
-      auto &state = processStates[procId];
-      state.randomGenerator.seed(static_cast<uint32_t>(seed));
-      uint32_t result = state.randomGenerator();
+      uint32_t result = __moore_urandom_seeded(seed);
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, result)));
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_urandom_seeded(" << seed
                  << ") = " << result
-                 << " [per-process RNG, pid=" << procId << "]\n");
+                 << " [xrun-compat, pid=" << procId << "]\n");
       return success();
     }
 
     // ---- __moore_random_seeded ----
-    // Seeds the calling process's RNG and returns a value from it.
+    // xrun-compatible seeded $random return mapping.
+    // ImportVerilog lowering applies inout seed update separately.
     if (calleeName == "__moore_random_seeded") {
       int32_t seed = static_cast<int32_t>(
           getValue(procId, callOp.getOperand(0)).getUInt64());
-      auto &state = processStates[procId];
-      state.randomGenerator.seed(static_cast<uint32_t>(seed));
-      int32_t result = static_cast<int32_t>(state.randomGenerator());
+      int32_t result = __moore_random_seeded(seed);
       setValue(procId, callOp.getResult(),
                InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_random_seeded(" << seed
                  << ") = " << result
-                 << " [per-process RNG, pid=" << procId << "]\n");
+                 << " [xrun-compat, pid=" << procId << "]\n");
       return success();
     }
 
@@ -33815,13 +34064,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(0)).getUInt64();
         int64_t classSize = static_cast<int64_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
-        // Track last randomized object for subsequent range calls
-        lastRandomizeObjAddr = classAddr;
+        // Track last randomized object for subsequent range calls.
+        lastRandomizeObjAddrByProcess[procId] = classAddr;
         // If there's a pending seed from an old-style @srandom() stub,
         // apply it to this object's RNG now.
-        if (pendingSrandomSeed.has_value()) {
-          perObjectRng[classAddr] = std::mt19937(*pendingSrandomSeed);
-          pendingSrandomSeed.reset();
+        auto pendingSeedIt = pendingSrandomSeeds.find(procId);
+        if (pendingSeedIt != pendingSrandomSeeds.end()) {
+          perObjectRng[classAddr] = std::mt19937(pendingSeedIt->second);
+          pendingSrandomSeeds.erase(pendingSeedIt);
         }
 
         // Fill the entire object with random bytes.  MooreToCore saves
@@ -34070,9 +34320,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(1)).getUInt64());
         if (dataAddr != 0 && size > 0) {
           size_t byteCount = static_cast<size_t>(size);
+          uint64_t randomizeObjAddr = 0;
+          if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+              it != lastRandomizeObjAddrByProcess.end())
+            randomizeObjAddr = it->second;
           auto randomWord = [&]() -> uint32_t {
-            if (lastRandomizeObjAddr)
-              return getObjectRng(lastRandomizeObjAddr, procId)();
+            if (randomizeObjAddr)
+              return getObjectRng(randomizeObjAddr, procId)();
             return processStates[procId].randomGenerator();
           };
 
@@ -34205,7 +34459,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
 
           if (totalWeight > 0) {
-            auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
+            uint64_t randomizeObjAddr = 0;
+            if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+                it != lastRandomizeObjAddrByProcess.end())
+              randomizeObjAddr = it->second;
+            auto &rng = getObjectRng(randomizeObjAddr, procId);
             int64_t randomWeight =
                 static_cast<int64_t>(rng()) % totalWeight;
             int64_t cumulative = 0;
@@ -34251,7 +34509,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       }
       int64_t result = minVal;
       if (maxVal > minVal) {
-        auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
+        uint64_t randomizeObjAddr = 0;
+        if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+            it != lastRandomizeObjAddrByProcess.end())
+          randomizeObjAddr = it->second;
+        auto &rng = getObjectRng(randomizeObjAddr, procId);
         uint64_t range = static_cast<uint64_t>(maxVal - minVal) + 1;
         uint64_t randomVal = static_cast<uint64_t>(rng());
         if (range > UINT32_MAX)
@@ -34262,8 +34524,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs()
                  << "  llvm.call: __moore_randomize_with_range(min="
                  << minVal << ", max=" << maxVal << ") = " << result << "\n");
-      if (traceRandomize)
-        maybeTraceRandRange(lastRandomizeObjAddr, minVal, maxVal, result);
+      if (traceRandomize) {
+        uint64_t randomizeObjAddr = 0;
+        if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+            it != lastRandomizeObjAddrByProcess.end())
+          randomizeObjAddr = it->second;
+        maybeTraceRandRange(randomizeObjAddr, minVal, maxVal, result);
+      }
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
                  InterpretedValue(static_cast<uint64_t>(result), 64));
@@ -34313,7 +34580,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
           if (totalSize > 0) {
             // Generate random position in [0, totalSize - 1]
-            auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
+            uint64_t randomizeObjAddr = 0;
+            if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+                it != lastRandomizeObjAddrByProcess.end())
+              randomizeObjAddr = it->second;
+            auto &rng = getObjectRng(randomizeObjAddr, procId);
             uint64_t randomVal = static_cast<uint64_t>(rng());
             if (totalSize > UINT32_MAX)
               randomVal = (static_cast<uint64_t>(rng()) << 32) |
@@ -34349,6 +34620,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_randomize_with_modulo ----
+    // Signature: (mod: i64, remainder: i64) -> i64
+    if (calleeName == "__moore_randomize_with_modulo") {
+      int64_t mod = 0;
+      int64_t remainder = 0;
+      if (callOp.getNumOperands() >= 2) {
+        mod = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        remainder = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+      }
+      int64_t result = __moore_randomize_with_modulo(mod, remainder);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_randomize_with_modulo(mod=" << mod
+                 << ", remainder=" << remainder << ") = " << result << "\n");
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(static_cast<uint64_t>(result), 64));
+      return success();
+    }
+
     // ---- __moore_randomize_neq_retry ----
     // Signature: (currentVal: i64, excludeVal: i64, min: i64, max: i64) -> i64
     // Re-randomize a value to avoid equality with excludeVal.
@@ -34371,7 +34663,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // Unsatisfiable: only one value in range and it's excluded
             result = minVal;
           } else {
-            auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
+            uint64_t randomizeObjAddr = 0;
+            if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+                it != lastRandomizeObjAddrByProcess.end())
+              randomizeObjAddr = it->second;
+            auto &rng = getObjectRng(randomizeObjAddr, procId);
             uint64_t range =
                 static_cast<uint64_t>(maxVal - minVal) + 1;
             bool found = false;
@@ -36232,7 +36528,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t maxVal = (bitWidth >= 64) ? UINT64_MAX
                                             : ((1ULL << bitWidth) - 1);
-        auto &rng = getObjectRng(lastRandomizeObjAddr, procId);
+        uint64_t randomizeObjAddr = 0;
+        if (auto it = lastRandomizeObjAddrByProcess.find(procId);
+            it != lastRandomizeObjAddrByProcess.end())
+          randomizeObjAddr = it->second;
+        auto &rng = getObjectRng(randomizeObjAddr, procId);
         uint64_t result = static_cast<uint64_t>(rng()) & maxVal;
         setValue(procId, callOp.getResult(),
                  InterpretedValue(result, 64));
@@ -37054,6 +37354,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       constexpr uint64_t kFilterNegateOff =
           kFilterNumRangesOff + sizeof(int32_t);
       constexpr uint64_t kFilterStride = kFilterNegateOff + sizeof(uint8_t);
+      // Keep cross-filter decoding resilient to runtime field renames by
+      // materializing the ABI payload with a local mirror layout.
+      struct DecodedCrossBinsofFilter {
+        int32_t cp_index;
+        int32_t *bin_indices;
+        int32_t num_bins;
+        int64_t *values;
+        int32_t num_values;
+        int64_t *ranges;
+        int32_t num_ranges;
+        bool negate;
+      };
+      static_assert(sizeof(DecodedCrossBinsofFilter) <=
+                        sizeof(MooreCrossBinsofFilter),
+                    "unexpected MooreCrossBinsofFilter layout shrink");
 
       if (filtersAddr && numFilters > 0) {
         parsedFilters.reserve(numFilters);
@@ -37064,70 +37379,71 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         for (int32_t i = 0; i < numFilters; ++i) {
           uint64_t filterAddr =
               filtersAddr + static_cast<uint64_t>(i) * kFilterStride;
-          MooreCrossBinsofFilter filter{};
           bool filterOk = true;
+          int32_t cpIndex = 0;
+          int32_t numBins = 0;
+          int32_t numValues = 0;
+          int32_t numRanges = 0;
+          int32_t *binIndices = nullptr;
+          int64_t *valuesPtr = nullptr;
+          int64_t *rangesPtr = nullptr;
+          bool negate = false;
 
-          filterOk &= readI32(filterAddr + kFilterCpIndexOff, filter.cp_index);
+          filterOk &= readI32(filterAddr + kFilterCpIndexOff, cpIndex);
 
           uint64_t binIndicesAddr = 0;
           filterOk &= readPtr(filterAddr + kFilterBinIndicesOff, binIndicesAddr);
-          filterOk &= readI32(filterAddr + kFilterNumBinsOff, filter.num_bins);
+          filterOk &= readI32(filterAddr + kFilterNumBinsOff, numBins);
           if (!filterOk)
             continue;
-          if (filter.num_bins > 0 && binIndicesAddr) {
+          if (numBins > 0 && binIndicesAddr) {
             auto &owned = ownedBinIndices.emplace_back();
-            owned.resize(filter.num_bins);
+            owned.resize(numBins);
             bool binsOk = true;
-            for (int32_t bi = 0; bi < filter.num_bins; ++bi) {
+            for (int32_t bi = 0; bi < numBins; ++bi) {
               binsOk &= readI32(
                   binIndicesAddr + static_cast<uint64_t>(bi) * sizeof(int32_t),
                   owned[bi]);
             }
             if (binsOk) {
-              filter.bin_indices = owned.data();
+              binIndices = owned.data();
             } else {
-              filter.bin_indices = nullptr;
-              filter.num_bins = 0;
+              numBins = 0;
             }
           } else {
-            filter.bin_indices = nullptr;
-            filter.num_bins = 0;
+            numBins = 0;
           }
 
           uint64_t valuesAddr = 0;
           filterOk &= readPtr(filterAddr + kFilterValuesOff, valuesAddr);
-          filterOk &= readI32(filterAddr + kFilterNumValuesOff,
-                              filter.num_values);
+          filterOk &= readI32(filterAddr + kFilterNumValuesOff, numValues);
           if (!filterOk)
             continue;
-          if (filter.num_values > 0 && valuesAddr) {
+          if (numValues > 0 && valuesAddr) {
             auto &owned = ownedValues.emplace_back();
-            owned.resize(filter.num_values);
+            owned.resize(numValues);
             bool valuesOk = true;
-            for (int32_t vi = 0; vi < filter.num_values; ++vi) {
+            for (int32_t vi = 0; vi < numValues; ++vi) {
               valuesOk &= readI64(
                   valuesAddr + static_cast<uint64_t>(vi) * sizeof(int64_t),
                   owned[vi]);
             }
             if (valuesOk) {
-              filter.values = owned.data();
+              valuesPtr = owned.data();
             } else {
-              filter.values = nullptr;
-              filter.num_values = 0;
+              numValues = 0;
             }
           } else {
-            filter.values = nullptr;
-            filter.num_values = 0;
+            numValues = 0;
           }
 
           uint64_t rangesAddr = 0;
           filterOk &= readPtr(filterAddr + kFilterRangesOff, rangesAddr);
-          filterOk &= readI32(filterAddr + kFilterNumRangesOff,
-                              filter.num_ranges);
+          filterOk &= readI32(filterAddr + kFilterNumRangesOff, numRanges);
           if (!filterOk)
             continue;
-          if (filter.num_ranges > 0 && rangesAddr) {
-            int32_t flattened = filter.num_ranges * 2;
+          if (numRanges > 0 && rangesAddr) {
+            int32_t flattened = numRanges * 2;
             auto &owned = ownedRanges.emplace_back();
             owned.resize(flattened);
             bool rangesOk = true;
@@ -37137,19 +37453,21 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   owned[ri]);
             }
             if (rangesOk) {
-              filter.ranges = owned.data();
+              rangesPtr = owned.data();
             } else {
-              filter.ranges = nullptr;
-              filter.num_ranges = 0;
+              numRanges = 0;
             }
           } else {
-            filter.ranges = nullptr;
-            filter.num_ranges = 0;
+            numRanges = 0;
           }
 
-          bool negate = false;
-          if (readBool(filterAddr + kFilterNegateOff, negate))
-            filter.negate = negate;
+          readBool(filterAddr + kFilterNegateOff, negate);
+
+          DecodedCrossBinsofFilter decoded{
+              cpIndex,  binIndices, numBins,  valuesPtr,
+              numValues, rangesPtr, numRanges, negate};
+          MooreCrossBinsofFilter filter{};
+          std::memcpy(&filter, &decoded, sizeof(decoded));
           parsedFilters.push_back(filter);
         }
       }
@@ -37549,8 +37867,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                   int64_t nativeElemSize =
                       inferQueueElemSize(dataPtr, queueLen, requestedElemSize);
                   // Fisher-Yates shuffle using per-process RNG for
-                  // random stability instead of __moore_queue_shuffle
-                  // which uses std::rand().
+                  // random stability in interpreted mode.
                   {
                     auto *data = reinterpret_cast<char *>(dataPtr);
                     auto &rng = processStates[procId].randomGenerator;
@@ -38839,6 +39156,54 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_info(\"" << message
                                 << "\")\n");
       }
+      return success();
+    }
+
+    // ---- __moore_randomize_unique_array ----
+    if (calleeName == "__moore_randomize_unique_array") {
+      int32_t result = 0;
+      if (callOp.getNumOperands() >= 5) {
+        uint64_t arrayAddr =
+            getValue(procId, callOp.getOperand(0)).getUInt64();
+        int64_t numElements = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(1)).getUInt64());
+        int64_t elementSize = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(2)).getUInt64());
+        int64_t minValue = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(3)).getUInt64());
+        int64_t maxValue = static_cast<int64_t>(
+            getValue(procId, callOp.getOperand(4)).getUInt64());
+
+        if (arrayAddr >= 0x10000000000ULL) {
+          result = __moore_randomize_unique_array(
+              reinterpret_cast<void *>(arrayAddr), numElements, elementSize,
+              minValue, maxValue);
+        } else if (arrayAddr != 0 && numElements > 0 && elementSize > 0) {
+          uint64_t offset = 0;
+          auto *block = findMemoryBlockByAddress(arrayAddr, procId, &offset);
+          if (!block)
+            block = findBlockByAddress(arrayAddr, offset);
+          if (block && block->initialized && offset <= block->size) {
+            uint64_t totalBytes = 0;
+            bool overflow = __builtin_mul_overflow(
+                static_cast<uint64_t>(numElements),
+                static_cast<uint64_t>(elementSize), &totalBytes);
+            uint64_t available =
+                static_cast<uint64_t>(block->size) - static_cast<uint64_t>(offset);
+            if (!overflow && totalBytes <= available) {
+              result = __moore_randomize_unique_array(
+                  block->bytes() + offset, numElements, elementSize, minValue,
+                  maxValue);
+            }
+          }
+        }
+      }
+      if (callOp.getNumResults() >= 1)
+        setValue(procId, callOp.getResult(),
+                 InterpretedValue(APInt(32, static_cast<uint32_t>(result))));
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_randomize_unique_array() = "
+                 << result << "\n");
       return success();
     }
 
@@ -40709,12 +41074,6 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
           name.contains("get_print_config_matches") ||
           name.contains("get_root_blocks") ||
           name == "get_inst" || name.starts_with("get_inst_"))))
-      return true;
-    // Callback iterator queue walkers dispatch deep callback-list traversal
-    // via m_get_q_*/get_first_* helper wrappers; keep these interpreted until
-    // coroutine/callback parity is complete.
-    if (name.contains("::uvm_callback_iter::first") ||
-        name.starts_with("m_get_q_") || name.starts_with("get_first_"))
       return true;
     // Phase-graph/state mutators have interpreter-side cache/update logic.
     if (!allowNativeUvmPhaseState &&

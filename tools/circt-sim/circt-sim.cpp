@@ -689,7 +689,7 @@ static llvm::cl::opt<RunMode> runMode(
 
 static llvm::cl::opt<std::string> compiledModulePath(
     "compiled",
-    llvm::cl::desc("Path to AOT-compiled .so module (from circt-sim-compile)"),
+    llvm::cl::desc("Path to AOT-compiled .so module (from circt-compile)"),
     llvm::cl::value_desc("path"), llvm::cl::init(""),
     llvm::cl::cat(mainCategory));
 
@@ -3999,7 +3999,7 @@ int main(int argc, char **argv) {
 
   // Snapshot directory detection: if the input is a directory or ends in
   // .csnap, treat it as a snapshot bundle (design.mlirbc + native.so +
-  // meta.json) produced by circt-sim-compile --emit-snapshot.
+  // meta.json) produced by circt-compile --emit-snapshot.
   bool isSnapshot = false;
   bool snapshotAutoEnabledNativeModuleInit = false;
   if (inputFilename != "-") {

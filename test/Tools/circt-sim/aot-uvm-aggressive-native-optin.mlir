@@ -1,19 +1,19 @@
-// RUN: circt-sim-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=COMPILE-DEFAULT
+// RUN: circt-compile %s -o %t.default.so 2>&1 | FileCheck %s --check-prefix=COMPILE-DEFAULT
 // RUN: circt-sim %s --compiled=%t.default.so 2>&1 | FileCheck %s --check-prefix=DEFAULT
-// RUN: env CIRCT_AOT_AGGRESSIVE_UVM=1 circt-sim-compile %s -o %t.fast.so 2>&1 | FileCheck %s --check-prefix=COMPILE-FAST
+// RUN: env CIRCT_AOT_AGGRESSIVE_UVM=1 circt-compile %s -o %t.fast.so 2>&1 | FileCheck %s --check-prefix=COMPILE-FAST
 // RUN: env CIRCT_AOT_AGGRESSIVE_UVM=1 circt-sim %s --compiled=%t.fast.so 2>&1 | FileCheck %s --check-prefix=FAST
 
 // Regression: umbrella env enables all UVM native opt-ins.
 //
-// COMPILE-DEFAULT: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE-DEFAULT: [circt-sim-compile] Demoted 1 intercepted functions to trampolines
-// COMPILE-DEFAULT: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE-DEFAULT: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE-DEFAULT: [circt-compile] Demoted 1 intercepted functions to trampolines
+// COMPILE-DEFAULT: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // DEFAULT: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // DEFAULT: out=47
 //
-// COMPILE-FAST: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE-FAST: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// COMPILE-FAST: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE-FAST: [circt-compile] 2 functions + 0 processes ready for codegen
 //
 // FAST: Loaded 2 compiled functions: 2 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // FAST: out=47

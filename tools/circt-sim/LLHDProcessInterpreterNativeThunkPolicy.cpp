@@ -724,7 +724,7 @@ LLHDProcessInterpreter::ProcessThunkInstallResult
 LLHDProcessInterpreter::tryInstallProcessThunk(ProcessId procId,
                                                ProcessExecutionState &state,
                                                std::string *deoptDetail) {
-  // JIT compile manager removed — thunk installation requires circt-sim-compile.
+  // JIT compile manager removed — thunk installation requires circt-compile.
   (void)procId; (void)state; (void)deoptDetail;
   return ProcessThunkInstallResult::MissingThunk;
 #if 0  // Dead code — JIT removed

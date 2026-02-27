@@ -1,10 +1,10 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s
 //
 // Ensure process-body extraction accepts common external LLVM values captured
 // from the enclosing hw.module region.
 //
-// CHECK: [circt-sim-compile] Compiled 1 process bodies
-// CHECK: [circt-sim-compile] Processes: 1 total, 1 callback-eligible, 0 rejected
+// CHECK: [circt-compile] Compiled 1 process bodies
+// CHECK: [circt-compile] Processes: 1 total, 1 callback-eligible, 0 rejected
 
 llvm.mlir.global internal constant @__packed_hello("h") {addr_space = 0 : i32}
 

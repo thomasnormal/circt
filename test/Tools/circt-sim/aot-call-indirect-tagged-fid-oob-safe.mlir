@@ -1,11 +1,11 @@
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so | FileCheck %s --check-prefix=COMPILED
 
 // Regression: invalid tagged FuncIds in lowered call_indirect paths must not
 // dispatch through out-of-bounds entry-table slots.
 //
-// COMPILE: [circt-sim-compile] LowerTaggedIndirectCalls: lowered 1 indirect calls
+// COMPILE: [circt-compile] LowerTaggedIndirectCalls: lowered 1 indirect calls
 // SIM: bad=0
 // COMPILED: bad=0
 

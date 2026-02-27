@@ -1,10 +1,10 @@
-// RUN: not env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s
+// RUN: not env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-compile %s -o %t.so 2>&1 | FileCheck %s
 
 // Regression: referenced externs with unsupported trampoline ABI types must be
 // diagnosed at compile time, not left as unresolved runtime symbols.
 //
 // CHECK: error: cannot generate interpreter trampoline for referenced external function: unsupported trampoline ABI (return type vector<2xi32>)
-// CHECK: [circt-sim-compile] Failed to generate trampolines
+// CHECK: [circt-compile] Failed to generate trampolines
 
 module {
   // Force demotion via verif.assume.

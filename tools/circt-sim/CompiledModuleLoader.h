@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Loads a shared object (.so) produced by circt-sim-compile and provides
+// Loads a shared object (.so) produced by circt-compile and provides
 // lookup of compiled function pointers. The .so exports a
 // CirctSimCompiledModule descriptor via circt_sim_get_compiled_module().
 //

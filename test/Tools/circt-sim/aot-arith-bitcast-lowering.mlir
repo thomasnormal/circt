@@ -1,11 +1,11 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 
 // Regression: arith.bitcast should lower to llvm.bitcast so compilable
 // functions are not stripped as residual non-LLVM bodies.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE-NOT: Stripped
-// COMPILE: [circt-sim-compile] 2 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] 2 functions + 0 processes ready for codegen
 
 func.func @bitcast_roundtrip(%x: i32) -> i32 {
   %f = arith.bitcast %x : i32 to f32

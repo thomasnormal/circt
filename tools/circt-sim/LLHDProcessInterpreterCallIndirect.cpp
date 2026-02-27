@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <unordered_set>
 
 #define DEBUG_TYPE "llhd-interpreter"
 
@@ -357,6 +358,127 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         return std::nullopt;
       return addrOfOp.getGlobalName().str();
     };
+    auto findDirectCoverageRuntimeCalleeInSymbol =
+        [&](llvm::StringRef symbolName) -> std::optional<std::string> {
+      ModuleOp moduleOp = callSiteModule ? callSiteModule : rootModule;
+      if (!moduleOp)
+        return std::nullopt;
+
+      auto tryGetDirectSymbolFromCalleeValue =
+          [&](Value calleeValue) -> std::optional<std::string> {
+        Value base = calleeValue;
+        if (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+          if (castOp.getNumOperands() == 1)
+            base = castOp.getOperand(0);
+        }
+        auto addrOfOp = base.getDefiningOp<LLVM::AddressOfOp>();
+        if (!addrOfOp)
+          return std::nullopt;
+        return addrOfOp.getGlobalName().str();
+      };
+
+      constexpr size_t kMaxVisitedSymbols = 128;
+      std::unordered_set<std::string> visitedSymbols;
+      SmallVector<std::string, 8> worklist;
+      worklist.push_back(symbolName.str());
+
+      while (!worklist.empty() && visitedSymbols.size() < kMaxVisitedSymbols) {
+        std::string currentSymbol = std::move(worklist.back());
+        worklist.pop_back();
+        if (!visitedSymbols.insert(currentSymbol).second)
+          continue;
+
+        if (isCoverageRuntimeCallee(currentSymbol))
+          return currentSymbol;
+
+        auto enqueueSymbol = [&](StringRef calleeName) {
+          if (calleeName.empty() || isCoverageRuntimeCallee(calleeName))
+            return;
+          if (visitedSymbols.size() >= kMaxVisitedSymbols)
+            return;
+          if (visitedSymbols.count(calleeName.str()))
+            return;
+          worklist.push_back(calleeName.str());
+        };
+
+        if (auto funcOp = moduleOp.lookupSymbol<func::FuncOp>(currentSymbol)) {
+          std::optional<std::string> hit;
+          funcOp.walk([&](Operation *nestedOp) {
+            if (auto llvmCall = dyn_cast<LLVM::CallOp>(nestedOp)) {
+              if (auto callee = llvmCall.getCallee()) {
+                if (isCoverageRuntimeCallee(*callee)) {
+                  hit = callee->str();
+                  return WalkResult::interrupt();
+                }
+                enqueueSymbol(*callee);
+              } else {
+                auto calleeOperands = llvmCall.getCalleeOperands();
+                if (!calleeOperands.empty()) {
+                  if (auto directCallee = tryGetDirectSymbolFromCalleeValue(
+                          calleeOperands.front())) {
+                    if (isCoverageRuntimeCallee(*directCallee)) {
+                      hit = *directCallee;
+                      return WalkResult::interrupt();
+                    }
+                    enqueueSymbol(*directCallee);
+                  }
+                }
+              }
+            } else if (auto funcCall = dyn_cast<func::CallOp>(nestedOp)) {
+              if (isCoverageRuntimeCallee(funcCall.getCallee())) {
+                hit = funcCall.getCallee().str();
+                return WalkResult::interrupt();
+              }
+              enqueueSymbol(funcCall.getCallee());
+            } else if (auto callIndirect =
+                           dyn_cast<func::CallIndirectOp>(nestedOp)) {
+              if (auto directCallee =
+                      tryGetDirectSymbolFromCalleeValue(callIndirect.getCallee())) {
+                if (isCoverageRuntimeCallee(*directCallee)) {
+                  hit = *directCallee;
+                  return WalkResult::interrupt();
+                }
+                enqueueSymbol(*directCallee);
+              }
+            }
+            return WalkResult::advance();
+          });
+          if (hit)
+            return hit;
+        }
+
+        if (auto llvmFuncOp =
+                moduleOp.lookupSymbol<LLVM::LLVMFuncOp>(currentSymbol)) {
+          std::optional<std::string> hit;
+          llvmFuncOp.walk([&](LLVM::CallOp nestedCall) {
+            if (auto callee = nestedCall.getCallee()) {
+              if (isCoverageRuntimeCallee(*callee)) {
+                hit = callee->str();
+                return WalkResult::interrupt();
+              }
+              enqueueSymbol(*callee);
+            } else {
+              auto calleeOperands = nestedCall.getCalleeOperands();
+              if (!calleeOperands.empty()) {
+                if (auto directCallee = tryGetDirectSymbolFromCalleeValue(
+                        calleeOperands.front())) {
+                  if (isCoverageRuntimeCallee(*directCallee)) {
+                    hit = *directCallee;
+                    return WalkResult::interrupt();
+                  }
+                  enqueueSymbol(*directCallee);
+                }
+              }
+            }
+            return WalkResult::advance();
+          });
+          if (hit)
+            return hit;
+        }
+      }
+
+      return std::nullopt;
+    };
 
     auto setCallIndirectResults =
         [&](llvm::ArrayRef<InterpretedValue> values) {
@@ -460,6 +582,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           return callIndirectOp.emitError()
                  << "unhandled coverage runtime call in interpreter: "
                  << *directCallee;
+        }
+        if (auto wrappedCoverageCallee =
+                findDirectCoverageRuntimeCalleeInSymbol(*directCallee)) {
+          processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+          return callIndirectOp.emitError()
+                 << "unhandled coverage runtime call in interpreter: "
+                 << *wrappedCoverageCallee;
         }
       }
 
@@ -1930,6 +2059,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                    << "unhandled coverage runtime call in interpreter: "
                    << *directCallee;
           }
+          if (auto wrappedCoverageCallee =
+                  findDirectCoverageRuntimeCalleeInSymbol(*directCallee)) {
+            processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+            return callIndirectOp.emitError()
+                   << "unhandled coverage runtime call in interpreter: "
+                   << *wrappedCoverageCallee;
+          }
         }
         std::string reason = "address " +
             llvm::utohexstr(funcAddr) + " not found in vtable map";
@@ -3398,6 +3534,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                << "unhandled coverage runtime call in interpreter: "
                << calleeName;
       }
+      if (auto wrappedCoverageCallee =
+              findDirectCoverageRuntimeCalleeInSymbol(calleeName)) {
+        processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+        return callIndirectOp.emitError()
+               << "unhandled coverage runtime call in interpreter: "
+               << *wrappedCoverageCallee;
+      }
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: function '" << calleeName
                               << "' not found\n");
       for (Value result : callIndirectOp.getResults()) {
@@ -4459,8 +4602,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           found = true;
         }
       }
-      bool allowGlobalFallbackSearch =
-          (seqrQueueAddr == 0 || !sequencerItemFifo.contains(seqrQueueAddr));
+      // Use global FIFO fallback only when queue routing is completely
+      // unresolved. If we already have a queue hint, keep the waiter bound
+      // to that queue even before the first push creates FIFO state.
+      bool allowGlobalFallbackSearch = (seqrQueueAddr == 0);
       // Fallback: when the port-to-sequencer resolution fails (no UVM
       // connection chain), scan all FIFOs for any available item. This
       // handles simple test cases with a single sequencer-driver pair.

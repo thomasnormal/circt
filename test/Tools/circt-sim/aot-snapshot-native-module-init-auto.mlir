@@ -1,10 +1,10 @@
-// RUN: circt-sim-compile %s --emit-snapshot -o %t.csnap 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s --emit-snapshot -o %t.csnap 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %t.csnap 2>&1 | FileCheck %s --check-prefix=SNAP-ON
 // RUN: env CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0 circt-sim %t.csnap 2>&1 | FileCheck %s --check-prefix=SNAP-OFF
 
-// COMPILE: [circt-sim-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
-// COMPILE: [circt-sim-compile] Native module init functions: 1
-// COMPILE: [circt-sim-compile] Wrote snapshot to
+// COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
+// COMPILE: [circt-compile] Native module init functions: 1
+// COMPILE: [circt-compile] Wrote snapshot to
 //
 // SNAP-ON: [circt-sim] Loading snapshot from
 // SNAP-ON: [circt-sim] Snapshot auto-enabled native module init

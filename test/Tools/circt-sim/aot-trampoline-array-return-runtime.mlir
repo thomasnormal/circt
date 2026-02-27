@@ -1,11 +1,11 @@
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s | FileCheck %s --check-prefix=SIM
-// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 
 // Regression: demoted functions with LLVM array return types must trampoline
 // correctly instead of leaving unresolved extern symbols in compiled mode.
 //
-// COMPILE: [circt-sim-compile] Generated 1 interpreter trampolines
+// COMPILE: [circt-compile] Generated 1 interpreter trampolines
 // SIM: ok=-1
 // COMPILED: ok=-1
 

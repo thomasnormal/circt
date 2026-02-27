@@ -1,4 +1,4 @@
-// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 
 // Regression: compiled->interpreter trampoline dispatch must not return
@@ -7,7 +7,7 @@
 // Prior bug: dispatchTrampoline ignored interpretFuncBody failure and unpacked
 // return slots that were never written, producing garbage in compiled mode.
 //
-// COMPILE: [circt-sim-compile] Generated 1 interpreter trampolines
+// COMPILE: [circt-compile] Generated 1 interpreter trampolines
 // COMPILED: r0=1 r1=0 sum=1
 
 module {

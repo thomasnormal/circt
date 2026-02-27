@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_STATS=1 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
 
 // Regression: interpreted func.call_indirect native entry dispatch must
@@ -7,9 +7,9 @@
 // Without normalization here, low-bit-tagged UVM-style handles can reach
 // native callees unchanged, producing wrong behavior.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE: [circt-sim-compile] Demoted 1 intercepted functions to trampolines
-// COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
+// COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // RUNTIME: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
 // RUNTIME: Entry-table native calls:         1

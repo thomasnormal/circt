@@ -33,6 +33,7 @@
 #include <deque>
 #include <ctime>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -125,6 +126,54 @@ std::string convertGlobToRegex(const std::string &pattern, bool withBrackets) {
 static void *normalizeHostPtr(void *ptr, const char *funcName);
 static bool isInterpreterVirtualAddress(const void *ptr);
 
+static uint64_t runtimeRandomBelow(uint64_t upperExclusive) {
+  if (upperExclusive <= 1)
+    return 0;
+  uint64_t lo = static_cast<uint64_t>(__moore_urandom());
+  uint64_t hi = static_cast<uint64_t>(__moore_urandom());
+  uint64_t value = (hi << 32) | lo;
+  return value % upperExclusive;
+}
+
+namespace {
+constexpr int64_t kQueueLenSanityLimit = 100000;
+constexpr int64_t kQueueElemSizeSanityLimit = 1 << 20; // 1 MiB element cap.
+
+static bool isQueueLenSane(int64_t len) {
+  return len >= 0 && len <= kQueueLenSanityLimit;
+}
+
+static bool isQueueElemSizeSane(int64_t elemSize) {
+  return elemSize > 0 && elemSize <= kQueueElemSizeSanityLimit;
+}
+
+static bool mulToSizeT(int64_t a, int64_t b, size_t &out) {
+  if (a < 0 || b < 0)
+    return false;
+  unsigned long long aa = static_cast<unsigned long long>(a);
+  unsigned long long bb = static_cast<unsigned long long>(b);
+  if (bb != 0 && aa > std::numeric_limits<size_t>::max() / bb)
+    return false;
+  out = static_cast<size_t>(aa * bb);
+  return true;
+}
+
+static MooreQueue *normalizeQueuePtr(MooreQueue *queue, const char *funcName) {
+  return static_cast<MooreQueue *>(
+      normalizeHostPtr(static_cast<void *>(queue), funcName));
+}
+
+static void *normalizeQueueDataPtr(void *rawDataPtr, const char *funcName) {
+  return normalizeHostPtr(rawDataPtr, funcName);
+}
+
+static void maybeFreeQueueData(void *rawDataPtr, void *hostDataPtr) {
+  if (!rawDataPtr || isInterpreterVirtualAddress(rawDataPtr))
+    return;
+  std::free(hostDataPtr ? hostDataPtr : rawDataPtr);
+}
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // Queue Operations
 //===----------------------------------------------------------------------===//
@@ -149,11 +198,14 @@ extern "C" MooreQueue __moore_queue_min(MooreQueue *queue) {
 }
 
 extern "C" void __moore_queue_clear(MooreQueue *queue) {
+  queue = normalizeQueuePtr(queue, "__moore_queue_clear:queue");
+  if (!queue)
+    return;
   // Clear all elements from the queue.
-  if (queue->data) {
-    std::free(queue->data);
-    queue->data = nullptr;
-  }
+  void *rawDataPtr = queue->data;
+  void *hostDataPtr = normalizeQueueDataPtr(rawDataPtr, "__moore_queue_clear:data");
+  maybeFreeQueueData(rawDataPtr, hostDataPtr);
+  queue->data = nullptr;
   queue->len = 0;
 }
 
@@ -162,7 +214,15 @@ extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
   // Delete element at specified index.
   // SystemVerilog semantics: delete(index) removes the element at that index
   // and shifts all subsequent elements down by one position.
-  if (!queue || !queue->data || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_delete_index:queue");
+  if (!queue || !isQueueLenSane(queue->len) || !isQueueElemSizeSane(element_size))
+    return;
+  void *rawDataPtr = queue->data;
+  if (!rawDataPtr || queue->len == 0)
+    return;
+  void *hostDataPtr =
+      normalizeQueueDataPtr(rawDataPtr, "__moore_queue_delete_index:data");
+  if (!hostDataPtr)
     return;
 
   // Bounds check: index must be valid
@@ -171,7 +231,7 @@ extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
 
   // If this is the last element, just shrink
   if (queue->len == 1) {
-    std::free(queue->data);
+    maybeFreeQueueData(rawDataPtr, hostDataPtr);
     queue->data = nullptr;
     queue->len = 0;
     return;
@@ -179,11 +239,14 @@ extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
 
   // Allocate new storage with one fewer element
   int64_t newLen = queue->len - 1;
-  void *newData = std::malloc(newLen * element_size);
+  size_t newBytes = 0;
+  if (!mulToSizeT(newLen, element_size, newBytes))
+    return;
+  void *newData = std::malloc(newBytes);
   if (!newData)
     return;
 
-  char *src = static_cast<char *>(queue->data);
+  char *src = static_cast<char *>(hostDataPtr);
   char *dst = static_cast<char *>(newData);
 
   // Copy elements before the deleted index
@@ -199,7 +262,7 @@ extern "C" void __moore_queue_delete_index(MooreQueue *queue, int32_t index,
   }
 
   // Free old data and update queue
-  std::free(queue->data);
+  maybeFreeQueueData(rawDataPtr, hostDataPtr);
   queue->data = newData;
   queue->len = newLen;
 }
@@ -210,8 +273,20 @@ extern "C" void __moore_queue_insert(MooreQueue *queue, int32_t index,
   // SystemVerilog semantics: insert(index, item) inserts the item at the
   // specified index, shifting all subsequent elements up by one position.
   // If index < 0, it's treated as 0. If index >= size, the item is appended.
-  if (!queue || !element || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_insert:queue");
+  element = normalizeHostPtr(element, "__moore_queue_insert:element");
+  if (!queue || !element || !isQueueLenSane(queue->len) ||
+      !isQueueElemSizeSane(element_size))
     return;
+  void *rawDataPtr = queue->data;
+  void *hostDataPtr = nullptr;
+  if (queue->len > 0) {
+    if (!rawDataPtr)
+      return;
+    hostDataPtr = normalizeQueueDataPtr(rawDataPtr, "__moore_queue_insert:data");
+    if (!hostDataPtr)
+      return;
+  }
 
   // Clamp index to valid range
   if (index < 0)
@@ -221,15 +296,18 @@ extern "C" void __moore_queue_insert(MooreQueue *queue, int32_t index,
 
   // Allocate new storage with space for one more element
   int64_t newLen = queue->len + 1;
-  void *newData = std::malloc(newLen * element_size);
+  size_t newBytes = 0;
+  if (!mulToSizeT(newLen, element_size, newBytes))
+    return;
+  void *newData = std::malloc(newBytes);
   if (!newData)
     return;
 
-  char *src = static_cast<char *>(queue->data);
+  char *src = static_cast<char *>(hostDataPtr);
   char *dst = static_cast<char *>(newData);
 
   // Copy elements before the insertion index
-  if (index > 0 && queue->data) {
+  if (index > 0 && hostDataPtr) {
     std::memcpy(dst, src, index * element_size);
   }
 
@@ -237,33 +315,48 @@ extern "C" void __moore_queue_insert(MooreQueue *queue, int32_t index,
   std::memcpy(dst + index * element_size, element, element_size);
 
   // Copy elements after the insertion index
-  if (queue->data && index < queue->len) {
+  if (hostDataPtr && index < queue->len) {
     std::memcpy(dst + (index + 1) * element_size,
                 src + index * element_size,
                 (queue->len - index) * element_size);
   }
 
   // Free old data and update queue
-  if (queue->data)
-    std::free(queue->data);
+  maybeFreeQueueData(rawDataPtr, hostDataPtr);
   queue->data = newData;
   queue->len = newLen;
 }
 
 extern "C" void __moore_queue_push_back(MooreQueue *queue, void *element,
                                         int64_t element_size) {
-  if (!queue || !element || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_push_back:queue");
+  element = normalizeHostPtr(element, "__moore_queue_push_back:element");
+  if (!queue || !element || !isQueueLenSane(queue->len) ||
+      !isQueueElemSizeSane(element_size))
     return;
+  void *rawDataPtr = queue->data;
+  void *hostDataPtr = nullptr;
+  if (queue->len > 0) {
+    if (!rawDataPtr)
+      return;
+    hostDataPtr =
+        normalizeQueueDataPtr(rawDataPtr, "__moore_queue_push_back:data");
+    if (!hostDataPtr)
+      return;
+  }
 
   // Allocate new storage with space for one more element
   int64_t newLen = queue->len + 1;
-  void *newData = std::malloc(newLen * element_size);
+  size_t newBytes = 0;
+  if (!mulToSizeT(newLen, element_size, newBytes))
+    return;
+  void *newData = std::malloc(newBytes);
   if (!newData)
     return;
 
   // Copy existing elements
-  if (queue->data && queue->len > 0) {
-    std::memcpy(newData, queue->data, queue->len * element_size);
+  if (hostDataPtr && queue->len > 0) {
+    std::memcpy(newData, hostDataPtr, queue->len * element_size);
   }
 
   // Copy new element to the end
@@ -271,20 +364,35 @@ extern "C" void __moore_queue_push_back(MooreQueue *queue, void *element,
               element, element_size);
 
   // Free old data and update queue
-  if (queue->data)
-    std::free(queue->data);
+  maybeFreeQueueData(rawDataPtr, hostDataPtr);
   queue->data = newData;
   queue->len = newLen;
 }
 
 extern "C" void __moore_queue_push_front(MooreQueue *queue, void *element,
                                          int64_t element_size) {
-  if (!queue || !element || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_push_front:queue");
+  element = normalizeHostPtr(element, "__moore_queue_push_front:element");
+  if (!queue || !element || !isQueueLenSane(queue->len) ||
+      !isQueueElemSizeSane(element_size))
     return;
+  void *rawDataPtr = queue->data;
+  void *hostDataPtr = nullptr;
+  if (queue->len > 0) {
+    if (!rawDataPtr)
+      return;
+    hostDataPtr =
+        normalizeQueueDataPtr(rawDataPtr, "__moore_queue_push_front:data");
+    if (!hostDataPtr)
+      return;
+  }
 
   // Allocate new storage with space for one more element
   int64_t newLen = queue->len + 1;
-  void *newData = std::malloc(newLen * element_size);
+  size_t newBytes = 0;
+  if (!mulToSizeT(newLen, element_size, newBytes))
+    return;
+  void *newData = std::malloc(newBytes);
   if (!newData)
     return;
 
@@ -292,26 +400,34 @@ extern "C" void __moore_queue_push_front(MooreQueue *queue, void *element,
   std::memcpy(newData, element, element_size);
 
   // Copy existing elements after the new one
-  if (queue->data && queue->len > 0) {
+  if (hostDataPtr && queue->len > 0) {
     std::memcpy(static_cast<char *>(newData) + element_size,
-                queue->data, queue->len * element_size);
+                hostDataPtr, queue->len * element_size);
   }
 
   // Free old data and update queue
-  if (queue->data)
-    std::free(queue->data);
+  maybeFreeQueueData(rawDataPtr, hostDataPtr);
   queue->data = newData;
   queue->len = newLen;
 }
 
 extern "C" int64_t __moore_queue_pop_back(MooreQueue *queue,
                                           int64_t element_size) {
-  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_pop_back:queue");
+  if (!queue || !isQueueLenSane(queue->len) || queue->len <= 0 ||
+      !isQueueElemSizeSane(element_size))
+    return 0;
+  void *rawDataPtr = queue->data;
+  if (!rawDataPtr)
+    return 0;
+  void *hostDataPtr =
+      normalizeQueueDataPtr(rawDataPtr, "__moore_queue_pop_back:data");
+  if (!hostDataPtr)
     return 0;
 
   // Read the last element
   int64_t result = 0;
-  void *lastElem = static_cast<char *>(queue->data) +
+  void *lastElem = static_cast<char *>(hostDataPtr) +
                    (queue->len - 1) * element_size;
   // Copy up to 8 bytes (size of int64_t)
   std::memcpy(&result, lastElem,
@@ -322,7 +438,7 @@ extern "C" int64_t __moore_queue_pop_back(MooreQueue *queue,
 
   // If queue is now empty, free the data
   if (queue->len == 0) {
-    std::free(queue->data);
+    maybeFreeQueueData(rawDataPtr, hostDataPtr);
     queue->data = nullptr;
   }
   // Otherwise, we could reallocate to save memory, but for now we keep
@@ -333,13 +449,22 @@ extern "C" int64_t __moore_queue_pop_back(MooreQueue *queue,
 
 extern "C" int64_t __moore_queue_pop_front(MooreQueue *queue,
                                            int64_t element_size) {
-  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_pop_front:queue");
+  if (!queue || !isQueueLenSane(queue->len) || queue->len <= 0 ||
+      !isQueueElemSizeSane(element_size))
+    return 0;
+  void *rawDataPtr = queue->data;
+  if (!rawDataPtr)
+    return 0;
+  void *hostDataPtr =
+      normalizeQueueDataPtr(rawDataPtr, "__moore_queue_pop_front:data");
+  if (!hostDataPtr)
     return 0;
 
   // Read the first element
   int64_t result = 0;
   // Copy up to 8 bytes (size of int64_t)
-  std::memcpy(&result, queue->data,
+  std::memcpy(&result, hostDataPtr,
               element_size < 8 ? element_size : 8);
 
   // Reduce the queue size and shift elements
@@ -347,12 +472,12 @@ extern "C" int64_t __moore_queue_pop_front(MooreQueue *queue,
 
   if (queue->len == 0) {
     // Queue is now empty
-    std::free(queue->data);
+    maybeFreeQueueData(rawDataPtr, hostDataPtr);
     queue->data = nullptr;
   } else {
     // Shift remaining elements to the front
-    std::memmove(queue->data,
-                 static_cast<char *>(queue->data) + element_size,
+    std::memmove(hostDataPtr,
+                 static_cast<char *>(hostDataPtr) + element_size,
                  queue->len * element_size);
   }
 
@@ -362,7 +487,16 @@ extern "C" int64_t __moore_queue_pop_front(MooreQueue *queue,
 extern "C" MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start,
                                           int64_t end, int64_t element_size) {
   MooreQueue result = {nullptr, 0};
-  if (!queue || !queue->data || queue->len <= 0 || element_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_slice:queue");
+  if (!queue || !isQueueLenSane(queue->len) || queue->len <= 0 ||
+      !isQueueElemSizeSane(element_size))
+    return result;
+  void *rawDataPtr = queue->data;
+  if (!rawDataPtr)
+    return result;
+  void *hostDataPtr =
+      normalizeQueueDataPtr(rawDataPtr, "__moore_queue_slice:data");
+  if (!hostDataPtr)
     return result;
 
   int64_t len = queue->len;
@@ -381,12 +515,15 @@ extern "C" MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start,
   if (sliceLen <= 0)
     return result;
 
-  void *data = std::malloc(sliceLen * element_size);
+  size_t sliceBytes = 0;
+  if (!mulToSizeT(sliceLen, element_size, sliceBytes))
+    return result;
+  void *data = std::malloc(sliceBytes);
   if (!data)
     return result;
 
   std::memcpy(data,
-              static_cast<char *>(queue->data) + start * element_size,
+              static_cast<char *>(hostDataPtr) + start * element_size,
               sliceLen * element_size);
   result.data = data;
   result.len = sliceLen;
@@ -396,18 +533,23 @@ extern "C" MooreQueue __moore_queue_slice(MooreQueue *queue, int64_t start,
 extern "C" MooreQueue __moore_queue_concat(MooreQueue *queues, int64_t count,
                                            int64_t element_size) {
   MooreQueue result = {nullptr, 0};
-  if (!queues || count <= 0 || element_size <= 0)
+  if (!queues || count <= 0 || !isQueueElemSizeSane(element_size))
     return result;
 
   int64_t totalLen = 0;
   for (int64_t i = 0; i < count; ++i) {
+    if (!isQueueLenSane(queues[i].len))
+      return result;
     if (queues[i].len > 0)
       totalLen += queues[i].len;
   }
-  if (totalLen <= 0)
+  if (!isQueueLenSane(totalLen) || totalLen <= 0)
     return result;
 
-  void *data = std::malloc(totalLen * element_size);
+  size_t totalBytes = 0;
+  if (!mulToSizeT(totalLen, element_size, totalBytes))
+    return result;
+  void *data = std::malloc(totalBytes);
   if (!data)
     return result;
 
@@ -416,8 +558,14 @@ extern "C" MooreQueue __moore_queue_concat(MooreQueue *queues, int64_t count,
     const auto &q = queues[i];
     if (!q.data || q.len <= 0)
       continue;
-    std::memcpy(static_cast<char *>(data) + offset * element_size, q.data,
-                q.len * element_size);
+    void *hostData = normalizeQueueDataPtr(
+        q.data, "__moore_queue_concat:queue_data");
+    if (!hostData) {
+      std::free(data);
+      return result;
+    }
+    std::memcpy(static_cast<char *>(data) + offset * element_size, hostData,
+                static_cast<size_t>(q.len) * static_cast<size_t>(element_size));
     offset += q.len;
   }
 
@@ -428,7 +576,8 @@ extern "C" MooreQueue __moore_queue_concat(MooreQueue *queues, int64_t count,
 
 extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
                                     int (*compare)(const void *, const void *)) {
-  auto *q = static_cast<MooreQueue *>(queue);
+  auto *q = normalizeQueuePtr(static_cast<MooreQueue *>(queue),
+                              "__moore_queue_sort:queue");
 
   // Allocate result queue
   auto *result = static_cast<MooreQueue *>(std::malloc(sizeof(MooreQueue)));
@@ -436,21 +585,34 @@ extern "C" void *__moore_queue_sort(void *queue, int64_t elem_size,
     return nullptr;
 
   // Handle empty or invalid queue
-  if (!q || !q->data || q->len <= 0 || elem_size <= 0) {
+  if (!q || !q->data || !isQueueLenSane(q->len) || q->len <= 0 ||
+      !isQueueElemSizeSane(elem_size)) {
+    result->data = nullptr;
+    result->len = 0;
+    return result;
+  }
+  void *hostData =
+      normalizeQueueDataPtr(q->data, "__moore_queue_sort:data");
+  if (!hostData) {
     result->data = nullptr;
     result->len = 0;
     return result;
   }
 
   // Allocate and copy elements to new queue
-  int64_t totalSize = q->len * elem_size;
+  size_t totalSize = 0;
+  if (!mulToSizeT(q->len, elem_size, totalSize)) {
+    result->data = nullptr;
+    result->len = 0;
+    return result;
+  }
   result->data = std::malloc(totalSize);
   if (!result->data) {
     result->len = 0;
     return result;
   }
 
-  std::memcpy(result->data, q->data, totalSize);
+  std::memcpy(result->data, hostData, totalSize);
   result->len = q->len;
 
   // Sort the copied elements using qsort
@@ -477,22 +639,34 @@ int compareQueueElemDesc(const void *a, const void *b) {
 } // namespace
 
 extern "C" void __moore_queue_rsort(MooreQueue *queue, int64_t elem_size) {
-  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0 ||
-      elem_size > 8)
+  queue = normalizeQueuePtr(queue, "__moore_queue_rsort:queue");
+  if (!queue || !queue->data || !isQueueLenSane(queue->len) ||
+      queue->len <= 1 || elem_size <= 0 || elem_size > 8)
+    return;
+  void *hostData =
+      normalizeQueueDataPtr(queue->data, "__moore_queue_rsort:data");
+  if (!hostData)
     return;
 
   queueSortElemSize = elem_size;
-  std::qsort(queue->data, queue->len, elem_size, compareQueueElemDesc);
+  std::qsort(hostData, queue->len, elem_size, compareQueueElemDesc);
 }
 
 extern "C" void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size) {
-  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_shuffle:queue");
+  if (!queue || !queue->data || !isQueueLenSane(queue->len) ||
+      queue->len <= 1 || !isQueueElemSizeSane(elem_size))
+    return;
+  void *hostData =
+      normalizeQueueDataPtr(queue->data, "__moore_queue_shuffle:data");
+  if (!hostData)
     return;
 
-  auto *data = static_cast<char *>(queue->data);
+  auto *data = static_cast<char *>(hostData);
   std::vector<char> temp(static_cast<size_t>(elem_size));
   for (int64_t i = queue->len - 1; i > 0; --i) {
-    int64_t j = std::rand() % (i + 1);
+    int64_t j = static_cast<int64_t>(
+        runtimeRandomBelow(static_cast<uint64_t>(i) + 1));
     if (i == j)
       continue;
 
@@ -506,10 +680,16 @@ extern "C" void __moore_queue_shuffle(MooreQueue *queue, int64_t elem_size) {
 }
 
 extern "C" void __moore_queue_reverse(MooreQueue *queue, int64_t elem_size) {
-  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_reverse:queue");
+  if (!queue || !queue->data || !isQueueLenSane(queue->len) ||
+      queue->len <= 1 || !isQueueElemSizeSane(elem_size))
+    return;
+  void *hostData =
+      normalizeQueueDataPtr(queue->data, "__moore_queue_reverse:data");
+  if (!hostData)
     return;
 
-  auto *data = static_cast<char *>(queue->data);
+  auto *data = static_cast<char *>(hostData);
   std::vector<char> temp(static_cast<size_t>(elem_size));
   int64_t left = 0;
   int64_t right = queue->len - 1;
@@ -595,7 +775,6 @@ extern "C" void __moore_queue_pop_front_ptr(MooreQueue *queue, void *result_ptr,
 }
 
 extern "C" int64_t __moore_queue_size(MooreQueue *queue) {
-  constexpr int64_t kQueueLenSanityLimit = 100000;
   queue = static_cast<MooreQueue *>(
       normalizeHostPtr(static_cast<void *>(queue), "__moore_queue_size:queue"));
   if (!queue || queue->len < 0 || queue->len > kQueueLenSanityLimit)
@@ -609,13 +788,18 @@ extern "C" MooreQueue __moore_queue_unique(MooreQueue *queue) {
   // This simplified version assumes 8-byte elements (pointers/int64).
   // For full support, element size should be passed as a parameter.
   // The MooreToCore should be updated to use __moore_array_unique instead.
-  if (!queue || !queue->data || queue->len <= 0)
+  queue = normalizeQueuePtr(queue, "__moore_queue_unique:queue");
+  if (!queue || !queue->data || !isQueueLenSane(queue->len) || queue->len <= 0)
+    return result;
+  void *hostData =
+      normalizeQueueDataPtr(queue->data, "__moore_queue_unique:data");
+  if (!hostData)
     return result;
 
   // Default to 8-byte element size (common for pointers and int64)
   int64_t elementSize = 8;
 
-  auto *data = static_cast<char *>(queue->data);
+  auto *data = static_cast<char *>(hostData);
   int64_t numElements = queue->len;
 
   // For each element, check if it's already in the result
@@ -667,12 +851,17 @@ int compareQueueElemAsc(const void *a, const void *b) {
 } // namespace
 
 extern "C" void __moore_queue_sort_inplace(MooreQueue *queue, int64_t elem_size) {
-  if (!queue || !queue->data || queue->len <= 1 || elem_size <= 0 ||
-      elem_size > 8)
+  queue = normalizeQueuePtr(queue, "__moore_queue_sort_inplace:queue");
+  if (!queue || !queue->data || !isQueueLenSane(queue->len) ||
+      queue->len <= 1 || elem_size <= 0 || elem_size > 8)
+    return;
+  void *hostData = normalizeQueueDataPtr(
+      queue->data, "__moore_queue_sort_inplace:data");
+  if (!hostData)
     return;
 
   queueSortInplaceElemSize = elem_size;
-  std::qsort(queue->data, queue->len, elem_size, compareQueueElemAsc);
+  std::qsort(hostData, queue->len, elem_size, compareQueueElemAsc);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2207,14 +2396,80 @@ extern "C" void __moore_process_await(int64_t /*handle*/) {
 // In compiled simulation there is no multi-process scheduler, so a single
 // thread-local RNG per thread mirrors the per-process RNG in the interpreter.
 namespace {
-thread_local std::mt19937 processRng(std::random_device{}());
+constexpr uint32_t kXrunZeroSeedBootstrap = 0x92153206u;
+// xrun-compatible internal $urandom stream state for seed==0.
+constexpr uint32_t kXrunUrandomSeedZeroState = 0xdc10f2b8u;
+
+thread_local std::mt19937 processRng;
+thread_local bool runtimeRngInitialized = false;
+thread_local bool legacyRngInitialized = false;
+thread_local uint32_t legacyRandomState = 0;
+thread_local uint32_t legacyUrandomState = kXrunUrandomSeedZeroState;
+
+static inline uint32_t svLegacyLcgNext(uint32_t seed) {
+  return seed * 69069u + 1u;
+}
+
+static inline uint32_t svLegacyUrandomStateFromSeed(uint32_t seed) {
+  return seed == 0 ? kXrunUrandomSeedZeroState : seed;
+}
+
+// xrun-compatible $random return mapping from internal stream state.
+static int32_t svLegacyRandomFromState(uint32_t state) {
+  uint32_t mantissa = state >> 9;
+  uint64_t base = (static_cast<uint64_t>(mantissa) + 1ull) << 9;
+  base += static_cast<uint64_t>(mantissa >> 14);
+  int64_t result = static_cast<int64_t>(base) - (1ll << 31);
+  if (result > static_cast<int64_t>(std::numeric_limits<int32_t>::max()))
+    result = std::numeric_limits<int32_t>::max();
+  return static_cast<int32_t>(result);
+}
+
+static uint32_t mixRuntimeSeed(uint32_t baseSeed, uint32_t salt) {
+  uint32_t x = baseSeed ^ salt;
+  x ^= x >> 16;
+  x *= 0x7feb352dU;
+  x ^= x >> 15;
+  x *= 0x846ca68bU;
+  x ^= x >> 16;
+  return x;
+}
+
+static void ensureRuntimeRngInitialized() {
+  if (runtimeRngInitialized)
+    return;
+  uint32_t baseSeed = static_cast<uint32_t>(__moore_get_initial_random_seed());
+  processRng.seed(mixRuntimeSeed(baseSeed, 0x50524F43U)); // 'PROC'
+  runtimeRngInitialized = true;
+}
+
+static void ensureLegacyRngInitialized() {
+  if (legacyRngInitialized)
+    return;
+  const char *envSeed = std::getenv("CIRCT_SIM_RANDOM_SEED");
+  if (envSeed) {
+    uint32_t seedU32 =
+        static_cast<uint32_t>(static_cast<int32_t>(std::strtol(envSeed, nullptr, 10)));
+    legacyRandomState = seedU32;
+    legacyUrandomState = svLegacyUrandomStateFromSeed(seedU32);
+  } else {
+    // Match xrun defaults when no explicit seed is provided.
+    legacyRandomState = 0;
+    legacyUrandomState = svLegacyUrandomStateFromSeed(0);
+  }
+  legacyRngInitialized = true;
+}
 } // namespace
 
 extern "C" MooreString __moore_process_get_randstate(int64_t /*handle*/) {
+  ensureRuntimeRngInitialized();
+  ensureLegacyRngInitialized();
   // Serialize the process RNG state to a string.
   std::ostringstream oss;
   oss << processRng;
   std::string stateStr = oss.str();
+  stateStr += "|LR=" + std::to_string(legacyRandomState);
+  stateStr += "|LU=" + std::to_string(legacyUrandomState);
   if (stateStr.empty())
     return MooreString{nullptr, 0};
   MooreString result = allocateString(static_cast<int64_t>(stateStr.size()));
@@ -2229,13 +2484,40 @@ extern "C" void __moore_process_set_randstate(int64_t /*handle*/,
   if (!state.data || state.len <= 0)
     return;
   std::string stateStr(state.data, static_cast<size_t>(state.len));
+  size_t lrPos = stateStr.rfind("|LR=");
+  size_t luPos = stateStr.rfind("|LU=");
+  if (lrPos != std::string::npos && luPos != std::string::npos &&
+      lrPos < luPos) {
+    std::istringstream iss(stateStr.substr(0, lrPos));
+    iss >> processRng;
+    std::string randomPart = stateStr.substr(lrPos + 4, luPos - (lrPos + 4));
+    std::string urandomPart = stateStr.substr(luPos + 4);
+    legacyRandomState = static_cast<uint32_t>(
+        static_cast<int32_t>(std::strtol(randomPart.c_str(), nullptr, 10)));
+    legacyUrandomState = static_cast<uint32_t>(
+        static_cast<int32_t>(std::strtol(urandomPart.c_str(), nullptr, 10)));
+    legacyRngInitialized = true;
+    runtimeRngInitialized = true;
+    return;
+  }
+  // Backward compatibility with older state strings that only serialized
+  // processRng.
   std::istringstream iss(stateStr);
   iss >> processRng;
+  runtimeRngInitialized = true;
 }
 
 extern "C" void __moore_process_srandom(int64_t /*handle*/, int32_t seed) {
+  ensureRuntimeRngInitialized();
+  ensureLegacyRngInitialized();
   // Seed the per-thread process RNG.
-  processRng.seed(static_cast<uint32_t>(seed));
+  uint32_t seedU32 = static_cast<uint32_t>(seed);
+  processRng.seed(seedU32);
+  // xrun parity: process::srandom seeds the $urandom-compatible legacy stream,
+  // but does not rewind the legacy $random stream.
+  legacyUrandomState = svLegacyUrandomStateFromSeed(seedU32);
+  runtimeRngInitialized = true;
+  legacyRngInitialized = true;
 }
 
 /// Global initial random seed, set once at startup.
@@ -2497,22 +2779,44 @@ extern "C" void __moore_wait_condition(int32_t condition) {
 // Random Number Generation
 //===----------------------------------------------------------------------===//
 
-namespace {
-// Thread-local random number generator for reproducible simulation.
-// Uses a Mersenne Twister engine which provides good statistical properties.
-thread_local std::mt19937 urandomGenerator(std::random_device{}());
-thread_local std::mt19937 randomGenerator(std::random_device{}());
-} // anonymous namespace
+extern "C" uint32_t __moore_xrun_urandom_state_from_seed(int32_t seed) {
+  return svLegacyUrandomStateFromSeed(static_cast<uint32_t>(seed));
+}
+
+extern "C" uint32_t __moore_xrun_urandom_next(uint32_t *state) {
+  if (!state)
+    return 0;
+  uint32_t current = *state;
+  if (current == 0)
+    current = svLegacyUrandomStateFromSeed(0);
+  uint32_t s1 = svLegacyLcgNext(current);
+  uint32_t s2 = svLegacyLcgNext(s1);
+  *state = s2;
+  return (s1 & 0xFFFF0000u) | (s2 >> 16);
+}
+
+extern "C" int32_t __moore_xrun_random_next(uint32_t *state) {
+  if (!state)
+    return 0;
+  uint32_t current = *state;
+  if (current == 0)
+    current = kXrunZeroSeedBootstrap;
+  else
+    current = svLegacyLcgNext(current);
+  *state = current;
+  return svLegacyRandomFromState(current);
+}
 
 extern "C" uint32_t __moore_urandom(void) {
-  // Generate a 32-bit unsigned pseudo-random number.
-  return urandomGenerator();
+  ensureLegacyRngInitialized();
+  return __moore_xrun_urandom_next(&legacyUrandomState);
 }
 
 extern "C" uint32_t __moore_urandom_seeded(int32_t seed) {
-  // Seed the generator and return a random number.
-  urandomGenerator.seed(static_cast<uint32_t>(seed));
-  return urandomGenerator();
+  // xrun-compatible seeded $urandom is pure in the seed argument:
+  // it does not mutate process RNG state and is deterministic for the input.
+  uint32_t state = __moore_xrun_urandom_state_from_seed(seed);
+  return __moore_xrun_urandom_next(&state);
 }
 
 extern "C" uint32_t __moore_urandom_range(uint32_t maxval, uint32_t minval) {
@@ -2527,23 +2831,24 @@ extern "C" uint32_t __moore_urandom_range(uint32_t maxval, uint32_t minval) {
   if (minval == maxval) {
     return minval;
   }
-
-  // Generate a random number in the range [minval, maxval]
-  std::uniform_int_distribution<uint32_t> dist(minval, maxval);
-  return dist(urandomGenerator);
+  uint64_t span = static_cast<uint64_t>(maxval) - minval + 1ull;
+  uint64_t draw = static_cast<uint64_t>(__moore_urandom());
+  return minval + static_cast<uint32_t>(draw % span);
 }
 
 extern "C" int32_t __moore_random(void) {
-  // Generate a 32-bit signed random number.
-  // $random is supposed to be "truly random" but in practice is implemented
-  // as a pseudo-random generator.
-  return static_cast<int32_t>(randomGenerator());
+  ensureLegacyRngInitialized();
+  return __moore_xrun_random_next(&legacyRandomState);
 }
 
 extern "C" int32_t __moore_random_seeded(int32_t seed) {
-  // Seed the generator and return a random number.
-  randomGenerator.seed(static_cast<uint32_t>(seed));
-  return static_cast<int32_t>(randomGenerator());
+  // xrun-compatible seeded $random return mapping.
+  // ImportVerilog lowering handles inout seed update separately as:
+  //   seed_next = seed * 69069 + 1 (mod 2^32)
+  uint32_t seedU32 = static_cast<uint32_t>(seed);
+  uint32_t nextSeed =
+      (seedU32 == 0) ? kXrunZeroSeedBootstrap : svLegacyLcgNext(seedU32);
+  return svLegacyRandomFromState(nextSeed);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2551,6 +2856,7 @@ extern "C" int32_t __moore_random_seeded(int32_t seed) {
 //===----------------------------------------------------------------------===//
 
 static void randomizeByteBuffer(uint8_t *data, int64_t size) {
+  ensureRuntimeRngInitialized();
   if (!data || size <= 0)
     return;
 
@@ -2605,6 +2911,7 @@ extern "C" int32_t __moore_randomize_bytes(void *dataPtr, int64_t size) {
 }
 
 extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
+  ensureRuntimeRngInitialized();
   if (!fieldPtr || bitWidth <= 0)
     return 0;
 
@@ -2646,7 +2953,7 @@ extern "C" int64_t __moore_randc_next(void *fieldPtr, int64_t bitWidth) {
     }
 
     std::uniform_int_distribution<size_t> dist(0, state.remaining.size() - 1);
-    size_t idx = dist(urandomGenerator);
+    size_t idx = dist(processRng);
     uint64_t value = state.remaining[idx];
     state.remaining[idx] = state.remaining.back();
     state.remaining.pop_back();
@@ -11136,7 +11443,8 @@ extern "C" int32_t __moore_randomize_unique_array(void *array,
     // Shuffle and pick first numElements
     for (int64_t i = 0; i < numElements; ++i) {
       int64_t remaining = static_cast<int64_t>(pool.size()) - i;
-      int64_t j = i + (std::rand() % remaining);
+      int64_t j =
+          i + static_cast<int64_t>(runtimeRandomBelow(remaining));
       std::swap(pool[static_cast<size_t>(i)], pool[static_cast<size_t>(j)]);
 
       // Write to array
@@ -11154,7 +11462,7 @@ extern "C" int32_t __moore_randomize_unique_array(void *array,
   for (int64_t i = 0; i < numElements; ++i) {
     int64_t value;
     do {
-      value = minValue + (std::rand() % rangeSize);
+      value = __moore_randomize_with_range(minValue, maxValue);
       iterations++;
       if (iterations > maxIterations) {
         // Fallback: just fill with sequential values
@@ -15861,7 +16169,8 @@ MooreSequenceHandle arbitrateSequence(Sequencer *sequencer) {
 
     case MOORE_SEQ_ARB_RANDOM: {
       // Random selection
-      size_t idx = std::rand() % sequencer->waitingSequences.size();
+      size_t idx = static_cast<size_t>(
+          runtimeRandomBelow(sequencer->waitingSequences.size()));
       return sequencer->waitingSequences[idx];
     }
 
@@ -15880,7 +16189,8 @@ MooreSequenceHandle arbitrateSequence(Sequencer *sequencer) {
       if (totalWeight <= 0 || weighted.empty())
         return sequencer->waitingSequences.front();
 
-      int32_t r = std::rand() % totalWeight;
+      int32_t r = static_cast<int32_t>(
+          runtimeRandomBelow(static_cast<uint64_t>(totalWeight)));
       int32_t cumulative = 0;
       for (auto &p : weighted) {
         cumulative += p.second;
@@ -15922,7 +16232,8 @@ MooreSequenceHandle arbitrateSequence(Sequencer *sequencer) {
 
       if (candidates.empty())
         return MOORE_SEQUENCE_INVALID_HANDLE;
-      return candidates[std::rand() % candidates.size()];
+      return candidates[static_cast<size_t>(
+          runtimeRandomBelow(candidates.size()))];
     }
 
     case MOORE_SEQ_ARB_USER: {

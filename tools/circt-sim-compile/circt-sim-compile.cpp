@@ -50,6 +50,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -4050,6 +4051,111 @@ collectVtableFuncIds(ModuleOp module) {
   return allFuncNames;
 }
 
+static bool isSuspendingRuntimeCalleeName(StringRef callee) {
+  return callee == "__moore_wait_event" ||
+         callee == "__moore_wait_condition" ||
+         callee == "__moore_process_await" ||
+         callee == "__circt_sim_wait_event" ||
+         callee == "__circt_sim_yield";
+}
+
+/// Compute per-FuncId flags (ABI v5 `all_func_flags`) by analyzing function
+/// symbols in the original module and mapping the result to `allFuncEntryNames`
+/// in vtable FuncId order.
+///
+/// A function is marked MAY_YIELD if it:
+///   - contains explicit suspension ops (`moore.wait_event`, `llhd.wait`,
+///     `sim.fork` family), or
+///   - calls known suspending runtime helpers, or
+///   - performs an indirect call (`func.call_indirect` or indirect `llvm.call`)
+///     where callee behavior is unknown.
+///
+/// The MAY_YIELD bit then propagates through direct call graph edges so wrapper
+/// functions inherit suspend behavior conservatively.
+static llvm::SmallVector<uint8_t>
+collectAllFuncFlags(ModuleOp module,
+                    const llvm::SmallVector<std::string> &allFuncEntryNames) {
+  struct YieldInfo {
+    bool mayYield = false;
+    llvm::SmallVector<std::string, 8> directCallees;
+  };
+
+  llvm::StringMap<YieldInfo> yieldByName;
+
+  auto analyzeFuncLike = [&](StringRef symName, Operation *op,
+                             bool isExternal) {
+    auto &info = yieldByName[symName];
+    if (isExternal)
+      return;
+    op->walk([&](Operation *nested) {
+      if (isa<moore::WaitEventOp, llhd::WaitOp, sim::SimForkOp,
+              sim::SimForkTerminatorOp, sim::SimWaitForkOp,
+              sim::SimDisableForkOp>(nested)) {
+        info.mayYield = true;
+        return WalkResult::advance();
+      }
+      if (isa<func::CallIndirectOp>(nested)) {
+        info.mayYield = true;
+        return WalkResult::advance();
+      }
+      if (auto call = dyn_cast<func::CallOp>(nested)) {
+        StringRef callee = call.getCallee();
+        if (isSuspendingRuntimeCalleeName(callee))
+          info.mayYield = true;
+        info.directCallees.push_back(callee.str());
+        return WalkResult::advance();
+      }
+      if (auto call = dyn_cast<LLVM::CallOp>(nested)) {
+        if (auto callee = call.getCallee()) {
+          if (isSuspendingRuntimeCalleeName(*callee))
+            info.mayYield = true;
+          info.directCallees.push_back(callee->str());
+        } else {
+          // Indirect LLVM call: treat as potentially suspending.
+          info.mayYield = true;
+        }
+      }
+      return WalkResult::advance();
+    });
+  };
+
+  module.walk([&](func::FuncOp funcOp) {
+    analyzeFuncLike(funcOp.getSymName(), funcOp.getOperation(),
+                    funcOp.isExternal());
+  });
+  module.walk([&](LLVM::LLVMFuncOp funcOp) {
+    analyzeFuncLike(funcOp.getSymName(), funcOp.getOperation(),
+                    funcOp.isDeclaration());
+  });
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto &entry : yieldByName) {
+      auto &info = entry.second;
+      if (info.mayYield)
+        continue;
+      for (const auto &calleeName : info.directCallees) {
+        auto calleeIt = yieldByName.find(calleeName);
+        if (calleeIt != yieldByName.end() && calleeIt->second.mayYield) {
+          info.mayYield = true;
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+
+  llvm::SmallVector<uint8_t> allFuncFlags;
+  allFuncFlags.assign(allFuncEntryNames.size(), 0);
+  for (unsigned i = 0; i < allFuncEntryNames.size(); ++i) {
+    auto it = yieldByName.find(allFuncEntryNames[i]);
+    if (it != yieldByName.end() && it->second.mayYield)
+      allFuncFlags[i] |= CIRCT_FUNC_FLAG_MAY_YIELD;
+  }
+  return allFuncFlags;
+}
+
 struct TaggedVtableEntry {
   uint32_t slot = 0;
   uint32_t fid = 0;
@@ -4110,14 +4216,14 @@ static unsigned initializeTaggedVtableGlobals(
                                             /*AllowInternal=*/true);
     if (!gv) {
       if (verbose)
-        llvm::errs() << "[circt-sim-compile] tagged-vtable: missing global '"
+        llvm::errs() << "[circt-compile] tagged-vtable: missing global '"
                      << kv.getKey() << "' in LLVM module\n";
       continue;
     }
     auto *arrayTy = dyn_cast<llvm::ArrayType>(gv->getValueType());
     if (!arrayTy) {
       if (verbose)
-        llvm::errs() << "[circt-sim-compile] tagged-vtable: global '"
+        llvm::errs() << "[circt-compile] tagged-vtable: global '"
                      << kv.getKey() << "' has non-array type\n";
       continue;
     }
@@ -5891,6 +5997,7 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const llvm::SmallVector<llvm::GlobalVariable *> &globalPatchVars,
                                  const llvm::SmallVector<uint32_t> &globalPatchSizes,
                                  const llvm::SmallVector<std::string> &allFuncEntryNames,
+                                 const llvm::SmallVector<uint8_t> &allFuncFlags,
                                  uint32_t arenaSize,
                                  const llvm::SmallVector<std::string> &arenaGlobalNames,
                                  const llvm::SmallVector<uint32_t> &arenaGlobalOffsets,
@@ -6167,13 +6274,21 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
         "__circt_sim_arena_global_sizes");
   }
 
-  // all_func_flags: zero-filled for now (Phase 7 will populate per-function
-  // MAY_YIELD flags).
+  // all_func_flags: per-FuncId runtime dispatch flags (ABI v5).
   auto *i8Ty = llvm::Type::getInt8Ty(ctx);
   llvm::Constant *allFuncFlagsGlobal = nullptr;
   if (numAllFuncs > 0) {
     auto *flagsArrayTy = llvm::ArrayType::get(i8Ty, numAllFuncs);
-    auto *flagsArray = llvm::ConstantAggregateZero::get(flagsArrayTy);
+    llvm::SmallVector<llvm::Constant *> flagConstants;
+    flagConstants.reserve(numAllFuncs);
+    for (unsigned i = 0; i < numAllFuncs; ++i) {
+      uint8_t flags = i < allFuncFlags.size() ? allFuncFlags[i] : 0;
+      flagConstants.push_back(llvm::ConstantInt::get(i8Ty, flags));
+    }
+    auto *flagsArray =
+        llvm::ConstantArray::get(flagsArrayTy,
+                                 llvm::ArrayRef<llvm::Constant *>(
+                                     flagConstants));
     allFuncFlagsGlobal = new llvm::GlobalVariable(
         llvmModule, flagsArrayTy, true, llvm::GlobalValue::PrivateLinkage,
         flagsArray, "__circt_sim_all_func_flags");
@@ -6743,18 +6858,13 @@ static LogicalResult emitObjectFileNoOpt(llvm::Module &llvmModule,
 
 static LogicalResult linkToSharedObject(llvm::StringRef objectPath,
                                         llvm::StringRef outputPath) {
-  // Find a C++ compiler in PATH. Prefer clang, fall back to gcc variants.
+  // Find a C++ compiler in PATH. Require clang toolchains only.
   auto clangPath = llvm::sys::findProgramByName("clang++");
   if (!clangPath)
     clangPath = llvm::sys::findProgramByName("clang");
-  if (!clangPath)
-    clangPath = llvm::sys::findProgramByName("g++");
-  if (!clangPath)
-    clangPath = llvm::sys::findProgramByName("gcc");
   if (!clangPath) {
-    llvm::errs()
-        << "Error: cannot find 'clang', 'clang++', 'g++', or 'gcc' in PATH "
-           "for linking\n";
+    llvm::errs() << "Error: cannot find 'clang++' or 'clang' in PATH for "
+                    "linking\n";
     return failure();
   }
 
@@ -6762,6 +6872,9 @@ static LogicalResult linkToSharedObject(llvm::StringRef objectPath,
   args.push_back(*clangPath);
   args.push_back("-shared");
   args.push_back("-fvisibility=hidden");
+#ifndef __APPLE__
+  args.push_back("-fuse-ld=lld");
+#endif
   args.push_back("-o");
   args.push_back(outputPath);
   args.push_back(objectPath);
@@ -6804,7 +6917,7 @@ static void debugProbePtrLikeTypes(ModuleOp moduleOp) {
 
     if (auto ptrLike = dyn_cast<PtrLikeTypeInterface>(type)) {
       ++probeCount;
-      llvm::errs() << "[circt-sim-compile] ptrlike-probe #" << probeCount
+      llvm::errs() << "[circt-compile] ptrlike-probe #" << probeCount
                    << " op=" << owner->getName().getStringRef()
                    << " kind=" << kind << " type=";
       type.print(llvm::errs());
@@ -6861,7 +6974,7 @@ static void debugProbePtrLikeTypes(ModuleOp moduleOp) {
         probeType(typeAttr.getValue(), op, "type_attr", probeType);
   });
 
-  llvm::errs() << "[circt-sim-compile] ptrlike-probe complete: " << probeCount
+  llvm::errs() << "[circt-compile] ptrlike-probe complete: " << probeCount
                << " unique ptr-like types\n";
 }
 
@@ -6873,7 +6986,7 @@ static LogicalResult debugTranslateBisection(ModuleOp microModule,
       definedFunctionNames.push_back(funcOp.getSymName().str());
   }
 
-  llvm::errs() << "[circt-sim-compile] translate-bisect: "
+  llvm::errs() << "[circt-compile] translate-bisect: "
                << definedFunctionNames.size() << " defined functions\n";
 
   registerBuiltinDialectTranslation(mlirContext);
@@ -6892,26 +7005,26 @@ static LogicalResult debugTranslateBisection(ModuleOp microModule,
     }
 
     if (failed(mlir::verify(cloned))) {
-      llvm::errs() << "[circt-sim-compile] translate-bisect: verify failed for "
+      llvm::errs() << "[circt-compile] translate-bisect: verify failed for "
                    << targetName << "\n";
       cloned.erase();
       return failure();
     }
 
-    llvm::errs() << "[circt-sim-compile] translate-bisect: translating "
+    llvm::errs() << "[circt-compile] translate-bisect: translating "
                  << targetName << "\n";
     llvm::LLVMContext llvmContext;
     auto llvmModule = translateModuleToLLVMIR(cloned, llvmContext);
     cloned.erase();
     if (!llvmModule) {
-      llvm::errs() << "[circt-sim-compile] translate-bisect: translation "
+      llvm::errs() << "[circt-compile] translate-bisect: translation "
                       "returned null for "
                    << targetName << "\n";
       return failure();
     }
   }
 
-  llvm::errs() << "[circt-sim-compile] translate-bisect: all functions "
+  llvm::errs() << "[circt-compile] translate-bisect: all functions "
                   "translated successfully\n";
   return success();
 }
@@ -6951,7 +7064,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
-    llvm::errs() << "[circt-sim-compile] parse: "
+    llvm::errs() << "[circt-compile] parse: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
 
@@ -6964,12 +7077,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       compileProcessBodies(*module, procNames, procKinds,
                            &totalProcesses, &procRejectionReasons);
   if (numProcsCompiled > 0) {
-    llvm::errs() << "[circt-sim-compile] Compiled " << numProcsCompiled
+    llvm::errs() << "[circt-compile] Compiled " << numProcsCompiled
                  << " process bodies\n";
   }
 
   unsigned rejectedProcesses = totalProcesses - numProcsCompiled;
-  llvm::errs() << "[circt-sim-compile] Processes: " << totalProcesses
+  llvm::errs() << "[circt-compile] Processes: " << totalProcesses
                << " total, " << numProcsCompiled << " callback-eligible, "
                << rejectedProcesses << " rejected\n";
 
@@ -6980,7 +7093,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     llvm::sort(sorted, [](const auto &a, const auto &b) {
       return a.second > b.second;
     });
-    llvm::errs() << "[circt-sim-compile] Top process rejection reasons:\n";
+    llvm::errs() << "[circt-compile] Top process rejection reasons:\n";
     for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
       llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
                    << "\n";
@@ -7012,7 +7125,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     candidates.push_back(funcOp);
   });
 
-  llvm::errs() << "[circt-sim-compile] Functions: " << totalFuncs << " total, "
+  llvm::errs() << "[circt-compile] Functions: " << totalFuncs << " total, "
                << externalFuncs << " external, " << rejectedFuncs
                << " rejected, " << candidates.size() << " compilable\n";
 
@@ -7023,14 +7136,14 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     llvm::sort(sorted, [](const auto &a, const auto &b) {
       return a.second > b.second;
     });
-    llvm::errs() << "[circt-sim-compile] Top function rejection reasons:\n";
+    llvm::errs() << "[circt-compile] Top function rejection reasons:\n";
     for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
       llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
                    << "\n";
   }
 
   if (candidates.empty() && procNames.empty()) {
-    llvm::errs() << "[circt-sim-compile] No compilable functions found\n";
+    llvm::errs() << "[circt-compile] No compilable functions found\n";
     return failure();
   }
 
@@ -7052,10 +7165,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   NativeModuleInitSynthesisStats nativeModuleInitStats =
       synthesizeNativeModuleInitFunctions(*module, microModule);
   if (nativeModuleInitStats.emittedModules > 0)
-    llvm::errs() << "[circt-sim-compile] Native module init functions: "
+    llvm::errs() << "[circt-compile] Native module init functions: "
                  << nativeModuleInitStats.emittedModules << "\n";
   if (verbose && nativeModuleInitStats.totalModules > 0) {
-    llvm::errs() << "[circt-sim-compile] Native module init modules: "
+    llvm::errs() << "[circt-compile] Native module init modules: "
                  << nativeModuleInitStats.emittedModules << " emitted / "
                  << nativeModuleInitStats.totalModules << " total\n";
     if (!nativeModuleInitStats.skipReasons.empty()) {
@@ -7066,7 +7179,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
         return a.second > b.second;
       });
       llvm::errs()
-          << "[circt-sim-compile] Top native module init skip reasons:\n";
+          << "[circt-compile] Top native module init skip reasons:\n";
       for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
         llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
                      << "\n";
@@ -7216,10 +7329,11 @@ static LogicalResult compile(MLIRContext &mlirContext) {
         return true;
       // Reporting paths manage dynamic report handlers/messages and can crash
       // under native dispatch before interpreter-level handling runs.
+      // Keep `uvm_report_message::get_severity` native-enabled by default:
+      // assoc/virtual pointer normalization now handles this safely.
       if (!allowNativeUvmReporting &&
           (name.contains("::uvm_report_handler::") ||
            name.contains("::uvm_report_object::") ||
-           name.contains("::uvm_report_message::get_severity") ||
            name.contains("process_report_message")))
         return true;
       // Random-seeding paths build dynamic strings and rely on interpreter-side
@@ -7246,9 +7360,6 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       if (name.ends_with("::execute_phase") || name == "execute_phase")
         return true;
 
-      // Sequence body methods
-      if (name.ends_with("::body") && name.contains("_seq"))
-        return true;
       return false;
     };
 
@@ -7375,13 +7486,13 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     // Clean up empty names.
     llvm::erase_if(funcNames, [](const std::string &s) { return s.empty(); });
     if (demoted > 0)
-      llvm::errs() << "[circt-sim-compile] Demoted " << demoted
+      llvm::errs() << "[circt-compile] Demoted " << demoted
                    << " intercepted functions to trampolines\n";
   }
 
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
-    llvm::errs() << "[circt-sim-compile] clone: "
+    llvm::errs() << "[circt-compile] clone: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
 
@@ -7389,7 +7500,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // This is best-effort: if conversion fails for some function body, keep
   // going and rely on later stripping of residual non-LLVM bodies.
   if (!lowerSCFToCF(microModule))
-    llvm::errs() << "[circt-sim-compile] Warning: SCF->CF lowering failed; "
+    llvm::errs() << "[circt-compile] Warning: SCF->CF lowering failed; "
                     "falling back to residual-op stripping\n";
 
   // Canonicalize 4-state block arguments after SCF->CF. This ensures merged
@@ -7398,7 +7509,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   // Lower arith/cf/func → LLVM dialect.
   if (!lowerFuncArithCfToLLVM(microModule, mlirContext)) {
-    llvm::errs() << "[circt-sim-compile] Lowering failed\n";
+    llvm::errs() << "[circt-compile] Lowering failed\n";
     microModule.erase();
     return failure();
   }
@@ -7431,7 +7542,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     }
     procNames = std::move(survivingProcs);
     procKinds = std::move(survivingKinds);
-    llvm::errs() << "[circt-sim-compile] Stripped " << stripped.size()
+    llvm::errs() << "[circt-compile] Stripped " << stripped.size()
                  << " functions with non-LLVM ops\n";
     if (verbose && !stripResult.reasonCounts.empty()) {
       llvm::SmallVector<std::pair<llvm::StringRef, unsigned>> sorted;
@@ -7441,14 +7552,14 @@ static LogicalResult compile(MLIRContext &mlirContext) {
         return a.second > b.second;
       });
       llvm::errs()
-          << "[circt-sim-compile] Top residual non-LLVM strip reasons:\n";
+          << "[circt-compile] Top residual non-LLVM strip reasons:\n";
       for (unsigned i = 0; i < std::min<unsigned>(5, sorted.size()); ++i)
         llvm::errs() << "  " << sorted[i].second << "x " << sorted[i].first
                      << "\n";
     }
     if (verbose && !stripResult.strippedDetails.empty()) {
       llvm::errs()
-          << "[circt-sim-compile] Residual stripped symbols (top 20):\n";
+          << "[circt-compile] Residual stripped symbols (top 20):\n";
       for (unsigned i = 0;
            i < std::min<unsigned>(20, stripResult.strippedDetails.size()); ++i)
         llvm::errs() << "  " << stripResult.strippedDetails[i].first << " ["
@@ -7460,14 +7571,23 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // This must happen BEFORE trampoline generation so we can ensure all
   // vtable functions have either compiled bodies or trampolines.
   auto allFuncEntryNames = collectVtableFuncIds(*module);
+  auto allFuncFlags = collectAllFuncFlags(*module, allFuncEntryNames);
   llvm::StringSet<> forcedTrampolineNames;
   for (const auto &name : allFuncEntryNames)
     forcedTrampolineNames.insert(name);
   auto taggedVtableAssignments = collectTaggedVtableAssignments(*module);
-  llvm::errs() << "[circt-sim-compile] Collected " << allFuncEntryNames.size()
+  llvm::errs() << "[circt-compile] Collected " << allFuncEntryNames.size()
                << " vtable FuncIds\n";
+  if (verbose) {
+    unsigned mayYieldCount = 0;
+    for (uint8_t flags : allFuncFlags)
+      if (flags & CIRCT_FUNC_FLAG_MAY_YIELD)
+        ++mayYieldCount;
+    llvm::errs() << "[circt-compile] Tagged " << mayYieldCount << "/"
+                 << allFuncFlags.size() << " FuncIds as MAY_YIELD\n";
+  }
   if (verbose && !taggedVtableAssignments.empty())
-    llvm::errs() << "[circt-sim-compile] Tagged vtable globals discovered: "
+    llvm::errs() << "[circt-compile] Tagged vtable globals discovered: "
                  << taggedVtableAssignments.size() << "\n";
 
   // Ensure all vtable functions have declarations in the micro-module so
@@ -7544,36 +7664,36 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   auto trampolineNamesOr =
       generateTrampolines(microModule, *module, forcedTrampolineNames);
   if (failed(trampolineNamesOr)) {
-    llvm::errs() << "[circt-sim-compile] Failed to generate trampolines\n";
+    llvm::errs() << "[circt-compile] Failed to generate trampolines\n";
     microModule.erase();
     return failure();
   }
   auto trampolineNames = *trampolineNamesOr;
   if (!trampolineNames.empty()) {
-    llvm::errs() << "[circt-sim-compile] Generated " << trampolineNames.size()
+    llvm::errs() << "[circt-compile] Generated " << trampolineNames.size()
                  << " interpreter trampolines\n";
   }
 
-  llvm::errs() << "[circt-sim-compile] " << funcNames.size()
+  llvm::errs() << "[circt-compile] " << funcNames.size()
                << " functions + " << procNames.size()
                << " processes ready for codegen\n";
 
   if (funcNames.empty() && procNames.empty()) {
-    llvm::errs() << "[circt-sim-compile] No functions survived lowering\n";
+    llvm::errs() << "[circt-compile] No functions survived lowering\n";
     microModule.erase();
     return failure();
   }
 
   // Verify the module.
   if (failed(mlir::verify(microModule))) {
-    llvm::errs() << "[circt-sim-compile] Module verification failed\n";
+    llvm::errs() << "[circt-compile] Module verification failed\n";
     microModule.erase();
     return failure();
   }
 
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
-    llvm::errs() << "[circt-sim-compile] lower: "
+    llvm::errs() << "[circt-compile] lower: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
 
@@ -7581,12 +7701,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     std::error_code ec;
     llvm::raw_fd_ostream os(dumpPath, ec, llvm::sys::fs::OF_None);
     if (ec) {
-      llvm::errs() << "[circt-sim-compile] Failed to open pre-translate dump "
+      llvm::errs() << "[circt-compile] Failed to open pre-translate dump "
                    << dumpPath << ": " << ec.message() << "\n";
     } else {
       microModule.print(os);
       os.flush();
-      llvm::errs() << "[circt-sim-compile] Wrote pre-translate MLIR to "
+      llvm::errs() << "[circt-compile] Wrote pre-translate MLIR to "
                    << dumpPath << "\n";
     }
   }
@@ -7607,7 +7727,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   microModule.erase();
 
   if (!llvmModule) {
-    llvm::errs() << "[circt-sim-compile] LLVM IR translation failed\n";
+    llvm::errs() << "[circt-compile] LLVM IR translation failed\n";
     return failure();
   }
 
@@ -7618,7 +7738,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   {
     unsigned flatCount = flattenGlobalTypesToByteArrays(*llvmModule);
     if (flatCount > 0)
-      llvm::errs() << "[circt-sim-compile] Flattened " << flatCount
+      llvm::errs() << "[circt-compile] Flattened " << flatCount
                    << " globals to byte arrays\n";
   }
 
@@ -7628,7 +7748,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   {
     unsigned gepCount = rewriteGEPsForPackedLayout(*llvmModule);
     if (gepCount > 0)
-      llvm::errs() << "[circt-sim-compile] Rewrote " << gepCount
+      llvm::errs() << "[circt-compile] Rewrote " << gepCount
                    << " struct GEPs for packed layout\n";
   }
 
@@ -7659,7 +7779,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     uint64_t size = computePackedTypeAllocSize(type, llvmModule->getDataLayout());
     globalPatchSizes.push_back(static_cast<uint32_t>(size));
   }
-  llvm::errs() << "[circt-sim-compile] Global patches: "
+  llvm::errs() << "[circt-compile] Global patches: "
                << globalPatchNames.size() << " mutable globals\n";
 
   // Compute arena layout: assign each mutable global a 16-byte-aligned offset
@@ -7679,7 +7799,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     arenaSize = offset + globalPatchSizes[i];
   }
 
-  llvm::errs() << "[circt-sim-compile] Arena: " << arenaGlobalNames.size()
+  llvm::errs() << "[circt-compile] Arena: " << arenaGlobalNames.size()
                << " globals, " << arenaSize << " bytes\n";
 
   // Create @__circt_sim_arena_base external global. The runtime populates this
@@ -7778,7 +7898,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     unsigned initializedVtables = initializeTaggedVtableGlobals(
         *llvmModule, taggedVtableAssignments);
     if (initializedVtables > 0)
-      llvm::errs() << "[circt-sim-compile] Initialized "
+      llvm::errs() << "[circt-compile] Initialized "
                    << initializedVtables
                    << " vtable globals with tagged FuncIds\n";
   }
@@ -7787,7 +7907,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
                        procNames, procKinds, buildId,
                        globalPatchNames, globalPatchVars, globalPatchSizes,
-                       allFuncEntryNames, arenaSize,
+                       allFuncEntryNames, allFuncFlags, arenaSize,
                        arenaGlobalNames, arenaGlobalOffsets, arenaGlobalSizes);
 
   // Rewrite indirect calls through tagged synthetic vtable addresses
@@ -7810,9 +7930,9 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
-    llvm::errs() << "[circt-sim-compile] translate: "
+    llvm::errs() << "[circt-compile] translate: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
-    llvm::errs() << "[circt-sim-compile] internalize: marked "
+    llvm::errs() << "[circt-compile] internalize: marked "
                  << alwaysInlineCount
                  << " small functions as alwaysinline\n";
   }
@@ -7825,7 +7945,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   if (emitSnapshot) {
     // .so goes to a temp file; it will be moved into the snapshot dir below.
     llvm::SmallString<256> tmpSo;
-    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-sim-compile",
+    if (auto ec = llvm::sys::fs::createTemporaryFile("circt-compile",
                                                       "so", tmpSo)) {
       llvm::errs() << "Error creating temp file: " << ec.message() << "\n";
       return failure();
@@ -7852,14 +7972,14 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // happen before optimization so the optimizer uses the correct layout.
   auto *targetMachine = createHostTargetMachine(*llvmModule, optLevel);
   if (!targetMachine) {
-    llvm::errs() << "[circt-sim-compile] Target machine creation failed\n";
+    llvm::errs() << "[circt-compile] Target machine creation failed\n";
     return failure();
   }
 
   ModuleStats preStats;
   if (verbose) {
     preStats = collectModuleStats(*llvmModule);
-    llvm::errs() << "[circt-sim-compile] pre-opt: " << preStats.definedFnCount
+    llvm::errs() << "[circt-compile] pre-opt: " << preStats.definedFnCount
                  << " functions (" << preStats.internalFnCount
                  << " internal), " << preStats.callCount << " calls\n";
   }
@@ -7872,7 +7992,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     unsigned dce = preStats.internalFnCount > postStats.internalFnCount
                        ? preStats.internalFnCount - postStats.internalFnCount
                        : 0;
-    llvm::errs() << "[circt-sim-compile] post-opt: " << postStats.definedFnCount
+    llvm::errs() << "[circt-compile] post-opt: " << postStats.definedFnCount
                  << " functions (" << postStats.internalFnCount << " internal, "
                  << dce << " DCE'd), " << postStats.callCount << " calls\n";
   }
@@ -7890,7 +8010,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       return failure();
     }
     llvmModule->print(out, nullptr);
-    llvm::errs() << "[circt-sim-compile] Wrote LLVM IR to " << llPath << "\n";
+    llvm::errs() << "[circt-compile] Wrote LLVM IR to " << llPath << "\n";
     return success();
   }
 
@@ -7904,7 +8024,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   } else {
     // Temporary .o for linking.
     std::error_code ec =
-        llvm::sys::fs::createTemporaryFile("circt-sim-compile", "o", objPath);
+        llvm::sys::fs::createTemporaryFile("circt-compile", "o", objPath);
     if (ec) {
       llvm::errs() << "Error creating temp file: " << ec.message() << "\n";
       return failure();
@@ -7912,24 +8032,24 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   }
 
   if (failed(emitObjectFileNoOpt(*llvmModule, targetMachine, objPath))) {
-    llvm::errs() << "[circt-sim-compile] Object emission failed\n";
+    llvm::errs() << "[circt-compile] Object emission failed\n";
     return failure();
   }
 
   if (verbose) {
     auto elapsed = std::chrono::steady_clock::now() - startTime;
-    llvm::errs() << "[circt-sim-compile] codegen: "
+    llvm::errs() << "[circt-compile] codegen: "
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
 
   if (emitObject) {
-    llvm::errs() << "[circt-sim-compile] Wrote object to " << objPath << "\n";
+    llvm::errs() << "[circt-compile] Wrote object to " << objPath << "\n";
     return success();
   }
 
   // Link .o → .so.
   if (failed(linkToSharedObject(objPath, outPath))) {
-    llvm::errs() << "[circt-sim-compile] Linking failed\n";
+    llvm::errs() << "[circt-compile] Linking failed\n";
     llvm::sys::fs::remove(objPath);
     return failure();
   }
@@ -7940,11 +8060,11 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Report output file size.
   uint64_t fileSize = 0;
   if (!llvm::sys::fs::file_size(outPath, fileSize))
-    llvm::errs() << "[circt-sim-compile] Output size: " << (fileSize / 1024)
+    llvm::errs() << "[circt-compile] Output size: " << (fileSize / 1024)
                  << " KB\n";
 
   auto elapsed = std::chrono::steady_clock::now() - startTime;
-  llvm::errs() << "[circt-sim-compile] Wrote " << outPath << " ("
+  llvm::errs() << "[circt-compile] Wrote " << outPath << " ("
                << procNames.size() << " processes, "
                << funcNames.size() << " functions, "
                << trampolineNames.size() << " trampolines, "
@@ -7966,7 +8086,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     }
     // Ensure the directory ends with .csnap for clarity (but don't force it).
     if (auto ec = llvm::sys::fs::create_directories(snapDir)) {
-      llvm::errs() << "[circt-sim-compile] Error creating snapshot dir "
+      llvm::errs() << "[circt-compile] Error creating snapshot dir "
                    << snapDir << ": " << ec.message() << "\n";
       return failure();
     }
@@ -7977,7 +8097,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     if (auto ec = llvm::sys::fs::rename(outPath, soDestPath)) {
       // rename can fail across filesystems; fall back to copy + remove.
       if (auto ec2 = llvm::sys::fs::copy_file(outPath, soDestPath)) {
-        llvm::errs() << "[circt-sim-compile] Error copying .so to snapshot: "
+        llvm::errs() << "[circt-compile] Error copying .so to snapshot: "
                      << ec2.message() << "\n";
         return failure();
       }
@@ -7991,7 +8111,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       std::error_code ec;
       llvm::raw_fd_ostream os(bcPath, ec);
       if (ec) {
-        llvm::errs() << "[circt-sim-compile] Error opening " << bcPath << ": "
+        llvm::errs() << "[circt-compile] Error opening " << bcPath << ": "
                      << ec.message() << "\n";
         return failure();
       }
@@ -7999,7 +8119,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       if (mlir::failed(
               mlir::writeBytecodeToFile(module->getOperation(), os, bcConfig))) {
         llvm::errs()
-            << "[circt-sim-compile] Error writing bytecode to " << bcPath
+            << "[circt-compile] Error writing bytecode to " << bcPath
             << "\n";
         return failure();
       }
@@ -8013,7 +8133,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       std::error_code ec;
       llvm::raw_fd_ostream os(metaPath, ec);
       if (ec) {
-        llvm::errs() << "[circt-sim-compile] Error opening " << metaPath
+        llvm::errs() << "[circt-compile] Error opening " << metaPath
                      << ": " << ec.message() << "\n";
         return failure();
       }
@@ -8033,7 +8153,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       os.flush();
     }
 
-    llvm::errs() << "[circt-sim-compile] Wrote snapshot to " << snapDir
+    llvm::errs() << "[circt-compile] Wrote snapshot to " << snapDir
                  << "/\n";
   }
 

@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 
@@ -7,9 +7,9 @@
 // native block so interpreted loads read host memory instead of falling back to
 // unknown/zero.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE: [circt-sim-compile] Demoted 1 intercepted functions to trampolines
-// COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
+// COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 //
 // SIM: class_id=620
 // COMPILED: class_id=620

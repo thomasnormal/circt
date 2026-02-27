@@ -1,0 +1,6 @@
+// RUN: bash -c 'set -euo pipefail; root="%S/../../.."; file="$root/tools/circt-sim/LLHDProcessInterpreter.cpp"; ! grep -nE "filter\\.(ranges|num_ranges)" "$file"; echo COVERAGE_CROSS_FILTER_FIELDNAME_AGNOSTIC_OK' | FileCheck %s
+// CHECK: COVERAGE_CROSS_FILTER_FIELDNAME_AGNOSTIC_OK
+
+// Regression: keep interpreted cross-filter decoding independent of
+// MooreCrossBinsofFilter range field spellings (e.g. ranges/num_ranges
+// rename drift across runtime header revisions).

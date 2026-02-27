@@ -1,11 +1,11 @@
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s | FileCheck %s --check-prefix=SIM
-// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 
 // Regression: compiled->interpreted trampoline return packing must preserve
 // wide integer bits for non-struct returns (e.g. i128).
 //
-// COMPILE: [circt-sim-compile] Generated 1 interpreter trampolines
+// COMPILE: [circt-compile] Generated 1 interpreter trampolines
 // SIM: hi=-1
 // COMPILED: hi=-1
 

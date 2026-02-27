@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=STRICT
 
@@ -8,7 +8,7 @@
 // though the symbol contains "uvm_". Legacy blanket interception is still
 // available via CIRCT_AOT_INTERCEPT_ALL_UVM=1.
 //
-// COMPILE: [circt-sim-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
+// COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 //
 // COMPILED: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // COMPILED: out=200

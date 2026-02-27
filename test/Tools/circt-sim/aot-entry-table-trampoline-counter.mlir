@@ -1,4 +1,4 @@
-// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=COMPILED
 
 // Regression: count non-native tagged entry-table hits.
@@ -8,9 +8,9 @@
 // through a tagged vtable slot; runtime dispatches via the entry table to a
 // trampoline callback into the interpreter.
 //
-// COMPILE: [circt-sim-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
-// COMPILE: [circt-sim-compile] Demoted 1 intercepted functions to trampolines
-// COMPILE: [circt-sim-compile] Collected 1 vtable FuncIds
+// COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
+// COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
+// COMPILE: [circt-compile] Collected 1 vtable FuncIds
 //
 // COMPILED: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // COMPILED: Entry table: 1 entries for tagged-FuncId dispatch (0 native, 1 non-native)

@@ -1,8 +1,8 @@
-// RUN: circt-sim-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 
-// COMPILE: [circt-sim-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
+// COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 // COMPILE-NOT: Stripped
-// COMPILE: [circt-sim-compile] 1 functions + 0 processes ready for codegen
+// COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 
 llvm.func @callee_llvm(%pair: !llvm.struct<(i64, i64)>) -> i32 {
   %a = llvm.extractvalue %pair[0] : !llvm.struct<(i64, i64)>

@@ -9,11 +9,12 @@
 module {
   llvm.func @malloc(i64) -> !llvm.ptr
   llvm.func @free(!llvm.ptr)
-  llvm.func @__moore_urandom_seeded(i32) -> i32
+  llvm.func @__moore_process_srandom(i64, i32)
   llvm.func @__moore_randomize_bytes(!llvm.ptr, i64) -> i32
 
   hw.module @test() {
     %t1 = llhd.constant_time <1ns, 0d, 0e>
+    %c0_i64 = arith.constant 0 : i64
     %c0_i8 = arith.constant 0 : i8
     %c0_i32 = arith.constant 0 : i32
     %c1_i32 = arith.constant 1 : i32
@@ -24,9 +25,9 @@ module {
       %ptr1 = llvm.call @malloc(%c5_i64) : (i64) -> !llvm.ptr
       %ptr2 = llvm.call @malloc(%c5_i64) : (i64) -> !llvm.ptr
 
-      %_seed0 = llvm.call @__moore_urandom_seeded(%seed_i32) : (i32) -> i32
+      llvm.call @__moore_process_srandom(%c0_i64, %seed_i32) : (i64, i32) -> ()
       %rc1 = llvm.call @__moore_randomize_bytes(%ptr1, %c5_i64) : (!llvm.ptr, i64) -> i32
-      %_seed1 = llvm.call @__moore_urandom_seeded(%seed_i32) : (i32) -> i32
+      llvm.call @__moore_process_srandom(%c0_i64, %seed_i32) : (i64, i32) -> ()
       %rc2 = llvm.call @__moore_randomize_bytes(%ptr2, %c5_i64) : (!llvm.ptr, i64) -> i32
 
       %p1_0 = llvm.getelementptr %ptr1[0] : (!llvm.ptr) -> !llvm.ptr, i8

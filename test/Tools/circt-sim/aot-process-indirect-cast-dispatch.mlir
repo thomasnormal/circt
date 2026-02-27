@@ -1,11 +1,11 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
 //
 // Ensure callback process eligibility accepts safe
 // builtin.unrealized_conversion_cast patterns used by func.call_indirect.
 //
-// COMPILE: [circt-sim-compile] Compiled 1 process bodies
-// COMPILE: [circt-sim-compile] Processes: 3 total, 1 callback-eligible, 2 rejected
+// COMPILE: [circt-compile] Compiled 1 process bodies
+// COMPILE: [circt-compile] Processes: 3 total, 1 callback-eligible, 2 rejected
 // RUNTIME-NOT: FATAL: trampoline dispatch
 // RUNTIME: a=1
 

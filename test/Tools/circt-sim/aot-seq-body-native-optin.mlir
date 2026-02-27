@@ -1,4 +1,4 @@
-// RUN: circt-sim-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
+// RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=DEFAULT
 // RUN: env CIRCT_AOT_ALLOW_NATIVE_SEQ_BODY=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=OPTIN
 
@@ -10,7 +10,7 @@
 // OPTIN: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // OPTIN: out=200
 
-// COMPILE: [circt-sim-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
+// COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 
 func.func @"uvm_pkg::toy_sequence::body"(%a: i32, %b: i32) -> i32 {
   %c = arith.muli %a, %b : i32
