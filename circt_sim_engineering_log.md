@@ -1549,3 +1549,143 @@
       - `coverage-unhandled-runtime-call-error*.mlir`
       - `coverage-event-implicit-sample*.sv`
       - `test/Conversion/ImportVerilog/coverage-event-*-new-error.sv`
+
+- UVM by-type factory null fix (2026-02-27 11:03:08Z)
+  - TDD baseline:
+    - `test/Tools/circt-sim/uvm-sequence-body-runtime-dispatch.sv` failed with
+      `UVM_FATAL FCTTYP` (`create_4759` path initially; then
+      `.automatic_phase_objection` object creation in `create_1547`).
+    - `test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv` passed.
+  - Root cause:
+    - Lowered helper wrappers (`create_by_type_*`) and object helper
+      `create_by_type` can transiently return null via factory call-indirect
+      startup paths despite having a valid wrapper pointer.
+    - Existing fallback only covered `create_by_type` with `parent == null`,
+      missing non-root object creation (`.automatic_phase_objection`) and
+      wrapper-suffixed helper symbols.
+  - Fixes in `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - Added narrow fallback for `create_by_type_*` helper functions.
+      - Uses wrapper vtable dispatch directly via `tryInvokeWrapperFactoryMethod`.
+      - Prefers component slot (`slot 1`) when parent is non-null, with safe
+        fallback to object slot (`slot 0`).
+    - Broadened `create_by_type` fallback to always attempt object creation via
+      wrapper slot 0 (removed root-only parent-null gate).
+  - Test hardening:
+    - Added `// CHECK-NOT: FCTTYP` to
+      `test/Tools/circt-sim/uvm-sequence-body-runtime-dispatch.sv`.
+  - Validation:
+    - `CCACHE_DISABLE=1 ninja -C build_clang_test circt-sim` passed.
+    - `build_clang_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-sequence-body-runtime-dispatch.sv` passed.
+    - `build_clang_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv` passed.
+
+- AOT UVM phase-domain parity fix (2026-02-27)
+  - TDD/root-cause repro:
+    - `build_test/bin/circt-sim /tmp/uvm_seq_body.mlir --top top --compiled=/tmp/uvm_seq_body.so --max-time=50000000000`
+      failed at time 0 with
+      `UVM_FATAL ... PH/INTERNAL get_domain: m_phase_type is DOMAIN but $cast to uvm_domain fails`.
+    - Interpreter baseline on the same MLIR completed to `50000000000 fs`.
+  - Diagnostics added/used:
+    - `CIRCT_SIM_TRACE_DYN_CAST_CHECK=1` showed compiled-only failure:
+      `func=uvm_pkg::uvm_phase::get_domain src=0 target=620`.
+    - Added env-gated function-entry trace:
+      `CIRCT_SIM_TRACE_GET_DOMAIN_ARG=1`.
+      Failing pointer was host-looking and untracked:
+      `phase=0x0ca70470 class_id=0 source=none`.
+  - Root cause:
+    - Mixed native/interpreted execution can pass host object pointers into
+      interpreted UVM paths without registering them in `nativeMemoryBlocks`.
+    - Interpreted loads on those pointers then miss all memory block maps and
+      collapse to unknown/zero, producing false class-id failures.
+  - Fix in `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - Native `func.call` slow path: when a native-dispatched function returns a
+      pointer result, auto-register unknown host pointers with a conservative
+      fallback native block (`512` bytes).
+    - Native `func.call` cached path: same pointer-return registration logic.
+    - Trampoline dispatch (`dispatchTrampoline`): for UVM-style pointer args,
+      auto-register unknown host pointers before interpreted execution.
+    - All registrations are guarded to skip virtual/tagged ranges and already
+      tracked pointers; optional pointer tracing uses existing
+      `CIRCT_AOT_TRACE_PTR` flow.
+  - New regression (AOT-specific):
+    - `test/Tools/circt-sim/aot-native-pointer-return-to-interpreted-load.mlir`
+      - native `@mk_obj` returns host pointer
+      - interpreted intercepted `uvm_pkg::uvm_phase::get_domain` loads class id
+      - verifies compiled mode returns `class_id=620` (not 0/X).
+  - Validation:
+    - `aot-native-pointer-return-to-interpreted-load.mlir` passed.
+    - `aot-call-indirect-may-yield-default-demote.mlir` passed (default + opt-in).
+    - `aot-queue-pop-front-ptr-invalid-len-guard.mlir` passed.
+    - Large workload recheck:
+      - `uvm_seq_body` compiled now completes (`status=0`) at
+        `Simulation completed at time 50000000000 fs`.
+
+- AOT pointer-boundary hardening (Phase 1 completion pass, 2026-02-27 12:16:13Z)
+  - TDD repro:
+    - Added runtime unit tests:
+      - `MooreRuntimeAssocTest.UnresolvedVirtualPointerReturnsSafeDefaults`
+      - `MooreRuntimeQueueTest.UnresolvedVirtualQueuePointerReturnsZeroSize`
+    - Before fix: running those tests crashed in `__moore_assoc_exists` on
+      unresolved virtual pointer dereference.
+  - Root cause:
+    - Moore runtime pointer normalization still returned unresolved virtual
+      pointers to callers, allowing raw dereference paths in assoc/queue
+      helpers.
+    - LLHD interpreter destructor did not clear Moore runtime resolver/accessor
+      callback bindings, leaving stale callback state possible during shutdown.
+  - Fixes:
+    - `lib/Runtime/MooreRuntime.cpp`
+      - `normalizeHostPtr` now returns `nullptr` (safe default) for:
+        - unresolved virtual pointers (`0x10000000..0x1fffffff`)
+        - tagged FuncId pointers (`0xf0000000..0xffffffff`)
+        - obviously invalid low addresses (`<0x10000`)
+      - tracing strings updated to include `returning null`.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - destructor now clears runtime bridge callbacks:
+        - `__moore_assoc_set_ptr_resolver(nullptr, nullptr)`
+        - `__moore_signal_registry_set_accessor(nullptr, ..., nullptr)`
+      - resets `currentInterpreter` when destroying the active bridge owner.
+  - Validation:
+    - `utils/ninja-with-lock.sh -C build_test MooreRuntimeTests` passed.
+    - `MooreRuntimeAssocTest.*` + queue guard subset passed.
+    - `llvm-lit` targeted AOT regressions passed:
+      - `aot-native-pointer-return-to-interpreted-load.mlir`
+      - `aot-queue-pop-front-ptr-invalid-len-guard.mlir`.
+
+- Phase 2 all-entry interpreter call_indirect dispatch fix (2026-02-27 12:28:57Z)
+  - TDD/root-cause repro:
+    - `aot-entry-table-trampoline-counter.mlir` failed in compiled mode:
+      expected `Trampoline calls: 1` / `Entry-table trampoline calls: 1`,
+      observed both counters at `0`.
+    - direct repro with `build_test/bin/circt-sim` confirmed:
+      tagged FuncId entry table had `0 native, 1 non-native` but runtime still
+      executed pure interpreter fallback.
+  - Root cause:
+    - interpreter `call_indirect` entry-table paths still had a native-only
+      dispatch gate:
+      `if (!compiledFuncIsNative[fid]) goto interpreted;`
+    - this existed in all 4 interpreter dispatch paths
+      (X-fallback, static fallback, site-cache, main), violating Phase 2
+      all-entry dispatch intent.
+  - Fix in `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`:
+    - removed non-native dispatch gate in all 4 paths.
+    - kept pointer-arg normalization native-only (`isNativeEntry`).
+    - kept MAY_YIELD skip native-only (`isNativeEntry &&
+      shouldSkipMayYieldNative(fid)`).
+    - preserved deny/trap policy behavior.
+  - Regression updates:
+    - `test/Tools/circt-sim/aot-call-indirect-trampoline-pointer-preserve.mlir`
+      now expects `Entry-table trampoline calls: 1` (was `0`).
+  - Validation:
+    - Build:
+      - `utils/ninja-with-lock.sh -C build_test circt-sim` passed.
+    - Focused checks (manual RUN-line equivalent with `build_test/bin/FileCheck`):
+      - `aot-entry-table-trampoline-counter.mlir` passed (red -> green).
+      - `aot-call-indirect-trampoline-pointer-preserve.mlir` passed.
+      - `aot-call-indirect-native-pointer-tag-normalize.mlir` passed.
+      - `aot-call-indirect-may-yield-default-demote.mlir` passed (default + opt-in).
+    - Profiling sanity (`uvm-sequence-body-runtime-dispatch.sv`):
+      - `Simulation completed at time 50000000000 fs`, `EXIT_CODE=0`
+      - `Entry-table native calls: 6`
+      - `Entry-table trampoline calls: 35`
+      - `Max AOT depth: 1`
+      - `WALL=9.780s`.

@@ -345,6 +345,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     };
 
+    // Try to recover a direct callee symbol from:
+    //   func.call_indirect (unrealized_conversion_cast (llvm.mlir.addressof @sym))
+    auto tryGetDirectAddressOfCalleeName = [&]() -> std::optional<std::string> {
+      auto castOp =
+          calleeValue.getDefiningOp<mlir::UnrealizedConversionCastOp>();
+      if (!castOp || castOp.getInputs().size() != 1)
+        return std::nullopt;
+      auto addrOfOp = castOp.getInputs().front().getDefiningOp<LLVM::AddressOfOp>();
+      if (!addrOfOp)
+        return std::nullopt;
+      return addrOfOp.getGlobalName().str();
+    };
+
     auto setCallIndirectResults =
         [&](llvm::ArrayRef<InterpretedValue> values) {
           auto opResults = callIndirectOp.getResults();
@@ -364,10 +377,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     auto fillNativeCallArgs = [&](llvm::ArrayRef<InterpretedValue> callArgs,
                                   mlir::TypeRange argTypes,
                                   llvm::StringRef calleeNameForNormalization,
-                                  unsigned numArgs, uint64_t (&packed)[8]) {
+                                  unsigned numArgs, uint64_t (&packed)[8],
+                                  bool normalizePointerArgs) {
       for (unsigned i = 0; i < numArgs; ++i) {
         uint64_t argVal = (i < callArgs.size()) ? callArgs[i].getUInt64() : 0;
-        if (i < argTypes.size() &&
+        if (normalizePointerArgs && i < argTypes.size() &&
             isa<mlir::LLVM::LLVMPointerType>(argTypes[i])) {
           argVal = normalizeNativeCallPointerArg(procId,
                                                  calleeNameForNormalization,
@@ -376,10 +390,78 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         packed[i] = argVal;
       }
     };
+    auto maybeTraceIndirectNative = [&](uint32_t fid, llvm::StringRef callee,
+                                        unsigned numArgs, unsigned numResults,
+                                        const uint64_t (&packed)[8]) {
+      static bool traceNativeCalls =
+          std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+      static uint64_t traceNativeCallLimit = []() -> uint64_t {
+        if (const char *s = std::getenv("CIRCT_AOT_TRACE_NATIVE_LIMIT"))
+          return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
+        return 200;
+      }();
+      static uint64_t traceNativeCallCount = 0;
+      if (!traceNativeCalls || traceNativeCallCount >= traceNativeCallLimit)
+        return;
+      bool mayYield =
+          compiledFuncFlags &&
+          fid < numCompiledAllFuncs &&
+          (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD);
+      llvm::errs() << "[AOT TRACE] call_indirect native fid=" << fid
+                   << " callee=" << callee << " args=" << numArgs
+                   << " rets=" << numResults
+                   << " may_yield=" << (mayYield ? 1 : 0)
+                   << " active_proc=" << activeProcessId << "\n";
+      if (numArgs > 0)
+        llvm::errs() << "            a0=" << llvm::format_hex(packed[0], 16)
+                     << "\n";
+      if (numArgs > 1)
+        llvm::errs() << "            a1=" << llvm::format_hex(packed[1], 16)
+                     << "\n";
+      ++traceNativeCallCount;
+    };
+    auto shouldSkipMayYieldNative = [&](uint32_t fid) {
+      if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
+        return false;
+      if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
+        return false;
+      static bool allowNativeMayYield =
+          std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
+      static bool traceNativeCalls =
+          std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+      // Default safety: native func.call_indirect cannot suspend today.
+      // Keep MAY_YIELD FuncIds on interpreter dispatch unless explicitly
+      // opted in for experiments.
+      if (!allowNativeMayYield) {
+        if (traceNativeCalls) {
+          llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid="
+                       << fid << " active_proc=" << activeProcessId
+                       << " mode=default\n";
+        }
+        return true;
+      }
+      // Legacy opt-in mode: only allow within an active process context.
+      bool skip = activeProcessId == InvalidProcessId;
+      if (skip && traceNativeCalls) {
+        llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid
+                     << " active_proc=" << activeProcessId
+                     << " mode=optin-no-proc\n";
+      }
+      return skip;
+    };
 
     if (funcPtrVal.isX()) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
                               << "(uninitialized vtable pointer)\n");
+      if (auto directCallee = tryGetDirectAddressOfCalleeName()) {
+        noteResolvedTarget(*directCallee);
+        if (isCoverageRuntimeCallee(*directCallee)) {
+          processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+          return callIndirectOp.emitError()
+                 << "unhandled coverage runtime call in interpreter: "
+                 << *directCallee;
+        }
+      }
 
       // Fallback: try to resolve the virtual method statically by tracing
       // the SSA chain back to the vtable GEP pattern:
@@ -699,6 +781,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (aotDepth != 0) {
             ++entryTableSkippedDepthCount;
           } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+            bool isNativeEntry =
+                (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
             // Deny/trap checks for call_indirect X-fallback path.
             if (aotDenyFids.count(fid))
               goto ci_xfallback_interpreted;
@@ -711,9 +795,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
             // Skip native dispatch for yield-capable functions outside process
             // context.
-            if (compiledFuncFlags &&
-                (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
-                !activeProcessId) {
+            if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
               ++entryTableSkippedYieldCount;
               goto ci_xfallback_interpreted;
             }
@@ -744,10 +826,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                   }
                 }
               }
-              if (eligible) {
-                uint64_t a[8] = {};
+          if (eligible) {
+            uint64_t a[8] = {};
+            bool normalizePointerArgs = isNativeEntry;
                 fillNativeCallArgs(args, funcOp.getArgumentTypes(), resolvedName,
-                                   numArgs, a);
+                               numArgs, a, normalizePointerArgs);
+                maybeTraceIndirectNative(fid, resolvedName, numArgs,
+                                         numResults, a);
 
                 if (eligible) {
 
@@ -791,7 +876,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                       llvm::APInt(64, result).zextOrTrunc(bits)));
                   setCallIndirectResults(nativeResults);
                 }
-                if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
+                if (isNativeEntry)
                   ++nativeEntryCallCount;
                 else
                   ++trampolineEntryCallCount;
@@ -812,6 +897,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         --callState.callDepth;
 
         if (failed(callResult)) {
+          if (callState.waiting)
+            return success();
+          if (shouldPropagateCoverageRuntimeFailure(procId))
+            return failure();
           break;
         }
 
@@ -1491,9 +1580,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             processStates[procId].callDepth < 2000) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
           noteAotFuncIdCall(fid);
-          if (aotDepth != 0) {
-            ++entryTableSkippedDepthCount;
-          } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+        if (aotDepth != 0) {
+          ++entryTableSkippedDepthCount;
+        } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+            bool isNativeEntry =
+                (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
             // Deny/trap checks for call_indirect static fallback path.
             if (aotDenyFids.count(fid))
               goto ci_static_interpreted;
@@ -1506,9 +1597,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
             // Skip native dispatch for yield-capable functions outside process
             // context.
-            if (compiledFuncFlags &&
-                (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
-                !activeProcessId) {
+            if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
               ++entryTableSkippedYieldCount;
               goto ci_static_interpreted;
             }
@@ -1539,10 +1628,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                   }
                 }
               }
-              if (eligible) {
-                uint64_t a[8] = {};
+          if (eligible) {
+            uint64_t a[8] = {};
+            bool normalizePointerArgs = isNativeEntry;
                 fillNativeCallArgs(sArgs, fOp.getArgumentTypes(), resolvedName,
-                                   numArgs, a);
+                               numArgs, a, normalizePointerArgs);
+                maybeTraceIndirectNative(fid, resolvedName, numArgs,
+                                         numResults, a);
 
                 if (eligible) {
 
@@ -1586,7 +1678,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                       llvm::APInt(64, result).zextOrTrunc(bits)));
                   setCallIndirectResults(nativeResults);
                 }
-                if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
+                if (isNativeEntry)
                   ++nativeEntryCallCount;
                 else
                   ++trampolineEntryCallCount;
@@ -1605,8 +1697,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         auto callRes = interpretFuncBody(procId, fOp, sArgs, sResults,
                                          callIndirectOp);
         --cs2.callDepth;
-        if (failed(callRes))
+        if (failed(callRes)) {
+          if (cs2.waiting)
+            return success();
+          if (shouldPropagateCoverageRuntimeFailure(procId))
+            return failure();
           break;
+        }
         setCallIndirectResults(sResults);
         staticResolved = true;
       } while (false);
@@ -1826,6 +1923,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                    << "  func.call_indirect: address 0x"
                    << llvm::format_hex(funcAddr, 16)
                    << " not in vtable map\n");
+        if (auto directCallee = tryGetDirectAddressOfCalleeName()) {
+          if (isCoverageRuntimeCallee(*directCallee)) {
+            processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+            return callIndirectOp.emitError()
+                   << "unhandled coverage runtime call in interpreter: "
+                   << *directCallee;
+          }
+        }
         std::string reason = "address " +
             llvm::utohexstr(funcAddr) + " not found in vtable map";
         emitVtableWarning(reason);
@@ -2042,6 +2147,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             processStates[procId].callDepth < 2000 &&
             aotDepth == 0) {
           auto &entry = siteIt->second;
+          bool isNativeEntry =
+              (entry.cachedFid < compiledFuncIsNative.size() &&
+               compiledFuncIsNative[entry.cachedFid]);
           noteAotFuncIdCall(entry.cachedFid);
           // Deny/trap checks for call_indirect E5 cache path.
           if (aotDenyFids.count(entry.cachedFid))
@@ -2055,9 +2163,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           // Skip native dispatch for yield-capable functions outside process
           // context.
-          if (compiledFuncFlags &&
-              (compiledFuncFlags[entry.cachedFid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
-              !activeProcessId) {
+          if (isNativeEntry && shouldSkipMayYieldNative(entry.cachedFid)) {
             ++entryTableSkippedYieldCount;
             goto ci_cache_interpreted;
           }
@@ -2089,8 +2195,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           if (eligible) {
             uint64_t a[8] = {};
+            bool normalizePointerArgs = isNativeEntry;
             fillNativeCallArgs(fastArgs, cachedFuncOp.getArgumentTypes(),
-                               cachedFuncOp.getSymName(), numArgs, a);
+                               cachedFuncOp.getSymName(), numArgs, a,
+                               normalizePointerArgs);
+            maybeTraceIndirectNative(entry.cachedFid, cachedFuncOp.getSymName(),
+                                     numArgs, numResults, a);
 
             if (eligible) {
 
@@ -2137,8 +2247,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                   InterpretedValue(llvm::APInt(64, result).zextOrTrunc(bits)));
               setCallIndirectResults(nativeResults);
             }
-            if (entry.cachedFid < compiledFuncIsNative.size() &&
-                compiledFuncIsNative[entry.cachedFid])
+            if (isNativeEntry)
               ++nativeEntryCallCount;
             else
               ++trampolineEntryCallCount;
@@ -2166,6 +2275,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           auto &failState = processStates[procId];
           if (failState.waiting)
             return success();
+          if (shouldPropagateCoverageRuntimeFailure(procId))
+            return failure();
           for (Value result : callIndirectOp.getResults()) {
             unsigned width = getTypeWidth(result.getType());
             setValue(procId, result, InterpretedValue(llvm::APInt(width, 0)));
@@ -4613,6 +4724,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       if (aotDepth != 0) {
         ++entryTableSkippedDepthCount;
       } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
+        bool isNativeEntry =
+            (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
         // Deny/trap checks for call_indirect main dispatch path.
         if (aotDenyFids.count(fid))
           goto ci_main_interpreted;
@@ -4625,9 +4738,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
         // Skip native dispatch for yield-capable functions outside process
         // context.
-        if (compiledFuncFlags &&
-            (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) &&
-            !activeProcessId) {
+        if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
           ++entryTableSkippedYieldCount;
           goto ci_main_interpreted;
         }
@@ -4660,8 +4771,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           if (eligible) {
             uint64_t a[8] = {};
+            bool normalizePointerArgs = isNativeEntry;
             fillNativeCallArgs(args, funcOp.getArgumentTypes(), calleeName,
-                               numArgs, a);
+                               numArgs, a, normalizePointerArgs);
+            maybeTraceIndirectNative(fid, calleeName, numArgs, numResults, a);
 
             if (eligible) {
 
@@ -4710,7 +4823,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             // Decrement depth counter after returning.
             if (indAddedToVisited)
               decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
-            if (compiledFuncIsNative.size() > fid && compiledFuncIsNative[fid])
+            if (isNativeEntry)
               ++nativeEntryCallCount;
             else
               ++trampolineEntryCallCount;

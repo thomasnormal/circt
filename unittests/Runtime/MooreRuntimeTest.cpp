@@ -211,6 +211,24 @@ TEST(MooreRuntimeAssocTest, TracePtrLogsVirtualTranslation) {
   EXPECT_NE(output.find("tls-normalize"), std::string::npos);
 }
 
+TEST(MooreRuntimeAssocTest, UnresolvedVirtualPointerReturnsSafeDefaults) {
+  AssocResolverGuard assocGuard;
+  TlsNormalizeGuard tlsGuard;
+
+  int32_t key = 17;
+  constexpr uintptr_t virtualArrayPtr = 0x10264760ULL;
+  EXPECT_EQ(__moore_assoc_exists(reinterpret_cast<void *>(virtualArrayPtr), &key),
+            0);
+  EXPECT_EQ(__moore_assoc_size(reinterpret_cast<void *>(virtualArrayPtr)), 0);
+}
+
+TEST(MooreRuntimeQueueTest, UnresolvedVirtualQueuePointerReturnsZeroSize) {
+  TlsNormalizeGuard tlsGuard;
+  constexpr uintptr_t virtualQueuePtr = 0x10264760ULL;
+  EXPECT_EQ(__moore_queue_size(reinterpret_cast<MooreQueue *>(virtualQueuePtr)),
+            0);
+}
+
 //===----------------------------------------------------------------------===//
 // DPI Regex Tests
 //===----------------------------------------------------------------------===//

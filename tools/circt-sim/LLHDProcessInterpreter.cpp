@@ -74,6 +74,8 @@ using namespace circt::sim;
 
 namespace {
 thread_local LLHDProcessInterpreter *tlsNativeModuleInitInterpreter = nullptr;
+// Current interpreter instance used by C-style runtime callback bridges.
+LLHDProcessInterpreter *currentInterpreter = nullptr;
 
 static bool isTruthyEnv(const char *value) {
   if (!value)
@@ -857,7 +859,13 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
 
 // Destructor defined here (not in header) so that BytecodeProgram is a
 // complete type when unique_ptr destructors fire.
-LLHDProcessInterpreter::~LLHDProcessInterpreter() = default;
+LLHDProcessInterpreter::~LLHDProcessInterpreter() {
+  if (currentInterpreter == this)
+    currentInterpreter = nullptr;
+  __moore_assoc_set_ptr_resolver(nullptr, nullptr);
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+}
 
 bool LLHDProcessInterpreter::isAhbMonitorSampleFunctionForTrace(
     llvm::StringRef funcName) {
@@ -4310,11 +4318,6 @@ LLHDProcessInterpreter::getEncodedUnknownForType(Type type) const {
 //===----------------------------------------------------------------------===//
 
 namespace {
-/// Static pointer to the current interpreter for callback access.
-/// This is needed because the MooreRuntime callbacks are C-style function
-/// pointers that don't support closures.
-LLHDProcessInterpreter *currentInterpreter = nullptr;
-
 /// Callback for reading a signal value from the ProcessScheduler.
 int64_t signalReadCallback(MooreSignalHandle handle, void *userData) {
   auto *scheduler = static_cast<ProcessScheduler *>(userData);
@@ -23902,6 +23905,43 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             --state.callDepth;
             if (addedToVisited)
               decrementRecursionDepthEntry(state, funcKey, arg0Val);
+            if (numResults == 1 &&
+                isa<mlir::LLVM::LLVMPointerType>(callOp.getResult(0).getType()) &&
+                retVal != 0) {
+              // Native UVM getters can return host object pointers that the
+              // interpreter later consumes through trampolines. If the pointer
+              // isn't in any tracked block, register a conservative fallback
+              // region so interpreted loads/stores use host memory instead of
+              // producing X/0 from "unknown pointer" paths.
+              constexpr uint64_t kMinReasonablePtr = 0x10000ULL;
+              constexpr uint64_t kVirtualLo = 0x10000000ULL;
+              constexpr uint64_t kVirtualHi = 0x20000000ULL;
+              constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+              constexpr uint64_t kTaggedHi = 0x100000000ULL;
+              constexpr size_t kFallbackNativeObjSize = 512;
+              uint64_t off = 0;
+              size_t nativeSize = 0;
+              bool knownProc = findMemoryBlockByAddress(retVal, procId, &off);
+              bool knownGlobal = !knownProc && findBlockByAddress(retVal, off);
+              bool knownNative =
+                  !knownProc && !knownGlobal &&
+                  findNativeMemoryBlockByAddress(retVal, &off, &nativeSize);
+              bool looksHostObjectPtr =
+                  retVal >= kMinReasonablePtr &&
+                  !(retVal >= kVirtualLo && retVal < kVirtualHi) &&
+                  !(retVal >= kTaggedLo && retVal < kTaggedHi);
+              if (looksHostObjectPtr && !knownProc && !knownGlobal &&
+                  !knownNative) {
+                nativeMemoryBlocks[retVal] = kFallbackNativeObjSize;
+                if (isAotPtrTraceEnabled()) {
+                  llvm::errs()
+                      << "[AOT PTR] register-native-ret-block slow name="
+                      << funcOp.getName() << " ptr="
+                      << llvm::format_hex(retVal, 16)
+                      << " size=" << kFallbackNativeObjSize << "\n";
+                }
+              }
+            }
             if (numResults == 1) {
               unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
               setValue(procId, callOp.getResult(0),
@@ -24210,6 +24250,38 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
           --state.callDepth;
           if (addedToVisited)
             decrementRecursionDepthEntry(state, funcKey, arg0Val);
+          if (numResults == 1 &&
+              isa<mlir::LLVM::LLVMPointerType>(callOp.getResult(0).getType()) &&
+              retVal != 0) {
+            constexpr uint64_t kMinReasonablePtr = 0x10000ULL;
+            constexpr uint64_t kVirtualLo = 0x10000000ULL;
+            constexpr uint64_t kVirtualHi = 0x20000000ULL;
+            constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+            constexpr uint64_t kTaggedHi = 0x100000000ULL;
+            constexpr size_t kFallbackNativeObjSize = 512;
+            uint64_t off = 0;
+            size_t nativeSize = 0;
+            bool knownProc = findMemoryBlockByAddress(retVal, procId, &off);
+            bool knownGlobal = !knownProc && findBlockByAddress(retVal, off);
+            bool knownNative =
+                !knownProc && !knownGlobal &&
+                findNativeMemoryBlockByAddress(retVal, &off, &nativeSize);
+            bool looksHostObjectPtr =
+                retVal >= kMinReasonablePtr &&
+                !(retVal >= kVirtualLo && retVal < kVirtualHi) &&
+                !(retVal >= kTaggedLo && retVal < kTaggedHi);
+            if (looksHostObjectPtr && !knownProc && !knownGlobal &&
+                !knownNative) {
+              nativeMemoryBlocks[retVal] = kFallbackNativeObjSize;
+              if (isAotPtrTraceEnabled()) {
+                llvm::errs()
+                    << "[AOT PTR] register-native-ret-block cached name="
+                    << funcOp.getName() << " ptr="
+                    << llvm::format_hex(retVal, 16)
+                    << " size=" << kFallbackNativeObjSize << "\n";
+              }
+            }
+          }
           if (numResults == 1) {
             unsigned resWidth = getTypeWidth(callOp.getResult(0).getType());
             setValue(procId, callOp.getResult(0),
@@ -24285,6 +24357,57 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   // be used as the phase address in both cases.
   StringRef funcName = funcOp.getSymName();
   maybeSeedSequenceRuntimeVtableFromFunction(procId, funcName, args);
+
+  // Debug aid for AOT parity: trace the incoming phase pointer/class-id at
+  // uvm_phase::get_domain entry to classify bad-pointer sources.
+  static bool traceGetDomainArg = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_GET_DOMAIN_ARG");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceGetDomainArg && funcName == "uvm_pkg::uvm_phase::get_domain" &&
+      !args.empty() && !args[0].isX()) {
+    auto readClassIdAtAddr =
+        [&](uint64_t addr, llvm::StringRef &source) -> uint32_t {
+      source = "none";
+      if (addr == 0)
+        return 0;
+      uint64_t off = 0;
+      if (MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off)) {
+        if (blk->initialized && off + 4 <= blk->size) {
+          source = "proc-local";
+          uint32_t v = 0;
+          for (unsigned i = 0; i < 4; ++i)
+            v |= static_cast<uint32_t>(blk->bytes()[off + i]) << (i * 8);
+          return v;
+        }
+      }
+      if (MemoryBlock *blk = findBlockByAddress(addr, off)) {
+        if (blk->initialized && off + 4 <= blk->size) {
+          source = "global";
+          uint32_t v = 0;
+          for (unsigned i = 0; i < 4; ++i)
+            v |= static_cast<uint32_t>(blk->bytes()[off + i]) << (i * 8);
+          return v;
+        }
+      }
+      uint64_t nativeOff = 0;
+      size_t nativeSize = 0;
+      if (findNativeMemoryBlockByAddress(addr, &nativeOff, &nativeSize) &&
+          nativeOff + 4 <= nativeSize) {
+        source = "native";
+        uint32_t v = 0;
+        std::memcpy(&v, reinterpret_cast<const void *>(addr), sizeof(v));
+        return v;
+      }
+      return 0;
+    };
+    uint64_t phaseAddr = args[0].getUInt64();
+    llvm::StringRef source = "none";
+    uint32_t classId = readClassIdAtAddr(phaseAddr, source);
+    llvm::errs() << "[GET-DOMAIN-ARG] proc=" << procId
+                 << " phase=" << llvm::format_hex(phaseAddr, 16)
+                 << " class_id=" << classId << " source=" << source << "\n";
+  }
 
   // Handle dispatch-agnostic UVM fast-paths at function entry. This catches
   // fallback call_indirect dispatch paths that bypass call-site interceptors.
@@ -29064,6 +29187,24 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Get the callee name
   auto callee = callOp.getCallee();
   std::string resolvedCalleeName;
+  std::optional<std::string> directIndirectCalleeName;
+
+  // Recover a direct symbol from llvm.call indirect forms like:
+  //   %fptr = llvm.mlir.addressof @sym : !llvm.ptr
+  //   %r = llvm.call %fptr(...)
+  auto tryGetDirectIndirectCalleeName = [&](Value calleeOperand)
+      -> std::optional<std::string> {
+    Value base = calleeOperand;
+    if (auto castOp = base.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getNumOperands() == 1 &&
+          isa<LLVM::LLVMPointerType>(castOp.getOperand(0).getType()))
+        base = castOp.getOperand(0);
+    }
+    auto addrOfOp = base.getDefiningOp<LLVM::AddressOfOp>();
+    if (!addrOfOp)
+      return std::nullopt;
+    return addrOfOp.getGlobalName().str();
+  };
 
   if (!callee) {
     // Indirect call - try to resolve through vtable
@@ -29072,6 +29213,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     auto calleeOperands = callOp.getCalleeOperands();
     if (!calleeOperands.empty()) {
       Value calleeOperand = calleeOperands.front();
+      directIndirectCalleeName = tryGetDirectIndirectCalleeName(calleeOperand);
       InterpretedValue funcPtrVal = getValue(procId, calleeOperand);
       if (!funcPtrVal.isX()) {
         uint64_t funcAddr = funcPtrVal.getUInt64();
@@ -29090,6 +29232,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     }
 
     if (resolvedCalleeName.empty()) {
+      if (directIndirectCalleeName &&
+          isCoverageRuntimeCallee(*directIndirectCalleeName)) {
+        processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+        return callOp.emitError()
+               << "unhandled coverage runtime call in interpreter: "
+               << *directIndirectCalleeName;
+      }
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect call could not be resolved\n");
       for (Value result : callOp.getResults()) {
         setValue(procId, result,
@@ -40561,6 +40710,12 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
           name.contains("get_root_blocks") ||
           name == "get_inst" || name.starts_with("get_inst_"))))
       return true;
+    // Callback iterator queue walkers dispatch deep callback-list traversal
+    // via m_get_q_*/get_first_* helper wrappers; keep these interpreted until
+    // coroutine/callback parity is complete.
+    if (name.contains("::uvm_callback_iter::first") ||
+        name.starts_with("m_get_q_") || name.starts_with("get_first_"))
+      return true;
     // Phase-graph/state mutators have interpreter-side cache/update logic.
     if (!allowNativeUvmPhaseState &&
         (name.contains("uvm_phase::set_state") ||
@@ -41072,6 +41227,49 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
        argIdx < argTypes.size() && slotIdx < numArgs; ++argIdx) {
     mlir::Type argTy = argTypes[argIdx];
     interpArgs.push_back(unpackTrampolineArg(argTy, args, slotIdx, numArgs));
+  }
+
+  // Native code can pass host object pointers into trampolines that route into
+  // interpreted UVM methods. Ensure unknown host pointers are backed by a
+  // conservative native block so interpreted loads/stores can access them.
+  if (funcName && *funcName) {
+    llvm::StringRef trampName(funcName);
+    bool looksUvmMethod = trampName.contains("uvm_") || trampName.contains("::");
+    if (looksUvmMethod) {
+      constexpr uint64_t kMinReasonablePtr = 0x10000ULL;
+      constexpr uint64_t kVirtualLo = 0x10000000ULL;
+      constexpr uint64_t kVirtualHi = 0x20000000ULL;
+      constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+      constexpr uint64_t kTaggedHi = 0x100000000ULL;
+      constexpr size_t kFallbackNativeObjSize = 512;
+      for (unsigned i = 0; i < argTypes.size() && i < interpArgs.size(); ++i) {
+        if (!isa<mlir::LLVM::LLVMPointerType>(argTypes[i]) || interpArgs[i].isX())
+          continue;
+        uint64_t addr = interpArgs[i].getUInt64();
+        if (addr < kMinReasonablePtr)
+          continue;
+        if (addr >= kVirtualLo && addr < kVirtualHi)
+          continue;
+        if (addr >= kTaggedLo && addr < kTaggedHi)
+          continue;
+        uint64_t off = 0;
+        size_t nativeSize = 0;
+        bool knownProc = findMemoryBlockByAddress(addr, procId, &off);
+        bool knownGlobal = !knownProc && findBlockByAddress(addr, off);
+        bool knownNative =
+            !knownProc && !knownGlobal &&
+            findNativeMemoryBlockByAddress(addr, &off, &nativeSize);
+        if (knownProc || knownGlobal || knownNative)
+          continue;
+        nativeMemoryBlocks[addr] = kFallbackNativeObjSize;
+        if (isAotPtrTraceEnabled()) {
+          llvm::errs() << "[AOT PTR] register-trampoline-arg-block name="
+                       << trampName << " arg=" << i << " ptr="
+                       << llvm::format_hex(addr, 16)
+                       << " size=" << kFallbackNativeObjSize << "\n";
+        }
+      }
+    }
   }
 
   // Call the interpreter.

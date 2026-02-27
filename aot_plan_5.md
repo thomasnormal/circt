@@ -52,17 +52,46 @@ The remaining gap to Xcelium-level end-to-end throughput is now mostly:
     - `MooreRuntimeQueueTest.QueuePopFrontPtrInvalidLengthGuard`
     - `MooreRuntimeQueueTest.QueuePopBackPtrInvalidLengthGuard`
     - `MooreRuntimeQueueTest.QueueSizeInvalidLengthGuard`
-- `uvm_seq_body` parity mismatch (`COMP/INTERNAL`) is now mitigated with a
-  root-cause-specific demotion:
-  - culprit class was generated short-name build-phase singleton getters
-    (for example `get_2160`) touching
-    `@"uvm_pkg::uvm_pkg::uvm_build_phase::m_inst"` under unmapped direct
-    native `func.call`.
-  - compile-time demotion now strips functions that access that global to
-    trampolines by default.
-  - unmapped direct native `func.call` policy is back to default allow-all;
-    targeted deny remains available via
-    `CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES=...`.
+- `uvm_seq_body` parity mismatch (`COMP/INTERNAL get_domain`) is now resolved
+  with a pointer-model fix (not additional demotion):
+  - root cause: native-dispatched functions/trampolines could pass host object
+    pointers into interpreted UVM paths without registering those pointers in
+    `nativeMemoryBlocks`. Interpreted loads then treated those pointers as
+    unknown and collapsed class-id reads to zero.
+  - fix landed in `LLHDProcessInterpreter.cpp`:
+    - register unknown host pointer returns from native `func.call` dispatch
+      (slow + cached paths) with a conservative fallback native block.
+    - register unknown host pointer arguments at trampoline entry for UVM-style
+      interpreted calls.
+  - new regression:
+    - `aot-native-pointer-return-to-interpreted-load.mlir`.
+  - workload status after fix:
+    - `uvm_seq_body` compiled run completes (`RUN_EXIT=0`,
+      `Simulation completed at time 50000000000 fs`) with no time-0
+      `PH/INTERNAL get_domain` fatal.
+- Phase 2 all-entry interpreter `call_indirect` dispatch is now enforced:
+  - root cause of missing trampoline accounting/perf gap:
+    interpreter `call_indirect` paths still gated non-native FuncIds with
+    `compiledFuncIsNative`, forcing direct interpreted fallback.
+  - fix landed in `LLHDProcessInterpreterCallIndirect.cpp` across all 4
+    interpreter entry-table dispatch paths (`X` fallback, static fallback,
+    site-cache dispatch, main dispatch):
+    - removed native-only dispatch gate
+    - retained pointer-arg normalization as native-only
+    - retained `MAY_YIELD` skip as native-only
+    - preserved deny/trap policy behavior
+  - regression status:
+    - `aot-entry-table-trampoline-counter.mlir` now passes with
+      `Trampoline calls: 1` and `Entry-table trampoline calls: 1`.
+    - `aot-call-indirect-trampoline-pointer-preserve.mlir` updated to expect
+      trampoline entry-table dispatch (`Entry-table trampoline calls: 1`) while
+      preserving tagged-pointer semantics (`out=1`).
+  - profile snapshot after fix (`uvm_seq_body`, `--max-time=50000000000`):
+    - `RUN_EXIT=0`, `Simulation completed at time 50000000000 fs`
+    - `Entry-table native calls: 6`
+    - `Entry-table trampoline calls: 35`
+    - `Max AOT depth: 1`
+    - wall time (single run): `WALL=9.780s`.
 - Direct-call policy consistency hardening landed:
   - cached `func.call` path now applies the same `CIRCT_AOT_DENY_FID` and
     `CIRCT_AOT_TRAP_FID` checks as the slow path.
@@ -404,14 +433,20 @@ Normalize assoc-array pointers before dereference:
   points at a pointer field
 - pointer-class diagnostics with optional trace stream (`CIRCT_AOT_TRACE_PTR`):
   - `class=virtual ... -> host=... (tls-normalize)`
-  - `class=virtual ... unresolved (tls-miss|no-tls-callback)`
-  - `class=tagged_funcid ...` trap.
+  - `class=virtual ... unresolved (tls-miss|no-tls-callback, returning null)`
+  - `class=tagged_funcid ...` (returning null).
+  - `class=invalid-low ...` (returning null).
+- unresolved virtual/tagged/invalid pointers no longer fall through to raw
+  helper dereference; they now return null-safe defaults at the Moore runtime
+  boundary (prevents shutdown-time segfaults on stale virtual pointers).
 - interpreter resolver provenance tracing now classifies:
   - `assoc-host`, `virtual-direct`, `virtual-pointer-slot`,
     `virtual-unmapped`.
 - unit coverage:
   - `MooreRuntimeAssocTest.TlsNormalizeMapsVirtualPointer`
-  - `MooreRuntimeAssocTest.TracePtrLogsVirtualTranslation`.
+  - `MooreRuntimeAssocTest.TracePtrLogsVirtualTranslation`
+  - `MooreRuntimeAssocTest.UnresolvedVirtualPointerReturnsSafeDefaults`
+  - `MooreRuntimeQueueTest.UnresolvedVirtualQueuePointerReturnsZeroSize`.
 
 ### 1.3 Assoc helper integration (implemented)
 
@@ -421,8 +456,9 @@ All assoc helper entry points now normalize pointer operands before
 Acceptance criteria:
 
 - no crash at `header->type` dereference in assoc helper
-- failures become deterministic traps with pointer provenance (met for
-  pointer-class tracing in runtime + resolver path)
+- unresolved virtual pointers are classified and resolved when possible;
+  unresolved cases return null-safe defaults rather than raw dereference
+  crashes (met)
 - tactical intercept exceptions (like `get_severity`) can be removed once
   normalization + translation is verified.
 
