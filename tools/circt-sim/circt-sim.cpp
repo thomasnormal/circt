@@ -3720,6 +3720,7 @@ static LogicalResult processInput(MLIRContext &context,
     const auto &schedStats = simContext.getSchedulerStats();
     uint64_t processActivationsTotal = schedStats.processesExecuted;
     uint64_t deltaCyclesTotal = schedStats.deltaCyclesExecuted;
+    uint64_t eventActivationsTotal = deltaCyclesTotal;
     uint64_t signalUpdatesTotal = schedStats.signalUpdates;
     uint64_t edgesDetectedTotal = schedStats.edgesDetected;
     uint64_t simulatedTimeFs = simContext.getFinalTime().realTime;
@@ -3731,6 +3732,7 @@ static LogicalResult processInput(MLIRContext &context,
     };
     uint64_t processActivationsPerS = scalePerSecond(processActivationsTotal);
     uint64_t deltaCyclesPerS = scalePerSecond(deltaCyclesTotal);
+    uint64_t eventActivationsPerS = deltaCyclesPerS;
     uint64_t signalUpdatesPerS = scalePerSecond(signalUpdatesTotal);
     uint64_t edgesDetectedPerS = scalePerSecond(edgesDetectedTotal);
     uint64_t simulatedNsPerS = scalePerSecond(simulatedTimeFs) / 1000000;
@@ -3773,6 +3775,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << processActivationsTotal << "\n";
     llvm::errs() << "[circt-sim] delta_cycles_total:               "
                  << deltaCyclesTotal << "\n";
+    llvm::errs() << "[circt-sim] event_activations_total:          "
+                 << eventActivationsTotal << "\n";
     llvm::errs() << "[circt-sim] signal_updates_total:             "
                  << signalUpdatesTotal << "\n";
     llvm::errs() << "[circt-sim] edges_detected_total:             "
@@ -3781,6 +3785,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << processActivationsPerS << "\n";
     llvm::errs() << "[circt-sim] delta_cycles_per_s:               "
                  << deltaCyclesPerS << "\n";
+    llvm::errs() << "[circt-sim] event_activations_per_s:          "
+                 << eventActivationsPerS << "\n";
     llvm::errs() << "[circt-sim] signal_updates_per_s:             "
                  << signalUpdatesPerS << "\n";
     llvm::errs() << "[circt-sim] edges_detected_per_s:             "
