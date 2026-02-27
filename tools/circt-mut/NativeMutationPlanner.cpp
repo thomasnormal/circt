@@ -27,7 +27,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
     "XOR_TO_OR",        "UNARY_NOT_DROP", "CONST0_TO_1",     "CONST1_TO_0",
     "ADD_TO_SUB",       "SUB_TO_ADD",     "SHL_TO_SHR",      "SHR_TO_SHL",
-    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ"};
+    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED",
+    "UNSIGNED_TO_SIGNED"};
 
 namespace {
 
@@ -305,6 +306,34 @@ static void collectComparatorTokenSites(StringRef text, StringRef token,
   }
 }
 
+static void collectCastFunctionSites(StringRef text, StringRef name,
+                                     ArrayRef<uint8_t> codeMask,
+                                     SmallVectorImpl<SiteInfo> &sites) {
+  assert((name == "signed" || name == "unsigned") &&
+         "expected signed or unsigned cast helper");
+  size_t nameLen = name.size();
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i) || text[i] != '$')
+      continue;
+    if (!isCodeRange(codeMask, i + 1, nameLen))
+      continue;
+    if (!text.substr(i + 1).starts_with(name))
+      continue;
+    size_t endName = i + 1 + nameLen;
+    char next = (endName < e && isCodeAt(codeMask, endName)) ? text[endName]
+                                                              : '\0';
+    if (isAlnum(next) || next == '_' || next == '$')
+      continue;
+    size_t j = endName;
+    while (j < e && isCodeAt(codeMask, j) &&
+           std::isspace(static_cast<unsigned char>(text[j])))
+      ++j;
+    if (j >= e || !isCodeAt(codeMask, j) || text[j] != '(')
+      continue;
+    sites.push_back({i});
+  }
+}
+
 static void collectStandaloneCompareSites(StringRef text, char needle,
                                           ArrayRef<uint8_t> codeMask,
                                           SmallVectorImpl<SiteInfo> &sites) {
@@ -563,6 +592,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectComparatorTokenSites(designText, "!==", codeMask, sites);
     return;
   }
+  if (op == "SIGNED_TO_UNSIGNED") {
+    collectCastFunctionSites(designText, "signed", codeMask, sites);
+    return;
+  }
+  if (op == "UNSIGNED_TO_SIGNED") {
+    collectCastFunctionSites(designText, "unsigned", codeMask, sites);
+    return;
+  }
   if (op == "LT_TO_LE") {
     collectStandaloneCompareSites(designText, '<', codeMask, sites);
     return;
@@ -662,6 +699,8 @@ static std::string getOpFamily(StringRef op) {
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL")
     return "shift";
+  if (op == "SIGNED_TO_UNSIGNED" || op == "UNSIGNED_TO_SIGNED")
+    return "cast";
   return "misc";
 }
 
