@@ -200,17 +200,16 @@ bool LLHDProcessInterpreter::handleUvmWaitForSelfAndSiblingsToDrop(
   if (handle != MOORE_OBJECTION_INVALID_HANDLE)
     count = __moore_objection_get_count(handle);
 
-  static std::map<ProcessId, int> yieldCountByProc;
   if (count <= 0) {
     // Yield repeatedly to give forked task processes a chance to raise.
-    int &yields = yieldCountByProc[procId];
+    int &yields = phaseWaitYieldCountByProc[procId];
     if (yields >= 10) {
       yields = 0;
       return true;
     }
     ++yields;
   } else {
-    yieldCountByProc[procId] = 0;
+    phaseWaitYieldCountByProc[procId] = 0;
   }
 
   // Suspend and poll later.

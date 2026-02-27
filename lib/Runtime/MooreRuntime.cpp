@@ -2687,30 +2687,28 @@ extern "C" void __moore_mailbox_peek(int64_t mbox_id, int64_t *msg_out) {
 //===----------------------------------------------------------------------===//
 
 namespace {
-/// Collect plusargs from environment variables and cache them.
+/// Collect plusargs from environment variables.
 /// Checks CIRCT_UVM_ARGS and UVM_ARGS (space-separated plusargs).
 std::vector<std::string> &getPlusargs() {
-  static std::vector<std::string> plusargs = []() {
-    std::vector<std::string> args;
-    for (const char *envName : {"CIRCT_UVM_ARGS", "UVM_ARGS"}) {
-      const char *env = std::getenv(envName);
-      if (!env)
-        continue;
-      std::string s(env);
-      size_t pos = 0;
-      while (pos < s.size()) {
-        while (pos < s.size() && s[pos] == ' ')
-          ++pos;
-        size_t end = s.find(' ', pos);
-        if (end == std::string::npos)
-          end = s.size();
-        if (end > pos)
-          args.push_back(s.substr(pos, end - pos));
-        pos = end;
-      }
+  static std::vector<std::string> plusargs;
+  plusargs.clear();
+  for (const char *envName : {"CIRCT_UVM_ARGS", "UVM_ARGS"}) {
+    const char *env = std::getenv(envName);
+    if (!env)
+      continue;
+    std::string s(env);
+    size_t pos = 0;
+    while (pos < s.size()) {
+      while (pos < s.size() && s[pos] == ' ')
+        ++pos;
+      size_t end = s.find(' ', pos);
+      if (end == std::string::npos)
+        end = s.size();
+      if (end > pos)
+        plusargs.push_back(s.substr(pos, end - pos));
+      pos = end;
     }
-    return args;
-  }();
+  }
   return plusargs;
 }
 } // namespace
@@ -19347,6 +19345,121 @@ extern "C" int32_t __moore_semaphore_get_key_count(MooreSemaphoreHandle sem) {
 
   std::lock_guard<std::mutex> lock(semaphore->mutex);
   return semaphore->keyCount;
+}
+
+extern "C" void __moore_runtime_reset_for_new_simulation_run(void) {
+  // Simulation-control and display runtime state.
+  __moore_reset_finish_state();
+  __moore_set_time(0);
+  {
+    std::lock_guard<std::mutex> lock(strobeMutex);
+    strobeQueue.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(monitorMutex);
+    monitorState = MonitorState{};
+  }
+
+  // Signal registry and HDL bridge state.
+  __moore_signal_registry_set_accessor(nullptr, nullptr, nullptr, nullptr,
+                                       nullptr);
+  __moore_signal_registry_clear_all_forced();
+  __moore_signal_registry_clear();
+  {
+    std::lock_guard<std::mutex> lock(hdlMutex);
+    hdlValues.clear();
+  }
+
+  // Regex helper scratch state.
+  lastMatchBuffer.clear();
+
+  // Mailboxes and semaphores.
+  {
+    std::lock_guard<std::mutex> lock(mailboxRegistryMutex);
+    mailboxRegistry.clear();
+    nextMailboxId = 1;
+  }
+  {
+    auto &registry = getSemaphoreRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.semaphores.clear();
+    registry.nextHandle = 1;
+  }
+
+  // Coverage / constraint bookkeeping.
+  __moore_constraint_reset_stats();
+  __moore_implication_reset_stats();
+  __moore_coverage_reset_illegal_bin_hits();
+  __moore_coverage_clear_registered_assertions();
+  __moore_coverage_clear_exclusions();
+
+  // UVM runtime registries and reporting state.
+  __moore_uvm_reset_coverage();
+  __moore_uvm_factory_clear();
+  __moore_uvm_clear_components();
+  __moore_config_db_clear();
+  __moore_vif_clear_all();
+  __moore_vif_clear_registry();
+  __moore_uvm_reset_report_counts();
+  __moore_uvm_set_report_verbosity(MOORE_UVM_MEDIUM);
+  __moore_uvm_set_max_quit_count(0);
+  __moore_uvm_set_report_severity_action(MOORE_UVM_INFO, MOORE_UVM_DISPLAY);
+  __moore_uvm_set_report_severity_action(
+      MOORE_UVM_WARNING, MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+  __moore_uvm_set_report_severity_action(MOORE_UVM_ERROR,
+                                         MOORE_UVM_DISPLAY | MOORE_UVM_COUNT);
+  __moore_uvm_set_report_severity_action(MOORE_UVM_FATAL,
+                                         MOORE_UVM_DISPLAY | MOORE_UVM_EXIT);
+  __moore_uvm_set_fatal_exits(true);
+  __moore_uvm_set_time(0);
+  {
+    auto &state = getUvmReportState();
+    std::lock_guard<std::mutex> lock(state.idVerbosityMutex);
+    state.idVerbosity.clear();
+  }
+
+  // TLM, objections, sequences, scoreboard and RAL state.
+  {
+    auto &registry = getTlmRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.ports.clear();
+    registry.fifos.clear();
+  }
+  tlmTraceEnabled = false;
+  tlmTotalConnections = 0;
+  tlmTotalWrites = 0;
+  tlmTotalGets = 0;
+
+  {
+    auto &registry = getObjectionRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.pools.clear();
+  }
+  objectionTraceEnabled = false;
+
+  {
+    auto &registry = getSeqRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.sequencers.clear();
+    registry.sequences.clear();
+    registry.totalSequencesCreated.store(0);
+    registry.totalItemsTransferred.store(0);
+    registry.totalArbitrations.store(0);
+  }
+  seqTraceEnabled.store(false);
+
+  {
+    auto &registry = getScoreboardRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.scoreboards.clear();
+  }
+  scoreboardTraceEnabled.store(false);
+
+  __moore_reg_clear_all();
+
+  // Root singleton tracking.
+  __moore_uvm_root_constructing_end();
+  __moore_uvm_set_root_inst(nullptr);
 }
 
 //===----------------------------------------------------------------------===//
