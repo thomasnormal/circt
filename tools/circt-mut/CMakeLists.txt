@@ -1,6 +1,9 @@
 set(LLVM_LINK_COMPONENTS Support)
 
-add_circt_tool(circt-mut circt-mut.cpp)
+add_circt_tool(circt-mut
+  circt-mut.cpp
+  NativeMutationPlanner.cpp
+)
 target_link_libraries(circt-mut
   PRIVATE
   CIRCTSupport
