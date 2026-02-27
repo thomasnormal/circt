@@ -458,3 +458,16 @@
     - `val8=0x{{0*}}a`
 - Tests:
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/format-fourstate-int.sv test/Tools/circt-sim/bitcast-four-state.sv`
+
+### Sim/VPI basic: fix stale uninitialized-counter expectation
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/vpi-basic.sv`
+  - Observed `counter=x` while test expected `counter=0`.
+- Root cause:
+  - `counter` is declared as 4-state `logic [7:0]` and is never initialized:
+    no clock edges occur and reset is never asserted in the testbench.
+  - Expecting `0` was inconsistent with 4-state semantics.
+- Fix:
+  - Updated test comment and FileCheck expectation to `counter=x`.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/vpi-basic.sv`
