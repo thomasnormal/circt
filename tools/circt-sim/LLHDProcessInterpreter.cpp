@@ -23813,6 +23813,39 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           }
         }
       }
+      auto shouldSkipMayYieldNativeFunc = [&](uint32_t fid) {
+        if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
+          return false;
+        if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
+          return false;
+        static bool allowNativeMayYield =
+            std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
+        static bool traceNativeCalls =
+            std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+        // Default safety: native func.call cannot suspend today. Keep
+        // MAY_YIELD FuncIds on interpreter dispatch unless explicitly opted in.
+        if (!allowNativeMayYield) {
+          if (traceNativeCalls) {
+            llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
+                         << " active_proc=" << activeProcessId
+                         << " mode=default\n";
+          }
+          return true;
+        }
+        // Opt-in mode: only allow inside an active process context.
+        bool skip = activeProcessId == InvalidProcessId;
+        if (skip && traceNativeCalls) {
+          llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
+                       << " active_proc=" << activeProcessId
+                       << " mode=optin-no-proc\n";
+        }
+        return skip;
+      };
+      if (fidIt != funcOpToFid.end() &&
+          shouldSkipMayYieldNativeFunc(fidIt->second)) {
+        ++interpretedFuncCallCount;
+        goto func_call_interpreted_fallback;
+      }
       if (aotDepth == 0) {
         void *fptr = nativeIt->second;
         unsigned numArgs = args.size();
@@ -24171,6 +24204,37 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
       llvm::errs() << "\n";
       __builtin_trap();
+    }
+  }
+  if (nfp && fidIt != funcOpToFid.end()) {
+    auto shouldSkipMayYieldNativeFunc = [&](uint32_t fid) {
+      if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
+        return false;
+      if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
+        return false;
+      static bool allowNativeMayYield =
+          std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
+      static bool traceNativeCalls =
+          std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+      if (!allowNativeMayYield) {
+        if (traceNativeCalls) {
+          llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
+                       << " active_proc=" << activeProcessId
+                       << " mode=default\n";
+        }
+        return true;
+      }
+      bool skip = activeProcessId == InvalidProcessId;
+      if (skip && traceNativeCalls) {
+        llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
+                     << " active_proc=" << activeProcessId
+                     << " mode=optin-no-proc\n";
+      }
+      return skip;
+    };
+    if (shouldSkipMayYieldNativeFunc(fidIt->second)) {
+      nfp = nullptr;
+      forcedInterpreter = true;
     }
   }
   if (forcedInterpreter)
