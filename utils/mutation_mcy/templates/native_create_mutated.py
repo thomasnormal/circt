@@ -115,6 +115,43 @@ def replace_nth(pattern, repl, nth: int):
     return True
 
 
+def find_comparator_token(token: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    if token not in ("==", "!=", "===", "!=="):
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    tlen = len(token)
+    while i + tlen <= n:
+        if not is_code_span(i, i + tlen):
+            i += 1
+            continue
+        if not text.startswith(token, i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + tlen] if i + tlen < n and is_code_at(i + tlen) else ""
+        if token == "==":
+            if prev in ("=", "!", "<", ">") or nxt == "=":
+                i += 1
+                continue
+        elif token == "!=":
+            if nxt == "=":
+                i += 1
+                continue
+        elif token in ("===", "!=="):
+            if prev == "=" or nxt == "=":
+                i += 1
+                continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_relational_comparator_token(token: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -304,9 +341,25 @@ def find_binary_shift_token(token: str, nth: int) -> int:
 code_mask = build_code_mask(text)
 
 if op == 'EQ_TO_NEQ':
-    changed = replace_nth(r'==', '!=', site_index)
+    idx = find_comparator_token('==', site_index)
+    if idx >= 0:
+        text = text[:idx] + '!=' + text[idx + 2:]
+        changed = True
 elif op == 'NEQ_TO_EQ':
-    changed = replace_nth(r'!=', '==', site_index)
+    idx = find_comparator_token('!=', site_index)
+    if idx >= 0:
+        text = text[:idx] + '==' + text[idx + 2:]
+        changed = True
+elif op == 'CASEEQ_TO_EQ':
+    idx = find_comparator_token('===', site_index)
+    if idx >= 0:
+        text = text[:idx] + '==' + text[idx + 3:]
+        changed = True
+elif op == 'CASENEQ_TO_NEQ':
+    idx = find_comparator_token('!==', site_index)
+    if idx >= 0:
+        text = text[:idx] + '!=' + text[idx + 3:]
+        changed = True
 elif op == 'LT_TO_LE':
     changed = replace_nth(r'(?<![<>=!])<(?![<>=])', '<=', site_index)
 elif op == 'GT_TO_GE':

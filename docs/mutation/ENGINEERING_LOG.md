@@ -31,3 +31,14 @@
   - Extended CIRCT-only mode mappings (`arith`, `inv`, `invert`, `balanced/all`) to include shift mutations.
   - Hardened cycle/index tests to avoid depending on an exact global operator count.
   - Ran a shift-focused seeded mutation campaign (24 mutants) through both `xrun` and `circt`; no mismatches observed.
+
+## 2026-02-27 (4-state compare operators)
+
+- realizations:
+  - X-propagation handling (`==` vs `===`, `!=` vs `!==`) is a distinct and realistic RTL fault class that should not be conflated with ordinary compare mutations.
+  - Comparator token matching must be exact; naive `==` scanning can incorrectly match inside `===` and create semantically wrong mutants.
+
+- changes made:
+  - Added native operators `CASEEQ_TO_EQ` and `CASENEQ_TO_NEQ`.
+  - Tightened comparator site detection in both planner and mutator so `EQ_TO_NEQ`/`NEQ_TO_EQ` no longer target `===`/`!==` sites.
+  - Extended `arith`/`inv`/`invert`/`balanced` mode mappings to include 4-state compare mutations.

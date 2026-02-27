@@ -67,7 +67,7 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - wire-ish key
   - wirebit-ish key
 - Adds diversity pressure across semantic buckets:
-  - fault family (`compare|logic|constant|arithmetic|shift|misc`)
+  - fault family (`compare|xcompare|logic|constant|arithmetic|shift|misc`)
   - operator kind
   - coarse statement context (`control|assignment|verification|expression`)
 - Adds realism bias in scoring:
