@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic signed [7:0] a,b,c,d,e,f, output logic signed [7:0] y0,y1,y2);\n  assign y0 = a >> b[2:0];\n  assign y1 = c >>> d[2:0];\n  assign y2 = e >> f[2:0];\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_SHR_TO_ASHR@2\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: assign y0 = a >> b[2:0];
+// MUTANT: assign y1 = c >>> d[2:0];
+// MUTANT: assign y2 = e >>> f[2:0];

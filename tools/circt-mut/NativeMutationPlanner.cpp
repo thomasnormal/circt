@@ -29,7 +29,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
     "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
     "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
-    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ",
+    "SHR_TO_ASHR",      "ASHR_TO_SHR",    "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
@@ -541,6 +541,35 @@ static void collectBinaryShiftSites(StringRef text, StringRef token,
   }
 }
 
+static void collectBinaryArithmeticRightShiftSites(
+    StringRef text, ArrayRef<uint8_t> codeMask,
+    SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 2 < e; ++i) {
+    if (!isCodeRange(codeMask, i, 3))
+      continue;
+    if (!text.substr(i).starts_with(">>>"))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next =
+        (i + 3 < e && isCodeAt(codeMask, i + 3)) ? text[i + 3] : '\0';
+    if (prev == '>' || next == '>')
+      continue;
+    if (next == '=')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 3);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectBinaryXorSites(StringRef text, ArrayRef<uint8_t> codeMask,
                                   SmallVectorImpl<SiteInfo> &sites) {
   for (size_t i = 0, e = text.size(); i < e; ++i) {
@@ -878,6 +907,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryShiftSites(designText, ">>", codeMask, sites);
     return;
   }
+  if (op == "SHR_TO_ASHR") {
+    collectBinaryShiftSites(designText, ">>", codeMask, sites);
+    return;
+  }
+  if (op == "ASHR_TO_SHR") {
+    collectBinaryArithmeticRightShiftSites(designText, codeMask, sites);
+    return;
+  }
 }
 
 static uint64_t countNativeMutationSitesForOp(StringRef designText,
@@ -910,7 +947,8 @@ static std::string getOpFamily(StringRef op) {
       op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
       op == "UNARY_MINUS_DROP")
     return "arithmetic";
-  if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL")
+  if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL" || op == "SHR_TO_ASHR" ||
+      op == "ASHR_TO_SHR")
     return "shift";
   if (op == "SIGNED_TO_UNSIGNED" || op == "UNSIGNED_TO_SIGNED")
     return "cast";

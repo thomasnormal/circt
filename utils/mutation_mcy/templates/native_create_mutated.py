@@ -462,6 +462,44 @@ def find_binary_shift_token(token: str, nth: int) -> int:
     return -1
 
 
+def find_binary_ashr_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 2 < n:
+        if not is_code_span(i, i + 3):
+            i += 1
+            continue
+        if not text.startswith(">>>", i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 3] if i + 3 < n and is_code_at(i + 3) else ""
+        if prev == ">" or nxt == ">":
+            i += 1
+            continue
+        if nxt == "=":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 3)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+            text[next_sig]
+        ):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_binary_xor_token(nth: int) -> int:
     if nth < 1:
         return -1
@@ -754,6 +792,16 @@ elif op == 'SHR_TO_SHL':
     idx = find_binary_shift_token('>>', site_index)
     if idx >= 0:
         text = text[:idx] + '<<' + text[idx + 2:]
+        changed = True
+elif op == 'SHR_TO_ASHR':
+    idx = find_binary_shift_token('>>', site_index)
+    if idx >= 0:
+        text = text[:idx] + '>>>' + text[idx + 2:]
+        changed = True
+elif op == 'ASHR_TO_SHR':
+    idx = find_binary_ashr_token(site_index)
+    if idx >= 0:
+        text = text[:idx] + '>>' + text[idx + 3:]
         changed = True
 
 if not changed:

@@ -14805,8 +14805,9 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
                "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "SHL_TO_SHR", "SHR_TO_SHL", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
-               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
+               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
+               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED",
+               "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "control") {
@@ -14824,7 +14825,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "UNARY_NOT_DROP",
                "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
                "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "SHL_TO_SHR", "SHR_TO_SHL", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ"});
+               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
+               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ"});
     appendAll({"SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
@@ -14840,8 +14842,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "UNARY_BNOT_DROP", "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB",
                "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL",
                "MUL_TO_DIV", "UNARY_MINUS_DROP", "SHL_TO_SHR", "SHR_TO_SHL",
-               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED",
-               "UNSIGNED_TO_SIGNED"});
+               "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
+               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
 
@@ -14852,8 +14854,9 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "UNARY_NOT_DROP",
                "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
                "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "SHL_TO_SHR", "SHR_TO_SHL", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
-               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
+               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
+               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED",
+               "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "const0") {
