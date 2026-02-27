@@ -1,6 +1,4 @@
-// RUN: true
-// UNSUPPORTED: true
-// This test requires UVM runtime simulation, not circt-verilog compilation.
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 //===----------------------------------------------------------------------===//
 // UVM Phase wait_for_state Test
