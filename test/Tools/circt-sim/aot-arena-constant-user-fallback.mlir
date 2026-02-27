@@ -19,9 +19,13 @@
 // STATS-DAG: [circt-sim] arena_globals:                    0
 // STATS-DAG: [circt-sim] arena_size_bytes:                 0
 // STATS-DAG: [circt-sim] global_patch_count:               1
+// STATS-DAG: [circt-sim] global_patch_bytes:               4
 // STATS-DAG: [circt-sim] mutable_globals_total:            1
 // STATS-DAG: [circt-sim] mutable_globals_arena:            0
 // STATS-DAG: [circt-sim] mutable_globals_patch:            1
+// STATS-DAG: [circt-sim] mutable_bytes_total:              4
+// STATS-DAG: [circt-sim] mutable_bytes_arena:              0
+// STATS-DAG: [circt-sim] mutable_bytes_patch:              4
 // STATS: out=77
 
 llvm.mlir.global internal @g_counter(0 : i32) : i32

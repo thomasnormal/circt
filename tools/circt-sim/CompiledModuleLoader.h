@@ -174,6 +174,17 @@ public:
     return compiledModule->global_patch_sizes[i];
   }
 
+  /// Get total byte size of legacy global patches in the .so.
+  uint64_t getGlobalPatchBytes() const {
+    if (!compiledModule || compiledModule->num_global_patches == 0 ||
+        !compiledModule->global_patch_sizes)
+      return 0;
+    uint64_t total = 0;
+    for (uint32_t i = 0; i < compiledModule->num_global_patches; ++i)
+      total += compiledModule->global_patch_sizes[i];
+    return total;
+  }
+
   /// Get the total number of functions in the unified entry table.
   uint32_t getNumAllFuncs() const {
     return compiledModule ? compiledModule->num_all_funcs : 0;
