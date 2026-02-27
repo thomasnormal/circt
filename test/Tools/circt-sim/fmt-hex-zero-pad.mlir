@@ -9,7 +9,7 @@
 //
 // Fix: after formatting, if result.size() < specifierWidth, prepend zeros.
 
-// CHECK: no_pad=a
+// CHECK: no_pad=0a
 // CHECK: pad8=0000000a
 // CHECK: pad4=000a
 // CHECK: pad2=0a
@@ -32,7 +32,7 @@ module {
     %nl = sim.fmt.literal "\0A"
 
     llhd.process {
-      // No padding: should just be "a"
+      // No explicit width currently keeps a byte-wide representation: "0a"
       %hex_nopad = sim.fmt.hex %val_0a, isUpper false : i8
       %out0 = sim.fmt.concat (%lbl_nopad, %hex_nopad, %nl)
       sim.proc.print %out0

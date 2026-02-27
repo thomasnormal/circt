@@ -1,6 +1,6 @@
 // Test that circt-sim works with bytecode input and --skip-passes.
 // This is the fastest startup configuration for pre-compiled designs.
-// RUN: circt-as %s -o %t.mlirbc
+// RUN: circt-opt %s --emit-bytecode -o %t.mlirbc
 // RUN: circt-sim %t.mlirbc --top test --skip-passes 2>&1 | FileCheck %s
 
 // CHECK: fast startup

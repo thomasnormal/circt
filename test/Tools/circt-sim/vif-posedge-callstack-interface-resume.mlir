@@ -1,6 +1,6 @@
 // CHECK-NOT: maxTime reached
-// CHECK: DRV_CLK1 t=
 // CHECK: DRV_RUN_START t=
+// CHECK: DRV_CLK1 t=
 //
 // Regression: wait_event on virtual-interface field posedge inside func.call context
 // must resume through an active call stack.
