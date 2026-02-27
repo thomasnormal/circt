@@ -1,6 +1,5 @@
 // RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
-// RUN: circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUN
-// XFAIL: *
+// RUN: circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=OUT
 
 // Regression: lowering sim.proc.print introduces external vararg @printf.
 // AOT trampoline generation must not treat host extern varargs as
@@ -10,7 +9,7 @@
 // COMPILE-NOT: cannot generate interpreter trampoline for referenced external vararg function
 // COMPILE: [circt-compile] Wrote {{.*}}.so
 //
-// RUN: V=7
+// OUT: V=7
 
 func.func @emit_msg() {
   %v = arith.constant 7 : i32

@@ -1,16 +1,15 @@
 // RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
-// XFAIL: *
 //
-// Regression: trampoline native fallback must not dispatch external llvm.func
-// float signatures via raw uint64 ABI casts. This previously produced
-// deterministic garbage output in compiled mode.
+// Regression: compiled mode must preserve correct floating-point ABI when
+// calling external llvm.func declarations.
 //
-// COMPILE: [circt-compile] Generated 1 interpreter trampolines
+// COMPILE: [circt-compile] Functions: {{.*}} 1 compilable
+// COMPILE: [circt-compile] Wrote {{.*}} (0 processes, 1 functions, 0 trampolines{{.*}})
 //
-// RUNTIME: WARNING: unsupported trampoline native fallback ABI
-// RUNTIME: WARNING: external llvm.func trampoline sqrt has no compatible native fallback; returning zeros
-// RUNTIME: bits=0
+// RUNTIME-NOT: unsupported trampoline native fallback ABI
+// RUNTIME-NOT: has no compatible native fallback
+// RUNTIME: bits=4611686018427387904
 
 llvm.func @sqrt(f64) -> f64
 

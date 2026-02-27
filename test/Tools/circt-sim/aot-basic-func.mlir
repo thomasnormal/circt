@@ -2,7 +2,6 @@
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 // RUN: env CIRCT_AOT_STATS=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=AOTSTATS
-// XFAIL: *
 
 // Test the full AOT compile-then-run pipeline for a simple func.func.
 //
@@ -15,13 +14,16 @@
 // COMPILED: out=200
 //
 // AOTSTATS: [circt-sim] === AOT Statistics ===
-// AOTSTATS: [circt-sim] indirect_calls_total:             0
-// AOTSTATS: [circt-sim] indirect_calls_native:            0
-// AOTSTATS: [circt-sim] indirect_calls_trampoline:        0
-// AOTSTATS: [circt-sim] direct_calls_native:              1
-// AOTSTATS: [circt-sim] direct_calls_interpreted:         0
-// AOTSTATS: [circt-sim] aotDepth_max:                     0
-// AOTSTATS: [circt-sim] Entry-table trampoline calls:     0
+// AOTSTATS-DAG: [circt-sim] indirect_calls_total:             0
+// AOTSTATS-DAG: [circt-sim] indirect_calls_native:            0
+// AOTSTATS-DAG: [circt-sim] indirect_calls_trampoline:        0
+// AOTSTATS-DAG: [circt-sim] direct_calls_native:              1
+// AOTSTATS-DAG: [circt-sim] direct_calls_interpreted:         0
+// AOTSTATS-DAG: [circt-sim] aotDepth_max:                     0
+// AOTSTATS-DAG: [circt-sim] Entry-table trampoline calls:     0
+// AOTSTATS-DAG: [circt-sim] entry_calls_total:                0
+// AOTSTATS-DAG: [circt-sim] entry_calls_native:               0
+// AOTSTATS-DAG: [circt-sim] entry_calls_trampoline:           0
 // AOTSTATS: out=200
 
 // A pure arithmetic function — compilable by circt-compile.

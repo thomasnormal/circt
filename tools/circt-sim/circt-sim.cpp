@@ -3655,6 +3655,9 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t directCallsInterpreted = interp.getInterpretedFuncCallCount();
     uint64_t indirectCallsNative = interp.getNativeEntryCallCount();
     uint64_t indirectCallsTrampoline = interp.getTrampolineEntryCallCount();
+    uint64_t entryCallsNative = indirectCallsNative;
+    uint64_t entryCallsTrampoline = indirectCallsTrampoline;
+    uint64_t entryCallsTotal = entryCallsNative + entryCallsTrampoline;
     uint64_t indirectCallsTotal = indirectCallsNative + indirectCallsTrampoline;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
@@ -3690,6 +3693,13 @@ static LogicalResult processInput(MLIRContext &context,
                  << directCallsInterpreted << "\n";
     llvm::errs() << "[circt-sim] aotDepth_max:                     "
                  << interp.getMaxAotDepth() << "\n";
+    // Phase 6/7 north-star aliases.
+    llvm::errs() << "[circt-sim] entry_calls_total:                "
+                 << entryCallsTotal << "\n";
+    llvm::errs() << "[circt-sim] entry_calls_native:               "
+                 << entryCallsNative << "\n";
+    llvm::errs() << "[circt-sim] entry_calls_trampoline:           "
+                 << entryCallsTrampoline << "\n";
     interp.dumpAotHotUncompiledFuncs(llvm::errs(), /*topN=*/50);
   }
   // Use std::_Exit() here, before returning, to skip the expensive

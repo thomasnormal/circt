@@ -22,6 +22,7 @@
 // COMPILED: Entry table: 2 entries for tagged-FuncId dispatch (2 native, 0 non-native)
 // COMPILED: Entry-table native calls:         2
 // COMPILED: Entry-table trampoline calls:     0
+// COMPILED: entry_calls_total:                2
 // COMPILED: add42(5) = 47
 // COMPILED: mul100(3) = 300
 

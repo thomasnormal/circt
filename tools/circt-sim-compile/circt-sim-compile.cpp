@@ -4325,6 +4325,18 @@ generateTrampolines(ModuleOp microModule, ModuleOp originalModule,
     ty.print(os);
     return os.str();
   };
+  auto hasAggregateABI = [](LLVM::LLVMFunctionType funcTy) {
+    auto isAggregateType = [](Type ty) {
+      return isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(ty);
+    };
+    if (isAggregateType(funcTy.getReturnType()))
+      return true;
+    for (Type paramTy : funcTy.getParams()) {
+      if (isAggregateType(paramTy))
+        return true;
+    }
+    return false;
+  };
   for (auto funcOp : microModule.getOps<LLVM::LLVMFuncOp>()) {
     if (!funcOp.isExternal())
       continue;
@@ -4344,7 +4356,10 @@ generateTrampolines(ModuleOp microModule, ModuleOp originalModule,
     if (!needsTrampoline) {
       if (auto origLLVMFunc =
               originalModule.lookupSymbol<LLVM::LLVMFuncOp>(name))
-        needsTrampoline = !origLLVMFunc.isExternal();
+        needsTrampoline =
+            !origLLVMFunc.isExternal() ||
+            (origLLVMFunc.isExternal() &&
+             hasAggregateABI(origLLVMFunc.getFunctionType()));
     }
     // Host/runtime extern declarations (e.g. printf, memcpy, libm) must stay
     // as direct extern calls and must not be converted to interpreter

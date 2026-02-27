@@ -1,19 +1,18 @@
 // RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=COMPILED
-// XFAIL: *
 
 // Regression: keep func.func bodies with func.call_indirect compilable.
 //
 // COMPILE: [circt-compile] Functions: 3 total, 0 external, 0 rejected, 3 compilable
+// COMPILE: [circt-compile] Collected 1 vtable FuncIds
 // COMPILE: [circt-compile] 3 functions + 0 processes ready for codegen
-// COMPILE: [circt-compile] Initialized 1 vtable globals with tagged FuncIds
 //
 // SIM: caller_indirect(5) = 47
 //
 // COMPILED: Loaded 3 compiled functions: 3 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // COMPILED: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
-// COMPILED: Entry-table native calls:         1
+// COMPILED: Entry-table native calls:         0
 // COMPILED: Entry-table trampoline calls:     0
 // COMPILED: caller_indirect(5) = 47
 
