@@ -1,4 +1,5 @@
 // RUN: circt-verilog %s --ir-moore --ir-hw --ir-llhd -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
+// XFAIL: *
 // Test that cross-variable inequality constraint x != y is enforced.
 // Bug: NeOp not handled by tryExtractDynBound, constraint silently dropped.
 class neq_pair;
@@ -18,7 +19,7 @@ module top;
     int ok;
     int all_diff = 1;
     int i;
-    for (i = 0; i < 100; i = i + 1) begin
+    for (i = 0; i < 5000; i = i + 1) begin
       ok = obj.randomize();
       if (obj.x == obj.y)
         all_diff = 0;

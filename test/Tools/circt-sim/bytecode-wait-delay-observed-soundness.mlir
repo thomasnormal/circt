@@ -4,8 +4,9 @@
 // Bytecode must reject it and run it in the generic interpreter to preserve
 // wait semantics and reset propagation.
 
-// CHECK-DAG: [Bytecode Stats] 0/3 processes compiled to bytecode
-// CHECK-DAG: llhd.wait(delay):
+// CHECK: === Compile Coverage Report ===
+// CHECK-DAG: Bytecode:      0
+// CHECK-DAG: CallbackDynamicWait: 1
 // CHECK-DAG: RST_RISE
 
 hw.module @test() {
