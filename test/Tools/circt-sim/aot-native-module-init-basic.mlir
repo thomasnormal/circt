@@ -2,6 +2,7 @@
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=COMPILED
 // RUN: env CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=NATIVE
+// RUN: env CIRCT_AOT_STATS=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=STATS
 
 // COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 // COMPILE: [circt-compile] Native module init functions: 1
@@ -15,6 +16,11 @@
 // NATIVE: [circt-sim] Native module init: top
 // NATIVE: out=123
 // NATIVE-NOT: Warning: .so missing __circt_sim_arena_base symbol
+//
+// STATS-DAG: [circt-sim] arena_globals:                    1
+// STATS-DAG: [circt-sim] arena_size_bytes:                 4
+// STATS-DAG: [circt-sim] global_patch_count:               0
+// STATS: out=123
 
 llvm.mlir.global internal @g_counter(0 : i32) : i32
 

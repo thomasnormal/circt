@@ -152,6 +152,11 @@ public:
   /// Get the arena allocation size in bytes (0 if no arena).
   uint32_t getArenaSize() const { return arenaAllocSize; }
 
+  /// Get number of arena globals in the .so.
+  uint32_t getNumArenaGlobals() const {
+    return compiledModule ? compiledModule->num_arena_globals : 0;
+  }
+
   /// Get number of global patches in the .so.
   uint32_t getNumGlobalPatches() const {
     return compiledModule ? compiledModule->num_global_patches : 0;
