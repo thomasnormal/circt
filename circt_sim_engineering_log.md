@@ -757,3 +757,435 @@
   - `build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir -o /tmp/t2.so`
   - `build_test/bin/circt-sim test/Tools/circt-sim/aot-call-indirect-tagged-null-entry-safe.mlir --compiled=/tmp/t2.so`
   - Result: all pass; prior segfault no longer reproduces.
+
+- Additional audit finding in trampoline ABI packing:
+  wide integer scalars (`iN` where `N > 64`) were silently truncated to a
+  single `uint64_t` slot on compiled->interpreted calls and zero-extended on
+  return, losing high bits.
+  - Deterministic repro (before fix):
+    - `/tmp/tramp_i128.mlir`
+      - `func.func @entry(%x: i128) -> i128 { %r = llvm.call @ext_i128(%x) ... }`
+      - `llvm.func @ext_i128(i128) -> i128`
+    - Command:
+      - `build_test/bin/circt-sim-compile --emit-llvm /tmp/tramp_i128.mlir -o /tmp/tramp_i128.ll`
+    - Observed bad lowering:
+      - `__circt_sim_call_interpreted(..., i32 1, ..., i32 1)`
+      - `trunc i128 -> i64` before call
+      - `zext i64 -> i128` after call
+- Root cause:
+  - `countTrampolineSlots()` treated all integers as one slot.
+  - `emitPackValue()` truncated integers wider than 64 bits.
+  - `emitUnpackValue()` reconstructed wide integers from only one slot.
+  - Interpreter trampoline helpers mirrored the same one-slot assumption.
+- Fix:
+  - `tools/circt-sim-compile/circt-sim-compile.cpp`
+    - `countTrampolineSlots(iN)` now returns `ceil(N/64)`.
+    - `emitPackValue` splits wide integers into little-endian 64-bit chunks.
+    - `emitUnpackValue` reconstructs wide integers by zext+shift+or across all
+      consumed chunks.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - `unpackTrampolineArg` now consumes `ceil(N/64)` slots for wide ints.
+    - `packTrampolineResult` now writes `ceil(N/64)` slots for wide ints.
+- Added regressions:
+  - `test/Tools/circt-sim/aot-trampoline-i128-multi-slot-packing.mlir`
+    - checks emitted LLVM uses two slots and reconstructs via shift/or.
+  - `test/Tools/circt-sim/aot-trampoline-f32-packing-no-invalid-bitcast.mlir`
+    - checks non-64-bit float trampoline packing avoids invalid bitcasts.
+- Verification:
+  - `ninja -C build_test circt-sim-compile circt-sim`
+  - `build_test/bin/circt-sim-compile --emit-llvm test/Tools/circt-sim/aot-trampoline-i128-multi-slot-packing.mlir -o /tmp/tramp_i128_after2.ll`
+  - `build_test/bin/circt-sim-compile --emit-llvm test/Tools/circt-sim/aot-trampoline-f32-packing-no-invalid-bitcast.mlir -o /tmp/tramp_f32_after2.ll`
+  - `build_test/unittests/Tools/circt-sim-compile/CIRCTSimCompileToolTests --gtest_filter=LowerTaggedIndirectCallsTest.InvokeUnwindPhiUsesInvokeBlocks`
+  - Spot-checks in emitted IR confirm:
+    - `__circt_sim_call_interpreted(..., i32 2, ..., i32 2)` for `i128`
+    - high-word `lshr/shl` and `or` reconstruction present
+    - no `bitcast float -> i64` / `bitcast i64 -> float`
+  - Note:
+    - `ninja -C build_test check-circt-tools-circt-sim` currently fails in
+      unrelated existing build issues (`CIRCTSupportTests` LLHD TypeID link
+      failure and `CIRCTSimToolTests` compile mismatch), before lit reaches the
+      new regressions.
+
+- Additional audit finding in trampoline return path:
+  `dispatchTrampoline` packed non-struct returns with `getUInt64()` directly,
+  truncating wide integer returns (`iN`, `N > 64`) even after multi-slot
+  compiler packing was fixed.
+  - Deterministic repro (before fix):
+    - Added runtime regression
+      `test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir`
+      where:
+      - `@caller` is compiled and native-dispatched,
+      - `@caller` invokes demoted `@"uvm_pkg::uvm_demo::wide_ret"` via
+        trampoline (`Trampoline calls: 1`),
+      - callee returns `i128` with bit 100 set.
+    - Results before fix:
+      - interpreted: `hi=-1`
+      - compiled: `hi=0`
+      - proving upper bits were dropped on trampoline return.
+- Root cause:
+  - In `tools/circt-sim/LLHDProcessInterpreter.cpp` return marshaling used:
+    - `packTrampolineResult(...)` only for `LLVMStructType`,
+    - raw `getUInt64()` for all other return types.
+  - `i128` is non-struct, so only one 64-bit slot was written.
+- Fix:
+  - Always use `packTrampolineResult(retTy, ...)` when return type is known.
+  - Keep one-slot fallback only when type metadata is unavailable.
+- Added regression:
+  - `test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir`
+- Verification:
+  - `ninja -C build_test circt-sim`
+  - `CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir`
+  - `CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim-compile test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir -o /tmp/aot_i128_ret_fixed.so`
+  - `CIRCT_AOT_INTERCEPT_ALL_UVM=1 build_test/bin/circt-sim test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir --compiled=/tmp/aot_i128_ret_fixed.so --aot-stats`
+  - `python3 llvm/llvm/utils/lit/lit.py -sv \
+      build_test/test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir \
+      build_test/test/Tools/circt-sim/aot-trampoline-i128-multi-slot-packing.mlir \
+      build_test/test/Tools/circt-sim/aot-trampoline-f32-packing-no-invalid-bitcast.mlir \
+      build_test/test/Tools/circt-sim/aot-trampoline-personality-no-crash.mlir`
+  - Result: targeted tests pass; compiled runtime now matches interpreted
+    (`hi=-1`) with one native call and one trampoline call.
+
+- Additional trampoline packing audit (bf16 struct fields):
+  - Found and fixed another deterministic ABI mismatch:
+    `getScalarOrStructBitWidth` in
+    `tools/circt-sim/LLHDProcessInterpreter.cpp` hardcoded float widths for
+    `f16/f32/f64` and defaulted other floats to 64 bits.
+  - Impact:
+    - Struct packing/unpacking in interpreted trampoline dispatch could misplace
+      fields for `bf16` (and any non-f16/f32/f64 float), causing compiled vs
+      interpreted divergence.
+  - Repro and regression added:
+    - `test/Tools/circt-sim/aot-trampoline-bf16-struct-runtime.mlir`
+    - Before fix:
+      - interpreted: `ok=-1`
+      - compiled (via trampoline): `ok=0`
+    - After fix:
+      - interpreted and compiled both: `ok=-1`
+  - Fix:
+    - Use `floatTy.getWidth()` directly in trampoline bit-width helper.
+  - Verification:
+    - `ninja -C build_test circt-sim`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv \
+        build_test/test/Tools/circt-sim/aot-trampoline-bf16-struct-runtime.mlir \
+        build_test/test/Tools/circt-sim/aot-trampoline-i128-return-runtime.mlir \
+        build_test/test/Tools/circt-sim/aot-trampoline-i128-multi-slot-packing.mlir \
+        build_test/test/Tools/circt-sim/aot-trampoline-f32-packing-no-invalid-bitcast.mlir \
+        build_test/test/Tools/circt-sim/aot-trampoline-personality-no-crash.mlir`
+    - Result: all targeted tests pass.
+
+- Differential stress audit run (circt-sim vs xrun, 1000-cycle compact cases):
+  - Added utility:
+    - `utils/run_compact_sv_xrun_diff.py`
+    - Generates deterministic compact/intricate SV cases with mixed
+      `always_comb`/`always_ff`, `casez`, `priority case`, rotation/shift, and
+      function calls; runs both simulators and compares per-cycle traces + final
+      signatures.
+  - Tooling fixes while developing the runner:
+    - avoid parser false positives from `[circt-sim]` diagnostics interleaved in
+      `$display` output,
+    - switch `circt-verilog` invocation to `-o` file output to avoid huge
+      stdout buffering.
+  - Audit outcome:
+    - Ran 19 generated cases total at 1000 cycles each across multiple seed
+      batches (3 + 3 + 3 + 10), no semantic mismatches detected.
+    - Additional targeted 4-state/X-propagation stress case also matched final
+      signature between `circt-sim` and `xrun`.
+  - Notes:
+    - During this pass, shared `build_test` binaries were intermittently
+      unstable due concurrent rebuild activity; differential runs used a stable
+      tool snapshot to keep audit execution deterministic.
+
+- Additional trampoline audit finding (unsupported ABI declarations):
+  - Deterministic repro discovered while auditing:
+    - A demoted function with unsupported trampoline ABI type (e.g.
+      `vector<2xi32>` return) could be left without a generated trampoline.
+    - `circt-sim-compile` then still produced a `.so`, but compiled-mode load
+      failed later with unresolved symbol at runtime:
+      `undefined symbol: uvm_pkg::uvm_demo::vec_ret`.
+  - Root cause:
+    - `generateTrampolines()` silently skipped unsupported external signatures,
+      allowing broken artifacts to be emitted.
+  - Fix:
+    - `tools/circt-sim-compile/circt-sim-compile.cpp`
+      - `generateTrampolines()` now returns `FailureOr<...>` and emits
+        explicit diagnostics for unsupported external trampoline ABI shapes
+        (vararg or unflattenable parameter/return types).
+      - AOT compilation now fails fast when such declarations are present,
+        instead of deferring failure to runtime symbol lookup.
+  - Regression added:
+    - `test/Tools/circt-sim/aot-trampoline-unsupported-abi-diagnostic.mlir`
+      - checks compile-time diagnostic for unsupported `vector<2xi32>` return.
+  - Verification:
+    - `ninja -C build_test circt-sim-compile`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv \
+        build_test/test/Tools/circt-sim/aot-trampoline-unsupported-abi-diagnostic.mlir`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv --filter='aot-trampoline-' \
+        build_test/test/Tools/circt-sim`
+    - Result: new diagnostic regression passes; full trampoline cluster passes
+      (including existing vtable trampoline coverage).
+
+- Differential execution audit (additional batch):
+  - Ran:
+    - `python3 utils/run_compact_sv_xrun_diff.py --cases 20 --cycles 1000 \
+       --seed 20260226 --out-dir /tmp/circt-compact-sv-diff-audit-20260226 \
+       --circt-verilog <stable-snapshot> --circt-sim <stable-snapshot> --xrun xrun`
+  - Result:
+    - `20/20` matched, `0` mismatches.
+
+- Ongoing audit sweep (no new correctness regressions found in this pass):
+  - Trampoline ABI fuzz (scalar):
+    - 120 randomized identity-call cases spanning `i1..i256` sparse widths,
+      `bf16/f16/f32/f64`, and `!llvm.ptr`.
+    - For each case: interpreted run + compiled run compared via in-design
+      bit-exact checks (`ok=-1` expected).
+    - Result: `120/120` pass.
+  - Trampoline ABI fuzz (aggregate):
+    - 70 randomized nested `!llvm.struct` / `!llvm.array` cases with mixed
+      integer, float, and pointer leaves.
+    - Each case constructs aggregate via `llvm.insertvalue`, round-trips through
+      demoted identity callee, recursively compares all leaves.
+    - Result: `70/70` pass.
+  - Differential simulation vs xrun:
+    - `utils/run_compact_sv_xrun_diff.py --cases 40 --cycles 1000`
+      with stable snapshot binaries.
+    - Result: `40/40` matched, `0` mismatches.
+  - Note:
+    - One attempted differential run using `build_test/bin` aborted due
+      concurrent binary replacement (`Permission denied` on `circt-sim`);
+      rerun with snapshot binaries completed cleanly.
+
+- New audit finding: dynamic 4-state `casez`/`casex` matching was lowered
+  incorrectly in MooreToCore.
+  - Differential fuzzing (`circt-sim` vs `xrun`) found deterministic mismatches
+    on `casex` with unknown (`x/z`) select bits.
+  - Minimized SV repro showed `xrun` produced:
+    - `OBS sel=11z y=00000111`
+    - `OBS sel=zz1 y=00000111`
+    while `circt-sim` produced:
+    - `OBS sel=111 y=11101111`
+    - `OBS sel=111 y=11101111`
+  - Root cause identified in
+    `lib/Conversion/MooreToCore/MooreToCore.cpp`
+    (`CaseXZEqOpConversion`):
+    - only constant operand unknown bits were used to build ignore masks,
+    - dynamic unknown bits from 4-state operands were dropped by comparing only
+      extracted value lanes.
+  - Fix:
+    - For 4-state operands (`!hw.struct<value, unknown>`), build runtime ignore
+      masks from unknown lanes:
+      - `casex`: ignore `lhs.unknown | rhs.unknown`
+      - `casez`: ignore `lhs.z | rhs.z` where `z = value & unknown`
+    - `casez` now also compares masked unknown lanes so `X` remains
+      significant on non-ignored bits.
+  - Regression added:
+    - `test/Conversion/MooreToCore/case-xz-dynamic-fourstate.mlir`
+      checks generated core IR contains dynamic unknown-aware masking for both
+      `casez_eq` and `casexz_eq`.
+  - Verification:
+    - `ninja -C build_test circt-opt`
+    - `python3 llvm/llvm/utils/lit/lit.py -sv \
+        build_test/test/Conversion/MooreToCore/case-xz-dynamic-fourstate.mlir`
+    - Result: regression passes.
+  - Note:
+    - End-to-end `circt-verilog` rebuild was blocked by an unrelated concurrent
+      `ImportVerilog.cpp` compile crash in the dirty worktree; runtime
+      confirmation with newly linked `circt-verilog` is pending that unblock.
+
+- New audit finding: wildcard equality (`==?` / `!=?`) 4-state lowering had two
+  independent correctness bugs in `WildcardEqOpConversion`.
+  - Repro 1 (deterministic):
+    - `a=2'b1x; a ==? 2'b1z` expected `1`, got `X`.
+  - Root cause 1:
+    - LHS unknown taint used full `lhs.unknown`, not just bits that survive RHS
+      wildcard masking.
+  - Repro 2 (deterministic):
+    - `a=5'b1z11z; b=5'bx000z; a ==? b` expected `0`, got `X`.
+  - Root cause 2:
+    - Known mismatches were not given precedence; result was forced to `X` when
+      any compared LHS unknown bit existed, even when known bits already proved
+      inequality.
+  - Fix in `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+    - Compute `lhsRelevantUnk = lhsUnk & rhsMask`.
+    - Compute `knownMask = rhsMask & ~lhsRelevantUnk`.
+    - Compare only known bits for mismatch/eq (`knownEq`).
+    - Set result unknown to `lhsHasUnk & knownEq`.
+    - Set result value:
+      - `==?`: `knownEq & !lhsHasUnk`
+      - `!=?`: `!knownEq`
+  - New regressions:
+    - `test/Conversion/MooreToCore/wildcard-eq-dynamic-fourstate.mlir`
+      - checks lowering uses masked unknowns and known-mismatch gating.
+    - `test/Tools/circt-sim/wildcard-eq-rhs-mask-lhs-unknown.sv`
+      - checks masked unknown case and known-mismatch-dominates case.
+  - Verification:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv \
+        build_test/test/Conversion/MooreToCore/wildcard-eq-dynamic-fourstate.mlir \
+        build_test/test/Tools/circt-sim/wildcard-eq-rhs-mask-lhs-unknown.sv \
+        build_test/test/Tools/circt-sim/case-xz-dynamic-fourstate.sv`
+      - Result: 3/3 passed.
+    - Differential fuzz vs xrun (`--mode interpret`) after fix:
+      - targeted wildcard eq/ne fuzz: `240/240` matched.
+      - extended wildcard eq/ne fuzz: `1000/1000` matched.
+      - nearby logical eq/ne fuzz: `240/240` matched.
+      - nearby case eq/ne fuzz: `240/240` matched.
+  - Note:
+    - Running `test/Conversion/MooreToCore/basic.mlir` in this dirty tree still
+      hits an unrelated pre-existing CHECK mismatch outside this change.
+
+- New audit finding: integer format handling had two additional correctness
+  issues (ImportVerilog decimal zero-pad parsing and interpreter 4-state
+  formatting).
+  - Issue 1 (ImportVerilog `%0wd` parsing):
+    - `"%011d"` was lowered as `pad space width 11` instead of zero-padded.
+    - Root cause: fallback `zeroPad` detection was computed but not used when
+      selecting decimal padding.
+    - Fix:
+      - `lib/Conversion/ImportVerilog/FormatStrings.cpp` now uses the computed
+        `zeroPad` flag in decimal padding selection.
+      - fixed stale `emitInteger(...)` call site after signature extension.
+    - Regressions:
+      - `test/Conversion/ImportVerilog/format-decimal-zero-pad-width.sv`
+      - `test/Tools/circt-sim/format-decimal-zero-pad-width.sv`
+    - Validation:
+      - target checks pass via `circt-verilog|circt-sim + FileCheck`.
+      - differential integer formatting script:
+        - `PASS: 320 int-format cases matched xrun`.
+
+  - Issue 2 (4-state `%b/%o/%h/%d` formatting in interpreter):
+    - Symptom:
+      - unknown lanes (`x/z`) were dropped and printed as known digits.
+    - Root cause:
+      - `FormatIntOpConversion` extracted only struct field `value` from
+        lowered 4-state values (`!hw.struct<value, unknown>`), discarding
+        `unknown`.
+    - Fixes:
+      - `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+        - preserve 4-state payload by bitcasting `{value,unknown}` struct to
+          packed integer and attach new `fourStateWidth` attr on
+          `sim.fmt.bin/oct/hex/dec`.
+      - `include/circt/Dialect/Sim/SimOps.td`:
+        - added optional `fourStateWidth` attr to integer format ops.
+      - `lib/Dialect/Sim/SimOps.cpp`:
+        - disable constant folding for integer format ops when
+          `fourStateWidth` is present.
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+        - decode packed 4-state payloads using `fourStateWidth`.
+        - implement 4-state digit mapping for binary/octal/hex/decimal,
+          including `x/z/X/Z` handling and width/padding behavior.
+    - New regression:
+      - `test/Tools/circt-sim/format-fourstate-int.sv`
+        - reproduces and checks `x/z` behavior for `%b/%o/%h/%d/%04d`.
+    - Validation:
+      - regression passes.
+      - targeted formatting regressions still pass.
+      - randomized 4-state differential vs xrun:
+        - `218/220` matched.
+        - residual mismatches (2 cases) are in compacting of leading `Z` for
+          `%h/%o` with specific mixed-unknown patterns.
+
+- Follow-up audit: completed 4-state grouped-radix compaction parity with xrun.
+  - Starting point:
+    - prior residual mismatch count was `2/220` on randomized 4-state integer
+      formatting differential.
+  - New deterministic mismatches found by rerunning
+    `/tmp/fuzz_fmt_fourstate_diff.py`:
+    - `4/220` first pass (examples: `%0o` `0Z` preservation, `%0h/%0o`
+      uppercase `X` run over-collapsing, `%03o` mixed `Z` compaction).
+    - after first patch: `3/220` remained (`%1h/%1o` preserving leading zero
+      before unknown in partial-width groups).
+  - Key realizations from direct xrun probes:
+    - uppercase `X` runs are not compacted (`XX` stays `XX` even for `%1h`).
+    - uppercase/lowercase `Z` runs compact only as needed down to one leading
+      `Z/z` while keeping suffix digits.
+    - lowercase all-unknown `x/z` runs compact with width (`xxx` -> `x` for
+      `%1o`, `xx` for `%2o`, etc.).
+    - a leading zero before unknown in a partial top group is structural and
+      must be preserved (`0Z`, `0XX` cases).
+  - Fix:
+    - rewrote grouped-radix compaction in
+      `tools/circt-sim/LLHDProcessInterpreter.cpp` (`formatFourStateGrouped`):
+      - width-aware leading-zero stripping with partial-group/unknown
+        preservation.
+      - selective unknown-run collapse matching xrun behavior:
+        - collapse leading `Z/z` and lowercase `x` runs toward requested width,
+        - never collapse uppercase `X` runs.
+      - keep all-zero rendering consistent for `%0` and explicit widths.
+  - New/expanded regression:
+    - `test/Tools/circt-sim/format-radix-fourstate-compact-rules.sv`
+      - added checks for:
+        - `%0o` `0Z` preservation,
+        - `%0o/%0h` uppercase `XX` behavior,
+        - `%03o` `ZX3` compaction,
+        - `%1h` `0X`, `%1o/%0o` `0XX`,
+        - lowercase all-`x` `%0o/%1o` compaction.
+  - Validation:
+    - `ninja -C build_test circt-sim`
+    - `llvm/build/bin/llvm-lit -sv \
+        build_test/test/Tools/circt-sim/format-radix-fourstate-compact-rules.sv \
+        build_test/test/Tools/circt-sim/format-radix-zero-flag-minwidth.sv \
+        build_test/test/Tools/circt-sim/format-fourstate-int.sv \
+        build_test/test/Tools/circt-sim/format-decimal-zero-pad-width.sv`
+      - Result: `4/4` passed.
+    - randomized formatter differential:
+      - `python3 /tmp/fuzz_fmt_fourstate_diff.py`
+      - Result: `PASS: 220 four-state format cases matched xrun`.
+    - compact intricate SV differential (non-format stress):
+      - `PYTHONUNBUFFERED=1 python3 utils/run_compact_sv_xrun_diff.py --cases 8 --cycles 1000 --stop-on-first-mismatch --out-dir out/compact_sv_diff_audit_postfix_20260226`
+      - Result: `total=8 mismatches=0`.
+
+- Audit continuation (2026-02-27): case/casez four-state differential + compact stress.
+  - Re-verified recently added regressions:
+    - `test/Tools/circt-sim/casez-x-to-z-retrigger.sv`
+    - `test/Tools/circt-sim/case-no-default-preserves-initial-x.sv`
+    - (Adjusted `case-no-default-preserves-initial-x.sv` to avoid a false failure
+      caused by a `3'bxxx` arm matching at time 0.)
+
+  - Compact intricate differential run:
+    - `PYTHONUNBUFFERED=1 python3 utils/run_compact_sv_xrun_diff.py --cases 25 --cycles 1000 --seed 20260227 --stop-on-first-mismatch --out-dir out/compact_sv_diff_audit_20260227`
+    - Result: `total=25 mismatches=0`.
+
+  - New deterministic bug found and fixed (TDD): ImportVerilog case default elision with X/Z item constants.
+    - Reproducer class:
+      - `case` statements whose item constants include X/Z and whose raw constant
+        values incidentally span all `2^N` combinations.
+      - Existing two-state exhaustiveness heuristic incorrectly treated these as
+        full two-state coverage and suppressed the explicit `default`, falling
+        back to the last case item.
+    - Symptom:
+      - Example: `sel=3'b000` incorrectly produced a non-default arm value
+        (`17`/`d4`) instead of explicit `default` (`56`).
+    - Root cause:
+      - In `lib/Conversion/ImportVerilog/Statements.cpp`, the heuristic pushed
+        all constant case item values into `itemConsts`, including values with
+        unknown bits, and then checked raw-value coverage.
+    - Fix:
+      - Count constants for two-state exhaustiveness only when
+        `!defOp.getValue().hasUnknown()`.
+    - Regression added:
+      - `test/Tools/circt-sim/case-default-preserved-with-xz-items.sv`
+        - checks explicit `default` is preserved (`A<56>`, `B<56>`) while a
+          matching X/Z item still works (`C<17>`).
+    - Validation:
+      - `ninja -C build_test circt-verilog circt-sim`
+      - `llvm/build/bin/llvm-lit -sv \
+          build_test/test/Tools/circt-sim/case-default-preserved-with-xz-items.sv \
+          build_test/test/Tools/circt-sim/casez-x-to-z-retrigger.sv \
+          build_test/test/Tools/circt-sim/case-no-default-preserves-initial-x.sv`
+      - Result: `3/3` passed.
+
+  - Differential follow-up on the bug class:
+    - Ran randomized 4-state `case/casez/casex` differential fuzzer against xrun.
+    - Initial rerun surfaced one mismatch at `t=0`; reduced to scheduling-race
+      noise (uninitialized selector before first delay), not semantic divergence.
+    - Hardened fuzzer harness (initialized selector + delayed stimulus start) to
+      avoid time-zero ordering artifacts.
+    - Post-fix results:
+      - `--num 80 --seed 20260227`: `ALL_OK`.
+      - `--num 200 --seed 20260301`: `ALL_OK`.
+
+  - Realizations:
+    - The two-state exhaustiveness workaround is high-risk around 4-state
+      literals; raw-value coverage is insufficient unless unknown-bearing
+      constants are excluded.
+    - Differential fuzzers need explicit protection against time-zero scheduling
+      races, otherwise false mismatches dominate and mask real bugs.
