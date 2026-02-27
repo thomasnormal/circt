@@ -67,7 +67,7 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - wire-ish key
   - wirebit-ish key
 - Adds diversity pressure across semantic buckets:
-  - fault family (`compare|logic|constant|misc`)
+  - fault family (`compare|logic|constant|arithmetic|misc`)
   - operator kind
   - coarse statement context (`control|assignment|verification|expression`)
 - Adds realism bias in scoring:
@@ -91,6 +91,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   entries (unless `planner_policy` is explicitly set to `legacy`).
 - Site detection is lexer-aware for structural validity: mutation tokens inside
   comments and string literals are ignored.
+- Arithmetic site detection (`ADD_TO_SUB`, `SUB_TO_ADD`) intentionally excludes
+  `[...]` range/index contexts to avoid mutating packed-width declarations such
+  as `[W-1:0]`.
 - Mutation application must use the same site-index contract (code-only spans),
   otherwise `NATIVE_<OP>@<n>` can target different textual occurrences.
 

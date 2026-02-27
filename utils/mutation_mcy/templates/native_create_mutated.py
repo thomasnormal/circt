@@ -170,6 +170,96 @@ def find_relational_comparator_token(token: str, nth: int) -> int:
     return -1
 
 
+def find_prev_code_nonspace(pos: int) -> int:
+    i = pos
+    while i > 0:
+        i -= 1
+        if not is_code_at(i):
+            continue
+        if text[i].isspace():
+            continue
+        return i
+    return -1
+
+
+def find_next_code_nonspace(pos: int) -> int:
+    i = pos
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        if text[i].isspace():
+            i += 1
+            continue
+        return i
+    return -1
+
+
+def is_operand_end_char(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", ")", "]", "}", "'")
+
+
+def is_operand_start_char(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", "(", "[", "{", "'", "~", "!", "$")
+
+
+def find_binary_arithmetic_token(token: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    if token not in ("+", "-"):
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    bracket_depth = 0
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch != token:
+            i += 1
+            continue
+        if bracket_depth > 0:
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
+        if prev == token or nxt == token:
+            i += 1
+            continue
+        if prev == "=" or nxt == "=":
+            i += 1
+            continue
+        if token == "-" and nxt == ">":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 1)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+            text[next_sig]
+        ):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 code_mask = build_code_mask(text)
 
 if op == 'EQ_TO_NEQ':
@@ -210,14 +300,15 @@ elif op == 'CONST1_TO_0':
         lambda m: "1'b0" if m.group(0).endswith("b1") else "1'd0",
         site_index,
     )
-
-if not changed:
-    m = re.search(r'assign\s+([^=]+?)\s*=\s*(.+?);', text, re.S)
-    if m:
-        lhs = m.group(1).strip()
-        rhs = m.group(2).strip()
-        repl = f'assign {lhs} = ~({rhs});'
-        text = text[:m.start()] + repl + text[m.end():]
+elif op == 'ADD_TO_SUB':
+    idx = find_binary_arithmetic_token('+', site_index)
+    if idx >= 0:
+        text = text[:idx] + '-' + text[idx + 1:]
+        changed = True
+elif op == 'SUB_TO_ADD':
+    idx = find_binary_arithmetic_token('-', site_index)
+    if idx >= 0:
+        text = text[:idx] + '+' + text[idx + 1:]
         changed = True
 
 if not changed:
