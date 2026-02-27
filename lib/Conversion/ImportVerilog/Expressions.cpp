@@ -3872,6 +3872,21 @@ struct RvalueExprVisitor : public ExprVisitor {
         if (!lhs || !rhs)
           return {};
         return moore::EqOp::create(builder, loc, lhs, rhs);
+      } else if (isa<moore::EventType>(lhs.getType()) ||
+                 isa<moore::EventType>(rhs.getType())) {
+        // Event equality compares trigger state in boolean context.
+        auto i1Ty = moore::IntType::getInt(context.getContext(), 1);
+        lhs = context.convertToBool(lhs);
+        rhs = context.convertToBool(rhs);
+        if (!lhs || !rhs)
+          return {};
+        if (lhs.getType() != i1Ty)
+          lhs = context.materializeConversion(i1Ty, lhs, false, lhs.getLoc());
+        if (rhs.getType() != i1Ty)
+          rhs = context.materializeConversion(i1Ty, rhs, false, rhs.getLoc());
+        if (!lhs || !rhs)
+          return {};
+        return moore::EqOp::create(builder, loc, lhs, rhs);
       } else if (isa<moore::VirtualInterfaceType>(lhs.getType()) ||
                  isa<moore::VirtualInterfaceType>(rhs.getType())) {
         // Virtual interface comparison (e.g., vif == null, vif1 == vif2).
@@ -3959,6 +3974,24 @@ struct RvalueExprVisitor : public ExprVisitor {
 
         return moore::ClassHandleCmpOp::create(
             builder, loc, moore::ClassHandleCmpPredicate::eq, lhsVal, rhsVal);
+      } else if (isa<moore::CovergroupHandleType>(lhs.getType()) ||
+                 isa<moore::CovergroupHandleType>(rhs.getType())) {
+        // Covergroup handle comparison is by reference identity.
+        auto lhsCgTy = dyn_cast<moore::CovergroupHandleType>(lhs.getType());
+        auto rhsCgTy = dyn_cast<moore::CovergroupHandleType>(rhs.getType());
+        if (!lhsCgTy || !rhsCgTy) {
+          mlir::emitError(loc) << "covergroup handle comparison requires both "
+                               << "operands to be covergroup handles";
+          return {};
+        }
+        if (lhsCgTy != rhsCgTy) {
+          mlir::emitError(loc)
+              << "covergroup handle comparison requires matching types, got "
+              << lhsCgTy << " and " << rhsCgTy;
+          return {};
+        }
+        return moore::CovergroupHandleCmpOp::create(
+            builder, loc, moore::CovergroupHandleCmpPredicate::eq, lhs, rhs);
       } else
         return createBinary<moore::EqOp>(lhs, rhs);
     case BinaryOperator::Inequality:
@@ -4029,6 +4062,21 @@ struct RvalueExprVisitor : public ExprVisitor {
             moore::IntType::get(context.getContext(), 64, Domain::TwoValued);
         lhs = context.materializeConversion(intTy, lhs, false, lhs.getLoc());
         rhs = context.materializeConversion(intTy, rhs, false, rhs.getLoc());
+        if (!lhs || !rhs)
+          return {};
+        return moore::NeOp::create(builder, loc, lhs, rhs);
+      } else if (isa<moore::EventType>(lhs.getType()) ||
+                 isa<moore::EventType>(rhs.getType())) {
+        // Event inequality compares trigger state in boolean context.
+        auto i1Ty = moore::IntType::getInt(context.getContext(), 1);
+        lhs = context.convertToBool(lhs);
+        rhs = context.convertToBool(rhs);
+        if (!lhs || !rhs)
+          return {};
+        if (lhs.getType() != i1Ty)
+          lhs = context.materializeConversion(i1Ty, lhs, false, lhs.getLoc());
+        if (rhs.getType() != i1Ty)
+          rhs = context.materializeConversion(i1Ty, rhs, false, rhs.getLoc());
         if (!lhs || !rhs)
           return {};
         return moore::NeOp::create(builder, loc, lhs, rhs);
@@ -4119,6 +4167,24 @@ struct RvalueExprVisitor : public ExprVisitor {
 
         return moore::ClassHandleCmpOp::create(
             builder, loc, moore::ClassHandleCmpPredicate::ne, lhsVal, rhsVal);
+      } else if (isa<moore::CovergroupHandleType>(lhs.getType()) ||
+                 isa<moore::CovergroupHandleType>(rhs.getType())) {
+        // Covergroup handle comparison is by reference identity.
+        auto lhsCgTy = dyn_cast<moore::CovergroupHandleType>(lhs.getType());
+        auto rhsCgTy = dyn_cast<moore::CovergroupHandleType>(rhs.getType());
+        if (!lhsCgTy || !rhsCgTy) {
+          mlir::emitError(loc) << "covergroup handle comparison requires both "
+                               << "operands to be covergroup handles";
+          return {};
+        }
+        if (lhsCgTy != rhsCgTy) {
+          mlir::emitError(loc)
+              << "covergroup handle comparison requires matching types, got "
+              << lhsCgTy << " and " << rhsCgTy;
+          return {};
+        }
+        return moore::CovergroupHandleCmpOp::create(
+            builder, loc, moore::CovergroupHandleCmpPredicate::ne, lhs, rhs);
       } else
         return createBinary<moore::NeOp>(lhs, rhs);
     case BinaryOperator::CaseEquality:
@@ -8353,11 +8419,11 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (!isEmptyArg(arg))
         ++effectiveArity;
 
-    // $random(seed) / $urandom(seed): update the seed argument as an inout.
+    // $random(seed): update the seed argument as an inout.
     // Slang may wrap inout-style args in an AssignmentExpression; unwrap it
     // to get the real lvalue.
-    if (effectiveArity == 1 &&
-        (subroutine.name == "$random" || subroutine.name == "$urandom")) {
+    // Note: $urandom(seed) does not have inout seed semantics in xrun.
+    if (effectiveArity == 1 && subroutine.name == "$random") {
       const slang::ast::Expression *seedArgExpr = nullptr;
       for (auto *arg : args) {
         if (!isEmptyArg(arg)) {
@@ -8393,15 +8459,38 @@ struct RvalueExprVisitor : public ExprVisitor {
           if (!seedValue)
             return {};
 
+          // xrun-compatible $random(seed) semantics:
+          //   next_seed = seed * 69069 + 1 (mod 2^32)
+          //   return value is a separate transform of next_seed.
+          // The RandomBIOp handles the return-value transform; update the
+          // inout seed explicitly to next_seed.
+          auto zeroC = moore::ConstantOp::create(builder, loc, i32Ty, 0);
+          auto mulC = moore::ConstantOp::create(builder, loc, i32Ty, 69069);
+          auto oneC = moore::ConstantOp::create(builder, loc, i32Ty, 1);
+          auto magicSeedC =
+              moore::ConstantOp::create(builder, loc, i32Ty, 0x92153206u);
+          Value seedMul = moore::MulOp::create(builder, loc, seedValue, mulC);
+          Value lcgSeedNext =
+              moore::AddOp::create(builder, loc, seedMul, oneC);
+          Value isZeroSeed = moore::EqOp::create(builder, loc, seedValue, zeroC);
+          auto seedSelect =
+              moore::ConditionalOp::create(builder, loc, i32Ty, isZeroSeed);
+          {
+            OpBuilder::InsertionGuard g(builder);
+            builder.setInsertionPointToStart(
+                &seedSelect.getTrueRegion().emplaceBlock());
+            moore::YieldOp::create(builder, loc, magicSeedC);
+            builder.setInsertionPointToStart(
+                &seedSelect.getFalseRegion().emplaceBlock());
+            moore::YieldOp::create(builder, loc, lcgSeedNext);
+          }
+          Value seedNextI32 = seedSelect.getResult();
+
           Value randomResult =
-              (subroutine.name == "$random")
-                  ? static_cast<Value>(
-                        moore::RandomBIOp::create(builder, loc, seedValue))
-                  : static_cast<Value>(
-                        moore::UrandomBIOp::create(builder, loc, seedValue));
+              static_cast<Value>(moore::RandomBIOp::create(builder, loc, seedValue));
 
           Value seedNext = context.materializeConversion(
-              refTy.getNestedType(), randomResult,
+              refTy.getNestedType(), seedNextI32,
               seedLValueExpr->type->isSigned(), loc);
           if (!seedNext)
             return {};

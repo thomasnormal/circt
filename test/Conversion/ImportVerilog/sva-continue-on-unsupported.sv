@@ -4,17 +4,20 @@
 // REQUIRES: slang
 
 module SvaContinueOnUnsupported(input logic clk, a);
-  event ev;
-  always_ff @(posedge clk) if (a) -> ev;
+  covergroup cg_t;
+    coverpoint a;
+  endgroup
+  cg_t cg;
+  initial cg = new();
 
-  // `event` + sampled-value controls in `$past` is currently unsupported.
+  // Covergroup-handle sampled value for `$rose` is currently unsupported.
   bad_assert: assert property (@(posedge clk)
-      $past(ev, 1, 1'b1, @(posedge clk)) == ev);
+      $rose(cg));
 endmodule
 
-// ERR: error: unsupported $past value type with sampled-value controls
+// ERR: error: unsupported sampled value type for $rose
 
-// WARN: warning: unsupported $past value type with sampled-value controls
+// WARN: warning: unsupported sampled value type for $rose
 // WARN: warning: skipping unsupported SVA assertion in continue mode: property lowering failed
 
 // IR: verif.assert

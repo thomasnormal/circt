@@ -1461,6 +1461,40 @@ def ClassHandleCmpOp : MooreOp<"class_handle_cmp", [
   }];
 }
 
+def CovergroupHandleCmpPredicateAttr : I64EnumAttr<
+    "CovergroupHandleCmpPredicate", "",
+    [
+      I64EnumAttrCase<"eq", 0>,
+      I64EnumAttrCase<"ne", 1>
+    ]> {
+  let cppNamespace = "circt::moore";
+}
+
+def CovergroupHandleCmpOp : MooreOp<"covergroup_handle_cmp", [
+  Pure,
+  Commutative,
+  SameTypeOperands
+]> {
+  let summary = "Compare covergroup handles for reference equality";
+  let description = [{
+    Compares two covergroup handles using reference equality. This checks
+    whether two handles refer to the same covergroup instance.
+
+    Supported predicates:
+    - eq : equal
+    - ne : not equal
+  }];
+  let arguments = (ins
+    CovergroupHandleCmpPredicateAttr:$predicate,
+    CovergroupHandleType:$lhs,
+    CovergroupHandleType:$rhs
+  );
+  let results = (outs BitType:$result);
+  let assemblyFormat = [{
+    $predicate $lhs `,` $rhs attr-dict `:` type($lhs) `->` type($result)
+  }];
+}
+
 def StringConcatOp : MooreOp<"string_concat", [Pure]> {
   let summary = "Concatenate strings";
   let description = [{

@@ -161,6 +161,21 @@ static Value buildSampledStableComparison(Context &context, Location loc,
     return moore::EqOp::create(builder, loc, lhs, rhs).getResult();
   }
 
+  if (isa<moore::ClassHandleType>(lhs.getType()))
+    return moore::ClassHandleCmpOp::create(
+               builder, loc, moore::ClassHandleCmpPredicate::eq, lhs, rhs)
+        .getResult();
+
+  if (isa<moore::VirtualInterfaceType>(lhs.getType()))
+    return moore::VirtualInterfaceCmpOp::create(
+               builder, loc, moore::VirtualInterfaceCmpPredicate::eq, lhs, rhs)
+        .getResult();
+
+  if (isa<moore::CovergroupHandleType>(lhs.getType()))
+    return moore::CovergroupHandleCmpOp::create(
+               builder, loc, moore::CovergroupHandleCmpPredicate::eq, lhs, rhs)
+        .getResult();
+
   if (isa<moore::UnpackedArrayType>(lhs.getType()))
     return moore::UArrayCmpOp::create(builder, loc, moore::UArrayCmpPredicate::eq,
                                       lhs, rhs);
@@ -432,6 +447,15 @@ static Value buildSampledBoolean(Context &context, Location loc, Value value,
     if (boolVal.getType() != i1Ty)
       boolVal = context.materializeConversion(i1Ty, boolVal, false, loc);
     return boolVal;
+  }
+
+  if (auto classTy = dyn_cast<moore::ClassHandleType>(value.getType())) {
+    Value nullVal = moore::ClassNullOp::create(builder, loc, classTy);
+    Value nonNull = moore::ClassHandleCmpOp::create(
+        builder, loc, moore::ClassHandleCmpPredicate::ne, value, nullVal);
+    if (nonNull.getType() != i1Ty)
+      nonNull = context.materializeConversion(i1Ty, nonNull, false, loc);
+    return nonNull;
   }
 
   if (auto arrayTy = dyn_cast<moore::UnpackedArrayType>(value.getType())) {
@@ -1325,10 +1349,20 @@ static Value lowerPastWithSamplingControl(
       isa<moore::StringType>(originalType) ||
       isa<moore::FormatStringType>(originalType);
   bool isTimeSample = isa<moore::TimeType>(originalType);
+  bool isEventSample = isa<moore::EventType>(originalType);
+  bool isClassHandleSample = isa<moore::ClassHandleType>(originalType);
+  bool isVirtualInterfaceSample =
+      isa<moore::VirtualInterfaceType>(originalType);
+  bool isCovergroupHandleSample =
+      isa<moore::CovergroupHandleType>(originalType);
   auto intType = getSampledSimpleBitVectorType(context, *valueExpr.type);
-  if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
-      !isTimeSample &&
-      !intType) {
+  bool useDirectStorageType = isUnpackedAggregateSample || isRealSample ||
+                              isStringSample || isTimeSample || isEventSample ||
+                              isClassHandleSample ||
+                              isVirtualInterfaceSample ||
+                              isCovergroupHandleSample;
+  moore::IntType scalarSampleType = intType;
+  if (!useDirectStorageType && !scalarSampleType) {
     emitUnsupportedSvaDiagnostic(context, loc)
         << "unsupported $past value type with sampled-value controls (input "
            "type: "
@@ -1343,11 +1377,10 @@ static Value lowerPastWithSamplingControl(
     }
     return {};
   }
-  moore::UnpackedType storageType =
-      (isUnpackedAggregateSample || isRealSample || isStringSample ||
-       isTimeSample)
-          ? cast<moore::UnpackedType>(originalType)
-          : cast<moore::UnpackedType>(intType);
+  moore::UnpackedType storageType = useDirectStorageType
+                                        ? cast<moore::UnpackedType>(originalType)
+                                        : cast<moore::UnpackedType>(
+                                              scalarSampleType);
 
   int64_t historyDepth = std::max<int64_t>(delay, 1);
 
@@ -1366,9 +1399,8 @@ static Value lowerPastWithSamplingControl(
     }
 
     Value init;
-    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
-        !isTimeSample) {
-      init = createUnknownOrZeroConstant(context, loc, intType);
+    if (!useDirectStorageType) {
+      init = createUnknownOrZeroConstant(context, loc, scalarSampleType);
       if (!init)
         return {};
     }
@@ -1389,14 +1421,11 @@ static Value lowerPastWithSamplingControl(
     Value current = context.convertRvalueExpression(valueExpr);
     if (!current)
       return {};
-    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
-        !isTimeSample &&
-        !isa<moore::IntType>(current.getType()))
+    if (!useDirectStorageType && !isa<moore::IntType>(current.getType()))
       current = context.convertToSimpleBitVector(current);
     if (!current)
       return {};
-    if (isUnpackedAggregateSample || isRealSample || isStringSample ||
-        isTimeSample) {
+    if (useDirectStorageType) {
       if (!isa<moore::UnpackedType>(current.getType()) ||
           current.getType() != storageType) {
         emitUnsupportedSvaDiagnostic(context, loc)
@@ -1414,8 +1443,8 @@ static Value lowerPastWithSamplingControl(
             << current.getType() << ")";
         return {};
       }
-      if (current.getType() != intType)
-        current = context.materializeConversion(intType, current,
+      if (current.getType() != scalarSampleType)
+        current = context.materializeConversion(scalarSampleType, current,
                                                 /*isSigned=*/false, loc);
     }
 
@@ -1500,9 +1529,9 @@ static Value lowerPastWithSamplingControl(
     if (delay > 0)
       pastValue = moore::ReadOp::create(builder, loc, historyVars.back());
     Value disabledValue = pastValue;
-    if (!isUnpackedAggregateSample && !isRealSample && !isStringSample &&
-        !isTimeSample) {
-      disabledValue = createUnknownOrZeroConstant(context, loc, intType);
+    if (!useDirectStorageType) {
+      disabledValue =
+          createUnknownOrZeroConstant(context, loc, scalarSampleType);
       if (!disabledValue)
         return {};
     }
@@ -3704,12 +3733,27 @@ Value Context::convertAssertionCallExpression(
     bool isEventStableSample =
         (funcName == "$stable" || funcName == "$changed") &&
         isa<moore::EventType>(value.getType());
+    bool isClassHandleStableSample =
+        (funcName == "$stable" || funcName == "$changed") &&
+        isa<moore::ClassHandleType>(value.getType());
+    bool isVirtualInterfaceStableSample =
+        (funcName == "$stable" || funcName == "$changed") &&
+        isa<moore::VirtualInterfaceType>(value.getType());
+    bool isCovergroupHandleStableSample =
+        (funcName == "$stable" || funcName == "$changed") &&
+        isa<moore::CovergroupHandleType>(value.getType());
+    bool isHandleStableSample = isClassHandleStableSample ||
+                                isVirtualInterfaceStableSample ||
+                                isCovergroupHandleStableSample;
     bool isStringEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         isa<moore::StringType, moore::FormatStringType>(value.getType());
     bool isEventEdgeSample =
         (funcName == "$rose" || funcName == "$fell") &&
         isa<moore::EventType>(value.getType());
+    bool isClassHandleEdgeSample =
+        (funcName == "$rose" || funcName == "$fell") &&
+        isa<moore::ClassHandleType>(value.getType());
     auto emitUnsupportedNonConcurrentSampledPlaceholder = [&]() -> Value {
       if (!(options.continueOnUnsupportedSVA && !inAssertionExpr))
         return {};
@@ -3726,7 +3770,8 @@ Value Context::convertAssertionCallExpression(
     };
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
-        !isStringEdgeSample && !isEventEdgeSample &&
+        !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
+        !isClassHandleEdgeSample &&
         (isa<moore::UnpackedArrayType>(value.getType()) ||
          isa<moore::OpenUnpackedArrayType>(value.getType()) ||
          isa<moore::QueueType>(value.getType()) ||
@@ -3742,7 +3787,8 @@ Value Context::convertAssertionCallExpression(
     }
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
-        !isStringEdgeSample && !isEventEdgeSample &&
+        !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
+        !isClassHandleEdgeSample &&
         !isSimpleBitVectorCastable(value.getType())) {
       if (auto fallback = emitUnsupportedNonConcurrentSampledPlaceholder())
         return fallback;
@@ -3753,14 +3799,16 @@ Value Context::convertAssertionCallExpression(
 
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
-        !isStringEdgeSample && !isEventEdgeSample &&
+        !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
+        !isClassHandleEdgeSample &&
         !isa<moore::IntType>(value.getType()))
       value = convertToSimpleBitVector(value);
     if (!value)
       return {};
     if (!isAggregateSample && !isAggregateEdgeSample &&
         !isRealSample && !isStringStableSample && !isEventStableSample &&
-        !isStringEdgeSample && !isEventEdgeSample &&
+        !isHandleStableSample && !isStringEdgeSample && !isEventEdgeSample &&
+        !isClassHandleEdgeSample &&
         !isa<moore::IntType>(value.getType())) {
       emitUnsupportedSvaDiagnostic(*this, loc)
           << "unsupported sampled value type for " << funcName;
