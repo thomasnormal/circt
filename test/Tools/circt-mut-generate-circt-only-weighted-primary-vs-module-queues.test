@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module m0(input logic a,b,c, output logic y0,y1);\n  assign y0 = (a == b);\n  assign y1 = (a == c);\nendmodule\n\nmodule m1(input logic a,b, output logic y);\n  assign y = (a == b);\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/primary.txt --count 6 --seed 1 --cfg planner_policy=weighted --cfg pick_cover_prcnt=100 --cfg weight_cover=0 --cfg weight_pq_w=1 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=0 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 > %t/log-primary.txt
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/module.txt --count 6 --seed 1 --cfg planner_policy=weighted --cfg pick_cover_prcnt=100 --cfg weight_cover=0 --cfg weight_pq_w=0 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=1 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 > %t/log-module.txt
+// RUN: not cmp -s %t/primary.txt %t/module.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log-primary.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log-module.txt
+//
+// LOG: Generated mutations: 6
+// LOG: Mutation cache status: disabled

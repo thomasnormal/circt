@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "NativeMutationPlanner.h"
 #include "circt/Support/Version.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
@@ -48,6 +49,20 @@ using namespace llvm;
 
 namespace {
 
+static bool isTruthyEnvValue(const char *value) {
+  if (!value)
+    return false;
+  StringRef v(value);
+  return v.equals_insensitive("1") || v.equals_insensitive("true") ||
+         v.equals_insensitive("yes") || v.equals_insensitive("on");
+}
+
+static bool allowThirdPartyTools() {
+  // CIRCT-only mode is the default. Opt in to legacy third-party integrations
+  // (yosys-based mutation generation/apply paths) via environment override.
+  return isTruthyEnvValue(std::getenv("CIRCT_MUT_ALLOW_THIRD_PARTY"));
+}
+
 static void printHelp(raw_ostream &os) {
   os << "circt-mut - CIRCT mutation workflow frontend\n\n";
   os << "Usage:\n";
@@ -60,7 +75,10 @@ static void printHelp(raw_ostream &os) {
   os << "  matrix    Run mutation lane matrix flow (run_mutation_matrix.sh)\n";
   os << "  generate  Generate mutation lists (native path; script fallback)\n\n";
   os << "Environment:\n";
-  os << "  CIRCT_MUT_SCRIPTS_DIR  Override script directory location\n\n";
+  os << "  CIRCT_MUT_SCRIPTS_DIR  Override script directory location\n";
+  os << "  CIRCT_MUT_ALLOW_THIRD_PARTY\n";
+  os << "                        Enable legacy third-party integrations\n";
+  os << "                        (default: disabled / CIRCT-only mode)\n\n";
   os << "Examples:\n";
   os << "  circt-mut init --project-dir mut-campaign\n";
   os << "  circt-mut run --project-dir mut-campaign --mode all\n";
@@ -772,8 +790,10 @@ struct CoverRewriteResult {
 static CoverRewriteResult rewriteCoverArgs(const char *argv0,
                                            ArrayRef<StringRef> args) {
   CoverRewriteResult result;
+  const bool allowThirdParty = allowThirdPartyTools();
   bool hasMutationsFile = false;
   bool hasGenerateMutations = false;
+  bool hasCreateMutatedScript = false;
   bool wantsHelp = false;
   std::string generateMutations;
   std::string mutationsSeed;
@@ -911,10 +931,18 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
       continue;
     }
     if (arg == "--mutations-yosys" || arg.starts_with("--mutations-yosys=")) {
+      if (!allowThirdParty) {
+        result.error = "circt-mut cover: --mutations-yosys is disabled in "
+                       "CIRCT-only mode.";
+        return result;
+      }
       if (!resolveWithRequiredValue("--mutations-yosys"))
         return result;
       continue;
     }
+    if (arg == "--create-mutated-script" ||
+        arg.starts_with("--create-mutated-script="))
+      hasCreateMutatedScript = true;
     if (arg == "--native-global-filter-probe-mutant" ||
         arg.starts_with("--native-global-filter-probe-mutant=")) {
       nativeGlobalFilterProbe = true;
@@ -1302,6 +1330,29 @@ static CoverRewriteResult rewriteCoverArgs(const char *argv0,
     result.error =
         "circt-mut cover: use either --native-global-filter-probe-mutant or "
         "--native-global-filter-prequalify, not both.";
+    return result;
+  }
+  if (!allowThirdParty && !wantsHelp && !nativeGlobalFilterProbe &&
+      !nativeGlobalFilterPrequalify && !hasCreateMutatedScript) {
+    result.error = "circt-mut cover: CIRCT-only mode requires an explicit "
+                   "--create-mutated-script (default script is yosys-based).";
+    return result;
+  }
+  if (!allowThirdParty && hasGlobalFilterCmd) {
+    result.error = "circt-mut cover: --formal-global-propagate-cmd is "
+                   "disabled in CIRCT-only mode; use "
+                   "--formal-global-propagate-circt-lec, "
+                   "--formal-global-propagate-circt-bmc, or "
+                   "--formal-global-propagate-circt-chain.";
+    return result;
+  }
+  if (!allowThirdParty && !wantsHelp && !nativeGlobalFilterProbe &&
+      !nativeGlobalFilterPrequalify && !hasGlobalFilterLEC &&
+      !hasGlobalFilterBMC && !hasGlobalFilterChain) {
+    result.error = "circt-mut cover: CIRCT-only mode requires a CIRCT global "
+                   "formal filter (--formal-global-propagate-circt-lec, "
+                   "--formal-global-propagate-circt-bmc, or "
+                   "--formal-global-propagate-circt-chain).";
     return result;
   }
   if (nativeGlobalFilterPrequalify && !hasMutationsFile &&
@@ -2887,7 +2938,7 @@ struct MatrixLanePreflightDefaults {
 static bool preflightMatrixLaneTools(
     const char *argv0, StringRef lanesTSVPath,
     const MatrixLanePreflightDefaults &defaults, std::string &error,
-    bool &needsTimeoutTool) {
+    bool &needsTimeoutTool, bool allowThirdParty) {
   auto bufferOrErr = MemoryBuffer::getFile(lanesTSVPath);
   if (!bufferOrErr) {
     error = (Twine("circt-mut matrix: unable to read --lanes-tsv: ") +
@@ -3175,6 +3226,25 @@ static bool preflightMatrixLaneTools(
     bool hasAnyEffectiveGlobalFilterMode =
         !effectiveCmd.empty() || !effectiveLEC.empty() || !effectiveBMC.empty() ||
         !effectiveChain.empty();
+    if (!allowThirdParty && !effectiveCmd.empty()) {
+      error =
+          (Twine("Lane global filter config conflict in --lanes-tsv at line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel +
+           "): global_propagate_cmd is disabled in CIRCT-only mode.")
+              .str();
+      return false;
+    }
+    if (!allowThirdParty && effectiveLEC.empty() && effectiveBMC.empty() &&
+        effectiveChain.empty()) {
+      error =
+          (Twine("Lane global filter config missing in --lanes-tsv at line ") +
+           Twine(static_cast<unsigned long long>(lineIdx + 1)) + " (lane " +
+           laneLabel +
+           "): CIRCT-only mode requires circt-lec/circt-bmc/chain filter.")
+              .str();
+      return false;
+    }
     if (hasAnyEffectiveGlobalFilterMode &&
         (hasNonZeroDecimalValue(effectiveTimeoutSeconds) ||
          hasNonZeroDecimalValue(effectiveLECTimeoutSeconds) ||
@@ -3372,11 +3442,13 @@ static bool preflightMatrixLaneTools(
 static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
                                              ArrayRef<StringRef> args) {
   MatrixRewriteResult result;
+  const bool allowThirdParty = allowThirdPartyTools();
   MatrixLanePreflightDefaults defaults;
   bool hasDefaultGlobalFilterCmd = false;
   bool hasDefaultGlobalFilterLEC = false;
   bool hasDefaultGlobalFilterBMC = false;
   bool hasDefaultGlobalFilterChain = false;
+  bool hasCreateMutatedScript = false;
   std::string defaultGlobalFilterChainMode;
   std::string lanesTSVPath;
   for (size_t i = 0; i < args.size(); ++i) {
@@ -3506,6 +3578,11 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
     }
     if (arg == "--default-mutations-yosys" ||
         arg.starts_with("--default-mutations-yosys=")) {
+      if (!allowThirdParty) {
+        result.error = "circt-mut matrix: --default-mutations-yosys is "
+                       "disabled in CIRCT-only mode.";
+        return result;
+      }
       std::string requested;
       size_t eqPos = arg.find('=');
       if (eqPos != StringRef::npos)
@@ -3531,6 +3608,9 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
       result.rewrittenArgs.push_back(*resolved);
       continue;
     }
+    if (arg == "--create-mutated-script" ||
+        arg.starts_with("--create-mutated-script="))
+      hasCreateMutatedScript = true;
     if (arg == "--default-mutations-seed" ||
         arg.starts_with("--default-mutations-seed=")) {
       defaults.mutationsSeed = valueFromArg().str();
@@ -3860,8 +3940,24 @@ static MatrixRewriteResult rewriteMatrixArgs(const char *argv0,
   bool laneNeedsTimeoutTool = false;
   if (!lanesTSVPath.empty() &&
       !preflightMatrixLaneTools(argv0, lanesTSVPath, defaults, result.error,
-                                laneNeedsTimeoutTool))
+                                laneNeedsTimeoutTool, allowThirdParty))
     return result;
+  if (!allowThirdParty) {
+    if (!hasCreateMutatedScript) {
+      result.error =
+          "circt-mut matrix: CIRCT-only mode requires an explicit "
+          "--create-mutated-script (default script is yosys-based).";
+      return result;
+    }
+    if (hasDefaultGlobalFilterCmd) {
+      result.error = "circt-mut matrix: --default-formal-global-propagate-cmd "
+                     "is disabled in CIRCT-only mode; use "
+                     "--default-formal-global-propagate-circt-lec, "
+                     "--default-formal-global-propagate-circt-bmc, or "
+                     "--default-formal-global-propagate-circt-chain.";
+      return result;
+    }
+  }
   if ((needsTimeoutTool || laneNeedsTimeoutTool) &&
       !resolveToolPathFromEnvPath("timeout")) {
     result.error = "circt-mut matrix: unable to resolve timeout executable "
@@ -14698,6 +14794,64 @@ static void modeFamilyTargets(StringRef modeName,
   out.push_back(modeName.str());
 }
 
+static void circtOnlyNativeOpsForMode(StringRef modeName,
+                                      SmallVectorImpl<StringRef> &out) {
+  auto appendAll = [&](std::initializer_list<const char *> ops) {
+    for (const char *op : ops)
+      out.push_back(op);
+  };
+
+  if (modeName == "arith") {
+    appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
+               "GE_TO_GT"});
+    return;
+  }
+  if (modeName == "control") {
+    appendAll({"AND_TO_OR", "OR_TO_AND", "XOR_TO_OR", "UNARY_NOT_DROP"});
+    return;
+  }
+  if (modeName == "stuck") {
+    appendAll({"CONST0_TO_1", "CONST1_TO_0"});
+    return;
+  }
+  if (modeName == "invert") {
+    appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
+               "GE_TO_GT", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR",
+               "UNARY_NOT_DROP"});
+    return;
+  }
+  if (modeName == "connect") {
+    appendAll({"AND_TO_OR", "OR_TO_AND", "XOR_TO_OR"});
+    return;
+  }
+  if (modeName == "balanced" || modeName == "all") {
+    appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
+               "GE_TO_GT", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR",
+               "UNARY_NOT_DROP", "CONST0_TO_1", "CONST1_TO_0"});
+    return;
+  }
+
+  // Primitive mode mapping for CIRCT-only text-level operators.
+  if (modeName == "inv") {
+    appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
+               "GE_TO_GT", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR",
+               "UNARY_NOT_DROP"});
+    return;
+  }
+  if (modeName == "const0") {
+    out.push_back("CONST1_TO_0");
+    return;
+  }
+  if (modeName == "const1") {
+    out.push_back("CONST0_TO_1");
+    return;
+  }
+  if (modeName == "cnot0" || modeName == "cnot1") {
+    appendAll({"AND_TO_OR", "OR_TO_AND", "XOR_TO_OR"});
+    return;
+  }
+}
+
 static bool isIndexInRotatedExtraPrefix(uint64_t index, uint64_t start,
                                         uint64_t extraCount,
                                         uint64_t totalCount) {
@@ -14881,7 +15035,672 @@ static uint64_t countNonEmptyLines(StringRef path) {
   return count;
 }
 
+struct CirctOnlyModuleSpan {
+  std::string name;
+  size_t begin = 0;
+  size_t end = 0;
+};
+
+static bool isIdentifierStart(char c) { return isAlpha(c) || c == '_'; }
+
+static bool isIdentifierBody(char c) { return isAlnum(c) || c == '_' || c == '$'; }
+
+static bool isWordBoundary(StringRef text, size_t pos, size_t len) {
+  char prev = pos == 0 ? '\0' : text[pos - 1];
+  char next = pos + len < text.size() ? text[pos + len] : '\0';
+  bool prevBoundary = !isIdentifierBody(prev);
+  bool nextBoundary = !isIdentifierBody(next);
+  return prevBoundary && nextBoundary;
+}
+
+static std::optional<size_t> findTokenFrom(StringRef text, StringRef token,
+                                           size_t start) {
+  size_t pos = start;
+  while (true) {
+    pos = text.find(token, pos);
+    if (pos == StringRef::npos)
+      return std::nullopt;
+    if (isWordBoundary(text, pos, token.size()))
+      return pos;
+    ++pos;
+  }
+}
+
+static bool
+collectCirctOnlyModuleSpans(StringRef text,
+                            SmallVectorImpl<CirctOnlyModuleSpan> &spans) {
+  spans.clear();
+  size_t pos = 0;
+  while (true) {
+    auto modulePos = findTokenFrom(text, "module", pos);
+    if (!modulePos)
+      break;
+
+    size_t i = *modulePos + StringRef("module").size();
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+      ++i;
+    if (i >= text.size()) {
+      pos = *modulePos + 1;
+      continue;
+    }
+
+    size_t nameStart = i;
+    size_t nameEnd = i;
+    if (text[i] == '\\') {
+      ++nameEnd;
+      while (nameEnd < text.size() &&
+             !std::isspace(static_cast<unsigned char>(text[nameEnd])))
+        ++nameEnd;
+    } else if (isIdentifierStart(text[i])) {
+      ++nameEnd;
+      while (nameEnd < text.size() && isIdentifierBody(text[nameEnd]))
+        ++nameEnd;
+    } else {
+      pos = *modulePos + 1;
+      continue;
+    }
+
+    auto endmodulePos = findTokenFrom(text, "endmodule", nameEnd);
+    if (!endmodulePos)
+      return false;
+
+    CirctOnlyModuleSpan span;
+    span.name = text.slice(nameStart, nameEnd).str();
+    span.begin = *modulePos;
+    span.end = *endmodulePos + StringRef("endmodule").size();
+    spans.push_back(span);
+
+    pos = span.end;
+  }
+  return true;
+}
+
+static std::string globToRegexPattern(StringRef glob) {
+  std::string regex = "^";
+  for (char c : glob) {
+    switch (c) {
+    case '*':
+      regex += ".*";
+      break;
+    case '?':
+      regex += ".";
+      break;
+    case '.':
+    case '^':
+    case '$':
+    case '|':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case '+':
+    case '\\':
+      regex += '\\';
+      regex += c;
+      break;
+    default:
+      regex += c;
+      break;
+    }
+  }
+  regex += "$";
+  return regex;
+}
+
+static bool parseCirctOnlySelectModulePatterns(
+    ArrayRef<std::string> selectList, SmallVectorImpl<std::string> &patterns,
+    std::string &error) {
+  patterns.clear();
+  for (const std::string &rawEntry : selectList) {
+    StringRef entry = StringRef(rawEntry).trim();
+    if (entry.empty())
+      continue;
+    auto split = entry.split(':');
+    if (split.second == split.first) {
+      error = (Twine("circt-mut generate: unsupported --select expression in "
+                     "CIRCT-only mode: ") +
+               entry + " (supported prefixes: t:, m:)")
+                  .str();
+      return false;
+    }
+    StringRef prefix = split.first.trim();
+    StringRef pattern = split.second.trim();
+    if (prefix != "t" && prefix != "m") {
+      error = (Twine("circt-mut generate: unsupported --select expression in "
+                     "CIRCT-only mode: ") +
+               entry + " (supported prefixes: t:, m:)")
+                  .str();
+      return false;
+    }
+    if (pattern.empty()) {
+      error = (Twine("circt-mut generate: empty --select module pattern in "
+                     "CIRCT-only mode: ") +
+               entry)
+                  .str();
+      return false;
+    }
+    patterns.push_back(pattern.str());
+  }
+  return true;
+}
+
+static bool filterDesignTextForCirctOnlySelect(StringRef designText,
+                                               ArrayRef<std::string> selectList,
+                                               std::string &filteredDesignText,
+                                               std::string &error) {
+  if (selectList.empty()) {
+    filteredDesignText = designText.str();
+    return true;
+  }
+
+  SmallVector<std::string, 8> patterns;
+  if (!parseCirctOnlySelectModulePatterns(selectList, patterns, error))
+    return false;
+
+  SmallVector<CirctOnlyModuleSpan, 32> spans;
+  if (!collectCirctOnlyModuleSpans(designText, spans)) {
+    error = "circt-mut generate: failed to parse module spans for --select in "
+            "CIRCT-only mode";
+    return false;
+  }
+  if (spans.empty()) {
+    error = "circt-mut generate: no modules found for --select in CIRCT-only "
+            "mode";
+    return false;
+  }
+
+  SmallVector<Regex, 8> compiled;
+  for (const std::string &glob : patterns) {
+    std::string regexText = globToRegexPattern(glob);
+    Regex re(regexText);
+    std::string regexError;
+    if (!re.isValid(regexError)) {
+      error = (Twine("circt-mut generate: invalid --select pattern in "
+                     "CIRCT-only mode: ") +
+               glob + " (" + regexError + ")")
+                  .str();
+      return false;
+    }
+    compiled.push_back(std::move(re));
+  }
+
+  filteredDesignText.clear();
+  bool matchedAny = false;
+  for (const CirctOnlyModuleSpan &span : spans) {
+    bool matched = false;
+    for (const Regex &re : compiled) {
+      if (re.match(span.name)) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched)
+      continue;
+    matchedAny = true;
+    filteredDesignText.append(
+        designText.slice(span.begin, span.end).str());
+    filteredDesignText.push_back('\n');
+  }
+
+  if (!matchedAny) {
+    error = "circt-mut generate: --select did not match any modules in "
+            "CIRCT-only mode";
+    return false;
+  }
+
+  return true;
+}
+
+static int runCirctOnlyGenerate(const GenerateOptions &opts) {
+  auto start = std::chrono::steady_clock::now();
+  auto elapsedNs = [&]() -> uint64_t {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(now - start)
+        .count();
+  };
+
+  if (!sys::fs::exists(opts.design)) {
+    errs() << "circt-mut generate: design file not found: " << opts.design
+           << "\n";
+    return 1;
+  }
+
+  auto designHash = hashFileSHA256(opts.design);
+  if (!designHash) {
+    errs() << "circt-mut generate: failed to hash design file: " << opts.design
+           << "\n";
+    return 1;
+  }
+
+  auto designBuffer = MemoryBuffer::getFile(opts.design);
+  if (!designBuffer) {
+    errs() << "circt-mut generate: unable to read design file: " << opts.design
+           << "\n";
+    return 1;
+  }
+  StringRef designText = designBuffer.get()->getBuffer();
+  StringSet<> seenSelects;
+  SmallVector<std::string, 16> finalSelects;
+  for (const std::string &sel : opts.selectList) {
+    StringRef select = StringRef(sel).trim();
+    if (select.empty())
+      continue;
+    if (seenSelects.insert(select).second)
+      finalSelects.push_back(select.str());
+  }
+
+  std::string filteredDesignTextStorage;
+  std::string selectError;
+  if (!filterDesignTextForCirctOnlySelect(designText, finalSelects,
+                                          filteredDesignTextStorage,
+                                          selectError)) {
+    errs() << selectError << "\n";
+    return 1;
+  }
+  StringRef mutationDesignText = designText;
+  if (!filteredDesignTextStorage.empty())
+    mutationDesignText = filteredDesignTextStorage;
+
+  SmallVector<std::string, 16> orderedOps;
+  std::string nativePlanError;
+  if (!circt::mut::computeOrderedNativeMutationOps(mutationDesignText, orderedOps,
+                                                   nativePlanError)) {
+    errs() << nativePlanError << "\n";
+    return 1;
+  }
+
+  SmallVector<std::string, 8> profileModes;
+  SmallVector<std::string, 8> profileCfgs;
+  for (const std::string &profile : opts.profileList) {
+    std::string profileErr;
+    if (!appendProfile(profile, profileModes, profileCfgs, profileErr)) {
+      errs() << profileErr << "\n";
+      return 1;
+    }
+  }
+
+  SmallVector<std::string, 16> validateModes;
+  validateModes.append(profileModes.begin(), profileModes.end());
+  validateModes.append(opts.modeList.begin(), opts.modeList.end());
+  for (const std::string &modeEntry : validateModes) {
+    StringRef mode = StringRef(modeEntry).trim();
+    if (mode.empty())
+      continue;
+    if (!isKnownMutationMode(mode)) {
+      errs() << "circt-mut generate: unknown --mode value: " << mode
+             << " (expected inv|const0|const1|cnot0|cnot1|"
+                "arith|control|balanced|all|stuck|invert|connect)\n";
+      return 1;
+    }
+  }
+
+  bool modeCountsEnabled = false;
+  uint64_t modeCountsTotal = 0;
+  SmallVector<std::string, 8> modeCountKeys;
+  StringMap<uint64_t> modeCountByMode;
+  for (const std::string &entry : opts.modeCountList) {
+    StringRef ref(entry);
+    auto split = ref.split('=');
+    StringRef modeName = split.first.trim();
+    StringRef countRef = split.second.trim();
+    if (modeName.empty() || countRef == split.first) {
+      errs() << "circt-mut generate: invalid --mode-count entry: " << entry
+             << " (expected NAME=COUNT)\n";
+      return 1;
+    }
+    uint64_t modeCountValue = 0;
+    if (!parsePositiveUInt(countRef, modeCountValue)) {
+      errs() << "circt-mut generate: invalid --mode-count count for " << modeName
+             << ": " << countRef << " (expected positive integer)\n";
+      return 1;
+    }
+    if (!isKnownMutationMode(modeName)) {
+      errs() << "circt-mut generate: unknown --mode-count mode: " << modeName
+             << " (expected inv|const0|const1|cnot0|cnot1|"
+                "arith|control|balanced|all|stuck|invert|connect)\n";
+      return 1;
+    }
+    if (!modeCountByMode.count(modeName))
+      modeCountKeys.push_back(modeName.str());
+    modeCountByMode[modeName] += modeCountValue;
+    modeCountsTotal += modeCountValue;
+    modeCountsEnabled = true;
+  }
+  if (modeCountsEnabled && modeCountsTotal != opts.count) {
+    errs() << "circt-mut generate: mode-count total (" << modeCountsTotal
+           << ") must match --count (" << opts.count << ")\n";
+    return 1;
+  }
+
+  bool modeWeightsEnabled = false;
+  uint64_t modeWeightsTotal = 0;
+  SmallVector<std::string, 8> modeWeightKeys;
+  StringMap<uint64_t> modeWeightByMode;
+  for (const std::string &entry : opts.modeWeightList) {
+    StringRef ref(entry);
+    auto split = ref.split('=');
+    StringRef modeName = split.first.trim();
+    StringRef weightRef = split.second.trim();
+    if (modeName.empty() || weightRef == split.first) {
+      errs() << "circt-mut generate: invalid --mode-weight entry: " << entry
+             << " (expected NAME=WEIGHT)\n";
+      return 1;
+    }
+    uint64_t modeWeightValue = 0;
+    if (!parsePositiveUInt(weightRef, modeWeightValue)) {
+      errs() << "circt-mut generate: invalid --mode-weight weight for "
+             << modeName << ": " << weightRef
+             << " (expected positive integer)\n";
+      return 1;
+    }
+    if (!isKnownMutationMode(modeName)) {
+      errs() << "circt-mut generate: unknown --mode-weight mode: " << modeName
+             << " (expected inv|const0|const1|cnot0|cnot1|"
+                "arith|control|balanced|all|stuck|invert|connect)\n";
+      return 1;
+    }
+    if (!modeWeightByMode.count(modeName))
+      modeWeightKeys.push_back(modeName.str());
+    modeWeightByMode[modeName] += modeWeightValue;
+    modeWeightsTotal += modeWeightValue;
+    modeWeightsEnabled = true;
+  }
+  if (modeCountsEnabled && modeWeightsEnabled) {
+    errs() << "circt-mut generate: use either --mode-count(s) or "
+              "--mode-weight(s), not both\n";
+    return 1;
+  }
+  if (modeWeightsEnabled) {
+    if (modeWeightsTotal == 0) {
+      errs() << "circt-mut generate: mode-weight total must be positive\n";
+      return 1;
+    }
+    modeCountsEnabled = true;
+    modeCountsTotal = 0;
+    modeCountKeys = modeWeightKeys;
+    for (const std::string &modeName : modeWeightKeys) {
+      uint64_t modeWeightValue = modeWeightByMode[modeName];
+      uint64_t modeCountValue = (opts.count * modeWeightValue) / modeWeightsTotal;
+      modeCountByMode[modeName] = modeCountValue;
+      modeCountsTotal += modeCountValue;
+    }
+    uint64_t modeRemainder = opts.count - modeCountsTotal;
+    if (modeRemainder > 0 && !modeWeightKeys.empty()) {
+      uint64_t start = opts.seed % modeWeightKeys.size();
+      for (uint64_t i = 0; i < modeRemainder; ++i) {
+        const std::string &modeName =
+            modeWeightKeys[(start + i) % modeWeightKeys.size()];
+        modeCountByMode[modeName] += 1;
+      }
+    }
+  }
+
+  SmallVector<std::string, 16> combinedModes;
+  combinedModes.append(profileModes.begin(), profileModes.end());
+  combinedModes.append(opts.modeList.begin(), opts.modeList.end());
+  if (modeCountsEnabled)
+    combinedModes.append(modeCountKeys.begin(), modeCountKeys.end());
+
+  StringSet<> seenModes;
+  SmallVector<std::string, 16> finalModes;
+  for (const std::string &mode : combinedModes) {
+    StringRef m(mode);
+    m = m.trim();
+    if (m.empty())
+      continue;
+    if (seenModes.insert(m).second)
+      finalModes.push_back(m.str());
+  }
+  if (finalModes.empty())
+    finalModes.push_back(std::string());
+
+  SmallVector<std::pair<std::string, uint64_t>, 16> modeTargets;
+  if (!modeCountsEnabled) {
+    uint64_t modeCount = finalModes.size();
+    uint64_t baseCount = opts.count / modeCount;
+    uint64_t extraCount = opts.count % modeCount;
+    uint64_t extraStart = opts.seed % modeCount;
+    for (size_t i = 0; i < finalModes.size(); ++i) {
+      uint64_t listCount = baseCount;
+      if (isIndexInRotatedExtraPrefix(i, extraStart, extraCount, modeCount))
+        ++listCount;
+      if (listCount == 0)
+        continue;
+      modeTargets.push_back({finalModes[i], listCount});
+    }
+  } else {
+    for (const std::string &mode : finalModes) {
+      auto it = modeCountByMode.find(mode);
+      uint64_t listCount = it == modeCountByMode.end() ? 0 : it->second;
+      if (listCount == 0)
+        continue;
+      modeTargets.push_back({mode, listCount});
+    }
+  }
+
+  if (modeTargets.empty()) {
+    errs() << "circt-mut generate: no mutation targets selected after mode "
+              "expansion\n";
+    return 1;
+  }
+
+  SmallVector<std::string, 16> combinedCfgs;
+  combinedCfgs.append(profileCfgs.begin(), profileCfgs.end());
+  combinedCfgs.append(opts.cfgList.begin(), opts.cfgList.end());
+
+  circt::mut::NativeMutationPlannerConfig plannerConfig;
+  if (!circt::mut::parseNativeMutationPlannerConfig(combinedCfgs, plannerConfig,
+                                                    nativePlanError)) {
+    errs() << nativePlanError << "\n";
+    return 1;
+  }
+
+  bool cacheEnabled = !opts.cacheDir.empty();
+  std::string cacheFile;
+  std::string cacheMetaFile;
+  uint64_t cacheSavedRuntimeNs = 0;
+  uint64_t cacheLockWaitNs = 0;
+  int cacheLockContended = 0;
+
+  if (cacheEnabled) {
+    std::error_code ec = sys::fs::create_directories(opts.cacheDir);
+    if (ec) {
+      errs() << "circt-mut generate: failed to create cache directory: "
+             << opts.cacheDir << ": " << ec.message() << "\n";
+      return 1;
+    }
+
+    std::string cachePayload;
+    raw_string_ostream cachePayloadOS(cachePayload);
+    cachePayloadOS << "native-v1\n";
+    cachePayloadOS << "design_hash=" << *designHash << "\n";
+    cachePayloadOS << "count=" << opts.count << "\n";
+    cachePayloadOS << "seed=" << opts.seed << "\n";
+    cachePayloadOS << "profiles=" << joinWithTrailingNewline(opts.profileList);
+    cachePayloadOS << "modes=" << joinWithTrailingNewline(opts.modeList);
+    cachePayloadOS << "mode_counts=" << joinWithTrailingNewline(opts.modeCountList);
+    cachePayloadOS << "mode_weights=" << joinWithTrailingNewline(opts.modeWeightList);
+    cachePayloadOS << "selects=" << joinWithTrailingNewline(finalSelects);
+    cachePayloadOS << "ops=" << joinWithTrailingNewline(orderedOps);
+    cachePayloadOS << "planner_policy="
+                   << (plannerConfig.policy ==
+                               circt::mut::NativeMutationPlannerConfig::Policy::Weighted
+                           ? "weighted"
+                           : "legacy")
+                   << "\n";
+    cachePayloadOS << "pick_cover_prcnt=" << plannerConfig.pickCoverPercent
+                   << "\n";
+    cachePayloadOS << "weight_cover=" << plannerConfig.weightCover << "\n";
+    cachePayloadOS << "weight_pq_w=" << plannerConfig.weightPQW << "\n";
+    cachePayloadOS << "weight_pq_b=" << plannerConfig.weightPQB << "\n";
+    cachePayloadOS << "weight_pq_c=" << plannerConfig.weightPQC << "\n";
+    cachePayloadOS << "weight_pq_s=" << plannerConfig.weightPQS << "\n";
+    cachePayloadOS << "weight_pq_mw=" << plannerConfig.weightPQMW << "\n";
+    cachePayloadOS << "weight_pq_mb=" << plannerConfig.weightPQMB << "\n";
+    cachePayloadOS << "weight_pq_mc=" << plannerConfig.weightPQMC << "\n";
+    cachePayloadOS << "weight_pq_ms=" << plannerConfig.weightPQMS << "\n";
+    cachePayloadOS.flush();
+
+    std::string cacheKey = hashSHA256(cachePayload);
+    cacheFile = (Twine(opts.cacheDir) + "/" + cacheKey + ".mutations.txt").str();
+    cacheMetaFile = cacheFile + ".meta";
+
+    uint64_t cacheSize = 0;
+    if (!sys::fs::file_size(cacheFile, cacheSize) && cacheSize > 0) {
+      std::error_code copyEc = copyFileReplace(cacheFile, opts.outFile);
+      if (copyEc) {
+        errs() << "circt-mut generate: failed to copy cache file: " << cacheFile
+               << " -> " << opts.outFile << ": " << copyEc.message() << "\n";
+        return 1;
+      }
+      cacheSavedRuntimeNs = parseGenerationRuntimeFromMeta(cacheMetaFile);
+      uint64_t generated = countNonEmptyLines(opts.outFile);
+      outs() << "Generated mutations: " << generated << " (cache hit)\n";
+      outs() << "Mutation file: " << opts.outFile << "\n";
+      outs() << "Mutation generation runtime_ns: " << elapsedNs() << "\n";
+      outs() << "Mutation cache saved_runtime_ns: " << cacheSavedRuntimeNs
+             << "\n";
+      outs() << "Mutation cache lock_wait_ns: " << cacheLockWaitNs << "\n";
+      outs() << "Mutation cache lock_contended: " << cacheLockContended << "\n";
+      outs() << "Mutation cache status: hit\n";
+      outs() << "Mutation cache file: " << cacheFile << "\n";
+      return 0;
+    }
+  }
+
+  SmallString<256> outParent(opts.outFile);
+  sys::path::remove_filename(outParent);
+  if (!outParent.empty()) {
+    std::error_code ec = sys::fs::create_directories(outParent);
+    if (ec) {
+      errs() << "circt-mut generate: failed to create output directory: "
+             << outParent << ": " << ec.message() << "\n";
+      return 1;
+    }
+  }
+
+  std::error_code ec;
+  raw_fd_ostream out(opts.outFile, ec, sys::fs::OF_Text);
+  if (ec) {
+    errs() << "circt-mut generate: failed to open output file: " << opts.outFile
+           << ": " << ec.message() << "\n";
+    return 1;
+  }
+
+  uint64_t nextID = 1;
+  for (size_t i = 0; i < modeTargets.size(); ++i) {
+    StringRef modeName = modeTargets[i].first;
+    uint64_t listCount = modeTargets[i].second;
+
+    SmallVector<std::string, 16> filteredOps;
+    if (modeName.empty()) {
+      filteredOps.append(orderedOps.begin(), orderedOps.end());
+    } else {
+      SmallVector<StringRef, 16> modeOps;
+      circtOnlyNativeOpsForMode(modeName, modeOps);
+      StringSet<> selectedOps;
+      for (StringRef op : modeOps)
+        selectedOps.insert(op);
+      for (const std::string &op : orderedOps)
+        if (selectedOps.contains(op))
+          filteredOps.push_back(op);
+    }
+
+    if (filteredOps.empty()) {
+      errs() << "circt-mut generate: no mutation targets selected after mode "
+                "expansion\n";
+      return 1;
+    }
+
+    std::string modePlanText;
+    raw_string_ostream modePlanStream(modePlanText);
+    circt::mut::emitNativeMutationPlan(filteredOps, mutationDesignText, listCount,
+                                       opts.seed + i, plannerConfig,
+                                       modePlanStream);
+    modePlanStream.flush();
+
+    SmallVector<StringRef, 64> lines;
+    StringRef(modePlanText).split(lines, '\n', /*MaxSplit=*/-1,
+                                  /*KeepEmpty=*/false);
+    for (StringRef line : lines) {
+      if (line.trim().empty())
+        continue;
+      size_t splitPos = line.find_first_of(" \t");
+      if (splitPos == StringRef::npos)
+        continue;
+      StringRef mutSpec = line.substr(splitPos + 1).trim();
+      if (mutSpec.empty())
+        continue;
+      out << nextID++ << ' ' << mutSpec << '\n';
+    }
+  }
+  if (nextID != opts.count + 1) {
+    errs() << "circt-mut generate: generation produced unexpected mutation "
+              "count (expected="
+           << opts.count << " actual=" << (nextID - 1) << ")\n";
+    return 1;
+  }
+  out.close();
+
+  if (cacheEnabled) {
+    std::string cacheTmp =
+        cacheFile + ".tmp." + std::to_string(sys::Process::getProcessId());
+    std::string cacheMetaTmp =
+        cacheMetaFile + ".tmp." + std::to_string(sys::Process::getProcessId());
+
+    std::error_code copyEc = copyFileReplace(opts.outFile, cacheTmp);
+    if (copyEc) {
+      errs() << "circt-mut generate: failed to write cache file: " << cacheTmp
+             << ": " << copyEc.message() << "\n";
+      return 1;
+    }
+
+    std::error_code metaEc;
+    raw_fd_ostream metaOut(cacheMetaTmp, metaEc, sys::fs::OF_Text);
+    if (metaEc) {
+      errs() << "circt-mut generate: failed to write cache metadata: "
+             << cacheMetaTmp << ": " << metaEc.message() << "\n";
+      return 1;
+    }
+    metaOut << "generation_runtime_ns\t" << elapsedNs() << "\n";
+    metaOut.close();
+
+    std::error_code renameEc = sys::fs::rename(cacheTmp, cacheFile);
+    if (renameEc) {
+      errs() << "circt-mut generate: failed to publish cache file: " << cacheTmp
+             << " -> " << cacheFile << ": " << renameEc.message() << "\n";
+      return 1;
+    }
+    renameEc = sys::fs::rename(cacheMetaTmp, cacheMetaFile);
+    if (renameEc) {
+      errs() << "circt-mut generate: failed to publish cache metadata: "
+             << cacheMetaTmp << " -> " << cacheMetaFile << ": "
+             << renameEc.message() << "\n";
+      return 1;
+    }
+  }
+
+  outs() << "Generated mutations: " << opts.count << "\n";
+  outs() << "Mutation file: " << opts.outFile << "\n";
+  outs() << "Mutation generation runtime_ns: " << elapsedNs() << "\n";
+  outs() << "Mutation cache saved_runtime_ns: 0\n";
+  outs() << "Mutation cache lock_wait_ns: " << cacheLockWaitNs << "\n";
+  outs() << "Mutation cache lock_contended: " << cacheLockContended << "\n";
+  if (cacheEnabled) {
+    outs() << "Mutation cache status: miss\n";
+    outs() << "Mutation cache file: " << cacheFile << "\n";
+  } else {
+    outs() << "Mutation cache status: disabled\n";
+  }
+  return 0;
+}
+
 static int runNativeGenerate(const GenerateOptions &opts) {
+  if (!allowThirdPartyTools())
+    return runCirctOnlyGenerate(opts);
+
   auto start = std::chrono::steady_clock::now();
   auto elapsedNs = [&]() -> uint64_t {
     auto now = std::chrono::steady_clock::now();
@@ -15616,6 +16435,11 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (parseResult.fallbackToScript) {
+      if (!allowThirdPartyTools()) {
+        errs() << "circt-mut generate: unsupported option set in CIRCT-only "
+                  "mode.\n";
+        return 1;
+      }
       auto scriptPath = resolveScriptPath(argv[0], "generate_mutations_yosys.sh");
       if (!scriptPath) {
         errs() << "circt-mut: native generate path does not support this option set "

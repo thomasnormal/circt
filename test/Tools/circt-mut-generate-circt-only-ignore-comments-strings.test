@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top;\n  string s = "fake == token";\n  // fake == token in comment\n  logic a, b, y;\n  assign y = (a == b);\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/legacy.txt --count 13 --seed 0 --cfg planner_policy=legacy > %t/log-legacy.txt
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/weighted.txt --count 13 --seed 0 --cfg planner_policy=weighted --cfg weight_cover=1 --cfg weight_pq_w=0 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=0 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 --cfg pick_cover_prcnt=100 > %t/log-weighted.txt
+// RUN: sed -n '13p' %t/legacy.txt | FileCheck %s --check-prefix=LEGACY13
+// RUN: sed -n '13p' %t/weighted.txt | FileCheck %s --check-prefix=WEIGHTED13
+// RUN: not grep -E '@[23]' %t/legacy.txt
+// RUN: not grep -E '@[23]' %t/weighted.txt
+//
+// LEGACY13: 13 NATIVE_EQ_TO_NEQ@1
+// WEIGHTED13: 13 NATIVE_EQ_TO_NEQ@1
