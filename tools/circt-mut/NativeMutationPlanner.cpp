@@ -26,7 +26,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
     "XOR_TO_OR",        "UNARY_NOT_DROP", "CONST0_TO_1",     "CONST1_TO_0",
-    "ADD_TO_SUB",       "SUB_TO_ADD",     "SHL_TO_SHR",      "SHR_TO_SHL"};
+    "ADD_TO_SUB",       "SUB_TO_ADD",     "SHL_TO_SHR",      "SHR_TO_SHL",
+    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ"};
 
 namespace {
 
@@ -273,6 +274,37 @@ static void collectLiteralTokenSites(StringRef text, StringRef token,
   }
 }
 
+static void collectComparatorTokenSites(StringRef text, StringRef token,
+                                        ArrayRef<uint8_t> codeMask,
+                                        SmallVectorImpl<SiteInfo> &sites) {
+  assert((token == "==" || token == "!=" || token == "===" ||
+          token == "!==") &&
+         "expected comparator token");
+  size_t len = token.size();
+  for (size_t i = 0, e = text.size(); i + len <= e; ++i) {
+    if (!isCodeRange(codeMask, i, len))
+      continue;
+    if (!text.substr(i).starts_with(token))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + len < e && isCodeAt(codeMask, i + len)) ? text[i + len]
+                                                              : '\0';
+    if (token == "==") {
+      if (prev == '=' || prev == '!' || prev == '<' || prev == '>')
+        continue;
+      if (next == '=')
+        continue;
+    } else if (token == "!=") {
+      if (next == '=')
+        continue;
+    } else if (token == "===" || token == "!==") {
+      if (prev == '=' || next == '=')
+        continue;
+    }
+    sites.push_back({i});
+  }
+}
+
 static void collectStandaloneCompareSites(StringRef text, char needle,
                                           ArrayRef<uint8_t> codeMask,
                                           SmallVectorImpl<SiteInfo> &sites) {
@@ -491,11 +523,19 @@ static void collectSitesForOp(StringRef designText, StringRef op,
                               SmallVectorImpl<SiteInfo> &sites) {
   sites.clear();
   if (op == "EQ_TO_NEQ") {
-    collectLiteralTokenSites(designText, "==", codeMask, sites);
+    collectComparatorTokenSites(designText, "==", codeMask, sites);
     return;
   }
   if (op == "NEQ_TO_EQ") {
-    collectLiteralTokenSites(designText, "!=", codeMask, sites);
+    collectComparatorTokenSites(designText, "!=", codeMask, sites);
+    return;
+  }
+  if (op == "CASEEQ_TO_EQ") {
+    collectComparatorTokenSites(designText, "===", codeMask, sites);
+    return;
+  }
+  if (op == "CASENEQ_TO_NEQ") {
+    collectComparatorTokenSites(designText, "!==", codeMask, sites);
     return;
   }
   if (op == "LT_TO_LE") {
@@ -582,6 +622,8 @@ static std::string getOpFamily(StringRef op) {
   if (op == "EQ_TO_NEQ" || op == "NEQ_TO_EQ" || op == "LT_TO_LE" ||
       op == "GT_TO_GE" || op == "LE_TO_LT" || op == "GE_TO_GT")
     return "compare";
+  if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
+    return "xcompare";
   if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "XOR_TO_OR" ||
       op == "UNARY_NOT_DROP")
     return "logic";
