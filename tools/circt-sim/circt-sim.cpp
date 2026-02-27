@@ -3703,6 +3703,8 @@ static LogicalResult processInput(MLIRContext &context,
                  << entryCallsTrampoline << "\n";
     llvm::errs() << "[circt-sim] wait_event_count:                 "
                  << interp.getMooreWaitEventCount() << "\n";
+    llvm::errs() << "[circt-sim] wait_count:                       "
+                 << interp.getLlhdWaitCount() << "\n";
     llvm::errs() << "[circt-sim] fork_count:                       "
                  << interp.getSimForkCount() << "\n";
     llvm::errs() << "[circt-sim] join_count:                       "

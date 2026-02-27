@@ -1259,14 +1259,15 @@ public:
   uint64_t getEntryTableSkippedYieldCount() const {
     return entryTableSkippedYieldCount;
   }
+  uint64_t getLlhdWaitCount() const { return llhdWaitCount; }
   uint64_t getMooreWaitEventCount() const { return mooreWaitEventCount; }
   uint64_t getSimForkCount() const { return simForkCount; }
   uint64_t getSimJoinCount() const { return simJoinCount; }
   /// Canonical suspension telemetry for Phase 7 profiling dashboards.
-  /// Current composition tracks the two demoted-yield families with
-  /// stable counters: moore.wait_event and sim join/wait_fork.
+  /// Current composition tracks llhd.wait plus demoted-yield families:
+  /// moore.wait_event and sim join/wait_fork.
   uint64_t getYieldCountTotal() const {
-    return mooreWaitEventCount + simJoinCount;
+    return llhdWaitCount + mooreWaitEventCount + simJoinCount;
   }
   uint32_t getMaxAotDepth() const { return maxAotDepth; }
   void dumpAotHotUncompiledFuncs(llvm::raw_ostream &os, size_t topN) const;
@@ -4272,6 +4273,7 @@ private:
   uint64_t trampolineEntryCallCount = 0;
   uint64_t entryTableSkippedDepthCount = 0;
   uint64_t entryTableSkippedYieldCount = 0;
+  uint64_t llhdWaitCount = 0;
   uint64_t mooreWaitEventCount = 0;
   uint64_t simForkCount = 0;
   uint64_t simJoinCount = 0;
