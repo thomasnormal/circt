@@ -40,9 +40,9 @@
 // AOTSTATS-DAG: [circt-sim] simulated_time_fs:                15000000
 // AOTSTATS-DAG: [circt-sim] process_activations_total:        {{[0-9]+}}
 // AOTSTATS-DAG: [circt-sim] delta_cycles_total:               {{[0-9]+}}
-// AOTSTATS-DAG: [circt-sim] process_activations_per_s:        {{[0-9]+}}
-// AOTSTATS-DAG: [circt-sim] delta_cycles_per_s:               {{[0-9]+}}
-// AOTSTATS-DAG: [circt-sim] simulated_ns_per_s:               {{[0-9]+}}
+// AOTSTATS-DAG: [circt-sim] process_activations_per_s:        {{[1-9][0-9]*}}
+// AOTSTATS-DAG: [circt-sim] delta_cycles_per_s:               {{[1-9][0-9]*}}
+// AOTSTATS-DAG: [circt-sim] simulated_ns_per_s:               {{[1-9][0-9]*}}
 // AOTSTATS-DAG: [circt-sim] yield_count_total:                2
 // AOTSTATS: out=200
 

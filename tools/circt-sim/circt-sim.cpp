@@ -3640,6 +3640,10 @@ static LogicalResult processInput(MLIRContext &context,
   runStartTime = std::chrono::steady_clock::now();
   LogicalResult runResult = simContext.run();
   runDoneTime = std::chrono::steady_clock::now();
+  uint64_t runWallNs = static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(runDoneTime -
+                                                            runStartTime)
+          .count());
   uint64_t runWallMs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::milliseconds>(
           runDoneTime - runStartTime)
@@ -3717,11 +3721,11 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t processActivationsTotal = schedStats.processesExecuted;
     uint64_t deltaCyclesTotal = schedStats.deltaCyclesExecuted;
     uint64_t simulatedTimeFs = simContext.getFinalTime().realTime;
-    auto scalePerSecond = [runWallMs](uint64_t value) -> uint64_t {
-      if (runWallMs == 0)
+    auto scalePerSecond = [runWallNs](uint64_t value) -> uint64_t {
+      if (runWallNs == 0)
         return 0;
       return static_cast<uint64_t>(
-          (static_cast<unsigned __int128>(value) * 1000u) / runWallMs);
+          (static_cast<unsigned __int128>(value) * 1000000000ull) / runWallNs);
     };
     uint64_t processActivationsPerS = scalePerSecond(processActivationsTotal);
     uint64_t deltaCyclesPerS = scalePerSecond(deltaCyclesTotal);
