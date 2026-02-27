@@ -115,6 +115,10 @@ macro(add_circt_tool name)
   endif()
 endmacro()
 
+function(add_circt_tool_symlink link_name target)
+  llvm_add_tool_symlink(CIRCT ${ARGV})
+endfunction()
+
 # Adds a CIRCT library target for installation.  This should normally only be
 # called from add_circt_library().
 function(add_circt_library_install name)

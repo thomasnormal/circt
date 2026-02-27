@@ -10,12 +10,16 @@ set(CMAKE_CXX_STANDARD 20)
 add_compile_definitions($<$<CONFIG:Debug>:SLANG_DEBUG>)
 
 # HACK: When the `OBJECT` argument is passed to `llvm_add_library()`,
-# `COMPILE_DEFINITIONS` are not correctly inherited. For that reason, we
-# manually set it here.
-if(TARGET Boost::headers)
-  add_compile_definitions(
-    $<TARGET_PROPERTY:Boost::headers,INTERFACE_COMPILE_DEFINITIONS>)
-endif()
+# `COMPILE_DEFINITIONS` are not correctly inherited. For that reason, manually
+# propagate relevant interface definitions from Slang and Boost helper targets.
+foreach(_circt_slang_defs_target
+    slang::boost_unordered
+    Boost::headers)
+  if(TARGET ${_circt_slang_defs_target})
+    add_compile_definitions(
+      $<TARGET_PROPERTY:${_circt_slang_defs_target},INTERFACE_COMPILE_DEFINITIONS>)
+  endif()
+endforeach()
 
 # UTF-8 flag is required for MSVC when including the "fmt" library headers
 # which can get pulled in by the slang headers.
