@@ -3,7 +3,7 @@
 // Tests for uvm_callback, uvm_callbacks class, add/delete methods, and
 // callback iteration patterns
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -169,6 +169,7 @@ package callback_test_pkg;
   //==========================================================================
   class my_driver extends uvm_driver;
     `uvm_component_utils(my_driver)
+    `uvm_register_cb(my_driver, my_driver_callback)
 
     // Callback pool for this driver type
     my_driver_callback cb_queue[$];
@@ -199,6 +200,16 @@ package callback_test_pkg;
         end
       end
       return 1;
+    endfunction
+
+    // Exercise standard UVM callback macros in a valid object context.
+    function void do_pre_drive_with_uvm_macros(ref bit [7:0] data);
+      `uvm_do_callbacks(my_driver, my_driver_callback, pre_drive(this, data))
+    endfunction
+
+    function bit do_check_data_with_uvm_macros(bit [7:0] data);
+      `uvm_do_callbacks_exit_on(my_driver, my_driver_callback,
+                                check_data(this, data), 0)
     endfunction
 
     // Add callback to queue
@@ -564,27 +575,34 @@ package callback_test_pkg;
     endfunction
 
     virtual task run_phase(uvm_phase phase);
+      my_driver_callback macro_cb;
+      bit [7:0] macro_data;
+      bit macro_ok;
       phase.raise_objection(this, "Testing callback macros");
 
-      // Test uvm_register_cb macro (empty in stub)
+      // Register callback type pair at class scope; add one instance.
       `uvm_info("TEST", "=== Testing `uvm_register_cb macro ===", UVM_NONE)
-      `uvm_register_cb(my_driver, my_driver_callback)
-      `uvm_info("TEST", "uvm_register_cb macro executed (stub)", UVM_LOW)
+      macro_cb = my_driver_callback::type_id::create("macro_cb");
+      uvm_callbacks#(my_driver, my_driver_callback)::add(env.drv, macro_cb,
+                                                         UVM_APPEND);
+      `uvm_info("TEST", "uvm_register_cb is active via class registration", UVM_LOW)
 
-      // Test uvm_do_callbacks macro (empty in stub)
+      // Test uvm_do_callbacks macro from the callback owner object.
       `uvm_info("TEST", "=== Testing `uvm_do_callbacks macro ===", UVM_NONE)
-      `uvm_do_callbacks(my_driver, my_driver_callback, pre_drive(env.drv, _data))
-      `uvm_info("TEST", "uvm_do_callbacks macro executed (stub)", UVM_LOW)
+      macro_data = 8'h00;
+      env.drv.do_pre_drive_with_uvm_macros(macro_data);
+      `uvm_info("TEST", "uvm_do_callbacks macro executed", UVM_LOW)
 
-      // Test uvm_do_callbacks_exit_on macro (empty in stub)
+      // Test uvm_do_callbacks_exit_on macro in a bit-returning function.
       `uvm_info("TEST", "=== Testing `uvm_do_callbacks_exit_on macro ===", UVM_NONE)
-      `uvm_do_callbacks_exit_on(my_driver, my_driver_callback, check_data(env.drv, 8'h00), 0)
-      `uvm_info("TEST", "uvm_do_callbacks_exit_on macro executed (stub)", UVM_LOW)
+      macro_ok = env.drv.do_check_data_with_uvm_macros(8'h00);
+      `uvm_info("TEST", $sformatf("uvm_do_callbacks_exit_on macro returned %0d",
+                                  macro_ok), UVM_LOW)
 
-      // Test uvm_do_obj_callbacks macro (empty in stub)
+      // Test uvm_do_obj_callbacks macro with explicit callback owner.
       `uvm_info("TEST", "=== Testing `uvm_do_obj_callbacks macro ===", UVM_NONE)
       `uvm_do_obj_callbacks(my_driver, my_driver_callback, env.drv, post_drive(env.drv, 8'h00))
-      `uvm_info("TEST", "uvm_do_obj_callbacks macro executed (stub)", UVM_LOW)
+      `uvm_info("TEST", "uvm_do_obj_callbacks macro executed", UVM_LOW)
 
       phase.drop_objection(this, "Test complete");
     endtask

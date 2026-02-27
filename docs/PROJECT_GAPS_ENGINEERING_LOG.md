@@ -277,3 +277,31 @@
   - `utils/ninja-with-lock.sh -C build_test circt-verilog`
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
+
+### UVM: fix callback macro test for current `uvm-core` macro semantics
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_callback_test.sv`
+  - Failed with callback macro usage errors, including:
+    - `uvm_register_cb` expanded to a declaration inside a task body
+    - `uvm_do_callbacks` invoked from `uvm_test` context (`this` type mismatch)
+    - `uvm_do_callbacks_exit_on` used where macro-generated `return` was illegal
+- Root cause:
+  - The test still assumed stub/legacy callback macro behavior and called macros
+    from contexts that are invalid for IEEE-style `uvm-core` definitions.
+  - In current `uvm-core`, callback macros rely on type-correct owner objects and
+    some macros inject declarations/returns, constraining where they can appear.
+- Fix:
+  - Moved callback pair registration to class scope:
+    - added `` `uvm_register_cb(my_driver, my_driver_callback) `` in `my_driver`.
+  - Added `my_driver` helper methods that call:
+    - `` `uvm_do_callbacks `` in valid owner-object context
+    - `` `uvm_do_callbacks_exit_on `` in a bit-returning function
+  - Reworked `test_callback_macros::run_phase` to:
+    - add callbacks via `uvm_callbacks#(...)::add`
+    - invoke the new driver helper methods
+    - keep explicit `uvm_do_obj_callbacks` coverage with `env.drv`
+    - remove invalid in-task `uvm_register_cb`/legacy-stub assumptions.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_callback_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - improved from 12 pass / 5 fail to 13 pass / 4 fail.
