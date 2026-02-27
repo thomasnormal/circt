@@ -6658,6 +6658,35 @@ struct ClassHandleCmpOpConversion
   }
 };
 
+/// moore.covergroup_handle_cmp lowering: compare two covergroup handles
+/// using icmp.
+struct CovergroupHandleCmpOpConversion
+    : public OpConversionPattern<CovergroupHandleCmpOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(CovergroupHandleCmpOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    if (!resultType)
+      return rewriter.notifyMatchFailure(op, "failed to convert result type");
+
+    LLVM::ICmpPredicate pred;
+    switch (op.getPredicate()) {
+    case CovergroupHandleCmpPredicate::eq:
+      pred = LLVM::ICmpPredicate::eq;
+      break;
+    case CovergroupHandleCmpPredicate::ne:
+      pred = LLVM::ICmpPredicate::ne;
+      break;
+    }
+
+    rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(op, resultType, pred,
+                                              adaptor.getLhs(), adaptor.getRhs());
+    return success();
+  }
+};
+
 /// moore.virtual_interface.null lowering: create a null pointer.
 struct VirtualInterfaceNullOpConversion
     : public OpConversionPattern<VirtualInterfaceNullOp> {
@@ -9891,6 +9920,13 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
       return success();
     }
     if (isa_and_nonnull<IntegerType>(resultType)) {
+      if (auto ptrTy = dyn_cast<LLVM::LLVMPointerType>(input.getType())) {
+        auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
+            op, cast<Type>(resultType), LLVM::ICmpPredicate::ne, input,
+            nullPtr);
+        return success();
+      }
       // Compare input to zero of the input's type, not result type.
       // Handle both integer and float input types.
       if (auto floatTy = dyn_cast<FloatType>(input.getType())) {
@@ -9906,15 +9942,6 @@ struct BoolCastOpConversion : public OpConversionPattern<BoolCastOp> {
           hw::ConstantOp::create(rewriter, loc, input.getType(), 0);
       rewriter.replaceOpWithNewOp<comb::ICmpOp>(op, comb::ICmpPredicate::ne,
                                                 input, zero);
-      return success();
-    }
-    // Handle pointer types (virtual interfaces, class handles) - compare to null.
-    if (isa_and_nonnull<LLVM::LLVMPointerType>(resultType)) {
-      auto ptrTy = LLVM::LLVMPointerType::get(rewriter.getContext());
-      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-      auto i1Ty = rewriter.getI1Type();
-      rewriter.replaceOpWithNewOp<LLVM::ICmpOp>(
-          op, i1Ty, LLVM::ICmpPredicate::ne, input, nullPtr);
       return success();
     }
     if (isFourStateStructType(resultType) && isa<IntegerType>(input.getType())) {
@@ -21044,6 +21071,27 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       return LLVM::ICmpOp::create(rewriter, loc, pred, lhs, rhs);
     }
 
+    // Handle moore.covergroup_handle_cmp - compare two covergroup handles
+    if (auto cmpOp = dyn_cast<CovergroupHandleCmpOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(cmpOp.getLhs());
+      Value rhs = getConvertedOperand(cmpOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      LLVM::ICmpPredicate pred;
+      switch (cmpOp.getPredicate()) {
+      case CovergroupHandleCmpPredicate::eq:
+        pred = LLVM::ICmpPredicate::eq;
+        break;
+      case CovergroupHandleCmpPredicate::ne:
+        pred = LLVM::ICmpPredicate::ne;
+        break;
+      }
+
+      // Covergroup handles are pointers, use LLVM icmp.
+      return LLVM::ICmpOp::create(rewriter, loc, pred, lhs, rhs);
+    }
+
     // Handle moore.wildcard_eq - wildcard equality comparison
     if (auto wildcardEqOp = dyn_cast<WildcardEqOp>(mooreOp)) {
       Value lhs = getConvertedOperand(wildcardEqOp.getLhs());
@@ -31066,6 +31114,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     ClassUpcastOpConversion,
     ClassNullOpConversion,
     ClassHandleCmpOpConversion,
+    CovergroupHandleCmpOpConversion,
     // Virtual interface comparison patterns.
     VirtualInterfaceNullOpConversion,
     VirtualInterfaceCmpOpConversion,
