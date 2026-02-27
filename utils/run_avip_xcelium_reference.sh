@@ -15,6 +15,8 @@
 #   COMPILE_TIMEOUT=600        seconds
 #   SIM_TIMEOUT=300            seconds
 #   MEMORY_LIMIT_GB=20
+#   XCELIUM_COLLECT_VCD=0|1    (default: 0)
+#   XCELIUM_VCD_GLOB=*.vcd     (default: *.vcd)
 
 set -euo pipefail
 
@@ -29,6 +31,8 @@ UVM_VERBOSITY="${UVM_VERBOSITY:-UVM_LOW}"
 MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-20}"
 COMPILE_TIMEOUT="${COMPILE_TIMEOUT:-600}"
 SIM_TIMEOUT="${SIM_TIMEOUT:-300}"
+XCELIUM_COLLECT_VCD="${XCELIUM_COLLECT_VCD:-0}"
+XCELIUM_VCD_GLOB="${XCELIUM_VCD_GLOB:-*.vcd}"
 MEMORY_LIMIT_KB=$((MEMORY_LIMIT_GB * 1024 * 1024))
 
 TIME_TOOL=""
@@ -198,7 +202,7 @@ sim_status_from_exit() {
 
 matrix="$OUT_DIR/matrix.tsv"
 cat > "$matrix" <<'HDR'
-avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_raw	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log
+avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_raw	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log	vcd_file
 HDR
 
 meta="$OUT_DIR/meta.txt"
@@ -212,6 +216,8 @@ meta="$OUT_DIR/meta.txt"
   echo "memory_limit_gb=$MEMORY_LIMIT_GB"
   echo "compile_timeout=$COMPILE_TIMEOUT"
   echo "sim_timeout=$SIM_TIMEOUT"
+  echo "xcelium_collect_vcd=$XCELIUM_COLLECT_VCD"
+  echo "xcelium_vcd_glob=$XCELIUM_VCD_GLOB"
   echo "time_tool=${TIME_TOOL:-<none>}"
 } > "$meta"
 
@@ -261,6 +267,7 @@ for row in "${selected_avips[@]}"; do
     cov_1="-"
     cov_2="-"
     peak_rss_kb="-"
+    vcd_file="-"
 
     sim_wrapper_log="$avip_out/sim_seed_${seed}.wrapper.log"
     sim_log="$avip_out/sim_seed_${seed}.log"
@@ -310,14 +317,25 @@ for row in "${selected_avips[@]}"; do
       uvm_error=$(extract_uvm_count "UVM_ERROR" "$sim_log")
       cov_pair=$(extract_coverage_pair "$sim_log")
       IFS='|' read -r cov_1 cov_2 <<< "$cov_pair"
+
+      if [[ "$XCELIUM_COLLECT_VCD" != "0" ]]; then
+        vcd_candidate="$(
+          find "$caddir/$test_name" -type f -name "$XCELIUM_VCD_GLOB" 2>/dev/null | sort | head -n 1 || true
+        )"
+        if [[ -n "$vcd_candidate" && -s "$vcd_candidate" ]]; then
+          vcd_copy="$avip_out/sim_seed_${seed}.xcelium.vcd"
+          cp -f "$vcd_candidate" "$vcd_copy"
+          vcd_file="$vcd_copy"
+        fi
+      fi
     fi
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$name" "$seed" "$compile_status" "$compile_sec" "$sim_status" "$sim_exit" \
       "$sim_sec" "$sim_time_raw" "$sim_time_fs" "$uvm_fatal" "$uvm_error" \
-      "$cov_1" "$cov_2" "$peak_rss_kb" "$compile_log" "$sim_log" >> "$matrix"
+      "$cov_1" "$cov_2" "$peak_rss_kb" "$compile_log" "$sim_log" "$vcd_file" >> "$matrix"
 
-    echo "[avip-xcelium] $name seed=$seed sim_status=$sim_status sim_exit=$sim_exit sim_time_raw='$sim_time_raw' sim_time_fs=$sim_time_fs rss_kb=$peak_rss_kb"
+    echo "[avip-xcelium] $name seed=$seed sim_status=$sim_status sim_exit=$sim_exit sim_time_raw='$sim_time_raw' sim_time_fs=$sim_time_fs rss_kb=$peak_rss_kb vcd=$vcd_file"
   done
 done
 

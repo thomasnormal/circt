@@ -720,8 +720,8 @@ static Value getDominatingStoredValue(Operation *op, Value ptr,
                                &domInfo, nullptr);
 }
 
-static Value probeLLHDRefForPtr(Value ptr, hw::StructType hwType,
-                                OpBuilder &builder, Location loc) {
+static Value probeLLHDRefForPtr(Value ptr, Type hwType, OpBuilder &builder,
+                                Location loc) {
   auto findRefTypeForValue = [&](Value value) -> llhd::RefType {
     for (Operation *user : value.getUsers()) {
       auto cast = dyn_cast<UnrealizedConversionCastOp>(user);
@@ -1147,6 +1147,101 @@ static Value buildDefaultValue(Type type, OpBuilder &builder, Location loc,
     }
     return hw::StructCreateOp::create(builder, loc, structType, fields);
   }
+  if (auto arrayType = dyn_cast<hw::ArrayType>(type)) {
+    SmallVector<Value, 4> elements;
+    int64_t numElements = static_cast<int64_t>(arrayType.getNumElements());
+    elements.reserve(numElements);
+    for (int64_t index = 0; index < numElements; ++index) {
+      Value element =
+          buildDefaultValue(arrayType.getElementType(), builder, loc, zeroUnknown);
+      if (!element)
+        return {};
+      elements.push_back(element);
+    }
+    return hw::ArrayCreateOp::create(builder, loc, arrayType, elements);
+  }
+  return {};
+}
+
+static Value findInsertedAggregateValue(Value value, ArrayRef<int64_t> path) {
+  if (path.empty())
+    return value;
+
+  if (auto extract = value.getDefiningOp<LLVM::ExtractValueOp>()) {
+    SmallVector<int64_t, 8> composedPath;
+    composedPath.reserve(extract.getPosition().size() + path.size());
+    llvm::append_range(composedPath, extract.getPosition());
+    llvm::append_range(composedPath, path);
+    return findInsertedAggregateValue(extract.getContainer(), composedPath);
+  }
+
+  auto insert = value.getDefiningOp<LLVM::InsertValueOp>();
+  if (!insert)
+    return {};
+  ArrayRef<int64_t> pos = insert.getPosition();
+  if (path.size() >= pos.size() &&
+      llvm::equal(pos, path.take_front(pos.size()))) {
+    if (path.size() == pos.size())
+      return insert.getValue();
+    if (Value nested = findInsertedAggregateValue(
+            insert.getValue(), path.drop_front(pos.size())))
+      return nested;
+  }
+  return findInsertedAggregateValue(insert.getContainer(), path);
+}
+
+static Value buildHWAggregateFromLLVM(Value llvmValue, Type hwType,
+                                      OpBuilder &builder, Location loc,
+                                      ArrayRef<int64_t> path,
+                                      bool isUnknownLeaf = false) {
+  if (auto intType = dyn_cast<IntegerType>(hwType)) {
+    Value leaf = findInsertedAggregateValue(llvmValue, path);
+    if (leaf && leaf.getType() == intType)
+      return leaf;
+
+    auto defaultKind = getAggregateDefaultKind(llvmValue);
+    if (defaultKind == AggregateDefaultKind::none)
+      return {};
+    APInt value(intType.getWidth(), 0);
+    if (defaultKind == AggregateDefaultKind::undef && isUnknownLeaf)
+      value = APInt::getAllOnes(intType.getWidth());
+    return hw::ConstantOp::create(
+        builder, loc, builder.getIntegerAttr(intType, value));
+  }
+
+  if (auto structType = dyn_cast<hw::StructType>(hwType)) {
+    SmallVector<Value, 4> fields;
+    fields.reserve(structType.getElements().size());
+    for (auto [index, field] : llvm::enumerate(structType.getElements())) {
+      SmallVector<int64_t, 8> fieldPath(path.begin(), path.end());
+      fieldPath.push_back(static_cast<int64_t>(index));
+      bool childUnknownLeaf = field.name && field.name.getValue() == "unknown";
+      Value fieldValue =
+          buildHWAggregateFromLLVM(llvmValue, field.type, builder, loc,
+                                   fieldPath, childUnknownLeaf);
+      if (!fieldValue)
+        return {};
+      fields.push_back(fieldValue);
+    }
+    return hw::StructCreateOp::create(builder, loc, structType, fields);
+  }
+
+  if (auto arrayType = dyn_cast<hw::ArrayType>(hwType)) {
+    SmallVector<Value, 8> elements;
+    int64_t numElements = static_cast<int64_t>(arrayType.getNumElements());
+    elements.reserve(numElements);
+    for (int64_t index = 0; index < numElements; ++index) {
+      SmallVector<int64_t, 8> elementPath(path.begin(), path.end());
+      elementPath.push_back(index);
+      Value element = buildHWAggregateFromLLVM(
+          llvmValue, arrayType.getElementType(), builder, loc, elementPath,
+          isUnknownLeaf);
+      if (!element)
+        return {};
+      elements.push_back(element);
+    }
+    return hw::ArrayCreateOp::create(builder, loc, arrayType, elements);
+  }
   return {};
 }
 
@@ -1156,6 +1251,11 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
     return false;
   auto refType = dyn_cast<llhd::RefType>(castOp.getResult(0).getType());
   if (!refType)
+    return false;
+  Type nestedType = refType.getNestedType();
+  bool isStructPayload = isa<hw::StructType>(nestedType);
+  bool isArrayPayload = isa<hw::ArrayType>(nestedType);
+  if (!isStructPayload && !isArrayPayload)
     return false;
   Value ptr = castOp.getInputs().front();
   if (!isa<LLVM::LLVMPointerType>(ptr.getType()))
@@ -1167,6 +1267,7 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
 
   llvm::SmallPtrSet<Value, 16> derivedPtrs;
   SmallVector<Value, 16> worklist;
+  bool sawPointerControlFlow = false;
   auto addDerived = [&](Value value) {
     if (derivedPtrs.insert(value).second)
       worklist.push_back(value);
@@ -1185,12 +1286,14 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
         continue;
       }
       if (auto select = dyn_cast<LLVM::SelectOp>(user)) {
+        sawPointerControlFlow = true;
         llvm::SmallPtrSet<Value, 8> localVisited;
         if (resolveAllocaBase(select.getResult(), localVisited) == alloca)
           addDerived(select.getResult());
         continue;
       }
       if (auto branch = dyn_cast<BranchOpInterface>(user)) {
+        sawPointerControlFlow = true;
         for (unsigned succIndex = 0, e = branch->getNumSuccessors();
              succIndex < e; ++succIndex) {
           auto succOperands = branch.getSuccessorOperands(succIndex);
@@ -1207,6 +1310,15 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
         continue;
       }
     }
+  }
+
+  if (isArrayPayload) {
+    if (sawPointerControlFlow)
+      return false;
+    if (llvm::any_of(derivedPtrs, [](Value value) {
+          return isa<BlockArgument>(value);
+        }))
+      return false;
   }
 
   SmallVector<LLVM::StoreOp, 8> stores;
@@ -1293,8 +1405,25 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
     if (!derivedPtrs.contains(load.getAddr()))
       return false;
   }
+  if (isArrayPayload) {
+    Block *baseBlock = alloca->getBlock();
+    auto inBaseBlock = [baseBlock](Operation *op) {
+      return op->getBlock() == baseBlock;
+    };
+    if (llvm::any_of(stores, [&](LLVM::StoreOp store) {
+          return !inBaseBlock(store);
+        }))
+      return false;
+    if (llvm::any_of(loads, [&](LLVM::LoadOp load) {
+          return !inBaseBlock(load);
+        }))
+      return false;
+    if (llvm::any_of(refCasts, [&](UnrealizedConversionCastOp cast) {
+          return !inBaseBlock(cast);
+        }))
+      return false;
+  }
 
-  Type nestedType = refType.getNestedType();
   OpBuilder sigBuilder(alloca);
   // Local ref allocas act like temporary wires; initialize unknowns to 0.
   Value init =
@@ -1348,6 +1477,12 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
                                               nullptr);
         }
       }
+      if (storedValue && storedValue.getType() != nestedType &&
+          isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(
+              storedValue.getType())) {
+        storedValue = buildHWAggregateFromLLVM(storedValue, nestedType,
+                                               storeBuilder, store.getLoc(), {});
+      }
     }
     if (!storedValue || storedValue.getType() != nestedType)
       return false;
@@ -1366,39 +1501,56 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
   return true;
 }
 
-static bool rewriteLLVMStructCast(UnrealizedConversionCastOp castOp,
-                                  DenseMap<Value, Value> &allocaSignals) {
+static bool rewriteLLVMAggregateCast(UnrealizedConversionCastOp castOp,
+                                     DenseMap<Value, Value> &allocaSignals) {
   if (castOp.getInputs().size() != 1 || castOp.getResults().size() != 1)
     return false;
-  auto hwType = dyn_cast<hw::StructType>(castOp.getResult(0).getType());
-  if (!hwType)
+  Type hwType = castOp.getResult(0).getType();
+  bool wantsStruct = isa<hw::StructType>(hwType);
+  bool wantsArray = isa<hw::ArrayType>(hwType);
+  if (!wantsStruct && !wantsArray)
     return false;
   Value input = castOp.getInputs().front();
-  if (!isa<LLVM::LLVMStructType>(input.getType()))
+  if (!isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(input.getType()))
     return false;
 
   Value llvmValue = unwrapTrivialLoad(input);
-  if (Value hwValue = unwrapHWStructCast(llvmValue, hwType)) {
-    castOp.getResult(0).replaceAllUsesWith(hwValue);
-    castOp.erase();
-    return true;
+  if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
+    if (Value hwValue = unwrapHWStructCast(llvmValue, hwStructType)) {
+      castOp.getResult(0).replaceAllUsesWith(hwValue);
+      castOp.erase();
+      return true;
+    }
   }
+
   OpBuilder builder(castOp);
   DominanceInfo domInfo(castOp->getParentOp());
-  Value replacement =
-      buildHWStructFromLLVM(llvmValue, hwType, builder, castOp.getLoc(), {},
-                            &domInfo, &allocaSignals);
-  if (!replacement) {
-    if (auto load = llvmValue.getDefiningOp<LLVM::LoadOp>()) {
-      replacement = computeHWValueBeforeOp(load, load.getAddr(), hwType,
-                                            domInfo, builder, castOp.getLoc(),
-                                            &allocaSignals);
-      if (!replacement)
-        replacement = probeLLHDRefForPtr(load.getAddr(), hwType, builder,
-                                         castOp.getLoc());
+  Value replacement;
+  if (auto hwStructType = dyn_cast<hw::StructType>(hwType)) {
+    replacement = buildHWStructFromLLVM(llvmValue, hwStructType, builder,
+                                        castOp.getLoc(), {}, &domInfo,
+                                        &allocaSignals);
+    if (!replacement) {
+      if (auto load = llvmValue.getDefiningOp<LLVM::LoadOp>()) {
+        replacement = computeHWValueBeforeOp(load, load.getAddr(), hwStructType,
+                                             domInfo, builder, castOp.getLoc(),
+                                             &allocaSignals);
+        if (!replacement)
+          replacement = probeLLHDRefForPtr(load.getAddr(), hwStructType, builder,
+                                           castOp.getLoc());
+      }
     }
   }
   if (!replacement)
+    replacement =
+        buildHWAggregateFromLLVM(llvmValue, hwType, builder, castOp.getLoc(), {});
+  if (!replacement)
+    if (auto load = llvmValue.getDefiningOp<LLVM::LoadOp>())
+      replacement = probeLLHDRefForPtr(load.getAddr(), hwType, builder,
+                                       castOp.getLoc());
+  if (!replacement)
+    return false;
+  if (replacement.getType() != hwType)
     return false;
   castOp.getResult(0).replaceAllUsesWith(replacement);
   castOp.erase();
@@ -1554,14 +1706,15 @@ void LowerLECLLVMPass::runOnOperation() {
   SmallVector<UnrealizedConversionCastOp, 8> casts;
   module.walk([&](UnrealizedConversionCastOp op) {
     if (op.getInputs().size() == 1 && op.getResults().size() == 1 &&
-        isa<LLVM::LLVMStructType>(op.getInputs().front().getType()) &&
-        isa<hw::StructType>(op.getResult(0).getType()))
+        isa<LLVM::LLVMStructType, LLVM::LLVMArrayType>(
+            op.getInputs().front().getType()) &&
+        isa<hw::StructType, hw::ArrayType>(op.getResult(0).getType()))
       casts.push_back(op);
   });
   for (auto castOp : casts) {
-    if (!rewriteLLVMStructCast(castOp, allocaSignals)) {
+    if (!rewriteLLVMAggregateCast(castOp, allocaSignals)) {
       castOp.emitError(
-          "unsupported LLVM struct conversion in LEC; add lowering");
+          "unsupported LLVM aggregate conversion in LEC; add lowering");
       signalPassFailure();
       return;
     }
@@ -1733,7 +1886,7 @@ void LowerLECLLVMPass::runOnOperation() {
 
   SmallVector<LLVM::GlobalOp, 8> deadGlobals;
   module.walk([&](LLVM::GlobalOp global) {
-    if (global->use_empty())
+    if (SymbolTable::symbolKnownUseEmpty(global, module))
       deadGlobals.push_back(global);
   });
   for (auto global : deadGlobals)
@@ -1741,7 +1894,7 @@ void LowerLECLLVMPass::runOnOperation() {
 
   SmallVector<LLVM::LLVMFuncOp, 8> deadDecls;
   module.walk([&](LLVM::LLVMFuncOp func) {
-    if (func.isExternal() && func->use_empty())
+    if (func.isExternal() && SymbolTable::symbolKnownUseEmpty(func, module))
       deadDecls.push_back(func);
   });
   for (auto decl : deadDecls)

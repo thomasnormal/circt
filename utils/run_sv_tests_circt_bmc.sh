@@ -186,6 +186,35 @@ resolve_default_uvm_path() {
   printf '%s\n' "$SCRIPT_DIR/../lib/Runtime/uvm"
 }
 
+resolve_effective_uvm_path() {
+  local requested="${1:-}"
+  local normalized=""
+  local remap=""
+  if [[ -z "$requested" ]]; then
+    resolve_default_uvm_path
+    return
+  fi
+  if [[ -d "$requested" ]]; then
+    printf '%s\n' "$requested"
+    return
+  fi
+  normalized="${requested%/}"
+  # Compatibility shim: repo moved from lib/Runtime/uvm to uvm-core.
+  if [[ "$normalized" == */lib/Runtime/uvm ]]; then
+    remap="${normalized%/uvm}/uvm-core/src"
+    if [[ -d "$remap" ]]; then
+      printf '%s\n' "$remap"
+      return
+    fi
+    remap="${normalized%/uvm}/uvm-core"
+    if [[ -d "$remap" ]]; then
+      printf '%s\n' "$remap"
+      return
+    fi
+  fi
+  printf '%s\n' "$requested"
+}
+
 append_bmc_abstraction_provenance() {
   local case_id="$1"
   local case_path="$2"
@@ -259,7 +288,7 @@ has_multiclock_retryable_bmc_failure() {
   grep -Eiq "$pattern" <<<"$bmc_stdout"
 }
 
-UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
+UVM_PATH="$(resolve_effective_uvm_path "${UVM_PATH:-}")"
 
 is_nonneg_int() {
   local value="$1"

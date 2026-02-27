@@ -22,7 +22,10 @@ module DPIOpenArraySupported;
     end
   end
 
-  // CHECK-DAG: func.func private @dpi_open_inout(!moore.open_uarray<i8>, !moore.ref<open_uarray<i8>>)
-  // CHECK: func.call @dpi_open_inout
+  // CHECK: %[[IN:.*]] = moore.read %msg : <open_uarray<i8>>
+  // CHECK: %[[OUT_REF:.*]] = moore.variable : <open_uarray<i8>>
+  // CHECK: func.call @dpi_open_inout(%[[IN]], %[[OUT_REF]]) : (!moore.open_uarray<i8>, !moore.ref<open_uarray<i8>>) -> ()
+  // CHECK: %[[OUT_VAL:.*]] = moore.read %[[OUT_REF]] : <open_uarray<i8>>
+  // CHECK: moore.blocking_assign %digest, %[[OUT_VAL]] : open_uarray<i8>
+  // CHECK: func.func private @dpi_open_inout(!moore.open_uarray<i8>, !moore.ref<open_uarray<i8>>)
 endmodule
-

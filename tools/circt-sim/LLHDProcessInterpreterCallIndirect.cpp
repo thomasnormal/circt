@@ -40,6 +40,14 @@ static bool disableUvmFactoryByTypeFastPath() {
   return !enabled;
 }
 
+static bool disableUvmFactoryFastPaths() {
+  const char *env = std::getenv("CIRCT_SIM_ENABLE_UVM_FACTORY_FASTPATH");
+  bool enabled = env && env[0] != '\0' && env[0] != '0';
+  // Disabled by default until full UVM startup semantics are proven
+  // equivalent to the canonical MLIR implementation.
+  return !enabled;
+}
+
 // Optional function-call tracing for focused runtime diagnosis.
 // Enable with CIRCT_SIM_TRACE_CALL_FILTER. Example:
 //   CIRCT_SIM_TRACE_CALL_FILTER=uvm_tlm_analysis_fifo::write,uvm_tlm_fifo::get
@@ -354,9 +362,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         };
 
     auto fillNativeCallArgs = [&](llvm::ArrayRef<InterpretedValue> callArgs,
+                                  mlir::TypeRange argTypes,
+                                  llvm::StringRef calleeNameForNormalization,
                                   unsigned numArgs, uint64_t (&packed)[8]) {
-      for (unsigned i = 0; i < numArgs; ++i)
-        packed[i] = (i < callArgs.size()) ? callArgs[i].getUInt64() : 0;
+      for (unsigned i = 0; i < numArgs; ++i) {
+        uint64_t argVal = (i < callArgs.size()) ? callArgs[i].getUInt64() : 0;
+        if (i < argTypes.size() &&
+            isa<mlir::LLVM::LLVMPointerType>(argTypes[i])) {
+          argVal = normalizeNativeCallPointerArg(procId,
+                                                 calleeNameForNormalization,
+                                                 argVal);
+        }
+        packed[i] = argVal;
+      }
     };
 
     if (funcPtrVal.isX()) {
@@ -523,7 +541,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
              resolvedName.contains("uvm_phase::drop_objection")) &&
             !resolvedName.contains("phase_hopper") &&
             !args.empty() && !args[0].isX()) {
-          uint64_t phaseAddr = args[0].getUInt64();
+          uint64_t phaseAddr = normalizeUvmObjectKey(procId, args[0].getUInt64());
+          if (phaseAddr == 0)
+            phaseAddr = args[0].getUInt64();
           InterpretedValue countVal =
               args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
           int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
@@ -726,7 +746,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               }
               if (eligible) {
                 uint64_t a[8] = {};
-                fillNativeCallArgs(args, numArgs, a);
+                fillNativeCallArgs(args, funcOp.getArgumentTypes(), resolvedName,
+                                   numArgs, a);
 
                 if (eligible) {
 
@@ -992,7 +1013,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
              resolvedName.contains("uvm_phase::drop_objection")) &&
             !resolvedName.contains("phase_hopper") &&
             !sArgs.empty() && !sArgs[0].isX()) {
-          uint64_t phaseAddr = sArgs[0].getUInt64();
+          uint64_t phaseAddr = normalizeUvmObjectKey(procId, sArgs[0].getUInt64());
+          if (phaseAddr == 0)
+            phaseAddr = sArgs[0].getUInt64();
           InterpretedValue countVal =
               sArgs.size() > 3 ? sArgs[3] : InterpretedValue(llvm::APInt(32, 1));
           int64_t cnt = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
@@ -1518,7 +1541,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               }
               if (eligible) {
                 uint64_t a[8] = {};
-                fillNativeCallArgs(sArgs, numArgs, a);
+                fillNativeCallArgs(sArgs, fOp.getArgumentTypes(), resolvedName,
+                                   numArgs, a);
 
                 if (eligible) {
 
@@ -2065,7 +2089,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           if (eligible) {
             uint64_t a[8] = {};
-            fillNativeCallArgs(fastArgs, numArgs, a);
+            fillNativeCallArgs(fastArgs, cachedFuncOp.getArgumentTypes(),
+                               cachedFuncOp.getSymName(), numArgs, a);
 
             if (eligible) {
 
@@ -2328,8 +2353,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // vtable, does string comparisons, assoc array lookups, and override
     // scanning (~2300 steps each × 1078 types = 2.5M steps = ~80s).
     // We call get_type_name once (~6 ops) and store in a C++ map.
-    if (calleeName == "uvm_pkg::uvm_default_factory::register" ||
-        calleeName == "uvm_pkg::uvm_factory::register") {
+    if (!disableUvmFactoryFastPaths() &&
+        (calleeName == "uvm_pkg::uvm_default_factory::register" ||
+         calleeName == "uvm_pkg::uvm_factory::register")) {
       bool registered = false;
       do {
         if (callIndirectOp.getArgOperands().size() < 2)
@@ -2593,7 +2619,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // Signature: (this, requested_type_name: struct<(ptr,i64)>,
     //             parent_inst_path: struct<(ptr,i64)>,
     //             name: struct<(ptr,i64)>, parent: ptr) -> ptr
-    if ((calleeName ==
+    if (!disableUvmFactoryFastPaths() &&
+        (calleeName ==
              "uvm_pkg::uvm_default_factory::create_component_by_name" ||
          calleeName == "uvm_pkg::uvm_factory::create_component_by_name") &&
         callIndirectOp.getNumResults() >= 1 &&
@@ -2634,7 +2661,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
     // Intercept create_object_by_name — mirrors create_component_by_name but
     // dispatches wrapper slot 0 (create_object).
-    if ((calleeName ==
+    if (!disableUvmFactoryFastPaths() &&
+        (calleeName ==
              "uvm_pkg::uvm_default_factory::create_object_by_name" ||
          calleeName == "uvm_pkg::uvm_factory::create_object_by_name") &&
         callIndirectOp.getNumResults() >= 1 &&
@@ -2671,7 +2699,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // Intercept find_wrapper_by_name — uses nativeFactoryTypeNames to look
     // up a type name registered by the fast-path factory.register above.
     // This is needed for +UVM_TESTNAME to find the test class wrapper.
-    if ((calleeName == "uvm_pkg::uvm_default_factory::find_wrapper_by_name" ||
+    if (!disableUvmFactoryFastPaths() &&
+        (calleeName == "uvm_pkg::uvm_default_factory::find_wrapper_by_name" ||
          calleeName == "uvm_pkg::uvm_factory::find_wrapper_by_name") &&
         callIndirectOp.getNumResults() >= 1 &&
         callIndirectOp.getArgOperands().size() >= 2) {
@@ -2698,7 +2727,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
     // Intercept is_type_name_registered — checks if a type name was
     // registered by the fast-path factory.register above.
-    if ((calleeName == "uvm_pkg::uvm_default_factory::is_type_name_registered" ||
+    if (!disableUvmFactoryFastPaths() &&
+        (calleeName == "uvm_pkg::uvm_default_factory::is_type_name_registered" ||
          calleeName == "uvm_pkg::uvm_factory::is_type_name_registered") &&
         callIndirectOp.getNumResults() >= 1 &&
         callIndirectOp.getArgOperands().size() >= 2) {
@@ -2722,7 +2752,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     }
 
     // Intercept is_type_registered — checks if a wrapper ptr was registered.
-    if ((calleeName == "uvm_pkg::uvm_default_factory::is_type_registered" ||
+    if (!disableUvmFactoryFastPaths() &&
+        (calleeName == "uvm_pkg::uvm_default_factory::is_type_registered" ||
          calleeName == "uvm_pkg::uvm_factory::is_type_registered") &&
         callIndirectOp.getNumResults() >= 1 &&
         callIndirectOp.getArgOperands().size() >= 2) {
@@ -3052,6 +3083,177 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
+    // Intercept get_factory on core-service objects. Read the factory pointer
+    // directly and fall back to the global core-service singleton if `this`
+    // is transiently invalid during startup.
+    if ((calleeName == "uvm_pkg::uvm_default_coreservice_t::get_factory" ||
+         calleeName == "uvm_pkg::uvm_coreservice_t::get_factory") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        !callIndirectOp.getArgOperands().empty()) {
+      const bool traceGetFactory =
+          std::getenv("CIRCT_SIM_TRACE_UVM_GET_FACTORY") != nullptr;
+      auto readU64FromAddress = [&](uint64_t addr, uint64_t &value) -> bool {
+        value = 0;
+        uint64_t off = 0;
+        MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off);
+        if (!blk)
+          blk = findBlockByAddress(addr, off);
+        if (blk && blk->initialized && off + 8 <= blk->size) {
+          for (unsigned i = 0; i < 8; ++i)
+            value |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
+          return true;
+        }
+
+        uint64_t nativeOff = 0;
+        size_t nativeSize = 0;
+        if (findNativeMemoryBlockByAddress(addr, &nativeOff, &nativeSize) &&
+            nativeOff + 8 <= nativeSize) {
+          std::memcpy(&value, reinterpret_cast<const void *>(addr), sizeof(value));
+          return true;
+        }
+        return false;
+      };
+      auto gatherCoreServiceCandidates =
+          [&](uint64_t rawAddr, SmallVectorImpl<uint64_t> &candidates) {
+            auto addCandidate = [&](uint64_t candidate) {
+              if (candidate < 0x1000)
+                return;
+              if (std::find(candidates.begin(), candidates.end(), candidate) !=
+                  candidates.end())
+                return;
+              candidates.push_back(candidate);
+            };
+            addCandidate(rawAddr);
+            addCandidate(canonicalizeUvmObjectAddress(procId, rawAddr));
+            const uint64_t maskedCandidates[] = {
+                rawAddr & ~uint64_t(1), rawAddr & ~uint64_t(3),
+                rawAddr & ~uint64_t(7)};
+            for (uint64_t masked : maskedCandidates) {
+              addCandidate(masked);
+              addCandidate(canonicalizeUvmObjectAddress(procId, masked));
+            }
+          };
+      auto tryReadFactoryFromCoreService = [&](uint64_t rawCoreServiceAddr,
+                                               uint64_t &factoryPtr,
+                                               uint64_t &coreServiceAddr) -> bool {
+        constexpr uint64_t kFactoryOff = 12;
+        SmallVector<uint64_t, 8> candidates;
+        gatherCoreServiceCandidates(rawCoreServiceAddr, candidates);
+        for (uint64_t candidate : candidates) {
+          uint64_t candidateFactory = 0;
+          if (!readU64FromAddress(candidate + kFactoryOff, candidateFactory))
+            continue;
+          if (coreServiceAddr == 0)
+            coreServiceAddr = candidate;
+          if (candidateFactory == 0)
+            continue;
+          factoryPtr = candidateFactory;
+          coreServiceAddr = candidate;
+          return true;
+        }
+        return false;
+      };
+
+      uint64_t factoryPtr = 0;
+      uint64_t coreServicePtrForFallback = 0;
+      auto tryResolveFactoryFromCoreService = [&](uint64_t rawCoreServiceAddr,
+                                                  llvm::StringRef source) {
+        uint64_t resolvedCoreService = 0;
+        bool resolved = tryReadFactoryFromCoreService(
+            rawCoreServiceAddr, factoryPtr, resolvedCoreService);
+        if (traceGetFactory) {
+          llvm::errs() << "[UVM-GET-FACTORY] proc=" << procId
+                       << " source=" << source
+                       << " raw_core=0x"
+                       << llvm::format_hex(rawCoreServiceAddr, 16)
+                       << " resolved_core=0x"
+                       << llvm::format_hex(resolvedCoreService, 16)
+                       << " factory=0x" << llvm::format_hex(factoryPtr, 16)
+                       << " resolved=" << (resolved ? 1 : 0) << "\n";
+        }
+        if (resolved) {
+          if (resolvedCoreService != 0)
+            coreServicePtrForFallback = resolvedCoreService;
+          return true;
+        }
+        if (resolvedCoreService != 0)
+          coreServicePtrForFallback = resolvedCoreService;
+        return false;
+      };
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (traceGetFactory) {
+        llvm::errs() << "[UVM-GET-FACTORY] proc=" << procId
+                     << " callee=" << calleeName << " self=0x"
+                     << (selfVal.isX() ? llvm::format_hex(0, 16)
+                                       : llvm::format_hex(selfVal.getUInt64(), 16))
+                     << " self_is_x=" << (selfVal.isX() ? 1 : 0) << "\n";
+      }
+      if (!selfVal.isX())
+        (void)tryResolveFactoryFromCoreService(selfVal.getUInt64(), "self");
+
+      if (factoryPtr == 0) {
+        auto instIt =
+            globalAddresses.find("uvm_pkg::uvm_pkg::uvm_coreservice_t::inst");
+        if (instIt != globalAddresses.end()) {
+          uint64_t coreServicePtr = 0;
+          if (readU64FromAddress(instIt->second, coreServicePtr))
+            (void)tryResolveFactoryFromCoreService(coreServicePtr, "global");
+        }
+      }
+
+      if (factoryPtr == 0 && rootModule) {
+        auto get0Func = rootModule.lookupSymbol<func::FuncOp>("get_0");
+        if (get0Func && !get0Func.getBody().empty()) {
+          auto &state = processStates[procId];
+          constexpr size_t maxCallDepth = 200;
+          if (state.callDepth < maxCallDepth) {
+            ++state.callDepth;
+            SmallVector<InterpretedValue, 1> get0Results;
+            LogicalResult get0Status = interpretFuncBody(
+                procId, get0Func, {}, get0Results, callIndirectOp.getOperation());
+            --state.callDepth;
+            if (succeeded(get0Status) && !get0Results.empty() &&
+                !get0Results.front().isX())
+              (void)tryResolveFactoryFromCoreService(
+                  get0Results.front().getUInt64(), "get_0");
+          }
+        }
+      }
+
+      if (factoryPtr != 0) {
+        setValue(procId, callIndirectOp.getResult(0),
+                 InterpretedValue(factoryPtr, 64));
+        return success();
+      }
+
+      // If dispatch hits abstract base get_factory (returns null), force the
+      // concrete default implementation to preserve lazy factory allocation.
+      if (coreServicePtrForFallback != 0 && rootModule) {
+        auto defaultGetFactoryFunc = rootModule.lookupSymbol<func::FuncOp>(
+            "uvm_pkg::uvm_default_coreservice_t::get_factory");
+        if (defaultGetFactoryFunc && !defaultGetFactoryFunc.getBody().empty()) {
+          auto &state = processStates[procId];
+          constexpr size_t maxCallDepth = 200;
+          if (state.callDepth < maxCallDepth) {
+            ++state.callDepth;
+            SmallVector<InterpretedValue, 1> invokeResults;
+            LogicalResult invokeStatus = interpretFuncBody(
+                procId, defaultGetFactoryFunc,
+                {InterpretedValue(coreServicePtrForFallback, 64)}, invokeResults,
+                callIndirectOp.getOperation());
+            --state.callDepth;
+            if (succeeded(invokeStatus) && !invokeResults.empty() &&
+                !invokeResults.front().isX() &&
+                invokeResults.front().getUInt64() != 0) {
+              setValue(procId, callIndirectOp.getResult(0), invokeResults.front());
+              return success();
+            }
+          }
+        }
+      }
+    }
+
     // Look up the function
     auto &state = processStates[procId];
     Operation *parent = state.processOrInitialOp;
@@ -3079,6 +3281,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       funcOp = moduleOp.lookupSymbol<func::FuncOp>(calleeName);
     }
     if (!funcOp) {
+      if (isCoverageRuntimeCallee(calleeName)) {
+        processStates[procId].sawUnhandledCoverageRuntimeCall = true;
+        return callIndirectOp.emitError()
+               << "unhandled coverage runtime call in interpreter: "
+               << calleeName;
+      }
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: function '" << calleeName
                               << "' not found\n");
       for (Value result : callIndirectOp.getResults()) {
@@ -4331,8 +4539,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // These bypass interpretFuncCall() so we handle them here directly.
     if (calleeName.contains("uvm_phase::raise_objection") ||
         calleeName.contains("uvm_phase::drop_objection")) {
+      const bool traceUvmObjection =
+          std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
       if (!calleeName.contains("phase_hopper") && !args.empty() && !args[0].isX()) {
-        uint64_t phaseAddr = args[0].getUInt64();
+        uint64_t phaseAddr = normalizeUvmObjectKey(procId, args[0].getUInt64());
+        if (phaseAddr == 0)
+          phaseAddr = args[0].getUInt64();
         InterpretedValue countVal =
             args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
         int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
@@ -4346,10 +4558,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
           phaseObjectionHandles[phaseAddr] = handle;
         }
+        int64_t beforeCount = __moore_objection_get_count(handle);
         if (calleeName.contains("raise_objection")) {
           raisePhaseObjection(handle, count);
         } else {
           dropPhaseObjection(handle, count);
+        }
+        if (traceUvmObjection) {
+          int64_t afterCount = __moore_objection_get_count(handle);
+          llvm::errs() << "[UVM-OBJ] proc=" << procId
+                       << " callee=" << calleeName << " phase=0x"
+                       << llvm::format_hex(phaseAddr, 16)
+                       << " handle=" << handle << " delta=" << count
+                       << " before=" << beforeCount
+                       << " after=" << afterCount << "\n";
         }
       }
       if (indAddedToVisited)
@@ -4438,7 +4660,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
           if (eligible) {
             uint64_t a[8] = {};
-            fillNativeCallArgs(args, numArgs, a);
+            fillNativeCallArgs(args, funcOp.getArgumentTypes(), calleeName,
+                               numArgs, a);
 
             if (eligible) {
 
@@ -4537,6 +4760,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                 << " -- treating as suspension\n");
         return success();
       }
+      if (shouldPropagateCoverageRuntimeFailure(procId))
+        return failure();
       if (traceCallFailures) {
         auto &failState = processStates[procId];
         llvm::errs() << "[CALLFAIL] proc=" << procId

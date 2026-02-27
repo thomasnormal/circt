@@ -1989,3 +1989,933 @@
     - `Stripped 1 functions with non-LLVM ops`
     - residual reason still `1x body_nonllvm_op:hw.struct_create`
     - `3426 functions + 1 processes ready for codegen`.
+
+## 2026-02-26
+- Phase 5 coverage follow-up: fixed `llhd.sig.struct_extract` rejection for
+  block-argument `!llhd.ref<!hw.struct<...>>` inputs.
+- Root cause:
+  - `isFuncBodyCompilable` only accepted `sig.struct_extract` when input was
+    already pointer-backed (`ptr -> ref` cast) or a local `llhd.sig`.
+  - for ref-typed function arguments, the checker rejected before
+    ref-ABI canonicalization could run.
+  - additionally, `canonicalizeLLHDRefArgumentABIs(...)` did not treat
+    `llhd.sig.struct_extract` as a ref-typed use site, so even when ref args
+    were canonicalized to `!llvm.ptr`, no local ref-view cast was inserted for
+    struct-extract users.
+- TDD/regression:
+  - added `test/Tools/circt-sim/aot-llhd-sig-struct-extract-ref-arg-prb-drv.mlir`.
+  - red before fix:
+    - `Functions: 1 total, 0 external, 1 rejected, 0 compilable`
+    - rejection: `1x llhd.sig.struct_extract`.
+  - green after fix:
+    - `Functions: 1 total, 0 external, 0 rejected, 1 compilable`
+    - `1 functions + 0 processes ready for codegen`
+    - interpreter/compiled parity: `out=8`.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - added `isLLVMCompatibleRefValue(...)` helper for `!llhd.ref` nested-type
+    compatibility checks.
+  - checker updates:
+    - allow `sig.struct_extract`/`sig.extract`/`prb` paths when the source ref
+      is a compatible block-arg `!llhd.ref<...>` (not only pointer-cast defs).
+  - ABI canonicalization update:
+    - include `llhd::SigStructExtractOp` in `requiresRefOperand(...)` so
+      canonicalized ref args receive local `ptr -> ref` view casts at uses.
+- Validation:
+  - rebuilt: `ninja -C build_test circt-sim-compile circt-sim`.
+  - focused regressions passed:
+    - `aot-llhd-sig-struct-extract-ref-arg-prb-drv.mlir` (new)
+    - `aot-llhd-sig-struct-extract-prb-drv.mlir`
+    - `aot-llhd-sig-struct-extract-bit-drive.mlir`.
+  - large-workload compile telemetry (`-v`):
+    - `uvm_seq_body`: `37 rejected, 5277 compilable`,
+      `3426 functions + 1 processes ready for codegen`, `Stripped 1`.
+    - `uvm_run_phase`: `37 rejected, 5257 compilable`,
+      `3418 functions + 1 processes ready for codegen`, `Stripped 1`.
+    - top reasons now:
+      - `13x sim.fork.terminator`
+      - `12x builtin.unrealized_conversion_cast:i1->!moore.event`
+      - `5x sim.fmt.literal`
+      - `2x builtin.unrealized_conversion_cast:i1->!moore.i1`.
+  - runtime sanity:
+    - `uvm_run_phase` compiled remains at known parity point
+      (`UVM_FATAL FCTTYP`, `EXIT=1`).
+    - `uvm_seq_body` compiled remains non-crashing (`EXIT=0`).
+- Realization:
+  - remaining compile-time blockers are now concentrated in
+    suspension/formatting buckets (`sim.fork.*`, `moore.event` cast family,
+    `sim.fmt.literal`) rather than LLHD struct-ref plumbing.
+
+## 2026-02-26
+- Phase 5 coverage follow-up: eliminated `sim.fmt.literal` rejection bucket in
+  function-body AOT compilation by lowering procedural print/format ops.
+- TDD/regression:
+  - existing red test confirmed before patch:
+    - `aot-sim-fmt-literal-print-lowering.mlir`
+    - `Functions: 1 total, 0 external, 1 rejected, 0 compilable`
+    - rejection reason: `sim.fmt.literal`.
+  - regression expanded to cover literal + dec + concat in a compiled function.
+  - green after patch:
+    - `Functions: 1 total, 0 external, 0 rejected, 1 compilable`
+    - interpreter/compiled parity: `HELLO_FROM_FUNC=42`.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - checker update:
+    - `isFuncBodyCompilable(...)` now accepts
+      `sim.proc.print` + `sim.fmt.{literal,dec,hex,bin,oct,char,scientific,float,general,concat,dyn_string}`.
+  - lowering update:
+    - added early Phase-0 lowering `lowerSimProcPrintOps(...)`:
+      - recursively expands `sim.fmt.*` trees into a `printf` format string +
+        varargs list.
+      - emits per-callsite internal format globals and `llvm.call @printf`.
+      - erases `sim.proc.print` and dead `sim.fmt.*` metadata ops.
+    - unsupported format fragments degrade to literal placeholders instead of
+      failing whole-function lowering.
+- Validation:
+  - rebuilt: `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile circt-sim`.
+  - focused regressions passed (manual FileCheck invocations):
+    - `aot-sim-fmt-literal-print-lowering.mlir` (new/updated)
+    - `aot-llhd-sig-struct-extract-ref-arg-prb-drv.mlir`
+    - `aot-llhd-sig-struct-extract-prb-drv.mlir`
+    - `aot-llhd-sig-struct-extract-bit-drive.mlir`.
+  - large-workload compile telemetry (`-v`):
+    - `uvm_seq_body`: `35 rejected, 5279 compilable`,
+      `3427 functions + 1 processes ready for codegen`.
+    - `uvm_run_phase`: `35 rejected, 5259 compilable`,
+      `3419 functions + 1 processes ready for codegen`.
+    - top reasons now:
+      - `14x sim.fork.terminator`
+      - `12x builtin.unrealized_conversion_cast:i1->!moore.event`
+      - `2x builtin.unrealized_conversion_cast:i1->!moore.i1`
+      - `1x sim.wait_fork`
+      - `1x sim.terminate`.
+  - runtime sanity:
+    - `uvm_seq_body` compiled (`CIRCT_AOT_STATS=1`) remains stable, `EXIT_CODE=0`.
+    - `uvm_run_phase` compiled remains at known parity point
+      (`UVM_FATAL FCTTYP`, `EXIT_CODE=1`).
+- Realization:
+  - this unlock removes formatting as a blocker in function coverage and shifts
+    remaining top rejections almost entirely to suspend/event semantics
+    (`sim.fork.*`, `sim.wait_fork`, `moore.event` cast family).
+
+## 2026-02-26
+- Phase 4.2 follow-up: wired snapshot-driven native module-init enablement and
+  tightened native-init env semantics.
+- Root cause:
+  - `.csnap` loading auto-selected `native.so`, but native module-init
+    execution still depended on a separate env var presence check.
+  - `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0` still enabled native module-init
+    because runtime treated any presence as true.
+- Implementation:
+  - `tools/circt-sim/circt-sim.cpp`
+    - added shared boolean env parsing helper (`parseEnvBool` + `isTruthyEnv`).
+    - snapshot load path now auto-sets
+      `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1` iff:
+      - snapshot mode is active,
+      - a compiled module is available,
+      - env var is not explicitly set.
+    - emits one visibility message:
+      `[circt-sim] Snapshot auto-enabled native module init (...)`.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - native module-init gate now uses truthy parsing
+      (`1/true/yes/on`) instead of env presence.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-snapshot-native-module-init-auto.mlir`
+  - validates:
+    - snapshot default-on native module init
+    - explicit disable via `CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0`
+    - output parity (`out=123`) in both modes.
+- Validation:
+  - rebuild: `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile circt-sim`.
+  - focused checks (manual command pack) passed:
+    - `aot-snapshot-native-module-init-auto.mlir` (new)
+    - `aot-native-module-init-basic.mlir`
+    - `aot-native-module-init-memset.mlir`.
+  - large-workload runtime sanity:
+    - `uvm_seq_body` compiled (`CIRCT_AOT_STATS=1`): no crash, `EXIT_CODE=0`,
+      AOT counters still present (`Compiled function calls: 5`,
+      `Trampoline calls: 33`, `Entry-table native calls: 7`).
+    - `uvm_run_phase` compiled remains at known parity endpoint:
+      `UVM_FATAL FCTTYP`, `EXIT_CODE=1`.
+- Realization:
+  - this closes a practical phase-4 usability gap: snapshot bundles now behave
+    like “portable compiled runs” by default, while still allowing deterministic
+    native-init opt-out for parity bisects.
+
+## 2026-02-26
+- Phase 5 residual-strip closure: removed the last remaining
+  `body_nonllvm_op:hw.struct_create` blocker by canonicalizing 4-state
+  `cf` block arguments to LLVM-compatible boundary types after SCF->CF.
+- Red repro before fix:
+  - local reproducer (`/tmp/aot_hw_struct_create_blockarg_repro.mlir`) with:
+    - `hw.struct_create` in two predecessor blocks
+    - merged `cf` block argument of `!hw.struct<value,unknown>`
+    - downstream use through a call
+  - compile result before patch:
+    - `Stripped 1 functions with non-LLVM ops`
+    - `entry [body_nonllvm_op:hw.struct_create]`.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - added `canonicalizeFourStateCFBlockArguments(ModuleOp)`:
+    - finds function-internal block args of four-state hw.struct type.
+    - rewrites predecessor `cf.br` / `cf.cond_br` operands to LLVM-compatible
+      boundary type via bridge casts.
+    - retargets block arg type to LLVM boundary type and inserts a local
+      compatibility cast for existing uses.
+  - wired pass ordering:
+    - run this canonicalization immediately after `lowerSCFToCF(...)`
+      and before `lowerFuncArithCfToLLVM(...)`.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-hw-struct-create-cf-blockarg-lowering.mlir`
+  - test locks in:
+    - compile path has no residual strip (`COMPILE-NOT: Stripped`)
+    - interpreter/compiled parity (`out=11`).
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile circt-sim`.
+  - focused regressions passed:
+    - `aot-hw-struct-create-cf-blockarg-lowering.mlir` (new)
+    - `aot-fourstate-abi-canonicalization.mlir`
+    - `aot-hw-struct-create-cast-llvm-lowering.mlir`.
+  - red repro now green:
+    - `Functions: 2 total, 0 external, 0 rejected, 2 compilable`
+    - `2 functions + 0 processes ready for codegen`
+    - no residual strip lines.
+  - large-workload compile telemetry (`-v`):
+    - `uvm_seq_body`:
+      - `Functions: 5330 total, 16 external, 35 rejected, 5279 compilable`
+      - `3428 functions + 1 processes ready for codegen` (was `3427 + 1`)
+      - no `Stripped` output.
+    - `uvm_run_phase`:
+      - `Functions: 5310 total, 16 external, 35 rejected, 5259 compilable`
+      - `3420 functions + 1 processes ready for codegen` (was `3419 + 1`)
+      - no `Stripped` output.
+  - runtime sanity after this step:
+    - `uvm_seq_body` compiled: `Simulation completed`, `EXIT_CODE=0`.
+    - `uvm_run_phase` compiled: known parity endpoint
+      (`UVM_FATAL FCTTYP`, `EXIT_CODE=1`).
+- Realization:
+  - this closes the previously tracked residual strip tail and moves current
+    coverage blockers back to explicit rejection buckets
+    (`sim.fork.terminator`, `i1 -> !moore.event`, `sim.wait_fork`,
+    `sim.terminate`), which are plan-aligned next targets.
+
+## 2026-02-26
+- Phase-graph opt-in stability follow-up: kept high-coverage phase-graph opt-in
+  usable by default-intercepting a small unsafe `uvm_phase::*` subset.
+- Trigger:
+  - with `CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_GRAPH=1`, `uvm_seq_body` coverage
+    jumped from `3428 + 1` to `3472 + 1` ready-for-codegen, but runtime
+    regressed to `EXIT_CODE=139`.
+- Symbolized crash data (`LLVM_SYMBOLIZER_PATH=llvm/build/bin/llvm-symbolizer`):
+  - first crash stack:
+    - `uvm_pkg::uvm_phase::set_state`
+    - called from `uvm_pkg::uvm_phase_hopper::sync_phase/process_phase`.
+  - after intercepting `set_state`, next crash stack:
+    - `uvm_pkg::uvm_phase::get_domain`
+    - `uvm_pkg::uvm_phase::get_full_name`
+    - called from `uvm_pkg::uvm_phase_hopper::finish_phase`.
+- Implementation:
+  - added a dedicated phase-state gate in both compile-time demotion and
+    runtime native dispatch filters:
+    - env: `CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_STATE`
+    - default behavior: intercept
+      `uvm_phase::set_state`, `uvm_phase::get_domain`,
+      `uvm_phase::get_full_name`
+      even when `CIRCT_AOT_ALLOW_NATIVE_UVM_PHASE_GRAPH=1`.
+    - aggressive mode (`CIRCT_AOT_AGGRESSIVE_UVM=1`) still enables native path.
+  - files:
+    - `tools/circt-sim-compile/circt-sim-compile.cpp`
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-uvm-phase-state-mutator-native-optin.mlir`
+  - locks in:
+    - default: `set_state` demoted
+    - phase-graph opt-in only: still demoted
+    - phase-graph + phase-state opt-in: native-enabled.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile circt-sim`.
+  - focused tests passed:
+    - new: `aot-uvm-phase-state-mutator-native-optin.mlir`
+    - existing: `aot-uvm-phase-state-native-optin.mlir`
+    - existing: `aot-uvm-phase-graph-native-optin.mlir`
+    - existing: `aot-hw-struct-create-cf-blockarg-lowering.mlir`.
+  - workload check (`uvm_seq_body`, phase-graph opt-in):
+    - compile: `3468 functions + 1 processes ready for codegen`
+      (still +40 vs default `3428 + 1`).
+    - run: no segfault; `Simulation completed`, `RUN_EXIT=0`.
+  - workload check (`uvm_run_phase`, phase-graph opt-in):
+    - compile: `3460 functions + 1 processes ready for codegen`.
+    - run: expected parity endpoint preserved
+      (`UVM_FATAL FCTTYP`, `RUN_EXIT=1`).
+- Realization:
+  - a broad `uvm_phase::*` native-enable is still unsafe, but targeted
+    phase-state interception recovers most of the phase-graph coverage gain
+    without reintroducing the crash.
+
+## 2026-02-26
+- Phase 1 diagnostics follow-up: landed pointer-class trace/provenance for
+  Moore runtime pointer normalization (`CIRCT_AOT_TRACE_PTR`), plus unit tests.
+- Trigger:
+  - plan still marked pointer-class diagnostics as partial/minimal, making
+    shutdown/native pointer triage slower than needed.
+- Implementation:
+  - `lib/Runtime/MooreRuntime.cpp`
+    - added truthy parsing for `CIRCT_AOT_TRACE_PTR`.
+    - upgraded `normalizeHostPtr(...)` diagnostics:
+      - `class=tagged_funcid` hard trap marker
+      - `class=virtual ... -> host=... (tls-normalize)` on successful mapping
+      - `class=virtual ... unresolved (tls-miss|no-tls-callback)` on failure.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - added resolver-side provenance traces in
+      `normalizeAssocRuntimePointer(...)`:
+      - `assoc-host`
+      - `virtual-direct`
+      - `virtual-pointer-slot`
+      - `virtual-unmapped`.
+  - `unittests/Runtime/MooreRuntimeTest.cpp`
+    - added TLS normalize callback coverage:
+      - `MooreRuntimeAssocTest.TlsNormalizeMapsVirtualPointer`
+      - `MooreRuntimeAssocTest.TracePtrLogsVirtualTranslation`.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test unittests/Runtime/MooreRuntimeTests circt-sim`.
+  - runtime unit tests passed:
+    - `build_test/unittests/Runtime/MooreRuntimeTests --gtest_filter='MooreRuntimeAssocTest.*:MooreRuntimeQueueTest.QueuePopFrontPtrInvalidLengthGuard:MooreRuntimeQueueTest.QueuePopBackPtrInvalidLengthGuard:MooreRuntimeQueueTest.QueueSizeInvalidLengthGuard'`.
+  - large-workload AOT sanity preserved:
+    - `uvm_seq_body` compiled run (`CIRCT_AOT_STATS=1`) still exits cleanly:
+      - `RUN_EXIT=0`
+      - `UVM_FATAL :0` parity endpoint unchanged
+      - `Simulation completed`
+      - counters present (`Compiled function calls: 5`,
+        `Trampoline calls: 33`, `Entry-table native calls: 7`).
+- Realization:
+  - this closes the remaining Phase-1 diagnostics gap; ptr failures now
+    report concrete classification/provenance instead of opaque crash sites.
+
+## 2026-02-26
+- AOT func-body wait-event hardening: prevent native loader/runtime failures
+  from unsupported suspending Moore helpers.
+- Trigger:
+  - new func-body lowering path for `moore.wait_event` produced native calls to
+    `__moore_wait_event`; compiled runs failed at load/runtime boundary with:
+    - `symbol lookup error: ... undefined symbol: __moore_wait_event`.
+- Root cause:
+  - `__moore_wait_event` is currently implemented as an interpreter
+    interceptor path, not a native exported runtime ABI suitable for compiled
+    func-body dispatch/resume.
+  - allowing such functions to stay native is unsafe until a resumable ABI is
+    added for suspending helper calls.
+- Implementation:
+  - in `circt-sim-compile` interception demotion stage, added conservative
+    demotion of functions that:
+    - contain `moore.wait_event`, or
+    - call `__moore_wait_event`, `__moore_wait_condition`,
+      `__moore_process_await`.
+  - file:
+    - `tools/circt-sim-compile/circt-sim-compile.cpp`.
+- TDD/regression:
+  - updated regression:
+    - `test/Tools/circt-sim/aot-moore-wait-event-func-lowering.mlir`
+  - now checks compile-time demotion + compiled/interpreter parity (`out=1`)
+    instead of native-dispatching the suspending callee.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - targeted test manually validated:
+    - compile reports:
+      - `Functions: 2 total, 0 external, 0 rejected, 2 compilable`
+      - `Demoted 1 intercepted functions to trampolines`
+      - `1 functions + 0 processes ready for codegen`
+    - interpreter run: `out=1`, `EXIT=0`
+    - compiled run: `out=1`, `EXIT=0`, no symbol-lookup failure.
+  - large-workload sanity:
+    - `uvm_seq_body`:
+      - compile: `21 rejected`, `3416 + 1 ready`
+      - run: `RUN_EXIT=0`, `Simulation completed`
+    - `uvm_run_phase`:
+      - compile: `21 rejected`, `3408 + 1 ready`
+      - run: parity endpoint preserved (`FCTTYP`, `RUN_EXIT=1`).
+- Realization:
+  - this is a deliberate robustness trade-off: keep suspending func-body flows
+    on trampoline/interpreter path until coroutine-capable native ABI support
+    is available; prevents loader crashes and preserves UVM parity endpoints.
+
+## 2026-02-26
+- Phase 5 coverage follow-up: closed remaining `hw.array_get` rejection in the
+  large UVM workloads by supporting aggregate-constant array indexing.
+- Trigger:
+  - top rejection bucket after wait-event hardening still included:
+    - `1x hw.array_get` (`uvm_seq_body` / `uvm_run_phase`).
+  - representative rejected function shape:
+    - `%arr = hw.aggregate_constant [...] : !hw.array<4xi2>`
+    - `%next = hw.array_get %arr[%idx]`
+    - (not accepted before; checker only allowed `array_get` fed by
+      `hw.array_create`).
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - checker:
+    - `isFuncBodyCompilable` now also accepts integer `hw.array_get` when
+      input is integer-element `hw.aggregate_constant` array and index is
+      integer-typed.
+  - lowering:
+    - pre-lowering `hw.array_get` rewrite now handles both:
+      - `array_get(array_create(...), idx)` (existing path), and
+      - `array_get(aggregate_constant[...], idx)` (new path).
+    - new path materializes per-element constants and emits LLVM-compatible
+      select chains with the same logical index ordering used by existing
+      `array_create` lowering.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-hw-array-get-aggregate-constant-lowering.mlir`
+  - validates:
+    - compile: `Functions: 1 total, 0 external, 0 rejected, 1 compilable`
+    - parity: interpreter/compiled both print `out=-1`.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - targeted regression manual run:
+    - `COMPILE_EXIT=0`, `SIM_EXIT=0`, `COMPILED_EXIT=0`, `out=-1`.
+  - large-workload compile telemetry:
+    - `uvm_seq_body`:
+      - `20 rejected, 5294 compilable`
+      - `3417 functions + 1 processes ready for codegen`
+    - `uvm_run_phase`:
+      - `20 rejected, 5274 compilable`
+      - `3409 functions + 1 processes ready for codegen`
+    - previous step baseline:
+      - `21 rejected`, `3416 + 1` / `3408 + 1`.
+  - runtime sanity preserved:
+    - `uvm_seq_body`: `RUN_EXIT=0`, `Simulation completed`
+    - `uvm_run_phase`: known parity endpoint (`FCTTYP`, `RUN_EXIT=1`).
+- Realization:
+  - hot rejection set is now entirely suspension/control-flow oriented:
+    - `sim.fork.terminator`, `sim.wait_fork`, `sim.terminate`,
+      `sim.fork`, `sim.pause`.
+  - next high-ROI path is staged support/demotion strategy for `sim.pause` and
+    fork-family function bodies (or coroutine-capable func-body AOT ABI).
+
+## 2026-02-26
+- Phase 5 control-flow hardening follow-up: `sim.*` control ops are now
+  compilable for demotion instead of hard rejections.
+- Trigger:
+  - after aggregate-constant `hw.array_get` support, remaining rejection tail
+    still included:
+    - `1x sim.terminate`
+    - `1x sim.pause`
+  - these are semantically interpreter-integrated control ops, but rejecting
+    entire functions for their presence kept coverage lower than necessary.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - checker (`isFuncBodyCompilable`):
+    - now accepts:
+      - `sim::TerminateOp`
+      - `sim::PauseOp`
+      - `sim::ClockedTerminateOp`
+      - `sim::ClockedPauseOp`
+  - demotion policy:
+    - added `hasSimControlOp(func::FuncOp)` and demotes matching functions to
+      trampolines alongside existing interception/suspension demotion rules.
+  - effect:
+    - functions containing these ops are no longer rejected; they are compiled
+      as trampoline-callable declarations, preserving interpreter semantics.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-sim-control-func-demote.mlir`
+  - validates:
+    - compile: `Functions: 3 total, 0 external, 0 rejected, 3 compilable`
+    - compile: `Demoted 2 intercepted functions to trampolines`
+    - compile: `1 functions + 0 processes ready for codegen`
+    - compiled run parity: `out=7`.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - targeted regression manual run:
+    - compile+run success; output matches expected `out=7`.
+  - large-workload compile telemetry:
+    - `uvm_seq_body`:
+      - `18 rejected, 5296 compilable`
+      - top reasons:
+        - `14x sim.fork.terminator`
+        - `1x sim.wait_fork`
+        - `1x sim.fork`
+        - `1x comb.parity`
+        - `1x builtin.unrealized_conversion_cast:i32->!moore.i32`
+      - `3417 functions + 1 processes ready for codegen`.
+    - `uvm_run_phase`:
+      - `18 rejected, 5276 compilable`
+      - same top reason shape
+      - `3409 functions + 1 processes ready for codegen`.
+  - runtime sanity:
+    - `uvm_seq_body` compiled run:
+      - `RUN_EXIT=0`
+      - counters present (`Compiled function calls: 5`,
+        `Trampoline calls: 33`, `Entry-table native calls: 7`)
+      - known endpoint preserved (`UVM_FATAL :0`, simulation completed).
+    - `uvm_run_phase` compiled run:
+      - `RUN_EXIT=1`
+      - known parity endpoint preserved (`UVM_FATAL FCTTYP` at time 0).
+  - queue-guard relation check:
+    - existing interpreted and AOT queue invalid-length guard regressions still
+      pass:
+      - `queue-pop-front-ptr-invalid-len-guard.mlir`
+      - `aot-queue-pop-front-ptr-invalid-len-guard.mlir`
+    - both runs preserve `len_after=100001` and avoid pointer/length
+      corruption crashes.
+- Realization:
+  - this is a measurable coverage gain without adding new native semantic risk:
+    control ops are now handled through trampolines instead of rejection.
+  - next rejection targets are now concentrated on fork/suspend-family lowering
+    (`sim.fork.terminator`, `sim.wait_fork`, `sim.fork`) plus two minor
+    non-control tails (`comb.parity`, `builtin.unrealized_conversion_cast`).
+
+## 2026-02-26
+- Phase 5 cast-tail closure follow-up: accepted wait-event-local
+  `iN <-> !moore.iN` bridge casts to remove the last cast rejection in UVM
+  function coverage.
+- Trigger:
+  - after sim-control demotion, top rejection tail still included:
+    - `1x builtin.unrealized_conversion_cast:i32->!moore.i32`.
+  - localized pattern in both large workloads:
+    - `uvm_pkg::uvm_wait_for_nba_region`:
+      - `%v = llvm.load ... : i32`
+      - `%evt = builtin.unrealized_conversion_cast %v : i32 to !moore.i32`
+      - `moore.detect_event any %evt : i32`.
+  - this function is intentionally wait-event demoted, but compilability was
+    rejecting the cast before demotion could apply.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - in `isFuncBodyCompilable(...)` cast legality:
+    - added same-width integer/moore-int cast predicate.
+    - accept the cast only when nested under `moore.wait_event`.
+  - scope is intentionally narrow to avoid admitting unresolved moore-int casts
+    in non-wait-event native bodies.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-moore-wait-event-int-cast-demote.mlir`.
+  - validates:
+    - compile: `Functions: 2 total, 0 external, 0 rejected, 2 compilable`
+    - compile: `Demoted 1 intercepted functions to trampolines`
+    - compile: `1 functions + 0 processes ready for codegen`
+    - parity: interpreter/compiled both print `out=2`.
+  - existing regression preserved:
+    - `aot-moore-wait-event-func-lowering.mlir` still reports
+      `out=1` parity with the same demotion stats.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - targeted regressions manual run:
+    - new `aot-moore-wait-event-int-cast-demote.mlir` passed.
+    - existing `aot-moore-wait-event-func-lowering.mlir` passed.
+  - large-workload compile telemetry (`-v`, bounded):
+    - `uvm_seq_body`:
+      - `17 rejected, 5297 compilable`
+      - top reasons now:
+        - `14x sim.fork.terminator`
+        - `1x sim.wait_fork`
+        - `1x sim.fork`
+        - `1x comb.parity`
+      - `3417 functions + 1 processes ready for codegen`.
+    - `uvm_run_phase`:
+      - `17 rejected, 5277 compilable`
+      - same top reason shape
+      - `3409 functions + 1 processes ready for codegen`.
+- Realization:
+  - rejection tail is now purely control-flow/fork oriented plus one arithmetic
+    op (`comb.parity`); the cast bucket is fully removed from top telemetry.
+  - next high-ROI move remains fork-family strategy (demotion/lowering) to
+    reduce the dominant `sim.fork.terminator` bucket.
+
+## 2026-02-26
+- Phase 5 fork-family rejection closure follow-up: moved `sim.fork*` function
+  bodies from rejection to compile+demote path.
+- Trigger:
+  - after wait-event cast closure, top rejection reasons were:
+    - `14x sim.fork.terminator`
+    - `1x sim.wait_fork`
+    - `1x sim.fork`
+    - `1x comb.parity`
+  - these remaining `sim.fork*` buckets are interpreter-semantics-heavy but do
+    not need to block AOT compilation when function trampolines are available.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - checker (`isFuncBodyCompilable`):
+    - now accepts:
+      - `sim::SimForkOp`
+      - `sim::SimForkTerminatorOp`
+      - `sim::SimWaitForkOp`
+      - `sim::SimDisableForkOp`
+  - demotion policy:
+    - added `hasSimForkFamilyOp(func::FuncOp)` and demotes matching functions
+      to trampolines, alongside existing UVM/suspension/sim-control demotion.
+- TDD/regression:
+  - added:
+    - `test/Tools/circt-sim/aot-sim-fork-family-func-demote.mlir`.
+  - validates:
+    - compile: `Functions: 2 total, 0 external, 0 rejected, 2 compilable`
+    - compile: `Demoted 1 intercepted functions to trampolines`
+    - compile: `1 functions + 0 processes ready for codegen`
+    - compiled parity output: `out=9`.
+  - existing regression sanity:
+    - `aot-sim-control-func-demote.mlir` still passes (`out=7`).
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - large-workload compile telemetry:
+    - `uvm_seq_body` (`-v`):
+      - `1 rejected, 5313 compilable`
+      - top reason:
+        - `1x comb.parity`
+      - `Demoted 1895 intercepted functions to trampolines`
+      - `3417 functions + 1 processes ready for codegen`.
+    - `uvm_run_phase` (`-v`):
+      - `1 rejected, 5293 compilable`
+      - top reason:
+        - `1x comb.parity`
+      - `Demoted 1883 intercepted functions to trampolines`
+      - `3409 functions + 1 processes ready for codegen`.
+  - full compiled runtime sanity:
+    - `uvm_seq_body`:
+      - compile: `1 rejected, 5313 compilable`, `3417 + 1 ready`
+      - run: `RUN_STATUS=0`, `UVM_FATAL :0`, `Simulation completed`
+      - counters unchanged (`Compiled function calls: 5`,
+        `Trampoline calls: 33`, `Entry-table native calls: 7`).
+    - `uvm_run_phase`:
+      - compile: `1 rejected, 5293 compilable`, `3409 + 1 ready`
+      - run: `RUN_STATUS=1`, known parity endpoint
+        (`UVM_FATAL FCTTYP` at time 0).
+- Realization:
+  - function rejection tail is now reduced to a single arithmetic op bucket
+    (`comb.parity`), with fork/suspension semantics handled explicitly via
+    trampoline demotion.
+  - next obvious Phase 5 closure target is `comb.parity` lowering in
+    function-body AOT.
+
+## 2026-02-26
+- Phase 5 parity-tail closure (robustness-first): moved `comb.parity`
+  functions to compile+demote path after native lowering triggered a backend
+  crash on large workloads.
+- Trigger:
+  - with direct parity lowering enabled, both large workloads reached
+    `0 rejected` and `+1` ready-for-codegen, but `circt-sim-compile` crashed:
+    - `SIGSEGV` during LLVM translation after lowering stage.
+    - symbolized stack head:
+      - `mlir::PtrLikeTypeInterface::getMemorySpace`
+      - `mlir::LLVM::detail::TypeToLLVMIRTranslatorImpl::translateType`
+      - `mlir::LLVM::ModuleTranslation::convertOperation`.
+  - crash was reproducible with:
+    - `circt-sim-compile -v build_test/aot_scratch/uvm_seq_body.mlir ...`.
+- Root cause (working conclusion):
+  - admitting the previously-rejected parity-bearing UVM function into native
+    conversion exposed an existing MLIR->LLVM translation crash path in that
+    function body; this is not safe to ship in default AOT mode.
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - kept parity op accepted for compilability accounting.
+  - added `hasCombParityOp(func::FuncOp)` to demotion policy:
+    - parity-containing functions are now trampoline-demoted by default.
+  - effect:
+    - rejection bucket closes without exposing the native backend crash path.
+- TDD/regression:
+  - updated/added:
+    - `test/Tools/circt-sim/aot-comb-parity-lowering.mlir`
+  - validates:
+    - compile: `Functions: 2 total, 0 external, 0 rejected, 2 compilable`
+    - compile: `Demoted 1 intercepted functions to trampolines`
+    - compile: `1 functions + 0 processes ready for codegen`
+    - compiled parity output: `out=1`.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - targeted regressions:
+    - `aot-comb-parity-lowering.mlir` passed (demotion mode).
+    - `aot-sim-fork-family-func-demote.mlir` sanity passed.
+  - large-workload compile telemetry:
+    - `uvm_seq_body` full compile:
+      - `0 rejected, 5314 compilable`
+      - `Demoted 1896 intercepted functions to trampolines`
+      - `3417 functions + 1 processes ready for codegen`
+      - compile completed successfully (`Wrote ...step5_fixed.so`).
+    - `uvm_run_phase` full compile:
+      - `0 rejected, 5294 compilable`
+      - `Demoted 1884 intercepted functions to trampolines`
+      - `3409 functions + 1 processes ready for codegen`
+      - compile completed successfully (`Wrote ...step5_fixed_full.so`).
+  - runtime parity endpoints preserved:
+    - `uvm_seq_body` compiled run:
+      - `RUN_STATUS=0`
+      - `UVM_FATAL :0`
+      - `Simulation completed`
+      - counters unchanged (`Compiled function calls: 5`,
+        `Trampoline calls: 33`, `Entry-table native calls: 7`).
+    - `uvm_run_phase` compiled run:
+      - `RUN_STATUS=1`
+      - known `UVM_FATAL FCTTYP` endpoint.
+- Realization:
+  - function rejection telemetry is now closed (`0 rejected`) on both tracked
+    UVM workloads while keeping default compiled mode stable.
+  - native parity-op codegen can be revisited later behind an opt-in gate once
+    the underlying MLIR->LLVM translation crash path is root-caused.
+
+## 2026-02-26
+- Root-caused and fixed the MLIR->LLVM translation crash path seen after
+  enabling native parity admission (`CIRCT_AOT_ALLOW_NATIVE_PARITY=1`).
+- Repro signature (before fix):
+  - `circt-sim-compile -v ...` crashed during translate with stack head:
+    - `mlir::PtrLikeTypeInterface::getMemorySpace`
+    - `TypeToLLVMIRTranslatorImpl::translateType`
+    - `ModuleTranslation::convertOperation`
+  - observed pre-translate IR included `llvm.getelementptr` with non-LLVM
+    element types (for example `!hw.struct<...>`).
+- Fix landed in `tools/circt-sim-compile/circt-sim-compile.cpp`:
+  - `isFuncBodyCompilable` now special-cases `LLVM::GEPOp`:
+    - accepts non-LLVM `elem_type` only if it can be converted via
+      `convertToLLVMCompatibleType`.
+    - otherwise rejects with reason `llvm.getelementptr:elem_type`.
+  - pre-lowering canonicalization now rewrites `LLVM::GEPOp` with non-LLVM
+    `elem_type` to an equivalent GEP with converted LLVM-compatible element
+    type before LLVM IR translation.
+- TDD/regression:
+  - added
+    `test/Tools/circt-sim/aot-llvm-gep-non-llvm-elemtype-lowering.mlir`.
+  - covers compile + interpreter + compiled parity for a function using
+    `llvm.getelementptr` with `!hw.struct<...>` element type.
+  - checks:
+    - `Functions: 1 total, 0 external, 0 rejected, 1 compilable`
+    - no `Translation to LLVM IR failed`
+    - output parity `out=1` in both modes.
+- Validation:
+  - rebuilt:
+    - `CCACHE_DISABLE=1 ninja -C build_test circt-sim-compile`.
+  - regression RUN lines executed with `FileCheck` (sandbox blocked `llvm-lit`
+    multiprocessing semaphores).
+  - prior crash repro workloads now compile cleanly under parity admission:
+    - `uvm_seq_body`: `0 rejected, 5314 compilable`, wrote `.so` successfully.
+    - `uvm_run_phase`: `0 rejected, 5294 compilable`, wrote `.so` successfully.
+    - no `PtrLikeTypeInterface::getMemorySpace` / translation-failure signatures
+      in compile logs.
+
+## 2026-02-26
+- Follow-up: re-enabled native `comb.parity` codegen by default (removed
+  parity-specific demotion gate).
+- Implementation (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - removed `CIRCT_AOT_ALLOW_NATIVE_PARITY` demotion gate usage.
+  - removed `hasCombParityOp(...)` demotion path from function interception
+    stripping.
+  - parity remains directly lowered in function-body lowering.
+- Regression update:
+  - updated `test/Tools/circt-sim/aot-comb-parity-lowering.mlir` to expect
+    native codegen:
+    - dropped demotion expectation
+    - now checks `2 functions + 0 processes ready for codegen`.
+- Validation:
+  - rebuilt `circt-sim-compile`.
+  - focused regressions passed:
+    - `aot-comb-parity-lowering.mlir`
+    - `aot-llvm-gep-non-llvm-elemtype-lowering.mlir`.
+  - large compile repros with default settings (no parity env opt-in):
+    - `uvm_seq_body`: `0 rejected, 5314 compilable`,
+      `Demoted 1895`, `3418 + 1 ready`, compile success.
+    - `uvm_run_phase`: `0 rejected, 5294 compilable`,
+      `Demoted 1883`, `3410 + 1 ready`, compile success.
+  - compiled runtime parity endpoints unchanged:
+    - `uvm_seq_body`: `EXIT=0`, `UVM_FATAL :0`, stats unchanged.
+    - `uvm_run_phase`: `EXIT=1`, known `UVM_FATAL FCTTYP` endpoint.
+
+## 2026-02-26
+- Replaced the broad unmapped-native direct-call default gate with a
+  root-cause-specific fix for the `uvm_seq_body` parity regression.
+- Root cause isolation:
+  - bisection with `CIRCT_AOT_ALLOW_UNMAPPED_NATIVE=1` + name denies showed the
+    time-0 `COMP/INTERNAL` fatal disappears when denying `get_2160` (and the
+    `get_2160..get_2239` family).
+  - inspected MLIR showed `get_2160` is a generated singleton getter reading
+    `@"uvm_pkg::uvm_pkg::uvm_build_phase::m_inst"`.
+- Fix (`tools/circt-sim-compile/circt-sim-compile.cpp`):
+  - added `hasUvmBuildPhaseSingletonGlobalAccess(func::FuncOp)`.
+  - demotion policy now strips any function touching
+    `uvm_build_phase::m_inst` to a trampoline by default.
+- Policy cleanup (`tools/circt-sim/LLHDProcessInterpreter.cpp`):
+  - removed hardcoded default deny pattern `get_*` from
+    `shouldDenyUnmappedNativeCall`.
+  - default unmapped native `func.call` policy is now allow-all again.
+  - explicit controls remain:
+    - `CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES=...`
+    - `CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL=1`
+    - `CIRCT_AOT_ALLOW_UNMAPPED_NATIVE=1` (with optional deny names).
+- TDD/regressions:
+  - updated `test/Tools/circt-sim/aot-unmapped-native-get-policy.mlir` for
+    default allow-all expectations.
+  - added `test/Tools/circt-sim/aot-uvm-build-phase-singleton-getter-demote.mlir`
+    to lock in targeted compile-time demotion (`Demoted 1 ...`,
+    `1 functions + 0 processes ready for codegen`).
+- Validation:
+  - focused FileCheck RUN-lines passed:
+    - `aot-unmapped-native-get-policy.mlir`
+    - `aot-uvm-build-phase-singleton-getter-demote.mlir`
+  - large workload compile/runtime:
+    - `uvm_seq_body` compile: `0 rejected, 5314 compilable`,
+      `Demoted 1896`, `3417 + 1 ready`, `.so` emitted.
+    - `uvm_seq_body` run (compiled): `RUN_EXIT=0`, no `COMP/INTERNAL`,
+      known endpoint preserved (`UVM_FATAL :0`, simulation completed).
+      stats: `Compiled function calls: 23`, `Interpreted function calls: 7`,
+      `Entry-table native calls: 7`, `Entry-table trampoline calls: 2`.
+    - `uvm_run_phase` compile: `0 rejected, 5294 compilable`,
+      `Demoted 1884`, `3409 + 1 ready`, `.so` emitted.
+    - `uvm_run_phase` run (compiled): parity endpoint unchanged
+      (`UVM_FATAL @ 0: FCTTYP ...`, `RUN_EXIT=1`).
+- Realization:
+  - the `COMP/INTERNAL` issue was not a generic unmapped-direct-call problem;
+    it was a specific build-phase singleton getter path. Fixing that path lets
+    us keep default unmapped native dispatch permissive and avoid a broad
+    performance gate.
+
+## 2026-02-27
+- Root-caused the `phase_graph` opt-in crash signature (`uvm_phase::add` ->
+  `uvm_object::get_name`) as an ABI mismatch on indirect aggregate-return calls,
+  not a raw virtual-pointer dereference bug.
+- Core finding:
+  - caller side (vtable `call_indirect`) still used register aggregate-return
+    convention while callee had been flattened to sret ABI.
+  - this produced invalid argument registers at callee entry (`rsi=0x48` class
+    of crash), consistent with gdb/disassembly traces.
+- Fix in `tools/circt-sim-compile/circt-sim-compile.cpp`:
+  - `flattenAggregateFunctionABIs` now rewrites indirect `llvm.call` sites
+    (not just direct symbol calls) when the callee function type has aggregate
+    args/returns, including sret materialization for aggregate returns.
+- Follow-up compile stability fix (same file):
+  - tightened trampoline candidate selection in `generateTrampolines` so host
+    extern declarations (`printf`, libc/libm, etc.) are not treated as
+    interpreter-trampoline targets unless they map to original non-external
+    CIRCT symbols (or forced vtable entries).
+  - this removes false failures like:
+    `cannot generate interpreter trampoline for referenced external vararg function`
+    on `llvm.func @printf(... )`.
+- Added regression:
+  - `test/Tools/circt-sim/aot-host-vararg-extern-no-trampoline.mlir`
+  - asserts AOT compile succeeds in presence of lowered `sim.proc.print`
+    (`printf` vararg extern) and compiled run prints the expected output.
+
+## 2026-02-27
+- Follow-up on the reporting shutdown crash cleanup: removed the tactical
+  default demotion for `uvm_pkg::uvm_report_message::get_severity` while
+  keeping broader reporting demotions (`uvm_report_handler` /
+  `uvm_report_object` / `process_report_message`) unchanged.
+- Kept compile/runtime policy aligned:
+  - compile-time interception stripping and runtime native-dispatch filtering
+    both now exclude `get_severity` from the default reporting deny set.
+- Rationale:
+  - assoc/virtual pointer normalization is now handled at Moore runtime
+    boundaries via TLS resolver plumbing, so `get_severity` should no longer
+    require a compile-time interception gate.
+- Regression strengthened:
+  - updated `test/Tools/circt-sim/aot-uvm-report-message-severity-native-optin.mlir`
+    to assert default native codegen (no demotion) and compiled runtime output
+    parity (`sev=0`) in both default and reporting-opt-in modes.
+- Validation status:
+  - pending full run until local rebuild completes (workspace currently in a
+    large shared rebuild state).
+
+## 2026-02-27
+- Added shared build-lock wrapper to reduce multi-agent rebuild collisions:
+  - `utils/ninja-with-lock.sh`
+  - per-build-dir lock file: `<build-dir>/.circt-build.lock`
+  - owner metadata file: `<build-dir>/.circt-build.lock.owner`
+  - supports blocking wait (default), `--no-wait`, and `--timeout <sec>`.
+- Added regression test:
+  - `test/Tools/ninja-with-lock-no-wait.test`
+  - verifies a second `--no-wait` invocation fails cleanly while another build
+    holds the lock, with owner metadata diagnostics.
+- Updated repo guidance:
+  - `AGENTS.md` build section now recommends
+    `utils/ninja-with-lock.sh -C build <targets...>` for shared workspaces.
+
+## 2026-02-27
+- Root-caused and fixed the new native null-arena crash class
+  (`m_uvm_get_root` segfault at `cmpq ...(%r14)`):
+  - cause: `__circt_sim_arena_base` was emitted but hidden in `.so`, so
+    `dlsym("__circt_sim_arena_base")` failed and runtime never patched arena
+    base.
+  - symptom before fix:
+    - loader warning: `Warning: .so missing __circt_sim_arena_base symbol`
+    - native functions reading arena-backed globals crashed at time 0.
+- Fix:
+  - `tools/circt-sim-compile/circt-sim-compile.cpp`
+    (`setDefaultHiddenVisibility`): keep
+    `__circt_sim_arena_base` default-visible alongside `__circt_sim_ctx`.
+- Regression tightening:
+  - `test/Tools/circt-sim/aot-native-module-init-basic.mlir`
+    now asserts compiled/native runs do **not** print the missing-arena-base
+    warning (`COMPILED-NOT` / `NATIVE-NOT`).
+- Validation done before shared-runtime rebuild divergence:
+  - `nm -D` on compiled `.so` now exports:
+    - `__circt_sim_arena_base`
+    - `__circt_sim_ctx`
+  - focused runtime repro (`aot-native-module-init-basic`) moved from
+    `EXIT=139` to successful completion (`EXIT=0`) with compiled mode.
+  - large UVM `uvm_seq_body` no longer crashes in `m_uvm_get_root`; failure
+    moved forward to a different path (`uvm_root::m_do_dump_args`).
+- Current workspace caveat:
+  - concurrent unrelated edits currently leave shared `circt-sim` build
+    temporarily non-buildable (missing declarations/symbols outside this fix).
+  - `circt-sim-compile` remains buildable; AOT compile-side validation is
+    unaffected.
+
+## 2026-02-27
+- Fixed a runtime argument-marshal gap in native `func.call_indirect` entry-table
+  dispatch paths (`LLHDProcessInterpreterCallIndirect.cpp`): pointer-typed args
+  were packed as raw `uint64_t` without `normalizeNativeCallPointerArg(...)`.
+- Root cause / impact:
+  - direct `func.call` already normalized pointer args, but `call_indirect`
+    native paths did not.
+  - low-bit-tagged UVM-style object handles could reach native callees
+    unchanged, producing incorrect behavior.
+- Implementation:
+  - updated shared `fillNativeCallArgs(...)` helper to take callee arg types +
+    callee name and normalize pointer-typed operands before native invocation.
+  - wired all 4 call_indirect native dispatch sites:
+    - X-fallback entry-table path
+    - static-fallback entry-table path
+    - site-cache entry-table path
+    - main entry-table path
+- Added regression:
+  - `test/Tools/circt-sim/aot-call-indirect-native-pointer-tag-normalize.mlir`
+  - verifies interpreted call_indirect -> native entry dispatch clears low-bit
+    tag (`out=0`, `Entry-table native calls: 1`).
+- Validation:
+  - rebuilt `circt-sim` with build lock wrapper.
+  - targeted regressions passed:
+    - `aot-call-indirect-native-pointer-tag-normalize.mlir`
+    - `aot-func-call-native-pointer-tag-normalize.mlir`
+- Status on large repro:
+  - `uvm_seq_body` still crashes at `uvm_pkg::uvm_root::m_do_dump_args` with
+    native direct call arg0 observed as null; this confirms an additional,
+    separate issue remains in the compiled-process/run_test path.
+
+## 2026-02-27
+- Root-caused and fixed the remaining `uvm_seq_body` `m_do_dump_args` null-arg
+  crash class as an arena wiring bug (not a per-function native gate issue):
+  - concrete repro before fix:
+    - `aot-native-module-init-basic.mlir` compiled mode printed `out=0`
+      (expected `out=123`), proving mutable global state written during init
+      was not visible to native code.
+    - `uvm_seq_body` compiled trace showed
+      `m_do_dump_args` native call with `a0=0x0`, followed by crash.
+  - root cause:
+    - `CompiledModuleLoader::setupArenaGlobals(...)` existed but was never
+      called in `circt-sim` wiring.
+    - arena globals were skipped by pre-alias/alias paths, leaving interpreter
+      and native code on divergent mutable global storage (split-brain state).
+- Fixes landed:
+  - `tools/circt-sim/circt-sim.cpp`
+    - call `setupArenaGlobals(...)` in pre-init path
+      (`compiledLoaderForPreAlias`) before `initializeGlobals()`.
+    - call `setupArenaGlobals(...)` again in `setCompiledModule(...)` before
+      `aliasGlobals(...)` as a safe rebase step.
+  - `tools/circt-sim/CompiledModuleLoader.cpp`
+    - `setupArenaGlobals(...)` now preserves existing global bytes/initialized
+      state when rebasing onto arena storage.
+- Validation:
+  - `aot-native-module-init-basic.mlir` now restored:
+    - compiled output `out=123` (was `out=0` before fix).
+  - `uvm_seq_body`:
+    - compiled run no longer segfaults (`COMPILED_EXIT=0`).
+    - `m_do_dump_args` native trace now receives non-null `a0`.
+    - runtime currently ends at `UVM_FATAL :0` at time 0 (parity follow-up),
+      but the native null-pointer crash path is removed.

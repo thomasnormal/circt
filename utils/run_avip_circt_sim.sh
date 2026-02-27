@@ -20,6 +20,12 @@
 #   CIRCT_SIM_MODE=interpret|compile   (default: interpret)
 #   CIRCT_SIM_EXTRA_ARGS="..."         (default: empty)
 #   CIRCT_SIM_WRITE_JIT_REPORT=0|1     (default: 0)
+#   CIRCT_SIM_DUMP_VCD=0|1             (default: 0)
+#   CIRCT_SIM_TRACE_ALL=0|1            (default: 0, auto=1 when dumping VCD)
+#   CIRCT_SIM_TRACE_SIGNALS=s0,s1      (optional, repeated --trace)
+#   AVIP_SEQUENCE_REPEAT_CAP=N         (default: 8 in interpret mode, 0 otherwise)
+#   AVIP_NATIVE_SOURCES_ONLY=0|1       (default: 0)
+#   AVIP_SKIP_POST_MOORE_TO_CORE_CLEANUP=0|1 (default: 0)
 #   FAIL_ON_ACTIVITY_LIVENESS=0|1       (default: 0)
 #   ACTIVITY_MIN_COVERAGE_PCT=0.01      (default: 0.01)
 
@@ -58,15 +64,52 @@ CIRCT_SIM_MODE="${CIRCT_SIM_MODE:-interpret}"
 # Callers can override if desired.
 CIRCT_SIM_EXTRA_ARGS="${CIRCT_SIM_EXTRA_ARGS:---parallel=1 --mlir-disable-threading}"
 CIRCT_SIM_WRITE_JIT_REPORT="${CIRCT_SIM_WRITE_JIT_REPORT:-0}"
+CIRCT_SIM_DUMP_VCD="${CIRCT_SIM_DUMP_VCD:-0}"
+CIRCT_SIM_TRACE_SIGNALS="${CIRCT_SIM_TRACE_SIGNALS:-}"
+if [[ -z "${CIRCT_SIM_TRACE_ALL+x}" ]]; then
+  if [[ "$CIRCT_SIM_DUMP_VCD" != "0" ]]; then
+    CIRCT_SIM_TRACE_ALL=1
+  else
+    CIRCT_SIM_TRACE_ALL=0
+  fi
+fi
 # AVIP monitor diagnostic rewrites are useful for bring-up but very noisy in
 # interpreted regressions. Keep them opt-in and strip heavy per-cycle display
 # spam by default in interpreted mode.
 AVIP_ENABLE_MONITOR_DIAG_REWRITES="${AVIP_ENABLE_MONITOR_DIAG_REWRITES:-0}"
+AVIP_SKIP_POST_MOORE_TO_CORE_CLEANUP="${AVIP_SKIP_POST_MOORE_TO_CORE_CLEANUP:-0}"
+VERILOG_EXTRA_ARGS="${CIRCT_VERILOG_ARGS:-}"
+if [[ "$AVIP_SKIP_POST_MOORE_TO_CORE_CLEANUP" == "1" ]]; then
+  if [[ " $VERILOG_EXTRA_ARGS " != *" --skip-post-moore-to-core-cleanup "* ]]; then
+    if [[ -n "$VERILOG_EXTRA_ARGS" ]]; then
+      VERILOG_EXTRA_ARGS+=" "
+    fi
+    VERILOG_EXTRA_ARGS+="--skip-post-moore-to-core-cleanup"
+  fi
+fi
 if [[ -z "${AVIP_STRIP_MONITOR_DISPLAYS+x}" ]]; then
   if [[ "$CIRCT_SIM_MODE" == "interpret" ]]; then
     AVIP_STRIP_MONITOR_DISPLAYS=1
   else
     AVIP_STRIP_MONITOR_DISPLAYS=0
+  fi
+fi
+if [[ -z "${AVIP_SEQUENCE_REPEAT_CAP+x}" ]]; then
+  if [[ "$CIRCT_SIM_MODE" == "interpret" ]]; then
+    # Interpreted mode can be significantly slower on full-length UVM loops.
+    # Cap fixed repeat() counts in sequence/test sources via the verilog runner
+    # rewrite path to preserve e2e flow while keeping smoke runs bounded.
+    AVIP_SEQUENCE_REPEAT_CAP=8
+  else
+    AVIP_SEQUENCE_REPEAT_CAP=0
+  fi
+fi
+AVIP_NATIVE_SOURCES_ONLY="${AVIP_NATIVE_SOURCES_ONLY:-0}"
+if [[ -z "${AVIP_RELAX_RESET_WAIT+x}" ]]; then
+  if [[ "$CIRCT_SIM_MODE" == "interpret" ]]; then
+    AVIP_RELAX_RESET_WAIT=1
+  else
+    AVIP_RELAX_RESET_WAIT=0
   fi
 fi
 
@@ -237,11 +280,35 @@ if ! [[ "$ACTIVITY_MIN_COVERAGE_PCT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   echo "error: ACTIVITY_MIN_COVERAGE_PCT must be a non-negative number (got '$ACTIVITY_MIN_COVERAGE_PCT')" >&2
   exit 1
 fi
+if [[ "$CIRCT_SIM_DUMP_VCD" != "0" && "$CIRCT_SIM_DUMP_VCD" != "1" ]]; then
+  echo "error: CIRCT_SIM_DUMP_VCD must be 0 or 1 (got '$CIRCT_SIM_DUMP_VCD')" >&2
+  exit 1
+fi
+if [[ "$CIRCT_SIM_TRACE_ALL" != "0" && "$CIRCT_SIM_TRACE_ALL" != "1" ]]; then
+  echo "error: CIRCT_SIM_TRACE_ALL must be 0 or 1 (got '$CIRCT_SIM_TRACE_ALL')" >&2
+  exit 1
+fi
+if ! [[ "$AVIP_SEQUENCE_REPEAT_CAP" =~ ^[0-9]+$ ]]; then
+  echo "error: AVIP_SEQUENCE_REPEAT_CAP must be a non-negative integer (got '$AVIP_SEQUENCE_REPEAT_CAP')" >&2
+  exit 1
+fi
 
 sim_extra_args=()
 if [[ -n "$CIRCT_SIM_EXTRA_ARGS" ]]; then
   # Parsed as shell words; quote-preserving parsing is intentionally not used.
   read -r -a sim_extra_args <<< "$CIRCT_SIM_EXTRA_ARGS"
+fi
+trace_flags=()
+if [[ "$CIRCT_SIM_TRACE_ALL" == "1" ]]; then
+  trace_flags+=(--trace-all)
+fi
+if [[ -n "$CIRCT_SIM_TRACE_SIGNALS" ]]; then
+  IFS=',' read -r -a trace_signals <<< "$CIRCT_SIM_TRACE_SIGNALS"
+  for trace_sig in "${trace_signals[@]}"; do
+    trace_sig="${trace_sig//[[:space:]]/}"
+    [[ -z "$trace_sig" ]] && continue
+    trace_flags+=(--trace "$trace_sig")
+  done
 fi
 
 run_limited() {
@@ -398,7 +465,7 @@ should_retry_sim_failure() {
 
 matrix="$OUT_DIR/matrix.tsv"
 cat > "$matrix" <<'HDR'
-avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log
+avip	seed	compile_status	compile_sec	sim_status	sim_exit	sim_sec	sim_time_fs	uvm_fatal	uvm_error	cov_1_pct	cov_2_pct	peak_rss_kb	compile_log	sim_log	vcd_file
 HDR
 
 meta="$OUT_DIR/meta.txt"
@@ -421,6 +488,14 @@ meta="$OUT_DIR/meta.txt"
   echo "circt_sim_mode=$CIRCT_SIM_MODE"
   echo "circt_sim_extra_args=${CIRCT_SIM_EXTRA_ARGS:-<none>}"
   echo "circt_sim_write_jit_report=$CIRCT_SIM_WRITE_JIT_REPORT"
+  echo "circt_sim_dump_vcd=$CIRCT_SIM_DUMP_VCD"
+  echo "circt_sim_trace_all=$CIRCT_SIM_TRACE_ALL"
+  echo "circt_sim_trace_signals=${CIRCT_SIM_TRACE_SIGNALS:-<none>}"
+  echo "circt_verilog_args=${VERILOG_EXTRA_ARGS:-<none>}"
+  echo "avip_sequence_repeat_cap=$AVIP_SEQUENCE_REPEAT_CAP"
+  echo "avip_native_sources_only=$AVIP_NATIVE_SOURCES_ONLY"
+  echo "avip_skip_post_moore_to_core_cleanup=$AVIP_SKIP_POST_MOORE_TO_CORE_CLEANUP"
+  echo "avip_relax_reset_wait=$AVIP_RELAX_RESET_WAIT"
   echo "fail_on_functional_gate=$FAIL_ON_FUNCTIONAL_GATE"
   echo "fail_on_coverage_baseline=$FAIL_ON_COVERAGE_BASELINE"
   echo "coverage_baseline_pct=$COVERAGE_BASELINE_PCT"
@@ -466,8 +541,12 @@ for row in "${selected_avips[@]}"; do
     fi
     if CIRCT_VERILOG="$CIRCT_VERILOG" \
        CIRCT_VERILOG_IR=llhd \
+       CIRCT_VERILOG_ARGS="$VERILOG_EXTRA_ARGS" \
        AVIP_ENABLE_MONITOR_DIAG_REWRITES="$AVIP_ENABLE_MONITOR_DIAG_REWRITES" \
        AVIP_STRIP_MONITOR_DISPLAYS="$AVIP_STRIP_MONITOR_DISPLAYS" \
+       AVIP_SEQUENCE_REPEAT_CAP="$AVIP_SEQUENCE_REPEAT_CAP" \
+       AVIP_NATIVE_SOURCES_ONLY="$AVIP_NATIVE_SOURCES_ONLY" \
+       AVIP_RELAX_RESET_WAIT="$AVIP_RELAX_RESET_WAIT" \
        OUT="$mlir_file" \
        run_limited "$COMPILE_TIMEOUT" "${compile_cmd[@]}" > "$compile_log" 2>&1; then
       compile_status="OK"
@@ -491,10 +570,17 @@ for row in "${selected_avips[@]}"; do
     cov_1="-"
     cov_2="-"
     peak_rss_kb="-"
+    vcd_file="-"
 
     sim_log="$avip_out/sim_seed_${seed}.log"
     rss_log="$avip_out/sim_seed_${seed}.rss_kb"
     jit_report="$avip_out/sim_seed_${seed}.jit-report.json"
+    vcd_run_file="$avip_out/sim_seed_${seed}.vcd"
+    vcd_flags=()
+    if [[ "$CIRCT_SIM_DUMP_VCD" == "1" ]]; then
+      vcd_file="$vcd_run_file"
+      vcd_flags+=(--vcd="$vcd_run_file")
+    fi
 
     if [[ "$compile_status" == "OK" ]]; then
       top_flags=()
@@ -527,6 +613,8 @@ for row in "${selected_avips[@]}"; do
             "${top_flags[@]}" \
             "${mode_flags[@]}" \
             "${sim_extra_args[@]}" \
+            "${trace_flags[@]}" \
+            "${vcd_flags[@]}" \
             "${jit_report_flags[@]}" \
             --timeout="$SIM_TIMEOUT" \
             --max-time="$max_sim_fs" \
@@ -539,6 +627,8 @@ for row in "${selected_avips[@]}"; do
             "${top_flags[@]}" \
             "${mode_flags[@]}" \
             "${sim_extra_args[@]}" \
+            "${trace_flags[@]}" \
+            "${vcd_flags[@]}" \
             "${jit_report_flags[@]}" \
             --timeout="$SIM_TIMEOUT" \
             --max-time="$max_sim_fs" \
@@ -603,12 +693,16 @@ for row in "${selected_avips[@]}"; do
       fi
     fi
 
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    if [[ "$vcd_file" != "-" && ! -s "$vcd_file" ]]; then
+      vcd_file="-"
+    fi
+
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
       "$name" "$seed" "$compile_status" "$compile_sec" "$sim_status" "$sim_exit" \
       "$sim_sec" "$sim_time_fs" "$uvm_fatal" "$uvm_error" "$cov_1" "$cov_2" \
-      "$peak_rss_kb" "$compile_log" "$sim_log" >> "$matrix"
+      "$peak_rss_kb" "$compile_log" "$sim_log" "$vcd_file" >> "$matrix"
 
-    echo "[avip-circt-sim] $name seed=$seed sim_status=$sim_status sim_exit=$sim_exit sim_sec=${sim_sec}s sim_time_fs=$sim_time_fs rss_kb=$peak_rss_kb"
+    echo "[avip-circt-sim] $name seed=$seed sim_status=$sim_status sim_exit=$sim_exit sim_sec=${sim_sec}s sim_time_fs=$sim_time_fs rss_kb=$peak_rss_kb vcd=$vcd_file"
   done
 done
 

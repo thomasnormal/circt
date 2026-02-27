@@ -277,8 +277,95 @@ def env_flag(name: str, default: bool = False) -> bool:
         return default
     return value.strip().lower() in ("1", "true", "yes", "y", "on")
 
+def env_int(name: str, default: int = 0) -> int:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        parsed = int(value.strip(), 10)
+    except ValueError:
+        raise SystemExit(f"{name} must be a non-negative integer (got {value!r})")
+    if parsed < 0:
+        raise SystemExit(f"{name} must be a non-negative integer (got {value!r})")
+    return parsed
+
 enable_monitor_diag_rewrites = env_flag("AVIP_ENABLE_MONITOR_DIAG_REWRITES", False)
 strip_monitor_displays = env_flag("AVIP_STRIP_MONITOR_DISPLAYS", False)
+sequence_repeat_cap = env_int("AVIP_SEQUENCE_REPEAT_CAP", 0)
+relax_reset_wait = env_flag("AVIP_RELAX_RESET_WAIT", False)
+native_sources_only = env_flag("AVIP_NATIVE_SOURCES_ONLY", False)
+allow_source_overlays = not native_sources_only
+
+repeat_const_re = re.compile(r"\brepeat\s*\(\s*(\d+)\s*\)")
+wait_reset_task_decl_re = re.compile(
+    r"\btask\b[^;\n]*\bwaitfor(?:a)?resetn\b", re.IGNORECASE
+)
+wait_reset_event_re = re.compile(
+    r"^(\s*)@\(\s*posedge\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$"
+)
+wait_reset_negedge_re = re.compile(
+    r"^(\s*)@\(\s*negedge\s+([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;\s*$"
+)
+
+def should_cap_repeats(path: pathlib.Path) -> bool:
+    lower_name = path.name.lower()
+    if "sequence" in lower_name or "test" in lower_name:
+        return True
+    lower_path = path.as_posix().lower()
+    return ("/virtualsequence" in lower_path or
+            "/virtualsequences/" in lower_path or
+            "/sequences/" in lower_path or
+            "/tb/test/" in lower_path)
+
+def rewrite_sequence_repeat_cap(path: pathlib.Path, text: str):
+    if sequence_repeat_cap <= 0 or not should_cap_repeats(path):
+        return text, False
+    changed = False
+
+    def repl(match: re.Match) -> str:
+        nonlocal changed
+        count = int(match.group(1))
+        if count <= sequence_repeat_cap:
+            return match.group(0)
+        changed = True
+        return f"repeat({sequence_repeat_cap})"
+
+    new_text = repeat_const_re.sub(repl, text)
+    return new_text, changed
+
+def rewrite_reset_wait_task_text(path: pathlib.Path, text: str):
+    if not relax_reset_wait:
+        return text, False
+    lines = text.splitlines()
+    out = []
+    changed = False
+    in_wait_reset_task = False
+    for line in lines:
+        if wait_reset_task_decl_re.search(line):
+            in_wait_reset_task = True
+        if in_wait_reset_task:
+            match = wait_reset_negedge_re.match(line)
+            if match:
+                indent, signal = match.groups()
+                if signal.lower() in ("aresetn", "hresetn", "resetn"):
+                    out.append(f"{indent}// relaxed reset wait: skip negedge wait in interpreted mode")
+                    changed = True
+                    if "endtask" in line.lower():
+                        in_wait_reset_task = False
+                    continue
+            match = wait_reset_event_re.match(line)
+            if match:
+                indent, signal = match.groups()
+                if signal.lower() in ("aresetn", "hresetn", "resetn"):
+                    out.append(f"{indent}// relaxed reset wait: skip posedge wait in interpreted mode")
+                    changed = True
+                    if "endtask" in line.lower():
+                        in_wait_reset_task = False
+                    continue
+        out.append(line)
+        if in_wait_reset_task and re.search(r"\bendtask\b", line, re.IGNORECASE):
+            in_wait_reset_task = False
+    return ("\n".join(out) + "\n"), changed
 
 if not filelists:
     raise SystemExit("no filelists provided")
@@ -357,7 +444,7 @@ def maybe_prepend_axi4lite_filelists(filelists):
     return added
 
 needs_axi4lite = ensure_axi4lite_env(avip_dir, filelists)
-if needs_axi4lite:
+if allow_source_overlays and needs_axi4lite:
     maybe_prepend_axi4lite_filelists(filelists)
 
 def is_spi_avip(avip_root: pathlib.Path, filelists):
@@ -385,6 +472,27 @@ def is_ahb_avip(avip_root: pathlib.Path, filelists):
         except OSError:
             continue
         if "ahb" in text.lower():
+            return True
+    return False
+
+def is_axi4_avip(avip_root: pathlib.Path, filelists):
+    if avip_root:
+        name = avip_root.name.lower()
+        if "axi4lite" in name:
+            return False
+        if "axi4" in name:
+            return True
+    for fl in filelists:
+        lname = fl.name.lower()
+        if "axi4lite" in lname:
+            continue
+        if "axi4" in lname:
+            return True
+        try:
+            text = fl.read_text().lower()
+        except OSError:
+            continue
+        if "axi4_avip" in text:
             return True
     return False
 
@@ -591,6 +699,17 @@ def rewrite_ahb_text(path: pathlib.Path, text: str):
             changed = True
     return text, changed
 
+def rewrite_axi4_text(path: pathlib.Path, text: str):
+    changed = False
+    if path.name == "axi4_slave_agent_bfm.sv":
+        for sig in ("wdata", "wstrb", "wlast", "wuser", "wvalid", "wready"):
+            pattern = rf"\.{sig}\(\s*intf\.{sig}\s*\)"
+            replacement = f".{sig}({sig})"
+            text, count = re.subn(pattern, replacement, text)
+            if count:
+                changed = True
+    return text, changed
+
 def rewrite_i3c_text(path: pathlib.Path, text: str):
     changed = False
     if enable_monitor_diag_rewrites and path.name == "i3c_controller_monitor_proxy.sv":
@@ -738,6 +857,44 @@ if needs_axi4lite:
             if "Axi4LiteCoverProperty.sv" in line and "`include" in line:
                 lines[i] = "// circt: dropped Axi4LiteCoverProperty include for bind resolution"
                 changed = True
+
+        # Lift channel cross-connect assigns from an initial block to module
+        # scope. This keeps the links active in interpreted mode.
+        rewritten = []
+        in_initial = False
+        block = []
+        has_axi4lite_assign = False
+        axi4lite_assign_count = 0
+        for line in lines:
+            stripped = line.strip()
+            if not in_initial and stripped.startswith("initial begin"):
+                in_initial = True
+                block = [line]
+                has_axi4lite_assign = False
+                axi4lite_assign_count = 0
+                continue
+            if in_initial:
+                block.append(line)
+                if stripped.startswith("assign `AXI4LITE_"):
+                    has_axi4lite_assign = True
+                    axi4lite_assign_count += 1
+                if stripped == "end":
+                    if has_axi4lite_assign and axi4lite_assign_count >= 8:
+                        for body_line in block[1:-1]:
+                            body_stripped = body_line.strip()
+                            if body_stripped.startswith("assign `AXI4LITE_") or body_stripped == "":
+                                rewritten.append(body_line)
+                        changed = True
+                    else:
+                        rewritten.extend(block)
+                    in_initial = False
+                    block = []
+                continue
+            rewritten.append(line)
+        if in_initial and block:
+            rewritten.extend(block)
+        lines = rewritten
+
         if not changed:
             continue
         tmp_dir = out_path.parent / ".avip_tmp"
@@ -747,7 +904,7 @@ if needs_axi4lite:
         files[idx] = str(tmp_path.resolve())
 
 needs_spi = is_spi_avip(avip_dir, filelists)
-if needs_spi:
+if allow_source_overlays and needs_spi:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     spi_patch_names = {
@@ -822,7 +979,7 @@ if needs_spi:
             includes.insert(0, str(tmp_dir.resolve()))
 
 needs_ahb = is_ahb_avip(avip_dir, filelists)
-if needs_ahb:
+if allow_source_overlays and needs_ahb:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     ahb_patch_names = {
@@ -892,8 +1049,58 @@ if needs_ahb:
         if include_only_patched:
             includes.insert(0, str(tmp_dir.resolve()))
 
+needs_axi4 = is_axi4_avip(avip_dir, filelists)
+if allow_source_overlays and needs_axi4:
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    axi4_patch_names = {
+        "axi4_slave_agent_bfm.sv",
+    }
+    file_idx_by_name = {}
+    for idx, path_str in enumerate(files):
+        name = pathlib.Path(path_str).name
+        if name in axi4_patch_names and name not in file_idx_by_name:
+            file_idx_by_name[name] = idx
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        if path.name not in axi4_patch_names:
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_axi4_text(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+
+    # Patch include-only AXI4 sources and prepend tmp dir in include search path.
+    if avip_root and avip_root.exists():
+        include_only_patched = False
+        for name in axi4_patch_names:
+            if name in file_idx_by_name:
+                continue
+            for path in avip_root.rglob(name):
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_axi4_text(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                include_only_patched = True
+                break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
 needs_i3c = is_i3c_avip(avip_dir, filelists)
-if needs_i3c:
+if allow_source_overlays and needs_i3c:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     i3c_patch_names = {
@@ -962,7 +1169,7 @@ if needs_i3c:
             includes.insert(0, str(tmp_dir.resolve()))
 
 needs_uart = is_uart_avip(avip_dir, filelists)
-if needs_uart:
+if allow_source_overlays and needs_uart:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     uart_patch_names = {
@@ -1030,7 +1237,7 @@ if needs_uart:
             includes.insert(0, str(tmp_dir.resolve()))
 
 needs_jtag = is_jtag_avip(avip_dir, filelists)
-if needs_jtag:
+if allow_source_overlays and needs_jtag:
     tmp_dir = out_path.parent / ".avip_tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     jtag_patch_names = {
@@ -1078,6 +1285,96 @@ if needs_jtag:
                 tmp_path.write_text(new_text)
                 include_only_patched = True
                 break
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
+# Interpreted-mode compatibility helper: avoid deadlocking on reset wait tasks
+# when UVM run_phase starts after an initial reset pulse in the same time slot.
+# This rewrite is opt-in via AVIP_RELAX_RESET_WAIT and applied only through the
+# .avip_tmp overlay path (native AVIP sources remain untouched).
+if allow_source_overlays and relax_reset_wait and (needs_axi4lite or needs_axi4 or needs_ahb):
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    include_only_patched = False
+    patched_names = {pathlib.Path(path_str).name for path_str in files}
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_reset_wait_task_text(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+        patched_names.add(path.name)
+
+    # Patch include-only sources and prepend tmp dir so local `include lookup
+    # resolves rewritten files first.
+    if avip_root and avip_root.exists():
+        for path in avip_root.rglob("*.sv"):
+            if path.name in patched_names:
+                continue
+            try:
+                text = path.read_text()
+            except OSError:
+                continue
+            new_text, changed = rewrite_reset_wait_task_text(path, text)
+            if not changed:
+                continue
+            tmp_path = tmp_dir / path.name
+            tmp_path.write_text(new_text)
+            patched_names.add(path.name)
+            include_only_patched = True
+        if include_only_patched:
+            includes.insert(0, str(tmp_dir.resolve()))
+
+# Interpreted-mode throughput helper: cap fixed repeat(N) counts in sequence
+# and test sources. This is opt-in via AVIP_SEQUENCE_REPEAT_CAP and applied
+# through the same .avip_tmp overlay path used by other AVIP rewrites.
+if allow_source_overlays and sequence_repeat_cap > 0:
+    tmp_dir = out_path.parent / ".avip_tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    include_only_patched = False
+    patched_names = {pathlib.Path(path_str).name for path_str in files}
+
+    # Patch filelist entries directly when present.
+    for idx, path_str in enumerate(list(files)):
+        path = pathlib.Path(path_str)
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        new_text, changed = rewrite_sequence_repeat_cap(path, text)
+        if not changed:
+            continue
+        tmp_path = tmp_dir / path.name
+        tmp_path.write_text(new_text)
+        files[idx] = str(tmp_path.resolve())
+        patched_names.add(path.name)
+
+    # Patch include-only sequence/test files and prepend tmp dir so local
+    # `include` lookup resolves the rewritten files first.
+    if avip_root and avip_root.exists():
+        for pattern in ("*Sequence*.sv", "*Test*.sv"):
+            for path in avip_root.rglob(pattern):
+                if path.name in patched_names:
+                    continue
+                try:
+                    text = path.read_text()
+                except OSError:
+                    continue
+                new_text, changed = rewrite_sequence_repeat_cap(path, text)
+                if not changed:
+                    continue
+                tmp_path = tmp_dir / path.name
+                tmp_path.write_text(new_text)
+                patched_names.add(path.name)
+                include_only_patched = True
         if include_only_patched:
             includes.insert(0, str(tmp_dir.resolve()))
 

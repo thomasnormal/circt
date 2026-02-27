@@ -141,6 +141,122 @@ static Type getLvalueNestedType(Type lvalueType) {
   return {};
 }
 
+/// Returns the directly assigned variable symbol for a simple assignment lhs.
+/// Covers plain and hierarchical named-variable forms.
+static const slang::ast::VariableSymbol *
+getAssignedVariableSymbol(const slang::ast::Expression &lhs) {
+  if (auto *named = lhs.as_if<slang::ast::NamedValueExpression>())
+    return named->symbol.as_if<slang::ast::VariableSymbol>();
+  if (auto *hier = lhs.as_if<slang::ast::HierarchicalValueExpression>())
+    return hier->symbol.as_if<slang::ast::VariableSymbol>();
+  return nullptr;
+}
+
+/// Synthesize implicit covergroup event sampling for `var = new;` assignments.
+/// This complements declaration-time `cg var = new;` handling in Structure.cpp.
+static LogicalResult
+maybeSynthesizeCovergroupImplicitSamplingOnNewAssign(
+    Context &context, Location loc,
+    const slang::ast::AssignmentExpression &expr) {
+  auto *newCg = expr.right().as_if<slang::ast::NewCovergroupExpression>();
+  if (!newCg)
+    return success();
+
+  auto *varSym = getAssignedVariableSymbol(expr.left());
+  if (!varSym)
+    return success();
+  if (context.covergroupImplicitSamplingVars.contains(varSym))
+    return success();
+
+  const auto &canonicalVarType = varSym->getDeclaredType()->getType();
+  auto *cgType =
+      canonicalVarType.getCanonicalType().as_if<slang::ast::CovergroupType>();
+  if (!cgType)
+    return success();
+  const auto *sampleEvent = cgType->getCoverageEvent();
+  if (!sampleEvent)
+    return success();
+
+  auto *parentScope = varSym->getParentScope();
+  if (!parentScope)
+    return success();
+  auto *instBody = parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>();
+  if (!instBody) {
+    mlir::emitError(loc)
+        << "implicit covergroup event sampling for local variables is not "
+           "supported; declare the covergroup variable at module scope or call "
+           "sample() explicitly";
+    return failure();
+  }
+
+  auto moduleIt = context.modules.find(instBody);
+  if (moduleIt == context.modules.end())
+    return success();
+  auto moduleOp = moduleIt->second->op;
+
+  Value varRef = context.valueSymbols.lookup(varSym);
+  if (!varRef)
+    return success();
+
+  auto &builder = context.builder;
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToEnd(moduleOp.getBody());
+
+  auto procOp =
+      moore::ProcedureOp::create(builder, loc, moore::ProcedureKind::Always);
+  builder.setInsertionPointToEnd(&procOp.getBody().emplaceBlock());
+  Context::ValueSymbolScope scope(context.valueSymbols);
+
+  if (failed(context.convertTimingControl(*sampleEvent)))
+    return failure();
+
+  Value cgHandle = moore::ReadOp::create(builder, loc, varRef);
+  SmallVector<Value> sampleArgs;
+  SmallVector<Value> iffArgs;
+
+  const auto &cgBody = cgType->getBody();
+  bool hasAnyIff = false;
+  for (const auto &member : cgBody.members()) {
+    if (auto *cp = member.as_if<slang::ast::CoverpointSymbol>()) {
+      if (cp->getIffExpr()) {
+        hasAnyIff = true;
+        break;
+      }
+    }
+  }
+
+  for (const auto &member : cgBody.members()) {
+    auto *cp = member.as_if<slang::ast::CoverpointSymbol>();
+    if (!cp)
+      continue;
+
+    Value sampleVal = context.convertRvalueExpression(cp->getCoverageExpr());
+    if (!sampleVal)
+      return failure();
+    sampleArgs.push_back(sampleVal);
+
+    if (!hasAnyIff)
+      continue;
+
+    if (const auto *iffExpr = cp->getIffExpr()) {
+      Value iffVal = context.convertRvalueExpression(*iffExpr);
+      iffVal = context.convertToBool(iffVal, moore::Domain::TwoValued);
+      if (!iffVal)
+        return failure();
+      iffArgs.push_back(iffVal);
+    } else {
+      auto i1Ty = moore::IntType::getInt(context.getContext(), 1);
+      iffArgs.push_back(moore::ConstantOp::create(builder, loc, i1Ty, 1));
+    }
+  }
+
+  moore::CovergroupSampleOp::create(builder, loc, cgHandle, sampleArgs,
+                                    iffArgs);
+  moore::ReturnOp::create(builder, loc);
+  context.covergroupImplicitSamplingVars.insert(varSym);
+  return success();
+}
+
 /// Build logical equality for unpacked aggregate values, with recursive support
 /// for unpacked structs and unions.
 static Value buildDynamicArrayLogicalEq(Context &context, Location loc,
@@ -2263,6 +2379,27 @@ struct ExprVisitor {
                       : moore::ReadOp::create(builder, loc, signalRef);
     }
 
+    // Handle covergroup pseudo-members (coverpoint/cross references).
+    // Expressions like `cg_inst.cp.get_inst_coverage()` and
+    // `cg_inst.xab.get_coverage()` are represented as member access chains in
+    // Slang. The intermediate `cg_inst.cp` / `cg_inst.xab` is not a real
+    // field read; it just identifies which coverpoint/cross method is invoked.
+    // Preserve the original covergroup receiver so call lowering can resolve
+    // the target index and emit the runtime query.
+    if (expr.member.kind == slang::ast::SymbolKind::Coverpoint ||
+        expr.member.kind == slang::ast::SymbolKind::CoverCross) {
+      auto covergroupValue = context.convertRvalueExpression(expr.value());
+      if (!covergroupValue)
+        return {};
+      if (!isa<moore::CovergroupHandleType>(covergroupValue.getType())) {
+        mlir::emitError(loc)
+            << "coverpoint/cross member access requires covergroup handle, got "
+            << covergroupValue.getType();
+        return {};
+      }
+      return covergroupValue;
+    }
+
     mlir::emitError(loc, "expression of type ")
         << valueType->toString() << " has no member fields";
     return {};
@@ -2427,6 +2564,20 @@ struct RvalueExprVisitor : public ExprVisitor {
       if (!fieldRef)
         return {};
       return moore::ReadOp::create(builder, loc, fieldRef).getResult();
+    }
+
+    // Materialize parameters directly from their symbol value. This avoids
+    // reliance on expression-level eval for unpacked array parameters with
+    // dynamic indexing use sites (for example PiRotate[x][y]).
+    if (auto *param = expr.symbol.as_if<slang::ast::ParameterSymbol>()) {
+      if (auto value =
+              context.materializeConstant(param->getValue(), param->getType(), loc))
+        return value;
+    }
+    if (auto *specparam = expr.symbol.as_if<slang::ast::SpecparamSymbol>()) {
+      if (auto value = context.materializeConstant(specparam->getValue(),
+                                                   specparam->getType(), loc))
+        return value;
     }
 
     // Try to materialize constant values directly.
@@ -2807,6 +2958,10 @@ struct RvalueExprVisitor : public ExprVisitor {
   Value visit(const slang::ast::AssignmentExpression &expr) {
     if (failed(context.noteProceduralVariableAssignment(expr.left(), loc)))
       return {};
+    if (failed(
+            maybeSynthesizeCovergroupImplicitSamplingOnNewAssign(context, loc,
+                                                                 expr)))
+      return {};
 
     // Handle streaming concatenation lvalue with dynamic arrays/queues.
     // These require runtime streaming using StreamUnpackOp since the size
@@ -2844,16 +2999,10 @@ struct RvalueExprVisitor : public ExprVisitor {
         bool isRightToLeft = streamExpr->getSliceSize() != 0;
         int32_t sliceSize = streamExpr->getSliceSize();
 
-        // Handle timing control for blocking assignments
-        if (!expr.isNonBlocking()) {
-          if (expr.timingControl)
-            if (failed(context.convertTimingControl(*expr.timingControl)))
-              return {};
-        } else {
-          mlir::emitError(loc)
-              << "non-blocking streaming unpack not yet supported";
-          return {};
-        }
+        // Evaluate optional timing controls before the unpack.
+        if (expr.timingControl)
+          if (failed(context.convertTimingControl(*expr.timingControl)))
+            return {};
 
         if (isMixed) {
           // For mixed streaming, keep the RHS as-is (queue or dynamic array)
@@ -4709,9 +4858,186 @@ struct RvalueExprVisitor : public ExprVisitor {
       return context.materializeConversion(resultType, result, false, loc);
     }
 
+    // Handle coverpoint method calls (get_coverage, get_inst_coverage).
+    // IEEE 1800-2017 Section 19.8.1 "Coverage methods"
+    const auto &parentSym = subroutine->getParentScope()->asSymbol();
+    if (parentSym.kind == slang::ast::SymbolKind::Coverpoint) {
+      auto *coverpointSym = parentSym.as_if<slang::ast::CoverpointSymbol>();
+      if (!coverpointSym) {
+        mlir::emitError(loc) << "failed to resolve coverpoint method parent";
+        return {};
+      }
+
+      // Resolve the receiver covergroup instance.
+      Value covergroupInstance;
+      if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+        covergroupInstance = context.convertRvalueExpression(*recvExpr);
+        if (!covergroupInstance)
+          return {};
+      }
+      if (!covergroupInstance) {
+        mlir::emitError(loc)
+            << "coverpoint method call requires covergroup instance";
+        return {};
+      }
+      auto covergroupTy =
+          dyn_cast<moore::CovergroupHandleType>(covergroupInstance.getType());
+      if (!covergroupTy) {
+        mlir::emitError(loc)
+            << "coverpoint method call requires covergroup handle, got "
+            << covergroupInstance.getType();
+        return {};
+      }
+
+      // Determine the coverpoint index within the enclosing covergroup body.
+      auto *parentScope = coverpointSym->getParentScope();
+      if (!parentScope ||
+          parentScope->asSymbol().kind !=
+              slang::ast::SymbolKind::CovergroupBody) {
+        mlir::emitError(loc)
+            << "coverpoint method call requires enclosing covergroup body";
+        return {};
+      }
+      const auto &cgBody =
+          parentScope->asSymbol().as<slang::ast::CovergroupBodySymbol>();
+      int32_t coverpointIndex = 0;
+      bool foundCoverpoint = false;
+      for (const auto &member : cgBody.members()) {
+        if (auto *cp = member.as_if<slang::ast::CoverpointSymbol>()) {
+          if (cp == coverpointSym) {
+            foundCoverpoint = true;
+            break;
+          }
+          ++coverpointIndex;
+        }
+      }
+      if (!foundCoverpoint) {
+        mlir::emitError(loc)
+            << "failed to resolve coverpoint index for method call";
+        return {};
+      }
+
+      auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+      auto i32Ty = builder.getI32Type();
+      auto f64Ty = builder.getF64Type();
+      Value cgPtr = mlir::UnrealizedConversionCastOp::create(
+                        builder, loc, ptrTy, covergroupInstance)
+                        .getResult(0);
+      Value cpIdxConst = mlir::LLVM::ConstantOp::create(
+          builder, loc, i32Ty, builder.getI32IntegerAttr(coverpointIndex));
+
+      if (subroutine->name == "get_coverage" ||
+          subroutine->name == "get_inst_coverage") {
+        // Route through runtime C-API helpers:
+        //   __moore_coverpoint_get_coverage(cg, idx)
+        //   __moore_coverpoint_get_inst_coverage(cg, idx)
+        auto fnName = subroutine->name == "get_coverage"
+                          ? "__moore_coverpoint_get_coverage"
+                          : "__moore_coverpoint_get_inst_coverage";
+        auto fnTy = mlir::LLVM::LLVMFunctionType::get(f64Ty, {ptrTy, i32Ty});
+        auto fn = getOrCreateRuntimeFunc(context, fnName, fnTy);
+        auto callOp = mlir::LLVM::CallOp::create(
+            builder, loc, fn, ValueRange{cgPtr, cpIdxConst});
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, resultType, callOp.getResult())
+            .getResult(0);
+      }
+
+      mlir::emitWarning(loc) << "coverpoint method '" << subroutine->name
+                             << "' is not yet implemented; lowering as "
+                                "regular function call";
+    }
+
+    // Handle covercross method calls (get_coverage, get_inst_coverage).
+    // IEEE 1800-2017 Section 19.8.1 "Coverage methods"
+    if (auto *crossSym = parentSym.as_if<slang::ast::CoverCrossSymbol>()) {
+      // Resolve the receiver covergroup instance.
+      Value covergroupInstance;
+      if (const slang::ast::Expression *recvExpr = expr.thisClass()) {
+        covergroupInstance = context.convertRvalueExpression(*recvExpr);
+        if (!covergroupInstance)
+          return {};
+      }
+      if (!covergroupInstance) {
+        mlir::emitError(loc)
+            << "cross method call requires covergroup instance";
+        return {};
+      }
+      auto covergroupTy =
+          dyn_cast<moore::CovergroupHandleType>(covergroupInstance.getType());
+      if (!covergroupTy) {
+        mlir::emitError(loc)
+            << "cross method call requires covergroup handle, got "
+            << covergroupInstance.getType();
+        return {};
+      }
+
+      // Determine the cross index within the enclosing covergroup body.
+      auto *parentScope = crossSym->getParentScope();
+      if (!parentScope ||
+          parentScope->asSymbol().kind !=
+              slang::ast::SymbolKind::CovergroupBody) {
+        mlir::emitError(loc)
+            << "cross method call requires enclosing covergroup body";
+        return {};
+      }
+      const auto &cgBody =
+          parentScope->asSymbol().as<slang::ast::CovergroupBodySymbol>();
+      int32_t crossIndex = 0;
+      bool foundCross = false;
+      for (const auto &member : cgBody.members()) {
+        if (auto *cross = member.as_if<slang::ast::CoverCrossSymbol>()) {
+          if (cross == crossSym) {
+            foundCross = true;
+            break;
+          }
+          ++crossIndex;
+        }
+      }
+      if (!foundCross) {
+        mlir::emitError(loc) << "failed to resolve cross index for method call";
+        return {};
+      }
+
+      auto ptrTy = mlir::LLVM::LLVMPointerType::get(context.getContext());
+      auto i32Ty = builder.getI32Type();
+      auto f64Ty = builder.getF64Type();
+      Value cgPtr = mlir::UnrealizedConversionCastOp::create(
+                        builder, loc, ptrTy, covergroupInstance)
+                        .getResult(0);
+      Value crossIdxConst = mlir::LLVM::ConstantOp::create(
+          builder, loc, i32Ty, builder.getI32IntegerAttr(crossIndex));
+
+      if (subroutine->name == "get_coverage" ||
+          subroutine->name == "get_inst_coverage") {
+        // Route through runtime C-API helpers:
+        //   __moore_cross_get_coverage(cg, idx)
+        //   __moore_cross_get_inst_coverage(cg, idx)
+        auto fnName = subroutine->name == "get_coverage"
+                          ? "__moore_cross_get_coverage"
+                          : "__moore_cross_get_inst_coverage";
+        auto fnTy = mlir::LLVM::LLVMFunctionType::get(f64Ty, {ptrTy, i32Ty});
+        auto fn = getOrCreateRuntimeFunc(context, fnName, fnTy);
+        auto callOp = mlir::LLVM::CallOp::create(
+            builder, loc, fn, ValueRange{cgPtr, crossIdxConst});
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+        return mlir::UnrealizedConversionCastOp::create(
+                   builder, loc, resultType, callOp.getResult())
+            .getResult(0);
+      }
+
+      mlir::emitWarning(loc) << "cross method '" << subroutine->name
+                             << "' is not yet implemented; lowering as "
+                                "regular function call";
+    }
+
     // Handle covergroup method calls (sample, get_coverage, etc.)
     // IEEE 1800-2017 Section 19.8 "Covergroup methods"
-    const auto &parentSym = subroutine->getParentScope()->asSymbol();
     if (parentSym.kind == slang::ast::SymbolKind::CovergroupBody) {
       // Get the covergroup instance from the call expression
       Value covergroupInstance;
@@ -5794,6 +6120,20 @@ struct RvalueExprVisitor : public ExprVisitor {
                       if (!arb->hierRef.path.empty())
                         interfaceInstance =
                             context.resolveInterfaceInstance(arb->hierRef, loc);
+                      if (!interfaceInstance)
+                        interfaceInstance =
+                            context.resolveInterfaceInstance(instSym, loc);
+                    }
+                  }
+                } else if (auto *hier = viExpr.as_if<
+                               slang::ast::HierarchicalValueExpression>()) {
+                  if (auto *instSym =
+                          hier->symbol.as_if<slang::ast::InstanceSymbol>()) {
+                    if (instSym->getDefinition().definitionKind ==
+                        slang::ast::DefinitionKind::Interface) {
+                      if (!hier->ref.path.empty())
+                        interfaceInstance =
+                            context.resolveInterfaceInstance(hier->ref, loc);
                       if (!interfaceInstance)
                         interfaceInstance =
                             context.resolveInterfaceInstance(instSym, loc);
@@ -9970,53 +10310,26 @@ Value Context::materializeFixedSizeUnpackedArrayType(
   if (!constant.isUnpacked())
     return {};
 
-  auto type = convertType(astType);
+  auto type = dyn_cast_or_null<moore::UnpackedArrayType>(convertType(astType));
   if (!type)
     return {};
-
-  // Check whether underlying type is an integer, if so, get bit width
-  unsigned bitWidth;
-  if (astType.elementType.isIntegral())
-    bitWidth = astType.elementType.getBitWidth();
-  else
+  auto *elementAstType = &astType.elementType.getCanonicalType();
+  auto elementType = type.getElementType();
+  if (!elementType)
     return {};
 
-  bool typeIsFourValued = false;
-
-  // Check whether the underlying type is four-valued
-  if (auto unpackedType = dyn_cast<moore::UnpackedType>(type))
-    typeIsFourValued = unpackedType.getDomain() == moore::Domain::FourValued;
-  else
-    return {};
-
-  auto domain =
-      typeIsFourValued ? moore::Domain::FourValued : moore::Domain::TwoValued;
-
-  // Construct the integer type this is an unpacked array of; if possible keep
-  // it two-valued, unless any entry is four-valued or the underlying type is
-  // four-valued
-  auto intType = moore::IntType::get(getContext(), bitWidth, domain);
-  // Construct the full array type from intType
-  auto arrType = moore::UnpackedArrayType::get(
-      getContext(), constant.elements().size(), intType);
-
-  llvm::SmallVector<mlir::Value> elemVals;
-  moore::ConstantOp constOp;
-
-  mlir::OpBuilder::InsertionGuard guard(builder);
-
-  // Add one ConstantOp for every element in the array
+  llvm::SmallVector<Value> elementValues;
+  elementValues.reserve(constant.elements().size());
   for (auto elem : constant.elements()) {
-    FVInt fvInt = convertSVIntToFVInt(elem.integer());
-    constOp = moore::ConstantOp::create(builder, loc, intType, fvInt);
-    elemVals.push_back(constOp.getResult());
+    auto value = materializeConstant(elem, *elementAstType, loc);
+    if (!value)
+      return {};
+    if (value.getType() != elementType)
+      return {};
+    elementValues.push_back(value);
   }
-
-  // Take the result of each ConstantOp and concatenate them into an array (of
-  // constant values).
-  auto arrayOp = moore::ArrayCreateOp::create(builder, loc, arrType, elemVals);
-
-  return arrayOp.getResult();
+  return moore::ArrayCreateOp::create(builder, loc, type, elementValues)
+      .getResult();
 }
 
 Value Context::materializeConstant(const slang::ConstantValue &constant,

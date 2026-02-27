@@ -2,6 +2,7 @@
 // RUN: circt-sim %t.mlir --top top --max-time=20000000000 2>&1 | FileCheck %s
 
 // CHECK: DERIVED_SEQ_BODY
+// CHECK-NOT: FCTTYP
 // CHECK-NOT: Body definition undefined
 // CHECK-NOT: maxTime reached
 

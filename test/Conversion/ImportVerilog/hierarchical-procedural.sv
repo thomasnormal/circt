@@ -49,8 +49,7 @@ module Top(input clk, d, force_val, do_force);
   // This tests the fix for hierarchical references in always blocks
   // CHECK: moore.procedure always
   always @(posedge do_force) begin
-    // CHECK: moore.blocking_assign %u_flop.q
-    // The force statement is simplified to a blocking assignment
+    // CHECK: moore.force_assign %u_flop.q
     force u_flop.q = force_val;
   end
 endmodule

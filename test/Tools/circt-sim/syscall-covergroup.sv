@@ -1,5 +1,4 @@
 // RUN: circt-verilog %s --no-uvm-auto-include -o %t.mlir 2>&1 && circt-sim %t.mlir --top top 2>&1 | FileCheck %s
-// TODO: get_inst_coverage() returns x — covergroup sampling/query not wired to runtime.
 // Test covergroup, coverpoint, cross, sample, get_coverage, get_inst_coverage
 module top;
   int val;
@@ -11,9 +10,10 @@ module top;
       bins high = {[20:29]};
     }
   endgroup
+  cg cg_inst;
 
   initial begin
-    cg cg_inst = new();
+    cg_inst = new();
 
     val = 5;
     cg_inst.sample();

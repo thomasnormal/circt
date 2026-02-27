@@ -2508,8 +2508,8 @@ struct AssertionExprVisitor {
             break;
           }
           if (name == "$exit") {
-            moore::FinishBIOp::create(builder, loc, 0);
-            break;
+            mlir::emitError(loc) << "$exit is only valid in program blocks";
+            return failure();
           }
           if (name == "$dumpvars") {
             auto msg =

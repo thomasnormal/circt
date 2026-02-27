@@ -44,7 +44,7 @@ extern "C" {
 /// Bump this on any breaking change to the ABI (struct layout, function
 /// signature changes, removed functions). Adding new functions is NOT a
 /// breaking change.
-#define CIRCT_SIM_ABI_VERSION 4
+#define CIRCT_SIM_ABI_VERSION 5
 
 //===----------------------------------------------------------------------===//
 // Opaque Types
@@ -76,6 +76,14 @@ typedef enum {
   /// Typical use: clock generators (`always #5 clk = ~clk`).
   CIRCT_PROC_MINNOW = 2,
 } CirctProcKind;
+
+//===----------------------------------------------------------------------===//
+// Per-Function Flags (ABI v5)
+//===----------------------------------------------------------------------===//
+
+/// Function may suspend (wait_event, fork/join, etc.). If set, the runtime
+/// only dispatches natively when a coroutine context is active.
+#define CIRCT_FUNC_FLAG_MAY_YIELD 0x01
 
 //===----------------------------------------------------------------------===//
 // Compiled Module Descriptor
@@ -162,6 +170,34 @@ typedef struct {
   /// Symbol name for each entry, indexed by FuncId. Used for diagnostics
   /// and matching against the interpreter's function table.
   const char *const *all_func_entry_names;
+
+  //--- ABI v5: Arena-based mutable state ---//
+
+  /// Total size in bytes of the mutable-state arena. The runtime allocates
+  /// this much memory (16-byte aligned, zero-initialized) and stores the
+  /// base pointer in __circt_sim_arena_base in the .so.
+  /// 0 if no arena globals exist (fall back to legacy patch table).
+  uint32_t arena_size;
+
+  /// Number of mutable globals placed in the arena.
+  uint32_t num_arena_globals;
+
+  /// Byte offset of each arena global within the arena, indexed by arena
+  /// global index [0, num_arena_globals). 16-byte aligned.
+  const uint32_t *arena_global_offsets;
+
+  /// Size in bytes of each arena global, indexed by arena global index.
+  const uint32_t *arena_global_sizes;
+
+  /// Symbol names of arena globals, for matching against the interpreter's
+  /// globalMemoryBlocks. Array of num_arena_globals NUL-terminated strings.
+  const char *const *arena_global_names;
+
+  //--- ABI v5: Per-function flags ---//
+
+  /// Per-FuncId flags byte, indexed by FuncId [0, num_all_funcs).
+  /// May be null if no flags are set. See CIRCT_FUNC_FLAG_* constants.
+  const uint8_t *all_func_flags;
 } CirctSimCompiledModule;
 
 //===----------------------------------------------------------------------===//

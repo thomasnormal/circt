@@ -78,7 +78,36 @@ resolve_default_uvm_path() {
   printf '%s\n' "$SCRIPT_DIR/../lib/Runtime/uvm"
 }
 
-UVM_PATH="${UVM_PATH:-$(resolve_default_uvm_path)}"
+resolve_effective_uvm_path() {
+  local requested="${1:-}"
+  local normalized=""
+  local remap=""
+  if [[ -z "$requested" ]]; then
+    resolve_default_uvm_path
+    return
+  fi
+  if [[ -d "$requested" ]]; then
+    printf '%s\n' "$requested"
+    return
+  fi
+  normalized="${requested%/}"
+  # Compatibility shim: repo moved from lib/Runtime/uvm to uvm-core.
+  if [[ "$normalized" == */lib/Runtime/uvm ]]; then
+    remap="${normalized%/uvm}/uvm-core/src"
+    if [[ -d "$remap" ]]; then
+      printf '%s\n' "$remap"
+      return
+    fi
+    remap="${normalized%/uvm}/uvm-core"
+    if [[ -d "$remap" ]]; then
+      printf '%s\n' "$remap"
+      return
+    fi
+  fi
+  printf '%s\n' "$requested"
+}
+
+UVM_PATH="$(resolve_effective_uvm_path "${UVM_PATH:-}")"
 
 if [[ ! -d "$SV_TESTS_DIR/tests" ]]; then
   echo "sv-tests directory not found: $SV_TESTS_DIR" >&2

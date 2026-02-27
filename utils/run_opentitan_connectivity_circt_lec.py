@@ -1437,6 +1437,17 @@ def main() -> int:
                                     diag or result,
                                 )
                             )
+                    elif result == "EQ":
+                        rows.append(
+                            (
+                                "PASS",
+                                case.case_id,
+                                case.case_path,
+                                "opentitan",
+                                args.mode_label,
+                                diag or "EQ",
+                            )
+                        )
                     else:
                         rows.append(
                             (

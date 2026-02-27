@@ -17,6 +17,7 @@
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Format.h"
+#include <algorithm>
 #include <cstring>
 
 #define DEBUG_TYPE "llhd-interpreter"
@@ -169,10 +170,17 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
 static uint64_t sequencerProcKey(ProcessId procId) {
   return 0xF1F1000000000000ULL | static_cast<uint64_t>(procId);
 }
+
+static bool disableAllUvmFastPaths() {
+  const char *env = std::getenv("CIRCT_SIM_DISABLE_UVM_FASTPATHS");
+  return env && env[0] != '\0' && env[0] != '0';
+}
 } // namespace
 
 bool LLHDProcessInterpreter::handleUvmWaitForSelfAndSiblingsToDrop(
     ProcessId procId, uint64_t phaseAddr, mlir::Operation *callOp) {
+  if (disableAllUvmFastPaths())
+    return false;
   noteUvmFastPathActionHit("uvm.wait_for_self_and_siblings_to_drop");
   if (phaseAddr == 0 || !callOp)
     return true;
@@ -235,6 +243,8 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     ProcessId procId, mlir::func::FuncOp funcOp,
     llvm::ArrayRef<InterpretedValue> args,
     llvm::SmallVectorImpl<InterpretedValue> &results, mlir::Operation *callOp) {
+  if (disableAllUvmFastPaths())
+    return false;
   // Fast exit for functions known to have no fast-path match.
   // Avoids re-running StringSwitch + matchesMethod on every call.
   if (funcBodyNoFastPathSet.contains(funcOp.getOperation())) {
@@ -495,7 +505,7 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
   // fast paths and wrapper hops cannot bypass the rendezvous logic.
   if (isSequencerHandshakeFunc("::wait_for_grant")) {
     if (!args.empty() && !args[0].isX()) {
-      uint64_t sqrAddr = args[0].getUInt64();
+      uint64_t sqrAddr = normalizeUvmSequencerAddress(procId, args[0].getUInt64());
       if (sqrAddr != 0)
         itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
     }
@@ -504,7 +514,12 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
   }
 
   if (isSequencerHandshakeFunc("::send_request") && args.size() >= 3) {
-    uint64_t sqrAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    uint64_t sqrAddr = args[0].isX() ? 0
+                                     : normalizeUvmSequencerAddress(
+                                           procId, args[0].getUInt64());
+    uint64_t seqAddr = args[1].isX()
+                           ? 0
+                           : normalizeUvmObjectKey(procId, args[1].getUInt64());
     uint64_t itemAddr = args[2].isX() ? 0 : args[2].getUInt64();
     uint64_t queueAddr = 0;
     if (itemAddr != 0) {
@@ -519,10 +534,13 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     }
     if (queueAddr == 0)
       queueAddr = sqrAddr;
+    queueAddr = normalizeUvmSequencerAddress(procId, queueAddr);
     if (itemAddr != 0 && queueAddr != 0) {
       sequencerItemFifo[queueAddr].push_back(itemAddr);
       recordUvmSequencerItemOwner(itemAddr, queueAddr);
       sequencePendingItemsByProc[procId].push_back(itemAddr);
+      if (seqAddr != 0)
+        sequencePendingItemsBySeq[seqAddr].push_back(itemAddr);
       wakeUvmSequencerGetWaiterForPush(queueAddr);
       if (traceSeqEnabled) {
         llvm::errs() << "[SEQ-FBODY] send_request item=0x"
@@ -536,18 +554,54 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
   }
 
   if (isSequencerHandshakeFunc("::wait_for_item_done")) {
-    auto pendingIt = sequencePendingItemsByProc.find(procId);
-    if (pendingIt == sequencePendingItemsByProc.end() ||
-        pendingIt->second.empty()) {
+    uint64_t seqAddr =
+        args.size() > 1 && !args[1].isX()
+            ? normalizeUvmObjectKey(procId, args[1].getUInt64())
+            : 0;
+    uint64_t itemAddr = 0;
+    auto seqIt = sequencePendingItemsBySeq.end();
+    if (seqAddr != 0) {
+      seqIt = sequencePendingItemsBySeq.find(seqAddr);
+      if (seqIt != sequencePendingItemsBySeq.end() && !seqIt->second.empty())
+        itemAddr = seqIt->second.front();
+    }
+    auto procIt = sequencePendingItemsByProc.find(procId);
+    if (itemAddr == 0 && procIt != sequencePendingItemsByProc.end() &&
+        !procIt->second.empty())
+      itemAddr = procIt->second.front();
+    if (itemAddr == 0) {
       noteUvmFastPathActionHit("func.body.sequencer.wait_for_item_done_empty");
       return true;
     }
 
-    uint64_t itemAddr = pendingIt->second.front();
+    auto erasePendingItemByProc = [&](uint64_t item) {
+      auto it = sequencePendingItemsByProc.find(procId);
+      if (it == sequencePendingItemsByProc.end())
+        return;
+      auto &pending = it->second;
+      auto match = std::find(pending.begin(), pending.end(), item);
+      if (match != pending.end())
+        pending.erase(match);
+      if (pending.empty())
+        sequencePendingItemsByProc.erase(it);
+    };
+    auto erasePendingItemBySeq = [&](uint64_t seqKey, uint64_t item) {
+      if (seqKey == 0)
+        return;
+      auto it = sequencePendingItemsBySeq.find(seqKey);
+      if (it == sequencePendingItemsBySeq.end())
+        return;
+      auto &pending = it->second;
+      auto match = std::find(pending.begin(), pending.end(), item);
+      if (match != pending.end())
+        pending.erase(match);
+      if (pending.empty())
+        sequencePendingItemsBySeq.erase(it);
+    };
+
     if (itemDoneReceived.count(itemAddr)) {
-      pendingIt->second.pop_front();
-      if (pendingIt->second.empty())
-        sequencePendingItemsByProc.erase(pendingIt);
+      erasePendingItemByProc(itemAddr);
+      erasePendingItemBySeq(seqAddr, itemAddr);
       itemDoneReceived.erase(itemAddr);
       finishItemWaiters.erase(itemAddr);
       (void)takeUvmSequencerItemOwner(itemAddr);
@@ -800,6 +854,8 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
 bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,
     llvm::StringRef calleeName) {
+  if (disableAllUvmFastPaths())
+    return false;
   auto recordFastPathHit = [&](llvm::StringRef key) {
     noteUvmFastPathActionHit(key);
   };
@@ -1448,6 +1504,8 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
 
 bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     ProcessId procId, mlir::func::CallOp callOp, llvm::StringRef calleeName) {
+  if (disableAllUvmFastPaths())
+    return false;
   auto recordFastPathHit = [&](llvm::StringRef key) {
     noteUvmFastPathActionHit(key);
   };

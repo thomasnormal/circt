@@ -570,11 +570,63 @@ using ProjectionStack = SmallVector<Projection>;
 /// `toSlot` appears last in the vector.
 static ProjectionStack getProjections(Value fromSignal, Value toSlot) {
   ProjectionStack stack;
-  while (fromSignal != toSlot) {
-    auto *op = cast<OpResult>(fromSignal).getOwner();
+  SmallPtrSet<Value, 8> visited;
+
+  auto findProjectionPath = [&](auto &&self, Value value) -> bool {
+    if (value == toSlot)
+      return true;
+    if (!visited.insert(value).second)
+      return false;
+
+    auto eraseVisited = [&]() { visited.erase(value); };
+
+    if (auto arg = dyn_cast<BlockArgument>(value)) {
+      Block *block = arg.getOwner();
+      for (Block *pred : block->getPredecessors()) {
+        auto branch = dyn_cast<BranchOpInterface>(pred->getTerminator());
+        if (!branch)
+          continue;
+        for (unsigned succIndex = 0, e = branch->getNumSuccessors();
+             succIndex < e; ++succIndex) {
+          if (branch->getSuccessor(succIndex) != block)
+            continue;
+          auto succOperands = branch.getSuccessorOperands(succIndex);
+          if (arg.getArgNumber() >= succOperands.size())
+            continue;
+          if (succOperands.isOperandProduced(arg.getArgNumber()))
+            continue;
+          if (self(self, succOperands[arg.getArgNumber()])) {
+            eraseVisited();
+            return true;
+          }
+        }
+      }
+      eraseVisited();
+      return false;
+    }
+
+    auto opResult = dyn_cast<OpResult>(value);
+    if (!opResult) {
+      eraseVisited();
+      return false;
+    }
+    auto *op = opResult.getOwner();
+    if (!isa<SigArrayGetOp, SigStructExtractOp, SigExtractOp>(op)) {
+      eraseVisited();
+      return false;
+    }
     stack.push_back({op, Value()});
-    fromSignal = op->getOperand(0);
-  }
+    if (self(self, op->getOperand(0))) {
+      eraseVisited();
+      return true;
+    }
+    stack.pop_back();
+    eraseVisited();
+    return false;
+  };
+
+  if (!findProjectionPath(findProjectionPath, fromSignal))
+    return {};
   return stack;
 }
 

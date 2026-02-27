@@ -172,28 +172,29 @@ struct FormatStringParser {
     // See IEEE 1800-2017 § 21.2.1.2 "Format specifications".
     switch (specifierLower) {
     case 'b':
-      return emitInteger(arg, options, IntFormat::Binary);
+      return emitInteger(arg, options, IntFormat::Binary, fullSpecifier);
     case 'u':
       // IEEE %u writes unformatted 2-state binary data. ImportVerilog lowers
       // this using binary integer formatting.
-      return emitInteger(arg, options, IntFormat::Binary);
+      return emitInteger(arg, options, IntFormat::Binary, fullSpecifier);
     case 'z':
       // IEEE %z writes unformatted 4-state binary data. ImportVerilog lowers
       // this using binary integer formatting.
-      return emitInteger(arg, options, IntFormat::Binary);
+      return emitInteger(arg, options, IntFormat::Binary, fullSpecifier);
     case 'v':
       // IEEE %v prints strength information; lower value-only binary formatting
       // as a compatibility fallback.
-      return emitInteger(arg, options, IntFormat::Binary);
+      return emitInteger(arg, options, IntFormat::Binary, fullSpecifier);
     case 'o':
-      return emitInteger(arg, options, IntFormat::Octal);
+      return emitInteger(arg, options, IntFormat::Octal, fullSpecifier);
     case 'd':
-      return emitInteger(arg, options, IntFormat::Decimal);
+      return emitInteger(arg, options, IntFormat::Decimal, fullSpecifier);
     case 'h':
     case 'x':
       return emitInteger(arg, options,
                          std::isupper(specifier) ? IntFormat::HexUpper
-                                                 : IntFormat::HexLower);
+                                                 : IntFormat::HexLower,
+                         fullSpecifier);
 
     case 'e':
       return emitReal(arg, options, RealFormat::Exponential);
@@ -220,9 +221,21 @@ struct FormatStringParser {
     }
   }
 
+  static bool hasLegacyZeroPadFlag(StringRef fullSpecifier) {
+    // Slang may report width but miss zeroPad for strings like "%011d".
+    // Detect a leading '0' in the width field directly from the raw specifier.
+    if (!fullSpecifier.starts_with("%") || fullSpecifier.size() < 3)
+      return false;
+    size_t i = 1;
+    if (fullSpecifier[i] == '-')
+      ++i;
+    return i < fullSpecifier.size() - 1 && fullSpecifier[i] == '0';
+  }
+
   /// Emit an integer value with the given format.
   LogicalResult emitInteger(const slang::ast::Expression &arg,
-                            const FormatOptions &options, IntFormat format) {
+                            const FormatOptions &options, IntFormat format,
+                            StringRef fullSpecifier) {
 
     Type intTy = {};
     Value val;
@@ -264,8 +277,12 @@ struct FormatStringParser {
 
     // Determine the alignment and padding.
     auto alignment = options.leftJustify ? IntAlign::Left : IntAlign::Right;
-    auto padding =
-        format == IntFormat::Decimal ? IntPadding::Space : IntPadding::Zero;
+    bool zeroPad = options.zeroPad;
+    if (!zeroPad && format == IntFormat::Decimal)
+      zeroPad = hasLegacyZeroPadFlag(fullSpecifier);
+    auto padding = (format == IntFormat::Decimal && !zeroPad)
+                       ? IntPadding::Space
+                       : IntPadding::Zero;
     IntegerAttr widthAttr = nullptr;
     if (options.width) {
       widthAttr = builder.getI32IntegerAttr(*options.width);
@@ -460,7 +477,7 @@ struct FormatStringParser {
 
     // For other types, use default integer formatting
     FormatOptions options;
-    return emitInteger(expr, options, defaultFormat);
+    return emitInteger(expr, options, defaultFormat, /*fullSpecifier=*/"");
   }
 };
 } // namespace

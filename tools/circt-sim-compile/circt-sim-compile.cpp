@@ -5890,7 +5890,11 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
                                  const llvm::SmallVector<std::string> &globalPatchNames,
                                  const llvm::SmallVector<llvm::GlobalVariable *> &globalPatchVars,
                                  const llvm::SmallVector<uint32_t> &globalPatchSizes,
-                                 const llvm::SmallVector<std::string> &allFuncEntryNames) {
+                                 const llvm::SmallVector<std::string> &allFuncEntryNames,
+                                 uint32_t arenaSize,
+                                 const llvm::SmallVector<std::string> &arenaGlobalNames,
+                                 const llvm::SmallVector<uint32_t> &arenaGlobalOffsets,
+                                 const llvm::SmallVector<uint32_t> &arenaGlobalSizes) {
   auto &ctx = llvmModule.getContext();
   auto *i32Ty = llvm::Type::getInt32Ty(ctx);
   auto *ptrTy = llvm::PointerType::get(ctx, 0);
@@ -6108,12 +6112,83 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
         allNameArray, "__circt_sim_all_func_entry_names");
   }
 
+  // Build arena globals arrays (ABI v5).
+  unsigned numArenaGlobals = arenaGlobalNames.size();
+  llvm::Constant *arenaOffsetsGlobal = nullptr;
+  llvm::Constant *arenaSizesGlobal = nullptr;
+  llvm::Constant *arenaNamesGlobal = nullptr;
+
+  if (numArenaGlobals > 0) {
+    // arena_global_names: string constants.
+    llvm::SmallVector<llvm::Constant *> arenaNameGlobals;
+    for (unsigned i = 0; i < numArenaGlobals; ++i) {
+      auto *strConst =
+          llvm::ConstantDataArray::getString(ctx, arenaGlobalNames[i], true);
+      auto *strGlobal = new llvm::GlobalVariable(
+          llvmModule, strConst->getType(), true,
+          llvm::GlobalValue::PrivateLinkage, strConst,
+          "__circt_sim_arena_name_" + std::to_string(i));
+      arenaNameGlobals.push_back(strGlobal);
+    }
+    auto *arenaNameArrayTy = llvm::ArrayType::get(ptrTy, numArenaGlobals);
+    auto *arenaNameArray = llvm::ConstantArray::get(
+        arenaNameArrayTy,
+        llvm::ArrayRef<llvm::Constant *>(arenaNameGlobals));
+    arenaNamesGlobal = new llvm::GlobalVariable(
+        llvmModule, arenaNameArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        arenaNameArray, "__circt_sim_arena_global_names");
+
+    // arena_global_offsets: uint32_t[].
+    auto *arenaOffsetArrayTy = llvm::ArrayType::get(i32Ty, numArenaGlobals);
+    llvm::SmallVector<llvm::Constant *> offsetConstants;
+    for (unsigned i = 0; i < numArenaGlobals; ++i)
+      offsetConstants.push_back(
+          llvm::ConstantInt::get(i32Ty, arenaGlobalOffsets[i]));
+    auto *offsetArray = llvm::ConstantArray::get(
+        arenaOffsetArrayTy,
+        llvm::ArrayRef<llvm::Constant *>(offsetConstants));
+    arenaOffsetsGlobal = new llvm::GlobalVariable(
+        llvmModule, arenaOffsetArrayTy, true,
+        llvm::GlobalValue::PrivateLinkage, offsetArray,
+        "__circt_sim_arena_global_offsets");
+
+    // arena_global_sizes: uint32_t[].
+    auto *arenaSizeArrayTy = llvm::ArrayType::get(i32Ty, numArenaGlobals);
+    llvm::SmallVector<llvm::Constant *> arenaSizeConstants;
+    for (unsigned i = 0; i < numArenaGlobals; ++i)
+      arenaSizeConstants.push_back(
+          llvm::ConstantInt::get(i32Ty, arenaGlobalSizes[i]));
+    auto *arenaSizeArray = llvm::ConstantArray::get(
+        arenaSizeArrayTy,
+        llvm::ArrayRef<llvm::Constant *>(arenaSizeConstants));
+    arenaSizesGlobal = new llvm::GlobalVariable(
+        llvmModule, arenaSizeArrayTy, true,
+        llvm::GlobalValue::PrivateLinkage, arenaSizeArray,
+        "__circt_sim_arena_global_sizes");
+  }
+
+  // all_func_flags: zero-filled for now (Phase 7 will populate per-function
+  // MAY_YIELD flags).
+  auto *i8Ty = llvm::Type::getInt8Ty(ctx);
+  llvm::Constant *allFuncFlagsGlobal = nullptr;
+  if (numAllFuncs > 0) {
+    auto *flagsArrayTy = llvm::ArrayType::get(i8Ty, numAllFuncs);
+    auto *flagsArray = llvm::ConstantAggregateZero::get(flagsArrayTy);
+    allFuncFlagsGlobal = new llvm::GlobalVariable(
+        llvmModule, flagsArrayTy, true, llvm::GlobalValue::PrivateLinkage,
+        flagsArray, "__circt_sim_all_func_flags");
+  }
+
   // Build the CirctSimCompiledModule struct.
-  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr, i32, ptr, ptr, ptr, i32, ptr, ptr}
+  // Layout: {i32, i32, ptr, ptr, ptr, i32, ptr, ptr, i32, ptr, i32, ptr, ptr,
+  //          ptr, i32, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr}
+  // 17 original fields + 6 new ABI v5 fields (arena + func_flags)
   auto *descriptorTy = llvm::StructType::create(
       ctx,
       {i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy, i32Ty, ptrTy,
-       i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy},
+       i32Ty, ptrTy, ptrTy, ptrTy, i32Ty, ptrTy, ptrTy,
+       // ABI v5: arena fields + func_flags
+       i32Ty, i32Ty, ptrTy, ptrTy, ptrTy, ptrTy},
       "CirctSimCompiledModule");
 
   auto *nullPtr = llvm::ConstantPointerNull::get(ptrTy);
@@ -6137,6 +6212,14 @@ static void synthesizeDescriptor(llvm::Module &llvmModule,
           llvm::ConstantInt::get(i32Ty, numAllFuncs),       // num_all_funcs
           numAllFuncs > 0 ? allFuncEntriesGlobal : nullPtr, // all_func_entries
           numAllFuncs > 0 ? allFuncEntryNamesGlobal : nullPtr, // all_func_entry_names
+          // ABI v5: arena fields
+          llvm::ConstantInt::get(i32Ty, arenaSize),           // arena_size
+          llvm::ConstantInt::get(i32Ty, numArenaGlobals),     // num_arena_globals
+          numArenaGlobals > 0 ? arenaOffsetsGlobal : nullPtr, // arena_global_offsets
+          numArenaGlobals > 0 ? arenaSizesGlobal : nullPtr,   // arena_global_sizes
+          numArenaGlobals > 0 ? arenaNamesGlobal : nullPtr,   // arena_global_names
+          // ABI v5: func flags
+          numAllFuncs > 0 ? allFuncFlagsGlobal : nullPtr,     // all_func_flags
       });
 
   auto *descriptorGlobal = new llvm::GlobalVariable(
@@ -6192,8 +6275,9 @@ static void setDefaultHiddenVisibility(llvm::Module &llvmModule) {
     // Local linkage (private/internal) requires DefaultVisibility.
     if (global.hasLocalLinkage())
       continue;
-    // Keep __circt_sim_ctx visible so dlsym() can find it at runtime.
-    if (global.getName() == "__circt_sim_ctx")
+    // Keep runtime-patched globals visible so dlsym() can find them.
+    if (global.getName() == "__circt_sim_ctx" ||
+        global.getName() == "__circt_sim_arena_base")
       continue;
     global.setVisibility(llvm::GlobalValue::HiddenVisibility);
   }
@@ -7578,6 +7662,116 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   llvm::errs() << "[circt-sim-compile] Global patches: "
                << globalPatchNames.size() << " mutable globals\n";
 
+  // Compute arena layout: assign each mutable global a 16-byte-aligned offset
+  // within a contiguous arena buffer. The runtime allocates this buffer and
+  // stores its base pointer in @__circt_sim_arena_base.
+  llvm::SmallVector<std::string> arenaGlobalNames;
+  llvm::SmallVector<uint32_t> arenaGlobalOffsets;
+  llvm::SmallVector<uint32_t> arenaGlobalSizes;
+  uint32_t arenaSize = 0;
+
+  for (unsigned i = 0; i < globalPatchNames.size(); ++i) {
+    // Align to 16 bytes.
+    uint32_t offset = (arenaSize + 15u) & ~15u;
+    arenaGlobalNames.push_back(globalPatchNames[i]);
+    arenaGlobalOffsets.push_back(offset);
+    arenaGlobalSizes.push_back(globalPatchSizes[i]);
+    arenaSize = offset + globalPatchSizes[i];
+  }
+
+  llvm::errs() << "[circt-sim-compile] Arena: " << arenaGlobalNames.size()
+               << " globals, " << arenaSize << " bytes\n";
+
+  // Create @__circt_sim_arena_base external global. The runtime populates this
+  // pointer after allocating the arena buffer.
+  if (arenaSize > 0) {
+    auto *arenaPtrTy = llvm::PointerType::get(llvmModule->getContext(), 0);
+    auto *arenaBaseGlobal = new llvm::GlobalVariable(
+        *llvmModule, arenaPtrTy, /*isConstant=*/false,
+        llvm::GlobalValue::ExternalLinkage,
+        llvm::ConstantPointerNull::get(arenaPtrTy), "__circt_sim_arena_base");
+
+    // Replace mutable global uses with arena-relative access:
+    //   load ptr @__circt_sim_arena_base → getelementptr i8, %base, offset
+    // After replacement, erase the original globals.
+    auto *i8Ty = llvm::Type::getInt8Ty(llvmModule->getContext());
+    for (unsigned i = 0; i < globalPatchVars.size(); ++i) {
+      auto *oldGV = globalPatchVars[i];
+      uint32_t offset = arenaGlobalOffsets[i];
+
+      // Collect all uses first (can't modify use-list while iterating).
+      llvm::SmallVector<llvm::Use *> uses;
+      for (auto &U : oldGV->uses())
+        uses.push_back(&U);
+
+      for (auto *U : uses) {
+        auto *user = U->getUser();
+        llvm::IRBuilder<> builder(llvmModule->getContext());
+
+        if (auto *inst = llvm::dyn_cast<llvm::Instruction>(user)) {
+          builder.SetInsertPoint(inst);
+        } else {
+          // Skip non-instruction users (ConstantExpr, etc.) — handled below.
+          continue;
+        }
+
+        auto *baseLoad = builder.CreateLoad(arenaPtrTy, arenaBaseGlobal,
+                                            "arena.base");
+        llvm::Value *arenaPtr;
+        if (offset == 0) {
+          arenaPtr = baseLoad;
+        } else {
+          arenaPtr = builder.CreateGEP(i8Ty, baseLoad,
+                                       builder.getInt32(offset),
+                                       "arena.gep");
+        }
+        U->set(arenaPtr);
+      }
+
+      // Handle remaining ConstantExpr users by replacing them in each
+      // instruction that uses the constant expr.
+      llvm::SmallVector<llvm::Use *> remainingUses;
+      for (auto &U : oldGV->uses())
+        remainingUses.push_back(&U);
+
+      for (auto *U : remainingUses) {
+        if (!llvm::isa<llvm::ConstantExpr>(U->getUser()))
+          continue;
+        auto *ce = llvm::cast<llvm::ConstantExpr>(U->getUser());
+        llvm::SmallVector<llvm::Use *> ceUses;
+        for (auto &ceU : ce->uses())
+          ceUses.push_back(&ceU);
+
+        for (auto *ceU : ceUses) {
+          auto *ceInst = llvm::dyn_cast<llvm::Instruction>(ceU->getUser());
+          if (!ceInst)
+            continue;
+          llvm::IRBuilder<> builder(ceInst);
+          auto *baseLoad = builder.CreateLoad(arenaPtrTy, arenaBaseGlobal,
+                                              "arena.base");
+          llvm::Value *arenaPtr;
+          if (offset == 0) {
+            arenaPtr = baseLoad;
+          } else {
+            arenaPtr = builder.CreateGEP(i8Ty, baseLoad,
+                                         builder.getInt32(offset),
+                                         "arena.gep");
+          }
+          ceU->set(arenaPtr);
+        }
+      }
+
+      // Erase the original global if it has no remaining uses.
+      if (oldGV->use_empty())
+        oldGV->eraseFromParent();
+    }
+  }
+
+  // Clear the patch table — all mutable globals are now arena-based.
+  globalPatchNames.clear();
+  globalPatchVars.clear();
+  globalPatchSizes.clear();
+
   // Ensure compiled loads from vtable globals observe the same tagged FuncId
   // addresses (0xF0000000+N) used by the interpreter.
   {
@@ -7593,7 +7787,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
                        procNames, procKinds, buildId,
                        globalPatchNames, globalPatchVars, globalPatchSizes,
-                       allFuncEntryNames);
+                       allFuncEntryNames, arenaSize,
+                       arenaGlobalNames, arenaGlobalOffsets, arenaGlobalSizes);
 
   // Rewrite indirect calls through tagged synthetic vtable addresses
   // (0xF0000000+N) to use the func_entries table. Must run after

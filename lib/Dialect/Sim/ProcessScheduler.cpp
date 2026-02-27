@@ -76,8 +76,10 @@ EdgeType detectEdgeWithEncoding(const SignalValue &oldVal,
   bool newIsX = isFourStateUnknown(newVal);
 
   if (oldIsX || newIsX) {
+    // Any payload change between two unknown-bearing 4-state values must still
+    // be an event for @(*) / anyedge sensitivity (e.g. x -> z).
     if (oldIsX && newIsX)
-      return EdgeType::None;
+      return EdgeType::AnyEdge;
     if (oldIsX) {
       bool newBit = getFourStateValueLSB(newVal);
       return newBit ? EdgeType::Posedge : EdgeType::Negedge;

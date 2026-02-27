@@ -89,11 +89,16 @@ static bool isUnboundedConstantExpr(
 
 static LogicalResult evaluateIntersectToleranceRangeBounds(
     const slang::ast::ValueRangeExpression &rangeExpr, Location loc,
-    const std::function<slang::ConstantValue(const slang::ast::Expression &)>
-        &evaluateConstant,
     int64_t &lower, int64_t &upper) {
-  auto center = getConstantInt64(evaluateConstant(rangeExpr.left()));
-  auto tolerance = getConstantInt64(evaluateConstant(rangeExpr.right()));
+  auto centerConst = rangeExpr.left().getConstant();
+  auto toleranceConst = rangeExpr.right().getConstant();
+  if (!centerConst || !toleranceConst)
+    return mlir::emitError(loc)
+           << "unsupported non-constant intersect value range in cross "
+              "select expression";
+
+  auto center = getConstantInt64(*centerConst);
+  auto tolerance = getConstantInt64(*toleranceConst);
   if (!center || !tolerance)
     return mlir::emitError(loc)
            << "unsupported non-constant intersect value range in cross "
@@ -1088,7 +1093,8 @@ static LogicalResult emitTupleBinsOf(
         resolveCrossSelectTargetRef(*crossTargets[i], coverpointSymbols, builder);
     auto valuesAttr =
         builder.getArrayAttr({builder.getI64IntegerAttr(tupleValues[i])});
-    moore::BinsOfOp::create(builder, loc, targetRef, valuesAttr, mlir::UnitAttr(),
+    moore::BinsOfOp::create(builder, loc, targetRef, valuesAttr,
+                            mlir::DenseI64ArrayAttr(), mlir::UnitAttr(),
                             groupAttr);
   }
   return success();
@@ -1104,7 +1110,8 @@ static LogicalResult emitAlwaysFalseCrossSelect(
   auto targetRef =
       resolveCrossSelectTargetRef(*crossTargets.front(), coverpointSymbols, builder);
   moore::BinsOfOp::create(builder, loc, targetRef, mlir::ArrayAttr(),
-                          builder.getUnitAttr(), IntegerAttr());
+                          mlir::DenseI64ArrayAttr(), builder.getUnitAttr(),
+                          IntegerAttr());
   return success();
 }
 
@@ -1245,8 +1252,8 @@ static LogicalResult evaluateIntersectList(
       if (rangeExpr.rangeKind != slang::ast::ValueRangeKind::Simple) {
         int64_t lower = 0;
         int64_t upper = 0;
-        if (failed(evaluateIntersectToleranceRangeBounds(
-                rangeExpr, loc, evaluateConstant, lower, upper)))
+        if (failed(
+                evaluateIntersectToleranceRangeBounds(rangeExpr, loc, lower, upper)))
           return failure();
         if (value >= lower && value <= upper) {
           result = true;
@@ -1869,7 +1876,8 @@ static LogicalResult emitBinTupleBinsOf(
     }
 
     moore::BinsOfOp::create(builder, loc, targetRef, intersectValuesAttr,
-                            mlir::UnitAttr(), groupAttr);
+                            mlir::DenseI64ArrayAttr(), mlir::UnitAttr(),
+                            groupAttr);
   }
   return success();
 }
@@ -2386,11 +2394,13 @@ static LogicalResult emitBinsOfCondition(
   auto targetRef =
       resolveCrossSelectTargetRef(condExpr.target, coverpointSymbols, builder);
 
-  // Collect intersect values if present.
+  // Collect intersect values/ranges if present.
   mlir::ArrayAttr intersectValuesAttr;
+  mlir::DenseI64ArrayAttr intersectRangesAttr;
   if (!condExpr.intersects.empty()) {
     constexpr uint64_t kMaxIntersectValues = 4096;
     SmallVector<int64_t> intersectValues;
+    SmallVector<int64_t> intersectRanges;
     std::optional<std::pair<int64_t, int64_t>> targetBounds;
     auto getTargetBounds = [&]() -> std::optional<std::pair<int64_t, int64_t>> {
       if (targetBounds)
@@ -2438,14 +2448,29 @@ static LogicalResult emitBinsOfCondition(
     };
 
     auto appendIntersectRange = [&](int64_t lower, int64_t upper) -> LogicalResult {
-      uint64_t rangeCount =
-          static_cast<uint64_t>((__int128)upper - (__int128)lower + 1);
-      if (intersectValues.size() > kMaxIntersectValues - rangeCount)
+      if (lower > upper)
+        std::swap(lower, upper);
+      __int128 rangeCount128 =
+          static_cast<__int128>(upper) - static_cast<__int128>(lower) + 1;
+      if (rangeCount128 <= 0)
         return mlir::emitError(loc)
-               << "unsupported cross select expression due to large finite "
-                  "value set";
-      for (int64_t v = lower; v <= upper; ++v)
-        intersectValues.push_back(v);
+               << "unsupported cross select expression due to invalid "
+                  "intersect range";
+
+      uint64_t rangeCount = rangeCount128 > static_cast<__int128>(
+                                                std::numeric_limits<uint64_t>::max())
+                                ? std::numeric_limits<uint64_t>::max()
+                                : static_cast<uint64_t>(rangeCount128);
+      bool canExpand = rangeCount <= kMaxIntersectValues &&
+                       intersectValues.size() <= kMaxIntersectValues - rangeCount;
+      if (canExpand) {
+        for (int64_t v = lower; v <= upper; ++v)
+          intersectValues.push_back(v);
+        return success();
+      }
+
+      intersectRanges.push_back(lower);
+      intersectRanges.push_back(upper);
       return success();
     };
 
@@ -2455,8 +2480,8 @@ static LogicalResult emitBinsOfCondition(
         if (rangeExpr.rangeKind != slang::ast::ValueRangeKind::Simple) {
           int64_t lower = 0;
           int64_t upper = 0;
-          if (failed(evaluateIntersectToleranceRangeBounds(
-                  rangeExpr, loc, evaluateConstant, lower, upper)))
+          if (failed(
+                  evaluateIntersectToleranceRangeBounds(rangeExpr, loc, lower, upper)))
             return failure();
           if (failed(appendIntersectRange(lower, upper)))
             return failure();
@@ -2478,18 +2503,17 @@ static LogicalResult emitBinsOfCondition(
         int64_t upper = 0;
         if (leftUnbounded || rightUnbounded) {
           auto bounds = getTargetBounds();
-          if (!bounds)
-            return mlir::emitError(loc)
-                   << "unsupported non-constant intersect value range in cross "
-                      "select expression";
-          lower = leftVal ? *leftVal : bounds->first;
-          upper = rightVal ? *rightVal : bounds->second;
+          if (bounds) {
+            lower = leftVal ? *leftVal : bounds->first;
+            upper = rightVal ? *rightVal : bounds->second;
+          } else {
+            lower = leftVal ? *leftVal : std::numeric_limits<int64_t>::min();
+            upper = rightVal ? *rightVal : std::numeric_limits<int64_t>::max();
+          }
         } else {
           lower = *leftVal;
           upper = *rightVal;
         }
-        if (lower > upper)
-          std::swap(lower, upper);
         if (failed(appendIntersectRange(lower, upper)))
           return failure();
       } else {
@@ -2509,13 +2533,15 @@ static LogicalResult emitBinsOfCondition(
         intersectValueAttrs.push_back(builder.getI64IntegerAttr(value));
       intersectValuesAttr = builder.getArrayAttr(intersectValueAttrs);
     }
+    if (!intersectRanges.empty())
+      intersectRangesAttr = builder.getDenseI64ArrayAttr(intersectRanges);
   }
 
   auto negateAttr = negate ? builder.getUnitAttr() : mlir::UnitAttr();
   IntegerAttr groupAttr =
       group > 0 ? builder.getI32IntegerAttr(group) : IntegerAttr();
   moore::BinsOfOp::create(builder, loc, targetRef, intersectValuesAttr,
-                          negateAttr, groupAttr);
+                          intersectRangesAttr, negateAttr, groupAttr);
   return success();
 }
 

@@ -85,9 +85,6 @@ struct HierPathValueExprVisitor
         break;
       }
     }
-    if (!lca)
-      return;
-
     auto addHierIfacePath =
         [&](const slang::ast::InstanceBodySymbol *sym,
             mlir::StringAttr nameAttr,
@@ -105,6 +102,37 @@ struct HierPathValueExprVisitor
     SmallString<64> upwardName(ifaceSegment);
     if (upwardName.empty())
       return;
+
+    if (!lca) {
+      // Cross-root hierarchical interface references (for example sibling
+      // top-level modules) have no shared instance ancestor. Thread the
+      // interface value out of its defining root and into the referencing root.
+      for (auto *body = ifaceParentBody; body;
+           body = body->parentInstance
+                      ? body->parentInstance->getParentScope()
+                            ->getContainingInstance()
+                      : nullptr) {
+        addHierIfacePath(body, builder.getStringAttr(upwardName),
+                         slang::ast::ArgumentDirection::Out);
+        if (body->parentInstance) {
+          auto parentSegment = getInstancePathSegment(*body->parentInstance);
+          if (parentSegment.empty())
+            return;
+          SmallString<64> nextName;
+          nextName += parentSegment;
+          nextName += ".";
+          nextName += upwardName;
+          upwardName = nextName;
+        }
+      }
+
+      if (!pathName)
+        pathName = builder.getStringAttr(upwardName);
+      addHierIfacePath(outermostInstBody, pathName,
+                       slang::ast::ArgumentDirection::In);
+      return;
+    }
+
     for (auto *body = ifaceParentBody; body && body != lca;
          body = body->parentInstance
                     ? body->parentInstance->getParentScope()
@@ -147,32 +175,70 @@ struct HierPathValueExprVisitor
                                   : range.upper() - relIndex;
   }
 
-  std::string getInstancePathSegment(const slang::ast::InstanceSymbol &instSym) {
-    if (!instSym.name.empty())
-      return std::string(instSym.name);
-
-    auto *parentArray =
-        instSym.getParentScope()
-            ->asSymbol()
-            .as_if<slang::ast::InstanceArraySymbol>();
-    if (!parentArray || parentArray->name.empty())
+  std::string
+  getEnclosingGenerateScopePath(const slang::ast::Scope *parentScope) {
+    SmallVector<std::string, 4> generateSegments;
+    for (const slang::ast::Scope *scope = parentScope; scope;
+         scope = scope->asSymbol().getParentScope()) {
+      const auto &symbol = scope->asSymbol();
+      if (symbol.kind == slang::ast::SymbolKind::InstanceBody)
+        break;
+      if (symbol.kind != slang::ast::SymbolKind::GenerateBlock &&
+          symbol.kind != slang::ast::SymbolKind::GenerateBlockArray)
+        continue;
+      if (symbol.name.empty())
+        continue;
+      generateSegments.push_back(std::string(symbol.name));
+    }
+    if (generateSegments.empty())
       return {};
 
-    SmallString<64> segment(parentArray->name);
-    slang::SmallVector<slang::ConstantRange, 4> dimensions;
-    instSym.getArrayDimensions(dimensions);
-    size_t rank = instSym.arrayPath.size();
-    if (rank > dimensions.size())
-      rank = dimensions.size();
-    for (size_t dim = 0; dim < rank; ++dim) {
-      const auto &range = dimensions[dim];
-      int64_t relIndex = static_cast<int64_t>(instSym.arrayPath[dim]);
-      int64_t actualIndex =
-          range.isLittleEndian() ? range.lower() + relIndex
-                                 : range.upper() - relIndex;
-      segment += ("[" + llvm::Twine(actualIndex) + "]").str();
+    SmallString<64> path;
+    for (auto it = generateSegments.rbegin(); it != generateSegments.rend();
+         ++it) {
+      if (!path.empty())
+        path += ".";
+      path += *it;
     }
-    return segment.str().str();
+    return path.str().str();
+  }
+
+  std::string getInstancePathSegment(const slang::ast::InstanceSymbol &instSym) {
+    SmallString<64> segment;
+    if (!instSym.name.empty()) {
+      segment += instSym.name;
+    } else {
+      auto *parentArray =
+          instSym.getParentScope()
+              ->asSymbol()
+              .as_if<slang::ast::InstanceArraySymbol>();
+      if (!parentArray || parentArray->name.empty())
+        return {};
+
+      segment += parentArray->name;
+      slang::SmallVector<slang::ConstantRange, 4> dimensions;
+      instSym.getArrayDimensions(dimensions);
+      size_t rank = instSym.arrayPath.size();
+      if (rank > dimensions.size())
+        rank = dimensions.size();
+      for (size_t dim = 0; dim < rank; ++dim) {
+        const auto &range = dimensions[dim];
+        int64_t relIndex = static_cast<int64_t>(instSym.arrayPath[dim]);
+        int64_t actualIndex =
+            range.isLittleEndian() ? range.lower() + relIndex
+                                   : range.upper() - relIndex;
+        segment += ("[" + llvm::Twine(actualIndex) + "]").str();
+      }
+    }
+
+    auto generatePath = getEnclosingGenerateScopePath(instSym.getParentScope());
+    if (generatePath.empty())
+      return segment.str().str();
+
+    SmallString<64> fullSegment(generatePath);
+    fullSegment += ".";
+    fullSegment += segment;
+    return fullSegment.str().str();
   }
 
   const slang::ast::InstanceSymbol *
@@ -814,18 +880,6 @@ struct HierPathValueExprVisitor
     for (size_t i = 0; i < currentChain.size(); ++i)
       currentIndex[currentChain[i]] = i;
 
-    const slang::ast::InstanceBodySymbol *lca = nullptr;
-    size_t lcaOuterIndex = 0;
-    for (size_t i = 0; i < outerChain.size(); ++i) {
-      if (currentIndex.count(outerChain[i])) {
-        lca = outerChain[i];
-        lcaOuterIndex = i;
-        break;
-      }
-    }
-    if (!lca)
-      return;
-
     // Construct the full hierarchical name for the reference.
     SmallString<64> fullName;
     for (const auto &elem : expr.ref.path) {
@@ -840,6 +894,27 @@ struct HierPathValueExprVisitor
     fullName += expr.symbol.name;
     auto fullNameAttr = builder.getStringAttr(fullName);
 
+    const slang::ast::InstanceBodySymbol *lca = nullptr;
+    size_t lcaOuterIndex = 0;
+    for (size_t i = 0; i < outerChain.size(); ++i) {
+      if (currentIndex.count(outerChain[i])) {
+        lca = outerChain[i];
+        lcaOuterIndex = i;
+        break;
+      }
+    }
+    if (!lca) {
+      // Cross-root hierarchical references (for example sibling top-level
+      // modules) have no shared instance ancestor. Thread the referenced value
+      // out of its defining root and into the referencing root so conversion
+      // can model the reference instead of dropping it as unknown.
+      addHierPath(currentInstBody, builder.getStringAttr(expr.symbol.name),
+                  slang::ast::ArgumentDirection::Out);
+      addHierPath(outermostInstBody, fullNameAttr,
+                  slang::ast::ArgumentDirection::In);
+      return;
+    }
+
     // Propagate upward from the symbol's instance body to the LCA.
     SmallString<64> upwardName(expr.symbol.name);
     for (auto *body = currentInstBody; body && body != lca;
@@ -850,8 +925,11 @@ struct HierPathValueExprVisitor
       addHierPath(body, builder.getStringAttr(upwardName),
                   slang::ast::ArgumentDirection::Out);
       if (body->parentInstance) {
+        auto parentSegment = getInstancePathSegment(*body->parentInstance);
+        if (parentSegment.empty())
+          return;
         SmallString<64> nextName;
-        nextName += body->parentInstance->name;
+        nextName += parentSegment;
         nextName += ".";
         nextName += upwardName;
         upwardName = nextName;
@@ -978,8 +1056,11 @@ struct HierPathValueExprVisitor
           addHierPath(body, builder.getStringAttr(upwardName),
                       slang::ast::ArgumentDirection::Out);
           if (body->parentInstance) {
+            auto parentSegment = getInstancePathSegment(*body->parentInstance);
+            if (parentSegment.empty())
+              return;
             SmallString<64> nextName;
-            nextName += body->parentInstance->name;
+            nextName += parentSegment;
             nextName += ".";
             nextName += upwardName;
             upwardName = nextName;
@@ -1030,6 +1111,11 @@ struct HierPathValueExprVisitor
   void handle(const slang::ast::CallExpression &expr) {
     if (failed(result))
       return;
+
+    // Custom handlers suppress default AST descent. Visit call subexpressions
+    // first so hierarchical references in call arguments are collected
+    // (e.g., `$display("%0d", u_child.q)` in procedural blocks).
+    visitDefault(expr);
 
     auto *subroutine =
         std::get_if<const slang::ast::SubroutineSymbol *>(&expr.subroutine);

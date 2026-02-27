@@ -39,6 +39,7 @@ class InstanceSymbol;
 class HierarchicalReference;
 class TimingControl;
 class VariableSymbol;
+class ProceduralBlockSymbol;
 enum class CaseStatementCondition;
 } // namespace ast
 } // namespace slang
@@ -571,6 +572,10 @@ struct Context {
   DenseMap<const slang::ast::CovergroupType *,
            std::unique_ptr<CovergroupLowering>>
       covergroups;
+  /// Covergroup handle variables for which implicit sampling-event procedures
+  /// have already been synthesized.
+  DenseSet<const slang::ast::VariableSymbol *>
+      covergroupImplicitSamplingVars;
 
   /// A table of defined values, such as variables, that may be referred to by
   /// name in expressions. The expressions use this table to lookup the MLIR
@@ -585,6 +590,30 @@ struct Context {
   /// continuous/procedural assignments.
   DenseMap<const slang::ast::VariableSymbol *, unsigned>
       variableAssignmentKinds;
+  struct ContinuousAssignPathSegment {
+    enum class Kind { Member, ConstantIndex, ConstantRange, Wildcard };
+    Kind kind;
+    StringRef memberName;
+    int64_t index = 0;
+    int64_t rangeHigh = 0;
+  };
+  using ContinuousAssignPath = SmallVector<ContinuousAssignPathSegment, 4>;
+  DenseMap<const slang::ast::VariableSymbol *,
+           SmallVector<ContinuousAssignPath, 2>>
+      variableContinuousAssignmentPaths;
+  DenseMap<const slang::ast::VariableSymbol *,
+           SmallVector<ContinuousAssignPath, 2>>
+      variableProceduralAssignmentPaths;
+  struct ProceduralDriverInfo {
+    moore::ProcedureKind kind;
+    const slang::ast::ProceduralBlockSymbol *procedure;
+    ContinuousAssignPath path;
+  };
+  DenseMap<const slang::ast::VariableSymbol *,
+           SmallVector<ProceduralDriverInfo, 2>>
+      variableProceduralDrivers;
+  std::optional<moore::ProcedureKind> currentProcedureKind;
+  const slang::ast::ProceduralBlockSymbol *currentProceduralBlock = nullptr;
 
   /// A table mapping iterator variables to their index values for use with
   /// the `item.index` property in array locator methods.

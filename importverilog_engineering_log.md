@@ -3899,3 +3899,158 @@ standalone sources.
 - The previously used `build_test` directory disappeared from the workspace
   later in this slice (likely external cleanup). Further CIRCT validation
   requires a rebuilt `circt-verilog` binary.
+
+### Task
+Continue implementing ImportVerilog gaps with TDD after the DPI open-array
+landing by validating the rebuilt toolchain and re-running isolated differentials
+for new xrun-pass / CIRCT-fail cases.
+
+### Realizations
+- The rebuilt `build_clang_test/bin/circt-verilog` changed ordering sensitivity
+  in one newly added regression check; the test needed functional check ordering
+  fixes, not frontend code changes.
+- A broad isolated OpenTitan `.sv` sweep (`0..3908`) with per-file xrun worklib
+  isolation found no remaining `xrun-pass / circt-fail` mismatches.
+- Remaining divergences in this sweep were reverse-class only
+  (`xrun-fail / circt-pass`), mostly due standalone non-top files where xrun
+  `-elaborate` reports `NOTOP` or missing external dependencies while CIRCT emits
+  `-Wmissing-top` and returns success.
+- A compile-only (`xmvlog`) differential found additional
+  `xmvlog-pass / circt-fail` files, but first non-trivial example
+  (`i2c_protocol_cov.sv` hierarchical `$root.tb...`) is not actionable for
+  elaborate parity because `xrun -elaborate` also fails on the same construct.
+
+### Changes Landed In This Slice
+- `test/Conversion/ImportVerilog/dpi-open-array-supported.sv`
+  - Reworked checks to verify functional lowering shape instead of fragile
+    ordering:
+    - explicit read of input open array,
+    - explicit temporary ref variable for output open array,
+    - DPI `func.call` with `(!moore.open_uarray<i8>, !moore.ref<open_uarray<i8>>)`
+      signature,
+    - write-back assignment from output ref into destination variable.
+
+### Validation
+- Rebuilt-binary regression validation:
+  - `build_clang_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/dpi-open-array-supported.sv | llvm/build/bin/FileCheck ...` (PASS)
+  - `xrun -sv -64bit -elaborate test/Conversion/ImportVerilog/dpi-open-array-supported.sv` (PASS)
+- Isolated OpenTitan xrun-elaborate differential slices:
+  - `2000..2499`: no `xrun-pass / circt-fail`
+  - `2500..2999`: no `xrun-pass / circt-fail`
+  - `3000..3499`: no `xrun-pass / circt-fail`
+  - `3500..3908`: no `xrun-pass / circt-fail`
+- Representative reverse-only mismatches observed during these slices:
+  - `.../top_earlgrey/dv/env/alerts_if.sv`: xrun package bind failure vs CIRCT missing-top warning
+  - `.../gpio_inp_prd_cnt_vseq.sv`: xrun `NOTOP` vs CIRCT missing-top warning
+  - `.../i2c_protocol_cov.sv` (compile-only probe): xmvlog pass, but both CIRCT and xrun-elaborate fail on unresolved `$root.tb...` hierarchy.
+
+### Differential Follow-up (Actionability Triage)
+- Ran full OpenTitan compile/elaboration actionability triage over
+  `/home/thomas-ahle/opentitan/hw/**/*.sv`:
+  - step 1: `xmvlog -sv` vs `circt-verilog --ir-moore`
+  - step 2: for `xmvlog-pass / circt-fail` candidates, recheck with
+    `xrun -elaborate` and only treat `xrun-pass` as actionable support gaps.
+- Final triage summary:
+  - `checked=3909`
+  - `xmvlog_pass_circt_fail=97`
+  - `triaged_with_xrun=4`
+  - `actionable=0`
+- Conclusion: no new actionable `xrun-pass / circt-fail` ImportVerilog support
+  gap found in this corpus.
+
+### Regression Notation Sweep (Current Changed ImportVerilog Tests)
+- Executed `xrun -sv -64bit -elaborate` across changed
+  `test/Conversion/ImportVerilog/*.sv` files in the current worktree
+  (`43` files).
+- Outcomes:
+  - `42` behaved as expected under pass/fail intent.
+  - `builtins.sv` fails in xrun due `$exit` legality in function context
+    (`*E,EXITPB`), while CIRCT test currently ignores `$exit` lowering pending
+    program support. This is an intentional compatibility note, not a new
+    xrun-pass/CIRCT-fail support gap.
+
+### Task
+Close a strictness parity gap discovered during notation sweeps: `$exit`
+outside program blocks was accepted by CIRCT but rejected by xrun.
+
+### Realizations
+- `test/Conversion/ImportVerilog/builtins.sv` still contained `$exit` in a
+  function body and CIRCT lowered it as `$finish`, while xrun reports
+  `*E,EXITPB` (`$exit` only valid in program blocks).
+- This is a concrete `xrun-reject / circt-accept` legality mismatch that can be
+  fixed with a targeted diagnostic in statement/assertion subroutine lowering.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/Statements.cpp`
+  - changed `$exit` handling from lowering to `moore.builtin.finish` to a hard
+    diagnostic:
+    - `error: $exit is only valid in program blocks`
+- `lib/Conversion/ImportVerilog/AssertionExpr.cpp`
+  - aligned assertion-expression side-effect call lowering to emit the same
+    `$exit` legality error.
+- `test/Conversion/ImportVerilog/exit-outside-program-error.sv` (new)
+  - TDD regression that requires import failure with the new diagnostic.
+- `test/Conversion/ImportVerilog/builtins.sv`
+  - removed `$exit` from the general builtins smoke function to avoid relying on
+    previously permissive behavior.
+
+### Validation
+- TDD baseline before fix:
+  - `exit-outside-program-error.sv` check failed because CIRCT accepted `$exit`
+    and produced IR.
+- After fix:
+  - `ninja -C build_clang_test circt-verilog` (PASS)
+  - `! circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/exit-outside-program-error.sv | FileCheck ...` (PASS)
+  - `xrun -sv -64bit -elaborate test/Conversion/ImportVerilog/exit-outside-program-error.sv` (FAIL with `*E,EXITPB`, as expected)
+  - `xrun -sv -64bit -elaborate test/Conversion/ImportVerilog/builtins.sv` (PASS)
+
+### Task
+Continue ImportVerilog gap closure with TDD by finding the next concrete
+`xrun-pass / circt-fail` mismatch and validating notation/functionality with
+xrun.
+
+### Realizations
+- A focused sv-tests sweep found:
+  - known mismatch at `11.4.14.3--unpack_stream_inv.sv` (`BadStreamSize`);
+    xrun elaborates but runtime errors (`*E,BSLGTV`), so it is not a good
+    functional parity target.
+  - clean mismatch at
+    `chapter-8/8.25.1--parametrized_class_invalid_scope_resolution.sv`:
+    xrun accepts with warning `*W,NOUNAD` and assumes `#()`, while CIRCT
+    rejected.
+- Simply downgrading Slang diagnostic
+  `GenericClassScopeResolution` to warning was insufficient:
+  CIRCT emitted partial IR and dropped functional behavior in affected
+  procedures.
+- A source compatibility rewrite is safer than severity demotion for this
+  construct.
+
+### Changes Landed In This Slice
+- `lib/Conversion/ImportVerilog/ImportVerilog.cpp`
+  - added `rewriteGenericClassScopeCompat(...)`:
+    - scans source for parameterized class declarations (`class C #(...)`),
+    - rewrites unspecialized scope references `C::member` into `C#()::member`
+      before parsing/elaboration.
+  - wired the rewrite into driver source preprocessing.
+  - restored strict diagnostic severity policy (removed
+    `GenericClassScopeResolution` warning demotion attempt).
+- Added new regressions:
+  - `test/Conversion/ImportVerilog/parametrized-class-scope-resolution-default-compat.sv`
+    - asserts IR contains functional lowering (`moore.constant 23`,
+      `moore.builtin.display`) for unspecialized `par_cls::b`.
+  - `test/Tools/circt-sim/parametrized-class-scope-resolution-default-compat.sv`
+    - functional runtime check (`PASS b=23`) using `circt-sim`.
+
+### Validation
+- TDD baseline before rewrite:
+  - new regressions failed with
+    `error: cannot refer to generic class with '::' without providing parameter assignments`.
+- After rewrite:
+  - `ninja -C build_clang_test circt-verilog` (PASS)
+  - `circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/parametrized-class-scope-resolution-default-compat.sv | FileCheck ...` (PASS)
+  - `circt-verilog test/Tools/circt-sim/parametrized-class-scope-resolution-default-compat.sv --no-uvm-auto-include -o %t.mlir` (PASS)
+  - `circt-sim %t.mlir --top top | FileCheck ...` (PASS; `PASS b=23`)
+- xrun notation / behavior checks:
+  - `xrun -sv -64bit -elaborate test/Conversion/ImportVerilog/parametrized-class-scope-resolution-default-compat.sv` (PASS with `*W,NOUNAD`)
+  - `xrun -sv -64bit test/Conversion/ImportVerilog/parametrized-class-scope-resolution-default-compat.sv` (PASS; prints `PASS b=23`)
+  - `xrun -sv -64bit test/Tools/circt-sim/parametrized-class-scope-resolution-default-compat.sv` (PASS; prints `PASS b=23`)

@@ -26,6 +26,7 @@ TEST(MooreRuntimeTest, DisabledOnEmscripten) {
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <chrono>
@@ -52,8 +53,49 @@ void *resolveAssocPtrFromMap(const void *ptr, void *userData) {
   return it->second;
 }
 
+void *normalizeVirtualPtrFromMap(void *ctx, uint64_t addr) {
+  auto *map = static_cast<std::map<uint64_t, void *> *>(ctx);
+  if (!map)
+    return nullptr;
+  auto it = map->find(addr);
+  if (it == map->end())
+    return nullptr;
+  return it->second;
+}
+
 struct AssocResolverGuard {
   ~AssocResolverGuard() { __moore_assoc_set_ptr_resolver(nullptr, nullptr); }
+};
+
+struct TlsNormalizeGuard {
+  ~TlsNormalizeGuard() {
+    __circt_sim_set_tls_ctx(nullptr);
+    __circt_sim_set_tls_normalize(nullptr);
+  }
+};
+
+struct ScopedEnvVar {
+  explicit ScopedEnvVar(const char *name, const char *value) : name(name) {
+    const char *current = std::getenv(name);
+    hadOriginal = current != nullptr;
+    if (hadOriginal)
+      originalValue = current;
+    if (value)
+      setenv(name, value, 1);
+    else
+      unsetenv(name);
+  }
+
+  ~ScopedEnvVar() {
+    if (hadOriginal)
+      setenv(name.c_str(), originalValue.c_str(), 1);
+    else
+      unsetenv(name.c_str());
+  }
+
+  std::string name;
+  bool hadOriginal = false;
+  std::string originalValue;
 };
 
 //===----------------------------------------------------------------------===//
@@ -121,6 +163,52 @@ TEST(MooreRuntimeAssocTest, ResolverFallbackUsesOriginalPointer) {
   std::map<uintptr_t, void *> emptyMap;
   __moore_assoc_set_ptr_resolver(resolveAssocPtrFromMap, &emptyMap);
   EXPECT_EQ(__moore_assoc_exists(array, &key), 1);
+}
+
+TEST(MooreRuntimeAssocTest, TlsNormalizeMapsVirtualPointer) {
+  AssocResolverGuard assocGuard;
+  TlsNormalizeGuard tlsGuard;
+  void *array = __moore_assoc_create(/*key_size=*/4, /*value_size=*/4);
+  ASSERT_NE(array, nullptr);
+
+  int32_t key = 42;
+  ASSERT_NE(__moore_assoc_get_ref(array, &key, /*value_size=*/4), nullptr);
+
+  constexpr uint64_t virtualArrayPtr = 0x10264760ULL;
+  std::map<uint64_t, void *> map;
+  map[virtualArrayPtr] = array;
+  __circt_sim_set_tls_ctx(&map);
+  __circt_sim_set_tls_normalize(normalizeVirtualPtrFromMap);
+
+  EXPECT_EQ(__moore_assoc_exists(reinterpret_cast<void *>(virtualArrayPtr), &key),
+            1);
+  EXPECT_EQ(__moore_assoc_size(reinterpret_cast<void *>(virtualArrayPtr)), 1);
+}
+
+TEST(MooreRuntimeAssocTest, TracePtrLogsVirtualTranslation) {
+  AssocResolverGuard assocGuard;
+  TlsNormalizeGuard tlsGuard;
+  ScopedEnvVar traceVar("CIRCT_AOT_TRACE_PTR", "1");
+
+  void *array = __moore_assoc_create(/*key_size=*/4, /*value_size=*/4);
+  ASSERT_NE(array, nullptr);
+
+  int32_t key = 99;
+  ASSERT_NE(__moore_assoc_get_ref(array, &key, /*value_size=*/4), nullptr);
+
+  constexpr uint64_t virtualArrayPtr = 0x10264760ULL;
+  std::map<uint64_t, void *> map;
+  map[virtualArrayPtr] = array;
+  __circt_sim_set_tls_ctx(&map);
+  __circt_sim_set_tls_normalize(normalizeVirtualPtrFromMap);
+
+  testing::internal::CaptureStderr();
+  EXPECT_EQ(__moore_assoc_exists(reinterpret_cast<void *>(virtualArrayPtr), &key),
+            1);
+  std::string output = testing::internal::GetCapturedStderr();
+  EXPECT_NE(output.find("[AOT PTR] __moore_assoc_exists: class=virtual"),
+            std::string::npos);
+  EXPECT_NE(output.find("tls-normalize"), std::string::npos);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3654,6 +3742,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIgnoreBins) {
   int64_t ignoreValues[] = {0};
   filter.values = ignoreValues;
   filter.num_values = 1;
+  filter.ranges = nullptr;
+  filter.num_ranges = 0;
   filter.negate = false;
 
   int32_t ignoreBinIdx = __moore_cross_add_ignore_bin(cg, crossIdx,
@@ -3684,6 +3774,43 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIgnoreBins) {
   __moore_covergroup_destroy(cg);
 }
 
+TEST(MooreRuntimeCrossCoverageTest, CrossIgnoreBinsIntersectRanges) {
+  void *cg = __moore_covergroup_create("test_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  EXPECT_GE(crossIdx, 0);
+
+  // ignore_bins ignore_10_to_20 = binsof(cp0) intersect {[10:20]};
+  MooreCrossBinsofFilter filter;
+  int64_t rangePairs[] = {10, 20};
+  filter.cp_index = 0;
+  filter.bin_indices = nullptr;
+  filter.num_bins = 0;
+  filter.values = nullptr;
+  filter.num_values = 0;
+  filter.ranges = rangePairs;
+  filter.num_ranges = 1;
+  filter.negate = false;
+
+  int32_t ignoreBinIdx =
+      __moore_cross_add_ignore_bin(cg, crossIdx, "ignore_10_to_20", &filter, 1);
+  EXPECT_GE(ignoreBinIdx, 0);
+
+  int64_t inRange[] = {15, 1};
+  int64_t belowRange[] = {9, 1};
+  int64_t aboveRange[] = {21, 1};
+  EXPECT_TRUE(__moore_cross_is_ignored(cg, crossIdx, inRange));
+  EXPECT_FALSE(__moore_cross_is_ignored(cg, crossIdx, belowRange));
+  EXPECT_FALSE(__moore_cross_is_ignored(cg, crossIdx, aboveRange));
+
+  __moore_covergroup_destroy(cg);
+}
+
 TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBins) {
   void *cg = __moore_covergroup_create("test_cg", 2);
   ASSERT_NE(cg, nullptr);
@@ -3705,6 +3832,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBins) {
   filters[0].num_bins = 0;
   filters[0].values = cp0Values;
   filters[0].num_values = 1;
+  filters[0].ranges = nullptr;
+  filters[0].num_ranges = 0;
   filters[0].negate = false;
 
   // Filter for cp1
@@ -3714,6 +3843,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBins) {
   filters[1].num_bins = 0;
   filters[1].values = cp1Values;
   filters[1].num_values = 1;
+  filters[1].ranges = nullptr;
+  filters[1].num_ranges = 0;
   filters[1].negate = false;
 
   int32_t illegalBinIdx = __moore_cross_add_illegal_bin(cg, crossIdx,
@@ -3758,6 +3889,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBinsOrGroups) {
   filters[0].num_bins = 0;
   filters[0].values = cp0Values;
   filters[0].num_values = 1;
+  filters[0].ranges = nullptr;
+  filters[0].num_ranges = 0;
   filters[0].negate = false;
 
   filters[1].cp_index = -1; // Group separator.
@@ -3765,6 +3898,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBinsOrGroups) {
   filters[1].num_bins = 0;
   filters[1].values = nullptr;
   filters[1].num_values = 0;
+  filters[1].ranges = nullptr;
+  filters[1].num_ranges = 0;
   filters[1].negate = false;
 
   int64_t cp1Values[] = {200};
@@ -3773,6 +3908,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBinsOrGroups) {
   filters[2].num_bins = 0;
   filters[2].values = cp1Values;
   filters[2].num_values = 1;
+  filters[2].ranges = nullptr;
+  filters[2].num_ranges = 0;
   filters[2].negate = false;
 
   int32_t illegalBinIdx = __moore_cross_add_illegal_bin(cg, crossIdx,
@@ -3811,6 +3948,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossIllegalBinCallback) {
   filter.num_bins = 0;
   filter.values = illegalValues;
   filter.num_values = 1;
+  filter.ranges = nullptr;
+  filter.num_ranges = 0;
   filter.negate = false;
 
   __moore_cross_add_illegal_bin(cg, crossIdx, "illegal_999", &filter, 1);
@@ -3870,6 +4009,8 @@ TEST(MooreRuntimeCrossCoverageTest, CrossBinsofNegate) {
   filter.num_bins = 0;
   filter.values = values;
   filter.num_values = 1;
+  filter.ranges = nullptr;
+  filter.num_ranges = 0;
   filter.negate = true;  // Negate: ignore when cp0 != 5
 
   int32_t ignoreBinIdx = __moore_cross_add_ignore_bin(cg, crossIdx,
@@ -4200,6 +4341,88 @@ TEST(MooreRuntimeCrossCoverageTest, CrossCoverageWithAtLeast) {
   // Only (1,10) has >= 2 hits, so coverage = 1/4 = 25%
   double cov = __moore_cross_get_coverage(cg, crossIdx);
   EXPECT_DOUBLE_EQ(cov, 25.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+// Regression test for a runtime bookkeeping bug: two crosses with the same
+// arity must not share their sampled bins. This is currently disabled because
+// it fails until cross bin storage is keyed per-cross.
+TEST(MooreRuntimeCrossCoverageTest,
+     DISABLED_CrossBinsIsolatedPerCrossWithSameArity) {
+  void *cg = __moore_covergroup_create("same_arity_cross_cg", 4);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+  __moore_coverpoint_init(cg, 2, "cp2");
+  __moore_coverpoint_init(cg, 3, "cp3");
+
+  int32_t crossABCps[] = {0, 1};
+  int32_t crossCDCps[] = {2, 3};
+  int32_t crossAB = __moore_cross_create(cg, "crossAB", crossABCps, 2);
+  int32_t crossCD = __moore_cross_create(cg, "crossCD", crossCDCps, 2);
+  ASSERT_GE(crossAB, 0);
+  ASSERT_GE(crossCD, 0);
+
+  // crossAB tuples: (0,0), (1,1)
+  // crossCD tuples: (0,1), (1,0)
+  // Each cross should therefore have 2 unique bins hit and 50% coverage.
+  int64_t sample1[] = {0, 0, 0, 1};
+  int64_t sample2[] = {1, 1, 1, 0};
+
+  for (int32_t i = 0; i < 4; ++i)
+    __moore_coverpoint_sample(cg, i, sample1[i]);
+  __moore_cross_sample(cg, sample1, 4);
+
+  for (int32_t i = 0; i < 4; ++i)
+    __moore_coverpoint_sample(cg, i, sample2[i]);
+  __moore_cross_sample(cg, sample2, 4);
+
+  EXPECT_EQ(__moore_cross_get_bins_hit(cg, crossAB), 2);
+  EXPECT_EQ(__moore_cross_get_bins_hit(cg, crossCD), 2);
+  EXPECT_DOUBLE_EQ(__moore_cross_get_coverage(cg, crossAB), 50.0);
+  EXPECT_DOUBLE_EQ(__moore_cross_get_coverage(cg, crossCD), 50.0);
+
+  __moore_covergroup_destroy(cg);
+}
+
+// Regression test for filter ownership: the runtime should deep-copy
+// filter data passed to __moore_cross_add_*_bin APIs.
+TEST(MooreRuntimeCrossCoverageTest,
+     DISABLED_CrossNamedBinFiltersAreDeepCopied) {
+  void *cg = __moore_covergroup_create("cross_filter_copy_cg", 2);
+  ASSERT_NE(cg, nullptr);
+
+  __moore_coverpoint_init(cg, 0, "cp0");
+  __moore_coverpoint_init(cg, 1, "cp1");
+
+  int32_t cpIndices[] = {0, 1};
+  int32_t crossIdx = __moore_cross_create(cg, "cross01", cpIndices, 2);
+  ASSERT_GE(crossIdx, 0);
+
+  MooreCrossBinsofFilter filter;
+  std::memset(&filter, 0, sizeof(filter));
+  int64_t intersectValues[] = {7};
+  filter.cp_index = 0;
+  filter.values = intersectValues;
+  filter.num_values = 1;
+
+  int32_t ignoreIdx = __moore_cross_add_ignore_bin(
+      cg, crossIdx, "ignore_cp0_is_7", &filter, 1);
+  ASSERT_GE(ignoreIdx, 0);
+
+  // Mutate caller-owned memory after registration.
+  // Correct behavior: previously added filter must still match cp0 == 7.
+  intersectValues[0] = 999;
+
+  int64_t tuple[] = {7, 1};
+  __moore_coverpoint_sample(cg, 0, tuple[0]);
+  __moore_coverpoint_sample(cg, 1, tuple[1]);
+  __moore_cross_sample(cg, tuple, 2);
+
+  EXPECT_TRUE(__moore_cross_is_ignored(cg, crossIdx, tuple));
+  EXPECT_EQ(__moore_cross_get_bins_hit(cg, crossIdx), 0);
 
   __moore_covergroup_destroy(cg);
 }

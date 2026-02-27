@@ -305,7 +305,7 @@ void CompiledModuleLoader::setupArenaGlobals(
       compiledModule->num_arena_globals == 0)
     return;
 
-  unsigned mapped = 0;
+  unsigned mapped = 0, preserved = 0;
   for (uint32_t i = 0; i < compiledModule->num_arena_globals; ++i) {
     const char *name = compiledModule->arena_global_names[i];
     uint32_t offset = compiledModule->arena_global_offsets[i];
@@ -315,12 +315,33 @@ void CompiledModuleLoader::setupArenaGlobals(
 
     // Point the MemoryBlock directly into the arena allocation.
     void *addr = static_cast<char *>(arenaBase) + offset;
+
+    // Preserve any already-initialized interpreter state when rebasing an
+    // existing global onto arena storage. This keeps pre-init writes coherent.
+    auto existingIt = globalMemoryBlocks.find(name);
+    if (existingIt != globalMemoryBlocks.end()) {
+      const MemoryBlock &existing = existingIt->second;
+      if (existing.bytes() != addr) {
+        uint32_t copySize =
+            std::min(size, static_cast<uint32_t>(existing.size));
+        if (copySize > 0)
+          std::memcpy(addr, existing.bytes(), copySize);
+      }
+      if (existing.initialized)
+        ++preserved;
+    }
+
     MemoryBlock block;
     block.preAlias(addr, size);
+    if (existingIt != globalMemoryBlocks.end())
+      block.initialized = existingIt->second.initialized;
     globalMemoryBlocks[name] = std::move(block);
     ++mapped;
   }
 
   llvm::errs() << "[circt-sim] Mapped " << mapped
-               << " arena globals to memory blocks\n";
+               << " arena globals to memory blocks";
+  if (preserved)
+    llvm::errs() << " (" << preserved << " preserved from preexisting state)";
+  llvm::errs() << "\n";
 }

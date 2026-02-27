@@ -349,6 +349,8 @@ def evaluate_case(
     except subprocess.CalledProcessError as exc:
         lec_text = (exc.output or "") + "\n" + (exc.stderr or "")
         lec_result = parse_lec_result(lec_text)
+        if lec_result == "EQ":
+            return CaseStatus(status="PASS", diag="LEC_RESULT_EQ", reason="eq")
         if lec_result == "NEQ":
             return CaseStatus(status="FAIL", diag="LEC_RESULT_NEQ", reason="neq")
         if lec_result == "UNKNOWN":

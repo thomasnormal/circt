@@ -60,7 +60,6 @@ def ProcessOp : LLHDOp<"process", [
 //===----------------------------------------------------------------------===//
 
 def FinalOp : LLHDOp<"final", [
-  HasParent<"hw::HWModuleOp">,
   NoRegionArguments,
   ProceduralRegion,
   RecursiveMemoryEffects,
@@ -91,6 +90,7 @@ def FinalOp : LLHDOp<"final", [
   }];
   let regions = (region MinSizedRegion<1>: $body);
   let assemblyFormat = "attr-dict-with-keyword $body";
+  let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//

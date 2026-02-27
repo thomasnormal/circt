@@ -15,6 +15,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 using namespace mlir;
@@ -118,6 +119,111 @@ uint64_t LLHDProcessInterpreter::canonicalizeUvmObjectAddress(ProcessId procId,
       nativeOff != 0 && nativeOff < nativeSize)
     return addr - nativeOff;
   return addr;
+}
+
+uint64_t LLHDProcessInterpreter::normalizeNativeCallPointerArg(
+    ProcessId procId, llvm::StringRef calleeName, uint64_t rawAddr) {
+  if (rawAddr == 0)
+    return 0;
+
+  bool tracePtr = std::getenv("CIRCT_AOT_TRACE_PTR") != nullptr;
+  auto traceRewrite = [&](llvm::StringRef kind, uint64_t from, uint64_t to) {
+    if (!tracePtr || from == to)
+      return;
+    llvm::errs() << "[AOT PTR] native-arg-normalize kind=" << kind
+                 << " callee=" << calleeName << " from="
+                 << llvm::format_hex(from, 16) << " to="
+                 << llvm::format_hex(to, 16) << "\n";
+  };
+
+  auto tryVirtualToHost = [&](uint64_t candidate,
+                              llvm::StringRef kind) -> uint64_t {
+    if (candidate == 0)
+      return 0;
+    if (void *mapped = normalizeVirtualPtr(static_cast<void *>(this), candidate)) {
+      uint64_t mappedAddr = reinterpret_cast<uint64_t>(mapped);
+      if (mappedAddr != 0 && mappedAddr != candidate) {
+        traceRewrite(kind, rawAddr, mappedAddr);
+        return mappedAddr;
+      }
+    }
+    void *normalized =
+        normalizeAssocRuntimePointer(reinterpret_cast<void *>(candidate));
+    uint64_t normalizedAddr = reinterpret_cast<uint64_t>(normalized);
+    if (normalizedAddr != candidate) {
+      traceRewrite(kind, rawAddr, normalizedAddr);
+      return normalizedAddr;
+    }
+    return 0;
+  };
+
+  // Low-bit tagging is used on UVM object handles in several paths
+  // (especially around phase graph/state operations). Native code expects a
+  // canonical object pointer, not tagged variants.
+  bool isLikelyObjectMethod =
+      (calleeName.contains("uvm_") || calleeName.contains("::")) &&
+      !calleeName.starts_with("__");
+  if (isLikelyObjectMethod && (rawAddr & uint64_t(7)) != 0) {
+    llvm::SmallVector<uint64_t, 8> untagCandidates;
+    auto addUntagCandidate = [&](uint64_t candidate) {
+      if (candidate == 0 || candidate == rawAddr)
+        return;
+      if (std::find(untagCandidates.begin(), untagCandidates.end(), candidate) !=
+          untagCandidates.end())
+        return;
+      untagCandidates.push_back(candidate);
+    };
+
+    const uint64_t maskedCandidates[] = {
+        rawAddr & ~uint64_t(1), rawAddr & ~uint64_t(3), rawAddr & ~uint64_t(7)};
+    for (uint64_t masked : maskedCandidates) {
+      addUntagCandidate(masked);
+      addUntagCandidate(canonicalizeUvmObjectAddress(procId, masked));
+    }
+    addUntagCandidate(canonicalizeUvmObjectAddress(procId, rawAddr));
+
+    for (uint64_t candidate : untagCandidates) {
+      if (uint64_t hostAddr = tryVirtualToHost(candidate, "virtual-untagged"))
+        return hostAddr;
+    }
+    if (!untagCandidates.empty()) {
+      traceRewrite("untag-fallback", rawAddr, untagCandidates.front());
+      return untagCandidates.front();
+    }
+  }
+
+  if (uint64_t hostAddr = tryVirtualToHost(rawAddr, "virtual-direct"))
+    return hostAddr;
+
+  if (!isLikelyObjectMethod)
+    return rawAddr;
+
+  llvm::SmallVector<uint64_t, 8> candidates;
+  auto addCandidate = [&](uint64_t candidate) {
+    if (candidate == 0)
+      return;
+    if (std::find(candidates.begin(), candidates.end(), candidate) !=
+        candidates.end())
+      return;
+    candidates.push_back(candidate);
+  };
+
+  addCandidate(rawAddr);
+  addCandidate(canonicalizeUvmObjectAddress(procId, rawAddr));
+
+  for (uint64_t candidate : candidates) {
+    if (uint64_t hostAddr = tryVirtualToHost(candidate, "virtual-tagged"))
+      return hostAddr;
+  }
+
+  for (uint64_t candidate : candidates) {
+    if (candidate == rawAddr)
+      continue;
+    traceRewrite("untag-fallback", rawAddr, candidate);
+    return candidate;
+  }
+
+  return rawAddr;
 }
 
 void LLHDProcessInterpreter::cacheSequenceRuntimeVtableForObject(

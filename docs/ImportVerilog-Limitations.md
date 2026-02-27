@@ -14,8 +14,7 @@ covergroup cross bins.
 
 Supported:
 - `binsof(...) [intersect {...}]`, including constant tolerance ranges
-  (`[A +/- B]`, `[A +%- B]`) and open-ended ranges when they can be resolved to
-  finite integral target domains
+  (`[A +/- B]`, `[A +%- B]`) and open-ended ranges (`[A:$]`, `[$:B]`)
 - `!binsof(...)`
 - `&&` and `||` composition
 - plain cross identifier selection, e.g. `bins all = X;`
@@ -52,10 +51,8 @@ Currently unsupported (diagnosed with hard errors):
 - `cross_set_expression` forms that cannot be evaluated at import time
   (for example, helper functions with data-dependent control flow or other
   side effects that prevent static tuple extraction)
-- non-constant `intersect` value ranges in condition leaves, and unbounded
-  ranges that cannot be resolved to a finite integral target domain at import
-  time (for example `[0:$]` over wide/infinite domains, or non-constant
-  tolerance forms like `[center +%- span]`)
+- non-constant `intersect` value ranges in condition leaves
+  (for example non-constant tolerance forms like `[center +%- span]`)
 
 Examples that are supported:
 
@@ -132,7 +129,7 @@ Regression tests:
 - `test/Conversion/ImportVerilog/cross-select-setexpr-function-dowhile-pushback-supported.sv`
 - `test/Conversion/ImportVerilog/cross-select-setexpr-function-repeat-pushback-supported.sv`
 - `test/Conversion/ImportVerilog/cross-select-crossid-supported.sv`
-- `test/Conversion/ImportVerilog/cross-select-intersect-open-range-unsupported.sv`
+- `test/Conversion/ImportVerilog/cross-select-intersect-open-range-wide-supported.sv`
 - `test/Conversion/ImportVerilog/cross-select-intersect-open-range-supported.sv`
 - `test/Conversion/ImportVerilog/cross-select-intersect-tolerance-range-supported.sv`
 - `test/Conversion/ImportVerilog/cross-select-intersect-plusminus-unsupported.sv`

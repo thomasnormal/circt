@@ -1,5 +1,40 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-26 Session: Fast-path A/B waveform differential infrastructure
+
+### What changed
+- Added tooling:
+  - `utils/compare_vcd_waveforms.py`
+  - `utils/check_avip_waveform_matrix_parity.py`
+  - `utils/run_avip_circt_fastpath_ab.sh`
+- Extended matrix runners to persist waveform paths:
+  - `utils/run_avip_circt_sim.sh` now supports
+    `CIRCT_SIM_DUMP_VCD`, `CIRCT_SIM_TRACE_ALL`, `CIRCT_SIM_TRACE_SIGNALS`
+    and records `vcd_file` in `matrix.tsv`.
+  - `utils/run_avip_xcelium_reference.sh` now supports
+    `XCELIUM_COLLECT_VCD`, `XCELIUM_VCD_GLOB` and records `vcd_file` in
+    `matrix.tsv` when available.
+
+### Why
+- Existing A/B parity checks were mostly scalar-metric based
+  (`sim_status/sim_exit/coverage/sim_time`).
+- Fast-path bugs can preserve those coarse metrics while still producing
+  waveform-level functional drift.
+- Need a reproducible lane-level way to:
+  1. compare interpreted fast-path OFF vs ON directly on waveforms,
+  2. optionally compare both lanes to Xcelium waveforms.
+
+### Validation snapshot
+- Syntax checks:
+  - `python3 -m py_compile` on new Python utilities: PASS.
+  - `bash -n` on updated/new shell runners: PASS.
+- Functional spot checks with synthetic VCDs:
+  - equal traces: PASS (`--fail-on-mismatch` returns 0),
+  - intentional signal drift: FAIL as expected (non-zero + mismatching signal).
+- Matrix waveform checker smoke:
+  - compares functional rows only by default,
+  - skips non-functional rows, emits row-level TSV summary.
+
 ## 2026-02-26 Session: Bytecode fast-path drive-delay timing guard
 
 ### Red-first repro
@@ -11443,3 +11478,379 @@ Based on these findings, the circt-sim compiled process architecture:
 - Function-scope `CHECK-LABEL` boundaries are essential in BMC-conversion tests
   to avoid accidental matches across helper functions when return/cast patterns
   evolve.
+
+## 2026-02-26 OpenTitan LEC runner parity: honor explicit EQ result on non-zero tool exit
+
+### Gap identified
+- `utils/run_opentitan_circt_lec.py` treated any `subprocess.CalledProcessError`
+  from `circt-lec` as a hard FAIL, even if tool output clearly reported
+  `LEC_RESULT=EQ`.
+- This is brittle against solver/tool wrappers that return non-zero exit codes
+  for warning/error channels while still producing a definitive equivalence
+  result token.
+
+### TDD
+- Added red regression:
+  - `test/Tools/run-opentitan-lec-eq-result-nonzero-exit.test`
+  - Stub `circt-lec` prints:
+    - `LEC_RESULT=EQ`
+    - `c1 == c2`
+    - exits with code `2`.
+- Pre-fix behavior (expected red): runner emitted
+  `aes_sbox_canright FAIL (EQ)` and returned failure.
+
+### Implementation
+- File: `utils/run_opentitan_circt_lec.py`
+- In `except subprocess.CalledProcessError`:
+  - parse combined `circt-lec.log` + `circt-lec.out` as before,
+  - if `stage == "lec"`, `not lec_smoke_only`, and parsed `result == "EQ"`,
+    classify case as PASS and continue,
+  - otherwise keep existing FAIL classification flow unchanged.
+
+### Validation
+- New regression now passes:
+  - `llvm-lit -sv build_test/test/Tools/run-opentitan-lec-eq-result-nonzero-exit.test`
+- Existing behavior checks still pass:
+  - `run-opentitan-lec-missing-result-fails.test`
+  - `run-opentitan-lec-diag-fallback.test`
+  - `run-opentitan-lec-timeout-classification.test`
+  - `run-opentitan-lec-error-diag.test`
+  - `run-opentitan-lec-xprop-fail-detail.test`
+  - `run-opentitan-lec-xprop-summary.test`
+  - `run-opentitan-lec-launch-retry-transient.test`
+- Sanity:
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`
+
+### Realizations
+- Result-token-first classification is more robust for formal tool integration;
+  transport-layer exit status alone is not always a reliable semantic outcome
+  indicator.
+
+## 2026-02-26 OpenTitan LEC runner parity: accept XPROP_ONLY on non-zero tool exit
+
+### Gap identified
+- `utils/run_opentitan_circt_lec.py` only applied `XPROP_ONLY` acceptance
+  (`LEC_ACCEPT_XPROP_ONLY=1`) on the success path where `circt-lec` exits 0.
+- If `circt-lec` exited non-zero but still emitted explicit
+  `LEC_RESULT=NEQ` + `LEC_DIAG=XPROP_ONLY`, runner misclassified it as FAIL.
+
+### TDD
+- Added red regression:
+  - `test/Tools/run-opentitan-lec-xprop-nonzero-accepted.test`
+- Stub behavior:
+  - emits `LEC_RESULT=NEQ`, `LEC_DIAG=XPROP_ONLY`, exits `3`.
+- Pre-fix outcome:
+  - `aes_sbox_canright FAIL (XPROP_ONLY)` and non-zero runner exit.
+
+### Implementation
+- File: `utils/run_opentitan_circt_lec.py`
+- In `except subprocess.CalledProcessError`:
+  - keep existing parse of `result`/`diag`/summary fields,
+  - if stage is `lec`, non-smoke mode, `result in {NEQ, UNKNOWN}`,
+    `diag == XPROP_ONLY`, and `LEC_ACCEPT_XPROP_ONLY=1`:
+    - classify as `XFAIL`,
+    - emit accepted status line,
+    - append `xprop_rows`,
+    - `continue` without incrementing failures.
+- Existing non-zero `EQ` pass handling remains unchanged.
+
+### Validation
+- New regression passes:
+  - `llvm-lit -sv build_test/test/Tools/run-opentitan-lec-xprop-nonzero-accepted.test`
+- Focused compatibility set passes:
+  - `run-opentitan-lec-eq-result-nonzero-exit.test`
+  - `run-opentitan-lec-diagnose-xprop.test`
+  - `run-opentitan-lec-xprop-fail-detail.test`
+  - `run-opentitan-lec-xprop-summary.test`
+  - `run-opentitan-lec-missing-result-fails.test`
+- Full LEC runner cluster passes:
+  - `llvm-lit -sv build_test/test/Tools --filter='run-opentitan-lec'`
+- Sanity:
+  - `python3 -m py_compile utils/run_opentitan_circt_lec.py`
+
+### Realizations
+- For formal tool orchestration, explicit semantic result tokens should take
+  precedence over transport exit status for classification, including accepted
+  diagnostic buckets like `XPROP_ONLY`.
+
+## 2026-02-26 LEC runner parity sweep: non-zero exit with explicit EQ token
+
+### Gap identified
+- Two OpenTitan LEC runners still treated non-zero `circt-lec` exit as
+  non-pass even when output carried an explicit `LEC_RESULT=EQ` token:
+  - `utils/run_opentitan_connectivity_circt_lec.py`
+  - `utils/run_opentitan_fpv_circt_lec.py`
+- This diverged from token-first result semantics already established in
+  `utils/run_opentitan_circt_lec.py`.
+
+### TDD
+- Added red regressions:
+  - `test/Tools/run-opentitan-connectivity-circt-lec-eq-result-nonzero-exit.test`
+  - `test/Tools/run-opentitan-fpv-circt-lec-eq-result-nonzero-exit.test`
+- Both stubs emit `LEC_RESULT=EQ` and exit non-zero.
+- Pre-fix behavior:
+  - connectivity runner produced `ERROR`.
+  - FPV LEC runner produced `ERROR` / projected assertion `ERROR`.
+
+### Implementation
+- `utils/run_opentitan_connectivity_circt_lec.py`
+  - In `except subprocess.CalledProcessError` for `stage == lec`, when
+    parsed `result == EQ`, classify case as `PASS` with `diag or EQ`.
+- `utils/run_opentitan_fpv_circt_lec.py`
+  - In `classify_case` `except subprocess.CalledProcessError`, when
+    parsed `lec_result == EQ`, return `CaseStatus(PASS, LEC_RESULT_EQ, eq)`.
+
+### Validation
+- New tests pass:
+  - `run-opentitan-connectivity-circt-lec-eq-result-nonzero-exit.test`
+  - `run-opentitan-fpv-circt-lec-eq-result-nonzero-exit.test`
+- Filtered suites pass:
+  - `llvm-lit -sv build_test/test/Tools --filter='run-opentitan-connectivity-circt-lec|run-opentitan-fpv-circt-lec'`
+- Sanity:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py utils/run_opentitan_fpv_circt_lec.py`
+
+### Realization
+- The token-first policy should be consistent across all LEC orchestration
+  frontends to avoid runner-specific semantic drift caused by wrapper/process
+  exit behavior.
+
+## 2026-02-26 Connectivity BMC runner parity: row-first exit classification
+
+### Gap identified
+- `utils/run_opentitan_connectivity_circt_bmc.py` returned
+  `max(proc.returncode, governance_rc)` after pairwise execution.
+- This caused two parity gaps:
+  - false failure when pairwise exited non-zero but emitted clean `PASS` rows;
+  - false success when pairwise exited zero but emitted `FAIL` rows.
+
+### TDD
+- Added red regressions:
+  - `test/Tools/run-opentitan-connectivity-circt-bmc-nonzero-exit-pass-results.test`
+  - `test/Tools/run-opentitan-connectivity-circt-bmc-fail-row-zero-exit.test`
+  - `test/Tools/run-opentitan-connectivity-circt-bmc-missing-row-zero-exit.test`
+- Pre-fix behavior:
+  - non-zero/clean-row case failed with child exit code;
+  - zero-exit/fail-row case incorrectly passed.
+
+### Implementation
+- Added status helpers in connectivity BMC runner:
+  - `summarize_connectivity_status_counts`
+  - `evaluate_connectivity_case_rc`
+- Updated post-run result handling:
+  - derive `case_rc` from parsed case/cover statuses (`FAIL`, `XPASS`, errors,
+    cover `TIMEOUT`/`UNKNOWN`/error are fail-like);
+  - enforce completeness by checking observed case rows against generated case
+    count;
+  - return failure on `case_rc` or governance drift;
+  - if rows are complete/clean and child exit is non-zero, emit warning and
+    keep overall success.
+
+### Validation
+- New regressions pass:
+  - `run-opentitan-connectivity-circt-bmc-nonzero-exit-pass-results.test`
+  - `run-opentitan-connectivity-circt-bmc-fail-row-zero-exit.test`
+  - `run-opentitan-connectivity-circt-bmc-missing-row-zero-exit.test`
+- Existing connectivity BMC suite passes:
+  - `./llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-opentitan-connectivity-circt-bmc'`
+- Sanity:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+- Note:
+  - `run-formal-all-opentitan-connectivity-bmc-requires-filter.test` failed in
+    this environment due local harness tool-path setup (`build_test/bin/circt-verilog`
+    missing), unrelated to connectivity BMC result classification.
+
+### Realization
+- For orchestrated formal lanes, transport exit status is a weak signal; final
+  pass/fail must be grounded in parsed per-case semantics plus explicit
+  completeness checks.
+
+## 2026-02-26 FPV BMC runner parity: missing case-row detection
+
+### Gap identified
+- `utils/run_opentitan_fpv_circt_bmc.py` accepted pairwise outputs without
+  verifying one result row per emitted case.
+- A partial/truncated pairwise results file with zero process exit could
+  silently report success (`total=1 pass=1`) while scheduled cases were missing.
+
+### TDD
+- Added red regression:
+  - `test/Tools/run-opentitan-fpv-circt-bmc-missing-case-row-zero-exit.test`
+- Stub emits two input cases, writes one `PASS` row, exits zero.
+- Pre-fix behavior: runner returned success and omitted missing-case diagnostics.
+
+### Implementation
+- In FPV group execution loop:
+  - parse expected `(case_id, case_path)` entries from emitted case lines.
+  - if primary group results file is missing:
+    - write synthetic `ERROR` rows for all expected cases with reason
+      `pairwise_missing_case_result`,
+    - mark `pairwise_rc` failure and emit diagnostic.
+  - after timeout-fallback merge, enforce completeness:
+    - detect expected case IDs absent from `effective_rows`,
+    - append synthetic `ERROR` rows for missing cases,
+    - rewrite group results file and mark `pairwise_rc` failure.
+
+### Validation
+- New regression passes:
+  - `run-opentitan-fpv-circt-bmc-missing-case-row-zero-exit.test`
+- FPV runner suite passes:
+  - `./llvm/build/bin/llvm-lit -sv build_test/test/Tools --filter='run-opentitan-fpv-circt-bmc'`
+- Sanity:
+  - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+
+### Realization
+- Missing-case enforcement is required alongside token-first status parsing;
+  otherwise partial outputs can be misclassified as fully successful runs.
+
+## 2026-02-26 sv-tests waveform diff: wave upper bound accounting + MAX_TESTS pipe-noise
+
+### Gap identified
+- `utils/run_sv_tests_waveform_diff.sh` emitted noisy `sort: ... Broken pipe` warnings when `MAX_TESTS` was hit.
+- Root cause: early `break` from `while ... done < <(find ... | sort -z)` closes the consumer side while `sort` is still writing.
+- Runner also lacked explicit wave-count accounting for the expected upper bound model:
+  - `waves_upper_bound = selected_tests * 4`.
+
+### Implementation
+- `utils/run_sv_tests_waveform_diff.sh`
+  - Switched source iteration to `mapfile -d '' sv_candidates < <(find ... -print0 | sort -z)` + `for` loop.
+  - Restored clean early `break` on `MAX_TESTS` without producer broken-pipe noise.
+  - Added deterministic summary metrics:
+    - `max_tests_reached=0|1`
+    - `waves_upper_bound=<selected*4>`
+    - `waves_produced=<sum of non-missing vcd_file rows across 4 lanes>`
+    - per-lane VCD counts (`interpret_off`, `interpret_on`, `compile_aot`, `xcelium`).
+
+### Tests (TDD)
+- Added regression test:
+  - `test/Tools/run-sv-tests-waveform-diff-wave-count-summary.test`
+- Test uses fake circt-verilog/sim + fake compare tool and asserts:
+  - no `Broken pipe` in runner log,
+  - `selected=1`, `max_tests_reached=1`,
+  - `waves_upper_bound=4`, `waves_produced=3` (xcelium intentionally missing),
+  - per-lane VCD counts match matrix rows.
+
+### Validation
+- Manual replay of new test logic with temp fixture:
+  - passed all assertions.
+- Real script smoke replay:
+  - `MAX_TESTS=1 REQUIRE_XCELIUM=0 utils/run_sv_tests_waveform_diff.sh ...`
+  - no broken-pipe warning,
+  - summary reported `waves_upper_bound=4 waves_produced=3`.
+
+### Realization
+- Emitting `selected * lane_count` and produced-wave counts directly in runner output makes missing-wave diagnosis immediate and removes ambiguity around compare-stage skips (e.g., nonfunctional or no-license xcelium rows).
+
+### Follow-up run evidence
+- Real sample run (`MAX_TESTS=20`) after patch:
+  - `selected=20`
+  - `waves_upper_bound=80`
+  - `waves_produced=60`
+  - lane VCD counts: `interpret_off=20 interpret_on=20 compile_aot=20 xcelium=0`
+- In this environment, xcelium lane misses are explained by license checkout failures:
+  - `xmsim: *F,NOLICN: Unable to checkout license for the simulation`.
+
+## 2026-02-26 FPV parity lanes: non-empty objective evidence contract
+
+### Gaps identified
+- `run_opentitan_fpv_objective_parity_lane` only required assertion-result file
+  existence before invoking parity checker; empty-but-present BMC/LEC objective
+  artifacts could still drive checker invocation and produce misleading lane
+  outcomes.
+- `run_opentitan_fpv_bmc_evidence_parity_lane` required assertion file
+  existence (`-f`) but not non-empty objective evidence rows; empty assertion +
+  cover artifacts could similarly mask missing evidence.
+
+### TDD
+- Added red regressions:
+  - `test/Tools/run-formal-all-opentitan-fpv-objective-parity-empty-evidence-files-error.test`
+  - `test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-empty-evidence-files-error.test`
+- Both tests stub parity checkers to create a `parity-invoked` sentinel and
+  fail if invoked; expected behavior is now early lane `error=1` with
+  evidence-row diagnostics and no checker execution.
+
+### Implementation
+- `utils/run_formal_all.sh`
+  - In FPV objective parity lane:
+    - count non-empty rows in BMC/LEC assertion + optional cover evidence;
+    - require `bmc_objective_rows > 0` and `lec_objective_rows > 0`;
+    - otherwise emit `missing_fpv_objective_evidence_rows=1` plus side-specific
+      zero-row diagnostics and return early.
+  - In FPV BMC evidence parity lane:
+    - count non-empty rows in assertion + optional cover evidence;
+    - require `fpv_evidence_objective_rows > 0`;
+    - otherwise emit `missing_fpv_evidence_rows=1` with row counters and return
+      early.
+
+### Validation
+- New tests pass green after patch:
+  - `llvm-lit -sv build_test/test/Tools/run-formal-all-opentitan-fpv-objective-parity-empty-evidence-files-error.test`
+  - `llvm-lit -sv build_test/test/Tools/run-formal-all-opentitan-fpv-bmc-evidence-parity-empty-evidence-files-error.test`
+- Focused suite sweep passes:
+  - `llvm-lit -sv build_test/test/Tools --filter='run-formal-all-opentitan-fpv-(bmc-evidence-parity|objective-parity)'`
+
+### Realization
+- For parity/governance lanes, "file exists" is insufficient as a precondition;
+  evidence lanes need row-level non-emptiness contracts to prevent checker
+  execution from legitimizing empty inputs.
+
+## 2026-02-27 AVIP native repo baseline reset + native-source switch
+
+### User-directed baseline reset
+- Reset all AVIP repos under `/home/thomas-ahle/mbit/*_avip` to tracked upstream heads:
+  - `git fetch origin --prune`
+  - `git reset --hard origin/<current-branch>`
+  - `git clean -fdx`
+- Verified all 9 repos are clean and `0/0` diverged from origin.
+
+### Native-source mode (no `.avip_tmp` overlays)
+- Added opt-in flag to preserve AVIP sources exactly as filelists specify:
+  - `AVIP_NATIVE_SOURCES_ONLY=1`
+- Plumbing:
+  - `utils/run_avip_circt_sim.sh`
+    - env var documentation + meta emission (`avip_native_sources_only`)
+    - pass-through to `run_avip_circt_verilog.sh`
+  - `utils/run_avip_circt_verilog.sh`
+    - read `AVIP_NATIVE_SOURCES_ONLY`
+    - gate all source overlay rewrites (`Axi4Lite`, `SPI`, `AHB`, `AXI4`, `I3C`, `UART`, `JTAG`, reset-wait, repeat-cap).
+
+### Probe result
+- Short probe run with `AVIP_NATIVE_SOURCES_ONLY=1` on AHB confirmed:
+  - no `.avip_tmp` directory generated,
+  - compile fails in native upstream source with bind resolution errors (`ahbInterface` undeclared in `AhbMasterAgentBFM.sv`).
+
+### Realization
+- “Native AVIP repos” and “current CIRCT compile compatibility” are not equivalent today.
+- Upstream repos can be kept clean and reset while still requiring non-destructive transient overlays in CIRCT runners for compatibility until frontend support catches up.
+
+## 2026-02-27 LLHD compile regression triage (interpreted AVIP blocker)
+
+### Symptom
+- With rebuilt audit tools (`/tmp/circt_audit_tools`), APB compile in `--ir-llhd` times out repeatedly:
+  - `COMPILE_TIMEOUT=600` still fails (`apb.mlir` remains empty).
+- Same source set in `--ir-moore` completes quickly (~35-47s), indicating the bottleneck is in Moore->Core/LLHD lowering, not front-end parse/elaboration.
+
+### Pass-level localization
+- Ran `circt-verilog --verbose-pass-executions` under timeout.
+- Last completed stages before timeout:
+  - `convert-moore-to-core` finished in ~41s.
+  - Next pass group `any(cse, canonicalize)` did not finish before timeout and became the dominant stall.
+
+### Mitigation implemented (opt-in, interpreted-focused)
+- Added hidden frontend switch in `tools/circt-verilog/circt-verilog.cpp`:
+  - `--skip-post-moore-to-core-cleanup`
+  - This bypasses the post-conversion `cse+canonicalize` cleanup inside `populateMooreToCorePipeline`.
+- Refactored API with backward-compatible default:
+  - `populateMooreToCorePipeline(pm, bool skipPostCleanup = false)`
+  - default behavior unchanged for all existing callers.
+
+### Runner plumbing
+- `utils/run_avip_circt_sim.sh` now supports:
+  - `AVIP_SKIP_POST_MOORE_TO_CORE_CLEANUP=1`
+  - Appends `--skip-post-moore-to-core-cleanup` to `CIRCT_VERILOG_ARGS` for compile phase only.
+  - Metadata now records:
+    - `circt_verilog_args=...`
+    - `avip_skip_post_moore_to_core_cleanup=...`
+
+### Realization
+- Current interpreted AVIP blocker has shifted from runtime liveness into frontend throughput: LLHD generation is currently too slow to reach simulation.
+- Keeping the skip flag opt-in preserves compiled-mode and non-AVIP behavior while enabling targeted throughput recovery once rebuilt binaries include the new switch.
