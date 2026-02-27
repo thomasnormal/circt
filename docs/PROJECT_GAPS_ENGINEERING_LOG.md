@@ -199,3 +199,32 @@
     - `sva-immediate-sampled-continue-on-unsupported.sv`
     - `sva-immediate-past-event-continue-on-unsupported.sv`
     - `sva-continue-on-unsupported.sv`
+
+### UVM: align `uvm_reporting_test` with bundled `uvm-core` reporting APIs
+- Repro:
+  - `llvm-lit --filter 'Runtime/uvm/uvm_reporting_test.sv' test/Runtime/uvm`
+  - Failed on multiple API mismatches versus bundled `uvm-core`, including:
+    - missing `get_id_verbosity`
+    - missing `get_report_max_quit_count`
+    - missing `uvm_report_catcher::{add,remove,clear_catchers,get_catcher_count,summarize_catchers}`
+    - old `catch_action` signature instead of `catch`.
+- Root cause:
+  - The test was written against older/helper reporting APIs that are not
+    exposed by the current bundled IEEE-oriented `uvm-core` surface.
+- Fix:
+  - Updated `uvm_reporting_test.sv` to use currently available APIs:
+    - implement `uvm_report_catcher::catch()` directly
+    - use `get_verbosity_level(UVM_INFO, id)` for id verbosity checks
+    - validate max quit count through the report server singleton
+    - use severity-count APIs (`get_severity_count`) instead of convenience
+      `get_info_count/get_warning_count`.
+  - Reworked catcher registration/count/clear logic to use
+    `uvm_report_cb` + `uvm_report_cb_iter`.
+  - Switched `process_all_report_catchers` usage to the current
+    `uvm_report_message`-based API.
+  - Cast report server to `uvm_default_report_server` in the one test that
+    exercises convenience quit/severity reset helpers.
+- Tests:
+  - `llvm-lit -sv --filter 'Runtime/uvm/uvm_reporting_test.sv' test/Runtime/uvm`
+  - `llvm-lit -sv --filter 'Runtime/uvm/' test/Runtime/uvm`
+    - now 12 passing / 5 failing (previously 11 / 6).
