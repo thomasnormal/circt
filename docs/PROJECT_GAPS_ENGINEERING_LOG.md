@@ -499,3 +499,28 @@
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/sva-ended-runtime.sv`
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-sequencer-wait-for-grant-send-request-runtime.sv`
   - consolidated rerun: 1 pass, 7 expected-fail.
+
+### ImportVerilog: fix false-positive config-compilation-unit detection
+- Repro:
+  - `test/Tools/circt-sim/config-keyword-identifiers-default-compat.sv`
+    still failed parse even though config-keyword identifier rewrite exists.
+  - `-E` output showed no identifier rewriting for this test.
+- Root cause:
+  - `hasProbableConfigCompilationUnit` used a too-broad line-prefix heuristic:
+    lines like `library = ...` / `config = ...` in procedural code were
+    misclassified as compilation-unit `library/config` syntax.
+  - This disabled compatibility rewriting for the whole file.
+- Fix:
+  - Tightened compilation-unit detection to distinguish directive-like uses from
+    procedural assignments/usages:
+    - require meaningful token shape after keyword
+    - reject assignment-like forms (`=`, `<=`, etc.) before `;`
+    - keep `include` handling for directive-like forms only
+  - Removed `XFAIL` from
+    `test/Tools/circt-sim/config-keyword-identifiers-default-compat.sv`.
+- Tests:
+  - `build_test/bin/circt-verilog -E test/Tools/circt-sim/config-keyword-identifiers-default-compat.sv --no-uvm-auto-include`
+    - now shows `__circt_cfgkw_*` rewritten identifiers.
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/config-keyword-identifiers-default-compat.sv`
+    - passes.
+  - 8-test subset rerun now: 2 pass, 6 expected-fail.
