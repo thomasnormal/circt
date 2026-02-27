@@ -4686,12 +4686,13 @@ static Value createGlobalStringConstant(Location loc, ModuleOp mod,
 /// 1. Creates a global variable to store the covergroup handle
 /// 2. Generates an initialization function that:
 ///    - Calls __moore_covergroup_create(name, num_coverpoints) -> void*
-///    - Calls __moore_coverpoint_init(cg, index, name) for each coverpoint
+///    - Calls __moore_coverpoint_init_with_width(cg, index, name, width)
+///      for each coverpoint
 ///    - Stores the handle to the global variable
 ///
 /// Runtime functions used:
 /// - __moore_covergroup_create(name, num_coverpoints) -> void*
-/// - __moore_coverpoint_init(cg, index, name)
+/// - __moore_coverpoint_init_with_width(cg, index, name, width)
 /// - __moore_coverpoint_sample(cg, index, value) (called from sample sites)
 /// - __moore_covergroup_destroy(cg) (future: cleanup at end of simulation)
 /// - __moore_coverage_report() (future: called at $finish)
@@ -4770,11 +4771,11 @@ struct CovergroupDeclOpConversion
                                                "__moore_covergroup_create",
                                                createFnTy);
 
-        // Get or create __moore_coverpoint_init function
+        // Get or create __moore_coverpoint_init_with_width function.
         auto initCpFnTy =
-            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy});
+            LLVM::LLVMFunctionType::get(voidTy, {ptrTy, i32Ty, ptrTy, i32Ty});
         auto initCpFn = getOrCreateRuntimeFunc(
-            mod, rewriter, "__moore_coverpoint_init", initCpFnTy);
+            mod, rewriter, "__moore_coverpoint_init_with_width", initCpFnTy);
 
         // Covergroup option setters.
         auto setCgWeightFnTy =
@@ -4911,9 +4912,22 @@ struct CovergroupDeclOpConversion
           auto idxConst = LLVM::ConstantOp::create(
               rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIndex));
 
-          LLVM::CallOp::create(rewriter, loc, TypeRange{},
-                               SymbolRefAttr::get(initCpFn),
-                               ValueRange{cgHandle, idxConst, cpNamePtr});
+          int32_t cpBitWidth = 0;
+          if (auto cpTypeAttr = cp->getAttrOfType<TypeAttr>("type")) {
+            Type cpType = cpTypeAttr.getValue();
+            if (auto intTy = dyn_cast<IntType>(cpType)) {
+              cpBitWidth = static_cast<int32_t>(intTy.getWidth());
+            } else if (auto packedTy = dyn_cast<PackedType>(cpType)) {
+              if (auto bitSize = packedTy.getBitSize())
+                cpBitWidth = static_cast<int32_t>(*bitSize);
+            }
+          }
+          auto widthConst = LLVM::ConstantOp::create(
+              rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpBitWidth));
+
+          LLVM::CallOp::create(
+              rewriter, loc, TypeRange{}, SymbolRefAttr::get(initCpFn),
+              ValueRange{cgHandle, idxConst, cpNamePtr, widthConst});
 
           // Apply coverpoint options parsed during ImportVerilog lowering.
           if (auto cpWeightAttr = cp.getWeightAttr()) {
@@ -15965,6 +15979,26 @@ struct FormatStringToStringOpConversion
       return intVal;
     };
 
+    auto unpackPackedFourStateValueBits =
+        [&](Value intVal, std::optional<unsigned> fourStateWidth) -> Value {
+      if (!fourStateWidth || *fourStateWidth == 0)
+        return intVal;
+      auto intTy = dyn_cast<IntegerType>(intVal.getType());
+      if (!intTy)
+        return intVal;
+      unsigned packedWidth = intTy.getWidth();
+      unsigned logicalWidth = *fourStateWidth;
+      if (packedWidth != logicalWidth * 2)
+        return intVal;
+
+      auto shiftAmount = arith::ConstantOp::create(
+          rewriter, loc, intTy, rewriter.getIntegerAttr(intTy, logicalWidth));
+      Value shifted =
+          arith::ShRUIOp::create(rewriter, loc, intTy, intVal, shiftAmount);
+      auto logicalTy = IntegerType::get(ctx, logicalWidth);
+      return arith::TruncIOp::create(rewriter, loc, logicalTy, shifted);
+    };
+
     auto callStringFromI64 = [&](StringRef runtimeName, Value intI64) -> Value {
       auto fnTy = LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty});
       auto runtimeFn =
@@ -15977,25 +16011,33 @@ struct FormatStringToStringOpConversion
 
     // Case 3: Formatted decimal integer.
     if (auto decOp = dyn_cast<sim::FormatDecOp>(defOp)) {
-      Value intI64 = convertIntToI64(decOp.getValue(), decOp.getIsSigned());
+      Value intVal =
+          unpackPackedFourStateValueBits(decOp.getValue(), decOp.getFourStateWidth());
+      Value intI64 = convertIntToI64(intVal, decOp.getIsSigned());
       return callStringFromI64("__moore_int_to_string", intI64);
     }
 
     // Case 4: Formatted hexadecimal integer.
     if (auto hexOp = dyn_cast<sim::FormatHexOp>(defOp)) {
-      Value intI64 = convertIntToI64(hexOp.getValue(), /*isSigned=*/false);
+      Value intVal =
+          unpackPackedFourStateValueBits(hexOp.getValue(), hexOp.getFourStateWidth());
+      Value intI64 = convertIntToI64(intVal, /*isSigned=*/false);
       return callStringFromI64("__moore_string_hextoa", intI64);
     }
 
     // Case 5: Formatted octal integer.
     if (auto octOp = dyn_cast<sim::FormatOctOp>(defOp)) {
-      Value intI64 = convertIntToI64(octOp.getValue(), /*isSigned=*/false);
+      Value intVal =
+          unpackPackedFourStateValueBits(octOp.getValue(), octOp.getFourStateWidth());
+      Value intI64 = convertIntToI64(intVal, /*isSigned=*/false);
       return callStringFromI64("__moore_string_octtoa", intI64);
     }
 
     // Case 6: Formatted binary integer.
     if (auto binOp = dyn_cast<sim::FormatBinOp>(defOp)) {
-      Value intI64 = convertIntToI64(binOp.getValue(), /*isSigned=*/false);
+      Value intVal =
+          unpackPackedFourStateValueBits(binOp.getValue(), binOp.getFourStateWidth());
+      Value intI64 = convertIntToI64(intVal, /*isSigned=*/false);
       return callStringFromI64("__moore_string_bintoa", intI64);
     }
 
