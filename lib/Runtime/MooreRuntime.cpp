@@ -14410,7 +14410,8 @@ extern "C" void __uvm_execute_phases(void) {
 /// @param testNameLen Length of the test name string
 ///
 /// This function:
-/// 1. Creates the test component using the UVM factory (TODO)
+/// 1. Attempts to create the requested test component using the UVM factory
+///    (or emits UVM NOTYPE warning when unregistered)
 /// 2. Executes the UVM phase sequence (build, connect, run, etc.)
 /// 3. Reports summarize and finishes simulation
 extern "C" void __uvm_run_test(const char *testNameData, int64_t testNameLen) {
