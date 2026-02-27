@@ -37,5 +37,6 @@ formal-results-*
 .codex
 
 # Local engineering notes (do not commit by default)
-circt_sim_engineering_log.md
-aot_plan_5.md
+*_engineering_log.md
+aot_plan_*.md
+docs/CIRCT_SIM_FULL_NATIVE_JIT_PLAN.md
