@@ -25,6 +25,14 @@ TEST(ResourceGuardTest, ParseMegabytes) {
   EXPECT_FALSE(parseMegabytes("-1"));
 }
 
+TEST(ResourceGuardTest, ComputeDefaultResourceGuardMaxRSSMB) {
+  EXPECT_EQ(computeDefaultResourceGuardMaxRSSMB(std::nullopt), 8192u);
+  EXPECT_EQ(computeDefaultResourceGuardMaxRSSMB(2048), 1638u);
+  EXPECT_EQ(computeDefaultResourceGuardMaxRSSMB(8192), 4915u);
+  EXPECT_EQ(computeDefaultResourceGuardMaxRSSMB(32768), 13107u);
+  EXPECT_EQ(computeDefaultResourceGuardMaxRSSMB(131072), 32768u);
+}
+
 #if GTEST_HAS_DEATH_TEST
 TEST(ResourceGuardTest, WarnsWhenAllLimitsDisabledExplicitly) {
   EXPECT_EXIT(

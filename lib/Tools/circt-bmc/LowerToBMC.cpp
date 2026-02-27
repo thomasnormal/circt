@@ -2567,10 +2567,15 @@ void LowerToBMCPass::runOnOperation() {
       // input. This avoids treating structurally equivalent clock expressions
       // as unrelated to the inserted clock ports.
       for (auto clockOp : ltlClockOps) {
-        if (auto key = getI1ValueKeyWithBlockArgNames(clockOp.getClock(),
-                                                      getBlockArgName))
-          clockOp->setAttr("bmc.clock_key", builder.getStringAttr(*key));
         auto oldKeyAttr = clockOp->getAttrOfType<StringAttr>("bmc.clock_key");
+        // Preserve explicit/stable keys provided by prior lowering stages.
+        // Synthesis here is only for missing metadata.
+        if (!oldKeyAttr || oldKeyAttr.getValue().empty())
+          if (auto key = getI1ValueKeyWithBlockArgNames(clockOp.getClock(),
+                                                        getBlockArgName)) {
+            oldKeyAttr = builder.getStringAttr(*key);
+            clockOp->setAttr("bmc.clock_key", oldKeyAttr);
+          }
         auto idx = lookupClockInputIndex(clockOp.getClock());
         if (!idx) {
           if (clockOp.use_empty()) {
@@ -2590,7 +2595,10 @@ void LowerToBMCPass::runOnOperation() {
         auto rebuilt = ltl::ClockOp::create(builder, loc, clockOp.getInput(),
                                             clockOp.getEdge(), fromClk);
         StringAttr mappedKeyAttr = oldKeyAttr;
-        if (*idx < clockKeyAttrs.size()) {
+        bool keepNamedPortKey = mappedKeyAttr &&
+                                !mappedKeyAttr.getValue().empty() &&
+                                mappedKeyAttr.getValue().starts_with("port:");
+        if (!keepNamedPortKey && *idx < clockKeyAttrs.size()) {
           if (auto keyAttr = dyn_cast_or_null<StringAttr>(clockKeyAttrs[*idx]);
               keyAttr && !keyAttr.getValue().empty())
             mappedKeyAttr = keyAttr;

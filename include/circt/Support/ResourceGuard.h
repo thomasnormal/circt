@@ -34,6 +34,11 @@ namespace circt {
 /// Parse a string containing an unsigned integer number of megabytes.
 std::optional<uint64_t> parseMegabytes(llvm::StringRef text);
 
+/// Compute the default RSS limit (in MB) used by the resource guard when an
+/// explicit RSS limit is not provided.
+uint64_t computeDefaultResourceGuardMaxRSSMB(
+    std::optional<uint64_t> systemMemoryMB);
+
 /// Set a best-effort label for the current "phase" of execution. If the
 /// resource guard triggers, it will include this label in its diagnostic to
 /// help narrow down where memory was consumed.

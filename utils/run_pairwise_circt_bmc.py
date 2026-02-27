@@ -505,15 +505,18 @@ def has_command_option(args: list[str], option: str) -> bool:
 
 
 def has_explicit_resource_guard_policy(args: list[str]) -> bool:
-    explicit_options = (
-        "--resource-guard",
-        "--no-resource-guard",
+    # Treat explicit limit configuration (or explicit disable) as a policy pin.
+    # A plain "--resource-guard" flag still uses tool defaults and should
+    # remain eligible for auto-relax retries.
+    explicit_limit_options = (
         "--max-rss-mb",
         "--max-vmem-mb",
         "--max-malloc-mb",
         "--max-wall-ms",
     )
-    if any(has_command_option(args, option) for option in explicit_options):
+    if has_command_option(args, "--no-resource-guard"):
+        return True
+    if any(has_command_option(args, option) for option in explicit_limit_options):
         return True
     explicit_env_vars = (
         "CIRCT_MAX_RSS_MB",
