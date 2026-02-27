@@ -1420,31 +1420,33 @@ struct ModuleVisitor : public BaseVisitor {
       if (!expr) {
         if (auto *port = portSymbol->as_if<PortSymbol>()) {
           switch (port->direction) {
-          case ArgumentDirection::In: {
+          case ArgumentDirection::In:
+          case ArgumentDirection::InOut: {
             auto refType = moore::RefType::get(
                 cast<moore::UnpackedType>(context.convertType(port->getType())));
+            Value placeholder;
 
             if (const auto *net =
                     port->internalSymbol->as_if<slang::ast::NetSymbol>()) {
-              auto netOp = moore::NetOp::create(
+              placeholder = moore::NetOp::create(
                   builder, loc, refType,
                   StringAttr::get(builder.getContext(), net->name),
                   convertNetKind(net->netType.netKind), nullptr);
-              auto readOp = moore::ReadOp::create(builder, loc, netOp);
-              portValues.insert({portSymbol, readOp});
             } else if (const auto *var =
                            port->internalSymbol
                                ->as_if<slang::ast::VariableSymbol>()) {
-              auto varOp = moore::VariableOp::create(
+              placeholder = moore::VariableOp::create(
                   builder, loc, refType,
                   StringAttr::get(builder.getContext(), var->name), nullptr);
-              auto readOp = moore::ReadOp::create(builder, loc, varOp);
-              portValues.insert({portSymbol, readOp});
             } else {
               return mlir::emitError(loc)
                      << "unsupported internal symbol for unconnected port `"
                      << port->name << "`";
             }
+
+            if (port->direction == ArgumentDirection::In)
+              placeholder = moore::ReadOp::create(builder, loc, placeholder);
+            portValues.insert({portSymbol, placeholder});
             continue;
           }
 
@@ -1453,7 +1455,6 @@ struct ModuleVisitor : public BaseVisitor {
           case ArgumentDirection::Out:
             continue;
 
-          // TODO: Mark Inout port as unsupported and it will be supported later.
           default:
             return mlir::emitError(loc)
                    << "unsupported port `" << port->name << "` ("
