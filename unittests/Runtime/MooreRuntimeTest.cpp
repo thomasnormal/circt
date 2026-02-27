@@ -230,6 +230,58 @@ TEST(MooreRuntimeQueueTest, UnresolvedVirtualQueuePointerReturnsZeroSize) {
 }
 
 //===----------------------------------------------------------------------===//
+// Re-entry / Reset Tests
+//===----------------------------------------------------------------------===//
+
+TEST(MooreRuntimePlusargsTest, ReflectsEnvironmentUpdatesAcrossCalls) {
+  ScopedEnvVar circtArgs("CIRCT_UVM_ARGS", "+FIRST +VALUE=11");
+  ScopedEnvVar legacyArgs("UVM_ARGS", nullptr);
+
+  EXPECT_EQ(__moore_test_plusargs("FIRST", 5), 1);
+  int64_t value = 0;
+  EXPECT_EQ(__moore_value_plusargs("VALUE=%d", 8, &value), 1);
+  EXPECT_EQ(value, 11);
+
+  setenv("CIRCT_UVM_ARGS", "+SECOND +VALUE=22", 1);
+
+  EXPECT_EQ(__moore_test_plusargs("FIRST", 5), 0);
+  EXPECT_EQ(__moore_test_plusargs("SECOND", 6), 1);
+  EXPECT_EQ(__moore_value_plusargs("VALUE=%d", 8, &value), 1);
+  EXPECT_EQ(value, 22);
+}
+
+TEST(MooreRuntimeResetTest, ResetForNewSimulationRunClearsGlobalState) {
+  __moore_runtime_reset_for_new_simulation_run();
+
+  EXPECT_EQ(__moore_signal_registry_register("top.sig", 1, 1), 1);
+  EXPECT_EQ(__moore_signal_registry_count(), 1u);
+
+  int64_t mailbox = __moore_mailbox_create(/*bound=*/0);
+  __moore_mailbox_put(mailbox, 123);
+  EXPECT_EQ(__moore_mailbox_num(mailbox), 1);
+
+  MooreSemaphoreHandle sem = __moore_semaphore_create(3);
+  ASSERT_NE(sem, MOORE_SEMAPHORE_INVALID_HANDLE);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 3);
+
+  MooreString err = makeMooreString("reset me");
+  __moore_error(&err);
+  EXPECT_EQ(__moore_get_error_count(), 1);
+  __moore_set_time(77);
+  EXPECT_EQ(__moore_get_time(), 77);
+
+  __moore_runtime_reset_for_new_simulation_run();
+
+  EXPECT_EQ(__moore_signal_registry_count(), 0u);
+  EXPECT_EQ(__moore_mailbox_num(mailbox), 0);
+  EXPECT_EQ(__moore_semaphore_get_key_count(sem), 0);
+  EXPECT_EQ(__moore_get_error_count(), 0);
+  EXPECT_EQ(__moore_get_warning_count(), 0);
+  EXPECT_FALSE(__moore_finish_called());
+  EXPECT_EQ(__moore_get_time(), 0);
+}
+
+//===----------------------------------------------------------------------===//
 // DPI Regex Tests
 //===----------------------------------------------------------------------===//
 

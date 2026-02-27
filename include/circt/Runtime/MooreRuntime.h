@@ -3276,6 +3276,12 @@ int32_t __moore_get_exit_code(void);
 /// Reset the finish state (for testing purposes).
 void __moore_reset_finish_state(void);
 
+/// Reset process-global Moore runtime state for a fresh simulation run.
+///
+/// This is primarily used by wasm/callMain re-entry flows where the same
+/// process image executes multiple simulations.
+void __moore_runtime_reset_for_new_simulation_run(void);
+
 //===----------------------------------------------------------------------===//
 // Memory Management
 //===----------------------------------------------------------------------===//
