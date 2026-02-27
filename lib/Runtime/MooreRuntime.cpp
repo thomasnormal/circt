@@ -830,12 +830,22 @@ static void *normalizeHostPtr(void *ptr, const char *funcName) {
 
   auto addr = reinterpret_cast<uintptr_t>(ptr);
 
+  // Reject obviously invalid low addresses up front.
+  if (addr < 0x10000ULL) {
+    if (isAotPtrTraceEnabled()) {
+      fprintf(stderr,
+              "[AOT PTR] %s: class=invalid-low ptr=%p (returning null)\n",
+              funcName, ptr);
+    }
+    return nullptr;
+  }
+
   // Range 1: tagged FuncId — never a valid data pointer.
   if (addr >= 0xF0000000ULL && addr < 0x100000000ULL) {
     fprintf(stderr,
             "[AOT PTR] %s: class=tagged_funcid ptr=%p - not a data pointer\n",
             funcName, ptr);
-    __builtin_trap();
+    return nullptr;
   }
 
   // Range 2: interpreter virtual address — try TLS context translation.
@@ -855,10 +865,11 @@ static void *normalizeHostPtr(void *ptr, const char *funcName) {
     }
     if (isAotPtrTraceEnabled()) {
       fprintf(stderr,
-              "[AOT PTR] %s: class=virtual ptr=%p unresolved (%s)\n", funcName,
-              ptr, hasTlsCallback ? "tls-miss" : "no-tls-callback");
+              "[AOT PTR] %s: class=virtual ptr=%p unresolved (%s, "
+              "returning null)\n",
+              funcName, ptr, hasTlsCallback ? "tls-miss" : "no-tls-callback");
     }
-    return ptr;
+    return nullptr;
   }
 
   return ptr;
