@@ -35,3 +35,7 @@ formal-results-*
 
 .claude
 .codex
+
+# Local engineering notes (do not commit by default)
+circt_sim_engineering_log.md
+aot_plan_5.md
