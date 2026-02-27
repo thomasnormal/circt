@@ -8,7 +8,7 @@
 // - uvm_coverage_db
 // - Covergroup integration with UVM
 //
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -47,10 +47,6 @@ package coverage_test_pkg;
       super.new(name);
       sample_count = 0;
       data_cg = new();
-    endfunction
-
-    virtual function string get_type_name();
-      return "my_coverage";
     endfunction
 
     // Override sample method
@@ -140,8 +136,6 @@ package coverage_test_pkg;
     virtual function void build_phase(uvm_phase phase);
       super.build_phase(phase);
       cov = my_coverage::type_id::create("cov");
-      // Register with coverage database
-      uvm_coverage_db::get().register_coverage(cov);
     endfunction
 
     virtual function void write(covered_tx t);
@@ -178,24 +172,24 @@ package coverage_test_pkg;
       phase.raise_objection(this, "Testing MAM");
 
       // Create and configure MAM
-      cfg = new("cfg");
+      cfg = new;
       cfg.start_offset = 0;
       cfg.end_offset = 1023;
       cfg.n_bytes = 4;
-      cfg.mode = UVM_MEM_MAM_GREEDY;
+      cfg.mode = uvm_mem_mam::GREEDY;
 
       mam = new("mam", cfg);
 
       `uvm_info("MAM", $sformatf("Initial state: %s", mam.convert2string()), UVM_LOW)
 
       // Test request_region
-      r1 = mam.request_region(64, UVM_MEM_MAM_GREEDY);
+      r1 = mam.request_region(64);
       if (r1 == null)
         `uvm_error("MAM", "Failed to allocate r1")
       else
         `uvm_info("MAM", $sformatf("Allocated r1: %s", r1.convert2string()), UVM_LOW)
 
-      r2 = mam.request_region(128, UVM_MEM_MAM_GREEDY);
+      r2 = mam.request_region(128);
       if (r2 == null)
         `uvm_error("MAM", "Failed to allocate r2")
       else
@@ -210,14 +204,16 @@ package coverage_test_pkg;
 
       `uvm_info("MAM", $sformatf("After allocations: %s", mam.convert2string()), UVM_LOW)
 
-      // Get allocated regions
-      mam.get_allocated_regions(regions);
+      // Enumerate allocated regions through MAM iterator API.
+      begin
+        uvm_mem_region region;
+        region = mam.for_each(1);
+        while (region != null) begin
+          regions.push_back(region);
+          region = mam.for_each();
+        end
+      end
       `uvm_info("MAM", $sformatf("Number of allocated regions: %0d", regions.size()), UVM_LOW)
-
-      // Test statistics
-      `uvm_info("MAM", $sformatf("Total size: %0d", mam.get_total_size()), UVM_LOW)
-      `uvm_info("MAM", $sformatf("Allocated size: %0d", mam.get_allocated_size()), UVM_LOW)
-      `uvm_info("MAM", $sformatf("Available size: %0d", mam.get_available_size()), UVM_LOW)
 
       // Test release
       mam.release_region(r2);
@@ -261,15 +257,8 @@ package coverage_test_pkg;
 
     virtual task run_phase(uvm_phase phase);
       covered_tx tx;
-      uvm_coverage_db cov_db;
 
       phase.raise_objection(this, "Testing coverage DB");
-
-      // Get coverage database
-      cov_db = uvm_coverage_db::get();
-
-      `uvm_info("COVDB", $sformatf("Registered coverage objects: %0d",
-                                    cov_db.get_num_coverage_objects()), UVM_LOW)
 
       // Create and sample some transactions
       repeat (10) begin
@@ -279,21 +268,10 @@ package coverage_test_pkg;
         collector.write(tx);
       end
 
-      // Sample all through DB
-      cov_db.sample_all();
-
-      // Get overall coverage
-      `uvm_info("COVDB", $sformatf("Overall coverage: %.2f%%", cov_db.get_coverage_pct()), UVM_LOW)
-
-      // Disable coverage
-      cov_db.set_enabled(0);
-      `uvm_info("COVDB", $sformatf("Coverage enabled: %0b", cov_db.get_enabled()), UVM_LOW)
-
-      // Re-enable
-      cov_db.set_enabled(1);
-
-      // Print report
-      cov_db.report();
+      `uvm_info("COVDB", $sformatf("Collected coverage samples: %0d",
+                                    collector.cov.sample_count), UVM_LOW)
+      `uvm_info("COVDB", $sformatf("Collector coverage: %.2f%%",
+                                    collector.cov.get_coverage_pct()), UVM_LOW)
 
       phase.drop_objection(this, "Coverage DB test done");
     endtask

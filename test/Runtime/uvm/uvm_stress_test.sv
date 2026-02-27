@@ -8,7 +8,7 @@
 // 4. Report server patterns (custom servers, catchers, message filtering)
 // 5. Phase jumping patterns (phase state, wait_for_state, objections)
 //
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -71,7 +71,7 @@ package uvm_stress_test_pkg;
       super.new(name, parent);
     endfunction
 
-    function void check(bit cond, string name);
+    function void check_test(bit cond, string name);
       if (cond) begin
         test_pass++;
         `uvm_info("PASS", name, UVM_HIGH)
@@ -97,9 +97,9 @@ package uvm_stress_test_pkg;
       // Test 1: Deeply nested wildcards
       uvm_config_db#(int)::set(null, "*.*.*.deep", "field1", 111);
       uvm_config_db#(int)::set(null, "a.b.c.deep", "field1", 222);
-      check(uvm_config_db#(int)::get(null, "a.b.c.deep", "field1", val) && val == 222,
+      check_test(uvm_config_db#(int)::get(null, "a.b.c.deep", "field1", val) && val == 222,
             "Exact match over nested wildcards");
-      check(uvm_config_db#(int)::get(null, "x.y.z.deep", "field1", val) && val == 111,
+      check_test(uvm_config_db#(int)::get(null, "x.y.z.deep", "field1", val) && val == 111,
             "Nested wildcards match other paths");
 
       // Test 2: Multiple overlapping wildcards
@@ -107,21 +107,21 @@ package uvm_stress_test_pkg;
       uvm_config_db#(int)::set(null, "a.*", "overlap", 2);
       uvm_config_db#(int)::set(null, "a.b.*", "overlap", 3);
       uvm_config_db#(int)::set(null, "a.b.c", "overlap", 4);
-      check(uvm_config_db#(int)::get(null, "a.b.c", "overlap", val) && val == 4,
+      check_test(uvm_config_db#(int)::get(null, "a.b.c", "overlap", val) && val == 4,
             "Most specific wins (exact)");
-      check(uvm_config_db#(int)::get(null, "a.b.x", "overlap", val) && val == 3,
+      check_test(uvm_config_db#(int)::get(null, "a.b.x", "overlap", val) && val == 3,
             "More specific wildcard wins (a.b.*)");
-      check(uvm_config_db#(int)::get(null, "a.x", "overlap", val) && val == 2,
+      check_test(uvm_config_db#(int)::get(null, "a.x", "overlap", val) && val == 2,
             "Middle wildcard wins (a.*)");
-      check(uvm_config_db#(int)::get(null, "x", "overlap", val) && val == 1,
+      check_test(uvm_config_db#(int)::get(null, "x", "overlap", val) && val == 1,
             "Global wildcard for unmatched");
 
       // Test 3: Question mark wildcards
       uvm_config_db#(int)::set(null, "agent?", "qmark", 100);
       uvm_config_db#(int)::set(null, "agent??", "qmark", 200);
-      check(uvm_config_db#(int)::get(null, "agent1", "qmark", val) && val == 100,
+      check_test(uvm_config_db#(int)::get(null, "agent1", "qmark", val) && val == 100,
             "Single ? matches single char");
-      check(uvm_config_db#(int)::get(null, "agent12", "qmark", val) && val == 200,
+      check_test(uvm_config_db#(int)::get(null, "agent12", "qmark", val) && val == 200,
             "Double ?? matches two chars");
 
       // Test 4: Complex object configuration
@@ -133,7 +133,7 @@ package uvm_stress_test_pkg;
       uvm_config_db#(outer_config)::set(null, "*", "complex_cfg", ocfg);
       begin
         outer_config retrieved;
-        check(uvm_config_db#(outer_config)::get(null, "any.path", "complex_cfg", retrieved) &&
+        check_test(uvm_config_db#(outer_config)::get(null, "any.path", "complex_cfg", retrieved) &&
               retrieved.inner_cfg.depth == 5 &&
               retrieved.inner_cfg.tag == "stress_test" &&
               retrieved.name_list.size() == 2,
@@ -142,21 +142,21 @@ package uvm_stress_test_pkg;
 
       // Test 5: Empty and special paths
       uvm_config_db#(string)::set(null, "", "empty_path", "value1");
-      check(uvm_config_db#(string)::get(null, "", "empty_path", str) && str == "value1",
+      check_test(uvm_config_db#(string)::get(null, "", "empty_path", str) && str == "value1",
             "Empty path set/get");
 
       // Test 6: Overwrite in different scopes
       uvm_config_db#(int)::set(null, "scope.a", "shared", 10);
       uvm_config_db#(int)::set(null, "scope.b", "shared", 20);
-      check(uvm_config_db#(int)::get(null, "scope.a", "shared", val) && val == 10,
+      check_test(uvm_config_db#(int)::get(null, "scope.a", "shared", val) && val == 10,
             "Scope isolation - scope.a");
-      check(uvm_config_db#(int)::get(null, "scope.b", "shared", val) && val == 20,
+      check_test(uvm_config_db#(int)::get(null, "scope.b", "shared", val) && val == 20,
             "Scope isolation - scope.b");
 
       // Test 7: Regex-like patterns with uvm_is_match
-      check(uvm_is_match("uvm_test_top.env.agent[*]", "uvm_test_top.env.agent[0]"),
+      check_test(uvm_is_match("uvm_test_top.env.agent[*]", "uvm_test_top.env.agent[0]"),
             "Array-like path matching");
-      check(uvm_is_match("*monitor*", "env.my_monitor.analysis"),
+      check_test(uvm_is_match("*monitor*", "env.my_monitor.analysis"),
             "Contains pattern in middle of path");
 
       `uvm_info("STRESS", $sformatf("Config DB: %0d passed, %0d failed",
@@ -454,7 +454,7 @@ package uvm_stress_test_pkg;
       filter_id = "";
     endfunction
 
-    virtual function uvm_action_type_e catch_action();
+    virtual function action_e catch();
       caught_count++;
 
       // Demote errors with specific ID to warnings
@@ -481,7 +481,7 @@ package uvm_stress_test_pkg;
       super.new(name, parent);
     endfunction
 
-    function void check(bit cond, string name);
+    function void check_test(bit cond, string name);
       if (cond) begin test_pass++; `uvm_info("PASS", name, UVM_HIGH) end
       else begin test_fail++; `uvm_error("FAIL", name) end
     endfunction
@@ -496,20 +496,23 @@ package uvm_stress_test_pkg;
       `uvm_info("STRESS", "=== Report Server Stress Tests ===", UVM_LOW)
 
       server = uvm_report_server::get_server();
-      initial_info = server.get_info_count();
-      initial_warning = server.get_warning_count();
-      initial_error = server.get_error_count();
+      initial_info = server.get_severity_count(UVM_INFO);
+      initial_warning = server.get_severity_count(UVM_WARNING);
+      initial_error = server.get_severity_count(UVM_ERROR);
 
       // Test 1: Add/remove catchers dynamically
       catcher = new("stress_catcher");
       catcher.filter_id = "DEMOTE_TEST";
       catcher.demote_errors = 1;
-      uvm_report_catcher::add(catcher);
-      check(uvm_report_catcher::get_catcher_count() > 0, "Catcher added");
+      uvm_report_cb::add(null, catcher);
+      begin
+        uvm_report_cb_iter iter = new(null);
+        check_test(iter.first() != null, "Catcher added");
+      end
 
       // Test 2: Max quit count manipulation
       server.set_max_quit_count(100);
-      check(server.get_max_quit_count() == 100, "Max quit count set");
+      check_test(server.get_max_quit_count() == 100, "Max quit count set");
 
       // Test 3: Generate various severity messages
       `uvm_info("STRESS", "Info message 1", UVM_LOW)
@@ -518,21 +521,22 @@ package uvm_stress_test_pkg;
       `uvm_warning("STRESS", "Warning message 1")
 
       // Test 4: Check counts increased
-      check(server.get_info_count() > initial_info, "Info count increased");
-      check(server.get_warning_count() > initial_warning, "Warning count increased");
+      check_test(server.get_severity_count(UVM_INFO) > initial_info, "Info count increased");
+      check_test(server.get_severity_count(UVM_WARNING) > initial_warning,
+                 "Warning count increased");
 
       // Test 5: ID-based counting
-      check(server.get_id_count("STRESS") > 0, "ID count tracking works");
+      check_test(server.get_id_count("STRESS") > 0, "ID count tracking works");
 
       // Test 6: Catcher was invoked
-      check(catcher.caught_count > 0, "Catcher caught messages");
+      check_test(catcher.caught_count > 0, "Catcher caught messages");
 
       // Clean up catcher
-      uvm_report_catcher::remove(catcher);
+      uvm_report_cb::delete(null, catcher);
 
       // Test 7: Verbosity control
       set_report_verbosity_level(UVM_DEBUG);
-      check(get_report_verbosity_level() == UVM_DEBUG, "Verbosity set to DEBUG");
+      check_test(get_report_verbosity_level() == UVM_DEBUG, "Verbosity set to DEBUG");
 
       // Test 8: Action configuration
       set_report_severity_action(UVM_INFO, UVM_DISPLAY | UVM_LOG);
@@ -561,7 +565,7 @@ package uvm_stress_test_pkg;
       super.new(name, parent);
     endfunction
 
-    function void check(bit cond, string name);
+    function void check_test(bit cond, string name);
       if (cond) begin test_pass++; `uvm_info("PASS", name, UVM_HIGH) end
       else begin test_fail++; `uvm_error("FAIL", name) end
     endfunction
@@ -602,39 +606,38 @@ package uvm_stress_test_pkg;
 
       // Test phase objection methods
       objection = phase.get_objection();
-      check(objection != null, "Got phase objection");
+      check_test(objection != null, "Got phase objection");
 
       count = phase.get_objection_count(this);
-      check(count >= 1, "Objection count at least 1");
+      check_test(count >= 1, "Objection count at least 1");
 
       // Test phase state
       state = phase.get_state();
-      check(state == UVM_PHASE_EXECUTING || state == UVM_PHASE_STARTED,
+      check_test(state == UVM_PHASE_EXECUTING || state == UVM_PHASE_STARTED,
             $sformatf("Phase state is EXECUTING or STARTED (got %s)", state.name()));
 
       // Test wait_for_state (stub just sets state immediately)
       phase.wait_for_state(UVM_PHASE_READY_TO_END);
       state = phase.get_state();
-      check(state == UVM_PHASE_READY_TO_END, "wait_for_state changed state");
+      check_test(state == UVM_PHASE_READY_TO_END, "wait_for_state changed state");
 
       // Test nested objections
       phase.raise_objection(this, "Nested objection 1");
       phase.raise_objection(this, "Nested objection 2");
       count = phase.get_objection_count(this);
-      check(count >= 3, $sformatf("Multiple objections raised (count=%0d)", count));
+      check_test(count >= 3, $sformatf("Multiple objections raised (count=%0d)", count));
 
       phase.drop_objection(this, "Drop nested 2");
       phase.drop_objection(this, "Drop nested 1");
 
       // Test global phase handles
-      check(build_ph != null, "build_ph global handle exists");
-      check(connect_ph != null, "connect_ph global handle exists");
-      check(run_ph != null, "run_ph global handle exists");
+      check_test(build_ph != null, "build_ph global handle exists");
+      check_test(connect_ph != null, "connect_ph global handle exists");
+      check_test(run_ph != null, "run_ph global handle exists");
 
-      // Test uvm_test_done objection
-      uvm_test_done.raise_objection(this, "Test completion objection");
-      check(uvm_test_done.raised(), "uvm_test_done has raised objection");
-      uvm_test_done.drop_objection(this, "Drop test completion");
+      // Keep this component's objection accounting internally.
+      check_test(phase.get_objection_count(this) >= 1,
+                 "phase objection accounting remains valid");
 
       #10ns;
       `uvm_info("PHASE", $sformatf("Phase tests: %0d passed, %0d failed",
@@ -846,7 +849,7 @@ package uvm_stress_test_pkg;
       super.report_phase(phase);
 
       server = uvm_report_server::get_server();
-      errors = server.get_error_count();
+      errors = server.get_severity_count(UVM_ERROR);
 
       `uvm_info("TEST", "========================================", UVM_NONE)
       `uvm_info("TEST", "=== UVM Stress Test Results ===", UVM_NONE)
