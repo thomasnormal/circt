@@ -8,7 +8,7 @@
 // 5. Basic read/write methods
 // 6. get/set methods
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -339,7 +339,7 @@ package uvm_ral_test_pkg;
       // Test 1.6: Mirrored value operations
       `uvm_info("TEST", "=== Test 1.6: Mirrored value operations ===", UVM_NONE)
 
-      reg_model.ctrl.enable.set_mirrored_value(1);
+      reg_model.ctrl.enable.set(1);
       value = reg_model.ctrl.enable.get_mirrored_value();
       if (value != 1)
         `uvm_error("TEST", $sformatf("Mirrored value mismatch: expected 1, got %0d", value))
@@ -469,7 +469,7 @@ package uvm_ral_test_pkg;
       // Test 2.9: Register access type
       `uvm_info("TEST", "=== Test 2.9: Register access type ===", UVM_NONE)
 
-      `uvm_info("TEST", $sformatf("Ctrl register access: %s", reg_model.ctrl.get_access()), UVM_MEDIUM)
+      `uvm_info("TEST", $sformatf("Ctrl register access: %s", reg_model.ctrl.get_rights()), UVM_MEDIUM)
       `uvm_info("TEST", "PASS: get_access works", UVM_NONE)
 
       // Test 2.10: Check if register is in map
@@ -517,7 +517,7 @@ package uvm_ral_test_pkg;
       // Test 3.1: Get all registers from block
       `uvm_info("TEST", "=== Test 3.1: Get all registers from block ===", UVM_NONE)
 
-      reg_model.get_registers(regs, UVM_REG_NO_HIER);
+      reg_model.get_registers(regs, UVM_NO_HIER);
       if (regs.size() != 4)
         `uvm_error("TEST", $sformatf("Register count mismatch: expected 4, got %0d", regs.size()))
       else
@@ -691,7 +691,7 @@ package uvm_ral_test_pkg;
       // Test 4.5: Get all registers from map
       `uvm_info("TEST", "=== Test 4.5: Get all registers from map ===", UVM_NONE)
 
-      map.get_registers(regs, UVM_REG_NO_HIER);
+      map.get_registers(regs, UVM_NO_HIER);
       if (regs.size() != 4)
         `uvm_error("TEST", $sformatf("Map register count mismatch: expected 4, got %0d", regs.size()))
       else
@@ -750,7 +750,7 @@ package uvm_ral_test_pkg;
       // Test 5.1: Get child blocks
       `uvm_info("TEST", "=== Test 5.1: Get child blocks ===", UVM_NONE)
 
-      reg_model.get_blocks(blocks, UVM_REG_NO_HIER);
+      reg_model.get_blocks(blocks, UVM_NO_HIER);
       if (blocks.size() != 2)
         `uvm_error("TEST", $sformatf("Child block count mismatch: expected 2, got %0d", blocks.size()))
       else
@@ -772,7 +772,7 @@ package uvm_ral_test_pkg;
       // Test 5.3: Submap access
       `uvm_info("TEST", "=== Test 5.3: Submap access ===", UVM_NONE)
 
-      reg_model.default_map.get_submaps(submaps, UVM_REG_NO_HIER);
+      reg_model.default_map.get_submaps(submaps, UVM_NO_HIER);
       if (submaps.size() != 2)
         `uvm_error("TEST", $sformatf("Submap count mismatch: expected 2, got %0d", submaps.size()))
       else
@@ -1078,7 +1078,8 @@ package uvm_ral_test_pkg;
       item.element = reg_model.ctrl;
       // Note: element_kind is a uvm_object, not an enum in the CIRCT UVM implementation
       item.kind = UVM_WRITE;
-      item.value.push_back(32'h12345678);
+      item.value = new[1];
+      item.value[0] = 32'h12345678;
       item.offset = 'h00;
       item.map = reg_model.default_map;
 

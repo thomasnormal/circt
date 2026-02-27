@@ -305,3 +305,26 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_callback_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
     - improved from 12 pass / 5 fail to 13 pass / 4 fail.
+
+### UVM/RAL: align register-model test with current `uvm-core` APIs
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv`
+  - Failed with API mismatches:
+    - missing `uvm_reg_field::set_mirrored_value`
+    - missing `uvm_reg::get_access` (register-level access query API changed)
+    - undefined `UVM_REG_NO_HIER`
+    - dynamic-array `push_back` on `uvm_reg_item.value[]`
+- Root cause:
+  - The test used older RAL helper names and enum constants not present in the
+    bundled IEEE-style `uvm-core` APIs.
+  - `uvm_reg_item.value` is a dynamic array, not a queue in current headers.
+- Fix:
+  - Replaced field mirrored-write helper with `set(...)` before mirrored read.
+  - Switched register access reporting to `get_rights()`.
+  - Replaced `UVM_REG_NO_HIER` with `UVM_NO_HIER`.
+  - Initialized `uvm_reg_item.value` as a dynamic array (`new[1]` + index
+    assignment) instead of queue `push_back`.
+- Tests:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - improved from 13 pass / 4 fail to 14 pass / 3 fail.
