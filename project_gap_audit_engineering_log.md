@@ -377,3 +377,33 @@
 - Ran quick automated differential over ImportVerilog unsupported/diagnostic-heavy tests (31 files sampled):
   - Did not find `xrun accepts / CIRCT rejects` cases in this sample.
   - Found several `xrun rejects / CIRCT accepts` cases (`builtins.sv`, `constraint-implication.sv`, `procedures.sv`, `sva-sequence-match-item-stacktrace-function.sv`, `system-calls-complete.sv`) that need triage for legality-vs-tooling differences before treating as gaps.
+- SVA gap closure (ImportVerilog + MooreToCore): added covergroup-handle support for sampled `$past` under sampled-value controls and fixed handle-bool crash during MooreToCore lowering.
+- TDD flow:
+  - Added `test/Conversion/ImportVerilog/sva-past-covergroup-sampled-controls.sv` to lock in successful lowering for covergroup-handle `$past(..., clocking)` equality/inequality forms.
+  - Added `test/Conversion/MooreToCore/covergroup-handle-cmp.mlir` for new `moore.covergroup_handle_cmp` lowering.
+  - Added `test/Conversion/MooreToCore/bool-cast-handle-pointer.mlir` for pointer-handle `moore.bool_cast` lowering to `llvm.icmp ne %ptr, null`.
+- Implementation:
+  - `include/circt/Dialect/Moore/MooreOps.td`: introduced `CovergroupHandleCmpPredicateAttr` and `CovergroupHandleCmpOp`.
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`: lowered covergroup-handle `==`/`!=` to `moore.covergroup_handle_cmp`.
+  - `lib/Conversion/ImportVerilog/AssertionExpr.cpp`: extended sampled-value direct-storage set in `lowerPastWithSamplingControl` to include `moore::CovergroupHandleType`.
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`: added `CovergroupHandleCmpOp` conversion pattern + manual conversion path handling; fixed `BoolCastOpConversion` to branch on input pointer type (not result type) and lower pointer truthiness via null-compare.
+- Continue-on-unsupported test maintenance:
+  - Updated unsupported sentinels to `$stable(cg)` in strict/warn/IR tests:
+    - `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv`
+    - `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
+  - Realization: property context and immediate expression context emit different warn text today (`unsupported sampled value type for $stable` vs `$stable has unsupported sampled value type ... returning 0`), so expectations were made mode-specific.
+- Validation (manual RUN pipelines, since `llvm-lit` multiprocessing semaphores are blocked in this sandbox):
+  - Positive regressions pass: event/class/vif/covergroup sampled `$past` tests.
+  - Updated strict/warn/IR continue-on-unsupported tests pass.
+  - `past-clocking.sv` still passes.
+  - New MooreToCore regressions pass: `bool-cast-handle-pointer.mlir`, `covergroup-handle-cmp.mlir`.
+- MooreToCore TODO/XFAIL cleanup with root-cause validation:
+  - `test/Conversion/MooreToCore/array-locator-func-call-test.sv` was XFAIL due test construction, not conversion failure.
+  - Root cause: no top module instantiated/called the class method, so `m_update_lists` body was not emitted, causing MOORE checks to fail; default UVM auto-include also added unrelated noise.
+  - Fix:
+    - Added `--no-uvm-auto-include` to RUN lines.
+    - Added a small `top` module that constructs `uvm_sequencer_base` and calls `m_update_lists()`.
+    - Removed stale `XFAIL` marker and updated header comment to regression intent.
+  - Validation:
+    - `circt-verilog --no-uvm-auto-include --ir-moore ... | FileCheck --check-prefix=MOORE` PASS.
+    - `circt-verilog --no-uvm-auto-include ... | FileCheck` PASS.

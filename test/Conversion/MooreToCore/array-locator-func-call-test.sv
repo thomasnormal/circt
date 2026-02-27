@@ -1,7 +1,7 @@
-// RUN: circt-verilog %s --ir-moore -o - 2>&1 | FileCheck %s --check-prefix=MOORE
-// RUN: circt-verilog %s -o - 2>&1 | FileCheck %s
-// XFAIL: *
-// Array locator with function call in predicate needs top module to emit func.
+// RUN: circt-verilog %s --no-uvm-auto-include --ir-moore -o - 2>&1 | FileCheck %s --check-prefix=MOORE
+// RUN: circt-verilog %s --no-uvm-auto-include -o - 2>&1 | FileCheck %s
+// Regression: class method bodies with array locator predicates that call other
+// class methods must lower without legalization failures.
 
 // Test case for array locator with external function call in predicate
 // This replicates the pattern from uvm_sequencer_base.svh line 607:
@@ -33,6 +33,15 @@ class uvm_sequencer_base;
       (item.request == 1 && is_blocked(item.sequence_ptr) == 0);
   endfunction
 endclass
+
+module top;
+  uvm_sequencer_base seqr;
+  initial begin
+    seqr = new();
+    seqr.m_update_lists();
+    $finish;
+  end
+endmodule
 
 // MOORE: func.func private @"uvm_sequencer_base::m_update_lists"
 // MOORE: moore.array.locator
