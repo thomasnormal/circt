@@ -181,3 +181,21 @@
     - `run-sv-tests-sim-should-fail-elab-compile-pass.test`
     - `run-sv-tests-sim-tag-regex-empty-tags.test`
     - `run-sv-tests-sim-toolchain-derived-from-circt-verilog.test`
+
+### ImportVerilog: update stale sampled-value unsupported expectation
+- Repro:
+  - `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
+    expected `$stable(vif)` to be unsupported, but current lowering only rejects
+    `$rose(vif)`.
+- Root cause:
+  - Test expectations drifted behind implementation: sampled-value lowering now
+    supports `$stable` on virtual interface handles.
+- Fix:
+  - Updated STRICT/WARN checks to only expect unsupported diagnostics for
+    `$rose(vif)`.
+  - Marked the strict run as `not` to correctly assert diagnostic-failure mode.
+- Tests:
+  - `llvm-lit` for:
+    - `sva-immediate-sampled-continue-on-unsupported.sv`
+    - `sva-immediate-past-event-continue-on-unsupported.sv`
+    - `sva-continue-on-unsupported.sv`
