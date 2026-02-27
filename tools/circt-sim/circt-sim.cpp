@@ -3707,6 +3707,7 @@ static LogicalResult processInput(MLIRContext &context,
     uint64_t entryCallsTrampoline = indirectCallsTrampoline;
     uint64_t entryCallsTotal = entryCallsNative + entryCallsTrampoline;
     uint64_t indirectCallsTotal = indirectCallsNative + indirectCallsTrampoline;
+    uint64_t mutableGlobalsTotal = arenaGlobals + globalPatchCount;
     llvm::errs() << "[circt-sim] === AOT Statistics ===\n";
     llvm::errs() << "[circt-sim] parse_ms:                         "
                  << parseWallMs << "\n";
@@ -3725,6 +3726,12 @@ static LogicalResult processInput(MLIRContext &context,
     llvm::errs() << "[circt-sim] arena_size_bytes:                 "
                  << arenaSizeBytes << "\n";
     llvm::errs() << "[circt-sim] global_patch_count:               "
+                 << globalPatchCount << "\n";
+    llvm::errs() << "[circt-sim] mutable_globals_total:            "
+                 << mutableGlobalsTotal << "\n";
+    llvm::errs() << "[circt-sim] mutable_globals_arena:            "
+                 << arenaGlobals << "\n";
+    llvm::errs() << "[circt-sim] mutable_globals_patch:            "
                  << globalPatchCount << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
