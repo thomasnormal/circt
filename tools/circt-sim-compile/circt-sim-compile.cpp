@@ -7794,8 +7794,59 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     uint64_t size = computePackedTypeAllocSize(type, llvmModule->getDataLayout());
     globalPatchSizes.push_back(static_cast<uint32_t>(size));
   }
+  size_t totalMutableGlobals = globalPatchNames.size();
+
+  auto canArenaMigrateGlobal = [&](llvm::GlobalVariable *global) {
+    llvm::SmallVector<llvm::User *, 8> worklist;
+    llvm::SmallPtrSet<llvm::User *, 8> visited;
+    for (auto &use : global->uses())
+      worklist.push_back(use.getUser());
+    while (!worklist.empty()) {
+      llvm::User *user = worklist.pop_back_val();
+      if (!visited.insert(user).second)
+        continue;
+      if (llvm::isa<llvm::Instruction>(user))
+        continue;
+      if (auto *constantExpr = llvm::dyn_cast<llvm::ConstantExpr>(user)) {
+        for (auto &exprUse : constantExpr->uses())
+          worklist.push_back(exprUse.getUser());
+        continue;
+      }
+      // Global initializers and other constant users cannot be rewritten to
+      // arena-base-relative addresses (arena base is only known at runtime).
+      return false;
+    }
+    return true;
+  };
+
+  llvm::SmallVector<std::string> retainedPatchNames;
+  llvm::SmallVector<llvm::GlobalVariable *> retainedPatchVars;
+  llvm::SmallVector<uint32_t> retainedPatchSizes;
+  llvm::SmallVector<std::string> arenaSourceNames;
+  llvm::SmallVector<llvm::GlobalVariable *> arenaSourceVars;
+  llvm::SmallVector<uint32_t> arenaSourceSizes;
+  for (unsigned i = 0; i < globalPatchVars.size(); ++i) {
+    auto *global = globalPatchVars[i];
+    if (canArenaMigrateGlobal(global)) {
+      arenaSourceNames.push_back(globalPatchNames[i]);
+      arenaSourceVars.push_back(global);
+      arenaSourceSizes.push_back(globalPatchSizes[i]);
+      continue;
+    }
+    retainedPatchNames.push_back(globalPatchNames[i]);
+    retainedPatchVars.push_back(global);
+    retainedPatchSizes.push_back(globalPatchSizes[i]);
+  }
+  globalPatchNames = std::move(retainedPatchNames);
+  globalPatchVars = std::move(retainedPatchVars);
+  globalPatchSizes = std::move(retainedPatchSizes);
   llvm::errs() << "[circt-compile] Global patches: "
                << globalPatchNames.size() << " mutable globals\n";
+  if (arenaSourceNames.size() < totalMutableGlobals) {
+    llvm::errs() << "[circt-compile] Arena migration skipped "
+                 << (totalMutableGlobals - arenaSourceNames.size())
+                 << " mutable globals with non-rewritable constant users\n";
+  }
 
   // Compute arena layout: assign each mutable global a 16-byte-aligned offset
   // within a contiguous arena buffer. The runtime allocates this buffer and
@@ -7805,13 +7856,13 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   llvm::SmallVector<uint32_t> arenaGlobalSizes;
   uint32_t arenaSize = 0;
 
-  for (unsigned i = 0; i < globalPatchNames.size(); ++i) {
+  for (unsigned i = 0; i < arenaSourceNames.size(); ++i) {
     // Align to 16 bytes.
     uint32_t offset = (arenaSize + 15u) & ~15u;
-    arenaGlobalNames.push_back(globalPatchNames[i]);
+    arenaGlobalNames.push_back(arenaSourceNames[i]);
     arenaGlobalOffsets.push_back(offset);
-    arenaGlobalSizes.push_back(globalPatchSizes[i]);
-    arenaSize = offset + globalPatchSizes[i];
+    arenaGlobalSizes.push_back(arenaSourceSizes[i]);
+    arenaSize = offset + arenaSourceSizes[i];
   }
   // Keep the total arena size aligned so runtime aligned_alloc(16, size)
   // is always well-formed, including small single-global cases.
@@ -7834,8 +7885,8 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     //   load ptr @__circt_sim_arena_base → getelementptr i8, %base, offset
     // After replacement, erase the original globals.
     auto *i8Ty = llvm::Type::getInt8Ty(llvmModule->getContext());
-    for (unsigned i = 0; i < globalPatchVars.size(); ++i) {
-      auto *oldGV = globalPatchVars[i];
+    for (unsigned i = 0; i < arenaSourceVars.size(); ++i) {
+      auto *oldGV = arenaSourceVars[i];
       uint32_t offset = arenaGlobalOffsets[i];
 
       // Collect all uses first (can't modify use-list while iterating).
@@ -7905,11 +7956,6 @@ static LogicalResult compile(MLIRContext &mlirContext) {
         oldGV->eraseFromParent();
     }
   }
-
-  // Clear the patch table — all mutable globals are now arena-based.
-  globalPatchNames.clear();
-  globalPatchVars.clear();
-  globalPatchSizes.clear();
 
   // Ensure compiled loads from vtable globals observe the same tagged FuncId
   // addresses (0xF0000000+N) used by the interpreter.
