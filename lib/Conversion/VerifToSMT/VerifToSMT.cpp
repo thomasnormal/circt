@@ -6541,6 +6541,34 @@ struct VerifBoundedModelCheckingOpConversion
       return static_cast<unsigned>(clockIt - clockIndexes.begin());
     };
 
+    // Some lowering paths materialize extra BMC clocks (often expression-key
+    // only) without an explicit bmc_clock_sources arg mapping. If there is
+    // exactly one such unmapped clock position, reg-source metadata that only
+    // carries arg_index can still resolve to that unique remaining position.
+    std::optional<unsigned> uniqueUnmappedClockPosFromSources;
+    if (!clockIndexes.empty()) {
+      SmallVector<bool> mappedClockPos(clockIndexes.size(), false);
+      for (auto &[argIndex, sourceInfo] : clockSourceInputs)
+        if (sourceInfo.pos < mappedClockPos.size())
+          mappedClockPos[sourceInfo.pos] = true;
+      for (auto [pos, isMapped] : llvm::enumerate(mappedClockPos)) {
+        if (isMapped)
+          continue;
+        if (uniqueUnmappedClockPosFromSources) {
+          uniqueUnmappedClockPosFromSources.reset();
+          break;
+        }
+        uniqueUnmappedClockPosFromSources = static_cast<unsigned>(pos);
+      }
+    }
+
+    auto mapRegSourceArgIndexToClockPos = [&](unsigned argIndex)
+        -> std::optional<unsigned> {
+      if (auto pos = mapArgIndexToClockPos(argIndex))
+        return pos;
+      return uniqueUnmappedClockPosFromSources;
+    };
+
     auto lookupClockNamePos = [&](StringRef name) -> std::optional<unsigned> {
       if (name.empty())
         return std::nullopt;
@@ -6654,7 +6682,7 @@ struct VerifBoundedModelCheckingOpConversion
 
         std::optional<unsigned> mappedPos;
         if (auto argAttr = dict.getAs<IntegerAttr>("arg_index"))
-          mappedPos = mapArgIndexToClockPos(
+          mappedPos = mapRegSourceArgIndexToClockPos(
               static_cast<unsigned>(argAttr.getInt()));
         if (!mappedPos) {
           if (auto info = lookupClockKeyPosInfo(keyAttr.getValue()))
@@ -6741,7 +6769,7 @@ struct VerifBoundedModelCheckingOpConversion
           }
           if (!mappedPos) {
             if (auto argAttr = dict.getAs<IntegerAttr>("arg_index"))
-              mappedPos = mapArgIndexToClockPos(
+              mappedPos = mapRegSourceArgIndexToClockPos(
                   static_cast<unsigned>(argAttr.getInt()));
           }
           if (!mappedPos)
@@ -6749,11 +6777,8 @@ struct VerifBoundedModelCheckingOpConversion
 
           auto insert =
               clockNameToPos.try_emplace(nameAttr.getValue(), *mappedPos);
-          if (!insert.second && insert.first->second != *mappedPos) {
-            op.emitError("bmc_reg_clocks entry maps to multiple BMC clock "
-                         "inputs");
-            return failure();
-          }
+          if (!insert.second && insert.first->second != *mappedPos)
+            continue;
         }
       }
     }
@@ -6923,6 +6948,54 @@ struct VerifBoundedModelCheckingOpConversion
         if (auto keyInfo = lookupClockKeyPosInfo(*key))
           mergeInferredClockPos(argIndex, *keyInfo);
     };
+
+    DenseMap<unsigned, ClockPosInfo> regSourceClockPosByInputArg;
+    DenseSet<unsigned> regSourceClockPosConflictArgs;
+    auto mergeRegSourceClockPos = [&](unsigned argIndex, ClockPosInfo info) {
+      if (regSourceClockPosConflictArgs.contains(argIndex))
+        return;
+      auto insert = regSourceClockPosByInputArg.try_emplace(argIndex, info);
+      if (!insert.second &&
+          (insert.first->second.pos != info.pos ||
+           insert.first->second.invert != info.invert)) {
+        regSourceClockPosByInputArg.erase(argIndex);
+        regSourceClockPosConflictArgs.insert(argIndex);
+      }
+    };
+
+    if (auto regClockSourcesAttr =
+            op->getAttrOfType<ArrayAttr>("bmc_reg_clock_sources")) {
+      for (auto attr : regClockSourcesAttr) {
+        auto dict = dyn_cast<DictionaryAttr>(attr);
+        if (!dict)
+          continue;
+        auto argAttr = dict.getAs<IntegerAttr>("arg_index");
+        if (!argAttr)
+          continue;
+        unsigned argIndex = argAttr.getValue().getZExtValue();
+        if (argIndex >= originalNumNonStateInputs)
+          continue;
+        bool invert = false;
+        if (auto invertAttr = dict.getAs<BoolAttr>("invert"))
+          invert = invertAttr.getValue();
+
+        std::optional<ClockPosInfo> info;
+        if (auto keyAttr = dict.getAs<StringAttr>("clock_key");
+            keyAttr && !keyAttr.getValue().empty()) {
+          if (auto keyInfo = lookupClockKeyPosInfo(keyAttr.getValue()))
+            info = ClockPosInfo{
+                keyInfo->pos,
+                static_cast<bool>(invert ^ keyInfo->invert)};
+        }
+        if (!info)
+          if (auto pos = mapRegSourceArgIndexToClockPos(argIndex))
+            info = ClockPosInfo{*pos, invert};
+        if (!info)
+          continue;
+        mergeRegSourceClockPos(argIndex, *info);
+      }
+    }
+
     for (auto &entry : clockValueToPos)
       recordInferredClockPosFromValue(entry.first);
     for (auto &entry : clockEquivalenceUF.parent)
@@ -6934,11 +7007,47 @@ struct VerifBoundedModelCheckingOpConversion
 
     auto inferClockPosFromInputArg =
         [&](unsigned argIndex) -> std::optional<ClockPosInfo> {
+      if (regSourceClockPosConflictArgs.contains(argIndex))
+        return std::nullopt;
+      if (auto it = regSourceClockPosByInputArg.find(argIndex);
+          it != regSourceClockPosByInputArg.end())
+        return it->second;
       if (inferredClockPosConflictArgs.contains(argIndex))
         return std::nullopt;
       if (auto it = inferredClockPosByInputArg.find(argIndex);
           it != inferredClockPosByInputArg.end())
         return it->second;
+      // Fall back to assume-derived UF equivalence classes on-demand. This
+      // runs after clockRootToPos is populated and recovers cases where check
+      // metadata names a source argument that only maps to a BMC clock through
+      // an assumed equivalence with another i1 value.
+      std::optional<ClockPosInfo> resolved;
+      bool conflict = false;
+      auto mergeResolved = [&](ClockPosInfo info) {
+        if (!resolved) {
+          resolved = info;
+          return;
+        }
+        if (resolved->pos != info.pos || resolved->invert != info.invert)
+          conflict = true;
+      };
+      for (auto &entry : clockEquivalenceUF.parent) {
+        Value value = entry.first;
+        if (!isI1Value(value))
+          continue;
+        BlockArgument root;
+        if (!traceClockRoot(value, root) || !root ||
+            root.getArgNumber() != argIndex)
+          continue;
+        if (auto info = resolveClockPosInfo(value))
+          mergeResolved(*info);
+        else if (auto key = getI1ValueKey(value))
+          if (auto keyInfo = lookupClockKeyPosInfo(*key))
+            mergeResolved(*keyInfo);
+        if (conflict)
+          return std::nullopt;
+      }
+      return resolved;
       return std::nullopt;
     };
 
@@ -7106,7 +7215,7 @@ struct VerifBoundedModelCheckingOpConversion
               if (!info) {
                 if (auto argAttr = dict.getAs<IntegerAttr>("arg_index")) {
                   unsigned argIndex = argAttr.getValue().getZExtValue();
-                  if (auto pos = mapArgIndexToClockPos(argIndex))
+                  if (auto pos = mapRegSourceArgIndexToClockPos(argIndex))
                     info = ClockPosInfo{*pos, invert};
                 }
               }
