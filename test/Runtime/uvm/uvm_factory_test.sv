@@ -6,7 +6,7 @@
 // 3. Factory registration macros equivalents
 // 4. get_type() and get_type_name()
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -30,9 +30,6 @@ package uvm_factory_test_pkg;
     endfunction
 
     // Explicit get_type_name for verification
-    virtual function string get_type_name();
-      return "base_object";
-    endfunction
 
     virtual function string convert2string();
       return $sformatf("base_object: value=0x%0h", value);
@@ -49,10 +46,6 @@ package uvm_factory_test_pkg;
       super.new(name);
     endfunction
 
-    virtual function string get_type_name();
-      return "extended_object";
-    endfunction
-
     virtual function string convert2string();
       return $sformatf("extended_object: value=0x%0h, extra_field=0x%0h", value, extra_field);
     endfunction
@@ -66,10 +59,6 @@ package uvm_factory_test_pkg;
 
     function new(string name = "alt_extended_object");
       super.new(name);
-    endfunction
-
-    virtual function string get_type_name();
-      return "alt_extended_object";
     endfunction
 
     virtual function string convert2string();
@@ -90,9 +79,6 @@ package uvm_factory_test_pkg;
     endfunction
 
     // Explicit get_type_name for verification
-    virtual function string get_type_name();
-      return "base_component";
-    endfunction
 
     virtual function string get_component_type();
       return "base_component";
@@ -107,10 +93,6 @@ package uvm_factory_test_pkg;
       super.new(name, parent);
     endfunction
 
-    virtual function string get_type_name();
-      return "extended_component";
-    endfunction
-
     virtual function string get_component_type();
       return "extended_component";
     endfunction
@@ -122,10 +104,6 @@ package uvm_factory_test_pkg;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
-    endfunction
-
-    virtual function string get_type_name();
-      return "instance_component";
     endfunction
 
     virtual function string get_component_type();
@@ -148,10 +126,6 @@ package uvm_factory_test_pkg;
       super.new(name);
     endfunction
 
-    virtual function string get_type_name();
-      return "test_seq_item";
-    endfunction
-
     virtual function string convert2string();
       return $sformatf("addr=0x%0h data=0x%0h write=%0b", addr, data, write);
     endfunction
@@ -164,10 +138,6 @@ package uvm_factory_test_pkg;
 
     function new(string name = "ext_seq_item");
       super.new(name);
-    endfunction
-
-    virtual function string get_type_name();
-      return "ext_seq_item";
     endfunction
 
     virtual function string convert2string();
@@ -547,10 +517,6 @@ package uvm_factory_test_pkg;
     function new(string name = "manual_reg_object");
       super.new(name);
     endfunction
-
-    virtual function string get_type_name();
-      return "manual_reg_object";
-    endfunction
   endclass
 
   // Test component without macros - manual factory registration
@@ -564,10 +530,6 @@ package uvm_factory_test_pkg;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
-    endfunction
-
-    virtual function string get_type_name();
-      return "manual_reg_component";
     endfunction
   endclass
 

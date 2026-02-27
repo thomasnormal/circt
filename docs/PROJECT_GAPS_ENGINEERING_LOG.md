@@ -142,3 +142,18 @@
 - Tests:
   - `llvm-lit --filter 'Runtime/uvm/config_db_test.sv' test/Runtime/uvm` passes.
   - Full UVM parse subset now: 9 passing / 8 failing.
+
+### UVM: remove duplicate `get_type_name` overrides in factory tests
+- Repro:
+  - `Runtime/uvm/uvm_factory_test.sv` and
+    `Runtime/uvm/uvm_factory_override_test.sv` failed with
+    `redefinition of 'get_type_name'`.
+- Root cause:
+  - These tests use `` `uvm_object_utils `` / `` `uvm_component_utils `` which
+    already provide `get_type_name`, but also declared explicit methods with the
+    same signature.
+- Fix:
+  - Removed the redundant explicit `get_type_name` methods in both tests.
+- Tests:
+  - `llvm-lit --filter 'Runtime/uvm/uvm_factory_test.sv|Runtime/uvm/uvm_factory_override_test.sv' test/Runtime/uvm` passes.
+  - Full `Runtime/uvm` parse subset now: 11 passing / 6 failing.

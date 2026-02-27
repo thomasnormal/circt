@@ -3,7 +3,7 @@
 // Tests for set_type_override_by_type(), set_inst_override_by_type(),
 // set_type_override_by_name(), and set_inst_override_by_name() methods
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
 
 `timescale 1ns/1ps
 
@@ -24,10 +24,6 @@ package factory_override_test_pkg;
       super.new(name);
     endfunction
 
-    virtual function string get_type_name();
-      return "base_tx";
-    endfunction
-
     virtual function string convert2string();
       return $sformatf("base_tx: data=%0h", data);
     endfunction
@@ -43,10 +39,6 @@ package factory_override_test_pkg;
 
     function new(string name = "extended_tx");
       super.new(name);
-    endfunction
-
-    virtual function string get_type_name();
-      return "extended_tx";
     endfunction
 
     virtual function string convert2string();
