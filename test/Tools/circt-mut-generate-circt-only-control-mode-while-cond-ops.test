@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  int i;\n  initial begin\n    i = 0;\n    while (i < 3) i++;\n    while (i < 5) i++;\n    while (i < 8) i++;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 48 --seed 0 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_WHILE_COND_NEGATE' %t/mutations.txt
+// RUN: grep -q 'NATIVE_WHILE_COND_TRUE' %t/mutations.txt
+// RUN: grep -q 'NATIVE_WHILE_COND_FALSE' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 48

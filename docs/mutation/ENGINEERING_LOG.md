@@ -2286,3 +2286,46 @@
   - seeded xrun-vs-circt parity with watchdog-enabled wait benchmark:
     - workspace: `/tmp/wait_seeded_waitcond_parity_watchdog_1772308559`
     - result: `ok=18 mismatch=0 fail=0`.
+
+## 2026-02-28 (while-condition mutation class)
+
+- realizations:
+  - `while (cond)` bugs (inverted exit condition or accidental constant
+    conditions) are common in control logic and are semantically distinct from
+    `if` and `wait` mutations.
+  - `WHILE_COND_TRUE`/`WHILE_COND_FALSE` can induce non-termination or immediate
+    bypass, so parity benches need watchdog termination.
+
+- changes made:
+  - Added native mutation operators:
+    - `WHILE_COND_NEGATE`
+    - `WHILE_COND_TRUE`
+    - `WHILE_COND_FALSE`
+  - Implemented in `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - token-aware `while (...)` site collection,
+    - condition-bound discovery at while sites,
+    - apply rewrites aligned with `if`/`wait` condition family:
+      - negate: `while (expr)` -> `while (!(expr))`
+      - force true/false: `while (1'b1)` / `while (1'b0)`.
+  - Integrated operators into CIRCT-only control-bearing mode sets in
+    `tools/circt-mut/circt-mut.cpp`.
+  - Updated native-op validator allowlist in
+    `utils/run_mutation_mcy_examples.sh`.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-while-cond-force.test`
+  - `test/Tools/native-create-mutated-while-cond-site-index.test`
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-while-cond-ops.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-while-cond-force.test test/Tools/native-create-mutated-while-cond-site-index.test test/Tools/circt-mut-generate-circt-only-control-mode-while-cond-ops.test`
+    - result: `3 passed`.
+  - safe-op validator regression:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+    - result: `1 passed`.
+  - seeded xrun-vs-circt parity with watchdog-enabled while benchmark:
+    - workspace: `/tmp/while_seeded_whilecond_parity_watchdog_1772308805`
+    - result: `ok=18 mismatch=0 fail=0`.

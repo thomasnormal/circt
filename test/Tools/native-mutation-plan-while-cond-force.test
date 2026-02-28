@@ -1,0 +1,17 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  int i;\n  initial begin\n    i = 0;\n    while (i < 3) i++;\n    while (i < 5) i++;\n  end\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops WHILE_COND_NEGATE --out %t/neg.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops WHILE_COND_TRUE --out %t/true.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops WHILE_COND_FALSE --out %t/false.txt
+// RUN: FileCheck %s --check-prefix=NEG < %t/neg.txt
+// RUN: FileCheck %s --check-prefix=TRUE < %t/true.txt
+// RUN: FileCheck %s --check-prefix=FALSE < %t/false.txt
+//
+// NEG: NATIVE_WHILE_COND_NEGATE@1
+// NEG: NATIVE_WHILE_COND_NEGATE@2
+//
+// TRUE: NATIVE_WHILE_COND_TRUE@1
+// TRUE: NATIVE_WHILE_COND_TRUE@2
+//
+// FALSE: NATIVE_WHILE_COND_FALSE@1
+// FALSE: NATIVE_WHILE_COND_FALSE@2
