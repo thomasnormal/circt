@@ -3434,6 +3434,37 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
         (void)getOrCreateImmediateCoverSignal(coverOp, instanceId);
       });
 
+      // Classify instance process execution model for compiled callback wiring.
+      // Use the per-instance signal map so wait/probe/drive signal references
+      // resolve to the instance's concrete SignalIds.
+      const auto &instanceSignalMap = instanceValueToSignal[instanceId];
+      CallbackPlan plan =
+          AOTProcessCompiler::classifyProcess(processOp, instanceSignalMap);
+      processExecModels[procId] = plan.model;
+
+      if (plan.isCallback()) {
+        processCallbackPlans[procId] = std::move(plan);
+        const auto &storedPlan = processCallbackPlans[procId];
+
+        // E2: Allocate callback frame for processes with loop-carried state.
+        if (storedPlan.hasFrame()) {
+          CallbackFrame &frame = callbackFrames[procId];
+          frame.slots.resize(storedPlan.frameSlotTypes.size());
+        }
+
+        // For CallbackStaticObserved, register permanent sensitivity once.
+        if (storedPlan.model == ExecModel::CallbackStaticObserved) {
+          for (auto &[sigId, edge] : storedPlan.staticSignals) {
+            if (sigId != 0)
+              scheduler.addSensitivity(procId, sigId, edge);
+          }
+          LLVM_DEBUG(llvm::dbgs()
+                     << "[callback] proc=" << procId
+                     << " registered permanent sensitivity ("
+                     << storedPlan.staticSignals.size() << " signals)\n");
+        }
+      }
+
       LLVM_DEBUG(maybeTraceRegisteredChildProcess(procName, procId));
 
       scheduler.scheduleProcess(procId, SchedulingRegion::Active);
