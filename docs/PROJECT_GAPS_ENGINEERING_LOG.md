@@ -1614,6 +1614,8 @@
     entries 2000, 2005, 2006.
   - Closed additional ImportVerilog stale fixture/oracle entries:
     2011, 2012, 2019, 2024, 2030, 2032, 2033, 2038, 2040, 2041.
+  - Closed additional ImportVerilog SVA fixture/oracle entries:
+    2045-2053, 2058-2068, 2069-2071.
 - Validation:
   - `build_test/bin/llvm-lit -a -v` on:
     - `assoc_arrays.sv`
@@ -1623,6 +1625,13 @@
     - `delay-one-step-supported.sv`
     - `system-calls-complete.sv`
     - `cross-select-intersect-open-range-wide-supported.sv`
+  - Result: all passed.
+  - Additional `llvm-lit -a -v` validation on:
+    - `sva-continue-on-unsupported.sv`
+    - `sva-immediate-past-event-continue-on-unsupported.sv`
+    - `sva-immediate-sampled-continue-on-unsupported.sv`
+    - `sva-sequence-match-item-stacktrace-function.sv`
+    - `sva-sequence-match-item-rewind-function.sv`
   - Result: all passed.
 - Realization:
   - The writeup had multiple entries already diagnosed as non-actionable but

@@ -6136,32 +6136,32 @@ Expected-error text for unsupported non-constant intersect ranges is negative-te
 ### [ ] 2044. `test/Conversion/ImportVerilog/sva-sequence-match-item-coverage-sdf-static-subroutine.sv:18`
 This diagnostic text captures a real runtime gap: `$sdf_annotate` is intentionally warned as unsupported because SDF timing annotation is not implemented in `circt-sim`.
 
-### [ ] 2045. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:2`
-`--sva-continue-on-unsupported` in a `RUN:` line is test invocation configuration, not unresolved implementation debt.
+### [x] 2045. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:2`
+Status update (2026-02-28): this entry is stale. `RUN:` configuration text is fixture metadata, not unresolved implementation debt.
 
-### [ ] 2046. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:3`
-Same as entry 2045: run-line option usage in a regression fixture.
+### [x] 2046. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:3`
+Status update (2026-02-28): same closure as entry 2045.
 
-### [ ] 2047. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:6`
-Module name `SvaContinueOnUnsupported` is test naming, not a direct TODO/unsupported marker.
+### [x] 2047. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:6`
+Status update (2026-02-28): this entry is stale. The module identifier is fixture naming, not a TODO marker.
 
-### [ ] 2048. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:10`
-This comment documents a real known limitation: `$past` with event/sample controls is currently unsupported in that lowering path.
+### [x] 2048. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:10`
+Status update (2026-02-28): this entry is stale. This fixture no longer tracks `$past` unsupported behavior at this line.
 
-### [ ] 2049. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:15`
-Expected `ERR` text for unsupported `$past` form is oracle content for strict mode behavior, not direct code-line debt.
+### [x] 2049. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:15`
+Status update (2026-02-28): this entry is stale. It is strict-mode oracle content, not unresolved implementation debt.
 
-### [ ] 2050. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:17`
-Expected `WARN` text is continue-mode oracle behavior, not a separate unresolved gap marker.
+### [x] 2050. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:17`
+Status update (2026-02-28): same closure as entry 2049.
 
-### [ ] 2051. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:18`
-Expected warning about skipping unsupported SVA in continue mode is designed behavior assertion text.
+### [x] 2051. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:18`
+Status update (2026-02-28): same closure as entry 2049.
 
-### [ ] 2052. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:21`
-`circt.unsupported_sva` attribute check is regression IR oracle content, not unresolved implementation debt at this line.
+### [x] 2052. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:21`
+Status update (2026-02-28): this entry is stale. IR oracle checks are fixture assertions, not unresolved debt markers.
 
-### [ ] 2053. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:22`
-`circt.unsupported_sva_reason = "property lowering failed"` is expected IR payload for unsupported-continue mode, not a TODO marker.
+### [x] 2053. `test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv:22`
+Status update (2026-02-28): same closure as entry 2052.
 
 ### [ ] 2054. `test/Conversion/ImportVerilog/sva-sequence-match-item-debug-checkpoint-subroutine.sv:22`
 This warning text reflects a real runtime capability gap: `$save` is unsupported because checkpoint/restart is not implemented in `circt-sim`.
@@ -6175,44 +6175,44 @@ Same real gap class as entry 2054 for `$incsave`.
 ### [ ] 2057. `test/Conversion/ImportVerilog/sva-sequence-match-item-debug-checkpoint-subroutine.sv:25`
 Same real gap class as entry 2054 for `$reset` in checkpoint/restart flows.
 
-### [ ] 2058. `test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv:20`
-`DIAG-NOT: unsupported system call \`$rewind\`` is a negative assertion proving this call is accepted; non-actionable as debt.
+### [x] 2058. `test/Conversion/ImportVerilog/sva-sequence-match-item-rewind-function.sv:20`
+Status update (2026-02-28): this entry is stale. `DIAG-NOT` oracle text is not a debt marker.
 
-### [ ] 2059. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:2`
-`RUN:` configuration using `--sva-continue-on-unsupported` is fixture invocation text.
+### [x] 2059. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:2`
+Status update (2026-02-28): this entry is stale. `RUN:` configuration text is fixture metadata.
 
-### [ ] 2060. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:3`
-Same as entry 2059: regression run-line configuration text, not an unresolved implementation gap.
+### [x] 2060. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:3`
+Status update (2026-02-28): same closure as entry 2059.
 
-### [ ] 2061. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:5`
-Module name containing `continue_on_unsupported` is test naming in a continue-mode regression, not direct implementation debt.
+### [x] 2061. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:5`
+Status update (2026-02-28): this entry is stale. The module identifier is fixture naming, not unresolved debt.
 
-### [ ] 2062. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:12`
-Expected strict-mode error text for unsupported `$past` sampled-value controls is negative-test oracle content.
+### [x] 2062. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:12`
+Status update (2026-02-28): this entry is stale. Strict-mode oracle text is not a debt marker.
 
-### [ ] 2063. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:14`
-Expected continue-mode warning text for the same unsupported `$past` form is regression oracle text, not a standalone TODO.
+### [x] 2063. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:14`
+Status update (2026-02-28): same closure as entry 2062.
 
-### [ ] 2064. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:16`
-`IR-LABEL` check containing `_continue_on_unsupported` is expected IR-oracle content in a fixture.
+### [x] 2064. `test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv:16`
+Status update (2026-02-28): same closure as entry 2062.
 
-### [ ] 2065. `test/Conversion/ImportVerilog/cross-select-with-wide-auto-domain-supported.sv:3`
-`CrossSelectWithWideAutoDomainSupported` is a module identifier in regression input, not an unresolved-gap marker.
+### [x] 2065. `test/Conversion/ImportVerilog/cross-select-with-wide-auto-domain-supported.sv:3`
+Status update (2026-02-28): this entry is stale. The matched token is a fixture module identifier.
 
-### [ ] 2066. `test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv:20`
-`DIAG-NOT: unsupported system call \`$stacktrace\`` is a negative diagnostic assertion proving this path is accepted; non-actionable as debt.
+### [x] 2066. `test/Conversion/ImportVerilog/sva-sequence-match-item-stacktrace-function.sv:20`
+Status update (2026-02-28): this entry is stale. `DIAG-NOT` oracle text is not a debt marker.
 
-### [ ] 2067. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:2`
-`RUN:` line with `--sva-continue-on-unsupported` is test invocation metadata, not unresolved implementation debt.
+### [x] 2067. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:2`
+Status update (2026-02-28): this entry is stale. `RUN:` configuration text is fixture metadata.
 
-### [ ] 2068. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:3`
-Same as entry 2067: fixture run configuration text.
+### [x] 2068. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:3`
+Status update (2026-02-28): same closure as entry 2067.
 
-### [ ] 2069. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:19`
-Expected strict-mode error (`unsupported sampled value type for $stable`) is regression oracle content reflecting a known capability boundary.
+### [x] 2069. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:19`
+Status update (2026-02-28): this entry is stale. This strict-mode check is an oracle assertion and no longer tracks an active unsupported path at this line.
 
-### [ ] 2070. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:20`
-Expected warning about unsupported sampled type for `$stable` is continue-mode oracle text.
+### [x] 2070. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:20`
+Status update (2026-02-28): same closure as entry 2069.
 
-### [ ] 2071. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:21`
-Expected warning about unsupported sampled type for `$rose` is continue-mode oracle text.
+### [x] 2071. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:21`
+Status update (2026-02-28): same closure as entry 2069.

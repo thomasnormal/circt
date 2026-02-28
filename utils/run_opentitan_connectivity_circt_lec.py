@@ -26,7 +26,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import yaml
 
@@ -564,7 +564,7 @@ def apply_prim_impl_file_filter(target_name: str, files: list[str]) -> list[str]
     return files
 
 
-def infer_rule_top_override(groups: Sequence[ConnectivityRuleGroup]) -> str:
+def infer_rule_top_override(groups: Sequence[ConnectivityConnectionGroup]) -> str:
     tops: set[str] = set()
     for group in groups:
         for rule in (group.connection, *group.conditions):
@@ -586,6 +586,39 @@ def apply_top_override_source_prune(
         return source_files
     suffixes = (f"/{current_top}.sv", f"/{current_top}.v")
     return [path for path in source_files if not path.endswith(suffixes)]
+
+
+def infer_external_hierarchy_top_fallback(
+    groups: Sequence[ConnectivityConnectionGroup],
+    current_top: str,
+    target_name: str,
+    source_files: Sequence[str],
+) -> str:
+    """Select a chip-wrapper top when rules reference external sibling blocks.
+
+    OpenTitan connectivity rows may mix `top_*.*` paths with sibling instances
+    like `u_ast.*`. If FuseSoC exposes `top_*` as toplevel, those sibling
+    instances are unreachable. In that case, fall back to the target chip
+    wrapper module when it is present in the source set.
+    """
+
+    if not current_top or not target_name or current_top == target_name:
+        return ""
+    roots: set[str] = set()
+    for group in groups:
+        for block in (group.connection.src_block, group.connection.dest_block):
+            token = block.strip()
+            if not token:
+                continue
+            root = token.split(".", 1)[0].strip()
+            if root:
+                roots.add(root)
+    if not roots or all(root == current_top for root in roots):
+        return ""
+    target_suffixes = (f"/{target_name}.sv", f"/{target_name}.v")
+    if not any(path.endswith(target_suffixes) for path in source_files):
+        return ""
+    return target_name
 
 
 def sanitize_token(token: str) -> str:
@@ -1344,12 +1377,25 @@ def main() -> int:
         source_files, include_dirs = resolve_eda_paths(eda_obj.get("files"), eda_yml.parent)
         source_files = apply_platform_file_filter(target.rel_path, source_files)
         source_files = apply_prim_impl_file_filter(target.target_name, source_files)
+        selected_top = top_module
         rule_top_override = infer_rule_top_override(selected_groups)
-        source_files = apply_top_override_source_prune(
-            source_files, top_module, rule_top_override
-        )
         if rule_top_override:
-            top_module = rule_top_override
+            selected_top = rule_top_override
+        hierarchy_top_fallback = infer_external_hierarchy_top_fallback(
+            selected_groups, selected_top, target.target_name, source_files
+        )
+        if hierarchy_top_fallback:
+            print(
+                "opentitan connectivity lec: using chip-wrapper top fallback "
+                f"{hierarchy_top_fallback} (eda_top={toplevels[0]})",
+                file=sys.stderr,
+                flush=True,
+            )
+            selected_top = hierarchy_top_fallback
+        source_files = apply_top_override_source_prune(
+            source_files, top_module, selected_top
+        )
+        top_module = selected_top
         if not source_files:
             fail(f"no source files resolved from EDA description: {eda_yml}")
         explicit_incdirs = [
