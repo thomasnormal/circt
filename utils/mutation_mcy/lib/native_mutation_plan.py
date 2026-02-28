@@ -24,6 +24,9 @@ NATIVE_OPS_ALL = [
     "REDXOR_TO_REDXNOR",
     "REDXNOR_TO_REDXOR",
     "IF_COND_NEGATE",
+    "RESET_COND_NEGATE",
+    "IF_COND_TRUE",
+    "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS",
     "UNARY_NOT_DROP",
     "CONST0_TO_1",
@@ -51,6 +54,9 @@ OP_PATTERNS = {
     "REDOR_TO_REDAND": r"\|",
     "REDXOR_TO_REDXNOR": r"\^",
     "REDXNOR_TO_REDXOR": r"\^~|~\^",
+    "RESET_COND_NEGATE": r"\bif\b",
+    "IF_COND_TRUE": r"\bif\b",
+    "IF_COND_FALSE": r"\bif\b",
     "UNARY_NOT_DROP": r"!\s*(?=[A-Za-z_(])",
     "CONST0_TO_1": r"1'b0|1'd0",
     "CONST1_TO_0": r"1'b1|1'd1",
@@ -488,6 +494,75 @@ def count_if_cond_negate_sites(text: str, mask: list[bool]) -> int:
     return count
 
 
+def is_reset_like_identifier(name: str) -> bool:
+    lowered = name.lower()
+    return lowered.startswith("rst") or ("reset" in lowered)
+
+
+def if_condition_has_reset_identifier(
+    text: str, mask: list[bool], cond_open: int, cond_close: int
+) -> bool:
+    if cond_open < 0 or cond_close <= cond_open + 1 or cond_close > len(text):
+        return False
+    i = cond_open + 1
+    while i < cond_close:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "\\":
+            start = i + 1
+            i += 1
+            while i < cond_close and is_code_at(mask, i) and (not text[i].isspace()):
+                i += 1
+            if i > start and is_reset_like_identifier(text[start:i]):
+                return True
+            continue
+        if not (ch.isalpha() or ch == "_"):
+            i += 1
+            continue
+        start = i
+        i += 1
+        while i < cond_close and is_code_at(mask, i) and (
+            text[i].isalnum() or text[i] in ("_", "$")
+        ):
+            i += 1
+        if is_reset_like_identifier(text[start:i]):
+            return True
+    return False
+
+
+def count_reset_if_cond_negate_sites(text: str, mask: list[bool]) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(mask, i, i + 2) or not text.startswith("if", i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+        nxt = text[i + 2] if i + 2 < n and is_code_at(mask, i + 2) else ""
+        if (prev and is_identifier_body(prev)) or (nxt and is_identifier_body(nxt)):
+            i += 1
+            continue
+        j = i + 2
+        while j < n and ((not is_code_at(mask, j)) or text[j].isspace()):
+            j += 1
+        if j >= n or not is_code_at(mask, j) or text[j] != "(":
+            i += 1
+            continue
+        k = find_matching_paren(text, mask, j)
+        if k < 0:
+            i += 1
+            continue
+        if not if_condition_has_reset_identifier(text, mask, j, k):
+            i += 1
+            continue
+        count += 1
+        i += 1
+    return count
+
+
 def match_keyword_token(text: str, mask: list[bool], pos: int, keyword: str) -> bool:
     if pos < 0 or not keyword:
         return False
@@ -851,6 +926,12 @@ def count_binary_xnor_token(text: str, mask: list[bool]) -> int:
 
 def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> int:
     if op == "IF_COND_NEGATE":
+        return count_if_cond_negate_sites(design_text, mask)
+    if op == "RESET_COND_NEGATE":
+        return count_reset_if_cond_negate_sites(design_text, mask)
+    if op == "IF_COND_TRUE":
+        return count_if_cond_negate_sites(design_text, mask)
+    if op == "IF_COND_FALSE":
         return count_if_cond_negate_sites(design_text, mask)
     if op == "IF_ELSE_SWAP_ARMS":
         return count_if_else_swap_sites(design_text, mask)

@@ -32,8 +32,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
-    "IF_COND_NEGATE",   "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP",
-    "UNARY_BNOT_DROP",
+    "IF_COND_NEGATE",   "RESET_COND_NEGATE", "IF_COND_TRUE",   "IF_COND_FALSE",
+    "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
     "MUL_TO_DIV",       "INC_TO_DEC",     "DEC_TO_INC",  "SHL_TO_SHR",
@@ -1413,6 +1413,52 @@ static bool isIdentifierBodyChar(char c) {
   return isAlnum(c) || c == '_' || c == '$';
 }
 
+static bool isResetLikeIdentifier(StringRef ident) {
+  if (ident.empty())
+    return false;
+  std::string lower = ident.lower();
+  StringRef lowerRef(lower);
+  return lowerRef.starts_with("rst") || lowerRef.contains("reset");
+}
+
+static bool conditionContainsResetIdentifier(StringRef text,
+                                             ArrayRef<uint8_t> codeMask,
+                                             size_t openPos,
+                                             size_t closePos) {
+  if (openPos == StringRef::npos || closePos == StringRef::npos ||
+      closePos <= openPos + 1 || closePos > text.size())
+    return false;
+
+  for (size_t i = openPos + 1; i < closePos;) {
+    if (!isCodeAt(codeMask, i)) {
+      ++i;
+      continue;
+    }
+    char ch = text[i];
+    if (ch == '\\') {
+      size_t start = i + 1;
+      ++i;
+      while (i < closePos && isCodeAt(codeMask, i) &&
+             !std::isspace(static_cast<unsigned char>(text[i])))
+        ++i;
+      if (i > start && isResetLikeIdentifier(text.slice(start, i)))
+        return true;
+      continue;
+    }
+    if (!(isAlpha(ch) || ch == '_')) {
+      ++i;
+      continue;
+    }
+    size_t start = i++;
+    while (i < closePos && isCodeAt(codeMask, i) &&
+           (isAlnum(text[i]) || text[i] == '_' || text[i] == '$'))
+      ++i;
+    if (isResetLikeIdentifier(text.slice(start, i)))
+      return true;
+  }
+  return false;
+}
+
 static size_t findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
                                 size_t openPos) {
   if (openPos == StringRef::npos || openPos >= text.size() ||
@@ -1534,8 +1580,9 @@ static size_t findIfElseBranchEnd(StringRef text, ArrayRef<uint8_t> codeMask,
   return StringRef::npos;
 }
 
-static void collectIfConditionNegateSites(
-    StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+static void collectIfConditionSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                    SmallVectorImpl<SiteInfo> &sites,
+                                    bool requireResetIdentifier) {
   for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
     if (!isCodeRange(codeMask, i, 2) || !text.substr(i).starts_with("if"))
       continue;
@@ -1557,8 +1604,24 @@ static void collectIfConditionNegateSites(
     if (closePos == StringRef::npos)
       continue;
 
+    if (requireResetIdentifier &&
+        !conditionContainsResetIdentifier(text, codeMask, openPos, closePos))
+      continue;
+
     sites.push_back({i});
   }
+}
+
+static void collectIfConditionNegateSites(
+    StringRef text, ArrayRef<uint8_t> codeMask,
+    SmallVectorImpl<SiteInfo> &sites) {
+  collectIfConditionSites(text, codeMask, sites, /*requireResetIdentifier=*/false);
+}
+
+static void collectResetConditionNegateSites(
+    StringRef text, ArrayRef<uint8_t> codeMask,
+    SmallVectorImpl<SiteInfo> &sites) {
+  collectIfConditionSites(text, codeMask, sites, /*requireResetIdentifier=*/true);
 }
 
 static void collectIfElseSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask,
@@ -1753,6 +1816,18 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectIfConditionNegateSites(designText, codeMask, sites);
     return;
   }
+  if (op == "RESET_COND_NEGATE") {
+    collectResetConditionNegateSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "IF_COND_TRUE") {
+    collectIfConditionNegateSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "IF_COND_FALSE") {
+    collectIfConditionNegateSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "IF_ELSE_SWAP_ARMS") {
     collectIfElseSwapArmSites(designText, codeMask, sites);
     return;
@@ -1875,7 +1950,9 @@ static std::string getOpFamily(StringRef op) {
     return "timing";
   if (op == "MUX_SWAP_ARMS")
     return "mux";
-  if (op == "IF_COND_NEGATE" || op == "IF_ELSE_SWAP_ARMS")
+  if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
+      op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
+      op == "IF_ELSE_SWAP_ARMS")
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";

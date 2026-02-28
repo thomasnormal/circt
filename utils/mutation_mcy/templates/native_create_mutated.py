@@ -511,6 +511,80 @@ def find_if_cond_token(nth: int):
     return (-1, -1, -1)
 
 
+def is_reset_like_identifier(name: str) -> bool:
+    if not name:
+        return False
+    lowered = name.lower()
+    return lowered.startswith("rst") or ("reset" in lowered)
+
+
+def if_condition_has_reset_identifier(cond_open: int, cond_close: int) -> bool:
+    if cond_open < 0 or cond_close <= cond_open + 1 or cond_close > len(text):
+        return False
+    i = cond_open + 1
+    while i < cond_close:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "\\":
+            start = i + 1
+            i += 1
+            while i < cond_close and is_code_at(i) and (not text[i].isspace()):
+                i += 1
+            if i > start and is_reset_like_identifier(text[start:i]):
+                return True
+            continue
+        if not (ch.isalpha() or ch == "_"):
+            i += 1
+            continue
+        start = i
+        i += 1
+        while i < cond_close and is_code_at(i) and (
+            text[i].isalnum() or text[i] in ("_", "$")
+        ):
+            i += 1
+        if is_reset_like_identifier(text[start:i]):
+            return True
+    return False
+
+
+def find_reset_if_cond_token(nth: int):
+    if nth < 1:
+        return (-1, -1, -1)
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(i, i + 2) or not text.startswith("if", i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 2] if i + 2 < n and is_code_at(i + 2) else ""
+        if (prev and is_identifier_body(prev)) or (nxt and is_identifier_body(nxt)):
+            i += 1
+            continue
+        j = i + 2
+        while j < n and ((not is_code_at(j)) or text[j].isspace()):
+            j += 1
+        if j >= n or not is_code_at(j) or text[j] != "(":
+            i += 1
+            continue
+        k = find_matching_paren(j)
+        if k < 0:
+            i += 1
+            continue
+        if not if_condition_has_reset_identifier(j, k):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return (i, j, k)
+        i += 1
+        continue
+    return (-1, -1, -1)
+
+
 def match_keyword_token(pos: int, keyword: str) -> bool:
     if pos < 0 or not keyword:
         return False
@@ -1808,6 +1882,22 @@ elif op == 'IF_COND_NEGATE':
     if cond_open >= 0 and cond_close >= cond_open:
         cond_expr = text[cond_open + 1:cond_close]
         text = text[:cond_open + 1] + '!(' + cond_expr + ')' + text[cond_close:]
+        changed = True
+elif op == 'RESET_COND_NEGATE':
+    _, cond_open, cond_close = find_reset_if_cond_token(site_index)
+    if cond_open >= 0 and cond_close >= cond_open:
+        cond_expr = text[cond_open + 1:cond_close]
+        text = text[:cond_open + 1] + '!(' + cond_expr + ')' + text[cond_close:]
+        changed = True
+elif op == 'IF_COND_TRUE':
+    _, cond_open, cond_close = find_if_cond_token(site_index)
+    if cond_open >= 0 and cond_close >= cond_open:
+        text = text[:cond_open + 1] + "1'b1" + text[cond_close:]
+        changed = True
+elif op == 'IF_COND_FALSE':
+    _, cond_open, cond_close = find_if_cond_token(site_index)
+    if cond_open >= 0 and cond_close >= cond_open:
+        text = text[:cond_open + 1] + "1'b0" + text[cond_close:]
         changed = True
 elif op == 'IF_ELSE_SWAP_ARMS':
     _, then_start, then_end, else_pos, else_start, else_end = find_if_else_swap_token(site_index)

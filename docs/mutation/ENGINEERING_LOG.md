@@ -551,3 +551,73 @@
     - excluding race-prone BA/NBA swaps: `38 match / 0 diff`
   - seeded `incdec_seeded` arith sweep (`20` mutants, includes inc/dec ops):
     `20 match / 0 diff`.
+
+## 2026-02-28 (MooreToCore ref-arg store fallback deletion safety check)
+
+- realizations:
+  - The removed `AssignOpConversion` fallback in
+    `lib/Conversion/MooreToCore/MooreToCore.cpp` was forcing `llvm.store` for
+    *all* `llhd.ref` function block args, including nonblocking assignments.
+  - That fallback contradicts current interpreter behavior, which now tracks
+    ref-argument signal provenance across function/task boundaries via
+    `refBlockArgSources` and related ref mapping paths.
+  - The prior mismatch was semantic, not random: task NBA through ref params was
+    being lowered with blocking-store behavior.
+
+- changes made:
+  - Kept the fallback removal in MooreToCore (no replacement path added there).
+  - Added/kept regression to lock expected task NBA ordering:
+    - `test/Tools/circt-sim/task-nonblocking-assign-in-task-order.sv`
+
+- validation:
+  - Targeted lit tests pass with current built tools:
+    - `test/Conversion/MooreToCore/ref-param-store.mlir`
+    - `test/Conversion/MooreToCore/interface-timing-after-inlining.sv`
+    - `test/Tools/circt-sim/task-nonblocking-assign-in-task-order.sv`
+    - `test/Tools/circt-sim/coverage-event-sampling-order-negedge.sv`
+  - Deterministic seeded parity repro rerun:
+    - xrun and circt both report:
+      `SUMMARY addr_unique=12 we_unique=2 cov_total=87.50 sig=876`
+  - Full rebuild/suite execution is currently blocked by concurrent dirty-file
+    compile failures outside MooreToCore (`ImportVerilog` and
+    `LLHDProcessInterpreter`), so safety claim is bounded to targeted semantics
+    and parity checks above.
+
+## 2026-02-28 (reset-polarity fault class in native mutation planner)
+
+- realizations:
+  - A reset polarity bug is a high-frequency, realistic control fault, but the
+    native operator catalog only had generic `IF_COND_NEGATE`.
+  - We need reset-focused site filtering (identifiers like `rst*` / `*reset*`)
+    to avoid spending control mutations on unrelated conditions.
+  - During parity sweeps, `xrun -R` with source files can silently ignore HDL
+    inputs and reuse old snapshots; for reproducible mutant comparison we must
+    compile-run without `-R`.
+
+- changes made:
+  - Added new native operator: `RESET_COND_NEGATE`.
+  - Integrated operator into CIRCT native planner and mode catalogs:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - `tools/circt-mut/circt-mut.cpp`
+  - Added reset-aware condition scanning in planner:
+    - detects reset-like identifiers in `if (...)` conditions, including escaped
+      identifiers.
+  - Added reset-aware mutation rewrite in native mutator template:
+    - `utils/mutation_mcy/templates/native_create_mutated.py`
+  - Updated Python native plan helper parity:
+    - `utils/mutation_mcy/lib/native_mutation_plan.py`
+  - Added TDD regressions:
+    - `test/Tools/circt-mut-generate-circt-only-control-mode-reset-cond-negate-op.test`
+    - `test/Tools/native-create-mutated-reset-cond-negate-site-index.test`
+
+- validation:
+  - TDD: new tests fail before implementation, pass after.
+  - Rebuilt and tested:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+    - `llvm-lit -sv` slices for control-mode generation, native mutation plan,
+      and native create-mutated tests (`124 passed` in broader touched slice).
+  - Seeded campaign (`cov_intro_seeded.sv`, `count=24`, `seed=20260228`,
+    mode=`balanced`) with per-mutant xrun/circt comparison:
+    - semantic matches: all mutants after rerunning transient tool errors.
+    - transient non-matches were infra only (`circt-sim` temporary
+      `Permission denied` while binaries changed), not semantic divergence.

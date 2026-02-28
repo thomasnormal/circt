@@ -14819,7 +14819,9 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
+               "RESET_COND_NEGATE",
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
     return;
   }
   if (modeName == "stuck") {
@@ -14835,7 +14837,9 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+               "RESET_COND_NEGATE",
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
                "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
                "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
@@ -14851,7 +14855,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "IF_ELSE_SWAP_ARMS"});
+               "RESET_COND_NEGATE",
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
     return;
   }
   if (modeName == "balanced" || modeName == "all") {
@@ -14863,7 +14868,9 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+               "RESET_COND_NEGATE",
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB", "SUB_TO_ADD",
                "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV",
                "UNARY_MINUS_DROP", "INC_TO_DEC", "DEC_TO_INC", "SHL_TO_SHR",
@@ -14883,7 +14890,9 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+               "RESET_COND_NEGATE",
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
                "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
                "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
@@ -14907,7 +14916,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "IF_ELSE_SWAP_ARMS"});
+               "RESET_COND_NEGATE",
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
     return;
   }
 }

@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, rst_n, en, a, output logic y0, y1);\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n) y0 <= 1'b0;\n    else if (en) y0 <= a;\n  end\n  always_comb begin\n    y1 = 1'b0;\n    if (rst_n && en) y1 = a;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 240 --seed 19 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_RESET_COND_NEGATE' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 240
