@@ -1311,6 +1311,264 @@ static std::string rewriteEventControlParenCompat(StringRef text,
   return out;
 }
 
+/// Collect simple `property <name>` declarations in this source text.
+static void collectPropertyDeclNames(StringRef text,
+                                     llvm::StringSet<> &propertyNames) {
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      continue;
+    }
+    if (text[i] == '"') {
+      ++i;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      continue;
+    }
+    if (!isIdentifierStartChar(text[i])) {
+      ++i;
+      continue;
+    }
+
+    size_t wordStart = i++;
+    while (i < text.size() && isIdentifierChar(text[i]))
+      ++i;
+    StringRef word = text.slice(wordStart, i);
+    if (word != "property")
+      continue;
+
+    auto maybeNameStart = skipTrivia(text, i);
+    if (!maybeNameStart || *maybeNameStart >= text.size())
+      continue;
+    size_t nameStart = *maybeNameStart;
+    if (!isIdentifierStartChar(text[nameStart]))
+      continue; // skip `assert property (...)`, etc.
+    size_t nameEnd = nameStart + 1;
+    while (nameEnd < text.size() && isIdentifierChar(text[nameEnd]))
+      ++nameEnd;
+    propertyNames.insert(text.slice(nameStart, nameEnd));
+  }
+}
+
+/// Rewrite open-range unary SVA forms rejected by this slang revision:
+/// - eventually[m:$]
+/// - s_always[m:$]
+/// - nexttime[m:$]
+/// - s_nexttime[m:$]
+///
+/// The rewrite targets common operand forms used in UVM / SVA tests where the
+/// operand is a simple identifier or a parenthesized expression.
+static std::string rewriteOpenRangeUnarySVACompat(StringRef text,
+                                                  bool &changed) {
+  llvm::StringSet<> propertyNames;
+  collectPropertyDeclNames(text, propertyNames);
+
+  auto parseOpenRange = [&](size_t afterKeyword, StringRef &lowerBound,
+                            size_t &afterRange) -> bool {
+    auto maybeOpen = skipTrivia(text, afterKeyword);
+    if (!maybeOpen || *maybeOpen >= text.size() || text[*maybeOpen] != '[')
+      return false;
+    size_t open = *maybeOpen;
+
+    auto maybeLowerStart = skipTrivia(text, open + 1);
+    if (!maybeLowerStart || *maybeLowerStart >= text.size())
+      return false;
+    size_t lowerStart = *maybeLowerStart;
+    size_t lowerEnd = lowerStart;
+    while (lowerEnd < text.size() &&
+           (std::isdigit(static_cast<unsigned char>(text[lowerEnd])) ||
+            text[lowerEnd] == '_'))
+      ++lowerEnd;
+    if (lowerEnd == lowerStart)
+      return false;
+
+    auto maybeColon = skipTrivia(text, lowerEnd);
+    if (!maybeColon || *maybeColon >= text.size() || text[*maybeColon] != ':')
+      return false;
+    auto maybeDollar = skipTrivia(text, *maybeColon + 1);
+    if (!maybeDollar || *maybeDollar >= text.size() || text[*maybeDollar] != '$')
+      return false;
+    auto maybeClose = skipTrivia(text, *maybeDollar + 1);
+    if (!maybeClose || *maybeClose >= text.size() || text[*maybeClose] != ']')
+      return false;
+
+    lowerBound = text.slice(lowerStart, lowerEnd);
+    afterRange = *maybeClose + 1;
+    return true;
+  };
+
+  auto parseOperand = [&](size_t start, size_t &end, bool &isIdentifier,
+                          StringRef &identifier) -> bool {
+    isIdentifier = false;
+    identifier = StringRef();
+    if (start >= text.size())
+      return false;
+    if (isIdentifierStartChar(text[start])) {
+      size_t identEnd = start + 1;
+      while (identEnd < text.size() && isIdentifierChar(text[identEnd]))
+        ++identEnd;
+      end = identEnd;
+      isIdentifier = true;
+      identifier = text.slice(start, identEnd);
+      return true;
+    }
+    if (text[start] == '(') {
+      auto close = scanBalanced(text, start, '(', ')');
+      if (!close)
+        return false;
+      end = *close + 1;
+      return true;
+    }
+    return false;
+  };
+
+  std::string out;
+  out.reserve(text.size());
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.slice(start, i));
+      continue;
+    }
+
+    if (!isIdentifierStartChar(text[i])) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    size_t wordStart = i++;
+    while (i < text.size() && isIdentifierChar(text[i]))
+      ++i;
+    StringRef keyword = text.slice(wordStart, i);
+    bool isInteresting = keyword == "eventually" || keyword == "s_always" ||
+                         keyword == "nexttime" || keyword == "s_nexttime";
+    if (!isInteresting) {
+      out.append(keyword);
+      continue;
+    }
+
+    StringRef lowerBound;
+    size_t afterRange = i;
+    if (!parseOpenRange(i, lowerBound, afterRange)) {
+      out.append(keyword);
+      continue;
+    }
+
+    auto maybeOperandStart = skipTrivia(text, afterRange);
+    if (!maybeOperandStart || *maybeOperandStart >= text.size()) {
+      out.append(keyword);
+      continue;
+    }
+
+    size_t operandStart = *maybeOperandStart;
+    size_t operandEnd = operandStart;
+    bool operandIsIdentifier = false;
+    StringRef operandIdentifier;
+    if (!parseOperand(operandStart, operandEnd, operandIsIdentifier,
+                      operandIdentifier)) {
+      out.append(keyword);
+      continue;
+    }
+
+    StringRef operand = text.slice(operandStart, operandEnd);
+    bool operandIsProperty =
+        operandIsIdentifier && propertyNames.contains(operandIdentifier);
+
+    if (keyword == "s_nexttime") {
+      out.append("s_eventually [");
+      out.append(lowerBound);
+      out.append(":$] ");
+      out.append(operand);
+    } else if (keyword == "nexttime" || keyword == "eventually") {
+      if (operandIsProperty) {
+        out.append("(not always [");
+        out.append(lowerBound);
+        out.append(":$] (not ");
+        out.append(operand);
+        out.append("))");
+      } else {
+        out.append("##[");
+        out.append(lowerBound);
+        out.append(":$] ");
+        out.append(operand);
+      }
+    } else if (keyword == "s_always") {
+      if (operandIsProperty) {
+        out.append("(not s_eventually (not (s_nexttime [");
+        out.append(lowerBound);
+        out.append("] ");
+        out.append(operand);
+        out.append(")))");
+      } else {
+        out.append("(not s_eventually (not ((##[");
+        out.append(lowerBound);
+        out.append("] 1'b1) and ((##[");
+        out.append(lowerBound);
+        out.append("] 1'b1) |-> ");
+        out.append(operand);
+        out.append("))))");
+      }
+    } else {
+      llvm_unreachable("covered by isInteresting");
+    }
+
+    changed = true;
+    i = operandEnd;
+  }
+
+  return out;
+}
+
 /// A converter that can be plugged into a slang `DiagnosticEngine` as a client
 /// that will map slang diagnostics to their MLIR counterpart and emit them.
 class MlirDiagnosticClient : public slang::DiagnosticClient {
@@ -1643,6 +1901,12 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
                  rewrittenText.contains("@posedge (") ||
                      rewrittenText.contains("@negedge (") ||
                      rewrittenText.contains("@edge ("));
+    applyRewrite(rewriteOpenRangeUnarySVACompat,
+                 rewrittenText.contains(":$") &&
+                     (rewrittenText.contains("eventually") ||
+                      rewrittenText.contains("s_always") ||
+                      rewrittenText.contains("nexttime") ||
+                      rewrittenText.contains("s_nexttime")));
     applyRewrite(rewriteConfigKeywordIdentifiersCompat,
                  rewrittenText.contains("cell") ||
                      rewrittenText.contains("config") ||

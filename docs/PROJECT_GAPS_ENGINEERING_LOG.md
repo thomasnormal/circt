@@ -1132,3 +1132,46 @@
   - Sim/UVM sanity:
     - `build_test/bin/llvm-lit -sv test/Tools/circt-sim test/Runtime/uvm -j 8`
     - result: `892` discovered, `892` passed.
+
+## 2026-02-28
+
+### ImportVerilog: remove open-range SVA XFAILs via pre-parse compatibility rewrite
+- Repro:
+  - Open-range unary property forms failed in parsing with this slang revision:
+    - `eventually [m:$] ...`
+    - `s_always [m:$] ...`
+    - `nexttime [m:$] ...`
+    - `s_nexttime [m:$] ...`
+  - Failing tests were:
+    - `sva-open-range-eventually-salways-property.sv`
+    - `sva-open-range-nexttime-property.sv`
+    - `sva-open-range-nexttime-sequence.sv`
+    - `sva-open-range-unary-repeat.sv`
+- Root cause:
+  - Parser rejects these open-range forms before IR lowering, even though
+    equivalent forms lower correctly once parsed.
+- Fix:
+  - Added `rewriteOpenRangeUnarySVACompat` in
+    `lib/Conversion/ImportVerilog/ImportVerilog.cpp` and wired it into
+    `prepareDriver` source rewrites.
+  - Rewrite behavior:
+    - `s_nexttime [m:$] x` -> `s_eventually [m:$] x`
+    - `nexttime/eventually [m:$] x`
+      - property operand: `not always [m:$] (not x)`
+      - non-property operand: `##[m:$] x`
+    - `s_always [m:$] x`
+      - property operand: `not s_eventually (not (s_nexttime [m] x))`
+      - non-property operand: `not s_eventually (not ((##[m] 1'b1) and ((##[m] 1'b1) |-> x)))`
+  - Added simple property-name collection (`collectPropertyDeclNames`) so
+    rewrites can distinguish property identifiers from sequence/boolean operands.
+- Test updates:
+  - Removed `XFAIL` in the 4 open-range tests above.
+  - Updated checks in:
+    - `sva-open-range-eventually-salways-property.sv`
+    - `sva-open-range-nexttime-property.sv`
+    - `sva-open-range-unary-repeat.sv`
+    to match current lowering shape after compat rewrites.
+- Validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-verilog`
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv test/Conversion/ImportVerilog/sva-open-range-nexttime-sequence.sv test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
+  - result: 4/4 passed.
