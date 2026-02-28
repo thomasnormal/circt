@@ -57,6 +57,7 @@
 #include "mlir/Dialect/LLVMIR/Transforms/InlinerInterfaceImpl.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/SMT/IR/SMTDialect.h"
 #include "mlir/IR/BuiltinDialect.h"
@@ -72,6 +73,7 @@
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Target/SMTLIB/ExportSMTLIB.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/SmallString.h"
@@ -147,6 +149,17 @@ static cl::opt<bool>
                  cl::desc("Run the verifier after each transformation pass"),
                  cl::init(true), cl::cat(mainCategory));
 
+static cl::opt<unsigned> lecCanonicalizerMaxIterations(
+    "lec-canonicalizer-max-iterations",
+    cl::desc("Override max canonicalizer iterations in circt-lec pipeline "
+             "(0 uses canonicalizer default)"),
+    cl::init(0), cl::cat(mainCategory));
+
+static cl::opt<unsigned> lecCanonicalizerMaxNumRewrites(
+    "lec-canonicalizer-max-num-rewrites",
+    cl::desc("Override max canonicalizer rewrites in circt-lec pipeline"),
+    cl::init(200000), cl::cat(mainCategory));
+
 static cl::opt<bool>
     verbosePassExecutions("verbose-pass-executions",
                           cl::desc("Log executions of toplevel module passes"),
@@ -206,6 +219,13 @@ static cl::opt<bool>
                        cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<bool>
+    approxTemporal("approx-temporal",
+                   cl::desc("Allow UNSOUND approximations for unsupported "
+                            "temporal LTL ops during verif-to-SMT lowering "
+                            "(for example non-zero ltl.delay)."),
+                   cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool>
     dumpUnknownSources("dump-unknown-sources",
                        cl::desc("Dump backward slices for 4-state outputs"),
                        cl::init(false), cl::cat(mainCategory));
@@ -228,6 +248,14 @@ static cl::opt<bool>
                              "the only differences are due to X-propagation. "
                              "Only supported with --run-smtlib."),
                     cl::init(false), cl::cat(mainCategory));
+
+static cl::opt<bool> acceptLLHDAbstraction(
+    "accept-llhd-abstraction",
+    cl::desc("If LEC is SAT and the mismatch is inconclusive due to LLHD "
+             "interface abstraction, treat the circuits as equivalent "
+             "(LEC_RESULT=EQ) while still reporting LEC_DIAG=LLHD_ABSTRACTION. "
+             "Only supported with --run-smtlib."),
+    cl::init(false), cl::cat(mainCategory));
 
 static cl::opt<unsigned>
     seqBound("bound",
@@ -329,9 +357,24 @@ parseAndMergeModules(MLIRContext &context, TimingScope &ts) {
     return failure();
 
   if (inputFilenames.size() == 2) {
-    auto moduleOpt = parseSourceFile<ModuleOp>(inputFilenames[1], &context);
-    if (!moduleOpt)
-      return failure();
+    OwningOpRef<ModuleOp> moduleOpt;
+    if (inputFilenames[0] == inputFilenames[1]) {
+      // Fast path for the common "same file twice" workflow:
+      // when the selected circuits are distinct symbols already present in the
+      // one parsed module, there is no need to clone/merge the full design.
+      bool circuitsAlreadyPresent =
+          firstModuleName != secondModuleName &&
+          SymbolTable::lookupSymbolIn(module.get(), secondModuleName);
+      if (circuitsAlreadyPresent)
+        return module;
+
+      // Otherwise we still need a duplicate module namespace (e.g. -c1 == -c2).
+      moduleOpt = OwningOpRef<ModuleOp>(cast<ModuleOp>(module->clone()));
+    } else {
+      moduleOpt = parseSourceFile<ModuleOp>(inputFilenames[1], &context);
+      if (!moduleOpt)
+        return failure();
+    }
     auto result = mergeModules(module.get(), moduleOpt.get(),
                                StringAttr::get(&context, secondModuleName));
     if (failed(result))
@@ -653,7 +696,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
   SmallVector<Type> lecInputTypes;
   SmallVector<Type> lecOutputTypes;
   if (outputFormat == OutputRunSMTLIB &&
-      (wantSolverOutput || diagnoseXProp || acceptXPropOnly)) {
+      (wantSolverOutput || diagnoseXProp || acceptXPropOnly ||
+       acceptLLHDAbstraction)) {
     if (auto moduleA =
             module->lookupSymbol<hw::HWModuleOp>(firstModuleName)) {
       auto inputTypes = moduleA.getInputTypes();
@@ -717,8 +761,17 @@ static LogicalResult executeLEC(MLIRContext &context) {
     return failure();
   }
 
-  if (flattenHWModules)
-    pm.addPass(hw::createFlattenModules());
+  auto createLECCanonicalizerPass = [&]() -> std::unique_ptr<Pass> {
+    mlir::GreedyRewriteConfig config;
+    config.setUseTopDownTraversal(false);
+    config.setRegionSimplificationLevel(
+        mlir::GreedySimplifyRegionLevel::Disabled);
+    config.setMaxNumRewrites(lecCanonicalizerMaxNumRewrites);
+    if (lecCanonicalizerMaxIterations > 0)
+      config.setMaxIterations(lecCanonicalizerMaxIterations);
+    return mlir::createCanonicalizerPass(config);
+  };
+
   pm.addPass(om::createStripOMPass());
   pm.addPass(emit::createStripEmitPass());
   pm.addPass(sim::createStripSim());
@@ -752,17 +805,27 @@ static LogicalResult executeLEC(MLIRContext &context) {
     llhdPrePM.addPass(llhd::createHoistSignalsPass());
     llhdPrePM.addPass(llhd::createDeseqPass());
 
-    // Hoist assertions before LLHD process lowering removes them.
-    pm.addPass(createStripLLHDProcesses());
-
     auto &llhdPostPM = pm.nest<hw::HWModuleOp>();
-    // Keep the LLHD pre-processing minimal here. The LEC pipeline ultimately
-    // strips LLHD storage/IO via `strip-llhd-interface-signals`, which has
-    // dedicated logic for resolving multi-driver semantics with strict/approx
-    // behavior. We only run the loop/control-flow simplifications needed to
-    // keep combinational regions concrete (avoid `llhd_comb` abstraction).
+    // Keep LLHD process structure concrete before stripping LLHD interfaces.
+    // This mirrors the BMC LLHD strategy and avoids pathological compile-time
+    // behavior when flattening very large designs up front.
+    llhdPostPM.addPass(llhd::createLowerProcessesPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(createLECCanonicalizerPass());
     llhdPostPM.addPass(llhd::createUnrollLoopsPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(createLECCanonicalizerPass());
     llhdPostPM.addPass(llhd::createRemoveControlFlowPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(createLECCanonicalizerPass());
+    llhdPostPM.addPass(createMapArithToCombPass(true));
+    llhdPostPM.addPass(llhd::createCombineDrivesPass());
+    llhdPostPM.addPass(mlir::createCSEPass());
+    llhdPostPM.addPass(createLECCanonicalizerPass());
+
+    // Hoist assertions before LLHD process stripping removes LLHD process
+    // operations.
+    pm.addPass(createStripLLHDProcesses());
 
     // Strip LLHD interface storage late, after loop unrolling and control-flow
     // removal, to avoid abstracting combinational regions that the LLHD-to-core
@@ -775,6 +838,11 @@ static LogicalResult executeLEC(MLIRContext &context) {
     // LLHD stripping so the rest of the LEC pipeline can proceed without LLVM
     // dialect operations.
     pm.addPass(createLowerLECLLVM());
+  }
+  if (flattenHWModules) {
+    pm.addPass(hw::createFlattenModules());
+    pm.addPass(createCSEPass());
+    pm.addPass(createLECCanonicalizerPass());
   }
   if (dumpUnknownSources)
     pm.addPass(createDumpLECUnknowns());
@@ -808,10 +876,11 @@ static LogicalResult executeLEC(MLIRContext &context) {
   ConvertVerifToSMTOptions convertVerifToSMTOptions;
   convertVerifToSMTOptions.assumeKnownInputs = assumeKnownInputs;
   convertVerifToSMTOptions.xOptimisticOutputs = xOptimisticOutputs;
+  convertVerifToSMTOptions.approxTemporalOps = approxTemporal;
   convertVerifToSMTOptions.forSMTLIBExport =
       (outputFormat == OutputSMTLIB || outputFormat == OutputRunSMTLIB);
   pm.addPass(createConvertVerifToSMT(convertVerifToSMTOptions));
-  pm.addPass(createBottomUpSimpleCanonicalizerPass());
+  pm.addPass(createLECCanonicalizerPass());
   pm.addPass(createSMTDeadCodeEliminationPass());
 
   if (outputFormat != OutputMLIR && outputFormat != OutputSMTLIB &&
@@ -821,7 +890,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
     options.printModelInputs = wantSolverOutput;
     pm.addPass(createLowerSMTToZ3LLVM(options));
     pm.addPass(createCSEPass());
-    pm.addPass(createBottomUpSimpleCanonicalizerPass());
+    pm.addPass(createLECCanonicalizerPass());
     pm.addPass(LLVM::createDIScopeForLLVMFuncOpPass());
   }
 
@@ -1095,6 +1164,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
     auto token = selectedRun->token;
     bool acceptedXPropOnly = false;
+    bool acceptedLLHDAbstraction = false;
     std::optional<bool> xpropOnly;
     std::optional<std::string> assumeKnownResultToken;
     if ((diagnoseXProp || acceptXPropOnly) && token &&
@@ -1200,6 +1270,8 @@ static LogicalResult executeLEC(MLIRContext &context) {
           (*token == "sat") && hasLLHDInterfaceAbstraction;
       acceptedXPropOnly =
           (*token == "sat") && acceptXPropOnly && xpropOnly && *xpropOnly;
+      acceptedLLHDAbstraction =
+          llhdAbstractionInconclusive && acceptLLHDAbstraction;
       if (acceptedXPropOnly) {
         outputFile.value()->os() << "c1 == c2\n";
         outputFile.value()->os() << "LEC_RESULT=EQ\n";
@@ -1211,6 +1283,18 @@ static LogicalResult executeLEC(MLIRContext &context) {
             << "note: accepting XPROP_ONLY mismatch (--accept-xprop-only): "
                "the circuits are equivalent under assume-known-inputs "
                "(unknown=0).\n";
+        maybePrintCounterexample(*token);
+      } else if (acceptedLLHDAbstraction) {
+        outputFile.value()->os() << "c1 == c2\n";
+        outputFile.value()->os() << "LEC_RESULT=EQ\n";
+        if (assumeKnownResultToken)
+          outputFile.value()->os() << "LEC_DIAG_ASSUME_KNOWN_RESULT="
+                                   << *assumeKnownResultToken << "\n";
+        outputFile.value()->os() << "LEC_DIAG=LLHD_ABSTRACTION\n";
+        llvm::errs() << "note: accepting LLHD abstraction mismatch "
+                        "(--accept-llhd-abstraction): unresolved LLHD "
+                        "interface abstraction inputs are treated as "
+                        "don't-care.\n";
         maybePrintCounterexample(*token);
       } else {
         outputFile.value()->os() << "c1 != c2\n";
@@ -1241,7 +1325,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
     }
     outputFile.value()->keep();
     if (failOnInequivalent && token && (*token == "sat" || *token == "unknown") &&
-        !acceptedXPropOnly)
+        !acceptedXPropOnly && !acceptedLLHDAbstraction)
       return failure();
     return success();
   }
@@ -1382,6 +1466,7 @@ int main(int argc, char **argv) {
     mlir::cf::ControlFlowDialect,
     mlir::BuiltinDialect,
     mlir::func::FuncDialect,
+    mlir::math::MathDialect,
     mlir::scf::SCFDialect,
     mlir::LLVM::LLVMDialect
   >();

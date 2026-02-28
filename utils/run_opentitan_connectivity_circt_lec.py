@@ -746,14 +746,24 @@ endmodule
     out_path.write_text(body, encoding="utf-8")
 
 
-def write_log(path: Path, stdout: str, stderr: str) -> None:
+def _coerce_text(payload: str | bytes | None) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", errors="replace")
+    return payload
+
+
+def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    stdout_text = _coerce_text(stdout)
+    stderr_text = _coerce_text(stderr)
     data = ""
-    if stdout:
-        data += stdout
+    if stdout_text:
+        data += stdout_text
         if not data.endswith("\n"):
             data += "\n"
-    if stderr:
-        data += stderr
+    if stderr_text:
+        data += stderr_text
     path.write_text(data, encoding="utf-8")
 
 
@@ -918,20 +928,22 @@ def run_and_log(
             timeout=timeout_secs if timeout_secs > 0 else None,
         )
     except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
+        stdout = _coerce_text(exc.stdout)
+        stderr = _coerce_text(exc.stderr)
         write_log(log_path, stdout, stderr)
         if out_path is not None:
             out_path.write_text(stdout, encoding="utf-8")
         raise
-    write_log(log_path, result.stdout or "", result.stderr or "")
+    stdout = _coerce_text(result.stdout)
+    stderr = _coerce_text(result.stderr)
+    write_log(log_path, stdout, stderr)
     if out_path is not None:
-        out_path.write_text(result.stdout or "", encoding="utf-8")
+        out_path.write_text(stdout, encoding="utf-8")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(
             result.returncode, cmd, output=result.stdout, stderr=result.stderr
         )
-    return (result.stdout or "") + "\n" + (result.stderr or "")
+    return stdout + "\n" + stderr
 
 
 def compute_contract_fingerprint(fields: list[str]) -> str:
@@ -1406,6 +1418,39 @@ def main() -> int:
                 f"{verify_each_mode} (expected auto|on|off)"
             )
         )
+    canonicalizer_timeout_retry_mode = os.environ.get(
+        "LEC_CANONICALIZER_TIMEOUT_RETRY_MODE", "auto"
+    ).strip().lower()
+    if canonicalizer_timeout_retry_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_CANONICALIZER_TIMEOUT_RETRY_MODE: "
+                f"{canonicalizer_timeout_retry_mode} (expected auto|on|off)"
+            )
+        )
+    canonicalizer_timeout_retry_max_iterations = parse_nonnegative_int(
+        os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_ITERATIONS", "0"),
+        "LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_ITERATIONS",
+    )
+    canonicalizer_timeout_retry_max_num_rewrites = parse_nonnegative_int(
+        os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES", "40000"),
+        "LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES",
+    )
+    canonicalizer_timeout_retry_timeout_secs = parse_nonnegative_int(
+        os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS", "0"),
+        "LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS",
+    )
+    if canonicalizer_timeout_retry_mode != "off":
+        if (
+            canonicalizer_timeout_retry_max_iterations <= 0
+            and canonicalizer_timeout_retry_max_num_rewrites <= 0
+        ):
+            fail(
+                "invalid canonicalizer timeout retry budget: expected "
+                "LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_ITERATIONS > 0 or "
+                "LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES > 0 "
+                "when timeout retry mode is enabled"
+            )
     opt_emit_bytecode_mode = os.environ.get(
         "LEC_OPT_EMIT_BYTECODE_MODE", "auto"
     ).strip().lower()
@@ -1627,6 +1672,16 @@ def main() -> int:
         )
         has_explicit_temporal_approx = has_command_option(
             circt_lec_args, "--approx-temporal"
+        )
+        has_explicit_canonicalizer_max_iterations = has_command_option(
+            circt_lec_args, "--lec-canonicalizer-max-iterations"
+        )
+        has_explicit_canonicalizer_max_num_rewrites = has_command_option(
+            circt_lec_args, "--lec-canonicalizer-max-num-rewrites"
+        )
+        has_explicit_canonicalizer_budget = (
+            has_explicit_canonicalizer_max_iterations
+            or has_explicit_canonicalizer_max_num_rewrites
         )
         verilog_timescale_override: str | None = None
         if verilog_timescale_fallback_mode == "on" and not has_explicit_timescale:
@@ -2019,8 +2074,20 @@ def main() -> int:
                     lec_enable_temporal_approx = (
                         temporal_approx_mode == "on" and not has_explicit_temporal_approx
                     )
+                    lec_enable_canonicalizer_timeout_budget = False
+                    attempted_canonicalizer_timeout_retry = False
+                    can_retry_canonicalizer_timeout = (
+                        canonicalizer_timeout_retry_mode == "on"
+                        or (
+                            canonicalizer_timeout_retry_mode == "auto"
+                            and not has_explicit_canonicalizer_budget
+                        )
+                    )
 
-                    def build_lec_cmd(enable_temporal_approx: bool) -> list[str]:
+                    def build_lec_cmd(
+                        enable_temporal_approx: bool,
+                        enable_canonicalizer_timeout_budget: bool,
+                    ) -> list[str]:
                         cmd = [
                             circt_lec,
                             str(shared_core_input),
@@ -2035,6 +2102,24 @@ def main() -> int:
                         cmd += circt_lec_args
                         if enable_temporal_approx and not has_explicit_temporal_approx:
                             cmd.append("--approx-temporal")
+                        if (
+                            enable_canonicalizer_timeout_budget
+                            and not has_explicit_canonicalizer_max_iterations
+                            and canonicalizer_timeout_retry_max_iterations > 0
+                        ):
+                            cmd.append(
+                                "--lec-canonicalizer-max-iterations="
+                                f"{canonicalizer_timeout_retry_max_iterations}"
+                            )
+                        if (
+                            enable_canonicalizer_timeout_budget
+                            and not has_explicit_canonicalizer_max_num_rewrites
+                            and canonicalizer_timeout_retry_max_num_rewrites > 0
+                        ):
+                            cmd.append(
+                                "--lec-canonicalizer-max-num-rewrites="
+                                f"{canonicalizer_timeout_retry_max_num_rewrites}"
+                            )
                         if verify_each_mode in {"auto", "off"} and not has_explicit_verify_each:
                             cmd.append("--verify-each=false")
                         return cmd
@@ -2043,12 +2128,53 @@ def main() -> int:
                     try:
                         attempted_temporal_retry = False
                         while True:
-                            lec_cmd = build_lec_cmd(lec_enable_temporal_approx)
+                            lec_cmd = build_lec_cmd(
+                                lec_enable_temporal_approx,
+                                lec_enable_canonicalizer_timeout_budget,
+                            )
+                            lec_timeout_secs = timeout_secs
+                            if (
+                                lec_enable_canonicalizer_timeout_budget
+                                and canonicalizer_timeout_retry_timeout_secs > 0
+                            ):
+                                lec_timeout_secs = canonicalizer_timeout_retry_timeout_secs
                             try:
                                 combined = run_and_log(
-                                    lec_cmd, lec_log, timeout_secs, out_path=lec_out
+                                    lec_cmd, lec_log, lec_timeout_secs, out_path=lec_out
                                 )
                                 break
+                            except subprocess.TimeoutExpired:
+                                if (
+                                    not lec_smoke_only
+                                    and can_retry_canonicalizer_timeout
+                                    and not lec_enable_canonicalizer_timeout_budget
+                                    and not attempted_canonicalizer_timeout_retry
+                                ):
+                                    timeout_retry_log = (
+                                        case_dir / "circt-lec.canonicalizer-timeout.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, timeout_retry_log)
+                                    else:
+                                        timeout_retry_log.write_text("", encoding="utf-8")
+                                    lec_enable_canonicalizer_timeout_budget = True
+                                    attempted_canonicalizer_timeout_retry = True
+                                    timeout_transition = f"{lec_timeout_secs}s"
+                                    if canonicalizer_timeout_retry_timeout_secs > 0:
+                                        timeout_transition += (
+                                            "->"
+                                            f"{canonicalizer_timeout_retry_timeout_secs}s"
+                                        )
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec with "
+                                        "bounded canonicalizer budget for "
+                                        f"{case.case_id} "
+                                        f"(timeout={timeout_transition})",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
+                                raise
                             except subprocess.CalledProcessError:
                                 if lec_log.is_file():
                                     lec_log_text = lec_log.read_text(encoding="utf-8")

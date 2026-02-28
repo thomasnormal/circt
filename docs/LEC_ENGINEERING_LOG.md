@@ -67,3 +67,54 @@
   - real OpenTitan replay:
     `connectivity::ast_clkmgr.csv:AST_CLK_ES_IN` -> `PASS ... EQ` with
     `.mlirbc` shared core input.
+
+## 2026-02-28 - Timeout frontier stabilization (retry budgets + fallback robustness)
+
+- realization:
+  - fallback-path timeout logging in
+    `run_opentitan_connectivity_circt_lec.py` could crash when
+    `subprocess.TimeoutExpired` carried `bytes` payloads (copied test-local
+    runner without shared helpers).
+  - low canonicalizer retry setting
+    `--lec-canonicalizer-max-iterations=1` can segfault on real OpenTitan
+    `AST_CLK_ES_IN` cores (direct `circt-lec` repro), so retry defaults needed
+    a safer profile.
+  - `AST_CLK_SNS_IN` sits on a real timeout frontier: repeated direct runs with
+    identical inputs at `CIRCT_TIMEOUT_SECS=120` oscillated between PASS and
+    TIMEOUT, indicating scheduler/load sensitivity, not a deterministic logic
+    failure.
+
+- TDD:
+  - updated
+    `test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-retry.test`
+    to:
+    - require copied first-timeout log preservation,
+    - require rewrites-only canonicalizer retry invocation,
+    - require extended retry timeout handling.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - fallback logger now coerces timeout payloads (`str|bytes|None`) robustly.
+    - canonicalizer-timeout retry knobs:
+      - `LEC_CANONICALIZER_TIMEOUT_RETRY_MODE` (`auto|on|off`)
+      - `LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_ITERATIONS` (default `0`)
+      - `LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES` (default `40000`)
+      - `LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS` (default `0`, optional
+        larger timeout only for retry attempt)
+    - safer default retry profile now uses rewrites-only budget unless user
+      opts in to iteration override.
+    - timeout retry diagnostic now reports timeout transition, e.g.
+      `(timeout=60s->180s)`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    27/27 pass.
+  - real OpenTitan repro:
+    - `AST_CLK_SNS_IN` showed PASS/TIMEOUT jitter at 120s in repeated direct
+      runs (baseline and rewrites-only).
+    - forced-timeout recovery demonstrated with retry timeout override:
+      `CIRCT_TIMEOUT_SECS=60` +
+      `LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS=180`
+      produced `PASS ... EQ` after canonicalizer-timeout retry.
