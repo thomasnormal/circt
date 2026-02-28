@@ -1412,3 +1412,9 @@
   - Seeded parity campaign (`xrun` vs `circt`) restricted to new ops:
     - `/tmp/cov_intro_seeded_assign_rhs_shift_parity_1772296371`
     - result: `ok=12 mismatch=0 fail=0` (`shl_mutants=6`, `shr_mutants=6`).
+  - Additional seeded all-mode regression sweep after integrating both shift ops:
+    - `/tmp/cov_intro_seeded_allmode_post_shift_1772296444`
+    - initial result: `ok=87 mismatch=0 fail=3` (all 3 were transient
+      `circt-sim: Permission denied` execution failures).
+    - targeted recheck of failed IDs (`17/18/19`) with the same mutants:
+      all rechecked `ok` with matching `COV` and `RESULT` vs xrun.
