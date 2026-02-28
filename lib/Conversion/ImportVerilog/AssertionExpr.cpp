@@ -3283,7 +3283,8 @@ struct AssertionExprVisitor {
         // ltl.past only accepts i1, so use delay+concat for sequences.
         Value pastAntecedent;
         if (lhs.getType().isInteger(1)) {
-          pastAntecedent = ltl::PastOp::create(builder, loc, lhs, 1).getResult();
+          pastAntecedent =
+              ltl::PastOp::create(builder, loc, lhs, 1, Value{}).getResult();
         } else {
           // For sequences, use delay to shift the antecedent back.
           auto constOne =

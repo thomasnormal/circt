@@ -15183,7 +15183,7 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
 
     if (input.getType().isInteger(1)) {
       // Fallback: use ltl.past when no clock is found.
-      rewriter.replaceOpWithNewOp<ltl::PastOp>(op, input, delay);
+      rewriter.replaceOpWithNewOp<ltl::PastOp>(op, input, delay, Value{});
       return success();
     }
 
