@@ -773,6 +773,16 @@ elif op == 'CASENEQ_TO_NEQ':
     if idx >= 0:
         text = text[:idx] + '!=' + text[idx + 3:]
         changed = True
+elif op == 'EQ_TO_CASEEQ':
+    idx = find_comparator_token('==', site_index)
+    if idx >= 0:
+        text = text[:idx] + '===' + text[idx + 2:]
+        changed = True
+elif op == 'NEQ_TO_CASENEQ':
+    idx = find_comparator_token('!=', site_index)
+    if idx >= 0:
+        text = text[:idx] + '!==' + text[idx + 2:]
+        changed = True
 elif op == 'SIGNED_TO_UNSIGNED':
     idx = find_cast_function_token('signed', site_index)
     if idx >= 0:

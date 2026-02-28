@@ -14807,7 +14807,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
                "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "SHL_TO_SHR",
                "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ",
-               "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
+               "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ",
+               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "control") {
@@ -14831,7 +14832,7 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
                "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
                "CASEEQ_TO_EQ",
-               "CASENEQ_TO_NEQ"});
+               "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ"});
     appendAll({"SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
@@ -14851,7 +14852,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL",
                "MUL_TO_DIV", "UNARY_MINUS_DROP", "SHL_TO_SHR", "SHR_TO_SHL",
                "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
-               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
+               "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
+               "UNSIGNED_TO_SIGNED"});
     return;
   }
 
@@ -14865,8 +14867,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
                "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
                "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
-               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "SIGNED_TO_UNSIGNED",
-               "UNSIGNED_TO_SIGNED"});
+               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ",
+               "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "const0") {
