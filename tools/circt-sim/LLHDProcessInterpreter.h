@@ -1896,6 +1896,13 @@ private:
   mlir::LogicalResult checkUvmRunTestEntry(ProcessId procId,
                                            llvm::StringRef calleeName);
 
+  /// Returns true when the active function/call stack is within UVM phase
+  /// execution (phase or phase_hopper frames).
+  bool isInUvmPhaseStackContext(ProcessId procId);
+
+  /// Returns true when the active function/call stack is within run_test().
+  bool isInUvmRunTestContext(ProcessId procId);
+
   /// Return true when the callee is a UVM factory override setter.
   /// Used to disable native by-type fast paths that bypass override lookup.
   static bool isUvmFactoryOverrideSetter(llvm::StringRef calleeName);
@@ -2593,6 +2600,9 @@ private:
 
   /// Returns true if `rootProcId` or any non-halted descendant is still alive.
   bool isProcessSubtreeAlive(ProcessId rootProcId) const;
+
+  /// Returns true if `rootProcId` has any non-halted descendant process.
+  bool hasActiveProcessDescendants(ProcessId rootProcId) const;
 
   //===--------------------------------------------------------------------===//
   // Signal Registry Bridge
@@ -3496,6 +3506,23 @@ private:
   /// This canonicalizes allocation-owner aliases and low-bit tagged variants.
   uint64_t normalizeUvmObjectKey(ProcessId procId, uint64_t addr);
 
+  /// Read the phase implementation pointer (`m_imp`) for a `uvm_phase`.
+  uint64_t readUvmPhaseImpAddress(ProcessId procId, uint64_t phaseAddr);
+
+  /// Record root->phase-imp insertion order from uvm_phase::add calls.
+  void recordUvmPhaseAddSequence(ProcessId procId,
+                                 llvm::ArrayRef<InterpretedValue> args);
+
+  /// Map a phase wrapper address onto the active common-domain phase graph.
+  uint64_t mapUvmPhaseAddressToActiveGraph(ProcessId procId, uint64_t phaseAddr);
+
+  /// Post-call canonicalization for `uvm_phase::get_predecessors`.
+  /// Rewrites predecessor assoc keys to the active phase graph objects when
+  /// stale/common-domain nodes are returned.
+  void maybeCanonicalizeUvmPhasePredecessorSet(
+      ProcessId procId, llvm::StringRef calleeName,
+      llvm::ArrayRef<InterpretedValue> args);
+
   /// Normalize a sequencer queue address across alias-equivalent pointers.
   /// Prefers addresses already observed in native sequencer maps/caches.
   uint64_t normalizeUvmSequencerAddress(ProcessId procId, uint64_t addr);
@@ -3831,6 +3858,9 @@ private:
   /// Tracks whether a process has observed a positive objection count for
   /// the currently monitored execute_phase.
   std::map<ProcessId, bool> executePhaseSawPositiveObjection;
+  /// Real-time deadline (fs) after objections drop to zero for execute_phase.
+  /// Used to honor configured objection drain time without long fixed polling.
+  std::map<ProcessId, uint64_t> executePhaseZeroDeadlineFs;
 
   /// Active execute_phase monitor-fork poll state keyed by process.
   std::map<ProcessId, uint64_t> executePhaseMonitorPollPhase;
@@ -3890,6 +3920,15 @@ private:
 
   /// Ordered list of function phase IMP addresses (populated at runtime).
   std::vector<uint64_t> functionPhaseImpSequence;
+
+  /// Root-domain keyed insertion order of phase IMP nodes seen via
+  /// uvm_phase::add(root, phase_imp, ...). Used to map stale phase graph
+  /// wrappers onto the active common domain by stable index.
+  llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 16>>
+      phaseRootImpSequence;
+
+  /// Active common-domain root phase pointer observed from get_common_domain().
+  uint64_t activePhaseRootAddr = 0;
 
   /// Processes waiting for IMP ordering: maps the IMP address they're waiting
   /// on to a list of {procId, resumeOp} pairs. When finish_phase marks an IMP
@@ -3982,6 +4021,10 @@ private:
   /// Populated by the fast-path factory.register interceptor (which calls
   /// get_type_name once instead of 7 times). Used by find_wrapper_by_name.
   llvm::StringMap<uint64_t> nativeFactoryTypeNames;
+
+  /// Runtime map for by-type factory overrides: requested wrapper -> override
+  /// wrapper. Used as a semantic backstop when interpreted UVM lookup fails.
+  llvm::DenseMap<uint64_t, uint64_t> nativeFactoryTypeOverridesByWrapper;
 
   /// Set once any UVM factory override API is called.
   /// When true, by-type native fast paths must be disabled to preserve
