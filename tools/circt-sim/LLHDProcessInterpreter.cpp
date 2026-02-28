@@ -24618,12 +24618,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           }
           return true;
         }
-        // Opt-in mode: only allow inside an active process context.
-        bool skip = activeProcessId == InvalidProcessId;
+        // Opt-in mode: only allow inside a coroutine-classified process.
+        bool inCoroutineProcess = false;
+        if (activeProcessId != InvalidProcessId) {
+          auto modelIt = processExecModels.find(activeProcessId);
+          inCoroutineProcess = modelIt != processExecModels.end() &&
+                               modelIt->second == ExecModel::Coroutine;
+        }
+        bool skip = !inCoroutineProcess;
         if (skip && traceNativeCalls) {
           llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
-                       << " active_proc=" << activeProcessId
-                       << " mode=optin-no-proc\n";
+                       << " active_proc=" << activeProcessId << " mode="
+                       << (activeProcessId == InvalidProcessId
+                               ? "optin-no-proc"
+                               : "optin-non-coro")
+                       << "\n";
         }
         return skip;
       };
@@ -25032,11 +25041,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         }
         return true;
       }
-      bool skip = activeProcessId == InvalidProcessId;
+      bool inCoroutineProcess = false;
+      if (activeProcessId != InvalidProcessId) {
+        auto modelIt = processExecModels.find(activeProcessId);
+        inCoroutineProcess = modelIt != processExecModels.end() &&
+                             modelIt->second == ExecModel::Coroutine;
+      }
+      bool skip = !inCoroutineProcess;
       if (skip && traceNativeCalls) {
         llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
-                     << " active_proc=" << activeProcessId
-                     << " mode=optin-no-proc\n";
+                     << " active_proc=" << activeProcessId << " mode="
+                     << (activeProcessId == InvalidProcessId
+                             ? "optin-no-proc"
+                             : "optin-non-coro")
+                     << "\n";
       }
       return skip;
     };

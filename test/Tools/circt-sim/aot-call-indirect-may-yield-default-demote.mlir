@@ -3,8 +3,9 @@
 // RUN: env CIRCT_AOT_STATS=1 CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD=1 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=OPTIN
 
 // Regression: call_indirect should not native-dispatch MAY_YIELD FuncIds by
-// default. Until native coroutine dispatch is enabled, those entries must
-// stay on interpreter fallback. Explicit opt-in can re-enable native dispatch.
+// default. Until native coroutine dispatch is enabled, those entries must stay
+// on interpreter fallback. Opt-in only enables native dispatch inside
+// coroutine-classified process context.
 //
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Collected 1 vtable FuncIds
@@ -16,9 +17,9 @@
 // DEFAULT: out=42{{$}}
 //
 // OPTIN: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
-// OPTIN: Entry-table native calls:         1
+// OPTIN: Entry-table native calls:         0
 // OPTIN: Entry-table trampoline calls:     0
-// OPTIN: Entry-table skipped (yield):      0
+// OPTIN: Entry-table skipped (yield):      1
 // OPTIN: out=42{{$}}
 
 func.func private @"uvm_pkg::inner_add_one"(%x: i32) -> i32 {
@@ -66,10 +67,6 @@ hw.module @top() {
     %vf = sim.fmt.dec %r signed : i32
     %msg = sim.fmt.concat (%prefix, %vf, %nl)
     sim.proc.print %msg
-    llhd.halt
-  }
-
-  llhd.process {
     %d = llhd.int_to_time %t10
     llhd.wait delay %d, ^done
   ^done:

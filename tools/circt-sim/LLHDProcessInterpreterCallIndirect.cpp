@@ -681,12 +681,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                        << " mode=native-default\n";
         return true;
       }
-      // Legacy opt-in mode: only allow within an active process context.
-      bool skip = activeProcessId == InvalidProcessId;
+      // Opt-in mode: only allow when the active process is coroutine-
+      // classified, since MAY_YIELD callees can suspend interpreter state.
+      bool inCoroutineProcess = false;
+      if (activeProcessId != InvalidProcessId) {
+        auto modelIt = processExecModels.find(activeProcessId);
+        inCoroutineProcess = modelIt != processExecModels.end() &&
+                             modelIt->second == ExecModel::Coroutine;
+      }
+      bool skip = !inCoroutineProcess;
       if (skip && traceNativeCalls) {
         llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid
-                     << " active_proc=" << activeProcessId
-                     << " mode=optin-no-proc\n";
+                     << " active_proc=" << activeProcessId << " mode="
+                     << (activeProcessId == InvalidProcessId
+                             ? "optin-no-proc"
+                             : "optin-non-coro")
+                     << "\n";
       }
       return skip;
     };
