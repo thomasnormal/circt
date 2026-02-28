@@ -504,7 +504,7 @@ is_nonneg_decimal() {
 
 is_valid_native_mutation_op_token() {
   case "$1" in
-    EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|AND_TO_OR|OR_TO_AND|XOR_TO_OR|UNARY_NOT_DROP|CONST0_TO_1|CONST1_TO_0)
+    EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|AND_TO_OR|OR_TO_AND|XOR_TO_OR|UNARY_NOT_DROP|CONST0_TO_1|CONST1_TO_0|MUX_SWAP_ARMS)
       return 0
       ;;
     *)
