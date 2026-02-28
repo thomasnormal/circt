@@ -1782,3 +1782,22 @@
   - These entries duplicated capability tracking already captured in concrete
     implementation sites; keeping them open inflated prioritized TODO counts
     without adding actionable signal.
+
+### UVM phase graph formatting: resolve `m_aa2string` tidy debt
+- Repro/context:
+  - Open tracker entry 317 pointed to `uvm_phase::m_aa2string` with
+    `// TBD tidy` in `lib/Runtime/uvm-core/src/base/uvm_phase.svh`.
+- Root cause:
+  - Edge-set stringification used index math inside concatenation and carried a
+    longstanding tidy marker, making the formatting path harder to read/maintain.
+- Fix:
+  - Refactored `m_aa2string` to a simple `first`-separator pattern:
+    - prepend `", "` only after the first element,
+    - remove `TBD tidy` marker,
+    - keep output format unchanged (`'{ ... }`).
+- Validation:
+  - `build_test/bin/llvm-lit -a -v test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv test/Runtime/uvm/uvm_simple_test.sv`
+  - Result: all passing.
+- Realization:
+  - Small readability fixes in vendored UVM core are worthwhile when they remove
+    explicit debt markers and keep behavior stable under existing runtime tests.

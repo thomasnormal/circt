@@ -952,8 +952,8 @@ Fallback debug-info construction for instances does not track port assignments, 
 ### [ ] 316. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:537`
 `TBD add more useful debug` marks observability debt in phase execution tracing, not a direct semantic bug. What is missing is richer debug output for phase control transitions/termination behavior. The fix is to define a concise debug schema and emit consistent trace points guarded by the existing phase-trace switch.
 
-### [ ] 317. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:553`
-`m_aa2string` is flagged `TBD tidy`, indicating code-hygiene debt in formatting predecessor/successor maps. What is missing is cleaner, reusable stringification for phase edge sets. The fix is to refactor this helper for readability/reuse and align formatting with other UVM diagnostics.
+### [x] 317. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:553`
+Status update (2026-02-28): this gap is closed in this workspace. `uvm_phase::m_aa2string` was refactored to use a straightforward separator-first pattern (removing the `TBD tidy` marker) for clearer and deterministic predecessor/successor edge-string formatting. Focused UVM phase/runtime regressions pass.
 
 ### [ ] 318. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:762`
 The add-schedule API lacks validation that referenced phase nodes belong to the current schedule/domain, which can allow invalid graph edits before later failure. What is missing is early structural error checking for schedule membership. The fix is to add explicit membership checks for all relationship parameters and emit immediate fatal diagnostics on mismatch.
