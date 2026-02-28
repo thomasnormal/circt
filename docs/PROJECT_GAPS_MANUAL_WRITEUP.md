@@ -6034,11 +6034,11 @@ Status update (2026-02-28): same closure as entry 2008. This is valgrind metadat
 ### [x] 2010. `test/Conversion/ImportVerilog/assoc_arrays.sv:6`
 Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not unresolved ImportVerilog semantics.
 
-### [ ] 2011. `test/Conversion/ImportVerilog/assoc_arrays.sv:32`
-This comment references a previously fixed unsupported-expression bug and documents regression intent. It is explanatory test commentary, not current unresolved debt.
+### [x] 2011. `test/Conversion/ImportVerilog/assoc_arrays.sv:32`
+Status update (2026-02-28): this entry is stale. This is explanatory regression-comment text, not unresolved ImportVerilog feature debt.
 
-### [ ] 2012. `test/Conversion/ImportVerilog/assoc_arrays.sv:345`
-Same as entry 2011: historical-fix regression note, non-actionable gap text.
+### [x] 2012. `test/Conversion/ImportVerilog/assoc_arrays.sv:345`
+Status update (2026-02-28): same closure as entry 2011.
 
 ### [x] 2013. `test/Conversion/ImportVerilog/constraint-solve.sv:5`
 Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not unresolved ImportVerilog debt.
@@ -6058,8 +6058,8 @@ Status update (2026-02-28): same closure as entry 2008.
 ### [x] 2018. `test/Conversion/ImportVerilog/basic.sv:6`
 Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2019. `test/Conversion/ImportVerilog/basic.sv:773`
-`CHECK: moore.constant hXXXXXXXX` is expected unknown-bit output in a regression oracle, not unresolved implementation debt.
+### [x] 2019. `test/Conversion/ImportVerilog/basic.sv:773`
+Status update (2026-02-28): this entry is stale. `CHECK: ... hXXXXXXXX` is regression oracle payload for unknown-bit behavior, not unresolved implementation debt.
 
 ### [x] 2020. `test/Conversion/ImportVerilog/hierarchical-names.sv:6`
 Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not a feature gap.
@@ -6073,8 +6073,8 @@ Status update (2026-02-28): same closure as entry 2008.
 ### [x] 2023. `test/Conversion/ImportVerilog/classes.sv:6`
 Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2024. `test/Conversion/ImportVerilog/four-state-constants.sv:45`
-`assign all_x = 4'bxxxx;` is intentional four-state constant test stimulus, not TODO/unsupported debt text.
+### [x] 2024. `test/Conversion/ImportVerilog/four-state-constants.sv:45`
+Status update (2026-02-28): this entry is stale. `4'bxxxx` is intentional four-state regression stimulus, not a TODO marker.
 
 ### [x] 2025. `test/Conversion/ImportVerilog/class-e2e.sv:5`
 Status update (2026-02-28): same closure as entry 2008.
@@ -6091,17 +6091,17 @@ Status update (2026-02-28): same closure as entry 2008.
 ### [x] 2029. `test/Conversion/ImportVerilog/pre-post-randomize.sv:6`
 Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2030. `test/Conversion/ImportVerilog/continuous-assign-delay-one-step-supported.sv:11`
-`DIAG-NOT: unsupported ... OneStepDelay` is a negative assertion proving support/absence of a diagnostic; it is oracle text, not unresolved implementation debt.
+### [x] 2030. `test/Conversion/ImportVerilog/continuous-assign-delay-one-step-supported.sv:11`
+Status update (2026-02-28): this entry is stale. This `DIAG-NOT` line is a support oracle, not unresolved implementation debt.
 
 ### [x] 2031. `test/Conversion/ImportVerilog/static-property-fixes.sv:6`
 Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not active ImportVerilog debt.
 
-### [ ] 2032. `test/Conversion/ImportVerilog/delay-cycle-supported.sv:17`
-`DIAG-NOT: unsupported delay control: CycleDelay` is a regression assertion proving support (absence of a diagnostic), not unresolved implementation debt.
+### [x] 2032. `test/Conversion/ImportVerilog/delay-cycle-supported.sv:17`
+Status update (2026-02-28): this entry is stale. This `DIAG-NOT` line is a support oracle, not unresolved implementation debt.
 
-### [ ] 2033. `test/Conversion/ImportVerilog/delay-one-step-supported.sv:8`
-Same class as entry 2032: a negative diagnostic check confirming `OneStepDelay` support, not a TODO marker.
+### [x] 2033. `test/Conversion/ImportVerilog/delay-one-step-supported.sv:8`
+Status update (2026-02-28): same closure as entry 2032.
 
 ### [x] 2034. `test/Conversion/ImportVerilog/randomize.sv:6`
 Status update (2026-02-28): same closure as entry 2008.
@@ -6115,17 +6115,17 @@ Status update (2026-02-28): same closure as entry 2008.
 ### [x] 2037. `test/Conversion/ImportVerilog/time-type-handling.sv:6`
 Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2038. `test/Conversion/ImportVerilog/cross-select-intersect-open-range-wide-supported.sv:3`
-`CrossSelectIntersectOpenRangeUnsupported` here is a module identifier in test source, not an unresolved-gap marker by itself.
+### [x] 2038. `test/Conversion/ImportVerilog/cross-select-intersect-open-range-wide-supported.sv:3`
+Status update (2026-02-28): this entry is stale. The matched token is a test module identifier, not a TODO/debt marker.
 
 ### [x] 2039. `test/Conversion/ImportVerilog/uvm_classes.sv:6`
 Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2040. `test/Conversion/ImportVerilog/system-calls-complete.sv:5`
-This comment documents test intent (“verify no `unsupported system` diagnostics”), which is oracle commentary rather than implementation debt.
+### [x] 2040. `test/Conversion/ImportVerilog/system-calls-complete.sv:5`
+Status update (2026-02-28): this entry is stale. This is test-intent commentary, not unresolved implementation debt.
 
-### [ ] 2041. `test/Conversion/ImportVerilog/system-calls-complete.sv:8`
-`CHECK-NOT: unsupported system call` is expected-output assertion text proving behavior, not unresolved support debt.
+### [x] 2041. `test/Conversion/ImportVerilog/system-calls-complete.sv:8`
+Status update (2026-02-28): same closure as entry 2040.
 
 ### [ ] 2042. `test/Conversion/ImportVerilog/cross-select-intersect-plusminus-unsupported.sv:3`
 Module name containing `Unsupported` is negative-test naming, not a direct TODO marker.

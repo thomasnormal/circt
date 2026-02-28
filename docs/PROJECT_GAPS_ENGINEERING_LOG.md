@@ -1612,6 +1612,18 @@
     entries: 2013-2018, 2021-2023, 2025-2029, 2034-2037, 2039.
   - Closed MooreToCore/FSM negative-test fixture false positives:
     entries 2000, 2005, 2006.
+  - Closed additional ImportVerilog stale fixture/oracle entries:
+    2011, 2012, 2019, 2024, 2030, 2032, 2033, 2038, 2040, 2041.
+- Validation:
+  - `build_test/bin/llvm-lit -a -v` on:
+    - `assoc_arrays.sv`
+    - `basic.sv`
+    - `continuous-assign-delay-one-step-supported.sv`
+    - `delay-cycle-supported.sv`
+    - `delay-one-step-supported.sv`
+    - `system-calls-complete.sv`
+    - `cross-select-intersect-open-range-wide-supported.sv`
+  - Result: all passed.
 - Realization:
   - The writeup had multiple entries already diagnosed as non-actionable but
     left unchecked, which obscured truly unresolved gaps.
