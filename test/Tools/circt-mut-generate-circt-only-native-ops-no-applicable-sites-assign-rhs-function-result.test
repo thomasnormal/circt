@@ -3,6 +3,10 @@
 // RUN: printf "module top(input logic [7:0] a, output logic [7:0] y);\n  function automatic logic [7:0] f(input logic [7:0] x);\n    f = x;\n  endfunction\n  assign y = f(a);\nendmodule\n" > %t/design.sv
 // RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_TO_LHS --out %t/mutations-tolhs.txt > %t/log-tolhs.txt 2>&1
 // RUN: FileCheck %s --check-prefix=ERR < %t/log-tolhs.txt
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_OR_LHS --out %t/mutations-orlhs.txt > %t/log-orlhs.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR < %t/log-orlhs.txt
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_AND_LHS --out %t/mutations-andlhs.txt > %t/log-andlhs.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR < %t/log-andlhs.txt
 // RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_XOR_LHS --out %t/mutations-xorlhs.txt > %t/log-xorlhs.txt 2>&1
 // RUN: FileCheck %s --check-prefix=ERR < %t/log-xorlhs.txt
 //

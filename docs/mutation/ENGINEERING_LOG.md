@@ -1759,3 +1759,56 @@
   - parity rerun on the exact previously-failing seeded batch:
     - before: `ok=18 mismatch=6`
     - after fix: `ok=24 mismatch=0 fail=0`
+
+## 2026-02-28 (ASSIGN_RHS_OR_LHS / ASSIGN_RHS_AND_LHS fault class)
+
+- realizations:
+  - Assignment-RHS connect mutations were still missing two realistic
+    wiring/merge bug classes: OR-with-LHS and AND-with-LHS.
+  - TDD baseline showed expected failures before implementation:
+    planner rejected `ASSIGN_RHS_OR_LHS`/`ASSIGN_RHS_AND_LHS` as unsupported and
+    apply emitted noop-fallback markers for those labels.
+  - Running build and lit in parallel can produce false negatives by testing an
+    old binary; rerunning lit after rebuild resolved that infra artifact.
+
+- changes made:
+  - Added native ops in planner catalog and assign-RHS machinery:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+      - op catalog (`kNativeMutationOpsAll`)
+      - assign-RHS op detection (`isAssignRhsMutationOp`)
+      - connect-family classification (`getAssignRhsMutationFamily`)
+      - replacement builder:
+        - `ASSIGN_RHS_OR_LHS` -> `(rhs | lhs)`
+        - `ASSIGN_RHS_AND_LHS` -> `(rhs & lhs)`
+      - site-quality guards aligned with `TO_LHS`/`XOR_LHS`:
+        skip `initial` and function-result assignment sites.
+  - Extended CIRCT-only mode mappings:
+    - `tools/circt-mut/circt-mut.cpp`
+      - included new ops in `connect`, `balanced/all`, `invert`, and `inv`.
+  - Synced native-op validation allowlist:
+    - `utils/run_mutation_mcy_examples.sh`
+  - Added/updated TDD regressions:
+    - `test/Tools/native-mutation-plan-assign-rhs-or-lhs-force.test`
+    - `test/Tools/native-mutation-plan-assign-rhs-and-lhs-force.test`
+    - `test/Tools/native-create-mutated-assign-rhs-or-lhs-site-index.test`
+    - `test/Tools/native-create-mutated-assign-rhs-and-lhs-site-index.test`
+    - updated `test/Tools/circt-mut-generate-circt-only-connect-mode-assign-rhs-const-ops.test`
+    - extended `test/Tools/circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-function-result.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice (new tests + touched coverage tests):
+    - `build_test/bin/llvm-lit -sv ...`
+    - result: all supported tests passed.
+  - assign-RHS regression slice:
+    - `build_test/bin/llvm-lit -sv $(ls test/Tools/*assign-rhs*.test)`
+    - result: `28 passed`, `7 unsupported`, `0 failed`.
+  - seeded xrun-vs-circt parity campaign (new ops only):
+    - workspace: `/tmp/cov_intro_seeded_orand3_1772302814`
+    - generation:
+      - `circt-mut generate --native-ops ASSIGN_RHS_OR_LHS,ASSIGN_RHS_AND_LHS --count 20 --seed 20260228`
+    - comparison:
+      - per-mutant xrun vs circt `RESULT` line equality
+    - result: `ok=20 mismatch=0 fail=0`
+    - op distribution: `ASSIGN_RHS_OR_LHS=10`, `ASSIGN_RHS_AND_LHS=10`.

@@ -158,6 +158,15 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - Timing rewrites are intentionally skipped in `always_comb`/`always_latch`,
     and `NBA_TO_BA` is skipped in `initial`, to avoid simulator-dependent race
     behavior in deterministic parity campaigns.
+- Assignment-RHS connect mutations model wiring/merge intent faults on
+  assignment statements:
+  - `ASSIGN_RHS_TO_LHS` rewrites RHS to the assignment LHS identifier.
+  - `ASSIGN_RHS_OR_LHS` rewrites RHS to `(rhs | lhs)`.
+  - `ASSIGN_RHS_AND_LHS` rewrites RHS to `(rhs & lhs)`.
+  - `ASSIGN_RHS_XOR_LHS` rewrites RHS to `(rhs ^ lhs)`.
+  - These are restricted to simple-identifier LHS sites and skip function-result
+    assignments and `initial`-block sites to avoid low-signal/equivalent
+    mutants and clock-liveness artifacts.
 - Ternary mux-arm mutations model swapped-data control bugs:
   - `MUX_SWAP_ARMS` targets assignment-context ternary expressions
     (`cond ? tval : fval`) and rewrites to (`cond ? fval : tval`) with
