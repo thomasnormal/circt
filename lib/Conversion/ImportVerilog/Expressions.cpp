@@ -7992,45 +7992,63 @@ struct RvalueExprVisitor : public ExprVisitor {
       // - 0b1000 (8): count Z values
       int32_t controlBitsMask = 0;
       auto appendControlBit = [&](const slang::SVInt &svint) -> LogicalResult {
-        // control_bit must be a single 4-state bit ('0, '1, 'x, 'z or
-        // equivalent 1-bit constant expressions).
-        if (svint.getBitWidth() != 1) {
-          mlir::emitError(loc)
-              << "$countbits control_bit must be '0, '1, 'x, or 'z";
-          return failure();
-        }
-
         auto *raw = svint.getRawPtr();
-        if (!raw) {
+        unsigned bitWidth = svint.getBitWidth();
+        if (!raw || bitWidth == 0) {
           mlir::emitError(loc)
               << "$countbits control_bit must be '0, '1, 'x, or 'z";
           return failure();
-        }
-
-        bool valueBit = (raw[0] & 1) != 0;
-        if (!svint.hasUnknown()) {
-          controlBitsMask |= valueBit ? 2 : 1;
-          return success();
         }
 
         unsigned rawWords = svint.getNumWords();
-        unsigned unknownWord = rawWords / 2;
-        if (unknownWord >= rawWords) {
+        unsigned valueWords = svint.hasUnknown() ? rawWords / 2 : rawWords;
+        ArrayRef<uint64_t> valueRaw(raw, valueWords);
+        APInt valueBits(bitWidth, valueRaw);
+
+        APInt unknownBits(bitWidth, 0);
+        if (svint.hasUnknown()) {
+          if (valueWords >= rawWords) {
+            mlir::emitError(loc)
+                << "$countbits control_bit must be '0, '1, 'x, or 'z";
+            return failure();
+          }
+          ArrayRef<uint64_t> unknownRaw(raw + valueWords, valueWords);
+          unknownBits = APInt(bitWidth, unknownRaw);
+        }
+
+        // Preserve compatibility with existing valid forms:
+        // - integer constants 0 / 1 (any integer width)
+        // - single 4-state bit constants ('0/'1/'x/'z or 1'bx/1'bz)
+        if (unknownBits.isZero() && (valueBits.isZero() || valueBits.isOne())) {
+          controlBitsMask |= valueBits.isOne() ? 2 : 1;
+          return success();
+        }
+
+        if (bitWidth != 1) {
           mlir::emitError(loc)
               << "$countbits control_bit must be '0, '1, 'x, or 'z";
           return failure();
         }
 
-        bool unknownBit = (raw[unknownWord] & 1) != 0;
-        if (!unknownBit) {
-          controlBitsMask |= valueBit ? 2 : 1;
-          return success();
+        if (unknownBits.isZero()) {
+          mlir::emitError(loc)
+              << "$countbits control_bit must be '0, '1, 'x, or 'z";
+          return failure();
         }
 
-        controlBitsMask |= valueBit ? 8 : 4;
+        controlBitsMask |= valueBits[0] ? 8 : 4;
         return success();
       };
       for (size_t i = 1; i < args.size(); ++i) {
+        // Fast-path decimal/based integer literals 0/1.
+        if (auto *intLiteral = args[i]->as_if<slang::ast::IntegerLiteral>()) {
+          auto literalVal = intLiteral->getValue().as<int32_t>();
+          if (literalVal && (*literalVal == 0 || *literalVal == 1)) {
+            controlBitsMask |= *literalVal ? 2 : 1;
+            continue;
+          }
+        }
+
         // Check if the argument is an unbased unsized integer literal ('0, '1,
         // 'x, 'z). These are the only valid control_bit values per IEEE
         // 1800-2017 Section 20.9.
@@ -8059,6 +8077,11 @@ struct RvalueExprVisitor : public ExprVisitor {
           mlir::emitError(loc)
               << "$countbits control_bit arguments must be constants";
           return {};
+        }
+        auto intVal = evalResult.integer().as<int32_t>();
+        if (intVal && (*intVal == 0 || *intVal == 1)) {
+          controlBitsMask |= *intVal ? 2 : 1;
+          continue;
         }
         if (failed(appendControlBit(evalResult.integer())))
           return {};

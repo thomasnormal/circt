@@ -299,6 +299,8 @@ function void BitVectorBuiltins(int x, logic [41:0] y);
   dummyA($countbits(x, 0, 1));
   // CHECK: [[CNTBITS_XZ_Y:%.+]] = moore.builtin.countbits [[Y]], 12 : l42
   dummyA($countbits(y, 'x, 'z));
+  // CHECK: [[CNTBITS_XZ_BASED_X:%.+]] = moore.builtin.countbits [[X]], 12 : i32
+  dummyA($countbits(x, 1'bx, 1'bz));
   // CHECK: [[CNTBITS_ALL_X:%.+]] = moore.builtin.countbits [[X]], 15 : i32
   dummyA($countbits(x, '0, '1, 'x, 'z));
 endfunction
