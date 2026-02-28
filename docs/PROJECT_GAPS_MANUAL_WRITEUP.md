@@ -1783,14 +1783,14 @@ Status update (2026-02-28): this gap is closed in this workspace. `uvm_component
 ### [ ] 593. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3337`
 This is the same known sorting TODO as earlier: still using `sort_by_precedence` and not `sort_by_precedence_q` (Mantis 7354). What is missing is migration to the newer precedence sort path. The fix is to adopt the newer API once dependency behavior is validated.
 
-### [ ] 594. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3542`
-`m_unsupported_set_local` here is a method name/comment describing override plumbing, not unresolved TODO work. This is a scanner false positive from token matching on “unsupported”. The fix is scan filtering for identifier names that are not debt markers.
+### [x] 594. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3542`
+Status update (2026-02-28): this entry is stale. `m_unsupported_set_local` is identifier-level naming in override plumbing, not an unresolved feature gap.
 
-### [ ] 595. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3545`
-Same as entry 594: normal function definition for unsupported-resource tracking override, not implementation debt. The fix is scanner refinement.
+### [x] 595. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3545`
+Status update (2026-02-28): same closure as entry 594. This is routine override implementation code, not a TODO/debt marker.
 
-### [ ] 596. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3547`
-Assignment to `m_unsupported_resource_base` is ordinary implementation detail, not a TODO/unsupported-feature marker. Non-actionable from gap perspective. The fix is marker-based audit filtering.
+### [x] 596. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3547`
+Status update (2026-02-28): same closure as entry 594. This assignment is ordinary implementation detail, not unresolved feature debt.
 
 ### [ ] 597. `lib/Tools/circt-bmc/LowerToBMC.cpp:3126`
 `hasUnsupportedUse` tracking indicates this lowering path only handles a constrained signal-use set and skips others. What is missing is broader support for additional LLHD signal user patterns. The fix is to extend use handling (or emit structured diagnostics for skipped cases).

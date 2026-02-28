@@ -1607,6 +1607,7 @@
   - Marked as closed (`[x]`) with dated stale notes:
     - sim false positives: entries 648, 649, 651
     - ImportVerilog valgrind metadata: entries 2008, 2009, 2010, 2020, 2031
+    - UVM identifier false positives: entries 594, 595, 596
 - Realization:
   - The writeup had multiple entries already diagnosed as non-actionable but
     left unchecked, which obscured truly unresolved gaps.
