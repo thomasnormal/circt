@@ -1356,3 +1356,39 @@
     - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd*.mlir`
   - Result:
     - All targeted/core `lec-strip-llhd*` tests passed with this change.
+
+### LEC strip: projected-local `llhd.sig.extract` dynamic-index drive updates
+- Repro:
+  - UVM mini sv-test repro (`uvm-parsing`) failed during LEC stripping with:
+    - `unsupported projected local llhd.ref drive path update in LEC`
+  - Minimal local reproducer added:
+    - `test/Tools/circt-lec/lec-strip-llhd-local-ref-extract-dynamic.mlir`
+  - Before fix, that test failed in `lowerProjectedLocalRefProbes` on:
+    - `llhd.drv %bit_ref, %bit after %t0 : i1`
+- Root cause:
+  - `lowerProjectedLocalRefProbes` handled projected extract updates only when
+    the `llhd.sig.extract` index was a constant.
+  - UVM lowering emits non-constant bit indices, so projected local drives on
+    extracted refs failed path reconstruction.
+- Fix:
+  - Extended projected-local `updatePath` extract handling to support
+    non-constant indices:
+    - materialize selected element with dynamic `shru` + `extract`,
+    - recurse path update on that element,
+    - reinject via dynamic masked `shl/and/or` composition.
+  - Kept constant-index behavior and bounds checks intact.
+  - Added regression:
+    - `test/Tools/circt-lec/lec-strip-llhd-local-ref-extract-dynamic.mlir`
+- Validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - New regression (pre-fix failed, post-fix passes):
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-local-ref-extract-dynamic.mlir`
+  - Nearby strip suite:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd*.mlir`
+    - result: 35/35 passed.
+- Engineering realization:
+  - This closes the previous `unsupported_projected_local_llhd_ref_drive_path_update_in_lec`
+    crash class for dynamic extract indices; current UVM mini shard now advances
+    to long `circt-lec` runtime and can time out, indicating a separate
+    scale/perf frontier rather than the earlier strip-path functional gap.
