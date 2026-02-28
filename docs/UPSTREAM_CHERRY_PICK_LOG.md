@@ -194,3 +194,63 @@ Local follow-up commits kept in stack:
 - `afcefdc19` ([comb] ~sext canonicalization) and `db50d3131` ([LLHD] mem2reg
   wait-live capture): re-attempted in this pass, both resolved to empty
   cherry-picks after conflict resolution (already functionally present).
+
+## Refresh (2026-02-28, continued mining pass)
+
+- Starting staging head for this pass: `a3bf77e8d`
+- Current staging head after this pass: `9aaafd297`
+- Stack size vs `origin/main`: `60` commits ahead
+
+### Additional Picks In This Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `0a9115330` | N/A (local follow-up) | [LTL] Fix PastOp optional-clock callsites |
+| `6ed59274b` | `0f99432e5` | [Arc] Lower time operations to LLVM IR (#9757) |
+| `a36b0236a` | `9b52782c1` | [FIRRTL] Lazily construct CircuitNamespace, NFC (#9767) |
+| `79b817856` | `83ff24e5b` | [PyCDE] Remove python 3.8, 3.9 and add 3.14 builds (#9769) |
+| `8910e519b` | `4f8fdaa73` | [PyCDE] Disable cocotb tests by default (#9770) |
+| `9aaafd297` | `35e49085c` | [Synth] Add resource usage analysis (#9717) |
+
+### Validation Added In This Pass
+
+- Build:
+  - `utils/ninja-with-lock.sh -C build_stage circt-opt`
+  - `utils/ninja-with-lock.sh -C build_stage firtool`
+  - `utils/ninja-with-lock.sh -C build_stage circt-opt circt-synth`
+- Arc lowering sanity (manual lit-equivalent checks):
+  - `build_stage/bin/circt-opt test/Conversion/ArcToLLVM/lower-arc-to-llvm.mlir --lower-arc-to-llvm`
+  - Verified output contains `llvm.func @Time`, expected loads, and no residual `int_to_time`/`time_to_int` ops.
+  - Verified existing `sim.proc.print`/`sim.terminate` lowerings still emit `printf`/`exit` calls.
+- FIRRTL instance-choice symbol pass sanity:
+  - `build_stage/bin/circt-opt -pass-pipeline='builtin.module(firrtl.circuit(firrtl-populate-instance-choice-symbols))' test/Dialect/FIRRTL/populate-instance-choice-symbols.mlir`
+  - Verified both expected `sv.macro.decl` entries and `instance_macro` attributes in output.
+- firtool CLI sanity:
+  - `build_stage/bin/firtool --help`
+  - Verified `-j` alias and `--num-threads=<N>` option are present.
+- PyCDE packaging sanity:
+  - `python3 -m py_compile frontends/PyCDE/setup.py`
+  - Parsed `frontends/PyCDE/pyproject.toml` via `tomllib`.
+- Synth analysis sanity:
+  - `build_stage/bin/circt-opt --synth-print-resource-usage-analysis='output-file="-"' test/Dialect/Synth/resource.mlir`
+  - Verified expected top-level counts (`comb.and/or/xor`, `synth.aig.and_inv`).
+  - `build_stage/bin/circt-synth test/circt-synth/path-e2e.mlir -analysis-output=- -top test -analysis-output-format=json`
+  - Verified JSON output contains `"module_name":"test"`.
+
+### Deferred / Superseded In This Pass
+
+- Empty (already present functionally after conflict resolution):
+  - `6e3d168f6`, `7a25c970c`, `49e7f3af0`, `6542026a9`,
+    `11cc66244`, `a0ddbccf0`, `5ade31e47`, `debd22694`, `5f7d374a7`,
+    `ec285f538`.
+- Skipped due path/layout divergence:
+  - `16b706093` (`TraceEncoder.h` modify/delete conflict; file path removed/reworked locally).
+
+### Engineering Notes
+
+- `check-circt` currently fails in this staging tree due an unrelated baseline
+  AOT compile issue (`registerJITRuntimeSymbols` undeclared in
+  `tools/circt-sim/AOTProcessCompiler.cpp`). This is outside the scope of the
+  upstream picks above; targeted build/test validation was used instead.
+- The Arc time-lowering pick was effectively already present in code; only a
+  minor test-file whitespace delta remained after conflict reconciliation.
