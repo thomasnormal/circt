@@ -1702,3 +1702,18 @@
 - Realization:
   - This was a contained high-value extension: it removes an artificial scalar
     type restriction without changing the overall wrapper ABI strategy.
+
+### Project gaps: close stale MooreToCore comment-line false positives
+- Repro/verification:
+  - Reviewed remaining open MooreToCore entries that already stated they were
+    non-actionable descriptive text, but were still marked unchecked.
+  - Re-ran a focused MooreToCore sanity test:
+    - `build_test/bin/llvm-lit -a -v test/Conversion/MooreToCore/basic.mlir`
+  - Result: passing.
+- Fix:
+  - Marked entries as closed (`[x]`) in
+    `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` with dated stale-status notes:
+    - 1301, 1302, 1303, 1304, 1305, 1320
+- Realization:
+  - Leaving known non-actionable entries unchecked obscures actual conversion
+    debt and slows prioritization in this high-volume tracker.

@@ -3904,20 +3904,20 @@ Extract lowering has known TODO for out-of-bounds behavior in four-valued domain
 ### [ ] 1300. `lib/Conversion/MooreToCore/MooreToCore.cpp:11233`
 CaseX/CaseZ equality lowering is still constant-centric until four-valued core integers are available for non-constant X/Z mask extraction. What is missing is full non-constant four-state casex/casez semantics.
 
-### [ ] 1301. `lib/Conversion/MooreToCore/MooreToCore.cpp:12736`
-This is explanatory comment text documenting supported UVM report call signatures, not unresolved implementation debt.
+### [x] 1301. `lib/Conversion/MooreToCore/MooreToCore.cpp:12736`
+Status update (2026-02-28): this entry is stale/non-actionable. The matched content is descriptive implementation text, not an unresolved MooreToCore TODO marker.
 
-### [ ] 1302. `lib/Conversion/MooreToCore/MooreToCore.cpp:12737`
-Same as entry 1301: descriptive signature documentation for interception path, non-actionable.
+### [x] 1302. `lib/Conversion/MooreToCore/MooreToCore.cpp:12737`
+Status update (2026-02-28): same closure as entry 1301.
 
-### [ ] 1303. `lib/Conversion/MooreToCore/MooreToCore.cpp:12739`
-Same as entry 1301: runtime ABI comment documentation, not a TODO marker.
+### [x] 1303. `lib/Conversion/MooreToCore/MooreToCore.cpp:12739`
+Status update (2026-02-28): same closure as entry 1301.
 
-### [ ] 1304. `lib/Conversion/MooreToCore/MooreToCore.cpp:12811`
-Same as entry 1303: comment describing runtime function signature, not unresolved work.
+### [x] 1304. `lib/Conversion/MooreToCore/MooreToCore.cpp:12811`
+Status update (2026-02-28): same closure as entry 1301.
 
-### [ ] 1305. `lib/Conversion/MooreToCore/MooreToCore.cpp:13009`
-Same as entry 1303: signature comment duplication for method variant, non-actionable.
+### [x] 1305. `lib/Conversion/MooreToCore/MooreToCore.cpp:13009`
+Status update (2026-02-28): same closure as entry 1301.
 
 ### [ ] 1306. `lib/Conversion/MooreToCore/MooreToCore.cpp:14637`
 Real semantic gap: conditional lowering is only sound for two-valued conditions; X/Z requires dual-branch evaluate-and-merge semantics not yet implemented.
@@ -3961,8 +3961,8 @@ Associative-array operations reject unsupported key representations. What is mis
 ### [ ] 1319. `lib/Conversion/MooreToCore/MooreToCore.cpp:24064`
 Same as entry 1318 for `fscanf`: unsupported destination-ref types remain unhandled.
 
-### [ ] 1320. `lib/Conversion/MooreToCore/MooreToCore.cpp:24335`
-This is runtime ABI documentation (`__moore_xxx(MooreString *message)`), not unresolved implementation debt.
+### [x] 1320. `lib/Conversion/MooreToCore/MooreToCore.cpp:24335`
+Status update (2026-02-28): this line-level tracker is stale. The matched content is explanatory implementation/comment text and not an unresolved MooreToCore TODO.
 
 ### [ ] 1321. `lib/Conversion/MooreToCore/MooreToCore.cpp:30654`
 Type conversion notes that unpacked arrays have semantics broader than packed arrays, while current mapping is naive. What is missing is semantics-faithful unpacked-array representation/layout in core lowering.
