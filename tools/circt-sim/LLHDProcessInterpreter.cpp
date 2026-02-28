@@ -23028,7 +23028,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   auto shouldTracePhaseCall = [&](llvm::StringRef name) {
     return name == "get_common_domain" || name == "get_2160" ||
            name.contains("uvm_pkg::uvm_phase::add") ||
-           name.contains("uvm_pkg::uvm_phase::find");
+           name.contains("uvm_pkg::uvm_phase::find") ||
+           name == "uvm_pkg::uvm_phase::get_predecessors" ||
+           name == "uvm_pkg::uvm_phase::get_sync_relationships" ||
+           name == "uvm_pkg::uvm_phase::set_jump_phase";
   };
   auto maybeTracePhaseArgs = [&](llvm::StringRef name) {
     if (!tracePhasePtrs || !shouldTracePhaseCall(name))
@@ -23047,61 +23050,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   if (calleeName == "uvm_pkg::uvm_phase::add")
     recordUvmPhaseAddSequence(procId, args);
-
-  auto maybeRemapPhaseArg0ToActiveGraph = [&](llvm::StringRef name) {
-    if (args.empty() || args[0].isX())
-      return;
-    if (name != "uvm_pkg::uvm_phase::wait_for_state" &&
-        name != "uvm_pkg::uvm_phase::get_predecessors" &&
-        name != "uvm_pkg::uvm_phase::get_sync_relationships")
-      return;
-    static bool tracePhaseRemap = []() {
-      const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
-      return env && env[0] != '\0' && env[0] != '0';
-    }();
-    uint64_t oldPhase = args[0].getUInt64();
-    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
-    if (name == "uvm_pkg::uvm_phase::wait_for_state" && newPhase != 0 &&
-        args.size() >= 3 && !args[1].isX() && !args[2].isX()) {
-      auto currentPhaseIt = currentExecutingPhaseAddr.find(procId);
-      uint64_t currentPhase =
-          currentPhaseIt != currentExecutingPhaseAddr.end()
-              ? currentPhaseIt->second
-              : 0;
-      constexpr uint64_t kUvmPhaseReadyToEnd = 32;
-      constexpr uint64_t kUvmWaitGte = 5;
-      uint64_t waitState = args[1].getUInt64();
-      uint64_t waitCmp = args[2].getUInt64();
-      if (currentPhase != 0 && newPhase == currentPhase &&
-          waitCmp == kUvmWaitGte && waitState >= kUvmPhaseReadyToEnd &&
-          activePhaseRootAddr != 0 && activePhaseRootAddr != newPhase) {
-        if (tracePhaseRemap) {
-          llvm::errs()
-              << "[PHASE-REMAP] proc=" << procId
-              << " fn=" << name
-              << " self-phase-deadlock-avoid old="
-              << llvm::format_hex(newPhase, 16) << " new="
-              << llvm::format_hex(activePhaseRootAddr, 16)
-              << " waitMask=0x"
-              << llvm::format_hex_no_prefix(waitState, 0)
-              << " waitCmp=" << waitCmp << "\n";
-        }
-        newPhase = activePhaseRootAddr;
-      }
-    }
-    if (tracePhaseRemap) {
-      llvm::errs() << "[PHASE-REMAP] proc=" << procId << " fn=" << name
-                   << " old=" << llvm::format_hex(oldPhase, 16)
-                   << " new=" << llvm::format_hex(newPhase, 16) << "\n";
-    }
-    if (newPhase == 0 || newPhase == oldPhase)
-      return;
-    unsigned width = args[0].getWidth();
-    if (width == 0)
-      width = 64;
-    args[0] = InterpretedValue(llvm::APInt(width, newPhase));
-  };
-  maybeRemapPhaseArg0ToActiveGraph(calleeName);
+  maybeRemapUvmPhaseArgsToActiveGraph(procId, calleeName, args);
 
   if (traceI3CConfigHandles && !args.empty() && !args.front().isX() &&
       calleeName.contains("i3c_") && calleeName.contains("_bfm::") &&
@@ -24787,58 +24736,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
 
   if (callOp.getCallee() == "uvm_pkg::uvm_phase::add")
     recordUvmPhaseAddSequence(procId, args);
-  if (!args.empty() && !args[0].isX() &&
-      (callOp.getCallee() == "uvm_pkg::uvm_phase::wait_for_state" ||
-       callOp.getCallee() == "uvm_pkg::uvm_phase::get_predecessors" ||
-       callOp.getCallee() == "uvm_pkg::uvm_phase::get_sync_relationships")) {
-    static bool tracePhaseRemap = []() {
-      const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
-      return env && env[0] != '\0' && env[0] != '0';
-    }();
-    uint64_t oldPhase = args[0].getUInt64();
-    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
-    if (callOp.getCallee() == "uvm_pkg::uvm_phase::wait_for_state" &&
-        newPhase != 0 && args.size() >= 3 && !args[1].isX() &&
-        !args[2].isX()) {
-      auto currentPhaseIt = currentExecutingPhaseAddr.find(procId);
-      uint64_t currentPhase =
-          currentPhaseIt != currentExecutingPhaseAddr.end()
-              ? currentPhaseIt->second
-              : 0;
-      constexpr uint64_t kUvmPhaseReadyToEnd = 32;
-      constexpr uint64_t kUvmWaitGte = 5;
-      uint64_t waitState = args[1].getUInt64();
-      uint64_t waitCmp = args[2].getUInt64();
-      if (currentPhase != 0 && newPhase == currentPhase &&
-          waitCmp == kUvmWaitGte && waitState >= kUvmPhaseReadyToEnd &&
-          activePhaseRootAddr != 0 && activePhaseRootAddr != newPhase) {
-        if (tracePhaseRemap) {
-          llvm::errs()
-              << "[PHASE-REMAP] proc=" << procId
-              << " fn=" << callOp.getCallee()
-              << " self-phase-deadlock-avoid old="
-              << llvm::format_hex(newPhase, 16) << " new="
-              << llvm::format_hex(activePhaseRootAddr, 16)
-              << " waitMask=0x"
-              << llvm::format_hex_no_prefix(waitState, 0)
-              << " waitCmp=" << waitCmp << "\n";
-        }
-        newPhase = activePhaseRootAddr;
-      }
-    }
-    if (tracePhaseRemap) {
-      llvm::errs() << "[PHASE-REMAP] proc=" << procId
-                   << " fn=" << callOp.getCallee()
-                   << " old=" << llvm::format_hex(oldPhase, 16)
-                   << " new=" << llvm::format_hex(newPhase, 16) << "\n";
-    }
-    if (newPhase != 0 && newPhase != oldPhase) {
-      unsigned width = args[0].getWidth();
-      if (width == 0)
-        width = 64;
-      args[0] = InterpretedValue(llvm::APInt(width, newPhase));
-    }
-  }
+  maybeRemapUvmPhaseArgsToActiveGraph(procId, callOp.getCallee(), args);
 
   // Call depth check.
   auto &state = processStates[procId];

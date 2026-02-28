@@ -460,6 +460,85 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
                      phaseImpAddr, mappedImpAddr);
 }
 
+void LLHDProcessInterpreter::maybeRemapUvmPhaseArgsToActiveGraph(
+    ProcessId procId, llvm::StringRef calleeName,
+    llvm::SmallVectorImpl<InterpretedValue> &args) {
+  bool remapArg0ToActiveGraph =
+      !args.empty() && !args[0].isX() &&
+      (calleeName == "uvm_pkg::uvm_phase::wait_for_state" ||
+       calleeName == "uvm_pkg::uvm_phase::get_predecessors" ||
+       calleeName == "uvm_pkg::uvm_phase::get_sync_relationships");
+  bool remapJumpTargetToActiveGraph =
+      args.size() >= 2 && !args[1].isX() &&
+      calleeName == "uvm_pkg::uvm_phase::set_jump_phase";
+  if (!remapArg0ToActiveGraph && !remapJumpTargetToActiveGraph)
+    return;
+
+  static bool tracePhaseRemap = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto rewriteArg = [&](size_t argIndex, uint64_t newPhase) {
+    if (argIndex >= args.size())
+      return;
+    unsigned width = args[argIndex].getWidth();
+    if (width == 0)
+      width = 64;
+    args[argIndex] = InterpretedValue(llvm::APInt(width, newPhase));
+  };
+
+  if (remapArg0ToActiveGraph) {
+    uint64_t oldPhase = args[0].getUInt64();
+    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
+    if (calleeName == "uvm_pkg::uvm_phase::wait_for_state" && newPhase != 0 &&
+        args.size() >= 3 && !args[1].isX() && !args[2].isX()) {
+      auto currentPhaseIt = currentExecutingPhaseAddr.find(procId);
+      uint64_t currentPhase =
+          currentPhaseIt != currentExecutingPhaseAddr.end()
+              ? currentPhaseIt->second
+              : 0;
+      constexpr uint64_t kUvmPhaseReadyToEnd = 32;
+      constexpr uint64_t kUvmWaitGte = 5;
+      uint64_t waitState = args[1].getUInt64();
+      uint64_t waitCmp = args[2].getUInt64();
+      if (currentPhase != 0 && newPhase == currentPhase &&
+          waitCmp == kUvmWaitGte && waitState >= kUvmPhaseReadyToEnd &&
+          activePhaseRootAddr != 0 && activePhaseRootAddr != newPhase) {
+        if (tracePhaseRemap) {
+          llvm::errs() << "[PHASE-REMAP] proc=" << procId
+                       << " fn=" << calleeName
+                       << " self-phase-deadlock-avoid old="
+                       << llvm::format_hex(newPhase, 16) << " new="
+                       << llvm::format_hex(activePhaseRootAddr, 16)
+                       << " waitMask=0x"
+                       << llvm::format_hex_no_prefix(waitState, 0)
+                       << " waitCmp=" << waitCmp << "\n";
+        }
+        newPhase = activePhaseRootAddr;
+      }
+    }
+    if (tracePhaseRemap) {
+      llvm::errs() << "[PHASE-REMAP] proc=" << procId << " fn=" << calleeName
+                   << " old=" << llvm::format_hex(oldPhase, 16)
+                   << " new=" << llvm::format_hex(newPhase, 16) << "\n";
+    }
+    if (newPhase != 0 && newPhase != oldPhase)
+      rewriteArg(0, newPhase);
+  }
+
+  if (remapJumpTargetToActiveGraph) {
+    uint64_t oldPhase = args[1].getUInt64();
+    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
+    if (tracePhaseRemap) {
+      llvm::errs() << "[PHASE-REMAP] proc=" << procId << " fn=" << calleeName
+                   << " arg1-old=" << llvm::format_hex(oldPhase, 16)
+                   << " arg1-new=" << llvm::format_hex(newPhase, 16) << "\n";
+    }
+    if (newPhase != 0 && newPhase != oldPhase)
+      rewriteArg(1, newPhase);
+  }
+}
+
 void LLHDProcessInterpreter::maybeCanonicalizeUvmPhasePredecessorSet(
     ProcessId procId, llvm::StringRef calleeName,
     llvm::ArrayRef<InterpretedValue> args) {

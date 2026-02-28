@@ -3552,6 +3552,14 @@ private:
   /// Map a phase wrapper address onto the active common-domain phase graph.
   uint64_t mapUvmPhaseAddressToActiveGraph(ProcessId procId, uint64_t phaseAddr);
 
+  /// Canonicalize UVM phase-handle call arguments onto the active graph.
+  /// This currently remaps:
+  /// - arg0 for wait/get_predecessors/get_sync_relationships
+  /// - arg1 (jump target) for set_jump_phase
+  void maybeRemapUvmPhaseArgsToActiveGraph(
+      ProcessId procId, llvm::StringRef calleeName,
+      llvm::SmallVectorImpl<InterpretedValue> &args);
+
   /// Post-call canonicalization for `uvm_phase::get_predecessors`.
   /// Rewrites predecessor assoc keys to the active phase graph objects when
   /// stale/common-domain nodes are returned.
