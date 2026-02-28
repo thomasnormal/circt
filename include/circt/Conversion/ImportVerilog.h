@@ -56,6 +56,15 @@ struct ImportVerilogOptions {
   /// Interpret `always @(*)` as `always_comb`.
   bool lowerAlwaysAtStarAsComb = true;
 
+  /// Allow multiple always_comb procedures to drive the same variable without
+  /// a diagnostic. Opt-in compatibility flag for designs that rely on this.
+  std::optional<bool> allowMultiAlwaysCombDrivers;
+
+  /// Control whether slang's analysis phase is run. When unset, defaults to
+  /// running analysis only in OnlyLint mode (not during full lowering) to
+  /// avoid hangs on large UVM/SVA workloads.
+  std::optional<bool> runSlangAnalysis;
+
   //===--------------------------------------------------------------------===//
   // Include paths
   //===--------------------------------------------------------------------===//

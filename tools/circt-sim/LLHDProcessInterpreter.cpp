@@ -38121,7 +38121,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           readBool(filterAddr + kFilterNegateOff, negate);
 
           MooreCrossBinsofFilter filter{
-              cpIndex, binIndices, numBins, valuesPtr, numValues, negate};
+              cpIndex, binIndices, numBins, valuesPtr, numValues,
+              /*ranges=*/nullptr, /*num_ranges=*/0, negate};
           parsedFilters.push_back(filter);
         }
       }
