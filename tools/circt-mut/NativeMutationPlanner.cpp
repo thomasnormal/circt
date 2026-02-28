@@ -50,7 +50,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0",
-    "CONST_PLUS_ONE",   "CONST_MINUS_ONE", "ADD_TO_SUB",
+    "CONST_PLUS_ONE",   "CONST_MINUS_ONE", "CMP_CONST_PLUS_ONE",
+    "CMP_CONST_MINUS_ONE", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
     "MUL_TO_DIV",       "MOD_TO_DIV",     "DIV_TO_MOD",  "INC_TO_DEC",
     "DEC_TO_INC",       "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
@@ -352,6 +353,9 @@ static bool isUnaryOperatorContext(char c);
 static bool statementLooksLikeTypedDeclaration(StringRef text,
                                                ArrayRef<uint8_t> codeMask,
                                                size_t stmtStart, size_t pos);
+static void collectRelationalComparatorSites(StringRef text, StringRef token,
+                                             ArrayRef<uint8_t> codeMask,
+                                             SmallVectorImpl<SiteInfo> &sites);
 
 static void collectLiteralTokenSites(StringRef text, StringRef token,
                                      ArrayRef<uint8_t> codeMask,
@@ -1099,6 +1103,99 @@ static void collectSimpleLiteralAnySites(StringRef text,
                                          bool skipZero = false) {
   collectSimpleLiteralSitesWithFilter(text, codeMask, /*filterByValue=*/false,
                                       /*targetValue=*/0, skipZero, sites);
+}
+
+static size_t comparatorTokenLengthAt(StringRef text, size_t pos) {
+  if (pos == StringRef::npos || pos >= text.size())
+    return 0;
+  StringRef rest = text.drop_front(pos);
+  if (rest.starts_with("===") || rest.starts_with("!=="))
+    return 3;
+  if (rest.starts_with("==") || rest.starts_with("!=") || rest.starts_with("<=") ||
+      rest.starts_with(">="))
+    return 2;
+  if (rest.starts_with("<") || rest.starts_with(">"))
+    return 1;
+  return 0;
+}
+
+static bool parseBackwardSimpleNonNegativeLiteralAt(StringRef text,
+                                                    ArrayRef<uint8_t> codeMask,
+                                                    size_t endPos,
+                                                    size_t &startPos,
+                                                    size_t &endPosExclusive,
+                                                    uint64_t &value) {
+  if (endPos == StringRef::npos || endPos >= text.size() ||
+      !isCodeAt(codeMask, endPos))
+    return false;
+  if (!isSimpleLiteralTokenChar(text[endPos]))
+    return false;
+  size_t start = endPos;
+  while (start > 0 && isCodeAt(codeMask, start - 1) &&
+         isSimpleLiteralTokenChar(text[start - 1]))
+    --start;
+  size_t end = start;
+  if (!parseSimpleNonNegativeLiteralAt(text, codeMask, start, end, value))
+    return false;
+  if (end == 0 || end - 1 != endPos)
+    return false;
+  startPos = start;
+  endPosExclusive = end;
+  return true;
+}
+
+static void collectComparatorConstLiteralSites(StringRef text,
+                                               ArrayRef<uint8_t> codeMask,
+                                               SmallVectorImpl<SiteInfo> &sites,
+                                               bool skipZero = false) {
+  SmallVector<SiteInfo, 32> comparatorSites;
+  collectComparatorTokenSites(text, "==", codeMask, comparatorSites);
+  collectComparatorTokenSites(text, "!=", codeMask, comparatorSites);
+  collectComparatorTokenSites(text, "===", codeMask, comparatorSites);
+  collectComparatorTokenSites(text, "!==", codeMask, comparatorSites);
+  collectStandaloneCompareSites(text, '<', codeMask, comparatorSites);
+  collectStandaloneCompareSites(text, '>', codeMask, comparatorSites);
+  collectRelationalComparatorSites(text, "<=", codeMask, comparatorSites);
+  collectRelationalComparatorSites(text, ">=", codeMask, comparatorSites);
+
+  for (const SiteInfo &cmp : comparatorSites) {
+    size_t cmpPos = cmp.pos;
+    size_t cmpLen = comparatorTokenLengthAt(text, cmpPos);
+    if (cmpLen == 0)
+      continue;
+
+    size_t lhsEnd = findPrevCodeNonSpace(text, codeMask, cmpPos);
+    size_t rhsStart = findNextCodeNonSpace(text, codeMask, cmpPos + cmpLen);
+    if (lhsEnd == StringRef::npos || rhsStart == StringRef::npos)
+      continue;
+
+    size_t litStart = StringRef::npos;
+    size_t litEnd = StringRef::npos;
+    uint64_t litValue = 0;
+    if (parseBackwardSimpleNonNegativeLiteralAt(text, codeMask, lhsEnd, litStart,
+                                                litEnd, litValue)) {
+      if (!(skipZero && litValue == 0))
+        sites.push_back({litStart});
+    }
+
+    litEnd = rhsStart;
+    litValue = 0;
+    if (parseSimpleNonNegativeLiteralAt(text, codeMask, rhsStart, litEnd,
+                                        litValue)) {
+      if (!(skipZero && litValue == 0))
+        sites.push_back({rhsStart});
+    }
+  }
+
+  llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
+    return a.pos < b.pos;
+  });
+  sites.erase(
+      std::unique(sites.begin(), sites.end(),
+                  [](const SiteInfo &a, const SiteInfo &b) {
+                    return a.pos == b.pos;
+                  }),
+      sites.end());
 }
 
 static bool buildFlippedSimpleLiteral(StringRef token, bool zeroToOne,
@@ -3501,6 +3598,15 @@ static void collectSitesForOp(StringRef designText, StringRef op,
                                  /*skipZero=*/true);
     return;
   }
+  if (op == "CMP_CONST_PLUS_ONE") {
+    collectComparatorConstLiteralSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "CMP_CONST_MINUS_ONE") {
+    collectComparatorConstLiteralSites(designText, codeMask, sites,
+                                       /*skipZero=*/true);
+    return;
+  }
   if (op == "ADD_TO_SUB") {
     collectBinaryArithmeticSites(designText, '+', codeMask, sites,
                                  /*skipRhsZeroEquivalent=*/true);
@@ -3694,6 +3800,8 @@ static std::string getOpFamily(StringRef op) {
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
+  if (op == "CMP_CONST_PLUS_ONE" || op == "CMP_CONST_MINUS_ONE")
+    return "compare";
   if (op == "CONST_PLUS_ONE" || op == "CONST_MINUS_ONE")
     return "arithmetic";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
@@ -4893,6 +5001,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   if (op == "CONST_PLUS_ONE")
     return applyConstDeltaAt(text, /*delta=*/1, pos, codeMask, mutatedText);
   if (op == "CONST_MINUS_ONE")
+    return applyConstDeltaAt(text, /*delta=*/-1, pos, codeMask, mutatedText);
+  if (op == "CMP_CONST_PLUS_ONE")
+    return applyConstDeltaAt(text, /*delta=*/1, pos, codeMask, mutatedText);
+  if (op == "CMP_CONST_MINUS_ONE")
     return applyConstDeltaAt(text, /*delta=*/-1, pos, codeMask, mutatedText);
   if (op == "ADD_TO_SUB")
     return replaceTokenAt(mutatedText, pos, 1, "-");

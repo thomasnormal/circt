@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic [3:0] a,b, output logic y0,y1);\n  assign y0 = (a == 3);\n  assign y1 = (4 <= b);\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops CMP_CONST_PLUS_ONE --out %t/plus.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops CMP_CONST_MINUS_ONE --out %t/minus.txt
+// RUN: FileCheck %s --check-prefix=PLUS < %t/plus.txt
+// RUN: FileCheck %s --check-prefix=MINUS < %t/minus.txt
+//
+// PLUS: NATIVE_CMP_CONST_PLUS_ONE@1
+// PLUS: NATIVE_CMP_CONST_PLUS_ONE@2
+//
+// MINUS: NATIVE_CMP_CONST_MINUS_ONE@1
+// MINUS: NATIVE_CMP_CONST_MINUS_ONE@2

@@ -2101,3 +2101,53 @@
   - seeded xrun-vs-circt parity campaign:
     - workspace: `/tmp/cov_intro_seeded_const_delta_1772306949`
     - result: `ok=20 mismatch=0 fail=0`.
+
+## 2026-02-28 (comparator constant boundary mutation class)
+
+- realizations:
+  - Comparator operator swaps (`<`/`<=`, `==`/`!=`) do not cover a key off-by-one
+    bug class where the operator is correct but the threshold constant drifts.
+  - Boundary-value comparator edits are realistic in counters/state guards and
+    semantically distinct from generic constant rewrites.
+
+- changes made:
+  - Added native mutation operators:
+    - `CMP_CONST_PLUS_ONE`
+    - `CMP_CONST_MINUS_ONE`
+  - Implemented in `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - comparator-context literal site discovery for
+      `==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`,
+    - site emission anchored at literal token positions on either comparator
+      side when the operand is a non-negative numeric literal,
+    - `CMP_CONST_MINUS_ONE` skips zero literals.
+    - apply rewrite reuses parenthesized delta expression replacement:
+      - `lit -> (lit + 1)` / `lit -> (lit - 1)`.
+  - Mode integration in `tools/circt-mut/circt-mut.cpp`:
+    - included new ops in CIRCT-only `arith`, `invert`, `inv`, and
+      `balanced/all` mode sets.
+  - Validator sync:
+    - `utils/run_mutation_mcy_examples.sh` native-op allowlist now accepts both
+      comparator-const delta ops.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-cmp-const-plus-minus-force.test`
+  - `test/Tools/native-create-mutated-cmp-const-plus-minus-site-index.test`
+  - `test/Tools/native-mutation-plan-cmp-const-minus-skip-zero.test`
+  - `test/Tools/circt-mut-generate-circt-only-arith-mode-cmp-const-delta-ops.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-cmp-const-plus-minus-force.test test/Tools/native-create-mutated-cmp-const-plus-minus-site-index.test test/Tools/native-mutation-plan-cmp-const-minus-skip-zero.test test/Tools/circt-mut-generate-circt-only-arith-mode-cmp-const-delta-ops.test`
+    - result: `4 passed`.
+  - broader touched-slice lit:
+    - filter on cmp-const + context-tokenization + const-delta + native-plan-safe-op tests
+    - result: `9 passed`.
+  - seeded xrun-vs-circt parity:
+    - operator-restricted:
+      - workspace: `/tmp/cov_intro_seeded_cmp_const_delta_1772307306`
+      - result: `ok=20 mismatch=0 fail=0`
+    - balanced recheck:
+      - workspace: `/tmp/cov_intro_seeded_cmp_balanced_recheck_1772307353`
+      - result: `ok=12 mismatch=0 fail=0`.

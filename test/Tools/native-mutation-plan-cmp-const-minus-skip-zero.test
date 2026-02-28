@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic [3:0] a, output logic y);\n  assign y = (a == 0);\nendmodule\n" > %t/design.sv
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops CMP_CONST_MINUS_ONE --out %t/mutations.txt 2>&1 | FileCheck %s --check-prefix=ERR
+//
+// ERR: circt-mut generate: no applicable native mutation sites for selected operators
