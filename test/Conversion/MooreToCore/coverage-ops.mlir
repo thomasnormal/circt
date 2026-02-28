@@ -9,7 +9,7 @@
 // CHECK-DAG: llvm.mlir.global{{.*}}constant @__cp_name_TestCG_data("data
 // CHECK-DAG: llvm.mlir.global{{.*}}constant @__cp_name_TestCG_addr("addr
 // CHECK-DAG: llvm.func @__moore_covergroup_create(!llvm.ptr, i32) -> !llvm.ptr
-// CHECK-DAG: llvm.func @__moore_coverpoint_init(!llvm.ptr, i32, !llvm.ptr)
+// CHECK-DAG: llvm.func @__moore_coverpoint_init_with_width(!llvm.ptr, i32, !llvm.ptr, i32)
 // CHECK-DAG: llvm.func @__moore_coverpoint_sample(!llvm.ptr, i32, i64)
 // CHECK-DAG: llvm.func @__moore_covergroup_get_coverage(!llvm.ptr) -> f64
 // CHECK-DAG: llvm.func @__moore_cross_create(!llvm.ptr, !llvm.ptr, !llvm.ptr, i32) -> i32

@@ -3711,6 +3711,16 @@ struct NamedBlockOpConversion : public OpConversionPattern<NamedBlockOp> {
 /// Compute the size of a type in bytes, handling types that DataLayout
 /// doesn't support (like llhd::TimeType).
 static uint64_t getTypeSizeSafe(Type type, ModuleOp mod) {
+  // Unwrap aliases so layout is computed on the canonical type.
+  if (auto aliasTy = dyn_cast<hw::TypeAliasType>(type))
+    return getTypeSizeSafe(aliasTy.getCanonicalType(), mod);
+
+  // Convert non-LLVM aggregate types (e.g., hw.struct/hw.array) to pure LLVM
+  // types first. DataLayout only supports LLVM-compatible types.
+  Type llvmType = convertToLLVMType(type);
+  if (llvmType != type)
+    return getTypeSizeSafe(llvmType, mod);
+
   // Handle llhd::TimeType specially - DataLayout doesn't support it.
   // Time is represented as {i64 realTime, i32 delta, i32 epsilon} = 16 bytes.
   if (isa<llhd::TimeType>(type))
@@ -3728,9 +3738,105 @@ static uint64_t getTypeSizeSafe(Type type, ModuleOp mod) {
   if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(type))
     return arrayTy.getNumElements() * getTypeSizeSafe(arrayTy.getElementType(), mod);
 
+  // Some packed HW/value types can still provide a bit width even when they
+  // are not directly understood by DataLayout.
+  if (int64_t bitWidth = hw::getBitWidth(type); bitWidth >= 0)
+    return llvm::divideCeil(static_cast<uint64_t>(bitWidth), uint64_t{8});
+
   // For other types, use DataLayout.
   DataLayout dl(mod);
   return dl.getTypeSize(type);
+}
+
+static Value repeatIntegerPattern(Value pattern, uint64_t count, Location loc,
+                                  ConversionPatternRewriter &rewriter) {
+  if (!pattern || count == 0)
+    return {};
+  if (!isa<IntegerType>(pattern.getType()))
+    return {};
+
+  auto concat = [&](Value lhs, Value rhs) -> Value {
+    return comb::ConcatOp::create(rewriter, loc, ValueRange{lhs, rhs});
+  };
+
+  Value acc;
+  Value chunk = pattern;
+  uint64_t remaining = count;
+  while (remaining > 0) {
+    if (remaining & 1)
+      acc = acc ? concat(acc, chunk) : chunk;
+    remaining >>= 1;
+    if (remaining > 0)
+      chunk = concat(chunk, chunk);
+  }
+  return acc;
+}
+
+/// Create an all-X initialization value for fixed-size arrays whose leaf
+/// element is a four-state struct `{value: iN, unknown: iN}`. This preserves
+/// SystemVerilog uninitialized-variable semantics for `logic` memories while
+/// avoiding materializing huge aggregate constant attrs.
+static Value createAllXArrayOfFourStateValue(
+    Type type, Location loc, ConversionPatternRewriter &rewriter) {
+  Type leafType = type;
+  uint64_t elementCount = 1;
+  while (true) {
+    if (auto arrayTy = dyn_cast<hw::ArrayType>(leafType)) {
+      if (arrayTy.getNumElements() == 0)
+        return {};
+      if (elementCount >
+          (std::numeric_limits<uint64_t>::max() / arrayTy.getNumElements()))
+        return {};
+      elementCount *= arrayTy.getNumElements();
+      leafType = arrayTy.getElementType();
+      continue;
+    }
+    if (auto arrayTy = dyn_cast<hw::UnpackedArrayType>(leafType)) {
+      if (arrayTy.getNumElements() == 0)
+        return {};
+      if (elementCount >
+          (std::numeric_limits<uint64_t>::max() / arrayTy.getNumElements()))
+        return {};
+      elementCount *= arrayTy.getNumElements();
+      leafType = arrayTy.getElementType();
+      continue;
+    }
+    break;
+  }
+
+  if (elementCount == 1 || !isFourStateStructType(leafType))
+    return {};
+
+  auto structTy = cast<hw::StructType>(leafType);
+  auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
+  auto unknownTy = dyn_cast<IntegerType>(structTy.getFieldType("unknown"));
+  if (!valueTy || !unknownTy || valueTy.getWidth() != unknownTy.getWidth())
+    return {};
+
+  auto valueZero =
+      hw::ConstantOp::create(rewriter, loc, IntegerAttr::get(valueTy, 0));
+  auto unknownOnes = hw::ConstantOp::create(
+      rewriter, loc,
+      IntegerAttr::get(unknownTy, APInt::getAllOnes(unknownTy.getWidth())));
+  auto leafX = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+
+  int64_t leafBits = hw::getBitWidth(leafType);
+  int64_t totalBits = hw::getBitWidth(type);
+  if (leafBits <= 0 || totalBits <= 0)
+    return {};
+
+  auto leafIntTy = rewriter.getIntegerType(static_cast<unsigned>(leafBits));
+  auto leafBitsValue =
+      rewriter.createOrFold<hw::BitcastOp>(loc, leafIntTy, leafX);
+  auto repeated =
+      repeatIntegerPattern(leafBitsValue, elementCount, loc, rewriter);
+  if (!repeated)
+    return {};
+
+  auto repeatedIntTy = dyn_cast<IntegerType>(repeated.getType());
+  if (!repeatedIntTy || repeatedIntTy.getWidth() != totalBits)
+    return {};
+  return rewriter.createOrFold<hw::BitcastOp>(loc, type, repeated);
 }
 
 static Value createZeroValue(Type type, Location loc,
@@ -3758,9 +3864,6 @@ static Value createZeroValue(Type type, Location loc,
   if (width == -1)
     return {};
 
-  // TODO: Once the core dialects support four-valued integers, this code
-  // will additionally need to generate an all-X value for four-valued
-  // variables.
   Value constZero = hw::ConstantOp::create(rewriter, loc, APInt(width, 0));
   return rewriter.createOrFold<hw::BitcastOp>(loc, type, constZero);
 }
@@ -7095,6 +7198,10 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
             rewriter, loc,
             IntegerAttr::get(unknownTy, APInt::getAllOnes(unknownTy.getWidth())));
         init = createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+      } else if (auto arrayAllX =
+                     createAllXArrayOfFourStateValue(elementType, loc,
+                                                     rewriter)) {
+        init = arrayAllX;
       } else {
         init = createZeroValue(elementType, loc, rewriter);
       }
@@ -24875,6 +24982,7 @@ struct ClassDynConstraintInfo {
   bool isUpper;           // true = upper bound, false = lower bound
   bool isStrict;          // true = strict (< >), false = non-strict (<= >=)
   bool isEquality = false; // true = equality (prop == boundProp)
+  bool isInequality = false; // true = inequality (prop != boundProp)
   bool isSigned = false;
   bool isSoft = false;
 };
@@ -25739,6 +25847,7 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
     bool isUpperBound = false;
     bool isStrict = false;
     bool isEquality = false;
+    bool isInequality = false;
     bool isSigned = false;
 
     if (isa<SltOp>(defOp)) {
@@ -25759,6 +25868,8 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
       isStrict = false; isUpperBound = false;
     } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
       isEquality = true;
+    } else if (isa<NeOp>(defOp) || isa<WildcardNeOp>(defOp)) {
+      isInequality = true;
     } else {
       return false;
     }
@@ -25771,6 +25882,7 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
     info.isUpper = isUpperBound;
     info.isStrict = isStrict;
     info.isEquality = isEquality;
+    info.isInequality = isInequality;
     info.isSigned = isSigned;
     info.isSoft = isSoft;
     results.push_back(info);
@@ -27624,6 +27736,13 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       bool isSoft;
     };
     SmallVector<DynValueAssignFixup> dynValueAssignFixups;
+    struct DynNeqFixup {
+      StringRef prop;
+      StringRef boundProp;
+      bool isSigned;
+      bool isSoft;
+    };
+    SmallVector<DynNeqFixup> dynNeqFixups;
     struct DynArraySizeFixup {
       StringRef prop;
       int32_t size;
@@ -28220,6 +28339,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       bool isUpper;           // true = upper bound, false = lower bound
       bool isStrict;          // true = strict (< >), false = non-strict (<= >=)
       bool isEquality = false;
+      bool isInequality = false;
       bool isSigned = false;
       bool isSoft = false;
     };
@@ -28241,6 +28361,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         dc.isStrict = dict.getAs<BoolAttr>("is_strict").getValue();
         if (auto eqAttr = dict.getAs<BoolAttr>("is_eq"))
           dc.isEquality = eqAttr.getValue();
+        if (auto neAttr = dict.getAs<BoolAttr>("is_ne"))
+          dc.isInequality = neAttr.getValue();
         dc.isSigned = dict.get("signed") != nullptr;
         dc.isSoft = dict.get("soft") != nullptr;
         dynamicConstraints.push_back(dc);
@@ -28259,6 +28381,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         dc.isUpper = cdc.isUpper;
         dc.isStrict = cdc.isStrict;
         dc.isEquality = cdc.isEquality;
+        dc.isInequality = cdc.isInequality;
         dc.isSigned = cdc.isSigned;
         dc.isSoft = cdc.isSoft;
         dynamicConstraints.push_back(dc);
@@ -28692,6 +28815,8 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
         arith::CmpIPredicate pred;
         if (dc.isEquality)
           pred = arith::CmpIPredicate::eq;
+        else if (dc.isInequality)
+          pred = arith::CmpIPredicate::ne;
         else if (dc.isUpper && dc.isStrict)
           pred = dc.isSigned ? arith::CmpIPredicate::slt
                              : arith::CmpIPredicate::ult;
@@ -29744,6 +29869,11 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
             dynValueAssignFixups.push_back({dc.prop, boundVal, dc.isSoft});
             continue;
           }
+          if (dc.isInequality) {
+            dynNeqFixups.push_back(
+                {dc.prop, dc.boundProp, dc.isSigned, dc.isSoft});
+            continue;
+          }
 
           // Extend to i64
           if (auto bIntTy = dyn_cast<IntegerType>(boundFieldTy)) {
@@ -29897,6 +30027,146 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
                                               classPtr, gepIndices);
           LLVM::StoreOp::create(rewriter, loc, toStore, fieldPtr);
+        }
+      }
+
+      // Apply dynamic inequality fixups from constraints like `x != y`.
+      // This runs after equality/dynamic range fixups so we can repair any
+      // accidental equality created by earlier assignments.
+      if (!dynNeqFixups.empty()) {
+        auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+        auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                              "__moore_randomize_with_range",
+                                              rangeFnTy);
+
+        for (const auto &fixup : dynNeqFixups) {
+          auto propPathIt = structInfo->propertyPath.find(fixup.prop);
+          auto boundPathIt = structInfo->propertyPath.find(fixup.boundProp);
+          if (propPathIt == structInfo->propertyPath.end() ||
+              boundPathIt == structInfo->propertyPath.end())
+            continue;
+
+          Type propFieldTy = convertToLLVMType(
+              resolveStructFieldType(structTy, propPathIt->second));
+          Type boundFieldTy = convertToLLVMType(
+              resolveStructFieldType(structTy, boundPathIt->second));
+          auto propIntTy = dyn_cast_or_null<IntegerType>(propFieldTy);
+          auto boundIntTy = dyn_cast_or_null<IntegerType>(boundFieldTy);
+          if (!propIntTy || !boundIntTy)
+            continue;
+
+          unsigned bitWidth = propIntTy.getWidth();
+          if (bitWidth == 0 || bitWidth > 64)
+            continue;
+
+          int64_t typeMin = 0;
+          int64_t typeMax = std::numeric_limits<int64_t>::max();
+          if (fixup.isSigned) {
+            if (bitWidth >= 64) {
+              typeMin = std::numeric_limits<int64_t>::min();
+              typeMax = std::numeric_limits<int64_t>::max();
+            } else {
+              typeMin = -(1LL << (bitWidth - 1));
+              typeMax = (1LL << (bitWidth - 1)) - 1;
+            }
+          } else {
+            typeMin = 0;
+            if (bitWidth < 63)
+              typeMax = (1LL << bitWidth) - 1;
+          }
+
+          Value minVal = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(typeMin));
+          Value maxVal = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(typeMax));
+          auto staticIt = staticBoundsForDynFixups.find(fixup.prop);
+          if (staticIt != staticBoundsForDynFixups.end()) {
+            Value staticMin = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(staticIt->second.first));
+            Value staticMax = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(staticIt->second.second));
+            minVal =
+                arith::MaxSIOp::create(rewriter, loc, staticMin, minVal);
+            maxVal =
+                arith::MinSIOp::create(rewriter, loc, staticMax, maxVal);
+          }
+
+          OpBuilder::InsertionGuard guard(rewriter);
+          Value randEnabled = createRandEnabledCheck(fixup.prop);
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabled,
+                                        /*withElseRegion=*/false);
+          rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+          SmallVector<LLVM::GEPArg> propGepIndices;
+          propGepIndices.push_back(0);
+          for (unsigned idx : propPathIt->second)
+            propGepIndices.push_back(static_cast<int32_t>(idx));
+          auto propPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                             classPtr, propGepIndices);
+          Value propVal =
+              LLVM::LoadOp::create(rewriter, loc, propFieldTy, propPtr);
+
+          SmallVector<LLVM::GEPArg> boundGepIndices;
+          boundGepIndices.push_back(0);
+          for (unsigned idx : boundPathIt->second)
+            boundGepIndices.push_back(static_cast<int32_t>(idx));
+          auto boundPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                              classPtr, boundGepIndices);
+          Value boundVal =
+              LLVM::LoadOp::create(rewriter, loc, boundFieldTy, boundPtr);
+
+          Value propVal64 = propVal;
+          if (bitWidth < 64) {
+            if (fixup.isSigned)
+              propVal64 =
+                  arith::ExtSIOp::create(rewriter, loc, i64Ty, propVal64);
+            else
+              propVal64 =
+                  arith::ExtUIOp::create(rewriter, loc, i64Ty, propVal64);
+          }
+
+          Value boundVal64 = boundVal;
+          unsigned boundWidth = boundIntTy.getWidth();
+          if (boundWidth < 64) {
+            if (fixup.isSigned)
+              boundVal64 =
+                  arith::ExtSIOp::create(rewriter, loc, i64Ty, boundVal64);
+            else
+              boundVal64 =
+                  arith::ExtUIOp::create(rewriter, loc, i64Ty, boundVal64);
+          } else if (boundWidth > 64) {
+            boundVal64 =
+                arith::TruncIOp::create(rewriter, loc, i64Ty, boundVal64);
+          }
+
+          Value randomReplacement = LLVM::CallOp::create(
+                                        rewriter, loc, TypeRange{i64Ty},
+                                        SymbolRefAttr::get(rangeFn),
+                                        ValueRange{minVal, maxVal})
+                                        .getResult();
+          Value randomNeBound = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::ne, randomReplacement,
+              boundVal64);
+          Value minNeBound = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::ne, minVal, boundVal64);
+          Value fallbackReplacement = arith::SelectOp::create(
+              rewriter, loc, minNeBound, minVal, maxVal);
+          Value replacement = arith::SelectOp::create(
+              rewriter, loc, randomNeBound, randomReplacement,
+              fallbackReplacement);
+          Value propNeBound = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::ne, propVal64, boundVal64);
+          Value finalVal64 =
+              arith::SelectOp::create(rewriter, loc, propNeBound, propVal64,
+                                      replacement);
+
+          Value toStore = finalVal64;
+          if (bitWidth < 64)
+            toStore =
+                arith::TruncIOp::create(rewriter, loc, propIntTy, toStore);
+          LLVM::StoreOp::create(rewriter, loc, toStore, propPtr);
         }
       }
 
@@ -31574,25 +31844,44 @@ void MooreToCorePass::runOnOperation() {
   MLIRContext &context = getContext();
   ModuleOp module = getOperation();
 
-  // Early exit: if there are no Moore dialect operations remaining, skip the
-  // entire pass. This is important for the second MooreToCore invocation in
-  // the pipeline (after InlineCalls), which only needs to handle
-  // WaitEventOp/DetectEventOp that were inlined from functions into processes.
-  // For designs without such ops, this avoids expensive full-module conversion
-  // scans over hundreds of thousands of operations.
+  TypeConverter typeConverter;
+  populateTypeConversion(typeConverter);
+
+  // Early exit: skip if neither Moore ops nor Moore-origin types need
+  // conversion. This keeps the fast path for the second MooreToCore pass after
+  // inline-calls, but still handles signature-only Moore types (e.g.
+  // !moore.string on func.func declarations/calls).
   {
     auto *mooreDialect = context.getLoadedDialect<MooreDialect>();
-    bool hasMooreOps = false;
-    if (mooreDialect) {
-      module.walk([&](Operation *op) {
-        if (op->getDialect() == mooreDialect) {
-          hasMooreOps = true;
+    bool needsConversion = false;
+    module.walk([&](Operation *op) {
+      if (mooreDialect && op->getDialect() == mooreDialect) {
+        needsConversion = true;
+        return WalkResult::interrupt();
+      }
+
+      // Function signatures are stored in attributes and are not covered by
+      // generic op type legality checks.
+      if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
+        if (!typeConverter.isSignatureLegal(funcOp.getFunctionType())) {
+          needsConversion = true;
           return WalkResult::interrupt();
         }
-        return WalkResult::advance();
-      });
-    }
-    if (!hasMooreOps)
+      } else if (auto hwModuleOp = dyn_cast<hw::HWModuleOp>(op)) {
+        if (!typeConverter.isSignatureLegal(
+                hwModuleOp.getModuleType().getFuncType())) {
+          needsConversion = true;
+          return WalkResult::interrupt();
+        }
+      }
+
+      if (!typeConverter.isLegal(op)) {
+        needsConversion = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (!needsConversion)
       return;
   }
 
@@ -31602,9 +31891,6 @@ void MooreToCorePass::runOnOperation() {
 
   IRRewriter rewriter(module);
   (void)mlir::eraseUnreachableBlocks(rewriter, module->getRegions());
-
-  TypeConverter typeConverter;
-  populateTypeConversion(typeConverter);
 
   ConversionTarget target(context);
   populateLegality(target, typeConverter);
@@ -31691,6 +31977,7 @@ void MooreToCorePass::runOnOperation() {
         bool isUpperBound = true;    // true: prop < bound, false: prop > bound
         bool isStrict = true;        // strict (< >) vs non-strict (<= >=)
         bool isEquality = false;     // true: prop == bound
+        bool isInequality = false;   // true: prop != bound
         bool isSigned = false;
         bool isSoft = false;
       };
@@ -31785,6 +32072,7 @@ void MooreToCorePass::runOnOperation() {
         bool isUpperBound = false; // Does this constrain the upper bound?
         bool isStrict = false;
         bool isEquality = false;
+        bool isInequality = false;
         bool isSigned = false;
 
         if (isa<SltOp>(defOp)) {
@@ -31817,6 +32105,8 @@ void MooreToCorePass::runOnOperation() {
           isUpperBound = !varOnLhs;
         } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
           isEquality = true;
+        } else if (isa<NeOp>(defOp) || isa<WildcardNeOp>(defOp)) {
+          isInequality = true;
         } else {
           return false;
         }
@@ -31849,6 +32139,7 @@ void MooreToCorePass::runOnOperation() {
         info.isUpperBound = isUpperBound;
         info.isStrict = isStrict;
         info.isEquality = isEquality;
+        info.isInequality = isInequality;
         info.isSigned = isSigned;
         info.isSoft = isSoft;
 
@@ -31955,6 +32246,10 @@ void MooreToCorePass::runOnOperation() {
           if (dyn.isEquality)
             entries.push_back(NamedAttribute(
                 StringAttr::get(&context, "is_eq"),
+                BoolAttr::get(&context, true)));
+          if (dyn.isInequality)
+            entries.push_back(NamedAttribute(
+                StringAttr::get(&context, "is_ne"),
                 BoolAttr::get(&context, true)));
           if (dyn.isSigned)
             entries.push_back(NamedAttribute(
