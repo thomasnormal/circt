@@ -288,3 +288,9 @@
     - before fix: both rules ended `FAIL ... LLHD_ABSTRACTION`.
     - after fix: both rules `PASS ... LLHD_ABSTRACTION` with
       `LEC_RESULT=EQ` in case logs.
+  - broader OpenTitan stress replay:
+    - filter: `ALERT_`, shard `0/6`, `CIRCT_TIMEOUT_SECS=60`.
+    - result: `11/11 PASS` with zero timeout rows.
+    - diag split: `EQ=6`, `LLHD_ABSTRACTION=5`.
+    - confirms formerly failing `clkmgr_cg_en` alert rows now pass in
+      mixed `alert_handler/clkmgr/rstmgr` shard context.
