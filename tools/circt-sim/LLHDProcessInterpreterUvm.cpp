@@ -1703,12 +1703,15 @@ bool LLHDProcessInterpreter::readObjectVTableAddress(uint64_t objectAddr,
   };
 
   auto tryDecodeAtAddress = [&](uint64_t addr) -> bool {
+    bool sawManagedBlock = false;
+
     // First try process-visible memory (stack allocas, parent frames, module
     // allocas) when a process context is available.
     if (procId != InvalidProcessId) {
       uint64_t processOffset = 0;
       if (MemoryBlock *block =
               findMemoryBlockByAddress(addr, procId, &processOffset)) {
+        sawManagedBlock = true;
         if (block->initialized &&
             decodeVtableAt(block->bytes(), block->size, processOffset))
           return true;
@@ -1718,15 +1721,23 @@ bool LLHDProcessInterpreter::readObjectVTableAddress(uint64_t objectAddr,
     // Then try interpreter-managed global/malloc blocks.
     uint64_t blockOffset = 0;
     if (MemoryBlock *block = findBlockByAddress(addr, blockOffset)) {
+      sawManagedBlock = true;
       if (block->initialized &&
           decodeVtableAt(block->bytes(), block->size, blockOffset))
         return true;
     }
 
+    // Avoid treating interpreter-managed virtual addresses as raw host pointers.
+    // In interpreted mode, malloc blocks can be represented in nativeMemoryBlocks
+    // for range tracking; blindly reinterpreting those addresses can segfault.
+    if (sawManagedBlock)
+      return false;
+
     // Then try native memory-backed allocations tracked by the interpreter.
     uint64_t nativeOffset = 0;
     size_t nativeSize = 0;
-    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize)) {
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset <= addr) {
       auto *nativeBytes = reinterpret_cast<const uint8_t *>(addr - nativeOffset);
       if (decodeVtableAt(nativeBytes, nativeSize, nativeOffset))
         return true;
