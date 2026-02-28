@@ -1775,10 +1775,10 @@ Analysis preservation is conservative; could preserve more analyses when no effe
 Dedup handling of `DistinctAttr` (including path use) remains incomplete and currently skipped (issue 6583). What is missing is correct distinct-attribute semantics during dedup/path transforms. The fix is full `DistinctAttr` support in dedup logic.
 
 ### 591. `lib/Runtime/uvm-core/src/base/uvm_component.svh:2569`
-`uvm_component::suspend()` still defaults to a warning-only unimplemented stub. What is missing is concrete suspend semantics for supported runtimes/components. The fix is to implement suspend behavior (or explicit unsupported error policy) and add runtime tests.
+Status update (2026-02-28): this gap is closed in this workspace. `uvm_component::suspend()` now uses tracked task-phase process handles (wired from `uvm_task_phase::execute`) and drives runtime `process::suspend()` instead of warning-only stub behavior. Interpreter wakeup flow now also respects explicit process suspension until `resume()`.
 
 ### 592. `lib/Runtime/uvm-core/src/base/uvm_component.svh:2577`
-`uvm_component::resume()` is likewise warning-only and unimplemented. What is missing is paired resume semantics consistent with suspend lifecycle expectations. The fix is to implement resume handling and validate suspend/resume state transitions.
+Status update (2026-02-28): this gap is closed in this workspace. `uvm_component::resume()` now resumes the tracked phase task process and clears explicit suspension state in the interpreter. Regression coverage was added in `test/Runtime/uvm/uvm_component_suspend_resume_test.sv` and passes with targeted process/UVM suites.
 
 ### 593. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3337`
 This is the same known sorting TODO as earlier: still using `sort_by_precedence` and not `sort_by_precedence_q` (Mantis 7354). What is missing is migration to the newer precedence sort path. The fix is to adopt the newer API once dependency behavior is validated.

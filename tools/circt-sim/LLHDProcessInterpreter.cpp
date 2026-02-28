@@ -12068,6 +12068,10 @@ void LLHDProcessInterpreter::resumeProcess(ProcessId procId) {
   if (it == processStates.end())
     return;
 
+  // process::suspend() blocks automatic wakeups until process::resume().
+  if (explicitlySuspendedProcesses.contains(procId))
+    return;
+
   // Clear waiting state and schedule for execution
   it->second.waiting = false;
   scheduler.scheduleProcess(procId, SchedulingRegion::Active);
@@ -12533,6 +12537,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       removeQueueNotEmptyWaiter(procId);
       removeUvmSequencerGetWaiter(procId);
       memoryEventWaiters.erase(procId);
+      explicitlySuspendedProcesses.erase(procId);
       executePhaseYieldCounts.erase(procId);
       executePhaseSawPositiveObjection.erase(procId);
       executePhaseZeroDeadlineFs.erase(procId);
@@ -12561,6 +12566,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     removeObjectionZeroWaiter(procId);
     removeUvmSequencerGetWaiter(procId);
     memoryEventWaiters.erase(procId);
+    explicitlySuspendedProcesses.erase(procId);
     executePhaseYieldCounts.erase(procId);
     executePhaseSawPositiveObjection.erase(procId);
     executePhaseZeroDeadlineFs.erase(procId);
@@ -31787,6 +31793,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 proc->setState(ProcessState::Suspended);
                 auto &state = processStates[targetId];
                 state.waiting = true;
+                explicitlySuspendedProcesses.insert(targetId);
                 // If suspending self, the caller will stop executing
                 // after this call returns success().
               }
@@ -31806,7 +31813,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           ProcessId targetId = resolveProcessHandle(handleVal.getUInt64());
           if (targetId != InvalidProcessId) {
             if (auto *proc = scheduler.getProcess(targetId)) {
-              if (proc->getState() == ProcessState::Suspended) {
+              if (proc->getState() == ProcessState::Suspended &&
+                  explicitlySuspendedProcesses.erase(targetId) > 0) {
                 resumeProcess(targetId);
               }
             }

@@ -1445,3 +1445,51 @@
 - Validation:
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/syscall-ungetc.sv`
   - result: 1/1 passed.
+
+### UVM: implement `uvm_component::suspend/resume` with TDD + runtime suspend gating
+- Repro (test first):
+  - Added regression:
+    - `test/Runtime/uvm/uvm_component_suspend_resume_test.sv`
+  - Initial failure with stubbed component methods:
+    - warnings: `COMP/SPND/UNIMP`, `COMP/RSUM/UNIMP`
+    - behavior: component ticks continued during suspended window.
+- Root cause:
+  - `uvm_component::suspend/resume` were warning-only stubs.
+  - There was no component-local phase process tracking wired from
+    `uvm_task_phase::execute`.
+  - In interpreter runtime, automatic wakeups (`__moore_delay`/event callbacks)
+    could still resume a process even after explicit `process::suspend()`.
+- Fix:
+  - UVM core:
+    - `lib/Runtime/uvm-core/src/base/uvm_component.svh`
+      - added internal `m_set_phase_process(process p)`.
+      - implemented `suspend()` and `resume()` to call process controls
+        on tracked phase process handle (with NOPROC warning fallback).
+    - `lib/Runtime/uvm-core/src/base/uvm_task_phase.svh`
+      - track process handle in `execute()` via `process::self()`.
+      - clear tracked handle on phase start/end and after task return.
+  - Simulator runtime:
+    - `tools/circt-sim/LLHDProcessInterpreter.h/.cpp`
+      - added `explicitlySuspendedProcesses`.
+      - block auto `resumeProcess()` wakeups for explicitly suspended processes.
+      - `__moore_process_suspend` marks explicit suspend.
+      - `__moore_process_resume` clears explicit suspend marker before resume.
+      - clear explicit suspend state in `finalizeProcess`.
+  - Test robustness:
+    - accepted one in-flight tick at suspend boundary
+      (`during <= before + 1`) to account for same-slot scheduling race,
+      while still detecting sustained progress during suspension.
+- Validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - New/targeted tests:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/process-suspend-resume.sv test/Tools/circt-sim/syscall-process-control.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv -j 8`
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm -j 8`
+  - Result:
+    - all above passed (serial runs).
+- Engineering surprise:
+  - I accidentally ran overlapping `llvm-lit` invocations on the same test set
+    in parallel, which corrupted shared `%t` output files and produced false
+    parse errors (`rivate/ivate` token fragments). Rerunning serially confirmed
+    the change is stable.

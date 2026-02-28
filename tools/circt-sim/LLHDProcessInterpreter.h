@@ -38,6 +38,7 @@ class CompiledModuleLoader;
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
@@ -2948,6 +2949,11 @@ private:
 
   /// Map from process handle values to process IDs.
   llvm::DenseMap<uint64_t, ProcessId> processHandleToId;
+
+  /// Processes explicitly suspended via process::suspend().
+  /// Auto wakeups (delay/event callbacks) must not resume these until
+  /// process::resume() clears this marker.
+  llvm::DenseSet<ProcessId> explicitlySuspendedProcesses;
 
   /// Map from process IDs to lists of awaiters.
   llvm::DenseMap<ProcessId, llvm::SmallVector<ProcessId, 4>> processAwaiters;
