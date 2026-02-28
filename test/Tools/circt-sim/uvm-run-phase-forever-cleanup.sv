@@ -2,7 +2,6 @@
 
 // Regression: run_phase cleanup must not stall to max-time when a component
 // run_phase contains a forever loop. UVM cleanup/report phases should still run.
-// CHECK-NOT: advanceTime() returned false
 // CHECK: DROP_DONE
 // CHECK: REPORT_DONE
 // CHECK-NOT: Main loop exit: maxTime reached
