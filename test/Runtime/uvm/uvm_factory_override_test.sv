@@ -4,6 +4,16 @@
 // set_type_override_by_name(), and set_inst_override_by_name() methods
 //===----------------------------------------------------------------------===//
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_type_override_by_name 2>&1 | FileCheck %s --check-prefix=SIM-TYPE-BY-NAME
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_type_override_by_type 2>&1 | FileCheck %s --check-prefix=SIM-TYPE-BY-TYPE
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_inst_override_by_name 2>&1 | FileCheck %s --check-prefix=SIM-INST-BY-NAME
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_override_priority 2>&1 | FileCheck %s --check-prefix=SIM-PRIORITY
+
+// SIM-TYPE-BY-NAME: UVM_FACTORY_TYPE_OVERRIDE_BY_NAME_PASS
+// SIM-TYPE-BY-TYPE: UVM_FACTORY_TYPE_OVERRIDE_BY_TYPE_PASS
+// SIM-INST-BY-NAME: UVM_FACTORY_INST_OVERRIDE_BY_NAME_PASS
+// SIM-PRIORITY: UVM_FACTORY_OVERRIDE_PRIORITY_PASS
 
 `timescale 1ns/1ps
 
@@ -95,6 +105,19 @@ package factory_override_test_pkg;
     endfunction
   endclass
 
+  function void ensure_factory_registered(uvm_object_wrapper wrapper);
+    uvm_factory f;
+    f = uvm_factory::get();
+    if (!f.is_type_registered(wrapper))
+      f.register(wrapper);
+  endfunction
+
+  function void register_factory_override_types();
+    ensure_factory_registered(base_driver::get_type());
+    ensure_factory_registered(extended_driver::get_type());
+    ensure_factory_registered(inst_specific_driver::get_type());
+  endfunction
+
   //==========================================================================
   // Test Environment
   //==========================================================================
@@ -132,6 +155,8 @@ package factory_override_test_pkg;
       uvm_factory f = uvm_factory::get();
       super.build_phase(phase);
 
+      register_factory_override_types();
+
       // Set type override by name - all base_driver instances become extended_driver
       f.set_type_override_by_name("base_driver", "extended_driver");
 
@@ -139,19 +164,29 @@ package factory_override_test_pkg;
     endfunction
 
     virtual function void check_phase(uvm_phase phase);
+      bit pass = 1;
       super.check_phase(phase);
       // Verify both drivers are extended_driver type
       if (env.drv1.get_driver_type() != "extended_driver")
-        `uvm_error("TEST", $sformatf("drv1 type mismatch: expected extended_driver, got %s",
-                                     env.drv1.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv1 type mismatch: expected extended_driver, got %s",
+                                       env.drv1.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv1 correctly overridden to extended_driver", UVM_MEDIUM)
 
       if (env.drv2.get_driver_type() != "extended_driver")
-        `uvm_error("TEST", $sformatf("drv2 type mismatch: expected extended_driver, got %s",
-                                     env.drv2.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv2 type mismatch: expected extended_driver, got %s",
+                                       env.drv2.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv2 correctly overridden to extended_driver", UVM_MEDIUM)
+
+      if (pass)
+        $display("UVM_FACTORY_TYPE_OVERRIDE_BY_NAME_PASS");
     endfunction
 
     virtual function void report_phase(uvm_phase phase);
@@ -184,19 +219,29 @@ package factory_override_test_pkg;
     endfunction
 
     virtual function void check_phase(uvm_phase phase);
+      bit pass = 1;
       super.check_phase(phase);
       // Verify both drivers are extended_driver type
       if (env.drv1.get_driver_type() != "extended_driver")
-        `uvm_error("TEST", $sformatf("drv1 type mismatch: expected extended_driver, got %s",
-                                     env.drv1.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv1 type mismatch: expected extended_driver, got %s",
+                                       env.drv1.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv1 correctly overridden to extended_driver via by_type", UVM_MEDIUM)
 
       if (env.drv2.get_driver_type() != "extended_driver")
-        `uvm_error("TEST", $sformatf("drv2 type mismatch: expected extended_driver, got %s",
-                                     env.drv2.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv2 type mismatch: expected extended_driver, got %s",
+                                       env.drv2.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv2 correctly overridden to extended_driver via by_type", UVM_MEDIUM)
+
+      if (pass)
+        $display("UVM_FACTORY_TYPE_OVERRIDE_BY_TYPE_PASS");
     endfunction
 
     virtual function void report_phase(uvm_phase phase);
@@ -221,6 +266,8 @@ package factory_override_test_pkg;
       uvm_factory f = uvm_factory::get();
       super.build_phase(phase);
 
+      register_factory_override_types();
+
       // Set instance override by name - only drv1 should be overridden
       f.set_inst_override_by_name("base_driver", "inst_specific_driver",
                                   "uvm_test_top.env.drv1");
@@ -229,20 +276,30 @@ package factory_override_test_pkg;
     endfunction
 
     virtual function void check_phase(uvm_phase phase);
+      bit pass = 1;
       super.check_phase(phase);
       // drv1 should be inst_specific_driver
       if (env.drv1.get_driver_type() != "inst_specific_driver")
-        `uvm_error("TEST", $sformatf("drv1 type mismatch: expected inst_specific_driver, got %s",
-                                     env.drv1.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv1 type mismatch: expected inst_specific_driver, got %s",
+                                       env.drv1.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv1 correctly overridden to inst_specific_driver", UVM_MEDIUM)
 
       // drv2 should remain base_driver (no override)
       if (env.drv2.get_driver_type() != "base_driver")
-        `uvm_error("TEST", $sformatf("drv2 type mismatch: expected base_driver, got %s",
-                                     env.drv2.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv2 type mismatch: expected base_driver, got %s",
+                                       env.drv2.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv2 correctly remains base_driver (no override)", UVM_MEDIUM)
+
+      if (pass)
+        $display("UVM_FACTORY_INST_OVERRIDE_BY_NAME_PASS");
     endfunction
 
     virtual function void report_phase(uvm_phase phase);
@@ -314,6 +371,8 @@ package factory_override_test_pkg;
       uvm_factory f = uvm_factory::get();
       super.build_phase(phase);
 
+      register_factory_override_types();
+
       // Set type override for all base_driver
       f.set_type_override_by_name("base_driver", "extended_driver");
 
@@ -325,20 +384,30 @@ package factory_override_test_pkg;
     endfunction
 
     virtual function void check_phase(uvm_phase phase);
+      bit pass = 1;
       super.check_phase(phase);
       // drv1 should be inst_specific_driver (instance override takes priority)
       if (env.drv1.get_driver_type() != "inst_specific_driver")
-        `uvm_error("TEST", $sformatf("drv1 type mismatch: expected inst_specific_driver, got %s",
-                                     env.drv1.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv1 type mismatch: expected inst_specific_driver, got %s",
+                                       env.drv1.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv1 correctly uses instance override over type override", UVM_MEDIUM)
 
       // drv2 should be extended_driver (type override applies)
       if (env.drv2.get_driver_type() != "extended_driver")
-        `uvm_error("TEST", $sformatf("drv2 type mismatch: expected extended_driver, got %s",
-                                     env.drv2.get_driver_type()))
+        begin
+          pass = 0;
+          `uvm_error("TEST", $sformatf("drv2 type mismatch: expected extended_driver, got %s",
+                                       env.drv2.get_driver_type()))
+        end
       else
         `uvm_info("TEST", "drv2 correctly uses type override", UVM_MEDIUM)
+
+      if (pass)
+        $display("UVM_FACTORY_OVERRIDE_PRIORITY_PASS");
     endfunction
 
     virtual function void report_phase(uvm_phase phase);
@@ -440,9 +509,7 @@ module tb_top;
 
   initial begin
     `uvm_info("TB", "Factory Override Test Starting", UVM_NONE)
-    // Run any of the tests defined above
-    // Default: test_type_override_by_name
-    run_test("test_type_override_by_name");
+    run_test();
   end
 
 endmodule

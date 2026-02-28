@@ -9666,3 +9666,41 @@
 
 - validation:
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/assoc_arrays.sv`
+
+## 2026-02-28 - UVM factory override semantics: constructor field-loss + instance-path normalization
+
+- realization:
+  - Converting `test/Runtime/uvm/uvm_factory_override_test.sv` from parse-only to semantic `circt-sim` checks exposed real runtime regressions:
+    - type overrides (`set_type_override_by_name`, `set_type_override_by_type`) silently failed for class hierarchies like `base_driver`/`extended_driver`.
+    - instance overrides by name also failed due path mismatch (`uvm_test_top...` vs `.uvm_test_top...`).
+
+- root cause (type override failure):
+  - `uvm_factory_override` entries pushed into `m_type_overrides`/`m_inst_overrides` could lose `orig/ovrd` metadata in this flow (null handles and unusable string names), so matching logic never selected overrides.
+  - net effect: requests fell through to original type with no override application.
+
+- root cause (instance override failure):
+  - runtime instance paths used by create/match can include a leading `.` while tests/user overrides commonly omit it.
+  - strict exact/wildcard matching without normalization caused valid overrides to miss.
+
+- implemented:
+  - `lib/Runtime/uvm-core/src/base/uvm_factory.svh`
+    - after constructing new override entries in:
+      - `set_type_override_by_type`
+      - `set_type_override_by_name`
+      - `set_inst_override_by_type`
+      - `set_inst_override_by_name`
+      explicitly reassign `orig/ovrd` type+name fields and other key metadata before queue insertion.
+    - normalized leading-dot behavior in `m_matches_inst_override` by matching both raw and dot-stripped instance paths for exact and wildcard cases.
+  - `test/Runtime/uvm/uvm_factory_override_test.sv`
+    - upgraded to semantic runtime coverage with `circt-sim` RUN lines and explicit pass markers for:
+      - type override by name
+      - type override by type
+      - instance override by name
+      - override priority (instance > type)
+    - switched top to `run_test()` so lit can select `+UVM_TESTNAME`.
+    - added small helper to ensure required types are registered before by-name override scenarios.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_override_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
+  - targeted manual runs of each new semantic scenario (`+UVM_TESTNAME`) confirmed expected pass markers and no UVM errors.
