@@ -303,7 +303,7 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
     }
   }
 
-  // Schedule the signal update.
+  // Schedule or apply the signal update.
   // Use updateSignalWithStrength to support multi-driver resolution (wand/wor).
   // Strength-sensitive drives use IDs keyed by DriveOp and active instance.
   SignalValue newVal = driveVal.toSignalValue();
@@ -360,21 +360,31 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
     }
   }
 
+  auto applyDrive = [this, targetSigId, driverId, newVal, strength0, strength1]() {
+    if (forcedSignals.contains(targetSigId)) {
+      forcedSignalSavedValues[targetSigId] =
+          InterpretedValue::fromSignalValue(newVal);
+      pendingEpsilonDrives.erase(targetSigId);
+      return;
+    }
+    scheduler.updateSignalWithStrength(targetSigId, driverId, newVal, strength0,
+                                       strength1);
+    // Clear any stale pending epsilon drive so future probes see
+    // the scheduler's committed value rather than a stale pending.
+    pendingEpsilonDrives.erase(targetSigId);
+  };
+
+  // Zero-delay continuous assignments must be visible in the current Active
+  // region. Deferring them through an event introduces an extra delta hop across
+  // instance boundaries (e.g. parent clk -> child clk), which can reorder NBA
+  // visibility between sibling processes.
+  if (delay.realTime == 0 && delay.deltaStep == 0) {
+    applyDrive();
+    return;
+  }
+
   scheduler.getEventScheduler().schedule(
-      targetTime, SchedulingRegion::Active,
-      Event([this, targetSigId, driverId, newVal, strength0, strength1]() {
-        if (forcedSignals.contains(targetSigId)) {
-          forcedSignalSavedValues[targetSigId] =
-              InterpretedValue::fromSignalValue(newVal);
-          pendingEpsilonDrives.erase(targetSigId);
-          return;
-        }
-        scheduler.updateSignalWithStrength(targetSigId, driverId, newVal,
-                                           strength0, strength1);
-        // Clear any stale pending epsilon drive so future probes see
-        // the scheduler's committed value rather than a stale pending.
-        pendingEpsilonDrives.erase(targetSigId);
-      }));
+      targetTime, SchedulingRegion::Active, Event(std::move(applyDrive)));
 }
 
 std::optional<std::pair<int64_t, unsigned>>
@@ -439,4 +449,3 @@ LLHDProcessInterpreter::detectArrayElementDrive(llhd::DriveOp driveOp) {
                           << elemIndex << " elemWidth=" << elemBitWidth << "\n");
   return std::make_pair(elemIndex, elemBitWidth);
 }
-

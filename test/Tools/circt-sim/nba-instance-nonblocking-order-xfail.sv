@@ -1,7 +1,6 @@
 // RUN: circt-verilog %s --ir-llhd --single-unit -o %t.mlir
 // RUN: circt-sim --resource-guard=false --mode interpret --top tb %t.mlir 2>&1 | FileCheck %s
 // REQUIRES: circt-sim
-// XFAIL: *
 //
 // Regression: instance-boundary NBA visibility ordering.
 // Expected behavior matches xrun: a nonblocking update to `we` in TB at a
