@@ -95,6 +95,8 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include "fstapi.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -532,6 +534,7 @@ static llvm::cl::OptionCategory parallelCategory("Parallel Simulation Options");
 static llvm::cl::OptionCategory debugCategory("Debug Options");
 
 // Input/Output options
+#ifndef CRUN_MODE
 static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
                                                 llvm::cl::desc("<input file>"),
                                                 llvm::cl::init("-"),
@@ -541,13 +544,21 @@ static llvm::cl::opt<std::string>
     outputFilename("o", llvm::cl::desc("Output filename"),
                    llvm::cl::value_desc("filename"), llvm::cl::init("-"),
                    llvm::cl::cat(mainCategory));
+#endif
 
 // Top module selection - supports multiple top modules for UVM testbenches
 // (e.g., --top hdl_top --top hvl_top)
+#ifdef CRUN_MODE
+llvm::cl::list<std::string>
+    topModules("top", llvm::cl::desc("Name of the top module (can be repeated)"),
+               llvm::cl::value_desc("name"),
+               llvm::cl::cat(mainCategory));
+#else
 static llvm::cl::list<std::string>
     topModules("top", llvm::cl::desc("Name of the top module (can be repeated)"),
                llvm::cl::value_desc("name"),
                llvm::cl::cat(mainCategory));
+#endif
 
 // Simulation control options
 static llvm::cl::opt<uint64_t>
@@ -630,9 +641,15 @@ static llvm::cl::opt<std::string>
                   llvm::cl::value_desc("filename"), llvm::cl::init(""),
                   llvm::cl::cat(debugCategory));
 
+#ifdef CRUN_MODE
+llvm::cl::opt<int>
+    verbosity("v", llvm::cl::desc("Verbosity level (0-4)"),
+              llvm::cl::init(1), llvm::cl::cat(debugCategory));
+#else
 static llvm::cl::opt<int>
     verbosity("v", llvm::cl::desc("Verbosity level (0-4)"),
               llvm::cl::init(1), llvm::cl::cat(debugCategory));
+#endif
 
 static llvm::cl::opt<bool>
     printStats("sim-stats", llvm::cl::desc("Print simulation statistics"),
@@ -728,7 +745,11 @@ static llvm::cl::opt<RunMode> runMode(
                    "Analyze the design without simulating")),
     llvm::cl::init(RunMode::Interpret), llvm::cl::cat(mainCategory));
 
+#ifdef CRUN_MODE
+llvm::cl::opt<std::string> compiledModulePath(
+#else
 static llvm::cl::opt<std::string> compiledModulePath(
+#endif
     "compiled",
     llvm::cl::desc("Path to AOT-compiled .so module (from circt-compile)"),
     llvm::cl::value_desc("path"), llvm::cl::init(""),
@@ -867,6 +888,78 @@ private:
 };
 
 //===----------------------------------------------------------------------===//
+// FST Waveform Writer
+//===----------------------------------------------------------------------===//
+
+/// FST file format writer for compressed waveform output.
+/// FST (Fast Signal Trace) is a compact binary waveform format created by
+/// GTKWave, widely used by Verilator and other simulators.
+class FSTWriter {
+public:
+  FSTWriter(const std::string &filename) : filename(filename), ctx(nullptr) {}
+
+  bool open() {
+    ctx = fstWriterCreate(filename.c_str(), 1 /* use_compressed_hier */);
+    if (!ctx) {
+      llvm::errs() << "Error: Could not open FST file: " << filename << "\n";
+      return false;
+    }
+    fstWriterSetFileType(ctx, FST_FT_VERILOG);
+    fstWriterSetVersion(ctx, "CIRCT circt-sim");
+    fstWriterSetPackType(ctx, FST_WR_PT_LZ4);
+    fstWriterSetRepackOnClose(ctx, 0);
+    return true;
+  }
+
+  void setTimescale(int exponent) {
+    if (ctx)
+      fstWriterSetTimescale(ctx, exponent);
+  }
+
+  void setScope(const std::string &name) {
+    if (ctx)
+      fstWriterSetScope(ctx, FST_ST_VCD_MODULE, name.c_str(), nullptr);
+  }
+
+  void upScope() {
+    if (ctx)
+      fstWriterSetUpscope(ctx);
+  }
+
+  fstHandle declareSignal(const std::string &name, uint32_t width) {
+    if (!ctx)
+      return 0;
+    return fstWriterCreateVar(ctx, FST_VT_VCD_WIRE, FST_VD_IMPLICIT, width,
+                              name.c_str(), 0);
+  }
+
+  void emitTimeChange(uint64_t time) {
+    if (ctx)
+      fstWriterEmitTimeChange(ctx, time);
+  }
+
+  void emitValueChange(fstHandle handle, const char *valueBits) {
+    if (ctx)
+      fstWriterEmitValueChange(ctx, handle, valueBits);
+  }
+
+  void close() {
+    if (ctx) {
+      fstWriterClose(ctx);
+      ctx = nullptr;
+    }
+  }
+
+  bool isOpen() const { return ctx != nullptr; }
+
+  ~FSTWriter() { close(); }
+
+private:
+  std::string filename;
+  fstWriterContext *ctx;
+};
+
+//===----------------------------------------------------------------------===//
 // Simulation Context
 //===----------------------------------------------------------------------===//
 
@@ -876,7 +969,8 @@ public:
   SimulationContext()
       : scheduler(ProcessScheduler::Config()),
         control(SimulationControl::Config()),
-        profiler(nullptr), vcdWriter(nullptr), parallelScheduler(nullptr) {}
+        profiler(nullptr), vcdWriter(nullptr), fstWriter(nullptr),
+        parallelScheduler(nullptr) {}
 
   ~SimulationContext() {
     stopWatchdogThread();
@@ -1059,6 +1153,7 @@ private:
   SimulationControl control;
   std::unique_ptr<PerformanceProfiler> profiler;
   std::unique_ptr<VCDWriter> vcdWriter;
+  std::unique_ptr<FSTWriter> fstWriter;
   std::unique_ptr<ParallelScheduler> parallelScheduler;
   size_t maxProcessSteps = 50000;
 
@@ -1075,6 +1170,12 @@ private:
   bool vcdTimeInitialized = false;
   bool vcdReady = false;
   bool vcdDumpEnabled = true;  // $dumpoff/$dumpon gate
+
+  // Traced signals for FST output
+  llvm::SmallVector<std::pair<SignalId, fstHandle>, 64> fstTracedSignals;
+  uint64_t lastFSTTime = 0;
+  bool fstTimeInitialized = false;
+  bool fstReady = false;
 
   // Module information
   llvm::SmallVector<std::string, 4> topModuleNames;
@@ -1928,31 +2029,41 @@ void SimulationContext::stopWatchdogThread() {
 }
 
 LogicalResult SimulationContext::setupWaveformTracing() {
-  if (vcdFile.empty())
-    return success();
+  if (!vcdFile.empty()) {
+    vcdWriter = std::make_unique<VCDWriter>(vcdFile);
+    if (!vcdWriter->open())
+      return failure();
+  }
 
-  vcdWriter = std::make_unique<VCDWriter>(vcdFile);
-  if (!vcdWriter->open())
-    return failure();
+  if (!fstFile.empty()) {
+    fstWriter = std::make_unique<FSTWriter>(fstFile);
+    if (!fstWriter->open())
+      return failure();
+    // FST timescale: -15 = 1fs (matches VCD's 1fs default)
+    fstWriter->setTimescale(-15);
+  }
 
   return success();
 }
 
 void SimulationContext::registerTracedSignal(SignalId signalId,
                                              llvm::StringRef name) {
-  if (!vcdWriter)
-    return;
-  if (nextVCDId > '~')
+  if (!vcdWriter && !fstWriter)
     return;
   if (tracedSignalIds.count(signalId))
     return;
 
-  tracedSignals.push_back({signalId, nextVCDId++});
+  // VCD registration (limited to 94 signals: '!' through '~')
+  if (vcdWriter && nextVCDId <= '~')
+    tracedSignals.push_back({signalId, nextVCDId++});
+
+  // FST registration uses tracedSignalIds only; actual fstHandle is
+  // created later in the header-writing phase when signal widths are known.
   tracedSignalIds.insert(signalId);
 }
 
 void SimulationContext::registerRequestedTraces() {
-  if (!vcdWriter)
+  if (!vcdWriter && !fstWriter)
     return;
 
   const auto &signalNames = scheduler.getSignalNames();
@@ -2004,7 +2115,7 @@ void SimulationContext::registerRequestedTraces() {
 }
 
 void SimulationContext::registerSvaAssertionTraces() {
-  if (!vcdWriter)
+  if (!vcdWriter && !fstWriter)
     return;
 
   const auto &signalNames = scheduler.getSignalNames();
@@ -2017,11 +2128,11 @@ void SimulationContext::registerSvaAssertionTraces() {
 }
 
 void SimulationContext::registerDefaultNamedSignalTraces() {
-  if (!vcdWriter)
+  if (!vcdWriter && !fstWriter)
     return;
   if (traceAll || !traceSignals.empty())
     return;
-  if (!tracedSignals.empty())
+  if (!tracedSignalIds.empty())
     return;
 
   const auto &signalNames = scheduler.getSignalNames();
@@ -2098,29 +2209,61 @@ LogicalResult SimulationContext::setupParallelSimulation() {
   return success();
 }
 
+/// Format a signal value as a binary string for FST output.
+static std::string formatBitsForFST(const SignalValue &value) {
+  uint32_t width = value.getWidth();
+  if (value.isUnknown())
+    return std::string(width, 'x');
+
+  const llvm::APInt &apVal = value.getAPInt();
+  std::string bits(width, '0');
+  for (uint32_t i = 0; i < width; ++i)
+    bits[width - 1 - i] = apVal[i] ? '1' : '0';
+  return bits;
+}
+
 void SimulationContext::recordValueChange(SignalId signal,
                                            const SignalValue &value) {
-  if (!vcdWriter || !vcdReady || !vcdDumpEnabled)
-    return;
+  // VCD recording
+  if (vcdWriter && vcdReady && vcdDumpEnabled) {
+    uint64_t currentTime = scheduler.getCurrentTime().realTime;
+    if (!vcdTimeInitialized) {
+      lastVCDTime = currentTime;
+      vcdTimeInitialized = true;
+    }
+    if (currentTime != lastVCDTime) {
+      vcdWriter->writeTime(currentTime);
+      lastVCDTime = currentTime;
+    }
 
-  uint64_t currentTime = scheduler.getCurrentTime().realTime;
-  if (!vcdTimeInitialized) {
-    lastVCDTime = currentTime;
-    vcdTimeInitialized = true;
-  }
-  if (currentTime != lastVCDTime) {
-    vcdWriter->writeTime(currentTime);
-    lastVCDTime = currentTime;
-  }
-
-  for (auto &traced : tracedSignals) {
-    if (traced.first == signal) {
-      if (value.isUnknown()) {
-        vcdWriter->writeUnknown(traced.second, value.getWidth());
-      } else {
-        vcdWriter->writeValue(traced.second, value.getValue(), value.getWidth());
+    for (auto &traced : tracedSignals) {
+      if (traced.first == signal) {
+        if (value.isUnknown()) {
+          vcdWriter->writeUnknown(traced.second, value.getWidth());
+        } else {
+          vcdWriter->writeValue(traced.second, value.getValue(),
+                                value.getWidth());
+        }
+        break;
       }
-      break;
+    }
+  }
+
+  // FST recording
+  if (fstWriter && fstReady) {
+    uint64_t currentTime = scheduler.getCurrentTime().realTime;
+    if (!fstTimeInitialized || currentTime != lastFSTTime) {
+      fstWriter->emitTimeChange(currentTime);
+      lastFSTTime = currentTime;
+      fstTimeInitialized = true;
+    }
+
+    for (auto &fstTraced : fstTracedSignals) {
+      if (fstTraced.first == signal) {
+        std::string bits = formatBitsForFST(value);
+        fstWriter->emitValueChange(fstTraced.second, bits.c_str());
+        break;
+      }
     }
   }
 }
@@ -2165,6 +2308,39 @@ LogicalResult SimulationContext::run() {
     }
     vcdWriter->endDumpVars();
     vcdReady = true;
+  }
+
+  // Write FST header and initial values
+  if (fstWriter) {
+    std::string fstTopName =
+        topModuleNames.empty() ? "top" : topModuleNames[0];
+    if (topModuleNames.size() > 1)
+      fstTopName = "multi_top";
+    fstWriter->setScope(fstTopName);
+
+    const auto &signalNames = scheduler.getSignalNames();
+    for (SignalId sid : tracedSignalIds) {
+      auto it = signalNames.find(sid);
+      if (it == signalNames.end())
+        continue;
+      const auto &value = scheduler.getSignalValue(sid);
+      fstHandle handle =
+          fstWriter->declareSignal(it->second, value.getWidth());
+      if (handle)
+        fstTracedSignals.push_back({sid, handle});
+    }
+    fstWriter->upScope();
+
+    // Write initial values at time 0
+    fstWriter->emitTimeChange(0);
+    lastFSTTime = 0;
+    fstTimeInitialized = true;
+    for (auto &fstTraced : fstTracedSignals) {
+      const auto &value = scheduler.getSignalValue(fstTraced.first);
+      std::string bits = formatBitsForFST(value);
+      fstWriter->emitValueChange(fstTraced.second, bits.c_str());
+    }
+    fstReady = true;
   }
 
   // Start profiling
@@ -3234,6 +3410,12 @@ LogicalResult SimulationContext::run() {
     llvm::outs() << "[circt-sim] Wrote waveform to " << vcdFile << "\n";
   }
 
+  // Close FST file
+  if (fstWriter) {
+    fstWriter->close();
+    llvm::outs() << "[circt-sim] Wrote FST waveform to " << fstFile << "\n";
+  }
+
   // Fire VPI end-of-simulation callback.
   if (vpiEnabled)
     VPIRuntime::getInstance().fireEndOfSimulation();
@@ -3295,8 +3477,8 @@ void SimulationContext::printStatistics(llvm::raw_ostream &os) const {
 // Main Processing Pipeline
 //===----------------------------------------------------------------------===//
 
-static LogicalResult processInput(MLIRContext &context,
-                                   llvm::SourceMgr &sourceMgr) {
+static LogicalResult runSimulationPipeline(MLIRContext &context,
+                                            mlir::OwningOpRef<mlir::ModuleOp> module) {
   auto startTime = std::chrono::steady_clock::now();
   auto parseDoneTime = startTime;
   auto passesDoneTime = startTime;
@@ -3341,16 +3523,6 @@ static LogicalResult processInput(MLIRContext &context,
         });
 #endif
   }
-
-  reportStage("parse");
-  // Parse the input file
-  mlir::OwningOpRef<mlir::ModuleOp> module =
-      parseSourceFile<ModuleOp>(sourceMgr, &context);
-  if (!module) {
-    llvm::errs() << "Error: Failed to parse input\n";
-    return failure();
-  }
-  parseDoneTime = std::chrono::steady_clock::now();
 
   auto countRegionOps = [](mlir::Region &region) -> size_t {
     llvm::SmallVector<mlir::Region *, 16> regionWorklist;
@@ -3632,6 +3804,14 @@ static LogicalResult processInput(MLIRContext &context,
   // storage from the start, preventing dangling inter-global pointers.
   std::unique_ptr<CompiledModuleLoader> compiledLoader;
   if (!compiledModulePath.empty()) {
+    llvm::StringRef compiledPath(compiledModulePath);
+    if (compiledPath.starts_with("-")) {
+      llvm::errs()
+          << "[circt-sim] error: missing compiled module path for '--compiled' "
+          << "(got option token '" << compiledPath
+          << "'). Use --compiled=<path>\n";
+      return failure();
+    }
     compiledLoader = CompiledModuleLoader::load(compiledModulePath);
     if (!compiledLoader)
       return failure();
@@ -3957,10 +4137,32 @@ static LogicalResult processInput(MLIRContext &context,
 #endif
 }
 
+#ifndef CRUN_MODE
+static LogicalResult processInput(MLIRContext &context,
+                                   llvm::SourceMgr &sourceMgr) {
+  // Parse the input file
+  mlir::OwningOpRef<mlir::ModuleOp> module =
+      parseSourceFile<ModuleOp>(sourceMgr, &context);
+  if (!module) {
+    llvm::errs() << "Error: Failed to parse input\n";
+    return failure();
+  }
+  return runSimulationPipeline(context, std::move(module));
+}
+#endif
+
+#ifdef CRUN_MODE
+LogicalResult processInputFromModule(MLIRContext &context,
+                                      mlir::OwningOpRef<mlir::ModuleOp> module) {
+  return runSimulationPipeline(context, std::move(module));
+}
+#endif
+
 //===----------------------------------------------------------------------===//
 // Main Entry Point
 //===----------------------------------------------------------------------===//
 
+#ifndef CRUN_MODE
 int main(int argc, char **argv) {
 #if !defined(__EMSCRIPTEN__)
   llvm::InitLLVM y(argc, argv);
@@ -4316,3 +4518,4 @@ int main(int argc, char **argv) {
   return 0;
 #endif
 }
+#endif // CRUN_MODE
