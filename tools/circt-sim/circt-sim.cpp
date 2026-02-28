@@ -3490,6 +3490,8 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
   auto runStartTime = startTime;
   auto runDoneTime = startTime;
   bool hadCompiledLoad = false;
+  uint64_t soLoadPreInitNs = 0;
+  uint64_t soLoadPostInitNs = 0;
   auto lastStageTime = startTime;
   auto reportStage = [&lastStageTime, &startTime](llvm::StringRef stage) {
     auto now = std::chrono::steady_clock::now();
@@ -3807,6 +3809,7 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
   // storage from the start, preventing dangling inter-global pointers.
   std::unique_ptr<CompiledModuleLoader> compiledLoader;
   if (!compiledModulePath.empty()) {
+    auto soLoadStart = std::chrono::steady_clock::now();
     llvm::StringRef compiledPath(compiledModulePath);
     if (compiledPath.starts_with("-")) {
       llvm::errs()
@@ -3822,6 +3825,10 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
       llvm::errs() << "[circt-sim] Compiled module ABI version mismatch\n";
       return failure();
     }
+    soLoadPreInitNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - soLoadStart)
+            .count());
   }
 
   reportStage("init");
@@ -3842,9 +3849,14 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
 
   // Install compiled module (functions + processes; globals already pre-aliased).
   if (compiledLoader) {
+    auto soLoadPostStart = std::chrono::steady_clock::now();
     simContext.setCompiledModule(std::move(compiledLoader));
     hadCompiledLoad = true;
     loadCompiledDoneTime = std::chrono::steady_clock::now();
+    soLoadPostInitNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            loadCompiledDoneTime - soLoadPostStart)
+            .count());
     reportStage("load-compiled");
   } else {
     loadCompiledDoneTime = initDoneTime;
@@ -3906,23 +3918,24 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
           std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
               .count());
     };
-    auto durationMsCeil = [](auto begin, auto end) -> uint64_t {
-      uint64_t ns = static_cast<uint64_t>(
-          std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
-              .count());
-      if (ns == 0)
-        return 0;
-      return (ns + 999999) / 1000000;
-    };
     uint64_t parseWallMs = durationMsFloor(startTime, parseDoneTime);
     uint64_t passesWallMs = durationMsFloor(parseDoneTime, passesDoneTime);
-    uint64_t initWallMs = durationMsFloor(passesDoneTime, initDoneTime);
+    uint64_t initNs = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(initDoneTime -
+                                                              passesDoneTime)
+            .count());
+    if (soLoadPreInitNs < initNs)
+      initNs -= soLoadPreInitNs;
+    else
+      initNs = 0;
+    uint64_t initWallMs = initNs / 1000000;
     uint64_t soLoadWallMs = 0;
     if (hadCompiledLoad) {
-      // Keep this visible on short runs: compiled load happened, so avoid
-      // truncating a sub-ms duration down to zero.
-      soLoadWallMs =
-          std::max<uint64_t>(1, durationMsCeil(initDoneTime, loadCompiledDoneTime));
+      // Account for both pre-init dlopen/ABI setup and post-init install
+      // wiring, and keep this visible on short runs.
+      uint64_t soLoadTotalNs = soLoadPreInitNs + soLoadPostInitNs;
+      soLoadWallMs = std::max<uint64_t>(
+          1, (soLoadTotalNs == 0 ? 0 : (soLoadTotalNs + 999999) / 1000000));
     }
     uint64_t snapshotRestoreWallMs = 0;
     uint64_t snapshotRestoreNs =

@@ -18,6 +18,7 @@
 // SNAP-OFF: out=123
 //
 // SNAP-STATS: [circt-sim] Loading snapshot from
+// SNAP-STATS: [circt-sim] so_load_ms:                       [[LOAD:[1-9][0-9]*]]
 // SNAP-STATS: [circt-sim] snapshot_restore_ms:              [[MS:[1-9][0-9]*]]
 // SNAP-STATS: out=123
 
