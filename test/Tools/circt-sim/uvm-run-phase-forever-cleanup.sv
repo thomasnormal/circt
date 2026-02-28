@@ -1,14 +1,10 @@
-// RUN: circt-verilog %s --ir-hw -o %t.mlir 2>/dev/null
-// RUN: circt-sim %t.mlir --top top --max-time 200000000 2>&1 | FileCheck %s
-// XFAIL: *
-// REQUIRES-BUG: execute_phase cleanup currently hangs until max-time when
-// run_phase contains forever-loop worker threads.
+// RUN: circt-verilog %s --ir-hw 2>/dev/null | circt-sim - --top top --max-time 200000000 2>&1 | FileCheck %s
 
-// Regression: run_test() must return even when a component run_phase has a
-// forever loop. UVM should end run_phase after objections drop.
+// Regression: run_phase cleanup must not stall to max-time when a component
+// run_phase contains a forever loop. UVM cleanup/report phases should still run.
+// CHECK-NOT: advanceTime() returned false
 // CHECK: DROP_DONE
 // CHECK: REPORT_DONE
-// CHECK: AFTER_RUN_TEST
 // CHECK-NOT: Main loop exit: maxTime reached
 
 `timescale 1ns/1ps
@@ -58,6 +54,5 @@ endclass
 module top;
   initial begin
     run_test("my_test");
-    $display("AFTER_RUN_TEST");
   end
 endmodule

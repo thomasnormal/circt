@@ -2601,6 +2601,37 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (traceConfigDbEnabled && procId == 1)
       llvm::errs() << "[CFG-CI-PROC1] callee=" << calleeName << "\n";
 
+    // Record explicit by-type overrides so by-type create calls can apply a
+    // semantic fallback even if interpreted factory lookup misses them.
+    if ((calleeName == "uvm_pkg::uvm_default_factory::set_type_override_by_type" ||
+         calleeName == "uvm_pkg::uvm_factory::set_type_override_by_type") &&
+        callIndirectOp.getArgOperands().size() >= 3) {
+      InterpretedValue reqWrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      InterpretedValue ovrWrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[2]);
+      if (!reqWrapperVal.isX() && !ovrWrapperVal.isX()) {
+        uint64_t reqWrapper = reqWrapperVal.getUInt64();
+        uint64_t ovrWrapper = ovrWrapperVal.getUInt64();
+        if (reqWrapper != 0 && ovrWrapper != 0) {
+          uint64_t reqCanonical = canonicalizeUvmObjectAddress(procId, reqWrapper);
+          uint64_t ovrCanonical = canonicalizeUvmObjectAddress(procId, ovrWrapper);
+          nativeFactoryTypeOverridesByWrapper[reqWrapper] = ovrWrapper;
+          nativeFactoryTypeOverridesByWrapper[reqCanonical] = ovrCanonical;
+          if (traceUvmFactoryByTypeEnabled()) {
+            llvm::errs() << "[UVM-BYTYPE] override-map set req=0x"
+                         << llvm::format_hex(reqWrapper, 16)
+                         << " req_canon=0x"
+                         << llvm::format_hex(reqCanonical, 16)
+                         << " -> ovr=0x"
+                         << llvm::format_hex(ovrWrapper, 16)
+                         << " ovr_canon=0x"
+                         << llvm::format_hex(ovrCanonical, 16) << "\n";
+          }
+        }
+      }
+    }
+
     // Intercept uvm_default_factory::register — fast-path native
     // registration. The original MLIR calls get_type_name 3-7 times via
     // vtable, does string comparisons, assoc array lookups, and override
@@ -2769,12 +2800,98 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return true;
     };
 
+    auto tryCreateUsingRecordedByTypeOverride =
+        [&](uint64_t requestedWrapperAddr, uint64_t slotIndex,
+            llvm::ArrayRef<InterpretedValue> extraArgs,
+            InterpretedValue &outResult) -> bool {
+      if (requestedWrapperAddr == 0)
+        return false;
+
+      auto tryInvoke = [&](uint64_t key) -> bool {
+        auto it = nativeFactoryTypeOverridesByWrapper.find(key);
+        if (it == nativeFactoryTypeOverridesByWrapper.end() || it->second == 0 ||
+            it->second == requestedWrapperAddr)
+          return false;
+        return tryInvokeWrapperFactoryMethod(it->second, slotIndex, extraArgs,
+                                             outResult);
+      };
+
+      if (tryInvoke(requestedWrapperAddr))
+        return true;
+      uint64_t canonical = canonicalizeUvmObjectAddress(procId, requestedWrapperAddr);
+      if (canonical != requestedWrapperAddr && tryInvoke(canonical))
+        return true;
+      return false;
+    };
+
+    if ((calleeName == "uvm_pkg::uvm_default_factory::create_object_by_type" ||
+         calleeName == "uvm_pkg::uvm_factory::create_object_by_type") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 4) {
+      InterpretedValue wrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
+        InterpretedValue nameArg =
+            getValue(procId, callIndirectOp.getArgOperands()[3]);
+        InterpretedValue createdObj;
+        if (tryCreateUsingRecordedByTypeOverride(wrapperVal.getUInt64(),
+                                                 /*slotIndex=*/0, {nameArg},
+                                                 createdObj)) {
+          setValue(procId, callIndirectOp.getResults()[0], createdObj);
+          if (traceUvmFactoryByTypeEnabled()) {
+            llvm::errs() << "[UVM-BYTYPE] override-map create_object hit req=0x"
+                         << llvm::format_hex(wrapperVal.getUInt64(), 16)
+                         << " result=0x"
+                         << llvm::format_hex(createdObj.isX()
+                                                 ? 0
+                                                 : createdObj.getUInt64(),
+                                             16)
+                         << "\n";
+          }
+          return success();
+        }
+      }
+    }
+
+    if ((calleeName == "uvm_pkg::uvm_default_factory::create_component_by_type" ||
+         calleeName == "uvm_pkg::uvm_factory::create_component_by_type") &&
+        callIndirectOp.getNumResults() >= 1 &&
+        callIndirectOp.getArgOperands().size() >= 5) {
+      InterpretedValue wrapperVal =
+          getValue(procId, callIndirectOp.getArgOperands()[1]);
+      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
+        InterpretedValue nameArg =
+            getValue(procId, callIndirectOp.getArgOperands()[3]);
+        InterpretedValue parentArg =
+            getValue(procId, callIndirectOp.getArgOperands()[4]);
+        InterpretedValue createdObj;
+        if (tryCreateUsingRecordedByTypeOverride(wrapperVal.getUInt64(),
+                                                 /*slotIndex=*/1,
+                                                 {nameArg, parentArg},
+                                                 createdObj)) {
+          setValue(procId, callIndirectOp.getResults()[0], createdObj);
+          if (traceUvmFactoryByTypeEnabled()) {
+            llvm::errs()
+                << "[UVM-BYTYPE] override-map create_component hit req=0x"
+                << llvm::format_hex(wrapperVal.getUInt64(), 16)
+                << " result=0x"
+                << llvm::format_hex(createdObj.isX() ? 0
+                                                     : createdObj.getUInt64(),
+                                    16)
+                << "\n";
+          }
+          return success();
+        }
+      }
+    }
+
     // Intercept create_component_by_type/object_by_type — when factory
     // register fast-path stores wrappers in nativeFactoryTypeNames, executing
     // the full MLIR path can still miss wrappers during early startup.
     // By-type calls already provide the wrapper pointer directly (arg1), so
     // dispatch straight to wrapper vtable create_* methods.
-    if (!disableUvmFactoryByTypeFastPath() &&
+    if (!nativeFactoryOverridesConfigured &&
+        !disableUvmFactoryByTypeFastPath() &&
         (calleeName ==
              "uvm_pkg::uvm_default_factory::create_component_by_type" ||
          calleeName == "uvm_pkg::uvm_factory::create_component_by_type") &&
@@ -2820,7 +2937,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       // Fall through to MLIR interpretation if fast-path fails.
     }
 
-    if (!disableUvmFactoryByTypeFastPath() &&
+    if (!nativeFactoryOverridesConfigured &&
+        !disableUvmFactoryByTypeFastPath() &&
         (calleeName ==
              "uvm_pkg::uvm_default_factory::create_object_by_type" ||
          calleeName == "uvm_pkg::uvm_factory::create_object_by_type") &&
@@ -3620,11 +3738,70 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         scheduler.scheduleProcess(waiterProc, SchedulingRegion::Active);
       }
     };
+    auto dropHopperObjection = [&](uint64_t hopperAddr) {
+      if (hopperAddr == 0)
+        return;
+      auto handleIt = phaseObjectionHandles.find(hopperAddr);
+      if (handleIt == phaseObjectionHandles.end())
+        return;
+      dropPhaseObjection(handleIt->second, 1);
+    };
 
     static bool disablePhaseHopperFastPath = []() {
       const char *env = std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH");
       return env && env[0] != '\0' && env[0] != '0';
     }();
+    const bool traceUvmObjection =
+        std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
+
+    // Intercept get_objection on call_indirect dispatch.
+    // The func.call interceptor already returns synthetic objection objects
+    // backed by native handles. Without the call_indirect equivalent, UVM
+    // wait_for() can observe a non-synthetic object and return immediately.
+    if ((calleeName.contains("uvm_phase::get_objection") ||
+         calleeName.contains("phase_hopper::get_objection")) &&
+        !calleeName.contains("get_objection_count") &&
+        !calleeName.contains("get_objection_total") &&
+        callIndirectOp.getNumResults() >= 1) {
+      if (args.empty() || args[0].isX()) {
+        setValue(procId, callIndirectOp.getResult(0),
+                 InterpretedValue(llvm::APInt(64, 0)));
+        if (traceUvmObjection) {
+          llvm::errs() << "[UVM-OBJ] proc=" << procId
+                       << " callee=" << calleeName
+                       << " phase=<x> handle=<invalid> synthetic=0x0\n";
+        }
+        return success();
+      }
+
+      uint64_t phaseAddr = normalizeUvmObjectKey(procId, args[0].getUInt64());
+      if (phaseAddr == 0)
+        phaseAddr = args[0].getUInt64();
+
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      auto it = phaseObjectionHandles.find(phaseAddr);
+      if (it != phaseObjectionHandles.end()) {
+        handle = it->second;
+      } else {
+        std::string phaseName = "phase_" + std::to_string(phaseAddr);
+        handle = __moore_objection_create(
+            phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
+        phaseObjectionHandles[phaseAddr] = handle;
+      }
+
+      uint64_t syntheticAddr =
+          0xE0000000ULL + static_cast<uint64_t>(handle);
+      setValue(procId, callIndirectOp.getResult(0),
+               InterpretedValue(llvm::APInt(64, syntheticAddr)));
+      if (traceUvmObjection) {
+        llvm::errs() << "[UVM-OBJ] proc=" << procId
+                     << " callee=" << calleeName << " phase=0x"
+                     << llvm::format_hex(phaseAddr, 16)
+                     << " handle=" << handle << " synthetic=0x"
+                     << llvm::format_hex(syntheticAddr, 16) << "\n";
+      }
+      return success();
+    }
 
     // Native queue fast path for phase hopper calls dispatched via vtable.
     if (!disablePhaseHopperFastPath &&
@@ -3646,7 +3823,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               hopperName.c_str(), static_cast<int64_t>(hopperName.size()));
           phaseObjectionHandles[hopperAddr] = handle;
         }
+        int64_t beforeCount = __moore_objection_get_count(handle);
         raisePhaseObjection(handle, 1);
+        if (traceUvmObjection) {
+          int64_t afterCount = __moore_objection_get_count(handle);
+          llvm::errs() << "[UVM-OBJ] proc=" << procId
+                       << " callee=" << calleeName << " hopper=0x"
+                       << llvm::format_hex(hopperAddr, 16) << " phase=0x"
+                       << llvm::format_hex(phaseAddr, 16) << " handle="
+                       << handle << " before=" << beforeCount
+                       << " after=" << afterCount << "\n";
+        }
       }
 
       unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
@@ -3669,9 +3856,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       if (writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr)) {
         if (hasPhase) {
           it->second.pop_front();
-          auto handleIt = phaseObjectionHandles.find(hopperAddr);
-          if (handleIt != phaseObjectionHandles.end())
-            dropPhaseObjection(handleIt->second, 1);
+          dropHopperObjection(hopperAddr);
         }
         unsigned width = getTypeWidth(callIndirectOp.getResult(0).getType());
         setValue(procId, callIndirectOp.getResult(0),
@@ -3721,9 +3906,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         uint64_t phaseAddr = it->second.front();
         if (writePointerToOutRef(callIndirectOp.getArgOperands()[1], phaseAddr)) {
           it->second.pop_front();
-          auto handleIt = phaseObjectionHandles.find(hopperAddr);
-          if (handleIt != phaseObjectionHandles.end())
-            dropPhaseObjection(handleIt->second, 1);
+          dropHopperObjection(hopperAddr);
           return success();
         }
       } else {

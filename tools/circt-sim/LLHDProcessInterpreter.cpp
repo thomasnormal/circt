@@ -12649,6 +12649,35 @@ bool LLHDProcessInterpreter::isProcessSubtreeAlive(ProcessId rootProcId) const {
   });
 }
 
+bool LLHDProcessInterpreter::hasActiveProcessDescendants(
+    ProcessId rootProcId) const {
+  if (rootProcId == InvalidProcessId)
+    return false;
+
+  auto isDescendantOfRoot = [&](ProcessId procId) {
+    ProcessId current = procId;
+    for (unsigned depth = 0; depth < 256; ++depth) {
+      auto it = processStates.find(current);
+      if (it == processStates.end())
+        return false;
+      ProcessId parentId = it->second.parentProcessId;
+      if (parentId == InvalidProcessId || parentId == current)
+        return false;
+      if (parentId == rootProcId)
+        return true;
+      current = parentId;
+    }
+    return false;
+  };
+
+  return processStates.forEachUntil([&](ProcessId procId,
+                                        const ProcessExecutionState &state) {
+    if (procId == rootProcId || state.halted)
+      return false;
+    return isDescendantOfRoot(procId);
+  });
+}
+
 //===----------------------------------------------------------------------===//
 // Time Conversion
 //===----------------------------------------------------------------------===//
@@ -14993,19 +15022,48 @@ llvm_dispatch:
   if (isa<LLVM::ReturnOp>(op))
     return success();
 
-  // LLVM unreachable indicates control should not reach here (e.g., after $finish)
-  // Halt the process when this is reached
+  // LLVM unreachable indicates control should not reach here (e.g., after
+  // $finish). Halt the process when this is reached unless we're unwinding
+  // through active phase-hopper execution.
   if (isa<LLVM::UnreachableOp>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.unreachable reached - halting process\n");
-    // When executing inside a phase function, llvm.unreachable follows an
-    // absorbed sim.terminate (die() → $finish pattern). Treat it as a void
-    // return so the phase can complete normally. The unreachable was generated
-    // because the compiler assumed $finish never returns.
+    // When unwinding through phase-hopper execution (or a run_test completion
+    // path), llvm.unreachable can follow an absorbed sim.terminate.
+    // Treat it as a void return so control can unwind to the caller.
     {
+      auto &ps = processStates[procId];
+      bool inRunTestContext = ps.callDepth > 0 && isInUvmRunTestContext(procId);
+      if (inRunTestContext) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  llvm.unreachable absorbed in run_test context"
+                   << " (callDepth=" << ps.callDepth << ")\n");
+        return success();
+      }
       auto phaseIt = currentExecutingPhaseAddr.find(procId);
       if (phaseIt != currentExecutingPhaseAddr.end()) {
-        auto &ps = processStates[procId];
-        if (ps.callDepth > 0) {
+        bool inPhaseStackContext =
+            StringRef(ps.currentFuncName).contains("uvm_pkg::uvm_phase::") ||
+            StringRef(ps.currentFuncName).contains("uvm_pkg::uvm_phase_hopper::");
+        if (!inPhaseStackContext) {
+          for (auto &frame : ps.callStack) {
+            if (!frame.isLLVM() && frame.funcOp &&
+                (frame.funcOp.getSymName().contains("uvm_pkg::uvm_phase::") ||
+                 frame.funcOp.getSymName().contains(
+                     "uvm_pkg::uvm_phase_hopper::"))) {
+              inPhaseStackContext = true;
+              break;
+            }
+            if (frame.isLLVM() && frame.llvmFuncOp &&
+                (frame.llvmFuncOp.getSymName().contains(
+                     "uvm_pkg::uvm_phase::") ||
+                 frame.llvmFuncOp.getSymName().contains(
+                     "uvm_pkg::uvm_phase_hopper::"))) {
+              inPhaseStackContext = true;
+              break;
+            }
+          }
+        }
+        if (ps.callDepth > 0 && inPhaseStackContext) {
           LLVM_DEBUG(llvm::dbgs()
                      << "  llvm.unreachable absorbed during phase execution"
                      << " (callDepth=" << ps.callDepth << ")\n");
@@ -15015,6 +15073,12 @@ llvm_dispatch:
         }
       }
     }
+    // Outside phase-stack unwind handling, llvm.unreachable corresponds to
+    // terminal control flow (for example after $finish). Request global
+    // termination so other runnable processes stop consistently instead of
+    // continuing until event exhaustion.
+    if (!inGlobalInit)
+      terminationRequested = true;
     finalizeProcess(procId, /*killed=*/false);
     return success();
   }
@@ -19416,7 +19480,8 @@ LogicalResult LLHDProcessInterpreter::interpretHalt(ProcessId procId,
   // This is critical for UVM phase termination where run_test() spawns UVM
   // phases via fork-join, and the parent process must not halt until all
   // forked children complete.
-  if (forkJoinManager.hasActiveChildren(procId)) {
+  if (forkJoinManager.hasActiveChildren(procId) ||
+      hasActiveProcessDescendants(procId)) {
     LLVM_DEBUG(llvm::dbgs() << "  Halt deferred - process has active forked children\n");
 
     // Suspend the process instead of halting - it will be resumed when
@@ -20285,6 +20350,43 @@ LLHDProcessInterpreter::checkUvmRunTestEntry(ProcessId procId,
 
   maybeTraceUvmRunTestReentryError(procId, calleeName, uvmRunTestEntryCount);
   return failure();
+}
+
+bool LLHDProcessInterpreter::isInUvmRunTestContext(ProcessId procId) {
+  auto isUvmRunTestCallee = [](llvm::StringRef name) {
+    if (name == "uvm_pkg::run_test" || name == "uvm_pkg::uvm_root::run_test")
+      return true;
+    return name.ends_with("::run_test");
+  };
+
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end())
+    return false;
+  auto &state = stateIt->second;
+
+  if (isUvmRunTestCallee(state.currentFuncName))
+    return true;
+
+  for (auto &frame : state.callStack) {
+    if (!frame.isLLVM() && frame.funcOp &&
+        isUvmRunTestCallee(frame.funcOp.getSymName()))
+      return true;
+    if (frame.isLLVM() && frame.llvmFuncOp &&
+        isUvmRunTestCallee(frame.llvmFuncOp.getSymName()))
+      return true;
+  }
+
+  if (!state.callStackOutermostCallOp)
+    return false;
+  if (auto funcCall =
+          dyn_cast<mlir::func::CallOp>(state.callStackOutermostCallOp))
+    return isUvmRunTestCallee(funcCall.getCallee());
+  if (auto llvmCall =
+          dyn_cast<mlir::LLVM::CallOp>(state.callStackOutermostCallOp)) {
+    if (auto callee = llvmCall.getCallee())
+      return isUvmRunTestCallee(*callee);
+  }
+  return false;
 }
 
 bool LLHDProcessInterpreter::isUvmFactoryOverrideSetter(
@@ -21455,6 +21557,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       scheduler.scheduleProcess(waiterProc, SchedulingRegion::Active);
     }
   };
+  auto dropHopperObjection = [&](uint64_t hopperAddr) {
+    if (hopperAddr == 0)
+      return;
+    auto handleIt = phaseObjectionHandles.find(hopperAddr);
+    if (handleIt == phaseObjectionHandles.end())
+      return;
+    dropPhaseObjection(handleIt->second, 1);
+  };
 
   auto getHopperAddr = [&]() -> uint64_t {
     if (callOp.getNumOperands() < 1)
@@ -21515,9 +21625,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     if (writePointerToOutRef(callOp.getOperand(1), phaseAddr)) {
       if (hasPhase) {
         it->second.pop_front();
-        auto handleIt = phaseObjectionHandles.find(hopperAddr);
-        if (handleIt != phaseObjectionHandles.end())
-          dropPhaseObjection(handleIt->second, 1);
+        dropHopperObjection(hopperAddr);
       }
       unsigned width = getTypeWidth(callOp.getResult(0).getType());
       setValue(procId, callOp.getResult(0),
@@ -21570,9 +21678,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       uint64_t phaseAddr = it->second.front();
       if (writePointerToOutRef(callOp.getOperand(1), phaseAddr)) {
         it->second.pop_front();
-        auto handleIt = phaseObjectionHandles.find(hopperAddr);
-        if (handleIt != phaseObjectionHandles.end())
-          dropPhaseObjection(handleIt->second, 1);
+        dropHopperObjection(hopperAddr);
         return success();
       }
     } else {
@@ -23252,30 +23358,49 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       !calleeName.contains("uvm_objection::")) {
     const bool traceUvmObjection =
         std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
-    InterpretedValue phaseVal = args[0]; // %arg0 = this (phase pointer)
+    auto normalizePhaseAddr = [&](const InterpretedValue &phaseVal) -> uint64_t {
+      if (phaseVal.isX())
+        return 0;
+      uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
+      if (phaseAddr == 0)
+        phaseAddr = phaseVal.getUInt64();
+      return phaseAddr;
+    };
+    auto normalizeHopperAddr = [&](const InterpretedValue &hopperVal) -> uint64_t {
+      if (hopperVal.isX())
+        return 0;
+      return canonicalizeUvmObjectAddress(procId, hopperVal.getUInt64());
+    };
     // %arg2 = description string (struct<(ptr,i64)>), %arg3 = count (i32)
-    InterpretedValue countVal = args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
-
-    if (phaseVal.isX())
-      return success();
-
-    uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
-    if (phaseAddr == 0)
-      phaseAddr = phaseVal.getUInt64();
+    InterpretedValue countVal =
+        args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
     int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
-
-    // Get or create the objection handle for this phase
-    auto it = phaseObjectionHandles.find(phaseAddr);
+    bool isPhaseHopperCall = calleeName.contains("phase_hopper::");
+    uint64_t handleKey = 0;
+    std::string handleName;
+    llvm::StringRef handleKind = "phase";
+    if (isPhaseHopperCall) {
+      // Hopper objections are keyed by hopper object (%arg0 = this).
+      if (!args.empty())
+        handleKey = normalizeHopperAddr(args[0]);
+      handleName = "phase_hopper_" + std::to_string(handleKey);
+      handleKind = "hopper";
+    } else {
+      if (!args.empty())
+        handleKey = normalizePhaseAddr(args[0]);
+      handleName = "phase_" + std::to_string(handleKey);
+    }
+    if (handleKey == 0)
+      return success();
+    auto it = phaseObjectionHandles.find(handleKey);
     MooreObjectionHandle handle;
     if (it != phaseObjectionHandles.end()) {
       handle = it->second;
     } else {
-      std::string phaseName = "phase_" + std::to_string(phaseAddr);
       handle = __moore_objection_create(
-          phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
-      phaseObjectionHandles[phaseAddr] = handle;
+          handleName.c_str(), static_cast<int64_t>(handleName.size()));
+      phaseObjectionHandles[handleKey] = handle;
     }
-
     int64_t beforeCount = __moore_objection_get_count(handle);
     if (calleeName.contains("raise_objection")) {
       raisePhaseObjection(handle, count);
@@ -23285,7 +23410,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     if (traceUvmObjection) {
       int64_t afterCount = __moore_objection_get_count(handle);
       llvm::errs() << "[UVM-OBJ] proc=" << procId << " callee=" << calleeName
-                   << " phase=0x" << llvm::format_hex(phaseAddr, 16)
+                   << " " << handleKind << "=0x"
+                   << llvm::format_hex(handleKey, 16)
                    << " handle=" << handle << " delta=" << count
                    << " before=" << beforeCount << " after=" << afterCount
                    << "\n";
@@ -24681,9 +24807,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   //
   // We intercept both:
   //   uvm_phase::raise_objection(%arg0=phase, %arg1=obj, %arg2=desc, %arg3=count)
-  //   uvm_phase_hopper::raise_objection(%arg0=hopper/phase, %arg1=obj, %arg2=desc, %arg3=count)
-  // The hopper IS a phase (uvm_phase_hopper extends uvm_phase), so %arg0 can
-  // be used as the phase address in both cases.
+  //   uvm_phase_hopper::raise_objection(%arg0=hopper, %arg1=phase, %arg2=desc, %arg3=count)
+  // Hopper calls carry the target phase in arg1.
   StringRef funcName = funcOp.getSymName();
   maybeSeedSequenceRuntimeVtableFromFunction(procId, funcName, args);
 
@@ -24837,29 +24962,44 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       !args.empty() && !args[0].isX()) {
     const bool traceUvmObjection =
         std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
-    // For uvm_phase::raise_objection, args[0] is the phase node.
-    // For uvm_phase_hopper::raise_objection, args[0] is the hopper (NOT the phase).
-    // Use currentExecutingPhaseAddr[procId] if it's a hopper call; otherwise use args[0].
-    uint64_t phaseAddr;
-    if (funcName.contains("phase_hopper") && currentExecutingPhaseAddr[procId] != 0) {
-      phaseAddr = currentExecutingPhaseAddr[procId];
-    } else {
-      phaseAddr = normalizeUvmObjectKey(procId, args[0].getUInt64());
+    auto normalizePhaseAddr = [&](const InterpretedValue &phaseVal) -> uint64_t {
+      if (phaseVal.isX())
+        return 0;
+      uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
       if (phaseAddr == 0)
-        phaseAddr = args[0].getUInt64();
-    }
+        phaseAddr = phaseVal.getUInt64();
+      return phaseAddr;
+    };
+    auto normalizeHopperAddr = [&](const InterpretedValue &hopperVal) -> uint64_t {
+      if (hopperVal.isX())
+        return 0;
+      return canonicalizeUvmObjectAddress(procId, hopperVal.getUInt64());
+    };
     InterpretedValue countVal =
         args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
     int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
-    auto objIt = phaseObjectionHandles.find(phaseAddr);
+    uint64_t handleKey = 0;
+    std::string handleName;
+    llvm::StringRef handleKind = "phase";
+    if (funcName.contains("phase_hopper")) {
+      // Hopper objections are keyed by hopper object (%arg0 = this).
+      handleKey = normalizeHopperAddr(args[0]);
+      handleName = "phase_hopper_" + std::to_string(handleKey);
+      handleKind = "hopper";
+    } else {
+      handleKey = normalizePhaseAddr(args[0]);
+      handleName = "phase_" + std::to_string(handleKey);
+    }
+    if (handleKey == 0)
+      return success();
+    auto objIt = phaseObjectionHandles.find(handleKey);
     MooreObjectionHandle handle;
     if (objIt != phaseObjectionHandles.end()) {
       handle = objIt->second;
     } else {
-      std::string phaseName = "phase_" + std::to_string(phaseAddr);
       handle = __moore_objection_create(
-          phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
-      phaseObjectionHandles[phaseAddr] = handle;
+          handleName.c_str(), static_cast<int64_t>(handleName.size()));
+      phaseObjectionHandles[handleKey] = handle;
     }
     int64_t beforeCount = __moore_objection_get_count(handle);
     if (funcName.contains("raise_objection")) {
@@ -24870,7 +25010,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     if (traceUvmObjection) {
       int64_t afterCount = __moore_objection_get_count(handle);
       llvm::errs() << "[UVM-OBJ] proc=" << procId << " func=" << funcName
-                   << " phase=0x" << llvm::format_hex(phaseAddr, 16)
+                   << " " << handleKind << "=0x"
+                   << llvm::format_hex(handleKey, 16)
                    << " handle=" << handle << " delta=" << count
                    << " before=" << beforeCount << " after=" << afterCount
                    << "\n";
@@ -25018,6 +25159,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
             return false;
           return true;
         };
+        auto resumePhaseOrderWaiter = [&](ProcessExecutionState &st,
+                                          mlir::Block::iterator resumeOp) {
+          // Resume at the blocked call site, not after it. If the process is
+          // currently suspended inside nested calls, update the innermost
+          // frame resume point so execute_phase is re-entered correctly.
+          if (!st.callStack.empty()) {
+            auto &innermostFrame = st.callStack.front();
+            innermostFrame.resumeBlock = resumeOp->getBlock();
+            innermostFrame.resumeOp = resumeOp;
+          } else {
+            st.currentBlock = resumeOp->getBlock();
+            st.currentOp = resumeOp;
+          }
+        };
         if (waitIt != impWaitingProcesses.end()) {
           for (auto &waiter : waitIt->second) {
             auto stateIt = processStates.find(waiter.procId);
@@ -25027,7 +25182,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
             if (!isPhaseOrderBlockedWaiter(waiter.procId, st))
               continue;
             st.waiting = false;
-            st.currentOp = waiter.resumeOp;
+            resumePhaseOrderWaiter(st, waiter.resumeOp);
             if (tracePhaseOrderEnabled()) {
               maybeTracePhaseOrderWakeWaiter(waiter.procId, impAddr);
             }
@@ -25054,7 +25209,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
               if (!isPhaseOrderBlockedWaiter(waiter.procId, st))
                 continue;
               st.waiting = false;
-              st.currentOp = waiter.resumeOp;
+              resumePhaseOrderWaiter(st, waiter.resumeOp);
               scheduler.scheduleProcess(waiter.procId,
                                         SchedulingRegion::Active);
             }
@@ -25473,13 +25628,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   size_t maxOps = maxFunctionOps;
   size_t opCount = 0;
 
-  // Track if we're starting from a resume point
-  bool skipToResumeOp = (resumeBlock != nullptr);
+  // Track whether the first resumed block should start from `resumeOp`
+  // instead of from block begin.
+  bool startFromResumeOp = (resumeBlock != nullptr);
+  static bool traceFuncResumeFailure = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_FUNC_RESUME_FAIL");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
 
   // Hoist per-op overhead decisions before the loop so the hot path is lean.
   const size_t cachedMaxSteps = getEffectiveMaxProcessSteps(procId);
   const bool needsDetailedTracking =
       cachedMaxSteps > 0 || collectOpStats || profileSummaryAtExitEnabled;
+  Block *lastExecutedBlock = nullptr;
+  Operation *lastExecutedOp = nullptr;
 
   while (currentBlock && (maxOps == 0 || opCount < maxOps)) {
     // Check if termination was requested (e.g., UVM die() -> sim.terminate).
@@ -25494,21 +25656,29 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       return failure();
     }
     bool tookBranch = false;  // Track if we branched to another block
-    for (auto opIt = currentBlock->begin(); opIt != currentBlock->end();
-         ++opIt) {
-      Operation &op = *opIt;
-
-      // If resuming, skip operations until we reach the resume point
-      if (skipToResumeOp) {
-        if (&op == &*resumeOp) {
-          skipToResumeOp = false;
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  Resuming function " << funcOp.getName()
-                     << " from saved position\n");
-        } else {
-          continue;
+    auto blockBeginIt = currentBlock->begin();
+    if (startFromResumeOp && currentBlock == resumeBlock) {
+      if (resumeOp == currentBlock->end()) {
+        // A saved frame should not resume at end-of-block. Treat this as a
+        // failed resume so caller-side logic can surface diagnostics.
+        if (traceFuncResumeFailure) {
+          llvm::errs() << "[FUNC-RESUME-FAIL] proc=" << procId
+                       << " func=" << funcOp.getName()
+                       << " reason=resume_op_at_end block=" << currentBlock
+                       << " region=" << currentBlock->getParent() << "\n";
         }
+        cleanupTempMappings();
+        return failure();
       }
+      blockBeginIt = resumeOp;
+      startFromResumeOp = false;
+      LLVM_DEBUG(llvm::dbgs() << "  Resuming function " << funcOp.getName()
+                              << " from saved position\n");
+    }
+    for (auto opIt = blockBeginIt; opIt != currentBlock->end(); ++opIt) {
+      Operation &op = *opIt;
+      lastExecutedBlock = currentBlock;
+      lastExecutedOp = &op;
 
       ++opCount;
       // Track func body steps in process state for global step limiting.
@@ -25596,6 +25766,30 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         for (Value operand : returnOp.getOperands()) {
           results.push_back(getValue(procId, operand));
         }
+        if (useSharedFuncResultCache && !results.empty()) {
+          bool cacheThisResult = true;
+          if (sharedCacheOnlyNonZeroResult) {
+            const InterpretedValue &lead = results.front();
+            cacheThisResult = !lead.isX() && lead.getUInt64() != 0;
+          }
+          if (cacheThisResult) {
+            sharedFuncResultCache[funcOp.getOperation()][sharedCacheArgHash] =
+                llvm::SmallVector<InterpretedValue, 2>(results.begin(),
+                                                       results.end());
+            maybeTraceFuncCacheSharedStore(funcName, sharedCacheArgHash);
+          }
+        }
+        cleanupTempMappings();
+        return success();
+      }
+
+      // Some func.func bodies imported through LLVM lowering terminate with
+      // llvm.return instead of func.return. Treat this as a normal function
+      // return so resumed call-stack frames don't fall off the block and get
+      // reported as failures.
+      if (auto llvmReturnOp = dyn_cast<LLVM::ReturnOp>(&op)) {
+        for (Value operand : llvmReturnOp.getOperands())
+          results.push_back(getValue(procId, operand));
         if (useSharedFuncResultCache && !results.empty()) {
           bool cacheThisResult = true;
           if (sharedCacheOnlyNonZeroResult) {
@@ -25795,21 +25989,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
           ++nextOpIt;
 
           bool elideTailWrapperFrame = false;
-          if (funcOp.getBody().hasOneBlock() && currentBlock == &entryBlock &&
-              nextOpIt != currentBlock->end() &&
-              std::next(nextOpIt) == currentBlock->end()) {
-            auto calleeCallOp = dyn_cast<mlir::func::CallOp>(&op);
-            auto returnOp = dyn_cast<mlir::func::ReturnOp>(*nextOpIt);
-            if (calleeCallOp && calleeCallOp.getNumResults() == 0 && returnOp &&
-                returnOp.getNumOperands() == 0) {
-              elideTailWrapperFrame = true;
-            }
-          }
 
           // Only save if there are more operations to execute in this function
           if (nextOpIt != currentBlock->end() ||
               currentBlock != &entryBlock) {
             if (elideTailWrapperFrame) {
+              // Track the most-outer call site across nested tail-wrapper
+              // elision so resume can restore process-level position.
               haltCheckState->callStackOutermostCallOp = callOp;
               auto wrapperName = funcOp.getName();
               auto calleeName = cast<mlir::func::CallOp>(op).getCallee();
@@ -25858,6 +26044,26 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
   }
 
   cleanupTempMappings();
+  if (traceFuncResumeFailure) {
+    llvm::errs() << "[FUNC-RESUME-FAIL] proc=" << procId
+                 << " func=" << funcOp.getName()
+                 << " reason=fell_off_end"
+                 << " resumeBlock=" << resumeBlock
+                 << " currentBlock=" << currentBlock
+                 << " lastBlock=" << lastExecutedBlock
+                 << " lastOp="
+                 << (lastExecutedOp
+                         ? lastExecutedOp->getName().getStringRef()
+                         : StringRef("<none>"))
+                 << "\n";
+    if (lastExecutedBlock && !lastExecutedBlock->empty()) {
+      Operation &term = lastExecutedBlock->back();
+      llvm::errs() << "[FUNC-RESUME-FAIL] proc=" << procId
+                   << " func=" << funcOp.getName()
+                   << " lastTerminator=" << term.getName().getStringRef()
+                   << "\n";
+    }
+  }
   return failure();
 }
 
@@ -27461,10 +27667,21 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   bool success = terminateOp.getSuccess();
   bool verbose = terminateOp.getVerbose();
   auto &state = processStates[procId];
-
+  static bool traceTerminatePath = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_TERMINATE_PATH");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting sim.terminate ("
                           << (success ? "success" : "failure") << ", "
                           << (verbose ? "verbose" : "quiet") << ")\n");
+  if (traceTerminatePath) {
+    bool inRunTestContext = state.callDepth > 0 && isInUvmRunTestContext(procId);
+    llvm::errs() << "[TERM-PATH] sim.terminate proc=" << procId
+                 << " success=" << (success ? 1 : 0)
+                 << " callDepth=" << state.callDepth
+                 << " inRunTest=" << (inRunTestContext ? 1 : 0)
+                 << " currentFunc=" << state.currentFuncName << "\n";
+  }
 
   // When sim.terminate is triggered from within a phase function's execution
   // (e.g., die() called from check_phase → uvm_report_error), absorb it
@@ -27485,6 +27702,19 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     }
   }
 
+  // UVM run_test can call $finish on completion. Preserve behavioral parity
+  // with simulators that let run_test return to its caller in this path:
+  // absorb successful terminate while still inside run_test call frames.
+  if (success && state.callDepth > 0 && isInUvmRunTestContext(procId)) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "  sim.terminate(success) absorbed in run_test context"
+               << " (callDepth=" << state.callDepth << ")\n");
+    if (traceTerminatePath)
+      llvm::errs() << "[TERM-PATH] absorb run_test terminate proc=" << procId
+                   << "\n";
+    return mlir::success();
+  }
+
   // Check if this process has active forked children that haven't completed,
   // OR if any UVM phase IMPs haven't completed yet.
   // This is important for UVM where run_test() forks phase execution and then
@@ -27498,7 +27728,8 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       if (!done) { phasesStillRunning = true; break; }
     }
   }
-  if (forkJoinManager.hasActiveChildren(procId) || phasesStillRunning) {
+  if (forkJoinManager.hasActiveChildren(procId) ||
+      hasActiveProcessDescendants(procId) || phasesStillRunning) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Terminate deferred - process has active forked children\n");
 

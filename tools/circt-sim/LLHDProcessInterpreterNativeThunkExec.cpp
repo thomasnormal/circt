@@ -548,7 +548,8 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     if (isQueuedForImpPhaseOrdering(procId) ||
         isAwaitingProcessCompletion(procId))
       return false;
-    return forkJoinManager.hasActiveChildren(procId);
+    return forkJoinManager.hasActiveChildren(procId) ||
+           hasActiveProcessDescendants(procId);
   };
   auto isResumingAfterForkJoinWait = [&](const ProcessExecutionState &s) {
     if (!bodyContainsForkPrelude || !s.waiting || s.halted)
@@ -559,7 +560,8 @@ bool LLHDProcessInterpreter::executeSingleBlockTerminatingNativeThunk(
     if (isQueuedForImpPhaseOrdering(procId) ||
         isAwaitingProcessCompletion(procId))
       return false;
-    return !forkJoinManager.hasActiveChildren(procId);
+    return !forkJoinManager.hasActiveChildren(procId) &&
+           !hasActiveProcessDescendants(procId);
   };
   bool resumingDeferredHalt = false;
 
@@ -881,7 +883,8 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     if (s.destBlock || s.resumeAtCurrentOp || s.waitConditionRestartBlock ||
         !s.callStack.empty() || s.sequencerGetRetryCallOp)
       return false;
-    return forkJoinManager.hasActiveChildren(procId);
+    return forkJoinManager.hasActiveChildren(procId) ||
+           hasActiveProcessDescendants(procId);
   };
   auto isResumingAfterForkJoinWait = [&](const ProcessExecutionState &s) {
     if (!bodyContainsForkPrelude || !s.waiting || s.halted)
@@ -889,7 +892,8 @@ bool LLHDProcessInterpreter::executeMultiBlockTerminatingNativeThunk(
     if (s.destBlock || s.resumeAtCurrentOp || s.waitConditionRestartBlock ||
         !s.callStack.empty() || s.sequencerGetRetryCallOp)
       return false;
-    return !forkJoinManager.hasActiveChildren(procId);
+    return !forkJoinManager.hasActiveChildren(procId) &&
+           !hasActiveProcessDescendants(procId);
   };
   auto isWaitingOnObjectionWaitFor = [&](ProcessId targetProcId,
                                          const ProcessExecutionState &s) {
@@ -2385,6 +2389,40 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
                  << " halted=" << state.halted
                  << " callStack=" << state.callStack.size() << "\n";
   };
+  auto traceResumeDetail = [&](llvm::StringRef label, Operation *op) {
+    if (!shouldTraceCallStackResume(procId))
+      return;
+    llvm::errs() << "[CS-RESUME-DETAIL] proc=" << procId << " " << label;
+    if (!op) {
+      llvm::errs() << " op=null\n";
+      return;
+    }
+    Block *block = op->getBlock();
+    Region *region = block ? block->getParent() : nullptr;
+    llvm::errs() << " op=" << op->getName().getStringRef()
+                 << " block=" << block << " region=" << region;
+    if (auto callOp = dyn_cast<mlir::func::CallOp>(op))
+      llvm::errs() << " callee=" << callOp.getCallee();
+    else if (auto callIndirectOp = dyn_cast<mlir::func::CallIndirectOp>(op))
+      llvm::errs() << " call_indirect";
+    else if (auto llvmCallOp = dyn_cast<LLVM::CallOp>(op))
+      if (auto callee = llvmCallOp.getCallee())
+        llvm::errs() << " callee=" << *callee;
+    llvm::errs() << "\n";
+  };
+  auto traceResumeBlockDetail = [&](llvm::StringRef label, Block *block,
+                                    Block::iterator opIt) {
+    if (!shouldTraceCallStackResume(procId))
+      return;
+    llvm::errs() << "[CS-RESUME-DETAIL] proc=" << procId << " " << label
+                 << " block=" << block
+                 << " region=" << (block ? block->getParent() : nullptr);
+    if (block && opIt != block->end())
+      llvm::errs() << " op=" << opIt->getName().getStringRef();
+    else
+      llvm::errs() << " op=<end>";
+    llvm::errs() << "\n";
+  };
   static bool traceI3CCallStack = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_I3C_CALLSTACK");
     return env && env[0] != '\0' && env[0] != '0';
@@ -2401,9 +2439,11 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
   // Preserve the outermost call site for restoring process-level position
   // once all nested frames have completed.
-  Operation *outermostCallOp = state.callStackOutermostCallOp
-                                   ? state.callStackOutermostCallOp
-                                   : state.callStack.back().callOp;
+  Operation *outermostCallOp = state.callStack.back().callOp;
+  if (!outermostCallOp)
+    outermostCallOp = state.callStackOutermostCallOp;
+  traceResumeDetail("selected_outermost", outermostCallOp);
+  traceResumeDetail("state_outermost_override", state.callStackOutermostCallOp);
   enum class FastResumeAction : uint8_t {
     NotHandled,
     Continue,
@@ -2563,6 +2603,7 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     // CallStackFrame payloads during nested resume/rotate sequences.
     CallStackFrame frame = state.callStack.front();
     state.callStack.erase(state.callStack.begin());
+    traceResumeDetail("frame_callop", frame.callOp);
 
     // Remaining old outer frames before resuming this frame.
     size_t oldFrameCount = state.callStack.size();
@@ -2578,6 +2619,20 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
 
     llvm::StringRef frameName =
         frame.isLLVM() ? frame.llvmFuncOp.getName() : frame.funcOp.getName();
+    if (shouldTraceCallStackResume(procId)) {
+      llvm::errs() << "[CS-RESUME-DETAIL] proc=" << procId
+                   << " frame_name=" << frameName
+                   << " resumeBlock=" << frame.resumeBlock
+                   << " resumeRegion="
+                   << (frame.resumeBlock ? frame.resumeBlock->getParent()
+                                         : nullptr);
+      if (frame.resumeBlock && frame.resumeOp != frame.resumeBlock->end())
+        llvm::errs() << " resumeOp="
+                     << frame.resumeOp->getName().getStringRef();
+      else
+        llvm::errs() << " resumeOp=<end>";
+      llvm::errs() << "\n";
+    }
     if (traceI3CCallStack &&
         (frameName.contains("i3c_target_monitor_bfm::") ||
          frameName.contains("i3c_target_driver_bfm::") ||
@@ -2592,7 +2647,8 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
                << "function '" << frameName << "' (remaining old frames: "
                << oldFrameCount << ")\n");
 
-    collapseTailWrapperFrame(frame, oldFrameCount);
+    // Keep all saved frames intact for correctness while debugging
+    // nested UVM suspend/resume behavior.
 
     FastResumeAction fastResumeAction =
         tryResumeGenerateBaudClkFrameFastPath(frame, oldFrameCount);
@@ -2621,6 +2677,30 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     if (failed(funcResult)) {
       LLVM_DEBUG(llvm::dbgs() << "    Function '" << frameName
                               << "' failed during resume\n");
+      if (shouldTraceCallStackResume(procId)) {
+        Block *resumeOpBlock = nullptr;
+        if (frame.resumeBlock && frame.resumeOp != frame.resumeBlock->end())
+          resumeOpBlock = frame.resumeOp->getBlock();
+        llvm::errs() << "[CS-RESUME-DETAIL] proc=" << procId
+                     << " func_failed frame=" << frameName
+                     << " resumeBlock=" << frame.resumeBlock
+                     << " resumeRegion="
+                     << (frame.resumeBlock ? frame.resumeBlock->getParent()
+                                           : nullptr);
+        if (frame.resumeBlock && frame.resumeOp != frame.resumeBlock->end())
+          llvm::errs() << " resumeOp="
+                       << frame.resumeOp->getName().getStringRef();
+        else
+          llvm::errs() << " resumeOp=<end>";
+        if (frame.resumeBlock && frame.resumeOp != frame.resumeBlock->end()) {
+          llvm::errs() << " resumeLoc=";
+          frame.resumeOp->getLoc().print(llvm::errs());
+        }
+        llvm::errs() << " resumeOpBlock=" << resumeOpBlock
+                     << " resumeOpBlockMatches="
+                     << (resumeOpBlock == frame.resumeBlock ? 1 : 0);
+        llvm::errs() << "\n";
+      }
       finalizeProcess(procId, /*killed=*/false);
       traceResumeReturn("func_failed");
       return CallStackResumeResult::Failed;
@@ -2629,6 +2709,11 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
     // Function suspended again: rotate newly created inner frames to front so
     // the next resume continues innermost-first.
     if (state.waiting) {
+      // If the resumed frame is the callee of a trivial outer wrapper
+      // (call + return), drop that wrapper so future resumes stay on the
+      // hot inner frame.
+      collapseTailWrapperFrame(frame, oldFrameCount);
+
       if (traceI3CCallStack &&
           (frameName.contains("i3c_target_monitor_bfm::") ||
            frameName.contains("i3c_target_driver_bfm::") ||
@@ -2699,13 +2784,18 @@ LLHDProcessInterpreter::resumeSavedCallStackFrames(
   }
 
   if (state.waitConditionSavedBlock) {
+    traceResumeBlockDetail("restore_from_wait_saved", state.waitConditionSavedBlock,
+                           state.waitConditionSavedOp);
     state.currentBlock = state.waitConditionSavedBlock;
     state.currentOp = state.waitConditionSavedOp;
     state.waitConditionSavedBlock = nullptr;
   } else if (outermostCallOp) {
+    traceResumeDetail("restore_from_outermost", outermostCallOp);
     state.currentBlock = outermostCallOp->getBlock();
     state.currentOp = std::next(outermostCallOp->getIterator());
   }
+  traceResumeBlockDetail("post_restore_current", state.currentBlock,
+                         state.currentOp);
   state.waitConditionRestartBlock = nullptr;
   state.callStackOutermostCallOp = nullptr;
 
