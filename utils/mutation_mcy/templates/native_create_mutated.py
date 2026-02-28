@@ -500,6 +500,44 @@ def find_binary_ashr_token(nth: int) -> int:
     return -1
 
 
+def find_logical_token(token: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    if token not in ("&&", "||"):
+        return -1
+    marker = token[0]
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(i, i + 2):
+            i += 1
+            continue
+        if not text.startswith(token, i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 2] if i + 2 < n and is_code_at(i + 2) else ""
+        if prev == marker or nxt == marker:
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 2)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+            text[next_sig]
+        ):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_binary_xor_token(nth: int) -> int:
     if nth < 1:
         return -1
@@ -708,6 +746,16 @@ elif op == 'AND_TO_OR':
     changed = replace_nth(r'&&', '||', site_index)
 elif op == 'OR_TO_AND':
     changed = replace_nth(r'\|\|', '&&', site_index)
+elif op == 'LAND_TO_BAND':
+    idx = find_logical_token('&&', site_index)
+    if idx >= 0:
+        text = text[:idx] + '&' + text[idx + 2:]
+        changed = True
+elif op == 'LOR_TO_BOR':
+    idx = find_logical_token('||', site_index)
+    if idx >= 0:
+        text = text[:idx] + '|' + text[idx + 2:]
+        changed = True
 elif op == 'XOR_TO_OR':
     idx = find_binary_xor_token(site_index)
     if idx >= 0:
@@ -722,6 +770,16 @@ elif op == 'BOR_TO_BAND':
     idx = find_binary_bitwise_token('|', site_index)
     if idx >= 0:
         text = text[:idx] + '&' + text[idx + 1:]
+        changed = True
+elif op == 'BAND_TO_LAND':
+    idx = find_binary_bitwise_token('&', site_index)
+    if idx >= 0:
+        text = text[:idx] + '&&' + text[idx + 1:]
+        changed = True
+elif op == 'BOR_TO_LOR':
+    idx = find_binary_bitwise_token('|', site_index)
+    if idx >= 0:
+        text = text[:idx] + '||' + text[idx + 1:]
         changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)

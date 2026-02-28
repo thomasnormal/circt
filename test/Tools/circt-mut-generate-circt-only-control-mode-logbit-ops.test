@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic a,b,c,d, output logic y0,y1,y2,y3);\n  assign y0 = a && b;\n  assign y1 = c || d;\n  assign y2 = a & c;\n  assign y3 = b | d;\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 120 --seed 23 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_LAND_TO_BAND' %t/mutations.txt
+// RUN: grep -q 'NATIVE_LOR_TO_BOR' %t/mutations.txt
+// RUN: grep -q 'NATIVE_BAND_TO_LAND' %t/mutations.txt
+// RUN: grep -q 'NATIVE_BOR_TO_LOR' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 120
