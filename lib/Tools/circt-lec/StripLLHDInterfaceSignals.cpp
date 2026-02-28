@@ -10,6 +10,7 @@
 #include "circt/Dialect/LLHD/IR/LLHDOps.h"
 #include "circt/Dialect/HW/HWInstanceGraph.h"
 #include "circt/Dialect/HW/HWOps.h"
+#include "circt/Dialect/HW/HWTypes.h"
 #include "circt/Dialect/Seq/SeqOps.h"
 #include "circt/Support/BoolCondition.h"
 #include "circt/Support/FourStateUtils.h"
@@ -17,6 +18,7 @@
 #include "circt/Support/LLVM.h"
 #include "circt/Support/Namespace.h"
 #include "circt/Tools/circt-lec/Passes.h"
+#include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/LLVMIR/LLVMAttrs.h"
@@ -34,6 +36,7 @@
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/PostOrderIterator.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/Support/raw_ostream.h"
 #include <optional>
@@ -568,6 +571,17 @@ static Value adjustIntegerWidth(OpBuilder &builder, Value value,
     return comb::ConcatOp::create(builder, loc, ValueRange{zeroExt, value});
   }
   return comb::ExtractOp::create(builder, loc, value, 0, targetWidth);
+}
+
+static Value castValueToEquivalentType(OpBuilder &builder, Value value,
+                                       Type targetType, Location loc) {
+  if (!value || !targetType)
+    return {};
+  if (value.getType() == targetType)
+    return value;
+  if (hw::getCanonicalType(value.getType()) != hw::getCanonicalType(targetType))
+    return {};
+  return hw::BitcastOp::create(builder, loc, targetType, value);
 }
 
 static Value stripPointerCasts(Value ptr,
@@ -1118,6 +1132,318 @@ static Value createZeroValue(OpBuilder &builder, Location loc, Type type) {
   return hw::BitcastOp::create(builder, loc, type, zero);
 }
 
+static Type inferPtrValueType(Value ptr, Type fallback) {
+  Type valueType;
+  for (auto *user : ptr.getUsers()) {
+    if (auto store = dyn_cast<LLVM::StoreOp>(user)) {
+      Type storeTy = store.getValue().getType();
+      if (!valueType)
+        valueType = storeTy;
+      else if (valueType != storeTy)
+        return {};
+      continue;
+    }
+    if (auto load = dyn_cast<LLVM::LoadOp>(user)) {
+      Type loadTy = load.getResult().getType();
+      if (!valueType)
+        valueType = loadTy;
+      else if (valueType != loadTy)
+        return {};
+    }
+  }
+  if (valueType)
+    return valueType;
+  if (fallback && LLVM::isCompatibleType(fallback))
+    return fallback;
+  return {};
+}
+
+static LogicalResult lowerProjectedLocalRefProbes(Operation *scope) {
+  struct RefStep {
+    enum Kind { StructField, Extract, ArrayElement } kind;
+    StringAttr field;
+    Value index;
+    Type elemType;
+  };
+  using RefPath = SmallVector<RefStep, 4>;
+  struct LocalRefDesc {
+    Value ptr;
+    Type rootType;
+    RefPath path;
+  };
+
+  auto deriveLocalRefDesc = [&](Value ref) -> std::optional<LocalRefDesc> {
+    RefPath suffix;
+    llvm::SmallPtrSet<Value, 16> seen;
+    while (true) {
+      if (!seen.insert(ref).second)
+        return std::nullopt;
+      if (auto castOp = ref.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (castOp.getInputs().size() != 1 || castOp.getResults().size() != 1)
+          return std::nullopt;
+        Value input = castOp.getInputs().front();
+        Type inputTy = input.getType();
+        Type resultTy = castOp.getResults().front().getType();
+        if (isa<LLVM::LLVMPointerType>(inputTy) && isa<llhd::RefType>(resultTy)) {
+          auto refTy = cast<llhd::RefType>(resultTy);
+          RefPath path;
+          path.append(llvm::reverse(suffix).begin(), llvm::reverse(suffix).end());
+          return LocalRefDesc{input, refTy.getNestedType(), path};
+        }
+        if (isa<llhd::RefType>(inputTy) && isa<llhd::RefType>(resultTy)) {
+          ref = input;
+          continue;
+        }
+        return std::nullopt;
+      }
+      if (auto structExtract = ref.getDefiningOp<llhd::SigStructExtractOp>()) {
+        suffix.push_back(
+            RefStep{RefStep::StructField, structExtract.getFieldAttr(),
+                    Value(), {}});
+        ref = structExtract.getInput();
+        continue;
+      }
+      if (auto bitExtract = ref.getDefiningOp<llhd::SigExtractOp>()) {
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(bitExtract.getResult().getType());
+        if (!resultRefType)
+          return std::nullopt;
+        suffix.push_back(RefStep{RefStep::Extract, {}, bitExtract.getLowBit(),
+                                 resultRefType.getNestedType()});
+        ref = bitExtract.getInput();
+        continue;
+      }
+      if (auto arrayGet = ref.getDefiningOp<llhd::SigArrayGetOp>()) {
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(arrayGet.getResult().getType());
+        if (!resultRefType)
+          return std::nullopt;
+        suffix.push_back(RefStep{RefStep::ArrayElement, {}, arrayGet.getIndex(),
+                                 resultRefType.getNestedType()});
+        ref = arrayGet.getInput();
+        continue;
+      }
+      return std::nullopt;
+    }
+  };
+
+  auto materializePath = [&](OpBuilder &builder, Value baseValue,
+                             const RefPath &path, Location loc) -> Value {
+    Value value = baseValue;
+    for (const auto &step : path) {
+      if (step.kind == RefStep::StructField) {
+        auto structType = dyn_cast<hw::StructType>(value.getType());
+        if (!structType)
+          return {};
+        value = hw::StructExtractOp::create(builder, loc, value, step.field);
+        continue;
+      }
+      if (step.kind == RefStep::Extract) {
+        auto elemType = dyn_cast<IntegerType>(step.elemType);
+        auto baseType = dyn_cast<IntegerType>(value.getType());
+        if (!elemType || !baseType)
+          return {};
+        if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+          uint64_t low = constant.getValue().getZExtValue();
+          if (low + elemType.getWidth() > baseType.getWidth())
+            return {};
+          value = comb::ExtractOp::create(builder, loc, value, low,
+                                          elemType.getWidth());
+          continue;
+        }
+        Value shift =
+            adjustIntegerWidth(builder, step.index, baseType.getWidth(), loc);
+        Value shifted = comb::ShrUOp::create(builder, loc, value, shift);
+        value = comb::ExtractOp::create(builder, loc, shifted, 0,
+                                        elemType.getWidth());
+        continue;
+      }
+      auto arrayType = dyn_cast<hw::ArrayType>(value.getType());
+      if (!arrayType)
+        return {};
+      if (arrayType.getElementType() != step.elemType)
+        return {};
+      value = hw::ArrayGetOp::create(builder, loc, value, step.index);
+    }
+    return value;
+  };
+  auto updatePath = [&](auto &&self, OpBuilder &builder, Value baseValue,
+                        ArrayRef<RefStep> path, Value updateValue,
+                        Location loc) -> Value {
+    if (path.empty())
+      return updateValue;
+    const RefStep &step = path.front();
+    if (step.kind == RefStep::StructField) {
+      auto structType = dyn_cast<hw::StructType>(baseValue.getType());
+      if (!structType)
+        return {};
+      SmallVector<Value, 4> fields;
+      fields.reserve(structType.getElements().size());
+      for (const auto &element : structType.getElements()) {
+        Value fieldValue =
+            hw::StructExtractOp::create(builder, loc, baseValue, element.name);
+        if (element.name == step.field) {
+          fieldValue = self(self, builder, fieldValue, path.drop_front(),
+                            updateValue, loc);
+          if (!fieldValue)
+            return {};
+        }
+        fields.push_back(fieldValue);
+      }
+      return hw::StructCreateOp::create(builder, loc, structType, fields);
+    }
+    if (step.kind == RefStep::Extract) {
+      auto baseInt = dyn_cast<IntegerType>(baseValue.getType());
+      auto elemInt = dyn_cast<IntegerType>(step.elemType);
+      if (!baseInt || !elemInt)
+        return {};
+      auto constant = step.index.getDefiningOp<hw::ConstantOp>();
+      if (!constant)
+        return {};
+      uint64_t low = constant.getValue().getZExtValue();
+      unsigned elemWidth = elemInt.getWidth();
+      unsigned baseWidth = baseInt.getWidth();
+      if (low + elemWidth > baseWidth)
+        return {};
+      Value updated =
+          adjustIntegerWidth(builder, updateValue, elemWidth, loc);
+      SmallVector<Value, 3> pieces;
+      if (low + elemWidth < baseWidth) {
+        Value upper = comb::ExtractOp::create(builder, loc, baseValue,
+                                              low + elemWidth,
+                                              baseWidth - low - elemWidth);
+        pieces.push_back(upper);
+      }
+      pieces.push_back(updated);
+      if (low > 0) {
+        Value lower = comb::ExtractOp::create(builder, loc, baseValue, 0, low);
+        pieces.push_back(lower);
+      }
+      if (pieces.size() == 1)
+        return pieces.front();
+      return comb::ConcatOp::create(builder, loc, pieces);
+    }
+    auto arrayType = dyn_cast<hw::ArrayType>(baseValue.getType());
+    if (!arrayType)
+      return {};
+    Value element = hw::ArrayGetOp::create(builder, loc, baseValue, step.index);
+    Value updatedElement =
+        self(self, builder, element, path.drop_front(), updateValue, loc);
+    if (!updatedElement)
+      return {};
+    return hw::ArrayInjectOp::create(builder, loc, baseValue, step.index,
+                                     updatedElement);
+  };
+
+  SmallVector<llhd::ProbeOp> probes;
+  scope->walk([&](llhd::ProbeOp probe) {
+    if (deriveLocalRefDesc(probe.getSignal()))
+      probes.push_back(probe);
+  });
+  SmallVector<llhd::DriveOp> drives;
+  scope->walk([&](llhd::DriveOp drive) {
+    if (deriveLocalRefDesc(drive.getSignal()))
+      drives.push_back(drive);
+  });
+
+  for (auto drive : drives) {
+    auto desc = deriveLocalRefDesc(drive.getSignal());
+    if (!desc)
+      continue;
+    if (drive.getEnable())
+      return drive.emitError(
+          "unsupported conditional drive on projected local llhd.ref in LEC");
+    if (!drive.getTime().getDefiningOp<llhd::ConstantTimeOp>())
+      return drive.emitError("unsupported non-constant projected local llhd.ref "
+                             "drive time in LEC");
+    Type ptrValueType = inferPtrValueType(desc->ptr, desc->rootType);
+    if (!ptrValueType)
+      return drive.emitError(
+          "unsupported projected local llhd.ref drive without LLVM value type");
+    OpBuilder builder(drive);
+    Value current = LLVM::LoadOp::create(builder, drive.getLoc(), ptrValueType,
+                                         desc->ptr);
+    if (current.getType() != desc->rootType)
+      current = UnrealizedConversionCastOp::create(builder, drive.getLoc(),
+                                                   desc->rootType, current)
+                    .getResult(0);
+    Value driveValue = drive.getValue();
+    if (!driveValue)
+      return drive.emitError("missing projected local llhd.ref drive value");
+    Value updated = updatePath(updatePath, builder, current, desc->path,
+                               driveValue, drive.getLoc());
+    if (!updated)
+      return drive.emitError("unsupported projected local llhd.ref drive path "
+                             "update in LEC");
+    if (updated.getType() != ptrValueType)
+      updated = UnrealizedConversionCastOp::create(builder, drive.getLoc(),
+                                                   ptrValueType, updated)
+                    .getResult(0);
+    LLVM::StoreOp::create(builder, drive.getLoc(), updated, desc->ptr);
+    drive.erase();
+  }
+
+  for (auto probe : probes) {
+    auto desc = deriveLocalRefDesc(probe.getSignal());
+    if (!desc)
+      continue;
+    Type loadType = inferPtrValueType(desc->ptr, desc->rootType);
+    if (!loadType)
+      return probe.emitError(
+          "unsupported local llhd.ref probe without LLVM value type");
+    OpBuilder builder(probe);
+    Value loaded = LLVM::LoadOp::create(builder, probe.getLoc(), loadType,
+                                        desc->ptr);
+    if (loaded.getType() != desc->rootType)
+      loaded = UnrealizedConversionCastOp::create(builder, probe.getLoc(),
+                                                  desc->rootType, loaded)
+                   .getResult(0);
+    Value replacement =
+        materializePath(builder, loaded, desc->path, probe.getLoc());
+    if (!replacement)
+      return probe.emitError(
+          "unsupported projected local llhd.ref probe path in LEC");
+    if (replacement.getType() != probe.getResult().getType())
+      replacement = UnrealizedConversionCastOp::create(
+                        builder, probe.getLoc(), probe.getResult().getType(),
+                        replacement)
+                        .getResult(0);
+    probe.getResult().replaceAllUsesWith(replacement);
+    probe.erase();
+  }
+
+  bool erased = true;
+  while (erased) {
+    erased = false;
+    SmallVector<Operation *> deadOps;
+    scope->walk([&](Operation *op) {
+      if (!op->use_empty())
+        return;
+      if (isa<llhd::SigStructExtractOp, llhd::SigExtractOp, llhd::SigArrayGetOp>(
+              op)) {
+        deadOps.push_back(op);
+        return;
+      }
+      if (auto cast = dyn_cast<UnrealizedConversionCastOp>(op)) {
+        if (cast.getInputs().size() != 1 || cast.getResults().size() != 1)
+          return;
+        if (isa<llhd::RefType>(cast.getInputs().front().getType()) ||
+            isa<llhd::RefType>(cast.getResults().front().getType()))
+          deadOps.push_back(op);
+      }
+    });
+    if (deadOps.empty())
+      break;
+    for (Operation *op : deadOps) {
+      if (!op->use_empty())
+        continue;
+      op->erase();
+      erased = true;
+    }
+  }
+  return success();
+}
+
 static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
                                           ModuleState &state,
                                           bool strictMode) {
@@ -1632,6 +1958,114 @@ static LogicalResult lowerCombinationalOp(llhd::CombinationalOp combOp,
   if (!yieldOp)
     return combOp.emitError("expected llhd.yield terminator in combinational");
 
+  // After CFG flattening, cond-merged pointer paths may become select-based
+  // temporaries between equivalent local allocas. Collapse these selects to a
+  // canonical alloca so mem2reg can eliminate the residual load/store traffic.
+  {
+    SmallVector<Value> pointerSelects;
+    for (Operation &op : body) {
+      if (auto select = dyn_cast<LLVM::SelectOp>(op);
+          select && isa<LLVM::LLVMPointerType>(select.getType())) {
+        pointerSelects.push_back(select.getResult());
+        continue;
+      }
+      if (auto select = dyn_cast<arith::SelectOp>(op);
+          select && isa<LLVM::LLVMPointerType>(select.getType()))
+        pointerSelects.push_back(select.getResult());
+    }
+
+    auto allocaUsedOnlyBySelect = [&](LLVM::AllocaOp alloca,
+                                      Value selectResult) -> bool {
+      if (!alloca)
+        return false;
+      Value allocaResult = alloca.getResult();
+      if (allocaResult.use_empty())
+        return false;
+      return llvm::all_of(allocaResult.getUses(), [&](OpOperand &use) {
+        return use.getOwner() == selectResult.getDefiningOp();
+      });
+    };
+
+    bool collapsedAnyPointerSelect = false;
+    for (Value pointerSelect : pointerSelects) {
+      if (!pointerSelect || pointerSelect.use_empty())
+        continue;
+
+      Operation *selectOp = pointerSelect.getDefiningOp();
+      if (!selectOp)
+        continue;
+      Value truePtr;
+      Value falsePtr;
+      if (auto select = dyn_cast<LLVM::SelectOp>(selectOp)) {
+        truePtr = select.getTrueValue();
+        falsePtr = select.getFalseValue();
+      } else if (auto select = dyn_cast<arith::SelectOp>(selectOp)) {
+        truePtr = select.getTrueValue();
+        falsePtr = select.getFalseValue();
+      } else {
+        continue;
+      }
+
+      bool usersAreMemoryOps = llvm::all_of(pointerSelect.getUsers(),
+                                            [&](Operation *user) {
+        if (auto load = dyn_cast<LLVM::LoadOp>(user))
+          return load.getAddr() == pointerSelect;
+        if (auto store = dyn_cast<LLVM::StoreOp>(user))
+          return store.getAddr() == pointerSelect;
+        return false;
+      });
+      if (!usersAreMemoryOps)
+        continue;
+
+      Value trueBase = stripPointerCasts(truePtr);
+      Value falseBase = stripPointerCasts(falsePtr);
+      auto trueAlloca = trueBase.getDefiningOp<LLVM::AllocaOp>();
+      auto falseAlloca = falseBase.getDefiningOp<LLVM::AllocaOp>();
+      if (!trueAlloca || !falseAlloca)
+        continue;
+      if (trueAlloca.getElemType() != falseAlloca.getElemType())
+        continue;
+      if (!allocaUsedOnlyBySelect(trueAlloca, pointerSelect) ||
+          !allocaUsedOnlyBySelect(falseAlloca, pointerSelect))
+        continue;
+
+      pointerSelect.replaceAllUsesWith(trueAlloca.getResult());
+      collapsedAnyPointerSelect = true;
+      if (selectOp->use_empty())
+        selectOp->erase();
+      if (falseAlloca.use_empty())
+        falseAlloca.erase();
+    }
+
+    if (collapsedAnyPointerSelect) {
+      OpBuilder builder(&body, body.begin());
+      SmallVector<PromotableAllocationOpInterface> allocators;
+      body.walk([&](PromotableAllocationOpInterface allocator) {
+        allocators.push_back(allocator);
+      });
+      if (!allocators.empty()) {
+        DataLayout dataLayout = DataLayout::closest(module);
+        DominanceInfo dominance(module);
+        (void)tryToPromoteMemorySlots(allocators, builder, dataLayout,
+                                      dominance);
+      }
+
+      while (true) {
+        SmallVector<Operation *> deadOps;
+        for (auto &op : body.without_terminator()) {
+          if (!op.use_empty())
+            continue;
+          if (isOpTriviallyDead(&op) || isa<LLVM::AllocaOp>(op))
+            deadOps.push_back(&op);
+        }
+        if (deadOps.empty())
+          break;
+        for (Operation *op : llvm::reverse(deadOps))
+          op->erase();
+      }
+    }
+  }
+
   // After CFRemover merges blocks, ops may reference values defined later in
   // the block (e.g. a hw.constant created for drive enables placed after the
   // drive that uses it). Sort the block topologically so that cloning visits
@@ -1674,7 +2108,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                                       ModuleState &state, bool strictMode) {
   bool isLocalSignal = sigOp->hasAttr(kLECLocalSignalAttr);
   struct RefStep {
-    enum Kind { StructField, Extract, ArrayElement } kind;
+    enum Kind { StructField, Extract, ArrayElement, ArraySlice } kind;
     StringAttr field;
     Value index;
     Type elemType;
@@ -1819,6 +2253,21 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         refPaths[arrayGet.getResult()] = derived;
         derivedRefs.push_back(arrayGet);
         worklist.push_back(arrayGet.getResult());
+        continue;
+      }
+      if (auto arraySlice = dyn_cast<llhd::SigArraySliceOp>(user)) {
+        RefPath derived = path;
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(arraySlice.getResult().getType());
+        if (!resultRefType)
+          return arraySlice.emitError(
+              "expected llhd.ref result for sig.array_slice");
+        derived.push_back(RefStep{RefStep::ArraySlice, {},
+                                  arraySlice.getLowIndex(),
+                                  resultRefType.getNestedType()});
+        refPaths[arraySlice.getResult()] = derived;
+        derivedRefs.push_back(arraySlice);
+        worklist.push_back(arraySlice.getResult());
         continue;
       }
       if (auto mux = dyn_cast<comb::MuxOp>(user)) {
@@ -1977,8 +2426,9 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   auto canInlinePath = [&](Type baseType, const RefPath &path) -> bool {
     Type currentType = baseType;
     for (const auto &step : path) {
+      Type canonicalCurrent = hw::getCanonicalType(currentType);
       if (step.kind == RefStep::StructField) {
-        auto structType = dyn_cast<hw::StructType>(currentType);
+        auto structType = dyn_cast<hw::StructType>(canonicalCurrent);
         if (!structType)
           return false;
         currentType = getStructFieldType(structType, step.field);
@@ -1987,8 +2437,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         continue;
       }
       if (step.kind == RefStep::Extract) {
-        auto baseInt = dyn_cast<IntegerType>(currentType);
-        auto elemInt = dyn_cast<IntegerType>(step.elemType);
+        auto baseInt = dyn_cast<IntegerType>(canonicalCurrent);
+        auto elemInt = dyn_cast<IntegerType>(hw::getCanonicalType(step.elemType));
         if (!baseInt || !elemInt)
           return false;
         auto constant = step.index.getDefiningOp<hw::ConstantOp>();
@@ -1997,14 +2447,15 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         uint64_t low = constant.getValue().getZExtValue();
         if (low + elemInt.getWidth() > baseInt.getWidth())
           return false;
-        currentType = elemInt;
+        currentType = step.elemType ? step.elemType : elemInt;
         continue;
       }
       if (step.kind == RefStep::ArrayElement) {
-        auto arrayType = dyn_cast<hw::ArrayType>(currentType);
+        auto arrayType = dyn_cast<hw::ArrayType>(canonicalCurrent);
         if (!arrayType)
           return false;
-        if (arrayType.getElementType() != step.elemType)
+        if (hw::getCanonicalType(arrayType.getElementType()) !=
+            hw::getCanonicalType(step.elemType))
           return false;
         auto indexType = dyn_cast<IntegerType>(step.index.getType());
         if (!indexType)
@@ -2014,7 +2465,29 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           if (index >= arrayType.getNumElements())
             return false;
         }
-        currentType = arrayType.getElementType();
+        currentType = step.elemType ? step.elemType : arrayType.getElementType();
+        continue;
+      }
+      if (step.kind == RefStep::ArraySlice) {
+        auto arrayType = dyn_cast<hw::ArrayType>(canonicalCurrent);
+        auto sliceType =
+            dyn_cast<hw::ArrayType>(hw::getCanonicalType(step.elemType));
+        if (!arrayType || !sliceType)
+          return false;
+        if (hw::getCanonicalType(arrayType.getElementType()) !=
+            hw::getCanonicalType(sliceType.getElementType()))
+          return false;
+        auto indexType = dyn_cast<IntegerType>(step.index.getType());
+        if (!indexType)
+          return false;
+        if (sliceType.getNumElements() > arrayType.getNumElements())
+          return false;
+        if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+          uint64_t index = constant.getValue().getZExtValue();
+          if (index + sliceType.getNumElements() > arrayType.getNumElements())
+            return false;
+        }
+        currentType = step.elemType ? step.elemType : sliceType;
         continue;
       }
     }
@@ -2025,32 +2498,60 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     Value value = baseValue;
     for (const auto &step : path) {
       if (step.kind == RefStep::StructField) {
-        value =
-            hw::StructExtractOp::create(pathBuilder, loc, value, step.field);
+        auto structType =
+            dyn_cast<hw::StructType>(hw::getCanonicalType(value.getType()));
+        if (!structType)
+          return Value();
+        Value structValue =
+            castValueToEquivalentType(pathBuilder, value, structType, loc);
+        if (!structValue)
+          return Value();
+        value = hw::StructExtractOp::create(pathBuilder, loc, structValue,
+                                            step.field);
         continue;
       }
       if (step.kind == RefStep::Extract) {
-        auto elemType = dyn_cast<IntegerType>(step.elemType);
-        auto baseType = dyn_cast<IntegerType>(value.getType());
+        auto elemType = dyn_cast<IntegerType>(hw::getCanonicalType(step.elemType));
+        auto baseType =
+            dyn_cast<IntegerType>(hw::getCanonicalType(value.getType()));
         if (!elemType || !baseType)
+          return Value();
+        Value intValue =
+            castValueToEquivalentType(pathBuilder, value, baseType, loc);
+        if (!intValue)
           return Value();
         if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
           uint64_t low = constant.getValue().getZExtValue();
-          value = comb::ExtractOp::create(pathBuilder, loc, value, low,
+          value = comb::ExtractOp::create(pathBuilder, loc, intValue, low,
                                           elemType.getWidth());
+          if (step.elemType)
+            value = castValueToEquivalentType(pathBuilder, value, step.elemType,
+                                              loc);
+          if (!value)
+            return Value();
           continue;
         }
         Value shift = adjustIntegerWidth(pathBuilder, step.index,
                                          baseType.getWidth(), loc);
         Value shifted =
-            comb::ShrUOp::create(pathBuilder, loc, value, shift);
+            comb::ShrUOp::create(pathBuilder, loc, intValue, shift);
         value = comb::ExtractOp::create(pathBuilder, loc, shifted, 0,
                                         elemType.getWidth());
+        if (step.elemType)
+          value = castValueToEquivalentType(pathBuilder, value, step.elemType,
+                                            loc);
+        if (!value)
+          return Value();
         continue;
       }
       if (step.kind == RefStep::ArrayElement) {
-        auto arrayType = dyn_cast<hw::ArrayType>(value.getType());
+        auto arrayType =
+            dyn_cast<hw::ArrayType>(hw::getCanonicalType(value.getType()));
         if (!arrayType)
+          return Value();
+        Value arrayValue =
+            castValueToEquivalentType(pathBuilder, value, arrayType, loc);
+        if (!arrayValue)
           return Value();
         auto indexType = dyn_cast<IntegerType>(step.index.getType());
         if (!indexType)
@@ -2060,12 +2561,219 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           if (index >= arrayType.getNumElements())
             return Value();
         }
-        value = hw::ArrayGetOp::create(pathBuilder, loc, value, step.index);
+        value = hw::ArrayGetOp::create(pathBuilder, loc, arrayValue, step.index);
+        if (step.elemType)
+          value = castValueToEquivalentType(pathBuilder, value, step.elemType,
+                                            loc);
+        if (!value)
+          return Value();
+        continue;
+      }
+      if (step.kind == RefStep::ArraySlice) {
+        auto arrayType =
+            dyn_cast<hw::ArrayType>(hw::getCanonicalType(value.getType()));
+        auto sliceType =
+            dyn_cast<hw::ArrayType>(hw::getCanonicalType(step.elemType));
+        if (!arrayType || !sliceType)
+          return Value();
+        if (hw::getCanonicalType(arrayType.getElementType()) !=
+            hw::getCanonicalType(sliceType.getElementType()))
+          return Value();
+        Value arrayValue =
+            castValueToEquivalentType(pathBuilder, value, arrayType, loc);
+        if (!arrayValue)
+          return Value();
+        auto indexType = dyn_cast<IntegerType>(step.index.getType());
+        if (!indexType)
+          return Value();
+        if (sliceType.getNumElements() > arrayType.getNumElements())
+          return Value();
+        if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+          uint64_t index = constant.getValue().getZExtValue();
+          if (index + sliceType.getNumElements() > arrayType.getNumElements())
+            return Value();
+        }
+        value = hw::ArraySliceOp::create(pathBuilder, loc, sliceType,
+                                         arrayValue, step.index);
+        if (step.elemType)
+          value = castValueToEquivalentType(pathBuilder, value, step.elemType,
+                                            loc);
+        if (!value)
+          return Value();
         continue;
       }
     }
     return value;
   };
+  DenseMap<Value, RefPath> derivedPathCache;
+  llvm::SmallPtrSet<Value, 16> derivedPathCacheMisses;
+  auto derivePathFromRef = [&](Value ref) -> std::optional<RefPath> {
+    Value originalRef = ref;
+    bool skipInitialRefPathLookup = ref.getDefiningOp() != nullptr;
+    if (auto it = derivedPathCache.find(originalRef);
+        it != derivedPathCache.end())
+      return it->second;
+    if (derivedPathCacheMisses.contains(originalRef))
+      return std::nullopt;
+
+    RefPath suffix;
+    llvm::SmallPtrSet<Value, 16> seen;
+    while (ref != sigOp.getResult()) {
+      if (!seen.insert(ref).second)
+        break;
+      bool allowRefPathLookup =
+          !(skipInitialRefPathLookup && ref == originalRef);
+      if (allowRefPathLookup) {
+        if (auto it = refPaths.find(ref); it != refPaths.end()) {
+          RefPath combined = it->second;
+          combined.append(llvm::reverse(suffix).begin(),
+                          llvm::reverse(suffix).end());
+          derivedPathCache[originalRef] = combined;
+          return combined;
+        }
+      }
+      if (auto structExtract = ref.getDefiningOp<llhd::SigStructExtractOp>()) {
+        suffix.push_back(
+            RefStep{RefStep::StructField, structExtract.getFieldAttr(),
+                    Value(), {}});
+        ref = structExtract.getInput();
+        continue;
+      }
+      if (auto bitExtract = ref.getDefiningOp<llhd::SigExtractOp>()) {
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(bitExtract.getResult().getType());
+        if (!resultRefType)
+          return std::nullopt;
+        suffix.push_back(RefStep{RefStep::Extract, {}, bitExtract.getLowBit(),
+                                 resultRefType.getNestedType()});
+        ref = bitExtract.getInput();
+        continue;
+      }
+      if (auto arrayGet = ref.getDefiningOp<llhd::SigArrayGetOp>()) {
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(arrayGet.getResult().getType());
+        if (!resultRefType)
+          return std::nullopt;
+        suffix.push_back(RefStep{RefStep::ArrayElement, {}, arrayGet.getIndex(),
+                                 resultRefType.getNestedType()});
+        ref = arrayGet.getInput();
+        continue;
+      }
+      if (auto arraySlice = ref.getDefiningOp<llhd::SigArraySliceOp>()) {
+        auto resultRefType =
+            dyn_cast<llhd::RefType>(arraySlice.getResult().getType());
+        if (!resultRefType)
+          return std::nullopt;
+        suffix.push_back(RefStep{RefStep::ArraySlice, {},
+                                 arraySlice.getLowIndex(),
+                                 resultRefType.getNestedType()});
+        ref = arraySlice.getInput();
+        continue;
+      }
+      if (auto cast = ref.getDefiningOp<UnrealizedConversionCastOp>()) {
+        if (cast.getInputs().size() == 1 && cast.getResults().size() == 1 &&
+            isa<llhd::RefType>(cast.getInputs().front().getType()) &&
+            isa<llhd::RefType>(cast.getResults().front().getType())) {
+          ref = cast.getInputs().front();
+          continue;
+        }
+      }
+      derivedPathCacheMisses.insert(originalRef);
+      return std::nullopt;
+    }
+    if (ref != sigOp.getResult()) {
+      derivedPathCacheMisses.insert(originalRef);
+      return std::nullopt;
+    }
+    RefPath path;
+    path.append(llvm::reverse(suffix).begin(), llvm::reverse(suffix).end());
+    derivedPathCache[originalRef] = path;
+    return path;
+  };
+  auto getProbePath = [&](llhd::ProbeOp probe) -> RefPath {
+    if (auto it = probePaths.find(probe); it != probePaths.end()) {
+      if (!it->second.empty() || probe.getSignal() == sigOp.getResult())
+        return it->second;
+    }
+    if (probe.getSignal() == sigOp.getResult())
+      return {};
+    if (auto derived = derivePathFromRef(probe.getSignal())) {
+      probePaths[probe] = *derived;
+      return *derived;
+    }
+    if (auto it = refPaths.find(probe.getSignal()); it != refPaths.end())
+      return it->second;
+    return {};
+  };
+  auto materializeProbeValue = [&](OpBuilder &pathBuilder, Value baseValue,
+                                   llhd::ProbeOp probe) -> Value {
+    RefPath probePath = getProbePath(probe);
+    Value replacement =
+        materializePath(pathBuilder, baseValue, probePath, probe.getLoc());
+    if (replacement)
+      return replacement;
+    if (auto derived = derivePathFromRef(probe.getSignal())) {
+      if (!pathsEqual(probePath, *derived)) {
+        probePaths[probe] = *derived;
+        replacement =
+            materializePath(pathBuilder, baseValue, *derived, probe.getLoc());
+      }
+    }
+    return replacement;
+  };
+  auto formatRefPath = [&](const RefPath &path) {
+    std::string text;
+    llvm::raw_string_ostream os(text);
+    os << "[";
+    bool first = true;
+    for (const auto &step : path) {
+      if (!first)
+        os << ", ";
+      first = false;
+      if (step.kind == RefStep::StructField) {
+        os << "field:" << step.field;
+        continue;
+      }
+      if (step.kind == RefStep::Extract) {
+        os << "extract(";
+        if (step.index)
+          os << step.index;
+        else
+          os << "<null>";
+        os << ")->" << step.elemType;
+        continue;
+      }
+      if (step.kind == RefStep::ArraySlice) {
+        os << "slice(";
+        if (step.index)
+          os << step.index;
+        else
+          os << "<null>";
+        os << ")->" << step.elemType;
+        continue;
+      }
+      os << "array(";
+      if (step.index)
+        os << step.index;
+      else
+        os << "<null>";
+      os << ")->" << step.elemType;
+    }
+    os << "]";
+    os.flush();
+    return text;
+  };
+  auto emitUnsupportedProbePath = [&](llhd::ProbeOp probe, Value baseValue) {
+    auto diag = probe.emitError("unsupported LLHD probe path in LEC");
+    RefPath probePath = getProbePath(probe);
+    diag << " (base type " << baseValue.getType() << ", probe type "
+         << probe.getResult().getType() << ", path "
+         << formatRefPath(probePath) << ")";
+    return failure();
+  };
+
+  for (auto probe : probes)
+    probePaths[probe] = getProbePath(probe);
   auto materializeValueBeforeUse =
       [&](auto &&self, Value value, Operation *useOp, OpBuilder &pathBuilder,
           IRMapping &mapping) -> Value {
@@ -2118,12 +2826,14 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           for (auto probe : probes) {
             OpBuilder probeBuilder(probe);
             Value replacement =
-                materializePath(probeBuilder, portValue,
-                                probePaths.lookup(probe), probe.getLoc());
+                materializeProbeValue(probeBuilder, portValue, probe);
             if (!replacement)
-              return probe.emitError("unsupported LLHD probe path in LEC");
+              return emitUnsupportedProbePath(probe, portValue);
             if (replacement.getType() != probe.getResult().getType())
-              return probe.emitError("signal probe type mismatch in LEC");
+              return probe.emitError()
+                     << "signal probe type mismatch in LEC: replacement type "
+                     << replacement.getType() << ", probe type "
+                     << probe.getResult().getType();
             probe.getResult().replaceAllUsesWith(replacement);
             probe.erase();
           }
@@ -2150,8 +2860,13 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       return updateValue;
     const RefStep &step = path.front();
     if (step.kind == RefStep::StructField) {
-      auto structType = dyn_cast<hw::StructType>(baseValue.getType());
+      auto structType =
+          dyn_cast<hw::StructType>(hw::getCanonicalType(baseValue.getType()));
       if (!structType)
+        return Value();
+      Value structValue =
+          castValueToEquivalentType(pathBuilder, baseValue, structType, loc);
+      if (!structValue)
         return Value();
       bool isFourStateStruct = isFourStateStructType(structType);
       StringAttr unknownFieldName;
@@ -2166,9 +2881,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       SmallVector<Value, 4> fields;
       fields.reserve(structType.getElements().size());
       for (const auto &element : structType.getElements()) {
-        Value fieldValue =
-            hw::StructExtractOp::create(pathBuilder, loc, baseValue,
-                                        element.name);
+        Value fieldValue = hw::StructExtractOp::create(pathBuilder, loc,
+                                                       structValue, element.name);
         if (element.name == step.field) {
           fieldValue = self(self, pathBuilder, fieldValue, path.drop_front(),
                             updateValue, loc);
@@ -2179,7 +2893,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             auto updateInt = dyn_cast<IntegerType>(updateValue.getType());
             if (updateInt) {
               Value unknownValue = hw::StructExtractOp::create(
-                  pathBuilder, loc, baseValue, unknownFieldName);
+                  pathBuilder, loc, structValue, unknownFieldName);
               Value zeroUpdate =
                   createZeroValue(pathBuilder, loc, updateValue.getType());
               Value updatedUnknown =
@@ -2192,26 +2906,36 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
               updatedFields.reserve(structType.getElements().size());
               for (const auto &nested : structType.getElements()) {
                 Value nestedValue = hw::StructExtractOp::create(
-                    pathBuilder, loc, baseValue, nested.name);
+                    pathBuilder, loc, structValue, nested.name);
                 if (nested.name == step.field)
                   nestedValue = fieldValue;
                 else if (nested.name == unknownFieldName)
                   nestedValue = unknownFieldValue;
                 updatedFields.push_back(nestedValue);
               }
-              return hw::StructCreateOp::create(pathBuilder, loc, structType,
-                                                updatedFields);
+              Value result = hw::StructCreateOp::create(pathBuilder, loc,
+                                                        structType, updatedFields);
+              return castValueToEquivalentType(pathBuilder, result,
+                                               baseValue.getType(), loc);
             }
           }
         }
         fields.push_back(fieldValue);
       }
-      return hw::StructCreateOp::create(pathBuilder, loc, structType, fields);
+      Value result =
+          hw::StructCreateOp::create(pathBuilder, loc, structType, fields);
+      return castValueToEquivalentType(pathBuilder, result, baseValue.getType(),
+                                       loc);
     }
     if (step.kind == RefStep::Extract) {
-      auto baseInt = dyn_cast<IntegerType>(baseValue.getType());
-      auto elemInt = dyn_cast<IntegerType>(step.elemType);
+      auto baseInt =
+          dyn_cast<IntegerType>(hw::getCanonicalType(baseValue.getType()));
+      auto elemInt = dyn_cast<IntegerType>(hw::getCanonicalType(step.elemType));
       if (!baseInt || !elemInt)
+        return Value();
+      Value intBaseValue =
+          castValueToEquivalentType(pathBuilder, baseValue, baseInt, loc);
+      if (!intBaseValue)
         return Value();
       auto constant = step.index.getDefiningOp<hw::ConstantOp>();
       if (!constant)
@@ -2221,28 +2945,38 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       unsigned baseWidth = baseInt.getWidth();
       if (low + elemWidth > baseWidth)
         return Value();
-      Value updated =
-          adjustIntegerWidth(pathBuilder, updateValue, elemWidth, loc);
+      Value updated = castValueToEquivalentType(pathBuilder, updateValue,
+                                                elemInt, loc);
+      if (!updated)
+        return Value();
+      updated = adjustIntegerWidth(pathBuilder, updated, elemWidth, loc);
       SmallVector<Value, 3> pieces;
       if (low + elemWidth < baseWidth) {
         Value upper = comb::ExtractOp::create(
-            pathBuilder, loc, baseValue, low + elemWidth,
+            pathBuilder, loc, intBaseValue, low + elemWidth,
             baseWidth - low - elemWidth);
         pieces.push_back(upper);
       }
       pieces.push_back(updated);
       if (low > 0) {
         Value lower =
-            comb::ExtractOp::create(pathBuilder, loc, baseValue, 0, low);
+            comb::ExtractOp::create(pathBuilder, loc, intBaseValue, 0, low);
         pieces.push_back(lower);
       }
-      if (pieces.size() == 1)
-        return pieces.front();
-      return comb::ConcatOp::create(pathBuilder, loc, pieces);
+      Value result = pieces.size() == 1
+                         ? pieces.front()
+                         : comb::ConcatOp::create(pathBuilder, loc, pieces);
+      return castValueToEquivalentType(pathBuilder, result, baseValue.getType(),
+                                       loc);
     }
     if (step.kind == RefStep::ArrayElement) {
-      auto arrayType = dyn_cast<hw::ArrayType>(baseValue.getType());
+      auto arrayType =
+          dyn_cast<hw::ArrayType>(hw::getCanonicalType(baseValue.getType()));
       if (!arrayType)
+        return Value();
+      Value arrayValue =
+          castValueToEquivalentType(pathBuilder, baseValue, arrayType, loc);
+      if (!arrayValue)
         return Value();
       auto indexType = dyn_cast<IntegerType>(step.index.getType());
       if (!indexType)
@@ -2252,14 +2986,104 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         if (index >= arrayType.getNumElements())
           return Value();
       }
-      Value element =
-          hw::ArrayGetOp::create(pathBuilder, loc, baseValue, step.index);
+      Value element = hw::ArrayGetOp::create(pathBuilder, loc, arrayValue,
+                                             step.index);
+      if (step.elemType) {
+        element = castValueToEquivalentType(pathBuilder, element, step.elemType,
+                                            loc);
+        if (!element)
+          return Value();
+      }
       Value updatedElement =
           self(self, pathBuilder, element, path.drop_front(), updateValue, loc);
       if (!updatedElement)
         return Value();
-      return hw::ArrayInjectOp::create(pathBuilder, loc, baseValue, step.index,
-                                       updatedElement);
+      updatedElement = castValueToEquivalentType(pathBuilder, updatedElement,
+                                                 arrayType.getElementType(),
+                                                 loc);
+      if (!updatedElement)
+        return Value();
+      Value result = hw::ArrayInjectOp::create(pathBuilder, loc, arrayValue,
+                                               step.index, updatedElement);
+      return castValueToEquivalentType(pathBuilder, result, baseValue.getType(),
+                                       loc);
+    }
+    if (step.kind == RefStep::ArraySlice) {
+      auto baseArrayType =
+          dyn_cast<hw::ArrayType>(hw::getCanonicalType(baseValue.getType()));
+      auto sliceArrayType =
+          dyn_cast<hw::ArrayType>(hw::getCanonicalType(step.elemType));
+      if (!baseArrayType || !sliceArrayType)
+        return Value();
+      if (hw::getCanonicalType(baseArrayType.getElementType()) !=
+          hw::getCanonicalType(sliceArrayType.getElementType()))
+        return Value();
+      if (sliceArrayType.getNumElements() > baseArrayType.getNumElements())
+        return Value();
+      Value baseArray =
+          castValueToEquivalentType(pathBuilder, baseValue, baseArrayType, loc);
+      if (!baseArray)
+        return Value();
+      auto baseIndexType = dyn_cast<IntegerType>(step.index.getType());
+      if (!baseIndexType)
+        return Value();
+      if (auto constant = step.index.getDefiningOp<hw::ConstantOp>()) {
+        uint64_t index = constant.getValue().getZExtValue();
+        if (index + sliceArrayType.getNumElements() >
+            baseArrayType.getNumElements())
+          return Value();
+      }
+
+      Value slice = hw::ArraySliceOp::create(pathBuilder, loc, sliceArrayType,
+                                             baseArray, step.index);
+      if (step.elemType) {
+        slice = castValueToEquivalentType(pathBuilder, slice, step.elemType,
+                                          loc);
+        if (!slice)
+          return Value();
+      }
+      Value updatedSlice =
+          self(self, pathBuilder, slice, path.drop_front(), updateValue, loc);
+      if (!updatedSlice)
+        return Value();
+      updatedSlice = castValueToEquivalentType(pathBuilder, updatedSlice,
+                                               sliceArrayType, loc);
+      if (!updatedSlice)
+        return Value();
+
+      unsigned numSliceElems = sliceArrayType.getNumElements();
+      if (numSliceElems == 0)
+        return castValueToEquivalentType(pathBuilder, baseArray,
+                                         baseValue.getType(), loc);
+      unsigned baseIndexWidth = baseIndexType.getWidth();
+      unsigned sliceIndexWidth =
+          numSliceElems == 1 ? 1 : llvm::Log2_64_Ceil(numSliceElems);
+      auto sliceIndexType = pathBuilder.getIntegerType(sliceIndexWidth);
+
+      Value result = baseArray;
+      for (unsigned i = 0; i < numSliceElems; ++i) {
+        Value sliceIndex = hw::ConstantOp::create(
+            pathBuilder, loc,
+            pathBuilder.getIntegerAttr(sliceIndexType,
+                                       APInt(sliceIndexWidth, i)));
+        Value element =
+            hw::ArrayGetOp::create(pathBuilder, loc, updatedSlice, sliceIndex);
+        Value targetIndex = step.index;
+        if (i != 0) {
+          Value offset = hw::ConstantOp::create(
+              pathBuilder, loc,
+              pathBuilder.getIntegerAttr(pathBuilder.getIntegerType(
+                                             baseIndexWidth),
+                                         APInt(baseIndexWidth, i)));
+          targetIndex =
+              comb::AddOp::create(pathBuilder, loc, targetIndex, offset);
+        }
+        result = hw::ArrayInjectOp::create(pathBuilder, loc, result,
+                                           targetIndex, element);
+      }
+
+      return castValueToEquivalentType(pathBuilder, result, baseValue.getType(),
+                                       loc);
     }
     return Value();
   };
@@ -2267,9 +3091,9 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   bool canInline = forwardedArgs.empty();
   Block *singleBlock = nullptr;
   for (auto probe : probes) {
-    if (!probePaths.lookup(probe).empty()) {
-      if (!canInlinePath(sigOp.getType().getNestedType(),
-                         probePaths.lookup(probe)))
+    RefPath probePath = getProbePath(probe);
+    if (!probePath.empty()) {
+      if (!canInlinePath(sigOp.getType().getNestedType(), probePath))
         canInline = false;
     }
     Block *block = probe->getBlock();
@@ -2330,13 +3154,15 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       Value drivenValue = driveOp.getValue();
       for (auto probe : probes) {
         OpBuilder probeBuilder(probe);
-        Value replacement = materializePath(probeBuilder, drivenValue,
-                                            probePaths.lookup(probe),
-                                            probe.getLoc());
+        Value replacement =
+            materializeProbeValue(probeBuilder, drivenValue, probe);
         if (!replacement)
-          return probe.emitError("unsupported LLHD probe path in LEC");
+          return emitUnsupportedProbePath(probe, drivenValue);
         if (replacement.getType() != probe.getResult().getType())
-          return probe.emitError("signal probe type mismatch in LEC");
+          return probe.emitError()
+                 << "signal probe type mismatch in LEC: replacement type "
+                 << replacement.getType() << ", probe type "
+                 << probe.getResult().getType();
         probe.getResult().replaceAllUsesWith(replacement);
         probe.erase();
       }
@@ -2377,13 +3203,15 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       if (dominatesAllProbes) {
         for (auto probe : probes) {
           OpBuilder probeBuilder(probe);
-          Value replacement = materializePath(probeBuilder, drivenValue,
-                                              probePaths.lookup(probe),
-                                              probe.getLoc());
+          Value replacement =
+              materializeProbeValue(probeBuilder, drivenValue, probe);
           if (!replacement)
             return probe.emitError("unsupported LLHD probe path in LEC");
           if (replacement.getType() != probe.getResult().getType())
-            return probe.emitError("signal probe type mismatch in LEC");
+            return probe.emitError()
+                   << "signal probe type mismatch in LEC: replacement type "
+                   << replacement.getType() << ", probe type "
+                   << probe.getResult().getType();
           probe.getResult().replaceAllUsesWith(replacement);
           probe.erase();
         }
@@ -2427,13 +3255,15 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
 
       for (auto probe : probes) {
         OpBuilder probeBuilder(probe);
-        Value replacement = materializePath(probeBuilder, drivenValue,
-                                            probePaths.lookup(probe),
-                                            probe.getLoc());
+        Value replacement =
+            materializeProbeValue(probeBuilder, drivenValue, probe);
         if (!replacement)
-          return probe.emitError("unsupported LLHD probe path in LEC");
+          return emitUnsupportedProbePath(probe, drivenValue);
         if (replacement.getType() != probe.getResult().getType())
-          return probe.emitError("signal probe type mismatch in LEC");
+          return probe.emitError()
+                 << "signal probe type mismatch in LEC: replacement type "
+                 << replacement.getType() << ", probe type "
+                 << probe.getResult().getType();
         probe.getResult().replaceAllUsesWith(replacement);
         probe.erase();
       }
@@ -2453,24 +3283,37 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
     }
   }
 
+  SmallVector<Operation *> signalOpsInOrder;
+  if (singleBlock) {
+    signalOpsInOrder.reserve(drives.size() + probes.size());
+    for (auto driveOp : drives) {
+      if (driveOp->getBlock() == singleBlock)
+        signalOpsInOrder.push_back(driveOp.getOperation());
+    }
+    for (auto probe : probes) {
+      if (probe->getBlock() == singleBlock)
+        signalOpsInOrder.push_back(probe.getOperation());
+    }
+    llvm::sort(signalOpsInOrder, [](Operation *lhs, Operation *rhs) {
+      return lhs->isBeforeInBlock(rhs);
+    });
+  }
+
   if (canInline && singleBlock) {
     if (!isLocalSignal && drives.size() > 1 && !allDrivesSameValue(drives)) {
       bool probesAfterDrives = true;
       Operation *firstProbe = nullptr;
       bool sawProbe = false;
-      for (auto &op : *singleBlock) {
-        if (auto probe = dyn_cast<llhd::ProbeOp>(&op)) {
-          if (probe.getSignal() == sigOp.getResult()) {
-            sawProbe = true;
-            if (!firstProbe)
-              firstProbe = probe.getOperation();
-          }
+      for (Operation *op : signalOpsInOrder) {
+        if (auto probe = dyn_cast<llhd::ProbeOp>(op)) {
+          sawProbe = true;
+          if (!firstProbe)
+            firstProbe = probe.getOperation();
+          continue;
         }
-        if (auto drive = dyn_cast<llhd::DriveOp>(&op)) {
-          if (drive.getSignal() == sigOp.getResult() && sawProbe) {
-            probesAfterDrives = false;
-            break;
-          }
+        if (isa<llhd::DriveOp>(op) && sawProbe) {
+          probesAfterDrives = false;
+          break;
         }
       }
 
@@ -2543,8 +3386,8 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       if ((probesAfterDrives || inputsDominateProbe) && firstProbe) {
         if (preferOrderedDriveSemantics) {
           Value resolved = sigOp.getInit();
-          for (auto it = singleBlock->begin(); it != singleBlock->end(); ++it) {
-            auto driveOp = dyn_cast<llhd::DriveOp>(&*it);
+          for (Operation *op : signalOpsInOrder) {
+            auto driveOp = dyn_cast<llhd::DriveOp>(op);
             if (!driveOp || driveOp.getSignal() != sigOp.getResult())
               continue;
             OpBuilder driveBuilder(driveOp);
@@ -2576,10 +3419,9 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
             for (auto probe : probes) {
               OpBuilder probeBuilder(probe);
               Value replacement =
-                  materializePath(probeBuilder, resolved,
-                                  probePaths.lookup(probe), probe.getLoc());
+                  materializeProbeValue(probeBuilder, resolved, probe);
               if (!replacement)
-                return probe.emitError("unsupported LLHD probe path in LEC");
+                return emitUnsupportedProbePath(probe, resolved);
               if (replacement.getType() != probe.getResult().getType())
                 return probe.emitError(
                     "failed to resolve LLHD multi-drive signal value");
@@ -2607,7 +3449,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
           return !drivePaths.lookup(drive).empty();
         });
         bool hasPathfulProbe = llvm::any_of(probes, [&](llhd::ProbeOp probe) {
-          return !probePaths.lookup(probe).empty();
+          return !getProbePath(probe).empty();
         });
         // Pathful refs (e.g. sig.array_get / sig.extract) target subelements
         // of the signal. Resolving those as concurrent whole-signal drives can
@@ -2728,8 +3570,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
               drives.front().getValue(), sigOp.getType().getNestedType()))
         current = drivenValue;
     }
-    for (auto it = singleBlock->begin(); it != singleBlock->end();) {
-      Operation *op = &*it++;
+    for (Operation *op : signalOpsInOrder) {
       if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
         auto pathIt = drivePaths.find(driveOp);
         if (pathIt == drivePaths.end())
@@ -2758,15 +3599,11 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         continue;
       }
       if (auto probe = dyn_cast<llhd::ProbeOp>(op)) {
-        auto pathIt = probePaths.find(probe);
-        if (pathIt == probePaths.end())
-          continue;
         OpBuilder probeBuilder(probe);
         Value replacement =
-            materializePath(probeBuilder, current, pathIt->second,
-                            probe.getLoc());
+            materializeProbeValue(probeBuilder, current, probe);
         if (!replacement)
-          return probe.emitError("unsupported LLHD probe path in LEC");
+          return emitUnsupportedProbePath(probe, current);
         probe.getResult().replaceAllUsesWith(replacement);
         probe.erase();
         continue;
@@ -2797,7 +3634,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       return drivePaths.lookup(d).empty();
     });
     bool allProbesSimplePath = llvm::all_of(probes, [&](llhd::ProbeOp p) {
-      return probePaths.lookup(p).empty();
+      return getProbePath(p).empty();
     });
     bool resolveEnabledDrives =
         strictMode && !isLocalSignal && canResolveEnabledDrives(drives) &&
@@ -2865,7 +3702,10 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                 }
               }
               if (replacement.getType() != probe.getResult().getType())
-                return probe.emitError("signal probe type mismatch in LEC");
+                return probe.emitError()
+                       << "signal probe type mismatch in LEC: replacement type "
+                       << replacement.getType() << ", probe type "
+                       << probe.getResult().getType();
               probe.getResult().replaceAllUsesWith(replacement);
               probe.erase();
             }
@@ -2921,8 +3761,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         // conflict resolution.
         if (hasUnconditionalDrive || hasProcessResultDrive) {
           Value current = sigOp.getInit();
-          for (auto it = singleBlock->begin(); it != singleBlock->end();) {
-            Operation *op = &*it++;
+          for (Operation *op : signalOpsInOrder) {
             if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
               if (driveOp.getSignal() != sigOp.getResult())
                 continue;
@@ -2985,8 +3824,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
         unsigned defaultStrength =
             static_cast<unsigned>(llhd::DriveStrength::Strong);
 
-        for (auto it = singleBlock->begin(); it != singleBlock->end();) {
-          Operation *op = &*it++;
+        for (Operation *op : signalOpsInOrder) {
           if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
             if (driveOp.getSignal() == sigOp.getResult()) {
               Value driveValue = getStoredValueForExpectedType(
@@ -3097,8 +3935,7 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
       if (!isLocalSignal && drives.size() == 1 && !drives.front().getEnable() &&
           isZeroTimeLike(drives.front()))
         current = drives.front().getValue();
-      for (auto it = singleBlock->begin(); it != singleBlock->end();) {
-        Operation *op = &*it++;
+      for (Operation *op : signalOpsInOrder) {
         if (auto driveOp = dyn_cast<llhd::DriveOp>(op)) {
           if (driveOp.getSignal() == sigOp.getResult()) {
             if (Value enable = driveOp.getEnable()) {
@@ -3175,13 +4012,16 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
                                     /*fieldIndex=*/std::nullopt,
                                     sigOp.getLoc());
     for (auto probe : probes) {
+      OpBuilder probeBuilder(probe);
       Value replacement =
-          materializePath(builder, newInput, probePaths.lookup(probe),
-                          probe.getLoc());
+          materializeProbeValue(probeBuilder, newInput, probe);
       if (!replacement)
-        return probe.emitError("unsupported LLHD probe path in LEC");
+        return emitUnsupportedProbePath(probe, newInput);
       if (replacement.getType() != probe.getResult().getType())
-        return probe.emitError("signal probe type mismatch in LEC");
+        return probe.emitError()
+               << "signal probe type mismatch in LEC: replacement type "
+               << replacement.getType() << ", probe type "
+               << probe.getResult().getType();
       probe.getResult().replaceAllUsesWith(replacement);
       probe.erase();
     }
@@ -3202,13 +4042,16 @@ static LogicalResult stripPlainSignal(llhd::SignalOp sigOp, DominanceInfo &dom,
   }
 
   for (auto probe : probes) {
+    OpBuilder probeBuilder(probe);
     Value replacement =
-        materializePath(builder, drivenValue, probePaths.lookup(probe),
-                        probe.getLoc());
+        materializeProbeValue(probeBuilder, drivenValue, probe);
     if (!replacement)
-      return probe.emitError("unsupported LLHD probe path in LEC");
+      return emitUnsupportedProbePath(probe, drivenValue);
     if (replacement.getType() != probe.getResult().getType())
-      return probe.emitError("signal probe type mismatch in LEC");
+      return probe.emitError()
+             << "signal probe type mismatch in LEC: replacement type "
+             << replacement.getType() << ", probe type "
+             << probe.getResult().getType();
     probe.getResult().replaceAllUsesWith(replacement);
     probe.erase();
   }
@@ -4006,6 +4849,17 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
     }
   }
 
+  // Final blocks are simulation epilogues. They commonly hold time/print/error
+  // logic that is irrelevant to combinational equivalence checking and is not
+  // consumed by the LLHD interface stripping below.
+  SmallVector<llhd::FinalOp> finals;
+  module.walk([&](llhd::FinalOp finalOp) {
+    if (finalOp->getParentOfType<hw::HWModuleOp>())
+      finals.push_back(finalOp);
+  });
+  for (auto finalOp : finals)
+    finalOp.erase();
+
   SmallVector<llhd::SignalOp> signals;
   module.walk([&](llhd::SignalOp sigOp) { signals.push_back(sigOp); });
 
@@ -4024,6 +4878,11 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
       sigOp.emitError("failed to strip llhd.signal for LEC");
       return signalPassFailure();
     }
+  }
+
+  if (failed(lowerProjectedLocalRefProbes(module.getOperation()))) {
+    module.emitError("failed to lower projected local llhd.ref probes for LEC");
+    return signalPassFailure();
   }
 
   SmallVector<llhd::ConstantTimeOp> times;
@@ -4123,16 +4982,29 @@ void StripLLHDInterfaceSignalsPass::runOnOperation() {
   }
 
   bool hasLLHD = false;
+  Operation *firstResidualLLHD = nullptr;
+  SmallVector<Operation *, 8> residualLLHDOps;
   module.walk([&](Operation *op) {
     if (!isa<llhd::LLHDDialect>(op->getDialect()))
       return;
     // LEC only reasons about hw.module bodies. Residual LLHD in helper
     // functions/classes outside hw.module should not fail this pass.
-    if (op->getParentOfType<hw::HWModuleOp>())
+    if (op->getParentOfType<hw::HWModuleOp>()) {
       hasLLHD = true;
+      if (!firstResidualLLHD)
+        firstResidualLLHD = op;
+      if (residualLLHDOps.size() < 8)
+        residualLLHDOps.push_back(op);
+    }
   });
   if (hasLLHD && requireNoLLHD) {
-    module.emitError("LLHD operations are not supported by circt-lec");
+    auto diag = module.emitError("LLHD operations are not supported by circt-lec");
+    if (firstResidualLLHD)
+      diag.attachNote(firstResidualLLHD->getLoc())
+          << "first residual LLHD op: " << firstResidualLLHD->getName();
+    for (Operation *op : residualLLHDOps) {
+      diag.attachNote(op->getLoc()) << "residual LLHD op: " << op->getName();
+    }
     return signalPassFailure();
   }
 }

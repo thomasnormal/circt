@@ -1316,3 +1316,43 @@
   - `build_test/bin/llvm-lit -sv test/Conversion/MooreToCore -j 8`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm -j 8`
   - result: both suites pass (MooreToCore 133/133, Runtime/uvm 17/17).
+
+### LEC strip: add `llhd.sig.array_slice` path support (main strip path)
+- Repro:
+  - Minimal reproducer failed in `strip-llhd-interface-signals`:
+    - `unsupported LLHD signal use in LEC: llhd.sig.array_slice`
+  - Command used:
+    - `build_test/bin/circt-opt --strip-llhd-interface-signals /tmp/array_slice_repro.mlir`
+- Root cause:
+  - `StripLLHDInterfaceSignals` handled `sig.struct_extract`, `sig.extract`,
+    and `sig.array_get` paths, but not `sig.array_slice`.
+  - This blocked inlining/materialization/update of sliced signal refs.
+- Fix:
+  - Extended main signal-strip path machinery to model slice steps:
+    - Added `RefStep::ArraySlice`.
+    - Taught use-collection and backtracking (`derivePathFromRef`) to
+      recognize `llhd.sig.array_slice`.
+    - Added `ArraySlice` handling in:
+      - path validation (`canInlinePath`),
+      - path materialization (`materializePath`),
+      - path updates (`updatePath`) via extract + reinject.
+    - Added ref-path formatter support for slice diagnostics.
+  - Regression test added:
+    - `test/Tools/circt-lec/lec-strip-llhd-signal-array-slice.mlir`
+- Engineering surprise / rollback:
+  - I initially also added `array_slice` handling to
+    `lowerProjectedLocalRefProbes` (local projected-ref helper).
+  - That caused UVM sv-tests smoke errors
+    (`unsupported_projected_local_llhd_ref_drive_path_update_in_lec`), so I
+    rolled back the local-helper slice changes and kept support only in the
+    main strip path for this step.
+- Validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - New + nearby strip regressions:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-signal-array-slice.mlir`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-signal-array-get.mlir`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd-signal-array-get-typealias.mlir`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd*.mlir`
+  - Result:
+    - All targeted/core `lec-strip-llhd*` tests passed with this change.
