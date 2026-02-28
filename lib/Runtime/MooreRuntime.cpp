@@ -2759,18 +2759,52 @@ extern "C" int32_t __moore_value_plusargs(const char *format, int64_t fmtLen,
 // Simulation Control Operations
 //===----------------------------------------------------------------------===//
 
+namespace {
+struct WaitConditionPollState {
+  MooreWaitConditionPollCallback callback = nullptr;
+  void *userData = nullptr;
+  std::mutex mutex;
+};
+
+WaitConditionPollState &getWaitConditionPollState() {
+  static WaitConditionPollState state;
+  return state;
+}
+} // namespace
+
+extern "C" void __moore_wait_condition_set_poll_callback(
+    MooreWaitConditionPollCallback callback, void *userData) {
+  auto &state = getWaitConditionPollState();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.callback = callback;
+  state.userData = callback ? userData : nullptr;
+}
+
 extern "C" void __moore_wait_condition(int32_t condition) {
-  // In a real simulation environment, this would suspend the current process
-  // until the condition becomes true. Since simulation timing is not directly
-  // supported in the compiled output, this function serves as a placeholder
-  // that can be implemented by the simulation runtime.
-  //
-  // For now, we simply check the condition - if it's already true, we return
-  // immediately. In a full simulation environment, if the condition is false,
-  // the runtime would need to suspend and re-evaluate when signals change.
-  (void)condition;
-  // TODO: Implement proper simulation-aware waiting when a simulation
-  // scheduler is available.
+  if (condition)
+    return;
+
+  MooreWaitConditionPollCallback callback = nullptr;
+  void *userData = nullptr;
+  {
+    auto &state = getWaitConditionPollState();
+    std::lock_guard<std::mutex> lock(state.mutex);
+    callback = state.callback;
+    userData = state.userData;
+  }
+
+  // Legacy fallback for standalone compiled mode without scheduler integration.
+  if (!callback)
+    return;
+
+  // Scheduler-assisted waiting: block/yield via callback until it reports the
+  // condition has become true.
+  do {
+    condition = callback(userData);
+    if (condition)
+      return;
+    std::this_thread::yield();
+  } while (true);
 }
 
 //===----------------------------------------------------------------------===//
@@ -3977,8 +4011,9 @@ extern "C" void *__moore_covergroup_create(const char *name,
   return cg;
 }
 
-extern "C" void __moore_coverpoint_init(void *cg, int32_t cp_index,
-                                         const char *name) {
+extern "C" void __moore_coverpoint_init_with_width(void *cg, int32_t cp_index,
+                                                    const char *name,
+                                                    int32_t declared_width) {
   auto *covergroup = static_cast<MooreCovergroup *>(cg);
   if (!covergroup || cp_index < 0 || cp_index >= covergroup->num_coverpoints)
     return;
@@ -3996,6 +4031,7 @@ extern "C" void __moore_coverpoint_init(void *cg, int32_t cp_index,
   cp->hits = 0;
   cp->min_val = INT64_MAX; // Will be updated on first sample
   cp->max_val = INT64_MIN; // Will be updated on first sample
+  cp->declared_width = declared_width > 0 ? declared_width : 0;
 
   // Store the coverpoint in the covergroup
   covergroup->coverpoints[cp_index] = cp;
@@ -4003,6 +4039,14 @@ extern "C" void __moore_coverpoint_init(void *cg, int32_t cp_index,
   // Initialize the value tracker for this coverpoint
   coverpointTrackers[cp] = CoverpointTracker();
 }
+
+extern "C" void __moore_coverpoint_init(void *cg, int32_t cp_index,
+                                         const char *name) {
+  __moore_coverpoint_init_with_width(cg, cp_index, name, /*declared_width=*/0);
+}
+
+// Cleanup helper implemented later alongside special bin storage.
+void __moore_special_bins_cleanup_for_coverpoint(MooreCoverpoint *cp);
 
 extern "C" void __moore_covergroup_destroy(void *cg) {
   auto *covergroup = static_cast<MooreCovergroup *>(cg);
@@ -4030,6 +4074,9 @@ extern "C" void __moore_covergroup_destroy(void *cg) {
 
       // Remove from excluded bins map
       excludedBins.erase(covergroup->coverpoints[i]);
+
+      // Remove special bin metadata (ignore/illegal bins).
+      __moore_special_bins_cleanup_for_coverpoint(covergroup->coverpoints[i]);
 
       // Free bin array if present
       if (covergroup->coverpoints[i]->bins) {
@@ -4206,14 +4253,22 @@ extern "C" double __moore_coverpoint_get_coverage(void *cg, int32_t cp_index) {
       coveredValues++;
   }
 
-  // We assume the goal is to cover the range [min_val, max_val].
-  // If the range is 0 (single value), coverage is 100%.
-  if (cp->min_val > cp->max_val)
-    return 0.0; // No valid samples
-
-  int64_t range = cp->max_val - cp->min_val + 1;
-  if (range <= 0)
-    return 100.0; // Single value = 100% coverage
+  int64_t range = 0;
+  if (cp->declared_width > 0) {
+    // Use declared type domain when available.
+    if (cp->declared_width >= 63) {
+      range = std::numeric_limits<int64_t>::max();
+    } else {
+      range = int64_t(1) << cp->declared_width;
+    }
+  } else {
+    // Fall back to observed sample range when type information is unavailable.
+    if (cp->min_val > cp->max_val)
+      return 0.0;
+    range = cp->max_val - cp->min_val + 1;
+    if (range <= 0)
+      return 100.0;
+  }
 
   // Get auto_bin_max to limit the number of bins considered
   int64_t autoBinMax = 64;
@@ -4379,6 +4434,7 @@ extern "C" void __moore_coverpoint_init_with_bins(void *cg, int32_t cp_index,
   cp->hits = 0;
   cp->min_val = INT64_MAX;
   cp->max_val = INT64_MIN;
+  cp->declared_width = 0;
 
   // Copy bins to internal storage
   if (num_bins > 0 && bins) {
@@ -6853,6 +6909,10 @@ bool checkIgnoreBinsInternal(MooreCoverpoint *cp, int64_t value) {
 }
 
 } // anonymous namespace
+
+void __moore_special_bins_cleanup_for_coverpoint(MooreCoverpoint *cp) {
+  specialBinData.erase(cp);
+}
 
 extern "C" void __moore_coverpoint_set_illegal_bins(void *cg, int32_t cp_index,
                                                      MooreCoverageBin *bins,
@@ -13400,9 +13460,9 @@ void *getOrCreateRegCovergroup(const std::string &regName) {
     bitWidth = bitWidthIt->second;
   }
 
-  // Initialize the coverpoint with auto bins.
-  // Auto bins track which values have been seen within the observed range.
-  __moore_coverpoint_init(cg, 0, regName.c_str());
+  // Initialize the coverpoint with declared register width so auto-bin
+  // coverage denominator matches the register domain.
+  __moore_coverpoint_init_with_width(cg, 0, regName.c_str(), bitWidth);
 
   // Set auto_bin_max based on bit width to limit bin count.
   int64_t autoBinMax = std::min(static_cast<int64_t>(64),
@@ -13467,11 +13527,66 @@ void *getOrCreateAddrMapCovergroup(const std::string &mapName) {
 
   // Initialize access type coverpoint (read=1, write=0).
   std::string accessCpName = mapName + "_access";
-  __moore_coverpoint_init(cg, 1, accessCpName.c_str());
+  __moore_coverpoint_init_with_width(cg, 1, accessCpName.c_str(), 1);
   __moore_coverpoint_set_auto_bin_max(cg, 1, 2);  // Only 2 values: read/write
 
   uvmCoverageState.addrMapCovergroups[mapName] = cg;
   return cg;
+}
+
+/// Compute UVM field coverage using the configured field range domain.
+/// Caller must hold uvmCoverageState.mutex.
+double computeUvmFieldCoverageLocked(const std::string &fieldName, void *cg) {
+  if (!cg)
+    return 0.0;
+
+  auto *covergroup = static_cast<MooreCovergroup *>(cg);
+  if (!covergroup || covergroup->num_coverpoints <= 0)
+    return 0.0;
+  auto *cp = covergroup->coverpoints[0];
+  if (!cp)
+    return 0.0;
+
+  auto rangeIt = uvmCoverageState.fieldRanges.find(fieldName);
+  if (rangeIt == uvmCoverageState.fieldRanges.end())
+    return __moore_covergroup_get_coverage(cg);
+
+  int64_t minVal = rangeIt->second.first;
+  int64_t maxVal = rangeIt->second.second;
+  if (minVal > maxVal)
+    return 0.0;
+
+  // Respect at_least threshold (coverpoint first, then covergroup default).
+  int64_t atLeast = 1;
+  auto cpOptIt = coverpointOptions.find(cp);
+  if (cpOptIt != coverpointOptions.end()) {
+    atLeast = cpOptIt->second.atLeast;
+  } else {
+    auto cgOptIt = covergroupOptions.find(covergroup);
+    if (cgOptIt != covergroupOptions.end())
+      atLeast = cgOptIt->second.atLeast;
+  }
+
+  auto trackerIt = coverpointTrackers.find(cp);
+  if (trackerIt == coverpointTrackers.end())
+    return 0.0;
+
+  int64_t coveredValues = 0;
+  for (const auto &entry : trackerIt->second.valueCounts) {
+    if (entry.first < minVal || entry.first > maxVal)
+      continue;
+    if (entry.second >= atLeast)
+      coveredValues++;
+  }
+
+  int64_t rangeSize = maxVal - minVal + 1;
+  if (rangeSize <= 0)
+    return 100.0;
+
+  double coverage = (100.0 * coveredValues) / rangeSize;
+  if (coverage < 0.0)
+    return 0.0;
+  return coverage > 100.0 ? 100.0 : coverage;
 }
 
 } // anonymous namespace
@@ -13590,6 +13705,20 @@ extern "C" double __moore_uvm_get_field_coverage(const char *field_name) {
     return 0.0; // No coverage data for this field.
   }
 
+  return computeUvmFieldCoverageLocked(it->first, it->second);
+}
+
+extern "C" double __moore_uvm_get_addr_map_coverage(const char *map_name) {
+  if (!map_name)
+    return 0.0;
+
+  std::lock_guard<std::mutex> lock(uvmCoverageState.mutex);
+
+  auto it = uvmCoverageState.addrMapCovergroups.find(map_name);
+  if (it == uvmCoverageState.addrMapCovergroups.end()) {
+    return 0.0; // No coverage data for this address map.
+  }
+
   return __moore_covergroup_get_coverage(it->second);
 }
 
@@ -13607,7 +13736,7 @@ extern "C" double __moore_uvm_get_coverage(void) {
 
   // Aggregate coverage from all field covergroups.
   for (const auto &pair : uvmCoverageState.fieldCovergroups) {
-    totalCoverage += __moore_covergroup_get_coverage(pair.second);
+    totalCoverage += computeUvmFieldCoverageLocked(pair.first, pair.second);
     count++;
   }
 
@@ -19362,6 +19491,7 @@ extern "C" void __moore_runtime_reset_for_new_simulation_run(void) {
   // Simulation-control and display runtime state.
   __moore_reset_finish_state();
   __moore_set_time(0);
+  __moore_wait_condition_set_poll_callback(nullptr, nullptr);
   {
     std::lock_guard<std::mutex> lock(strobeMutex);
     strobeQueue.clear();
@@ -19403,6 +19533,17 @@ extern "C" void __moore_runtime_reset_for_new_simulation_run(void) {
   __moore_coverage_reset_illegal_bin_hits();
   __moore_coverage_clear_registered_assertions();
   __moore_coverage_clear_exclusions();
+  globalExclusionFile.clear();
+  coverageSamplingStopped = false;
+  __moore_coverage_set_global_pre_sample_callback(nullptr, nullptr);
+  __moore_coverage_set_global_post_sample_callback(nullptr, nullptr);
+
+  // Destroy all registered covergroups so coverpoint/cross/callback state is
+  // fully reset between simulation runs.
+  while (!registeredCovergroups.empty()) {
+    auto *cg = registeredCovergroups.back();
+    __moore_covergroup_destroy(cg);
+  }
 
   // UVM runtime registries and reporting state.
   __moore_uvm_reset_coverage();

@@ -1254,3 +1254,31 @@
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/avip-e2e-testbench.sv`
   - `build_test/bin/llvm-lit -sv --show-xfail test/Conversion/ImportVerilog -j 8`
   - result: targeted test passes; full ImportVerilog suite is 550/550 passed.
+
+### Runtime: scheduler-assisted `__moore_wait_condition` semantics and unit tests
+- Repro:
+  - `lib/Runtime/MooreRuntime.cpp` still had a placeholder
+    `__moore_wait_condition` implementation that ignored false conditions.
+  - Existing `circt-sim` behavior was correct via interpreter interception, but
+    standalone runtime path had no scheduler integration point.
+- Root cause:
+  - Runtime lacked a callback contract to cooperate with a scheduler/yield loop
+    while waiting on a false condition.
+- Fix:
+  - Added a scheduler poll callback API in runtime:
+    - `MooreWaitConditionPollCallback`
+    - `__moore_wait_condition_set_poll_callback(...)`
+  - Updated `__moore_wait_condition`:
+    - immediate return when condition is true,
+    - legacy fallback return when no callback is installed,
+    - otherwise poll/yield via callback until it reports condition true.
+  - Hook reset integrated into
+    `__moore_runtime_reset_for_new_simulation_run`.
+  - Added runtime unit tests covering:
+    - true condition bypasses callback,
+    - false condition polls until ready,
+    - false condition blocks until external notifier unblocks callback.
+- Validation:
+  - `utils/ninja-with-lock.sh -C build_test MooreRuntimeTests`
+  - `build_test/tools/circt/unittests/Runtime/MooreRuntimeTests --gtest_filter=MooreRuntimeWaitConditionTest.*:MooreRuntimeResetTest.ResetForNewSimulationRunClearsGlobalState`
+  - result: 4/4 passed.

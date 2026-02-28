@@ -30,6 +30,7 @@ TEST(MooreRuntimeTest, DisabledOnEmscripten) {
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#include <condition_variable>
 #include <ctime>
 #include <map>
 #include <string>
@@ -97,6 +98,27 @@ struct ScopedEnvVar {
   bool hadOriginal = false;
   std::string originalValue;
 };
+
+struct WaitConditionBlockingContext {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool ready = false;
+  int pollCalls = 0;
+};
+
+int32_t waitConditionCountedPoll(void *userData) {
+  auto *polls = static_cast<std::atomic<int> *>(userData);
+  int current = polls->fetch_add(1) + 1;
+  return current >= 3 ? 1 : 0;
+}
+
+int32_t waitConditionBlockingPoll(void *userData) {
+  auto *ctx = static_cast<WaitConditionBlockingContext *>(userData);
+  std::unique_lock<std::mutex> lock(ctx->mutex);
+  ++ctx->pollCalls;
+  ctx->cv.wait(lock, [&] { return ctx->ready; });
+  return 1;
+}
 
 //===----------------------------------------------------------------------===//
 // String Length Tests
@@ -270,6 +292,13 @@ TEST(MooreRuntimeResetTest, ResetForNewSimulationRunClearsGlobalState) {
   __moore_set_time(77);
   EXPECT_EQ(__moore_get_time(), 77);
 
+  void *coverageCg = __moore_covergroup_create("reset_cov_cg", 1);
+  ASSERT_NE(coverageCg, nullptr);
+  __moore_coverpoint_init(coverageCg, 0, "cp");
+  __moore_coverpoint_sample(coverageCg, 0, 3);
+  EXPECT_EQ(__moore_coverage_get_num_covergroups(), 1);
+  EXPECT_GT(__moore_coverage_get_total(), 0.0);
+
   __moore_runtime_reset_for_new_simulation_run();
 
   EXPECT_EQ(__moore_signal_registry_count(), 0u);
@@ -279,6 +308,48 @@ TEST(MooreRuntimeResetTest, ResetForNewSimulationRunClearsGlobalState) {
   EXPECT_EQ(__moore_get_warning_count(), 0);
   EXPECT_FALSE(__moore_finish_called());
   EXPECT_EQ(__moore_get_time(), 0);
+  EXPECT_EQ(__moore_coverage_get_num_covergroups(), 0);
+  EXPECT_DOUBLE_EQ(__moore_coverage_get_total(), 0.0);
+}
+
+TEST(MooreRuntimeWaitConditionTest, TrueConditionDoesNotPollScheduler) {
+  __moore_runtime_reset_for_new_simulation_run();
+  std::atomic<int> polls{0};
+  __moore_wait_condition_set_poll_callback(waitConditionCountedPoll, &polls);
+  __moore_wait_condition(1);
+  EXPECT_EQ(polls.load(), 0);
+  __moore_wait_condition_set_poll_callback(nullptr, nullptr);
+}
+
+TEST(MooreRuntimeWaitConditionTest, FalseConditionPollsUntilReady) {
+  __moore_runtime_reset_for_new_simulation_run();
+  std::atomic<int> polls{0};
+  __moore_wait_condition_set_poll_callback(waitConditionCountedPoll, &polls);
+  __moore_wait_condition(0);
+  EXPECT_GE(polls.load(), 3);
+  __moore_wait_condition_set_poll_callback(nullptr, nullptr);
+}
+
+TEST(MooreRuntimeWaitConditionTest, FalseConditionBlocksUntilCallbackUnblocks) {
+  __moore_runtime_reset_for_new_simulation_run();
+  WaitConditionBlockingContext ctx;
+  __moore_wait_condition_set_poll_callback(waitConditionBlockingPoll, &ctx);
+
+  std::thread notifier([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::lock_guard<std::mutex> lock(ctx.mutex);
+    ctx.ready = true;
+    ctx.cv.notify_all();
+  });
+
+  auto start = std::chrono::steady_clock::now();
+  __moore_wait_condition(0);
+  auto elapsed = std::chrono::steady_clock::now() - start;
+
+  notifier.join();
+  EXPECT_GE(elapsed, std::chrono::milliseconds(10));
+  EXPECT_EQ(ctx.pollCalls, 1);
+  __moore_wait_condition_set_poll_callback(nullptr, nullptr);
 }
 
 //===----------------------------------------------------------------------===//
@@ -4439,10 +4510,9 @@ TEST(MooreRuntimeCrossCoverageTest, CrossCoverageWithAtLeast) {
 }
 
 // Regression test for a runtime bookkeeping bug: two crosses with the same
-// arity must not share their sampled bins. This is currently disabled because
-// it fails until cross bin storage is keyed per-cross.
+// arity must not share their sampled bins.
 TEST(MooreRuntimeCrossCoverageTest,
-     DISABLED_CrossBinsIsolatedPerCrossWithSameArity) {
+     CrossBinsIsolatedPerCrossWithSameArity) {
   void *cg = __moore_covergroup_create("same_arity_cross_cg", 4);
   ASSERT_NE(cg, nullptr);
 
@@ -4483,7 +4553,7 @@ TEST(MooreRuntimeCrossCoverageTest,
 // Regression test for filter ownership: the runtime should deep-copy
 // filter data passed to __moore_cross_add_*_bin APIs.
 TEST(MooreRuntimeCrossCoverageTest,
-     DISABLED_CrossNamedBinFiltersAreDeepCopied) {
+     CrossNamedBinFiltersAreDeepCopied) {
   void *cg = __moore_covergroup_create("cross_filter_copy_cg", 2);
   ASSERT_NE(cg, nullptr);
 
@@ -6514,6 +6584,34 @@ TEST(MooreRuntimeCoverageMergeTest, GoalTrackingAfterMerge) {
   std::remove(filename);
 }
 
+TEST(MooreRuntimeCoverageMergeTest, MergeKeepsDeclaredWidthDomain) {
+  // Width-aware coverpoint should keep domain-based denominator (2^width)
+  // across save/reset/merge flows.
+  void *cg = __moore_covergroup_create("merge_width_domain_test", 1);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init_with_width(cg, 0, "cp", 4);
+
+  // Cover 13 unique values in a 4-bit domain.
+  for (int i = 0; i < 13; ++i)
+    __moore_coverpoint_sample(cg, 0, i);
+  EXPECT_NEAR(__moore_coverpoint_get_coverage(cg, 0), 81.25, 1e-9);
+
+  const char *filename = "/tmp/merge_width_domain_test.json";
+  EXPECT_EQ(__moore_coverage_save(filename), 0);
+
+  // Reset and sample one value from the previously covered set.
+  __moore_coverpoint_reset(cg, 0);
+  __moore_coverpoint_sample(cg, 0, 5);
+  EXPECT_NEAR(__moore_coverpoint_get_coverage(cg, 0), 6.25, 1e-9);
+
+  // Merge should restore the same unique value set (13/16 => 81.25%).
+  EXPECT_EQ(__moore_coverage_merge_file(filename), 0);
+  EXPECT_NEAR(__moore_coverpoint_get_coverage(cg, 0), 81.25, 1e-9);
+
+  __moore_covergroup_destroy(cg);
+  std::remove(filename);
+}
+
 //===----------------------------------------------------------------------===//
 // Coverage Database Persistence with Metadata Tests
 //===----------------------------------------------------------------------===//
@@ -7213,6 +7311,31 @@ TEST(MooreRuntimeIgnoreBinsTest, IgnoreBinsRange) {
   __moore_covergroup_destroy(cg);
 }
 
+TEST(MooreRuntimeIgnoreBinsTest,
+     DestroyedCoverpointDoesNotLeakIgnoreBinsMetadata) {
+  // Regression: ignore/illegal metadata must be cleaned when a covergroup is
+  // destroyed; otherwise pointer reuse can make a later coverpoint appear to
+  // have stale ignore bins.
+  for (int i = 0; i < 64; ++i) {
+    void *cgWithIgnore = __moore_covergroup_create("ignore_src_cg", 1);
+    ASSERT_NE(cgWithIgnore, nullptr);
+    __moore_coverpoint_init(cgWithIgnore, 0, "cp");
+    __moore_coverpoint_add_ignore_bin(cgWithIgnore, 0, "skip_zero", 0, 0);
+    __moore_covergroup_destroy(cgWithIgnore);
+
+    void *freshCg = __moore_covergroup_create("ignore_dst_cg", 1);
+    ASSERT_NE(freshCg, nullptr);
+    __moore_coverpoint_init(freshCg, 0, "cp");
+
+    // A fresh coverpoint should not inherit ignore-bin behavior.
+    EXPECT_FALSE(__moore_coverpoint_is_ignored(freshCg, 0, 0));
+    __moore_coverpoint_sample(freshCg, 0, 0);
+    EXPECT_DOUBLE_EQ(__moore_coverpoint_get_coverage(freshCg, 0), 100.0);
+
+    __moore_covergroup_destroy(freshCg);
+  }
+}
+
 TEST(MooreRuntimeIgnoreBinsTest, SetIgnoreBinsBatch) {
   void *cg = __moore_covergroup_create("batch_ignore_cg", 1);
   ASSERT_NE(cg, nullptr);
@@ -7778,6 +7901,26 @@ TEST(MooreRuntimeCoverageOptionsTest, AutoBinMaxAffectsCoverage) {
 
   __moore_covergroup_destroy(cg);
   __moore_covergroup_destroy(cg2);
+}
+
+TEST(MooreRuntimeCoverageOptionsTest, DeclaredWidthAffectsAutoBinDomain) {
+  void *cg = __moore_covergroup_create("declared_width_domain_test", 2);
+  ASSERT_NE(cg, nullptr);
+  __moore_coverpoint_init(cg, 0, "cp_observed_range");
+  __moore_coverpoint_init_with_width(cg, 1, "cp_declared_width", 4);
+
+  for (int i = 0; i < 13; ++i) {
+    __moore_coverpoint_sample(cg, 0, i);
+    __moore_coverpoint_sample(cg, 1, i);
+  }
+
+  // Legacy/init-without-width path uses observed range denominator.
+  EXPECT_NEAR(__moore_coverpoint_get_coverage(cg, 0), 100.0, 1e-9);
+  // Width-aware path uses 4-bit domain denominator (16).
+  EXPECT_NEAR(__moore_coverpoint_get_coverage(cg, 1), 81.25, 1e-9);
+  EXPECT_NEAR(__moore_coverpoint_get_inst_coverage(cg, 1), 81.25, 1e-9);
+
+  __moore_covergroup_destroy(cg);
 }
 
 TEST(MooreRuntimeCoverageOptionsTest, WeightedCoverage) {
@@ -9108,8 +9251,7 @@ TEST(MooreRuntimeUvmCoverageTest, SampleRegCoverageEnabled) {
   __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
 }
 
-// DISABLED: Field coverage returns 0 - needs implementation fix
-TEST(MooreRuntimeUvmCoverageTest, DISABLED_SampleFieldCoverageEnabled) {
+TEST(MooreRuntimeUvmCoverageTest, SampleFieldCoverageEnabled) {
   __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
   __moore_uvm_reset_coverage();
 
@@ -9141,6 +9283,21 @@ TEST(MooreRuntimeUvmCoverageTest, SampleAddrMapCoverage) {
   EXPECT_GT(cov, 0.0);
 
   // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, AddrMapAccessTypeUsesDeclaredDomain) {
+  __moore_uvm_set_coverage_model(UVM_CVR_ADDR_MAP);
+  __moore_uvm_reset_coverage();
+
+  // Single read only:
+  // - address coverpoint sees one value => 100%
+  // - access-type coverpoint is 1-bit domain => 50%
+  // Overall map coverage (average of both coverpoints) should be 75%.
+  __moore_uvm_coverage_sample_addr_map("declared_domain_map", 0x1000, true);
+  double cov = __moore_uvm_get_addr_map_coverage("declared_domain_map");
+  EXPECT_NEAR(cov, 75.0, 1e-9);
+
   __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
 }
 
@@ -9201,6 +9358,21 @@ TEST(MooreRuntimeUvmCoverageTest, RegBitWidthSetting) {
   __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
 }
 
+TEST(MooreRuntimeUvmCoverageTest, RegBitWidthUsesDeclaredDomain) {
+  __moore_uvm_set_coverage_model(UVM_CVR_REG_BITS);
+  __moore_uvm_reset_coverage();
+
+  __moore_uvm_set_reg_bit_width("nibble_reg_width_test", 4);
+  __moore_uvm_coverage_sample_reg("nibble_reg_width_test", 1);
+  __moore_uvm_coverage_sample_reg("nibble_reg_width_test", 2);
+
+  // 2 unique values in 4-bit domain => 2/16 = 12.5%
+  double cov = __moore_uvm_get_reg_coverage("nibble_reg_width_test");
+  EXPECT_NEAR(cov, 12.5, 1e-9);
+
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
 TEST(MooreRuntimeUvmCoverageTest, FieldRangeSetting) {
   __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
   __moore_uvm_reset_coverage();
@@ -9220,6 +9392,41 @@ TEST(MooreRuntimeUvmCoverageTest, FieldRangeSetting) {
   EXPECT_GT(cov, 0.0);
 
   // Reset
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, FieldRangeUsesDeclaredDomain) {
+  __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
+  __moore_uvm_reset_coverage();
+
+  __moore_uvm_set_field_range("range_field", 10, 20); // domain size = 11
+  __moore_uvm_coverage_sample_field("range_field", 10);
+
+  // 1 unique hit in configured field domain [10..20] => 1/11 = 9.09%
+  double cov = __moore_uvm_get_field_coverage("range_field");
+  EXPECT_NEAR(cov, 9.09, 0.01);
+
+  __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
+}
+
+TEST(MooreRuntimeUvmCoverageTest, TotalCoverageUsesFieldRangeDomain) {
+  __moore_uvm_set_coverage_model(UVM_CVR_FIELD_VALS);
+  __moore_uvm_reset_coverage();
+
+  __moore_uvm_set_field_range("total_range_field", 10, 20); // domain size = 11
+  __moore_uvm_coverage_sample_field("total_range_field", 10);
+  double partialTotal = __moore_uvm_get_coverage();
+
+  // Drive field to full coverage; total should scale proportionally.
+  for (int i = 11; i <= 20; ++i)
+    __moore_uvm_coverage_sample_field("total_range_field", i);
+  double fullTotal = __moore_uvm_get_coverage();
+  ASSERT_GT(fullTotal, 0.0);
+
+  // Ratio is independent of how many stale zero-coverage groups exist.
+  // Expected: partial/full = (1/11) / (11/11) = 1/11.
+  EXPECT_NEAR(partialTotal / fullTotal, 1.0 / 11.0, 0.001);
+
   __moore_uvm_set_coverage_model(UVM_NO_COVERAGE);
 }
 
@@ -9310,6 +9517,7 @@ TEST(MooreRuntimeUvmCoverageTest, NullInputHandling) {
 
   EXPECT_DOUBLE_EQ(__moore_uvm_get_reg_coverage(nullptr), 0.0);
   EXPECT_DOUBLE_EQ(__moore_uvm_get_field_coverage(nullptr), 0.0);
+  EXPECT_DOUBLE_EQ(__moore_uvm_get_addr_map_coverage(nullptr), 0.0);
 
   __moore_uvm_set_reg_bit_width(nullptr, 8);
   __moore_uvm_set_field_range(nullptr, 0, 10);

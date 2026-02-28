@@ -666,6 +666,21 @@ int32_t __moore_value_plusargs(const char *format, int64_t fmtLen,
 // Simulation Control Operations
 //===----------------------------------------------------------------------===//
 
+/// Callback used by __moore_wait_condition to cooperate with a simulation
+/// scheduler while waiting on a false condition.
+///
+/// The callback should block or yield until the condition may have changed,
+/// then return a re-evaluated condition value (non-zero = true).
+typedef int32_t (*MooreWaitConditionPollCallback)(void *userData);
+
+/// Register or clear the scheduler polling callback used by
+/// __moore_wait_condition.
+///
+/// Passing `nullptr` disables scheduler-assisted waiting and restores the
+/// legacy best-effort behavior (immediate return when condition is false).
+void __moore_wait_condition_set_poll_callback(
+    MooreWaitConditionPollCallback callback, void *userData);
+
 /// Wait until a condition becomes true.
 /// Implements the SystemVerilog `wait(condition)` statement.
 /// This function suspends execution until the condition is non-zero.
@@ -980,6 +995,7 @@ int64_t __moore_array_reduce_xor(MooreQueue *array, int64_t elementSize);
 /// @member hits Total number of samples
 /// @member min_val Minimum sampled value (for auto bins)
 /// @member max_val Maximum sampled value (for auto bins)
+/// @member declared_width Declared coverpoint width in bits (0 if unknown)
 typedef struct {
   const char *name;
   int64_t *bins;
@@ -987,6 +1003,7 @@ typedef struct {
   int64_t hits;
   int64_t min_val;
   int64_t max_val;
+  int32_t declared_width;
 } MooreCoverpoint;
 
 /// Covergroup data structure for grouping coverpoints.
@@ -1017,6 +1034,18 @@ void *__moore_covergroup_create(const char *name, int32_t num_coverpoints);
 /// @param cp_index Index of the coverpoint to initialize
 /// @param name Name of the coverpoint (for reporting)
 void __moore_coverpoint_init(void *cg, int32_t cp_index, const char *name);
+
+/// Initialize a coverpoint with declared type width information.
+/// This enables auto-bin coverage to use the declared domain size instead of
+/// only observed min/max samples.
+///
+/// @param cg Pointer to the covergroup
+/// @param cp_index Index of the coverpoint to initialize
+/// @param name Name of the coverpoint (for reporting)
+/// @param declared_width Declared coverpoint width in bits (0 if unknown)
+void __moore_coverpoint_init_with_width(void *cg, int32_t cp_index,
+                                        const char *name,
+                                        int32_t declared_width);
 
 /// Destroy a covergroup and free all associated memory.
 /// Frees the covergroup, all its coverpoints, and their bin arrays.
@@ -3383,6 +3412,14 @@ double __moore_uvm_get_reg_coverage(const char *reg_name);
 /// @param field_name Name of the field
 /// @return Coverage percentage (0.0 to 100.0)
 double __moore_uvm_get_field_coverage(const char *field_name);
+
+/// Get address-map coverage percentage.
+/// Returns the coverage percentage for a specific address map.
+/// Creates an implicit covergroup for the map if it doesn't exist.
+///
+/// @param map_name Name of the address map
+/// @return Coverage percentage (0.0 to 100.0)
+double __moore_uvm_get_addr_map_coverage(const char *map_name);
 
 /// Get total UVM register model coverage.
 /// Returns the aggregate coverage across all sampled registers and fields.
