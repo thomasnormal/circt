@@ -708,6 +708,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return calleeName.contains(
                  "uvm_pkg::uvm_phase::set_max_ready_to_end_iterations") ||
              calleeName.contains(
+                 "uvm_pkg::uvm_sequence_base::clear_response_queue") ||
+             calleeName.contains(
                  "uvm_pkg::uvm_component_proxy::get_immediate_children");
     };
     auto tryResolveAnalysisWriteTarget =
