@@ -381,3 +381,41 @@ Local follow-up commits kept in stack:
 ### Validation Added In This Pass
 
 - N/A (ignore-list only change).
+
+## ESI Runtime CI + Windows Wheel Follow-up (2026-02-28)
+
+- Starting staging head for this pass: `fa2b73fe1`
+- Current staging head after this pass: `e5f1455f3`
+
+### Additional Picks In This Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `d9682325a` | `749013eab` | Enable vcpkg binary caching for ESI Runtime Windows wheel builds (#9691) |
+| `75d806807` | `a3264ecdc` | [ESI][Runtime] Reduce the number of vcpkg cache entries |
+| `e5f1455f3` | `a51d89f51` | [ESI][Runtime] Add Debug DLLs to wheels for Windows (#9687) |
+
+### Local Conflict Resolution/Adaptation
+
+- All three picks applied cleanly without manual conflict edits.
+- The first two commits stack on `.github/workflows/esiRuntimePublish.yml`:
+  - add vcpkg binary cache setup for Windows wheel jobs
+  - narrow cache key granularity to reduce cache-cardinality churn
+- The third commit updates runtime packaging/build plumbing to include required
+  debug DLL artifacts in Windows wheels.
+
+### Validation Added In This Pass
+
+- Runtime packaging script syntax sanity:
+  - `python3 -m py_compile lib/Dialect/ESI/runtime/setup.py`
+- Workflow content sanity:
+  - `rg -n "VCPKG_BINARY_SOURCES|VCPKG_DEFAULT_BINARY_CACHE|NUGET_PACKAGES|ACTIONS_RUNTIME_TOKEN|ACTIONS_CACHE_URL|x-gha" .github/workflows/esiRuntimePublish.yml`
+  - Verified vcpkg binary cache env injection is present in workflow.
+
+### Deferred / Superseded In This Pass
+
+- Attempted and resolved to empty cherry-picks (already present functionally):
+  - `83ff24e5b` ([PyCDE] Remove python 3.8, 3.9 and add 3.14 builds)
+  - `4f8fdaa73` ([PyCDE] Disable cocotb tests by default)
+  - `ee4badcde` ([circt-bmc] Add LTLToCore to pipeline)
+  - `f13da0b62` ([PyRTG] Add String format function)
