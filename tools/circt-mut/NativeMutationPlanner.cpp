@@ -39,7 +39,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "ASSIGN_RHS_INVERT",
     "ASSIGN_RHS_PLUS_ONE",
     "ASSIGN_RHS_MINUS_ONE", "ASSIGN_RHS_NEGATE", "ASSIGN_RHS_SHL_ONE",
-    "ASSIGN_RHS_SHR_ONE",
+    "ASSIGN_RHS_SHR_ONE", "ASSIGN_RHS_ASHR_ONE",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -901,11 +901,160 @@ static void collectUnaryReductionXnorSites(StringRef text,
   }
 }
 
+static bool parseSimpleNonNegativeLiteralValue(StringRef expr, uint64_t &value) {
+  StringRef e = expr.trim();
+  if (e.empty())
+    return false;
+  if (e.consume_front("+"))
+    e = e.trim();
+  if (e.empty() || e.front() == '-')
+    return false;
+
+  if (e == "'0") {
+    value = 0;
+    return true;
+  }
+
+  auto parseDigits = [&](StringRef digits, unsigned base,
+                         uint64_t &out) -> bool {
+    if (digits.empty())
+      return false;
+    uint64_t acc = 0;
+    bool sawDigit = false;
+    for (char ch : digits) {
+      if (ch == '_')
+        continue;
+      unsigned d = 0;
+      if (ch >= '0' && ch <= '9')
+        d = static_cast<unsigned>(ch - '0');
+      else if (ch >= 'a' && ch <= 'f')
+        d = 10u + static_cast<unsigned>(ch - 'a');
+      else if (ch >= 'A' && ch <= 'F')
+        d = 10u + static_cast<unsigned>(ch - 'A');
+      else
+        return false;
+      if (d >= base)
+        return false;
+      sawDigit = true;
+      if (acc > (std::numeric_limits<uint64_t>::max() - d) / base)
+        return false;
+      acc = acc * base + d;
+    }
+    if (!sawDigit)
+      return false;
+    out = acc;
+    return true;
+  };
+
+  size_t apost = e.find('\'');
+  if (apost == StringRef::npos)
+    return parseDigits(e, 10, value);
+
+  StringRef width = e.slice(0, apost).trim();
+  if (!width.empty()) {
+    for (char ch : width)
+      if (ch != '_' && (ch < '0' || ch > '9'))
+        return false;
+  }
+  if (apost + 1 >= e.size())
+    return false;
+
+  size_t idx = apost + 1;
+  if (e[idx] == 's' || e[idx] == 'S') {
+    ++idx;
+    if (idx >= e.size())
+      return false;
+  }
+  char baseCh = e[idx];
+  ++idx;
+  unsigned base = 0;
+  switch (baseCh) {
+  case 'b':
+  case 'B':
+    base = 2;
+    break;
+  case 'o':
+  case 'O':
+    base = 8;
+    break;
+  case 'd':
+  case 'D':
+    base = 10;
+    break;
+  case 'h':
+  case 'H':
+    base = 16;
+    break;
+  default:
+    return false;
+  }
+  return parseDigits(e.drop_front(idx), base, value);
+}
+
+static bool findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
+                              size_t openPos, size_t &closePos) {
+  if (openPos >= text.size() || text[openPos] != '(')
+    return false;
+  int depth = 0;
+  for (size_t i = openPos, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (text[i] == '(') {
+      ++depth;
+      continue;
+    }
+    if (text[i] != ')')
+      continue;
+    --depth;
+    if (depth == 0) {
+      closePos = i;
+      return true;
+    }
+    if (depth < 0)
+      return false;
+  }
+  return false;
+}
+
+static bool rhsLiteralEquals(StringRef text, ArrayRef<uint8_t> codeMask,
+                             size_t opPos, uint64_t target) {
+  size_t rhsStart = findNextCodeNonSpace(text, codeMask, opPos + 1);
+  if (rhsStart == StringRef::npos)
+    return false;
+
+  StringRef rhsExpr;
+  if (text[rhsStart] == '(') {
+    size_t rhsClose = StringRef::npos;
+    if (!findMatchingParen(text, codeMask, rhsStart, rhsClose))
+      return false;
+    rhsExpr = text.slice(rhsStart + 1, rhsClose).trim();
+  } else {
+    size_t rhsEnd = rhsStart;
+    while (rhsEnd < text.size() && isCodeAt(codeMask, rhsEnd)) {
+      char ch = text[rhsEnd];
+      if (std::isspace(static_cast<unsigned char>(ch)))
+        break;
+      if (ch == ',' || ch == ';' || ch == ':' || ch == '?' || ch == ')' ||
+          ch == ']')
+        break;
+      ++rhsEnd;
+    }
+    rhsExpr = text.slice(rhsStart, rhsEnd).trim();
+  }
+
+  uint64_t parsed = 0;
+  if (!parseSimpleNonNegativeLiteralValue(rhsExpr, parsed))
+    return false;
+  return parsed == target;
+}
+
 static void collectBinaryArithmeticSites(StringRef text, char needle,
                                          ArrayRef<uint8_t> codeMask,
-                                         SmallVectorImpl<SiteInfo> &sites) {
+                                         SmallVectorImpl<SiteInfo> &sites,
+                                         bool skipRhsZeroEquivalent = false) {
   assert((needle == '+' || needle == '-') &&
          "expected binary arithmetic token");
+
   int bracketDepth = 0;
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (!isCodeAt(codeMask, i))
@@ -941,6 +1090,8 @@ static void collectBinaryArithmeticSites(StringRef text, char needle,
     char nextSigChar = text[nextSig];
     if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
       continue;
+    if (skipRhsZeroEquivalent && rhsLiteralEquals(text, codeMask, i, 0))
+      continue;
 
     sites.push_back({i});
   }
@@ -948,9 +1099,11 @@ static void collectBinaryArithmeticSites(StringRef text, char needle,
 
 static void collectBinaryMulDivSites(StringRef text, char needle,
                                      ArrayRef<uint8_t> codeMask,
-                                     SmallVectorImpl<SiteInfo> &sites) {
+                                     SmallVectorImpl<SiteInfo> &sites,
+                                     bool skipRhsOneEquivalent = false) {
   assert((needle == '*' || needle == '/' || needle == '%') &&
          "expected * or / or % token");
+
   int bracketDepth = 0;
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (!isCodeAt(codeMask, i))
@@ -995,6 +1148,8 @@ static void collectBinaryMulDivSites(StringRef text, char needle,
     char prevSigChar = text[prevSig];
     char nextSigChar = text[nextSig];
     if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+    if (skipRhsOneEquivalent && rhsLiteralEquals(text, codeMask, i, 1))
       continue;
 
     sites.push_back({i});
@@ -1834,7 +1989,8 @@ static bool isAssignRhsMutationOp(StringRef op) {
          op == "ASSIGN_RHS_ADD_LHS" || op == "ASSIGN_RHS_SUB_LHS" ||
          op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
          op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE" ||
-         op == "ASSIGN_RHS_SHL_ONE" || op == "ASSIGN_RHS_SHR_ONE";
+         op == "ASSIGN_RHS_SHL_ONE" || op == "ASSIGN_RHS_SHR_ONE" ||
+         op == "ASSIGN_RHS_ASHR_ONE";
 }
 
 static bool findEventControlBoundsForEdgeSite(
@@ -1880,7 +2036,7 @@ static StringRef getAssignRhsMutationFamily(StringRef op) {
   if (op == "ASSIGN_RHS_ADD_LHS" || op == "ASSIGN_RHS_SUB_LHS" ||
       op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
       op == "ASSIGN_RHS_NEGATE" || op == "ASSIGN_RHS_SHL_ONE" ||
-      op == "ASSIGN_RHS_SHR_ONE")
+      op == "ASSIGN_RHS_SHR_ONE" || op == "ASSIGN_RHS_ASHR_ONE")
     return "arithmetic";
   return "";
 }
@@ -1967,6 +2123,10 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
   }
   if (op == "ASSIGN_RHS_SHR_ONE") {
     replacement = (Twine("(") + rhsForBinaryOp + " >> 1'b1)").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_ASHR_ONE") {
+    replacement = (Twine("(") + rhsForBinaryOp + " >>> 1'b1)").str();
     return true;
   }
   return false;
@@ -3173,11 +3333,13 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "ADD_TO_SUB") {
-    collectBinaryArithmeticSites(designText, '+', codeMask, sites);
+    collectBinaryArithmeticSites(designText, '+', codeMask, sites,
+                                 /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "SUB_TO_ADD") {
-    collectBinaryArithmeticSites(designText, '-', codeMask, sites);
+    collectBinaryArithmeticSites(designText, '-', codeMask, sites,
+                                 /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "MUL_TO_ADD") {
@@ -3189,11 +3351,13 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "DIV_TO_MUL") {
-    collectBinaryMulDivSites(designText, '/', codeMask, sites);
+    collectBinaryMulDivSites(designText, '/', codeMask, sites,
+                             /*skipRhsOneEquivalent=*/true);
     return;
   }
   if (op == "MUL_TO_DIV") {
-    collectBinaryMulDivSites(designText, '*', codeMask, sites);
+    collectBinaryMulDivSites(designText, '*', codeMask, sites,
+                             /*skipRhsOneEquivalent=*/true);
     return;
   }
   if (op == "MOD_TO_DIV") {

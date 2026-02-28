@@ -1,0 +1,19 @@
+// REQUIRES: native_tools
+//
+// Skip equivalent SUB_TO_ADD sites where RHS is a neutral zero literal.
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic [3:0] a, b, output logic [3:0] y0, y1, y2, y3);
+// RUN:   assign y0 = a - 0;
+// RUN:   assign y1 = a - 1;
+// RUN:   assign y2 = a - b;
+// RUN:   assign y3 = a - (1'b0);
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops SUB_TO_ADD --out %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+// RUN: not grep -q '@3' %t/mutations.txt
+
+// OUT: 1 NATIVE_SUB_TO_ADD@1
+// OUT: 2 NATIVE_SUB_TO_ADD@2
+

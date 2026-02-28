@@ -1,0 +1,26 @@
+// REQUIRES: native_tools
+//
+// Skip equivalent MUL_TO_DIV and DIV_TO_MUL sites where RHS is one.
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic [7:0] a, b, output logic [7:0] m0, m1, m2, d0, d1, d2);
+// RUN:   assign m0 = a * 1;
+// RUN:   assign m1 = a * 2;
+// RUN:   assign m2 = a * b;
+// RUN:   assign d0 = a / 1;
+// RUN:   assign d1 = a / 2;
+// RUN:   assign d2 = a / b;
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops MUL_TO_DIV --out %t/mul_to_div.txt
+// RUN: FileCheck %s --check-prefix=MUL < %t/mul_to_div.txt
+// RUN: not grep -q '@3' %t/mul_to_div.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops DIV_TO_MUL --out %t/div_to_mul.txt
+// RUN: FileCheck %s --check-prefix=DIV < %t/div_to_mul.txt
+// RUN: not grep -q '@3' %t/div_to_mul.txt
+
+// MUL: 1 NATIVE_MUL_TO_DIV@1
+// MUL: 2 NATIVE_MUL_TO_DIV@2
+// DIV: 1 NATIVE_DIV_TO_MUL@1
+// DIV: 2 NATIVE_DIV_TO_MUL@2
+

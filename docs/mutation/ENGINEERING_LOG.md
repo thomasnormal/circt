@@ -1874,3 +1874,91 @@
     - same workspace, seed/count: `20260303` / `24`
     - result: `ok=24 mismatch=0 fail=0`
     - file: `results_arith_20260303.tsv`
+
+## 2026-02-28 (xrun parity: 4-state arithmetic pessimism)
+
+- realizations:
+  - Root cause for seeded parity mismatches was in Moore 4-state arithmetic
+    lowering, not in mutation generation:
+    - `add/sub` used optimistic bit-level carry reasoning that produced
+      partially-known results for unknown operands.
+    - a dedicated `-1 - x` rewrite preserved per-bit unknowns, but xrun treats
+      it as all-unknown when any operand bit is unknown.
+  - A follow-up probe surfaced similar issues in other arithmetic ops:
+    - `mul` returned known values in some unknown-input cases.
+    - `div/mod` did not mark dynamic divide/mod-by-zero as unknown.
+  - xrun behavior across probes is consistently pessimistic for 4-state integer
+    arithmetic: any X/Z in operands yields all-X; divide/mod by zero yields
+    all-X.
+
+- changes made:
+  - Updated `buildFourStateAddSub` in
+    `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+    - computes arithmetic value normally,
+    - forces unknown mask to all-ones when `lhsUnk|rhsUnk != 0`.
+  - Removed the `FourStateSubNegOneOpConversion` special-case and its pattern
+    registration so `-1 - x` follows the same pessimistic arithmetic semantics.
+  - Simplified 4-state mul/div/mod lowering by removing optimistic specialized
+    branches and using the conservative arithmetic path.
+  - Added explicit dynamic divide/mod-by-zero unknowning for
+    `DivU/DivS/ModU/ModS`.
+
+- tests added/updated (TDD):
+  - Added:
+    - `test/Tools/circt-sim/fourstate-addsub-unknown-pessimistic.sv`
+    - `test/Tools/circt-sim/fourstate-muldivmod-unknown-pessimistic.sv`
+  - Updated:
+    - `test/Conversion/MooreToCore/four-state-sub-neg1-mask.mlir`
+    - `test/Conversion/MooreToCore/four-state-divu-modu-pow2.mlir`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-opt circt-verilog circt-sim`
+  - focused lit slice:
+    - add/sub pessimism test
+    - new mul/div/mod pessimism test
+    - updated MooreToCore conversion tests
+    - result: all passed.
+  - differential probe (`/tmp/fourstate_arith_matrix_probe.sv`):
+    - pre-fix showed xrun/circt mismatches in `mul`, `div`, `mod`;
+    - post-fix xrun and circt lines matched for all probe vectors.
+  - seeded mutation parity recheck:
+    - workspace: `/tmp/cov_intro_seeded_ashr_campaign_1772303783`
+    - `results_arith_mix_recheck_after_muldiv_fix.tsv`
+    - result: `mismatch=0` across 24 mutants.
+
+## 2026-02-28 (native mutation quality: neutral-element pruning)
+
+- realizations:
+  - Some arithmetic rewrites were producing equivalent low-signal mutants:
+    - `ADD_TO_SUB` on `x + 0`
+    - `SUB_TO_ADD` on `x - 0`
+    - `MUL_TO_DIV` on `x * 1`
+    - `DIV_TO_MUL` on `x / 1`
+  - These consume mutation budget without increasing fault sensitivity and reduce
+    semantic diversity in generated plans.
+
+- changes made:
+  - Updated `tools/circt-mut/NativeMutationPlanner.cpp` site collectors to prune
+    neutral-element equivalent sites for the transforms above.
+  - Added reusable literal parsing helpers used by arithmetic collectors:
+    - non-negative Verilog literal value parsing (supports sized/base literals)
+    - RHS literal extraction for binary operators
+  - Refactored helper logic to avoid duplicated parsing code between arithmetic
+    collectors.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-add-to-sub-skip-rhs-zero.test`
+  - `test/Tools/native-mutation-plan-sub-to-add-skip-rhs-zero.test`
+  - `test/Tools/native-mutation-plan-mul-div-skip-rhs-one.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - direct execution of the new planner tests' commands:
+    - confirmed only non-equivalent sites are emitted (`@1`, `@2`; no `@3`)
+  - seeded xrun-vs-circt parity campaigns:
+    - workspace: `/tmp/cov_intro_seeded_neutral_filter_campaign_1772305198`
+      - result: `ok=24 mismatch=0 fail=0`
+    - workspace: `/tmp/cov_intro_seeded_neutral_filter_recheck_1772305316`
+      - result: `ok=12 mismatch=0`
