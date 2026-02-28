@@ -2616,6 +2616,40 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
     }
   }
 
+  // Link parent interface field shadow signals to child module input signals
+  // discovered from module-level llhd.drv patterns. This keeps child inputs
+  // driven when tasks/classes write through interface backing-store pointers.
+  if (!interfaceFieldDrivenSignals.empty() && !interfaceFieldSignals.empty()) {
+    unsigned linkedDrivenSignals = 0;
+    unsigned unresolvedDrivenAddrs = 0;
+    for (auto &[srcAddr, drivenSigIds] : interfaceFieldDrivenSignals) {
+      auto srcIt = interfaceFieldSignals.find(srcAddr);
+      if (srcIt == interfaceFieldSignals.end()) {
+        ++unresolvedDrivenAddrs;
+        continue;
+      }
+      SignalId srcSigId = srcIt->second;
+      auto &children = interfaceFieldPropagation[srcSigId];
+      for (SignalId drivenSigId : drivenSigIds) {
+        if (drivenSigId == 0 || drivenSigId == srcSigId)
+          continue;
+        if (llvm::is_contained(children, drivenSigId))
+          continue;
+        children.push_back(drivenSigId);
+        ++linkedDrivenSignals;
+      }
+    }
+
+    LLVM_DEBUG({
+      if (traceInterfacePropagation) {
+        llvm::dbgs()
+            << "[INTERFACE PROP] linked field->driven signals: links="
+            << linkedDrivenSignals
+            << ", unresolved_src_addrs=" << unresolvedDrivenAddrs << "\n";
+      }
+    });
+  }
+
   // Bridge tri-state destination field copies (e.g. assign s_i = S lowered as
   // field_0 -> field_1) to resolved signal propagation. This keeps mirror fields
   // synced from the resolved net without writing back into tri-state dest fields.
@@ -12436,13 +12470,36 @@ void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
     for (auto &[srcSigId, destAddr] : signalMemoryMirrorPairs) {
       if (srcSigId != signal)
         continue;
+      APInt storeBits = bits;
+      unsigned pairStoreSize = storeSize;
+
+      // Signals use internal four-state encoding {unknown,value} while
+      // interface backing-store bytes use LLVM struct layout {value,unknown}.
+      // Reorder bits for direct signal->interface-field mirrors.
+      if (scheduler.getSignalEncoding(srcSigId) ==
+              SignalEncoding::FourStateStruct &&
+          interfaceFieldSignals.find(destAddr) != interfaceFieldSignals.end() &&
+          storeBits.getBitWidth() >= 2 && (storeBits.getBitWidth() % 2) == 0) {
+        unsigned logicalWidth = storeBits.getBitWidth() / 2;
+        APInt unknownBits = storeBits.extractBits(logicalWidth, 0);
+        APInt valueBits = storeBits.extractBits(logicalWidth, logicalWidth);
+        APInt llvmLayoutBits = APInt::getZero(storeBits.getBitWidth());
+        llvmLayoutBits.insertBits(valueBits, 0);
+        llvmLayoutBits.insertBits(unknownBits, logicalWidth);
+        storeBits = llvmLayoutBits;
+        pairStoreSize = (storeBits.getBitWidth() + 7) / 8;
+      }
+
       uint64_t off = 0;
       MemoryBlock *block =
           findMemoryBlockByAddress(destAddr, kAnyProcess, &off);
-      if (!block || off + storeSize > block->size)
+      if (!block || off + pairStoreSize > block->size)
         continue;
-      for (unsigned i = 0; i < storeSize; ++i)
-        block->bytes()[off + i] = bits.extractBitsAsZExtValue(8, i * 8);
+      if (pairStoreSize > 0 && storeBits.getBitWidth() < pairStoreSize * 8)
+        storeBits = storeBits.zext(pairStoreSize * 8);
+      for (unsigned i = 0; i < pairStoreSize; ++i)
+        block->bytes()[off + i] =
+            storeBits.extractBitsAsZExtValue(8, i * 8);
       block->initialized = true;
       ++mirrorHits;
     }
@@ -29470,6 +29527,17 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
       break;
     }
   };
+  auto isEdgeDetectableSignal = [&](SignalId sigId) -> bool {
+    if (sigId == 0)
+      return false;
+    Type sigType = getSignalValueType(sigId);
+    // Waiting on pointer-handle signals (e.g. !llvm.ptr carrying a virtual
+    // interface handle) never observes field toggles and can deadlock waits
+    // like @(posedge vif.clk) inside task/function call contexts.
+    if (isa<LLVM::LLVMPointerType>(sigType))
+      return false;
+    return true;
+  };
   auto expandInterfaceFieldPropagation = [&](SensitivityList &list) {
     if (interfaceFieldPropagation.empty())
       return;
@@ -29507,7 +29575,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     if (!hasDirectResolvedWaitList)
       return;
     SignalId sigId = resolveSignalId(detectOp.getInput());
-    if (sigId == 0) {
+    if (!isEdgeDetectableSignal(sigId)) {
       hasDirectResolvedWaitList = false;
       return;
     }
@@ -29633,7 +29701,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
       // Check if this value is a signal reference.
       SignalId sigId = resolveSignalId(value);
-      if (sigId != 0)
+      if (isEdgeDetectableSignal(sigId))
         return sigId;
 
       // Try to trace through the defining operation
@@ -32705,6 +32773,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
         };
         EdgeType waitEdge = edgeKindToSensitivity(edgeKind);
+        auto isEdgeDetectableSignal = [&](SignalId sigId) -> bool {
+          if (sigId == 0)
+            return false;
+          Type sigType = getSignalValueType(sigId);
+          return !isa<LLVM::LLVMPointerType>(sigType);
+        };
 
         auto resolveSignalFromValue = [&](Value seed) -> SignalId {
           llvm::SmallVector<Value, 8> stack;
@@ -32716,7 +32790,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (!value || !seen.insert(value).second)
               continue;
 
-            if (SignalId sigId = resolveSignalId(value); sigId != 0)
+            if (SignalId sigId = resolveSignalId(value);
+                isEdgeDetectableSignal(sigId))
               return sigId;
 
             Operation *defOp = value.getDefiningOp();
@@ -42092,12 +42167,59 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
             return it->second.getUInt64();
           return 0;
         };
-        uint64_t srcAddr = 0;
+        std::function<uint64_t(Value)> traceInterfaceFieldAddr =
+            [&](Value v) -> uint64_t {
+          if (!v)
+            return 0;
+
+          uint64_t addr = 0;
+          if (matchFourStateStructCreateLoad(v, getChildOrParentValue, addr) &&
+              addr != 0)
+            return addr;
+          if (matchFourStateCopyStore(v, getChildOrParentValue, addr) &&
+              addr != 0)
+            return addr;
+
+          if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+            for (const auto &entry : instanceInputMap)
+              if (entry.arg == blockArg)
+                return traceInterfaceFieldAddr(entry.value);
+            return 0;
+          }
+
+          if (auto castOp =
+                  v.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+            for (Value in : castOp.getInputs()) {
+              uint64_t inAddr = traceInterfaceFieldAddr(in);
+              if (inAddr != 0)
+                return inAddr;
+            }
+            return 0;
+          }
+
+          if (auto insertOp = v.getDefiningOp<LLVM::InsertValueOp>()) {
+            uint64_t valueAddr = traceInterfaceFieldAddr(insertOp.getValue());
+            if (valueAddr != 0)
+              return valueAddr;
+            return traceInterfaceFieldAddr(insertOp.getContainer());
+          }
+          if (auto extractOp = v.getDefiningOp<LLVM::ExtractValueOp>())
+            return traceInterfaceFieldAddr(extractOp.getContainer());
+          if (auto structExtract = v.getDefiningOp<hw::StructExtractOp>())
+            return traceInterfaceFieldAddr(structExtract.getInput());
+          if (auto bitcastOp = v.getDefiningOp<hw::BitcastOp>())
+            return traceInterfaceFieldAddr(bitcastOp.getInput());
+          if (auto loadOp = v.getDefiningOp<LLVM::LoadOp>()) {
+            uint64_t loadAddr = getChildOrParentValue(loadOp.getAddr());
+            if (loadAddr != 0)
+              return loadAddr;
+          }
+          return 0;
+        };
+
+        uint64_t srcAddr = traceInterfaceFieldAddr(driveOp.getValue());
         SignalId drivenSigId = getSignalId(driveOp.getSignal());
-        if (drivenSigId != 0 &&
-            matchFourStateStructCreateLoad(driveOp.getValue(),
-                                           getChildOrParentValue, srcAddr) &&
-            srcAddr != 0) {
+        if (drivenSigId != 0 && srcAddr != 0) {
           auto &drivenSignals = interfaceFieldDrivenSignals[srcAddr];
           if (std::find(drivenSignals.begin(), drivenSignals.end(),
                         drivenSigId) == drivenSignals.end())
@@ -42220,6 +42342,10 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
                           signalMemoryMirrorPairs.end(),
                           pair) == signalMemoryMirrorPairs.end())
               signalMemoryMirrorPairs.push_back(pair);
+            if (std::find(interfaceSignalCopyPairs.begin(),
+                          interfaceSignalCopyPairs.end(),
+                          pair) == interfaceSignalCopyPairs.end())
+              interfaceSignalCopyPairs.push_back(pair);
           }
 
           InterfaceTriStateStorePattern triPattern;
@@ -43363,6 +43489,41 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
   }
 
   unsigned matched = 0;
+  const bool traceProcessWiring =
+      std::getenv("CIRCT_AOT_TRACE_COMPILED_PROCESSES") != nullptr;
+  auto modelToString = [](ExecModel model) -> const char * {
+    switch (model) {
+    case ExecModel::CallbackStaticObserved:
+      return "CallbackStaticObserved";
+    case ExecModel::CallbackDynamicWait:
+      return "CallbackDynamicWait";
+    case ExecModel::CallbackTimeOnly:
+      return "CallbackTimeOnly";
+    case ExecModel::OneShotCallback:
+      return "OneShotCallback";
+    case ExecModel::Coroutine:
+      return "Coroutine";
+    }
+    return "Unknown";
+  };
+  auto hasPotentiallyUnsafeOneShotCall = [&](ProcessId procId) -> bool {
+    auto stateIt = processStates.find(procId);
+    if (stateIt == processStates.end())
+      return true;
+    llhd::ProcessOp processOp = stateIt->second.getProcessOp();
+    if (!processOp)
+      return true;
+
+    bool hasCall = false;
+    processOp.walk([&](Operation *op) {
+      if (isa<func::CallOp, func::CallIndirectOp, LLVM::CallOp>(op)) {
+        hasCall = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    return hasCall;
+  };
   for (uint32_t i = 0; i < mod->num_procs; i++) {
     llvm::StringRef procName(mod->proc_names[i]);
     auto it = processNameToId.find(procName);
@@ -43377,12 +43538,33 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     void *entry = const_cast<void *>(mod->proc_entry[i]);
 
     if (kind == CIRCT_PROC_CALLBACK) {
-      // Defer callback installation: the process's entry block must run
-      // interpreted first (to execute the initial llhd.wait and schedule
-      // the correct delay). The compiled callback is installed after the
-      // first wait sets callbackFrames[procId].initialized = true.
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-      pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
+      auto compiledCallback = [this, fptr, ctxPtr, procId]() {
+        auto stateIt = processStates.find(procId);
+        if (stateIt == processStates.end())
+          return;
+        ProcessExecutionState &state = stateIt->second;
+
+        ProcessId savedActiveProcessId = activeProcessId;
+        ProcessExecutionState *savedActiveProcessState = activeProcessState;
+        activeProcessId = procId;
+        activeProcessState = &state;
+        auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
+          activeProcessId = savedActiveProcessId;
+          activeProcessState = savedActiveProcessState;
+        });
+
+        void *prevTls = __circt_sim_get_tls_ctx();
+        __circt_sim_set_tls_ctx(static_cast<void *>(this));
+        __circt_sim_set_tls_normalize(
+            LLHDProcessInterpreter::normalizeVirtualPtr);
+        auto restoreTlsContext = llvm::make_scope_exit(
+            [&]() { __circt_sim_set_tls_ctx(prevTls); });
+
+        ++aotDepth;
+        maxAotDepth = std::max(maxAotDepth, aotDepth);
+        auto restoreAotDepth = llvm::make_scope_exit([&]() { --aotDepth; });
+
         ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr);
         // Re-arm if the process is a minnow (time-based callback).
@@ -43391,6 +43573,44 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
         if (scheduler.isMinnowProcess(procId))
           scheduler.rearmMinnow(procId);
       };
+
+      bool installImmediately = false;
+      bool deferredDueToPotentiallyUnsafeCalls = false;
+      auto execModelIt = processExecModels.find(procId);
+      if (execModelIt != processExecModels.end() &&
+          execModelIt->second == ExecModel::OneShotCallback) {
+        installImmediately = !hasPotentiallyUnsafeOneShotCall(procId);
+        deferredDueToPotentiallyUnsafeCalls = !installImmediately;
+      }
+
+      if (traceProcessWiring) {
+        llvm::errs() << "[circt-sim] compiled-proc name=" << procName
+                     << " pid=" << procId << " kind=CALLBACK model=";
+        if (execModelIt != processExecModels.end())
+          llvm::errs() << modelToString(execModelIt->second);
+        else
+          llvm::errs() << "<missing>";
+        llvm::errs() << " install=" << (installImmediately ? "immediate"
+                                                            : "deferred")
+                     << " oneshot_calls="
+                     << (deferredDueToPotentiallyUnsafeCalls ? "present"
+                                                            : "none")
+                     << "\n";
+      }
+
+      if (installImmediately) {
+        if (auto *process = scheduler.getProcess(procId))
+          process->setCallback(std::move(compiledCallback));
+        else if (traceProcessWiring)
+          llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
+                       << " missing scheduler process handle for immediate "
+                          "install\n";
+      } else {
+        // Default behavior: defer callback installation until the process's
+        // first interpreted llhd.wait executes. This keeps initial wait
+        // scheduling semantics in interpreted mode for wait-based callbacks.
+        pendingCompiledCallbacks[procId] = std::move(compiledCallback);
+      }
       matched++;
     } else if (kind == CIRCT_PROC_MINNOW) {
       // Minnow (CallbackTimeOnly) processes: same deferred installation,
@@ -43399,6 +43619,31 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       // bypasses that, so we re-arm explicitly here.
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
       pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
+        auto stateIt = processStates.find(procId);
+        if (stateIt == processStates.end())
+          return;
+        ProcessExecutionState &state = stateIt->second;
+
+        ProcessId savedActiveProcessId = activeProcessId;
+        ProcessExecutionState *savedActiveProcessState = activeProcessState;
+        activeProcessId = procId;
+        activeProcessState = &state;
+        auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
+          activeProcessId = savedActiveProcessId;
+          activeProcessState = savedActiveProcessState;
+        });
+
+        void *prevTls = __circt_sim_get_tls_ctx();
+        __circt_sim_set_tls_ctx(static_cast<void *>(this));
+        __circt_sim_set_tls_normalize(
+            LLHDProcessInterpreter::normalizeVirtualPtr);
+        auto restoreTlsContext = llvm::make_scope_exit(
+            [&]() { __circt_sim_set_tls_ctx(prevTls); });
+
+        ++aotDepth;
+        maxAotDepth = std::max(maxAotDepth, aotDepth);
+        auto restoreAotDepth = llvm::make_scope_exit([&]() { --aotDepth; });
+
         ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr);
         scheduler.rearmMinnow(procId);

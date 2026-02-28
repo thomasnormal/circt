@@ -79,25 +79,62 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
             return val.getUInt64();
           return 0;
         };
-        auto resolveSignal = [&](Value v) -> SignalId {
-          SignalId sigId = getSignalId(v);
-          if (sigId != 0)
-            return sigId;
+        auto resolveSignal = [&](Value root) -> SignalId {
+          SmallVector<Value, 8> worklist;
+          llvm::SmallDenseSet<Value, 16> visited;
+          worklist.push_back(root);
 
-          // Module-level stores can source directly from hw.module block args
-          // (e.g., `llvm.store %stream_in_string, %alloca`). Resolve those
-          // through the external port-signal map.
-          auto blockArg = dyn_cast<BlockArgument>(v);
-          if (!blockArg || blockArg.getOwner() != &hwModule.getBody().front())
-            return 0;
-          if (!externalPortSignals)
-            return 0;
-          unsigned argIdx = blockArg.getArgNumber();
-          if (argIdx >= hwModule.getNumPorts())
-            return 0;
-          auto portName = hwModule.getPortList()[argIdx].getName();
-          auto it = externalPortSignals->find(portName);
-          return it != externalPortSignals->end() ? it->second : 0;
+          while (!worklist.empty()) {
+            Value v = worklist.pop_back_val();
+            if (!v || !visited.insert(v).second)
+              continue;
+
+            SignalId sigId = getSignalId(v);
+            if (sigId != 0)
+              return sigId;
+
+            if (auto blockArg = dyn_cast<BlockArgument>(v)) {
+              // Module-level stores can source directly from hw.module block
+              // args (e.g., `llvm.store %stream_in_string, %alloca`).
+              if (blockArg.getOwner() == &hwModule.getBody().front() &&
+                  externalPortSignals) {
+                unsigned argIdx = blockArg.getArgNumber();
+                if (argIdx < hwModule.getNumPorts()) {
+                  auto portName = hwModule.getPortList()[argIdx].getName();
+                  auto it = externalPortSignals->find(portName);
+                  if (it != externalPortSignals->end() && it->second != 0)
+                    return it->second;
+                }
+              }
+              continue;
+            }
+
+            if (auto insertOp = v.getDefiningOp<LLVM::InsertValueOp>()) {
+              worklist.push_back(insertOp.getValue());
+              worklist.push_back(insertOp.getContainer());
+              continue;
+            }
+            if (auto extractOp = v.getDefiningOp<LLVM::ExtractValueOp>()) {
+              worklist.push_back(extractOp.getContainer());
+              continue;
+            }
+            if (auto structExtract = v.getDefiningOp<hw::StructExtractOp>()) {
+              worklist.push_back(structExtract.getInput());
+              continue;
+            }
+            if (auto bitcastOp = v.getDefiningOp<hw::BitcastOp>()) {
+              worklist.push_back(bitcastOp.getInput());
+              continue;
+            }
+            if (auto castOp =
+                    v.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+              for (Value in : castOp.getInputs())
+                worklist.push_back(in);
+              continue;
+            }
+          }
+
+          return 0;
         };
 
         uint64_t srcAddr = 0;
@@ -130,6 +167,12 @@ LogicalResult LLHDProcessInterpreter::executeModuleLevelLLVMOps(
                         signalMemoryMirrorPairs.end(),
                         pair) == signalMemoryMirrorPairs.end())
             signalMemoryMirrorPairs.push_back(pair);
+          // Also route direct signal->field stores through the interface
+          // propagation resolver so field shadow signals stay synchronized.
+          if (std::find(interfaceSignalCopyPairs.begin(),
+                        interfaceSignalCopyPairs.end(),
+                        pair) == interfaceSignalCopyPairs.end())
+            interfaceSignalCopyPairs.push_back(pair);
         }
 
         InterfaceTriStateStorePattern triPattern;
