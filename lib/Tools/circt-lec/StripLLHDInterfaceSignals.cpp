@@ -1300,24 +1300,53 @@ static LogicalResult lowerProjectedLocalRefProbes(Operation *scope) {
       unsigned elemWidth = elemInt.getWidth();
       unsigned baseWidth = baseInt.getWidth();
       auto constant = step.index.getDefiningOp<hw::ConstantOp>();
-      Value element;
       if (constant) {
         uint64_t low = constant.getValue().getZExtValue();
         if (low + elemWidth > baseWidth)
           return {};
-        element =
-            comb::ExtractOp::create(builder, loc, baseValue, low, elemWidth);
-      } else {
-        Value shift = adjustIntegerWidth(builder, step.index, baseWidth, loc);
-        Value shifted = comb::ShrUOp::create(builder, loc, baseValue, shift);
-        element = comb::ExtractOp::create(builder, loc, shifted, 0, elemWidth);
       }
-      Value updated =
-          self(self, builder, element, path.drop_front(), updateValue, loc);
+      Value updated;
+      if (path.size() == 1) {
+        updated = updateValue;
+      } else {
+        Value element;
+        if (constant) {
+          uint64_t low = constant.getValue().getZExtValue();
+          element =
+              comb::ExtractOp::create(builder, loc, baseValue, low, elemWidth);
+        } else {
+          Value shift =
+              adjustIntegerWidth(builder, step.index, baseWidth, loc);
+          Value shifted =
+              comb::ShrUOp::create(builder, loc, baseValue, shift);
+          element =
+              comb::ExtractOp::create(builder, loc, shifted, 0, elemWidth);
+        }
+        updated =
+            self(self, builder, element, path.drop_front(), updateValue, loc);
+      }
       if (!updated)
         return {};
       updated = adjustIntegerWidth(builder, updated, elemWidth, loc);
-      if (!constant) {
+      if (constant) {
+        uint64_t low = constant.getValue().getZExtValue();
+        SmallVector<Value, 3> pieces;
+        if (low + elemWidth < baseWidth) {
+          Value upper = comb::ExtractOp::create(builder, loc, baseValue,
+                                                low + elemWidth,
+                                                baseWidth - low - elemWidth);
+          pieces.push_back(upper);
+        }
+        pieces.push_back(updated);
+        if (low > 0) {
+          Value lower =
+              comb::ExtractOp::create(builder, loc, baseValue, 0, low);
+          pieces.push_back(lower);
+        }
+        if (pieces.size() == 1)
+          return pieces.front();
+        return comb::ConcatOp::create(builder, loc, pieces);
+      } else {
         // For dynamic extraction indices, preserve all non-target bits and
         // replace only the selected slice.
         Value shift = adjustIntegerWidth(builder, step.index, baseWidth, loc);
@@ -1340,22 +1369,6 @@ static LogicalResult lowerProjectedLocalRefProbes(Operation *scope) {
             comb::AndOp::create(builder, loc, shiftedUpdate, shiftedMask);
         return comb::OrOp::create(builder, loc, preserved, inserted);
       }
-      uint64_t low = constant.getValue().getZExtValue();
-      SmallVector<Value, 3> pieces;
-      if (low + elemWidth < baseWidth) {
-        Value upper = comb::ExtractOp::create(builder, loc, baseValue,
-                                              low + elemWidth,
-                                              baseWidth - low - elemWidth);
-        pieces.push_back(upper);
-      }
-      pieces.push_back(updated);
-      if (low > 0) {
-        Value lower = comb::ExtractOp::create(builder, loc, baseValue, 0, low);
-        pieces.push_back(lower);
-      }
-      if (pieces.size() == 1)
-        return pieces.front();
-      return comb::ConcatOp::create(builder, loc, pieces);
     }
     auto arrayType = dyn_cast<hw::ArrayType>(baseValue.getType());
     if (!arrayType)
