@@ -153,3 +153,41 @@ Local follow-up commits kept in stack:
   conflicts.
 - ImportVerilog queue/fork commits are high value but no longer "easy picks"
   on this tree due substantial local frontend/runtime divergence.
+
+## Refresh (2026-02-28, follow-up pass)
+
+- Current staging head: `77a0a4584`
+- Stack size vs `origin/main`: `49` commits ahead
+
+### Additional Picks In Follow-up Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `2e3c1ea20` | `eee665fe1` | [ESI][Runtime] Support editable installs (#9764) |
+| `9679a38c7` | `f13da0b62` | [PyRTG] Add String format function (#9762) |
+| `b9249b45a` | `6c1f5affa` | [ESI][Runtime][Wheel] Don't re-export stdlib symbols |
+| `77a0a4584` | `89778e1be` | [ImportVerilog] Fix silent failure on unsupported system calls (#9556) |
+
+### Validation Added In Follow-up Pass
+
+- Build:
+  - `utils/ninja-with-lock.sh -C build_stage circt-translate`
+- Python syntax sanity:
+  - `python3 -m py_compile lib/Dialect/ESI/runtime/setup.py`
+  - `python3 -m py_compile frontends/PyRTG/src/pyrtg/strings.py`
+  - `python3 -m py_compile frontends/PyRTG/test/basic.py`
+- ImportVerilog test status:
+  - Direct lit run of `build_stage/test/Conversion/ImportVerilog/errors.sv`
+    is not usable in this build config because `circt-translate` lacks
+    `--import-verilog` in this environment.
+
+### Deferred / Superseded In Follow-up Pass
+
+- `e0b24742a` ([VerifToSMT] assertions in funcs): superseded by local newer
+  behavior and tests; re-pick would regress.
+- `b02e27691` ([FIRRTL] Chisel intrinsic format substitutions): empty
+  cherry-pick after conflict resolution, already present functionally.
+- `78ca033c2`, `6b8405a08` (ESI runtime pytest/integration test follow-ups):
+  conflict with local removal/rework of integration test paths.
+- `2fdae8fcf` ([ArcRuntime][VCDTrace] final timestep): conflicts with local
+  Arc runtime file-layout divergence (upstream files removed/reworked here).
