@@ -37533,6 +37533,39 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_string_hextoa_width ----
+    // Signature: (value: i64, bit_width: i32) -> struct{ptr, i64}
+    if (calleeName == "__moore_string_hextoa_width") {
+      if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+        InterpretedValue valueArg = getValue(procId, callOp.getOperand(0));
+        InterpretedValue widthArg = getValue(procId, callOp.getOperand(1));
+        uint64_t value = valueArg.isX() ? 0 : valueArg.getUInt64();
+        int64_t bitWidth = widthArg.isX() ? 1 : static_cast<int64_t>(widthArg.getUInt64());
+        if (bitWidth <= 0)
+          bitWidth = 1;
+        if (bitWidth > 64)
+          bitWidth = 64;
+
+        uint64_t masked = value;
+        if (bitWidth < 64)
+          masked &= ((uint64_t{1} << bitWidth) - 1);
+
+        int digitWidth = static_cast<int>((bitWidth + 3) / 4);
+        if (digitWidth <= 0)
+          digitWidth = 1;
+
+        char buffer[32];
+        int len = std::snprintf(buffer, sizeof(buffer), "%0*llx", digitWidth,
+                                static_cast<unsigned long long>(masked));
+        std::string result(buffer, len > 0 ? len : 0);
+        setValue(procId, callOp.getResult(), storeStringResult(result));
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_string_hextoa_width("
+                                << value << ", " << bitWidth << ") = \""
+                                << result << "\"\n");
+      }
+      return success();
+    }
+
     // ---- __moore_string_octtoa ----
     // Signature: (value: i64) -> struct{ptr, i64}
     if (calleeName == "__moore_string_octtoa") {

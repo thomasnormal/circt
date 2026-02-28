@@ -16450,6 +16450,18 @@ struct FormatStringToStringOpConversion
                                        ValueRange{intI64});
       return call.getResult();
     };
+    auto callStringFromI64WithWidth = [&](StringRef runtimeName, Value intI64,
+                                          Value bitWidthI32) -> Value {
+      auto i32Ty = IntegerType::get(ctx, 32);
+      auto fnTy =
+          LLVM::LLVMFunctionType::get(stringStructTy, {i64Ty, i32Ty});
+      auto runtimeFn =
+          getOrCreateRuntimeFunc(mod, rewriter, runtimeName.str(), fnTy);
+      auto call = LLVM::CallOp::create(
+          rewriter, loc, TypeRange{stringStructTy}, SymbolRefAttr::get(runtimeFn),
+          ValueRange{intI64, bitWidthI32});
+      return call.getResult();
+    };
 
     // Case 3: Formatted decimal integer.
     if (auto decOp = dyn_cast<sim::FormatDecOp>(defOp)) {
@@ -16464,7 +16476,15 @@ struct FormatStringToStringOpConversion
       Value intVal =
           unpackPackedFourStateValueBits(hexOp.getValue(), hexOp.getFourStateWidth());
       Value intI64 = convertIntToI64(intVal, /*isSigned=*/false);
-      return callStringFromI64("__moore_string_hextoa", intI64);
+      unsigned logicalWidth = intVal.getType().getIntOrFloatBitWidth();
+      if (logicalWidth == 0)
+        logicalWidth = 1;
+      logicalWidth = std::min<unsigned>(logicalWidth, 64);
+      auto bitWidthI32 = arith::ConstantOp::create(
+          rewriter, loc, IntegerType::get(ctx, 32),
+          rewriter.getI32IntegerAttr(static_cast<int32_t>(logicalWidth)));
+      return callStringFromI64WithWidth("__moore_string_hextoa_width", intI64,
+                                        bitWidthI32);
     }
 
     // Case 5: Formatted octal integer.

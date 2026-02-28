@@ -1827,6 +1827,34 @@ extern "C" MooreString __moore_string_hextoa(int64_t value) {
   return result;
 }
 
+// Width-aware hex conversion used by formatted `%h` lowering.
+extern "C" MooreString __moore_string_hextoa_width(int64_t value,
+                                                    int32_t bitWidth) {
+  if (bitWidth <= 0)
+    bitWidth = 1;
+  if (bitWidth > 64)
+    bitWidth = 64;
+
+  uint64_t masked = static_cast<uint64_t>(value);
+  if (bitWidth < 64)
+    masked &= ((uint64_t{1} << bitWidth) - 1);
+
+  int digitWidth = (bitWidth + 3) / 4;
+  if (digitWidth <= 0)
+    digitWidth = 1;
+
+  char buffer[32];
+  int len = std::snprintf(buffer, sizeof(buffer), "%0*llx", digitWidth,
+                          static_cast<unsigned long long>(masked));
+  if (len <= 0) {
+    MooreString empty = {nullptr, 0};
+    return empty;
+  }
+  MooreString result = allocateString(len);
+  std::memcpy(result.data, buffer, len);
+  return result;
+}
+
 // str.octtoa(value) - convert integer to octal string
 extern "C" MooreString __moore_string_octtoa(int64_t value) {
   char buffer[32];

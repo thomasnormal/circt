@@ -451,6 +451,12 @@ double __moore_string_atoreal(MooreString *str);
 /// @return A new string containing the hex representation
 MooreString __moore_string_hextoa(int64_t value);
 
+/// Convert an integer to zero-padded hexadecimal string representation.
+/// @param value The integer value to convert
+/// @param bitWidth Logical source width used to derive hex digit count
+/// @return A new string containing the width-aware hex representation
+MooreString __moore_string_hextoa_width(int64_t value, int32_t bitWidth);
+
 /// Convert an integer to octal string representation.
 /// @param value The integer value to convert
 /// @return A new string containing the octal representation
