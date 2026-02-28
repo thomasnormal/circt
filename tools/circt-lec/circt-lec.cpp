@@ -788,6 +788,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   pm.addPass(createExternalizeRegisters(externalizeOptions));
   pm.nest<hw::HWModuleOp>().addPass(hw::createHWAggregateToComb());
   pm.addPass(hw::createHWConvertBitcasts());
+  pm.nest<hw::HWModuleOp>().addPass(createConvertSynthToComb());
   if (seqBound > 0) {
     // Sequential LEC: build a verif.bmc miter instead of verif.lec.
     ConstructSeqLECOptions seqOpts;
@@ -804,7 +805,6 @@ static LogicalResult executeLEC(MLIRContext &context) {
       opts.insertMode = lec::InsertAdditionalModeEnum::None;
     pm.addPass(createConstructLEC(opts));
   }
-  pm.addPass(createConvertSynthToComb());
   pm.addPass(createConvertHWToSMT());
   pm.addPass(createConvertDatapathToSMT());
   pm.addPass(createConvertCombToSMT());

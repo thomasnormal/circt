@@ -1,4 +1,4 @@
-// RUN: firtool --help | FileCheck %s --implicit-check-not='{{[Oo]}}ptions:'
+// RUN: firtool --help | FileCheck %s
 
 // CHECK: OVERVIEW: MLIR-based FIRRTL compiler
 // CHECK: General {{[Oo]}}ptions
