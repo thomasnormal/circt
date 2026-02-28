@@ -28,12 +28,14 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "LE_TO_GE",         "GE_TO_LE",       "AND_TO_OR",       "OR_TO_AND",
     "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "XOR_TO_XNOR",
     "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
-    "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",       "MUX_SWAP_ARMS",
-    "UNARY_NOT_DROP",   "UNARY_BNOT_DROP", "UNARY_MINUS_DROP",
-    "CONST0_TO_1",      "CONST1_TO_0",    "ADD_TO_SUB",      "SUB_TO_ADD",
-    "MUL_TO_ADD",       "ADD_TO_MUL",     "DIV_TO_MUL",      "MUL_TO_DIV",
-    "SHL_TO_SHR",       "SHR_TO_SHL",     "SHR_TO_ASHR",     "ASHR_TO_SHR",
-    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ",    "NEQ_TO_CASENEQ",
+    "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",
+    "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+    "IF_COND_NEGATE",   "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+    "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
+    "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
+    "MUL_TO_DIV",       "SHL_TO_SHR",     "SHR_TO_SHL",  "SHR_TO_ASHR",
+    "ASHR_TO_SHR",      "CASEEQ_TO_EQ",   "CASENEQ_TO_NEQ",
+    "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
@@ -285,6 +287,28 @@ static void collectLiteralTokenSites(StringRef text, StringRef token,
     if (isCodeRange(codeMask, pos, token.size()))
       sites.push_back({pos});
     pos += token.size();
+  }
+}
+
+static void collectKeywordTokenSites(StringRef text, StringRef keyword,
+                                     ArrayRef<uint8_t> codeMask,
+                                     SmallVectorImpl<SiteInfo> &sites) {
+  if (keyword.empty())
+    return;
+  size_t len = keyword.size();
+  for (size_t i = 0, e = text.size(); i + len <= e; ++i) {
+    if (!isCodeRange(codeMask, i, len))
+      continue;
+    if (!text.substr(i).starts_with(keyword))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + len < e && isCodeAt(codeMask, i + len)) ? text[i + len]
+                                                              : '\0';
+    bool prevBoundary = prev == '\0' || (!isAlnum(prev) && prev != '_' && prev != '$');
+    bool nextBoundary = next == '\0' || (!isAlnum(next) && next != '_' && next != '$');
+    if (!prevBoundary || !nextBoundary)
+      continue;
+    sites.push_back({i});
   }
 }
 
@@ -1320,6 +1344,62 @@ static void collectMuxSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask,
   }
 }
 
+static bool isIdentifierBodyChar(char c) {
+  return isAlnum(c) || c == '_' || c == '$';
+}
+
+static size_t findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t openPos) {
+  if (openPos == StringRef::npos || openPos >= text.size() ||
+      !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+    return StringRef::npos;
+  int depth = 0;
+  for (size_t i = openPos, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++depth;
+      continue;
+    }
+    if (ch != ')')
+      continue;
+    --depth;
+    if (depth == 0)
+      return i;
+    if (depth < 0)
+      return StringRef::npos;
+  }
+  return StringRef::npos;
+}
+
+static void collectIfConditionNegateSites(
+    StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!isCodeRange(codeMask, i, 2) || !text.substr(i).starts_with("if"))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 2 < e && isCodeAt(codeMask, i + 2)) ? text[i + 2] : '\0';
+    if ((prev != '\0' && isIdentifierBodyChar(prev)) ||
+        (next != '\0' && isIdentifierBodyChar(next)))
+      continue;
+
+    size_t openPos = i + 2;
+    while (openPos < e &&
+           (!isCodeAt(codeMask, openPos) ||
+            std::isspace(static_cast<unsigned char>(text[openPos]))))
+      ++openPos;
+    if (openPos >= e || !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+      continue;
+
+    size_t closePos = findMatchingParen(text, codeMask, openPos);
+    if (closePos == StringRef::npos)
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectSitesForOp(StringRef designText, StringRef op,
                               ArrayRef<uint8_t> codeMask,
                               SmallVectorImpl<SiteInfo> &sites) {
@@ -1440,8 +1520,20 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectProceduralNonblockingAssignSites(designText, codeMask, sites);
     return;
   }
+  if (op == "POSEDGE_TO_NEGEDGE") {
+    collectKeywordTokenSites(designText, "posedge", codeMask, sites);
+    return;
+  }
+  if (op == "NEGEDGE_TO_POSEDGE") {
+    collectKeywordTokenSites(designText, "negedge", codeMask, sites);
+    return;
+  }
   if (op == "MUX_SWAP_ARMS") {
     collectMuxSwapArmSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "IF_COND_NEGATE") {
+    collectIfConditionNegateSites(designText, codeMask, sites);
     return;
   }
   if (op == "UNARY_NOT_DROP") {
@@ -1547,10 +1639,13 @@ static std::string getOpFamily(StringRef op) {
       op == "BAND_TO_LAND" || op == "BOR_TO_LOR" || op == "UNARY_NOT_DROP" ||
       op == "UNARY_BNOT_DROP")
     return "logic";
-  if (op == "BA_TO_NBA" || op == "NBA_TO_BA")
+  if (op == "BA_TO_NBA" || op == "NBA_TO_BA" ||
+      op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE")
     return "timing";
   if (op == "MUX_SWAP_ARMS")
     return "mux";
+  if (op == "IF_COND_NEGATE")
+    return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||

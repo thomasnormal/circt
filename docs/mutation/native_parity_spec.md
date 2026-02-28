@@ -146,6 +146,15 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `MUX_SWAP_ARMS` targets assignment-context ternary expressions
     (`cond ? tval : fval`) and rewrites to (`cond ? fval : tval`) with
     statement-level disqualifier guards to avoid wildcard-case token confusion.
+- Conditional-polarity mutations model inverted control intent:
+  - `IF_COND_NEGATE` targets `if (cond)` headers and rewrites to
+    `if (!(cond))` with word-boundary token matching and balanced-parenthesis
+    guards.
+- Edge-polarity mutations model clock/reset sensitivity bugs:
+  - `POSEDGE_TO_NEGEDGE` targets `posedge` event-control keywords with
+    identifier-boundary guards.
+  - `NEGEDGE_TO_POSEDGE` targets `negedge` event-control keywords with
+    identifier-boundary guards.
 - Cast mutations (`SIGNED_TO_UNSIGNED`, `UNSIGNED_TO_SIGNED`) target
   `$signed(...)`/`$unsigned(...)` calls with boundary checks and optional
   whitespace before `(`.

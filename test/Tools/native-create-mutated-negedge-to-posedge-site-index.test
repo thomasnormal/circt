@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk0, clk1, input logic a, output logic y0, y1);\n  always_ff @(negedge clk0) y0 <= a;\n  always_ff @(negedge clk1) y1 <= y0;\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_NEGEDGE_TO_POSEDGE@1\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: always_ff @(posedge clk0) y0 <= a;
+// MUTANT: always_ff @(negedge clk1) y1 <= y0;
