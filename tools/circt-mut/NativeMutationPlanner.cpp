@@ -64,7 +64,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "SHR_TO_SHL",       "SHR_TO_ASHR",    "ASHR_TO_SHR", "CASEEQ_TO_EQ",
     "CASENEQ_TO_NEQ",
     "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
-    "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
+    "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED",
+    "REPEAT_COUNT_PLUS_ONE", "REPEAT_COUNT_MINUS_ONE"};
 
 namespace {
 
@@ -1185,6 +1186,48 @@ static void collectComparatorConstLiteralSites(StringRef text,
       if (!(skipZero && litValue == 0))
         sites.push_back({rhsStart});
     }
+  }
+
+  llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
+    return a.pos < b.pos;
+  });
+  sites.erase(
+      std::unique(sites.begin(), sites.end(),
+                  [](const SiteInfo &a, const SiteInfo &b) {
+                    return a.pos == b.pos;
+                  }),
+      sites.end());
+}
+
+static void collectRepeatCountLiteralSites(StringRef text,
+                                           ArrayRef<uint8_t> codeMask,
+                                           SmallVectorImpl<SiteInfo> &sites,
+                                           bool skipZero = false) {
+  SmallVector<SiteInfo, 16> repeatSites;
+  collectKeywordTokenSites(text, "repeat", codeMask, repeatSites);
+
+  for (const SiteInfo &repeatSite : repeatSites) {
+    size_t i = repeatSite.pos + strlen("repeat");
+    i = findNextCodeNonSpace(text, codeMask, i);
+    if (i == StringRef::npos || text[i] != '(')
+      continue;
+
+    size_t literalPos = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (literalPos == StringRef::npos)
+      continue;
+    size_t literalEnd = literalPos;
+    uint64_t literalValue = 0;
+    if (!parseSimpleNonNegativeLiteralAt(text, codeMask, literalPos, literalEnd,
+                                         literalValue))
+      continue;
+    if (skipZero && literalValue == 0)
+      continue;
+
+    size_t closePos = findNextCodeNonSpace(text, codeMask, literalEnd);
+    if (closePos == StringRef::npos || text[closePos] != ')')
+      continue;
+
+    sites.push_back({literalPos});
   }
 
   llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
@@ -3607,6 +3650,15 @@ static void collectSitesForOp(StringRef designText, StringRef op,
                                        /*skipZero=*/true);
     return;
   }
+  if (op == "REPEAT_COUNT_PLUS_ONE") {
+    collectRepeatCountLiteralSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "REPEAT_COUNT_MINUS_ONE") {
+    collectRepeatCountLiteralSites(designText, codeMask, sites,
+                                   /*skipZero=*/true);
+    return;
+  }
   if (op == "ADD_TO_SUB") {
     collectBinaryArithmeticSites(designText, '+', codeMask, sites,
                                  /*skipRhsZeroEquivalent=*/true);
@@ -3796,7 +3848,8 @@ static std::string getOpFamily(StringRef op) {
       op == "CASE_TO_CASEZ" || op == "CASEZ_TO_CASE" ||
       op == "CASE_TO_CASEX" || op == "CASEX_TO_CASE" ||
       op == "CASEZ_TO_CASEX" || op == "CASEX_TO_CASEZ" ||
-      op == "IF_ELSE_SWAP_ARMS" || op == "CASE_ITEM_SWAP_ARMS")
+      op == "IF_ELSE_SWAP_ARMS" || op == "CASE_ITEM_SWAP_ARMS" ||
+      op == "REPEAT_COUNT_PLUS_ONE" || op == "REPEAT_COUNT_MINUS_ONE")
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
@@ -5005,6 +5058,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   if (op == "CMP_CONST_PLUS_ONE")
     return applyConstDeltaAt(text, /*delta=*/1, pos, codeMask, mutatedText);
   if (op == "CMP_CONST_MINUS_ONE")
+    return applyConstDeltaAt(text, /*delta=*/-1, pos, codeMask, mutatedText);
+  if (op == "REPEAT_COUNT_PLUS_ONE")
+    return applyConstDeltaAt(text, /*delta=*/1, pos, codeMask, mutatedText);
+  if (op == "REPEAT_COUNT_MINUS_ONE")
     return applyConstDeltaAt(text, /*delta=*/-1, pos, codeMask, mutatedText);
   if (op == "ADD_TO_SUB")
     return replaceTokenAt(mutatedText, pos, 1, "-");

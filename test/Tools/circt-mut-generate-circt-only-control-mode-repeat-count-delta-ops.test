@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  initial begin\n    repeat (3) #1;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 16 --seed 0 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_REPEAT_COUNT_PLUS_ONE' %t/mutations.txt
+// RUN: grep -q 'NATIVE_REPEAT_COUNT_MINUS_ONE' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 16

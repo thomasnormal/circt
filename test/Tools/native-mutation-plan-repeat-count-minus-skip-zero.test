@@ -1,0 +1,5 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  initial begin\n    repeat (0) #1;\n  end\nendmodule\n" > %t/design.sv
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops REPEAT_COUNT_MINUS_ONE --out %t/mutations.txt 2>&1 | FileCheck %s --check-prefix=ERR
+//
+// ERR: circt-mut generate: no applicable native mutation sites for selected operators

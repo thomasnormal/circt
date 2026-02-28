@@ -2151,3 +2151,50 @@
     - balanced recheck:
       - workspace: `/tmp/cov_intro_seeded_cmp_balanced_recheck_1772307353`
       - result: `ok=12 mismatch=0 fail=0`.
+
+## 2026-02-28 (repeat-count off-by-one mutation class)
+
+- realizations:
+  - `repeat (N)` count edits are a realistic control fault class (loop/run-length
+    off-by-one) that is not covered by operator-only swaps.
+  - These mutations are semantically distinct from generic constant edits because
+    they target scheduling/iteration behavior in procedural control flow.
+
+- changes made:
+  - Added native mutation operators:
+    - `REPEAT_COUNT_PLUS_ONE`
+    - `REPEAT_COUNT_MINUS_ONE`
+  - Implemented repeat-literal site discovery in
+    `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - token-aware detection of `repeat` keyword,
+    - parse/collect simple non-negative literals inside `repeat (<lit>)`,
+    - keep skip-zero guard for minus operator.
+  - Added operator plumbing:
+    - planner catalog / family (`control`) / site collector dispatch,
+    - apply dispatch to existing constant-delta rewrite path.
+  - CIRCT-only mode integration in `tools/circt-mut/circt-mut.cpp`:
+    - included repeat-count delta ops in control-bearing profiles (`control`,
+      `invert`, `inv`, and balanced/all mode sets).
+  - Validator alignment:
+    - `utils/run_mutation_mcy_examples.sh` native-op token allowlist accepts
+      `REPEAT_COUNT_PLUS_ONE` and `REPEAT_COUNT_MINUS_ONE`.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-repeat-count-plus-minus-force.test`
+  - `test/Tools/native-create-mutated-repeat-count-plus-minus-site-index.test`
+  - `test/Tools/native-mutation-plan-repeat-count-minus-skip-zero.test`
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-repeat-count-delta-ops.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-repeat-count-plus-minus-force.test test/Tools/native-create-mutated-repeat-count-plus-minus-site-index.test test/Tools/native-mutation-plan-repeat-count-minus-skip-zero.test test/Tools/circt-mut-generate-circt-only-control-mode-repeat-count-delta-ops.test`
+    - result: `4 passed`.
+  - seeded xrun-vs-circt parity:
+    - first rerun had transient infra failures while invoking `circt-sim`
+      (`Permission denied` during concurrent binary replacement), but no
+      mismatches on completed comparisons.
+    - stable-binary rerun (snapshot copies of CIRCT tools in workspace):
+      - workspace: `/tmp/cov_intro_seeded_repeat_count_delta_recheck_stable_1772307799`
+      - result: `ok=20 mismatch=0 fail=0`.

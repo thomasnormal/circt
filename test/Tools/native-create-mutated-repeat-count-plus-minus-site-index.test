@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  initial begin\n    repeat (3) #1;\n    repeat (4) #1;\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_REPEAT_COUNT_PLUS_ONE@2\n' > %t/plus.txt
+// RUN: printf '1 NATIVE_REPEAT_COUNT_MINUS_ONE@1\n' > %t/minus.txt
+// RUN: circt-mut apply -i %t/plus.txt -o %t/plus.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/minus.txt -o %t/minus.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=PLUS < %t/plus.sv
+// RUN: FileCheck %s --check-prefix=MINUS < %t/minus.sv
+//
+// PLUS: repeat ((4 + 1)) #1;
+// MINUS: repeat ((3 - 1)) #1;
