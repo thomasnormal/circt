@@ -381,3 +381,42 @@
     `test/Tools/run-opentitan-connectivity-circt-lec-*.test`
     `test/Tools/formal-runner-common-tool-invoke-permission-error.test`:
     `35/35` pass.
+
+## 2026-02-28 - Persistent always_comb batch failure fast-path to singleton frontends
+
+- realization:
+  - for some OpenTitan connectivity clusters, shared frontend batching can fail
+    in `circt-verilog` with
+    `variable ... driven by always_comb procedure` even after auto-retry with
+    `--allow-multi-always-comb-drivers`.
+  - isolated single-rule replays from the same rule family can proceed through
+    `circt-verilog`/`circt-opt` and reach `circt-lec`, indicating a
+    batch-interaction pathology rather than a uniformly failing rule.
+  - previous binary split behavior (`N -> N/2 -> ...`) incurred avoidable
+    expensive failing frontend attempts on intermediate batches.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - detect persistent always_comb multi-driver failure in verilog stage after
+      multi-driver retry is already active.
+    - when that condition occurs for a multi-case batch, split directly into
+      single-case frontend batches instead of binary halving.
+    - emit explicit stderr diagnostic:
+      `splitting batch into single-case frontends after persistent always_comb multi-driver failure`.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-always-comb-persistent-singleton-split.test`.
+  - test models a frontend that:
+    - fails for multi-rule wrappers with always_comb diagnostic,
+    - succeeds for single-rule wrappers.
+  - required invocation count drops from prior split churn (`8`) to direct
+    singleton path (`6`).
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv`
+    `test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+    `test/Tools/formal-runner-common-tool-invoke-permission-error.test`:
+    `36/36` pass.

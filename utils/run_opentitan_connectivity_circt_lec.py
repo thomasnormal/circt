@@ -1986,6 +1986,7 @@ def main() -> int:
 
                 frontend_ok = False
                 frontend_split = False
+                frontend_force_singleton_split = False
                 stage = "verilog"
                 try:
                     attempted_timescale_retry = False
@@ -2090,6 +2091,14 @@ def main() -> int:
                                         batch_verilog_max_rss_mb,
                                     )
                                     continue
+                            if (
+                                stage == "verilog"
+                                and batch_allow_multi_driver
+                                and is_always_comb_multi_driver_retryable_failure(
+                                    shared_verilog_log_text
+                                )
+                            ):
+                                frontend_force_singleton_split = True
                             raise
 
                     if shared_verilog_log.exists():
@@ -2172,9 +2181,21 @@ def main() -> int:
                             append_timeout_reason(case, "frontend_command_timeout")
                 except subprocess.CalledProcessError:
                     if len(batch_cases) > 1:
-                        split_point = max(1, len(batch_cases) // 2)
-                        pending_batches.insert(0, batch_cases[split_point:])
-                        pending_batches.insert(0, batch_cases[:split_point])
+                        if frontend_force_singleton_split:
+                            print(
+                                "opentitan connectivity lec: splitting batch into "
+                                "single-case frontends after persistent "
+                                "always_comb multi-driver failure for "
+                                f"batch={batch_index}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            for split_case in reversed(batch_cases):
+                                pending_batches.insert(0, [split_case])
+                        else:
+                            split_point = max(1, len(batch_cases) // 2)
+                            pending_batches.insert(0, batch_cases[split_point:])
+                            pending_batches.insert(0, batch_cases[:split_point])
                         frontend_split = True
                     else:
                         frontend_diag = (
