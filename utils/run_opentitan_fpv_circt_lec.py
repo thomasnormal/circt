@@ -286,6 +286,8 @@ def evaluate_case(
     circt_lec: str,
     circt_lec_args: list[str],
     lec_run_smtlib: bool,
+    lec_smoke_only: bool,
+    lec_timeout_frontier_probe: bool,
     z3_bin: str,
 ) -> CaseStatus:
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -338,13 +340,50 @@ def evaluate_case(
     else:
         l_cmd.append("--run")
     l_cmd.extend(["--c1", toplevel, "--c2", toplevel, str(opt_mlir)])
+
+    def classify_lec_timeout_reason() -> str:
+        if lec_smoke_only:
+            return "frontend_command_timeout"
+        if not lec_timeout_frontier_probe:
+            return "solver_command_timeout"
+        probe_cmd: list[str] = []
+        skip_next = False
+        for arg in l_cmd:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg in {"--run-smtlib", "--run"}:
+                continue
+            if arg == "--z3-path":
+                skip_next = True
+                continue
+            if arg.startswith("--z3-path="):
+                continue
+            probe_cmd.append(arg)
+        if "--emit-mlir" not in probe_cmd:
+            probe_cmd.append("--emit-mlir")
+        try:
+            run_with_log(
+                probe_cmd,
+                case_dir / "circt-lec.timeout-frontier.log",
+                timeout_secs,
+                out_path=case_dir / "lec.timeout-frontier.out",
+            )
+        except subprocess.TimeoutExpired:
+            return "frontend_command_timeout"
+        except subprocess.CalledProcessError:
+            return "timeout_frontier_probe_error"
+        return "solver_command_timeout"
+
     try:
         lec_text = run_with_log(
             l_cmd, case_dir / "circt-lec.log", timeout_secs, out_path=lec_out
         )
     except subprocess.TimeoutExpired:
         return CaseStatus(
-            status="TIMEOUT", diag="CIRCT_LEC_TIMEOUT", reason="circt_lec_timeout"
+            status="TIMEOUT",
+            diag="CIRCT_LEC_TIMEOUT",
+            reason=classify_lec_timeout_reason(),
         )
     except subprocess.CalledProcessError as exc:
         lec_text = (exc.output or "") + "\n" + (exc.stderr or "")
@@ -583,6 +622,9 @@ def main() -> int:
 
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
+    lec_timeout_frontier_probe = (
+        os.environ.get("LEC_TIMEOUT_FRONTIER_PROBE", "1") == "1"
+    )
     z3_bin = os.environ.get("Z3_BIN", "")
     if lec_run_smtlib and not lec_smoke_only:
         if not z3_bin:
@@ -631,6 +673,8 @@ def main() -> int:
                 circt_lec=circt_lec,
                 circt_lec_args=circt_lec_args,
                 lec_run_smtlib=lec_run_smtlib and not lec_smoke_only,
+                lec_smoke_only=lec_smoke_only,
+                lec_timeout_frontier_probe=lec_timeout_frontier_probe,
                 z3_bin=z3_bin,
             )
         counts["total"] += 1
