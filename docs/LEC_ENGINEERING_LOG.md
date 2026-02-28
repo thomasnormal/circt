@@ -161,3 +161,7 @@
     - result: `2/2 PASS` with isolated shared batches:
       - batch 0 wrappers bind `top_earlgrey`
       - batch 1 wrappers bind `chip_earlgrey_asic`
+    - `AST_CLK_SNS_IN` spot checks after the refactor:
+      - `CIRCT_TIMEOUT_SECS=120`: `PASS ... EQ`
+      - `CIRCT_TIMEOUT_SECS=60`: retry path
+        `(timeout=60s->180s)` then `PASS ... EQ`
