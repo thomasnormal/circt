@@ -1,5 +1,53 @@
 # AVIP Coverage Parity Engineering Log
 
+## 2026-02-28 Session: compile-lane activation + native-dispatch isolation
+
+### What changed
+- Updated `utils/run_avip_circt_sim.sh` compile-mode path:
+  - invokes `circt-compile <mlir> -o <so>` in compile mode,
+  - passes `--compiled=<so>` to `circt-sim`,
+  - snapshots `circt-compile` in `.tool-snapshot` for compile-mode runs,
+  - writes `circt_compile=` metadata,
+  - fails compile lane if `circt-compile` succeeds without emitting a
+    non-empty `.so`.
+- Added regression tests:
+  - `test/Tools/run-avip-circt-sim-compile-mode-uses-compiled-so.test`
+  - `test/Tools/run-avip-circt-sim-compile-mode-missing-compiled-output.test`
+- Updated stale golden test expectations:
+  - `test/Tools/run-avip-circt-sim-contract-golden.test`
+
+### Why
+- AVIP compile lane was previously interpreter-only in practice because the
+  runner did not build/load an AOT shared object.
+- This made compile-vs-interpret AVIP comparisons invalid and hid native
+  dispatch bugs.
+
+### Validation snapshot
+- Targeted AVIP runner lit slice:
+  - `run-avip-circt-sim-compile-mode-uses-compiled-so.test`
+  - `run-avip-circt-sim-compile-mode-missing-compiled-output.test`
+  - `run-avip-circt-sim-contract-golden.test`
+  - `run-avip-circt-sim-axi4lite-testname.test`
+  - `run-avip-circt-sim-wall-timeout-guard.test`
+  - `run-avip-circt-sim-parse-output-behavior.test`
+  - result: `6/6 PASS`
+- Real APB compile-lane run (`AVIPS=apb`, `SEEDS=1`, `--aot-stats`):
+  - compile lane now loads AOT symbols:
+    - `Loaded 4572 compiled functions`
+    - `Compiled function calls: 282`
+    - `Entry-table native calls: 156`
+
+### Root-cause isolation found this session
+- Functional mismatch remains under native dispatch on APB:
+  - compile mode reports `Coverage=0.00%`
+  - interpret mode on same MLIR/UVM args reports `~54-55%`
+- Isolation experiment:
+  - `CIRCT_AOT_DISABLE_ALL=1` in compile mode restores non-zero coverage
+    (`54.17%`, `55.56%`).
+- Conclusion:
+  - remaining AVIP mismatch is in native dispatch semantics, not in
+    compile-lane wiring, `.so` loading, or compiled-process registration.
+
 ## 2026-02-26 Session: Fast-path A/B waveform differential infrastructure
 
 ### What changed

@@ -17,15 +17,15 @@
 
 // LOG: [avip-circt-sim] apb seed=1 sim_status=OK sim_exit=0
 
-// MATRIX: {{^avip[[:space:]]+seed[[:space:]]+compile_status[[:space:]]+compile_sec[[:space:]]+sim_status[[:space:]]+sim_exit[[:space:]]+sim_sec[[:space:]]+sim_time_fs[[:space:]]+uvm_fatal[[:space:]]+uvm_error[[:space:]]+cov_1_pct[[:space:]]+cov_2_pct[[:space:]]+peak_rss_kb[[:space:]]+compile_log[[:space:]]+sim_log$}}
-// MATRIX: {{^apb[[:space:]]+1[[:space:]]+OK[[:space:]]+[0-9]+[[:space:]]+OK[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+10[[:space:]]+0[[:space:]]+0[[:space:]]+100[[:space:]]+100[[:space:]]+-[[:space:]]+.*compile\.log[[:space:]]+.*sim_seed_1\.log$}}
+// MATRIX: {{^avip[[:space:]]+seed[[:space:]]+compile_status[[:space:]]+compile_sec[[:space:]]+sim_status[[:space:]]+sim_exit[[:space:]]+sim_sec[[:space:]]+sim_time_fs[[:space:]]+uvm_fatal[[:space:]]+uvm_error[[:space:]]+cov_1_pct[[:space:]]+cov_2_pct[[:space:]]+peak_rss_kb[[:space:]]+compile_log[[:space:]]+sim_log[[:space:]]+vcd_file$}}
+// MATRIX: {{^apb[[:space:]]+1[[:space:]]+OK[[:space:]]+[0-9]+[[:space:]]+OK[[:space:]]+0[[:space:]]+[0-9]+[[:space:]]+10[[:space:]]+0[[:space:]]+0[[:space:]]+100[[:space:]]+100[[:space:]]+-[[:space:]]+.*compile\.log[[:space:]]+.*sim_seed_1\.log[[:space:]]+-$}}
 
 // META: script_path={{.*}}/utils/run_avip_circt_sim.sh
 // META: avips=apb
 // META: seeds=1
 // META: sim_timeout_hard=40
 // META: circt_sim_mode=interpret
-// META: circt_sim_extra_args=<none>
+// META: circt_sim_extra_args=--parallel=1 --mlir-disable-threading
 // META: fail_on_functional_gate=0
 // META: fail_on_coverage_baseline=0
 

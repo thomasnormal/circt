@@ -47,9 +47,11 @@ ACTIVITY_MIN_COVERAGE_PCT="${ACTIVITY_MIN_COVERAGE_PCT:-0.01}"
 
 CANONICAL_CIRCT_VERILOG="$CIRCT_ROOT/build_test/bin/circt-verilog"
 CANONICAL_CIRCT_SIM="$CIRCT_ROOT/build_test/bin/circt-sim"
+CANONICAL_CIRCT_COMPILE="$CIRCT_ROOT/build_test/bin/circt-compile"
 
 CIRCT_VERILOG="${CIRCT_VERILOG:-$CANONICAL_CIRCT_VERILOG}"
 CIRCT_SIM="${CIRCT_SIM:-$CANONICAL_CIRCT_SIM}"
+CIRCT_COMPILE="${CIRCT_COMPILE:-$CANONICAL_CIRCT_COMPILE}"
 RUN_AVIP="${RUN_AVIP:-$SCRIPT_DIR/run_avip_circt_verilog.sh}"
 MBIT_DIR="${MBIT_DIR:-/home/thomas-ahle/mbit}"
 
@@ -144,6 +146,11 @@ if [[ "$CIRCT_ALLOW_NONCANONICAL_TOOLS" != "1" ]]; then
     echo "error: CIRCT_SIM must use canonical build_test path: $CANONICAL_CIRCT_SIM (got: $CIRCT_SIM)" >&2
     exit 1
   fi
+  if [[ "$CIRCT_SIM_MODE" == "compile" ]] && \
+     [[ -n "${CIRCT_COMPILE:-}" && "$CIRCT_COMPILE" != "$CANONICAL_CIRCT_COMPILE" ]]; then
+    echo "error: CIRCT_COMPILE must use canonical build_test path in compile mode: $CANONICAL_CIRCT_COMPILE (got: $CIRCT_COMPILE)" >&2
+    exit 1
+  fi
 fi
 
 tool_help_healthy() {
@@ -157,6 +164,10 @@ if [[ "$CIRCT_ALLOW_NONCANONICAL_TOOLS" != "1" ]]; then
     echo "error: circt-sim probe failed for '$CIRCT_SIM' (rebuild that binary)" >&2
     exit 1
   fi
+  if [[ "$CIRCT_SIM_MODE" == "compile" ]] && [[ -x "$CIRCT_COMPILE" ]] && ! tool_help_healthy "$CIRCT_COMPILE"; then
+    echo "error: circt-compile probe failed for '$CIRCT_COMPILE' (rebuild that binary)" >&2
+    exit 1
+  fi
 fi
 
 if [[ ! -x "$CIRCT_SIM" ]]; then
@@ -165,6 +176,10 @@ if [[ ! -x "$CIRCT_SIM" ]]; then
 fi
 if [[ ! -x "$CIRCT_VERILOG" ]]; then
   echo "error: circt-verilog not found or not executable: $CIRCT_VERILOG" >&2
+  exit 1
+fi
+if [[ "$CIRCT_SIM_MODE" == "compile" ]] && [[ ! -x "$CIRCT_COMPILE" ]]; then
+  echo "error: circt-compile not found or not executable: $CIRCT_COMPILE" >&2
   exit 1
 fi
 if [[ ! -x "$RUN_AVIP" ]]; then
@@ -188,12 +203,20 @@ snapshot_tool() {
 
 SNAPSHOT_CIRCT_VERILOG="$TOOL_SNAPSHOT_DIR/circt-verilog"
 SNAPSHOT_CIRCT_SIM="$TOOL_SNAPSHOT_DIR/circt-sim"
+SNAPSHOT_CIRCT_COMPILE=""
 snapshot_tool "$CIRCT_VERILOG" "$SNAPSHOT_CIRCT_VERILOG"
 snapshot_tool "$CIRCT_SIM" "$SNAPSHOT_CIRCT_SIM"
+if [[ "$CIRCT_SIM_MODE" == "compile" ]]; then
+  SNAPSHOT_CIRCT_COMPILE="$TOOL_SNAPSHOT_DIR/circt-compile"
+  snapshot_tool "$CIRCT_COMPILE" "$SNAPSHOT_CIRCT_COMPILE"
+fi
 
 # Use stable snapshots for the entire matrix execution.
 CIRCT_VERILOG="$SNAPSHOT_CIRCT_VERILOG"
 CIRCT_SIM="$SNAPSHOT_CIRCT_SIM"
+if [[ "$CIRCT_SIM_MODE" == "compile" ]]; then
+  CIRCT_COMPILE="$SNAPSHOT_CIRCT_COMPILE"
+fi
 
 # name|avip_dir|filelist|tops|max_sim_fs|test_name
 AVIPS_CORE8=(
@@ -476,6 +499,7 @@ meta="$OUT_DIR/meta.txt"
   echo "circt_root=$CIRCT_ROOT"
   echo "circt_verilog=$CIRCT_VERILOG"
   echo "circt_sim=$CIRCT_SIM"
+  echo "circt_compile=${CIRCT_COMPILE:-<unused>}"
   echo "avip_set=$AVIP_SET"
   echo "avips=${AVIPS:-<from-set>}"
   echo "seeds=$SEEDS_CSV"
@@ -516,6 +540,7 @@ for row in "${selected_avips[@]}"; do
   sim_test_name="$test_name"
   compile_log="$avip_out/compile.log"
   mlir_file="$avip_out/${name}.mlir"
+  compiled_so="$avip_out/${name}.so"
 
   compile_status="FAIL"
   compile_sec="-"
@@ -549,7 +574,18 @@ for row in "${selected_avips[@]}"; do
        AVIP_RELAX_RESET_WAIT="$AVIP_RELAX_RESET_WAIT" \
        OUT="$mlir_file" \
        run_limited "$COMPILE_TIMEOUT" "${compile_cmd[@]}" > "$compile_log" 2>&1; then
-      compile_status="OK"
+      if [[ "$CIRCT_SIM_MODE" == "compile" ]]; then
+        if run_limited "$COMPILE_TIMEOUT" \
+             "$CIRCT_COMPILE" "$mlir_file" -o "$compiled_so" >> "$compile_log" 2>&1; then
+          if [[ -s "$compiled_so" ]]; then
+            compile_status="OK"
+          else
+            echo "[avip-circt-sim] error: circt-compile succeeded but produced no shared object: $compiled_so" >> "$compile_log"
+          fi
+        fi
+      else
+        compile_status="OK"
+      fi
     fi
     end_compile=$(date +%s)
     compile_sec=$((end_compile - start_compile))
@@ -596,6 +632,10 @@ for row in "${selected_avips[@]}"; do
       fi
 
       mode_flags=(--mode="$CIRCT_SIM_MODE")
+      compiled_flags=()
+      if [[ "$CIRCT_SIM_MODE" == "compile" ]]; then
+        compiled_flags+=(--compiled="$compiled_so")
+      fi
       jit_report_flags=()
       if [[ "$CIRCT_SIM_WRITE_JIT_REPORT" != "0" ]]; then
         jit_report_flags+=(--jit-report="$jit_report")
@@ -612,6 +652,7 @@ for row in "${selected_avips[@]}"; do
             "$CIRCT_SIM" "$mlir_file" \
             "${top_flags[@]}" \
             "${mode_flags[@]}" \
+            "${compiled_flags[@]}" \
             "${sim_extra_args[@]}" \
             "${trace_flags[@]}" \
             "${vcd_flags[@]}" \
@@ -626,6 +667,7 @@ for row in "${selected_avips[@]}"; do
             "$CIRCT_SIM" "$mlir_file" \
             "${top_flags[@]}" \
             "${mode_flags[@]}" \
+            "${compiled_flags[@]}" \
             "${sim_extra_args[@]}" \
             "${trace_flags[@]}" \
             "${vcd_flags[@]}" \
