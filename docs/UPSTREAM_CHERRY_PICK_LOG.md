@@ -191,3 +191,6 @@ Local follow-up commits kept in stack:
   conflict with local removal/rework of integration test paths.
 - `2fdae8fcf` ([ArcRuntime][VCDTrace] final timestep): conflicts with local
   Arc runtime file-layout divergence (upstream files removed/reworked here).
+- `afcefdc19` ([comb] ~sext canonicalization) and `db50d3131` ([LLHD] mem2reg
+  wait-live capture): re-attempted in this pass, both resolved to empty
+  cherry-picks after conflict resolution (already functionally present).
