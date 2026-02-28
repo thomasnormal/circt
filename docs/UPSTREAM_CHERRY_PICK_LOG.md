@@ -359,3 +359,25 @@ Local follow-up commits kept in stack:
   - `0f99432e5` (Arc time lowering; resolved to empty)
   - `afcefdc19` (Comb canonicalization; overlaps with local SextMatcher hardening and test evolution)
   - `2b9e89d41` (MooreToCore unreachable default removal; empty on this branch)
+
+## Ignore List Sync (2026-02-28)
+
+- Starting staging head for this pass: `d8cdead5a`
+- Current staging head after this pass: `f95496ab8`
+
+### Additional Picks In This Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `f95496ab8` | `f25f25e1e` | Add LLVM subprojects to .gitignore to speed up LLM context indexing (#9693) |
+
+### Local Conflict Resolution/Adaptation
+
+- Merged upstream LLVM-subproject ignore entries with existing local ignore policy for engineering notes and local scratch files.
+- Preserved pre-existing local entries:
+  - `*_engineering_log.md`, `aot_plan_*.md`, `docs/CIRCT_SIM_FULL_NATIVE_JIT_PLAN.md`, `.claude`, `.codex`
+- Added upstream LLVM subproject exclusions under `/llvm/...`.
+
+### Validation Added In This Pass
+
+- N/A (ignore-list only change).
