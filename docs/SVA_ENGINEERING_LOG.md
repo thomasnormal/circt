@@ -9778,3 +9778,23 @@
 - validation:
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_sequence_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_sequence_test.sv test/Runtime/uvm/uvm_factory_test.sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
+
+## 2026-02-28 - UVM RAL semantic conversion for reg-field desired/mirrored behavior
+
+- realization:
+  - `test/Runtime/uvm/uvm_ral_test.sv` was parse-only and did not exercise runtime RAL semantics.
+  - after enabling semantic execution, `test_reg_field_ops` failed because the test expected `set()` to update mirrored value immediately.
+  - this was a test-semantics mismatch, not a runtime bug: in UVM RAL, `set()` updates desired value; mirrored value updates via predict/update paths.
+
+- implemented:
+  - `test/Runtime/uvm/uvm_ral_test.sv`
+    - converted from parse-only to semantic runtime coverage (`--ir-hw` + `circt-sim` + `FileCheck`).
+    - added semantic check prefix `SIM-REG-FIELD` with pass markers and `UVM_ERROR` exclusion.
+    - corrected test logic in section 1.6:
+      - assert desired value changes after `set()`,
+      - assert mirrored value remains at reset value before `predict()`,
+      - assert mirrored value updates after `predict(1)`.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv test/Runtime/uvm/uvm_factory_test.sv`

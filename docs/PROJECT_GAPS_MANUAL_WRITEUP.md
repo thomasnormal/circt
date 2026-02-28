@@ -6221,3 +6221,6 @@ Status update (2026-02-28): same closure as entry 2069.
 
 ### [x] 2072. `test/Runtime/uvm/uvm_sequence_test.sv:12`
 Status update (2026-02-28): this gap is closed in this workspace. The test now has execution-backed semantic coverage (`circt-verilog --ir-hw` + `circt-sim`) with a report-phase pass marker (`UVM_SEQUENCE_PATTERNS_PASS`). Runtime hardening in `uvm_sequence_item::set_id_info` now falls back to parent-sequence ID when request `sequence_id` is unavailable, so response routing in the sequence-pattern flow no longer fails silently.
+
+### [x] 2073. `test/Runtime/uvm/uvm_ral_test.sv:11`
+Status update (2026-02-28): this gap is closed in this workspace. The test was upgraded from parse-only to semantic runtime coverage (`circt-verilog --ir-hw` + `circt-sim`) with `FileCheck` assertions for `test_reg_field_ops`. Semantic expectations were corrected to reflect UVM RAL behavior (`set()` updates desired value, `predict()` updates mirrored value), so mirrored-value regressions are now validated by execution rather than silently passing parse-only checks.

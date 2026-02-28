@@ -9,6 +9,17 @@
 // 6. get/set methods
 //===----------------------------------------------------------------------===//
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM-REG-FIELD
+//
+// SIM-REG-FIELD: Running test test_reg_field_ops
+// SIM-REG-FIELD: PASS: Enable field set/get works correctly
+// SIM-REG-FIELD: PASS: Mode field set/get works correctly
+// SIM-REG-FIELD: PASS: Desired value updates while mirrored value is unchanged
+// SIM-REG-FIELD: PASS: Predict updates mirrored value correctly
+// SIM-REG-FIELD: test_reg_field_ops completed
+// SIM-REG-FIELD-NOT: UVM_ERROR
+// SIM-REG-FIELD: [circt-sim] Simulation completed
 
 `timescale 1ns/1ps
 
@@ -336,15 +347,25 @@ package uvm_ral_test_pkg;
       else
         `uvm_info("TEST", "PASS: Enable field parent is ctrl register", UVM_NONE)
 
-      // Test 1.6: Mirrored value operations
-      `uvm_info("TEST", "=== Test 1.6: Mirrored value operations ===", UVM_NONE)
+      // Test 1.6: Desired vs mirrored value semantics
+      `uvm_info("TEST", "=== Test 1.6: Desired vs mirrored value semantics ===", UVM_NONE)
 
+      // set() updates desired value; mirrored value remains unchanged until predict/update.
       reg_model.ctrl.enable.set(1);
+      if (reg_model.ctrl.enable.get() != 1)
+        `uvm_error("TEST", "Desired value mismatch after set()")
+      else if (reg_model.ctrl.enable.get_mirrored_value() != 0)
+        `uvm_error("TEST", "Mirrored value should remain reset value before predict()")
+      else
+        `uvm_info("TEST", "PASS: Desired value updates while mirrored value is unchanged", UVM_NONE)
+
+      // predict() updates mirrored value.
+      void'(reg_model.ctrl.enable.predict(1));
       value = reg_model.ctrl.enable.get_mirrored_value();
       if (value != 1)
-        `uvm_error("TEST", $sformatf("Mirrored value mismatch: expected 1, got %0d", value))
+        `uvm_error("TEST", $sformatf("Mirrored value mismatch after predict: expected 1, got %0d", value))
       else
-        `uvm_info("TEST", "PASS: Mirrored value set/get works correctly", UVM_NONE)
+        `uvm_info("TEST", "PASS: Predict updates mirrored value correctly", UVM_NONE)
 
       phase.drop_objection(this, "Test complete");
     endtask
