@@ -15387,6 +15387,19 @@ struct FormatConcatOpConversion : public OpConversionPattern<FormatConcatOp> {
   }
 };
 
+struct FormatHierPathOpConversion
+    : public OpConversionPattern<FormatHierPathOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(FormatHierPathOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.replaceOpWithNewOp<sim::FormatHierPathOp>(op,
+                                                       adaptor.getUseEscapes());
+    return success();
+  }
+};
+
 struct FormatIntOpConversion : public OpConversionPattern<FormatIntOp> {
   using OpConversionPattern::OpConversionPattern;
 
@@ -32676,6 +32689,7 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     // Format strings.
     FormatLiteralOpConversion,
     FormatConcatOpConversion,
+    FormatHierPathOpConversion,
     FormatIntOpConversion,
     FormatCharOpConversion,
     FormatClassOpConversion,

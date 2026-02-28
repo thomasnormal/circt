@@ -144,21 +144,24 @@ struct FormatStringParser {
                              const FormatOptions &options) {
     auto specifierLower = std::tolower(specifier);
 
-    // Special handling for %m - hierarchical name (consumes no argument).
-    // See IEEE 1800-2017 Section 21.2.1.3 "Hierarchical name format".
+    // Special handling for format specifiers that consume no argument.
+    // %m/%M prints the hierarchical path of the module instance.
     if (specifierLower == 'm') {
-      return emitHierarchicalName(options);
+      bool useEscapes = std::isupper(specifier);
+      fragments.push_back(
+          moore::FormatHierPathOp::create(builder, loc, useEscapes));
+      return success();
     }
 
     // Compatibility handling for %L.
-    // Some large codebases use %L where simulators print a hierarchical path.
-    // Treat it like %m so formatting can proceed.
+    // Some codebases use %L where simulators print a hierarchical path.
+    // Keep lowering this as a hierarchical name.
     if (specifier == 'L')
       return emitHierarchicalName(options);
 
-    // %l is the standard "library binding information" specifier.
-    // ImportVerilog does not currently track full library binding metadata, so
-    // fall back to the same hierarchical path behavior as %m.
+    // %l prints the library and cell name of the scope; not yet supported.
+    // Keep compatibility with existing behavior by lowering to a hierarchical
+    // path fallback.
     if (specifierLower == 'l')
       return emitHierarchicalName(options);
 
