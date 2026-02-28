@@ -8,6 +8,10 @@ on:
     types: [assigned, opened, synchronize, reopened]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Do sanity check (clang-format and python-format) first.
   sanity-check:
@@ -126,6 +130,9 @@ jobs:
   build-circt:
     name: Build and Test
     needs: sanity-check
+    # Keep PR CI lightweight and inexpensive: run full build/tests on main or
+    # explicit manual dispatch only.
+    if: ${{ github.event_name != 'pull_request' }}
     # Run on an internal MSFT subscription. Please DO NOT use this for any other
     # workflows without talking to John Demme (john.demme@microsoft.com, GH
     # teqdruid) first. We may lose funding for this if it ends up costing too
