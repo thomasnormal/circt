@@ -1297,16 +1297,50 @@ static LogicalResult lowerProjectedLocalRefProbes(Operation *scope) {
       auto elemInt = dyn_cast<IntegerType>(step.elemType);
       if (!baseInt || !elemInt)
         return {};
-      auto constant = step.index.getDefiningOp<hw::ConstantOp>();
-      if (!constant)
-        return {};
-      uint64_t low = constant.getValue().getZExtValue();
       unsigned elemWidth = elemInt.getWidth();
       unsigned baseWidth = baseInt.getWidth();
-      if (low + elemWidth > baseWidth)
-        return {};
+      auto constant = step.index.getDefiningOp<hw::ConstantOp>();
+      Value element;
+      if (constant) {
+        uint64_t low = constant.getValue().getZExtValue();
+        if (low + elemWidth > baseWidth)
+          return {};
+        element =
+            comb::ExtractOp::create(builder, loc, baseValue, low, elemWidth);
+      } else {
+        Value shift = adjustIntegerWidth(builder, step.index, baseWidth, loc);
+        Value shifted = comb::ShrUOp::create(builder, loc, baseValue, shift);
+        element = comb::ExtractOp::create(builder, loc, shifted, 0, elemWidth);
+      }
       Value updated =
-          adjustIntegerWidth(builder, updateValue, elemWidth, loc);
+          self(self, builder, element, path.drop_front(), updateValue, loc);
+      if (!updated)
+        return {};
+      updated = adjustIntegerWidth(builder, updated, elemWidth, loc);
+      if (!constant) {
+        // For dynamic extraction indices, preserve all non-target bits and
+        // replace only the selected slice.
+        Value shift = adjustIntegerWidth(builder, step.index, baseWidth, loc);
+        Value updatedWide =
+            adjustIntegerWidth(builder, updated, baseWidth, loc);
+        Value shiftedUpdate =
+            comb::ShlOp::create(builder, loc, updatedWide, shift);
+        APInt lowMask = APInt::getLowBitsSet(baseWidth, elemWidth);
+        Value mask = hw::ConstantOp::create(
+            builder, loc, builder.getIntegerAttr(baseInt, lowMask));
+        Value shiftedMask = comb::ShlOp::create(builder, loc, mask, shift);
+        Value allOnes = hw::ConstantOp::create(
+            builder, loc,
+            builder.getIntegerAttr(baseInt, APInt::getAllOnes(baseWidth)));
+        Value invertedMask = comb::XorOp::create(builder, loc, shiftedMask,
+                                                 allOnes);
+        Value preserved =
+            comb::AndOp::create(builder, loc, baseValue, invertedMask);
+        Value inserted =
+            comb::AndOp::create(builder, loc, shiftedUpdate, shiftedMask);
+        return comb::OrOp::create(builder, loc, preserved, inserted);
+      }
+      uint64_t low = constant.getValue().getZExtValue();
       SmallVector<Value, 3> pieces;
       if (low + elemWidth < baseWidth) {
         Value upper = comb::ExtractOp::create(builder, loc, baseValue,
