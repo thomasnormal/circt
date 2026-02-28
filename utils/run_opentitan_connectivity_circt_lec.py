@@ -614,6 +614,26 @@ def scope_under_instance(expr: str, instance_name: str) -> str:
     return f"{instance_name}.{token}"
 
 
+CONST_INDEXED_BIT_RE = re.compile(r"^\s*(.+?)\[(\d+)\]\s*$")
+
+
+def rewrite_const_indexed_bit(expr: str) -> str:
+    """Rewrite `foo[3]` to shift/mask form to avoid frontend crashes.
+
+    Some OpenTitan connectivity paths trigger `circt-verilog` crashes in
+    SimplifyProcedures when directly using hierarchical constant bit-select
+    syntax in generated wrappers. Rewrite the common constant-index case into
+    an equivalent `$unsigned` shift/mask form.
+    """
+
+    match = CONST_INDEXED_BIT_RE.fullmatch(expr.strip())
+    if not match:
+        return expr
+    base_expr = match.group(1).strip()
+    index = match.group(2)
+    return f"((($unsigned({base_expr})) >> {index}) & 1'b1)"
+
+
 def build_condition_guard_expr(
     conditions: tuple[ConnectivityRule, ...],
     top_module: str,
@@ -632,7 +652,9 @@ def build_condition_guard_expr(
                 "invalid CONDITION row missing signal expression: "
                 f"{condition.csv_file}:{condition.csv_row} ({condition.rule_id})"
             )
-        cond_expr = scope_under_instance(cond_expr_raw, instance_name)
+        cond_expr = rewrite_const_indexed_bit(
+            scope_under_instance(cond_expr_raw, instance_name)
+        )
         expected_true = condition.dest_block.strip()
         if not expected_true:
             fail(
@@ -1349,8 +1371,8 @@ def main() -> int:
             if not src_expr_raw or not dst_expr_raw:
                 skipped_connections += 1
                 continue
-            src_expr = scope_under_instance(src_expr_raw, "dut")
-            dst_expr = scope_under_instance(dst_expr_raw, "dut")
+            src_expr = rewrite_const_indexed_bit(scope_under_instance(src_expr_raw, "dut"))
+            dst_expr = rewrite_const_indexed_bit(scope_under_instance(dst_expr_raw, "dut"))
             guard_expr = build_condition_guard_expr(group.conditions, top_module, "dut")
             module_token = sanitize_token(f"conn_rule_{index}_{rule.rule_name}")
             if not module_token:
@@ -1410,31 +1432,22 @@ def main() -> int:
             flush=True,
         )
 
+        contract_fields = [
+            contract_source,
+            contract_backend_mode,
+            args.mode_label,
+            str(timeout_secs),
+            "1" if lec_x_optimistic else "0",
+            "1" if lec_assume_known_inputs else "0",
+            "1" if lec_accept_xprop_only else "0",
+            verilog_timescale_fallback_mode,
+            verilog_fallback_timescale if verilog_timescale_fallback_mode != "off" else "",
+            temporal_approx_mode,
+            contract_z3_path,
+            contract_lec_args,
+        ]
+        contract_fingerprint = compute_contract_fingerprint(contract_fields)
         for case in cases:
-            case_dir = workdir / "cases" / sanitize_token(case.case_id)
-            case_dir.mkdir(parents=True, exist_ok=True)
-            verilog_log = case_dir / "circt-verilog.log"
-            opt_log = case_dir / "circt-opt.log"
-            lec_log = case_dir / "circt-lec.log"
-            lec_out = case_dir / "circt-lec.out"
-            moore_mlir = case_dir / "connectivity.moore.mlir"
-            core_mlir = case_dir / "connectivity.core.mlir"
-
-            contract_fields = [
-                contract_source,
-                contract_backend_mode,
-                args.mode_label,
-                str(timeout_secs),
-                "1" if lec_x_optimistic else "0",
-                "1" if lec_assume_known_inputs else "0",
-                "1" if lec_accept_xprop_only else "0",
-                verilog_timescale_fallback_mode,
-                verilog_fallback_timescale if verilog_timescale_fallback_mode != "off" else "",
-                temporal_approx_mode,
-                contract_z3_path,
-                contract_lec_args,
-            ]
-            contract_fingerprint = compute_contract_fingerprint(contract_fields)
             resolved_contract_rows.append(
                 (
                     case.case_id,
@@ -1444,387 +1457,487 @@ def main() -> int:
                 )
             )
 
-            has_explicit_timescale = has_command_option(circt_verilog_args, "--timescale")
-            has_explicit_multi_driver = has_command_option(
-                circt_verilog_args, "--allow-multi-always-comb-drivers"
-            )
-            has_explicit_temporal_approx = has_command_option(
-                circt_lec_args, "--approx-temporal"
-            )
-            verilog_timescale_override: str | None = None
-            if (
-                verilog_timescale_fallback_mode == "on"
-                and not has_explicit_timescale
-            ):
-                verilog_timescale_override = verilog_fallback_timescale
-            verilog_allow_multi_always_comb_drivers = (
-                verilog_always_comb_multi_driver_mode == "on"
-                and not has_explicit_multi_driver
-            )
+        has_explicit_timescale = has_command_option(circt_verilog_args, "--timescale")
+        has_explicit_multi_driver = has_command_option(
+            circt_verilog_args, "--allow-multi-always-comb-drivers"
+        )
+        has_explicit_temporal_approx = has_command_option(
+            circt_lec_args, "--approx-temporal"
+        )
+        verilog_timescale_override: str | None = None
+        if verilog_timescale_fallback_mode == "on" and not has_explicit_timescale:
+            verilog_timescale_override = verilog_fallback_timescale
+        verilog_allow_multi_always_comb_drivers = (
+            verilog_always_comb_multi_driver_mode == "on" and not has_explicit_multi_driver
+        )
 
-            def build_verilog_cmd(timescale_override: str | None) -> list[str]:
-                cmd = [
-                    circt_verilog,
-                    "--ir-moore",
+        case_batches: list[list[ConnectivityLECCase]] = []
+        by_csv: dict[str, list[ConnectivityLECCase]] = {}
+        for case in cases:
+            csv_key = case.case_path.rsplit(":", 1)[0]
+            if csv_key not in by_csv:
+                by_csv[csv_key] = []
+                case_batches.append(by_csv[csv_key])
+            by_csv[csv_key].append(case)
+
+        def append_timeout_reason(case: ConnectivityLECCase, reason: str) -> None:
+            reason_key = (case.case_id, reason)
+            if reason_key in timeout_reason_seen:
+                return
+            timeout_reason_seen.add(reason_key)
+            timeout_reason_rows.append((case.case_id, case.case_path, reason))
+
+        def append_drop_reasons(case: ConnectivityLECCase, reasons: list[str]) -> None:
+            if reasons and case.case_id not in drop_remark_seen_cases:
+                drop_remark_seen_cases.add(case.case_id)
+                drop_remark_case_rows.append((case.case_id, case.case_path))
+            for reason in reasons:
+                key = (case.case_id, reason)
+                if key in drop_remark_seen_case_reasons:
+                    continue
+                drop_remark_seen_case_reasons.add(key)
+                drop_remark_reason_rows.append((case.case_id, case.case_path, reason))
+
+        batch_counter = 0
+        for initial_batch in case_batches:
+            pending_batches: list[list[ConnectivityLECCase]] = [initial_batch]
+            while pending_batches:
+                batch_cases = pending_batches.pop(0)
+                batch_index = batch_counter
+                batch_counter += 1
+
+                shared_dir = workdir / "shared" / f"batch_{batch_index}"
+                shared_dir.mkdir(parents=True, exist_ok=True)
+                shared_verilog_log = shared_dir / "circt-verilog.log"
+                shared_opt_log = shared_dir / "circt-opt.log"
+                shared_moore_mlir = shared_dir / "connectivity.moore.mlir"
+                shared_core_mlir = shared_dir / "connectivity.core.mlir"
+                shared_checker_sv = checks_dir / f"__circt_connectivity_batch_{batch_index}.sv"
+                shared_missing_timescale_log = (
+                    shared_dir / "circt-verilog.missing-timescale.log"
+                )
+                shared_always_comb_log = (
+                    shared_dir / "circt-verilog.always-comb-multi-driver.log"
+                )
+
+                with shared_checker_sv.open("w", encoding="utf-8") as handle:
+                    for case in batch_cases:
+                        text = case.checker_sv.read_text(encoding="utf-8")
+                        handle.write(text)
+                        if text and not text.endswith("\n"):
+                            handle.write("\n")
+
+                batch_timescale_override = verilog_timescale_override
+                batch_allow_multi_driver = verilog_allow_multi_always_comb_drivers
+
+                def build_shared_verilog_cmd(
+                    timescale_override: str | None, allow_multi_driver: bool
+                ) -> list[str]:
+                    cmd = [
+                        circt_verilog,
+                        "--ir-moore",
+                        "-o",
+                        str(shared_moore_mlir),
+                        "--single-unit",
+                        "--no-uvm-auto-include",
+                    ]
+                    for case in batch_cases:
+                        cmd.append(f"--top={case.ref_module}")
+                        cmd.append(f"--top={case.impl_module}")
+                    for include_dir in include_dirs:
+                        cmd += ["-I", include_dir]
+                    if timescale_override is not None and not has_explicit_timescale:
+                        cmd.append(f"--timescale={timescale_override}")
+                    if allow_multi_driver and not has_explicit_multi_driver:
+                        cmd.append("--allow-multi-always-comb-drivers")
+                    cmd += circt_verilog_args
+                    cmd += source_files + [str(shared_checker_sv)]
+                    return cmd
+
+                shared_verilog_cmd = build_shared_verilog_cmd(
+                    batch_timescale_override, batch_allow_multi_driver
+                )
+                shared_opt_cmd = [
+                    circt_opt,
+                    str(shared_moore_mlir),
+                    "--moore-lower-concatref",
+                    "--convert-moore-to-core",
+                    "--mlir-disable-threading",
                     "-o",
-                    str(moore_mlir),
-                    "--single-unit",
-                    "--no-uvm-auto-include",
-                    f"--top={case.ref_module}",
-                    f"--top={case.impl_module}",
+                    str(shared_core_mlir),
                 ]
-                for include_dir in include_dirs:
-                    cmd += ["-I", include_dir]
-                if timescale_override is not None and not has_explicit_timescale:
-                    cmd.append(f"--timescale={timescale_override}")
-                if (
-                    verilog_allow_multi_always_comb_drivers
-                    and not has_explicit_multi_driver
-                ):
-                    cmd.append("--allow-multi-always-comb-drivers")
-                cmd += circt_verilog_args
-                cmd += source_files + [str(case.checker_sv)]
-                return cmd
+                shared_opt_cmd += circt_opt_args
 
-            verilog_cmd = build_verilog_cmd(verilog_timescale_override)
+                def mirror_shared_frontend_logs(case_dir: Path) -> None:
+                    if shared_verilog_log.exists():
+                        shutil.copy2(shared_verilog_log, case_dir / "circt-verilog.log")
+                    if shared_opt_log.exists():
+                        shutil.copy2(shared_opt_log, case_dir / "circt-opt.log")
+                    if shared_missing_timescale_log.exists():
+                        shutil.copy2(
+                            shared_missing_timescale_log,
+                            case_dir / "circt-verilog.missing-timescale.log",
+                        )
+                    if shared_always_comb_log.exists():
+                        shutil.copy2(
+                            shared_always_comb_log,
+                            case_dir / "circt-verilog.always-comb-multi-driver.log",
+                        )
 
-            opt_cmd = [
-                circt_opt,
-                str(moore_mlir),
-                "--moore-lower-concatref",
-                "--convert-moore-to-core",
-                "--mlir-disable-threading",
-                "-o",
-                str(core_mlir),
-            ]
-            opt_cmd += circt_opt_args
-
-            lec_enable_temporal_approx = (
-                temporal_approx_mode == "on" and not has_explicit_temporal_approx
-            )
-
-            def build_lec_cmd(enable_temporal_approx: bool) -> list[str]:
-                cmd = [
-                    circt_lec,
-                    str(core_mlir),
-                    f"-c1={case.ref_module}",
-                    f"-c2={case.impl_module}",
-                ]
-                if lec_smoke_only:
-                    cmd.append("--emit-mlir")
-                elif lec_run_smtlib:
-                    cmd.append("--run-smtlib")
-                    cmd.append(f"--z3-path={z3_bin}")
-                cmd += circt_lec_args
-                if enable_temporal_approx and not has_explicit_temporal_approx:
-                    cmd.append("--approx-temporal")
-                if verify_each_mode in {"auto", "off"} and not has_explicit_verify_each:
-                    cmd.append("--verify-each=false")
-                return cmd
-
-            stage = "verilog"
-            try:
-                attempted_timescale_retry = False
-                attempted_multi_driver_retry = False
-                while True:
-                    try:
-                        run_and_log(verilog_cmd, verilog_log, timeout_secs)
-                        break
-                    except subprocess.CalledProcessError:
-                        if verilog_log.is_file():
-                            verilog_log_text = verilog_log.read_text(encoding="utf-8")
-                        else:
-                            verilog_log_text = ""
-                        if (
-                            verilog_timescale_fallback_mode == "auto"
-                            and verilog_timescale_override is None
-                            and not has_explicit_timescale
-                            and not attempted_timescale_retry
-                            and is_missing_timescale_retryable_failure(verilog_log_text)
-                        ):
-                            missing_timescale_log = (
-                                case_dir / "circt-verilog.missing-timescale.log"
-                            )
-                            shutil.copy2(verilog_log, missing_timescale_log)
-                            verilog_timescale_override = verilog_fallback_timescale
-                            attempted_timescale_retry = True
-                            print(
-                                "opentitan connectivity lec: retrying circt-verilog with "
-                                f"--timescale={verilog_timescale_override} for "
-                                f"{case.case_id}",
-                                file=sys.stderr,
-                                flush=True,
-                            )
-                            verilog_cmd = build_verilog_cmd(verilog_timescale_override)
-                            continue
-                        if (
-                            verilog_always_comb_multi_driver_mode == "auto"
-                            and not verilog_allow_multi_always_comb_drivers
-                            and not has_explicit_multi_driver
-                            and not attempted_multi_driver_retry
-                            and is_always_comb_multi_driver_retryable_failure(
-                                verilog_log_text
-                            )
-                        ):
-                            always_comb_log = (
-                                case_dir / "circt-verilog.always-comb-multi-driver.log"
-                            )
-                            shutil.copy2(verilog_log, always_comb_log)
-                            verilog_allow_multi_always_comb_drivers = True
-                            attempted_multi_driver_retry = True
-                            print(
-                                "opentitan connectivity lec: retrying circt-verilog with "
-                                "--allow-multi-always-comb-drivers for "
-                                f"{case.case_id}",
-                                file=sys.stderr,
-                                flush=True,
-                            )
-                            verilog_cmd = build_verilog_cmd(verilog_timescale_override)
-                            continue
-                        raise
-                if verilog_log.exists():
-                    reasons = extract_drop_reasons(
-                        verilog_log.read_text(encoding="utf-8"), drop_remark_pattern
-                    )
-                    if reasons and case.case_id not in drop_remark_seen_cases:
-                        drop_remark_seen_cases.add(case.case_id)
-                        drop_remark_case_rows.append((case.case_id, case.case_path))
-                    for reason in reasons:
-                        key = (case.case_id, reason)
-                        if key in drop_remark_seen_case_reasons:
-                            continue
-                        drop_remark_seen_case_reasons.add(key)
-                        drop_remark_reason_rows.append(
-                            (case.case_id, case.case_path, reason)
-                        )
-                strip_vpi_attributes_for_opt(moore_mlir)
-                stage = "opt"
-                run_and_log(opt_cmd, opt_log, timeout_secs)
-                stage = "lec"
-                attempted_temporal_retry = False
-                while True:
-                    lec_cmd = build_lec_cmd(lec_enable_temporal_approx)
-                    try:
-                        combined = run_and_log(
-                            lec_cmd, lec_log, timeout_secs, out_path=lec_out
-                        )
-                        break
-                    except subprocess.CalledProcessError:
-                        if lec_log.is_file():
-                            lec_log_text = lec_log.read_text(encoding="utf-8")
-                        else:
-                            lec_log_text = ""
-                        if (
-                            temporal_approx_mode == "auto"
-                            and not has_explicit_temporal_approx
-                            and not lec_enable_temporal_approx
-                            and not attempted_temporal_retry
-                            and is_temporal_approx_retryable_failure(lec_log_text)
-                        ):
-                            temporal_approx_log = case_dir / "circt-lec.temporal-approx.log"
-                            if lec_log.is_file():
-                                shutil.copy2(lec_log, temporal_approx_log)
-                            else:
-                                temporal_approx_log.write_text(
-                                    lec_log_text, encoding="utf-8"
-                                )
-                            lec_enable_temporal_approx = True
-                            attempted_temporal_retry = True
-                            print(
-                                "opentitan connectivity lec: retrying circt-lec with "
-                                "--approx-temporal for "
-                                f"{case.case_id}",
-                                file=sys.stderr,
-                                flush=True,
-                            )
-                            continue
-                        raise
-                diag = parse_lec_diag(combined)
-                result = parse_lec_result(combined)
-                if result in {"NEQ", "UNKNOWN"}:
-                    if diag == "XPROP_ONLY" and lec_accept_xprop_only:
-                        rows.append(
-                            (
-                                "XFAIL",
-                                case.case_id,
-                                case.case_path,
-                                "opentitan",
-                                args.mode_label,
-                                "XPROP_ONLY",
-                            )
-                        )
-                    else:
-                        rows.append(
-                            (
-                                "FAIL",
-                                case.case_id,
-                                case.case_path,
-                                "opentitan",
-                                args.mode_label,
-                                diag or result,
-                            )
-                        )
-                elif result == "EQ":
-                    rows.append(
-                        (
-                            "PASS",
-                            case.case_id,
-                            case.case_path,
-                            "opentitan",
-                            args.mode_label,
-                            diag or "EQ",
-                        )
-                    )
-                elif lec_smoke_only:
-                    rows.append(
-                        (
-                            "PASS",
-                            case.case_id,
-                            case.case_path,
-                            "opentitan",
-                            args.mode_label,
-                            diag or "SMOKE_ONLY",
-                        )
-                    )
-                else:
-                    rows.append(
-                        (
-                            "ERROR",
-                            case.case_id,
-                            case.case_path,
-                            "opentitan",
-                            args.mode_label,
-                            diag or "CIRCT_LEC_ERROR",
-                        )
-                    )
-            except subprocess.TimeoutExpired:
-                timeout_reason = "runner_timeout_unknown_stage"
-                if stage == "verilog":
-                    diag = "CIRCT_VERILOG_TIMEOUT"
-                    timeout_reason = "frontend_command_timeout"
-                elif stage == "opt":
-                    diag = "CIRCT_OPT_TIMEOUT"
-                    timeout_reason = "frontend_command_timeout"
-                else:
-                    diag = "CIRCT_LEC_TIMEOUT"
-                    if lec_smoke_only:
-                        timeout_reason = "frontend_command_timeout"
-                    elif lec_timeout_frontier_probe:
-                        probe_cmd = [
-                            arg
-                            for arg in lec_cmd
-                            if arg != "--run-smtlib"
-                            and not arg.startswith("--z3-path=")
-                        ]
-                        if "--emit-mlir" not in probe_cmd:
-                            probe_cmd.append("--emit-mlir")
+                frontend_ok = False
+                frontend_split = False
+                stage = "verilog"
+                try:
+                    attempted_timescale_retry = False
+                    attempted_multi_driver_retry = False
+                    while True:
                         try:
-                            run_and_log(
-                                probe_cmd,
-                                case_dir / "circt-lec.timeout-frontier.log",
-                                timeout_secs,
-                                out_path=case_dir / "circt-lec.timeout-frontier.out",
-                            )
-                        except subprocess.TimeoutExpired:
-                            timeout_reason = "frontend_command_timeout"
+                            run_and_log(shared_verilog_cmd, shared_verilog_log, timeout_secs)
+                            break
                         except subprocess.CalledProcessError:
-                            timeout_reason = "timeout_frontier_probe_error"
+                            if shared_verilog_log.is_file():
+                                shared_verilog_log_text = shared_verilog_log.read_text(
+                                    encoding="utf-8"
+                                )
+                            else:
+                                shared_verilog_log_text = ""
+                            if (
+                                verilog_timescale_fallback_mode == "auto"
+                                and batch_timescale_override is None
+                                and not has_explicit_timescale
+                                and not attempted_timescale_retry
+                                and is_missing_timescale_retryable_failure(
+                                    shared_verilog_log_text
+                                )
+                            ):
+                                shutil.copy2(shared_verilog_log, shared_missing_timescale_log)
+                                batch_timescale_override = verilog_fallback_timescale
+                                attempted_timescale_retry = True
+                                print(
+                                    "opentitan connectivity lec: retrying circt-verilog with "
+                                    f"--timescale={batch_timescale_override} for "
+                                    f"batch={batch_index}",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                shared_verilog_cmd = build_shared_verilog_cmd(
+                                    batch_timescale_override, batch_allow_multi_driver
+                                )
+                                continue
+                            if (
+                                verilog_always_comb_multi_driver_mode == "auto"
+                                and not batch_allow_multi_driver
+                                and not has_explicit_multi_driver
+                                and not attempted_multi_driver_retry
+                                and is_always_comb_multi_driver_retryable_failure(
+                                    shared_verilog_log_text
+                                )
+                            ):
+                                shutil.copy2(shared_verilog_log, shared_always_comb_log)
+                                batch_allow_multi_driver = True
+                                attempted_multi_driver_retry = True
+                                print(
+                                    "opentitan connectivity lec: retrying circt-verilog with "
+                                    "--allow-multi-always-comb-drivers for "
+                                    f"batch={batch_index}",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                shared_verilog_cmd = build_shared_verilog_cmd(
+                                    batch_timescale_override, batch_allow_multi_driver
+                                )
+                                continue
+                            raise
+
+                    if shared_verilog_log.exists():
+                        shared_reasons = extract_drop_reasons(
+                            shared_verilog_log.read_text(encoding="utf-8"),
+                            drop_remark_pattern,
+                        )
+                        for case in batch_cases:
+                            append_drop_reasons(case, shared_reasons)
+                    strip_vpi_attributes_for_opt(shared_moore_mlir)
+                    stage = "opt"
+                    run_and_log(shared_opt_cmd, shared_opt_log, timeout_secs)
+                    frontend_ok = True
+                except subprocess.TimeoutExpired:
+                    if len(batch_cases) > 1:
+                        split_point = max(1, len(batch_cases) // 2)
+                        pending_batches.insert(0, batch_cases[split_point:])
+                        pending_batches.insert(0, batch_cases[:split_point])
+                        frontend_split = True
+                    else:
+                        frontend_diag = (
+                            "CIRCT_VERILOG_TIMEOUT"
+                            if stage == "verilog"
+                            else "CIRCT_OPT_TIMEOUT"
+                        )
+                        for case in batch_cases:
+                            case_dir = workdir / "cases" / sanitize_token(case.case_id)
+                            case_dir.mkdir(parents=True, exist_ok=True)
+                            mirror_shared_frontend_logs(case_dir)
+                            rows.append(
+                                (
+                                    "TIMEOUT",
+                                    case.case_id,
+                                    case.case_path,
+                                    "opentitan",
+                                    args.mode_label,
+                                    frontend_diag,
+                                )
+                            )
+                            append_timeout_reason(case, "frontend_command_timeout")
+                except subprocess.CalledProcessError:
+                    if len(batch_cases) > 1:
+                        split_point = max(1, len(batch_cases) // 2)
+                        pending_batches.insert(0, batch_cases[split_point:])
+                        pending_batches.insert(0, batch_cases[:split_point])
+                        frontend_split = True
+                    else:
+                        frontend_diag = (
+                            "CIRCT_VERILOG_ERROR"
+                            if stage == "verilog"
+                            else "CIRCT_OPT_ERROR"
+                        )
+                        for case in batch_cases:
+                            case_dir = workdir / "cases" / sanitize_token(case.case_id)
+                            case_dir.mkdir(parents=True, exist_ok=True)
+                            mirror_shared_frontend_logs(case_dir)
+                            rows.append(
+                                (
+                                    "ERROR",
+                                    case.case_id,
+                                    case.case_path,
+                                    "opentitan",
+                                    args.mode_label,
+                                    frontend_diag,
+                                )
+                            )
+
+                if frontend_split or not frontend_ok:
+                    continue
+
+                for case in batch_cases:
+                    case_dir = workdir / "cases" / sanitize_token(case.case_id)
+                    case_dir.mkdir(parents=True, exist_ok=True)
+                    mirror_shared_frontend_logs(case_dir)
+                    lec_log = case_dir / "circt-lec.log"
+                    lec_out = case_dir / "circt-lec.out"
+                    lec_enable_temporal_approx = (
+                        temporal_approx_mode == "on" and not has_explicit_temporal_approx
+                    )
+
+                    def build_lec_cmd(enable_temporal_approx: bool) -> list[str]:
+                        cmd = [
+                            circt_lec,
+                            str(shared_core_mlir),
+                            f"-c1={case.ref_module}",
+                            f"-c2={case.impl_module}",
+                        ]
+                        if lec_smoke_only:
+                            cmd.append("--emit-mlir")
+                        elif lec_run_smtlib:
+                            cmd.append("--run-smtlib")
+                            cmd.append(f"--z3-path={z3_bin}")
+                        cmd += circt_lec_args
+                        if enable_temporal_approx and not has_explicit_temporal_approx:
+                            cmd.append("--approx-temporal")
+                        if verify_each_mode in {"auto", "off"} and not has_explicit_verify_each:
+                            cmd.append("--verify-each=false")
+                        return cmd
+
+                    lec_cmd: list[str] = []
+                    try:
+                        attempted_temporal_retry = False
+                        while True:
+                            lec_cmd = build_lec_cmd(lec_enable_temporal_approx)
+                            try:
+                                combined = run_and_log(
+                                    lec_cmd, lec_log, timeout_secs, out_path=lec_out
+                                )
+                                break
+                            except subprocess.CalledProcessError:
+                                if lec_log.is_file():
+                                    lec_log_text = lec_log.read_text(encoding="utf-8")
+                                else:
+                                    lec_log_text = ""
+                                if (
+                                    temporal_approx_mode == "auto"
+                                    and not has_explicit_temporal_approx
+                                    and not lec_enable_temporal_approx
+                                    and not attempted_temporal_retry
+                                    and is_temporal_approx_retryable_failure(lec_log_text)
+                                ):
+                                    temporal_approx_log = (
+                                        case_dir / "circt-lec.temporal-approx.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, temporal_approx_log)
+                                    else:
+                                        temporal_approx_log.write_text(
+                                            lec_log_text, encoding="utf-8"
+                                        )
+                                    lec_enable_temporal_approx = True
+                                    attempted_temporal_retry = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec with "
+                                        "--approx-temporal for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
+                                raise
+                        diag = parse_lec_diag(combined)
+                        result = parse_lec_result(combined)
+                        if result in {"NEQ", "UNKNOWN"}:
+                            if diag == "XPROP_ONLY" and lec_accept_xprop_only:
+                                rows.append(
+                                    (
+                                        "XFAIL",
+                                        case.case_id,
+                                        case.case_path,
+                                        "opentitan",
+                                        args.mode_label,
+                                        "XPROP_ONLY",
+                                    )
+                                )
+                            else:
+                                rows.append(
+                                    (
+                                        "FAIL",
+                                        case.case_id,
+                                        case.case_path,
+                                        "opentitan",
+                                        args.mode_label,
+                                        diag or result,
+                                    )
+                                )
+                        elif result == "EQ":
+                            rows.append(
+                                (
+                                    "PASS",
+                                    case.case_id,
+                                    case.case_path,
+                                    "opentitan",
+                                    args.mode_label,
+                                    diag or "EQ",
+                                )
+                            )
+                        elif lec_smoke_only:
+                            rows.append(
+                                (
+                                    "PASS",
+                                    case.case_id,
+                                    case.case_path,
+                                    "opentitan",
+                                    args.mode_label,
+                                    diag or "SMOKE_ONLY",
+                                )
+                            )
+                        else:
+                            rows.append(
+                                (
+                                    "ERROR",
+                                    case.case_id,
+                                    case.case_path,
+                                    "opentitan",
+                                    args.mode_label,
+                                    diag or "CIRCT_LEC_ERROR",
+                                )
+                            )
+                    except subprocess.TimeoutExpired:
+                        timeout_reason = "runner_timeout_unknown_stage"
+                        diag = "CIRCT_LEC_TIMEOUT"
+                        if lec_smoke_only:
+                            timeout_reason = "frontend_command_timeout"
+                        elif lec_timeout_frontier_probe:
+                            probe_cmd = [
+                                arg
+                                for arg in lec_cmd
+                                if arg != "--run-smtlib" and not arg.startswith("--z3-path=")
+                            ]
+                            if "--emit-mlir" not in probe_cmd:
+                                probe_cmd.append("--emit-mlir")
+                            try:
+                                run_and_log(
+                                    probe_cmd,
+                                    case_dir / "circt-lec.timeout-frontier.log",
+                                    timeout_secs,
+                                    out_path=case_dir / "circt-lec.timeout-frontier.out",
+                                )
+                            except subprocess.TimeoutExpired:
+                                timeout_reason = "frontend_command_timeout"
+                            except subprocess.CalledProcessError:
+                                timeout_reason = "timeout_frontier_probe_error"
+                            else:
+                                timeout_reason = "solver_command_timeout"
                         else:
                             timeout_reason = "solver_command_timeout"
-                    else:
-                        timeout_reason = "solver_command_timeout"
-                rows.append(
-                    (
-                        "TIMEOUT",
-                        case.case_id,
-                        case.case_path,
-                        "opentitan",
-                        args.mode_label,
-                        diag,
-                    )
-                )
-                reason_key = (case.case_id, timeout_reason)
-                if reason_key not in timeout_reason_seen:
-                    timeout_reason_seen.add(reason_key)
-                    timeout_reason_rows.append(
-                        (case.case_id, case.case_path, timeout_reason)
-                    )
-            except subprocess.CalledProcessError:
-                if stage == "verilog":
-                    rows.append(
-                        (
-                            "ERROR",
-                            case.case_id,
-                            case.case_path,
-                            "opentitan",
-                            args.mode_label,
-                            "CIRCT_VERILOG_ERROR",
+                        rows.append(
+                            (
+                                "TIMEOUT",
+                                case.case_id,
+                                case.case_path,
+                                "opentitan",
+                                args.mode_label,
+                                diag,
+                            )
                         )
-                    )
-                elif stage == "opt":
-                    rows.append(
-                        (
-                            "ERROR",
-                            case.case_id,
-                            case.case_path,
-                            "opentitan",
-                            args.mode_label,
-                            "CIRCT_OPT_ERROR",
-                        )
-                    )
-                else:
-                    combined = ""
-                    if lec_log.exists():
-                        combined += lec_log.read_text(encoding="utf-8")
-                    if lec_out.exists():
-                        combined += "\n" + lec_out.read_text(encoding="utf-8")
-                    diag = parse_lec_diag(combined)
-                    result = parse_lec_result(combined)
-                    if result in {"NEQ", "UNKNOWN"}:
-                        if diag == "XPROP_ONLY" and lec_accept_xprop_only:
+                        append_timeout_reason(case, timeout_reason)
+                    except subprocess.CalledProcessError:
+                        combined = ""
+                        if lec_log.exists():
+                            combined += lec_log.read_text(encoding="utf-8")
+                        if lec_out.exists():
+                            combined += "\n" + lec_out.read_text(encoding="utf-8")
+                        diag = parse_lec_diag(combined)
+                        result = parse_lec_result(combined)
+                        if result in {"NEQ", "UNKNOWN"}:
+                            if diag == "XPROP_ONLY" and lec_accept_xprop_only:
+                                rows.append(
+                                    (
+                                        "XFAIL",
+                                        case.case_id,
+                                        case.case_path,
+                                        "opentitan",
+                                        args.mode_label,
+                                        "XPROP_ONLY",
+                                    )
+                                )
+                            else:
+                                rows.append(
+                                    (
+                                        "FAIL",
+                                        case.case_id,
+                                        case.case_path,
+                                        "opentitan",
+                                        args.mode_label,
+                                        diag or result,
+                                    )
+                                )
+                        elif result == "EQ":
                             rows.append(
                                 (
-                                    "XFAIL",
+                                    "PASS",
                                     case.case_id,
                                     case.case_path,
                                     "opentitan",
                                     args.mode_label,
-                                    "XPROP_ONLY",
+                                    diag or "EQ",
                                 )
                             )
                         else:
                             rows.append(
                                 (
-                                    "FAIL",
+                                    "ERROR",
                                     case.case_id,
                                     case.case_path,
                                     "opentitan",
                                     args.mode_label,
-                                    diag or result,
+                                    diag or "CIRCT_LEC_ERROR",
                                 )
                             )
-                    elif result == "EQ":
-                        rows.append(
-                            (
-                                "PASS",
-                                case.case_id,
-                                case.case_path,
-                                "opentitan",
-                                args.mode_label,
-                                diag or "EQ",
-                            )
-                        )
-                    else:
-                        rows.append(
-                            (
-                                "ERROR",
-                                case.case_id,
-                                case.case_path,
-                                "opentitan",
-                                args.mode_label,
-                                diag or "CIRCT_LEC_ERROR",
-                            )
-                        )
 
         with results_file.open("w", encoding="utf-8") as handle:
             for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
