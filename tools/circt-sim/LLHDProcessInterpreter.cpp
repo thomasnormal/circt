@@ -374,14 +374,36 @@ static bool matchesUnmappedNamePattern(llvm::StringRef name,
   return name == pattern;
 }
 
-static bool shouldDenyUnmappedNativeCallByDefault(llvm::StringRef calleeName) {
+static bool hasPointerAbi(mlir::func::FuncOp funcOp) {
+  for (mlir::Type argTy : funcOp.getArgumentTypes())
+    if (mlir::isa<mlir::LLVM::LLVMPointerType>(argTy))
+      return true;
+  for (mlir::Type resTy : funcOp.getResultTypes())
+    if (mlir::isa<mlir::LLVM::LLVMPointerType>(resTy))
+      return true;
+  return false;
+}
+
+static bool shouldDenyUnmappedNativeCallByDefault(mlir::func::FuncOp funcOp) {
+  llvm::StringRef calleeName = funcOp.getName();
   // Package-qualified UVM helpers often depend on interpreter-side behavior
   // (interceptors, pointer canonicalization, and scheduler integration). If a
   // direct func.call has no FuncId mapping, keep these interpreted by default.
-  return calleeName.starts_with("uvm_pkg::");
+  if (calleeName.starts_with("uvm_pkg::"))
+    return true;
+
+  // Unqualified generated helper names for pointer-bearing UVM state are not
+  // ABI-stable across interpreted/native boundaries. Keep these interpreted by
+  // default unless explicitly opted in via ALLOW_UNMAPPED.
+  if (!hasPointerAbi(funcOp))
+    return false;
+  return calleeName.starts_with("get_") || calleeName.starts_with("set_") ||
+         calleeName.starts_with("create_") ||
+         calleeName.starts_with("m_initialize");
 }
 
-static bool shouldDenyUnmappedNativeCall(llvm::StringRef calleeName) {
+static bool shouldDenyUnmappedNativeCall(mlir::func::FuncOp funcOp) {
+  llvm::StringRef calleeName = funcOp.getName();
   static bool denyAllUnmappedNative =
       std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL") != nullptr;
   static bool allowUnmappedNative =
@@ -401,7 +423,7 @@ static bool shouldDenyUnmappedNativeCall(llvm::StringRef calleeName) {
   if (denyAllUnmappedNative)
     return true;
 
-  return shouldDenyUnmappedNativeCallByDefault(calleeName);
+  return shouldDenyUnmappedNativeCallByDefault(funcOp);
 }
 
 // circt-sim evaluates clocked assertions/assumptions through the LTL runtime
@@ -24380,8 +24402,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         goto func_call_interpreted_fallback;
       }
       auto fidIt = funcOpToFid.find(funcKey);
-      if (fidIt == funcOpToFid.end() &&
-          shouldDenyUnmappedNativeCall(funcOp.getName())) {
+      if (fidIt == funcOpToFid.end() && shouldDenyUnmappedNativeCall(funcOp)) {
         ++interpretedFuncCallCount;
         goto func_call_interpreted_fallback;
       }
@@ -24797,8 +24818,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       nfp = nullptr;
       forcedInterpreter = true;
     }
-    if (fidIt == funcOpToFid.end() &&
-        shouldDenyUnmappedNativeCall(funcOp.getName())) {
+    if (fidIt == funcOpToFid.end() && shouldDenyUnmappedNativeCall(funcOp)) {
       nfp = nullptr;
       forcedInterpreter = true;
     }
@@ -42303,7 +42323,9 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   } else if (std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL")) {
     llvm::errs() << "[circt-sim] Unmapped native func.call policy: deny-all\n";
   } else {
-    llvm::errs() << "[circt-sim] Unmapped native func.call policy: default deny uvm_pkg::* (allow others)\n";
+    llvm::errs() << "[circt-sim] Unmapped native func.call policy: default "
+                    "deny uvm_pkg::* and pointer-typed "
+                    "get_/set_/create_/m_initialize* (allow others)\n";
   }
 
   // Parse deny list: CIRCT_AOT_DENY_FID=123,456,789

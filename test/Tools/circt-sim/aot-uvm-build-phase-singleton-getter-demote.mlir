@@ -5,7 +5,7 @@
 // COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
 // COMPILE: [circt-compile] 1 functions + 0 processes ready for codegen
 //
-// RUNTIME: Unmapped native func.call policy: default allow-all
+// RUNTIME: Unmapped native func.call policy: default deny uvm_pkg::* and pointer-typed get_/set_/create_/m_initialize* (allow others)
 // RUNTIME: Compiled function calls:          1
 // RUNTIME: Interpreted function calls:       0
 // RUNTIME: direct_calls_native:              1
