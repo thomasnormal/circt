@@ -170,6 +170,10 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
     guards.
   - `IF_COND_TRUE` and `IF_COND_FALSE` force `if` conditions to `1'b1` and
     `1'b0` respectively.
+  - `RESET_COND_NEGATE` targets reset-like `if` conditions (`rst*` / `*reset*`)
+    and inverts only those reset conditions.
+  - `RESET_COND_TRUE` and `RESET_COND_FALSE` force only reset-like `if`
+    conditions to `1'b1` / `1'b0`.
 - Edge-polarity mutations model clock/reset sensitivity bugs:
   - `POSEDGE_TO_NEGEDGE` targets `posedge` event-control keywords with
     identifier-boundary guards.

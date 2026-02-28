@@ -1,5 +1,47 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (reset-condition force mutation class + reset-aware parity campaigns)
+
+- realizations:
+  - We had reset-condition inversion (`RESET_COND_NEGATE`) but no direct
+    reset-condition stuck-at forcing, which left a realistic reset fault class
+    underrepresented.
+  - Reset-aware seeded parity harnesses are useful to ensure control mutation
+    classes affect behavior and coverage signatures, not just syntactic churn.
+
+- changes made:
+  - Added native operators:
+    - `RESET_COND_TRUE`
+    - `RESET_COND_FALSE`
+  - Integrated these operators in:
+    - planner op catalog, reset-site collection reuse, family classification,
+      and apply rewrites (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`control`, `connect`, `invert`, `inv`,
+      `balanced/all`) in `tools/circt-mut/circt-mut.cpp`
+    - primitive cnot polarity sets:
+      - `cnot0`: includes `RESET_COND_FALSE`
+      - `cnot1`: includes `RESET_COND_TRUE`
+    - native-op validator allowlist in
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/native-create-mutated-reset-cond-true-site-index.test`
+    - `test/Tools/native-create-mutated-reset-cond-false-site-index.test`
+    - `test/Tools/native-mutation-plan-reset-cond-force.test`
+    - `test/Tools/circt-mut-generate-circt-only-control-mode-reset-cond-force-op.test`
+
+- validation:
+  - Red-first: all four new tests fail before implementation and pass after.
+  - Focused lit slices over reset/control/cnot touched tests:
+    `12 passed`.
+  - Deterministic reset-aware baseline parity (`cov_intro_seeded_reset.sv`):
+    - xrun: `COV=89.58`, `SIG=2b186888`
+    - circt: `COV=89.58`, `SIG=2b186888`
+  - Control-mode seeded parity campaign (`count=30`, `seed=20260228`):
+    - includes `RESET_COND_NEGATE`, `RESET_COND_TRUE`, `RESET_COND_FALSE`
+    - result: `ok=30`, `mismatch=0`, `fail=0`
+  - Weighted all-mode seeded parity campaign (`count=40`, `seed=20260229`):
+    - result: `ok=40`, `mismatch=0`, `fail=0`
+
 ## 2026-02-28 (cnot polarity tightening + preprocessor-safe div/mul mutations)
 
 - realizations:

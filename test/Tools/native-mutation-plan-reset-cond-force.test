@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, rst_n, soft_reset, en, a, output logic y0,y1,y2);\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n) y0 <= 1'b0;\n    else if (en) y0 <= a;\n  end\n  always_ff @(posedge clk) begin\n    if (soft_reset) y1 <= 1'b0;\n    else if (en) y1 <= a;\n  end\n  always_comb begin\n    y2 = 1'b0;\n    if (en) y2 = a;\n  end\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops RESET_COND_TRUE --out %t/mutations-true.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops RESET_COND_FALSE --out %t/mutations-false.txt
+// RUN: FileCheck %s --check-prefix=TRUE < %t/mutations-true.txt
+// RUN: FileCheck %s --check-prefix=FALSE < %t/mutations-false.txt
+//
+// TRUE: 1 NATIVE_RESET_COND_TRUE@1
+// TRUE: 2 NATIVE_RESET_COND_TRUE@2
+// FALSE: 1 NATIVE_RESET_COND_FALSE@1
+// FALSE: 2 NATIVE_RESET_COND_FALSE@2

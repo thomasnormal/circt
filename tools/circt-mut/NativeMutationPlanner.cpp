@@ -37,7 +37,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
-    "IF_COND_NEGATE",   "RESET_COND_NEGATE", "IF_COND_TRUE",   "IF_COND_FALSE",
+    "IF_COND_NEGATE",   "RESET_COND_NEGATE", "RESET_COND_TRUE",
+    "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
@@ -2269,6 +2270,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectResetConditionNegateSites(designText, codeMask, sites);
     return;
   }
+  if (op == "RESET_COND_TRUE") {
+    collectResetConditionNegateSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "RESET_COND_FALSE") {
+    collectResetConditionNegateSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "IF_COND_TRUE") {
     collectIfConditionNegateSites(designText, codeMask, sites);
     return;
@@ -2477,6 +2486,7 @@ static std::string getOpFamily(StringRef op) {
       op == "MUX_FORCE_FALSE")
     return "mux";
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
+      op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
       op == "IF_ELSE_SWAP_ARMS")
     return "control";
@@ -3495,15 +3505,16 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return applyMuxForceArmAt(text, codeMask, pos, /*forceTrueArm=*/false,
                               mutatedText);
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
+      op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE") {
     size_t condOpen = StringRef::npos;
     size_t condClose = StringRef::npos;
     if (!findIfConditionBoundsAtSite(text, codeMask, pos, condOpen, condClose))
       return false;
 
-    if (op == "IF_COND_TRUE")
+    if (op == "IF_COND_TRUE" || op == "RESET_COND_TRUE")
       return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b1");
-    if (op == "IF_COND_FALSE")
+    if (op == "IF_COND_FALSE" || op == "RESET_COND_FALSE")
       return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b0");
 
     StringRef condExpr = text.slice(condOpen + 1, condClose);

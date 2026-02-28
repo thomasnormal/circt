@@ -14867,7 +14867,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
                "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
                "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
-               "RESET_COND_NEGATE",
+               "RESET_COND_NEGATE", "RESET_COND_TRUE",
+               "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
     return;
@@ -14890,7 +14891,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
                "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
                "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
-               "RESET_COND_NEGATE",
+               "RESET_COND_NEGATE", "RESET_COND_TRUE",
+               "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
@@ -14918,7 +14920,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
                "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
                "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
-               "RESET_COND_NEGATE",
+               "RESET_COND_NEGATE", "RESET_COND_TRUE",
+               "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
     return;
   }
@@ -14936,7 +14939,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
                "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
                "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
-               "RESET_COND_NEGATE",
+               "RESET_COND_NEGATE", "RESET_COND_TRUE",
+               "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB", "SUB_TO_ADD",
@@ -14968,7 +14972,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
                "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
                "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
-               "RESET_COND_NEGATE",
+               "RESET_COND_NEGATE", "RESET_COND_TRUE",
+               "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
@@ -14993,11 +14998,11 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     return;
   }
   if (modeName == "cnot0") {
-    appendAll({"IF_COND_FALSE", "MUX_FORCE_FALSE"});
+    appendAll({"IF_COND_FALSE", "RESET_COND_FALSE", "MUX_FORCE_FALSE"});
     return;
   }
   if (modeName == "cnot1") {
-    appendAll({"IF_COND_TRUE", "MUX_FORCE_TRUE"});
+    appendAll({"IF_COND_TRUE", "RESET_COND_TRUE", "MUX_FORCE_TRUE"});
     return;
   }
 }
