@@ -60,7 +60,7 @@ module tb_top;
       uvm_component comps[$];
       phase.raise_objection(this);
 
-      find_all("*agent*", comps);
+      uvm_root::get().find_all("*agent*", comps);
       // Should find agent0 and agent1
       if (comps.size() == 2)
         `uvm_info("TEST", "find_all agent count: PASS", UVM_LOW)

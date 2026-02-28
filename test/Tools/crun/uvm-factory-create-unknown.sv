@@ -28,7 +28,7 @@ module tb_top;
       srv.set_max_quit_count(100);
 
       // Try to create a type that doesn't exist
-      obj = factory.create_object_by_name("nonexistent_type_xyz", "", "test_obj");
+      obj = uvm_factory::get().create_object_by_name("nonexistent_type_xyz", "", "test_obj");
 
       if (obj == null)
         `uvm_info("TEST", "unknown type returns null: PASS", UVM_LOW)

@@ -1,6 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test uvm_reg_adapter subclass and register block creation.
 // Verifies RAL adapter API and register model setup.

@@ -58,7 +58,7 @@ module tb_top;
     function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       if (comp.msg_count >= 2)
-        `uvm_info("TEST", $sformatf("message count >= 2", comp.msg_count), UVM_LOW)
+        `uvm_info("TEST", $sformatf("message count >= 2: %0d", comp.msg_count), UVM_LOW)
       else
         `uvm_error("TEST", $sformatf("message count=%0d, expected >=2", comp.msg_count))
       if (comp.msg_count >= 2 && comp.verbose == 1)

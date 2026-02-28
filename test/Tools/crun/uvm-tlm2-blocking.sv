@@ -1,6 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test TLM-2.0 blocking transport interface.
 // Verifies uvm_tlm_generic_payload and b_transport basic API.

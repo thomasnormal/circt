@@ -43,8 +43,8 @@ module tb_top;
 
     function void build_phase(uvm_phase phase);
       comp_a obj;
-      factory.set_type_override_by_type(comp_a::get_type(), comp_b::get_type());
-      factory.set_type_override_by_type(comp_b::get_type(), comp_c::get_type());
+      uvm_factory::get().set_type_override_by_type(comp_a::get_type(), comp_b::get_type());
+      uvm_factory::get().set_type_override_by_type(comp_b::get_type(), comp_c::get_type());
       obj = comp_a::type_id::create("obj", this);
       if (obj.get_type_name() == "comp_c")
         `uvm_info("TEST", "override chain A->B->C: PASS", UVM_LOW)

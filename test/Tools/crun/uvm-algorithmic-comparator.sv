@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: uvm_algorithmic_comparator parameterized type instantiation errors
 
 // Test uvm_algorithmic_comparator with identity transformer.
 

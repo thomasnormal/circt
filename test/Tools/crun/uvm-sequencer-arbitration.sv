@@ -92,7 +92,7 @@ module tb_top;
       seq_alpha sa;
       seq_beta sb;
       phase.raise_objection(this);
-      sqr.set_arbitration(SEQ_ARB_FIFO);
+      sqr.set_arbitration(UVM_SEQ_ARB_FIFO);
       sa = seq_alpha::type_id::create("sa");
       sb = seq_beta::type_id::create("sb");
       fork

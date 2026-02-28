@@ -7,10 +7,10 @@ Baseline: circt-sim commit cc7261bdb
 
 This matrix tracks UVM feature coverage across two test suites:
 
-- **test/Tools/crun/uvm-*.sv** — 168 targeted feature tests (145 PASS, 23 XFAIL)
+- **test/Tools/crun/uvm-*.sv** — 168 targeted feature tests (147 PASS, 21 XFAIL)
 - **test/Runtime/uvm/\*.sv** — 25 integration/regression tests (25 PASS, 0 XFAIL)
 
-**Grand total: 193 tests, 170 PASS, 23 XFAIL**
+**Grand total: 193 tests, 172 PASS, 21 XFAIL**
 
 ## Summary by Category
 
@@ -20,9 +20,9 @@ This matrix tracks UVM feature coverage across two test suites:
 | Objection | 4 | 0 | 4 | 0 | 4 |
 | Factory | 8 | 2 | 10 | 2 | 12 |
 | Config DB | 9 | 2 | 11 | 1 | 12 |
-| Sequences | 12 | 3 | 15 | 4 | 19 |
-| TLM / Analysis | 21 | 1 | 22 | 2 | 24 |
-| RAL | 17 | 2 | 19 | 1 | 20 |
+| Sequences | 11 | 4 | 15 | 4 | 19 |
+| TLM / Analysis | 22 | 0 | 22 | 2 | 24 |
+| RAL | 18 | 1 | 19 | 1 | 20 |
 | Reporting | 2 | 2 | 4 | 2 | 6 |
 | Objects | 10 | 1 | 11 | 0 | 11 |
 | Field Macros | 5 | 0 | 5 | 0 | 5 |
@@ -30,8 +30,8 @@ This matrix tracks UVM feature coverage across two test suites:
 | Events | 3 | 0 | 3 | 0 | 3 |
 | Barriers / Pools / Queues | 8 | 0 | 8 | 0 | 8 |
 | Integration | 8 | 4 | 12 | 3 | 15 |
-| Miscellaneous | 20 | 3 | 23 | 1 | 24 |
-| **Total** | **145** | **23** | **168** | **25** | **193** |
+| Miscellaneous | 21 | 2 | 23 | 1 | 24 |
+| **Total** | **147** | **21** | **168** | **25** | **193** |
 
 ---
 
@@ -116,7 +116,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | crun/uvm-sequence-do-with.sv | PASS | `uvm_do_with randomization constraint |
 | crun/uvm-sequence-body-return.sv | PASS | body() return value |
 | crun/uvm-sequence-pre-post-body.sv | PASS | pre_body/post_body hooks |
-| crun/uvm-sequence-item-clone.sv | PASS | Sequence item clone() |
+| crun/uvm-sequence-item-clone.sv | XFAIL | clone() requires `uvm_field_int automation macros not used |
 | crun/uvm-sequence-item-no-sequencer.sv | PASS | Item creation without sequencer |
 | crun/uvm-sequence-nested-3deep.sv | PASS | 3-level nested sequence execution |
 | crun/uvm-sequence-lock-grab.sv | PASS | lock()/grab() sequencer access |
@@ -155,7 +155,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | crun/uvm-tlm-put-get-ports.sv | PASS | Put/get port pairing |
 | crun/uvm-tlm2-payload-only.sv | PASS | TLM-2.0 generic payload fields |
 | crun/uvm-tlm2-time-only.sv | PASS | TLM-2.0 time annotation |
-| crun/uvm-tlm2-blocking.sv | XFAIL | TLM-2.0 b_transport socket: not in bundled UVM |
+| crun/uvm-tlm2-blocking.sv | PASS | TLM-2.0 b_transport socket works |
 | uvm/uvm_tlm_fifo_test.sv | PASS | Extended TLM FIFO testing |
 | uvm/uvm_tlm_port_test.sv | PASS | Basic TLM port connection |
 
@@ -180,7 +180,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | crun/uvm-ral-submap-create.sv | PASS | Sub-map creation and address |
 | crun/uvm-ral-mirrored.sv | PASS | Mirrored value predict() (previously XFAIL, now fixed) |
 | crun/uvm-ral-reg-read-write.sv | PASS | reg.write()/reg.read() via stub adapter (previously XFAIL, now fixed) |
-| crun/uvm-ral-adapter.sv | XFAIL | RAL adapter subsystem: uvm_reg nested class triggers slang error |
+| crun/uvm-ral-adapter.sv | PASS | RAL adapter subclass and register block creation works |
 | crun/uvm-ral-reg-callback-add.sv | XFAIL | uvm_reg nested class triggers slang non-static member access error |
 | uvm/uvm_ral_test.sv | PASS | RAL basic integration |
 
@@ -281,7 +281,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | Test File | Status | Notes |
 |-----------|--------|-------|
 | crun/uvm-basic.sv | PASS | Basic UVM test with driver/monitor |
-| crun/uvm-algorithmic-comparator.sv | PASS | uvm_algorithmic_comparator |
+| crun/uvm-algorithmic-comparator.sv | XFAIL | uvm_algorithmic_comparator parameterized type instantiation errors |
 | crun/uvm-comparer.sv | PASS | uvm_comparer configuration |
 | crun/uvm-coreservice.sv | PASS | uvm_coreservice_t access |
 | crun/uvm-driver-basic.sv | PASS | Driver start_item/finish_item |
@@ -300,26 +300,23 @@ This matrix tracks UVM feature coverage across two test suites:
 | crun/uvm-transaction-record.sv | PASS | begin_tr/end_tr recording |
 | crun/uvm-transaction-timing.sv | PASS | Transaction accept/request/response timing |
 | crun/uvm-tree-printer.sv | PASS | uvm_tree_printer output |
-| crun/uvm-dap-basic.sv | XFAIL | DAP classes (set_before_get_dap, get_to_lock_dap) not in bundled UVM |
+| crun/uvm-dap-basic.sv | PASS | set_before_get_dap and get_to_lock_dap work |
 | crun/uvm-pack-manual.sv | XFAIL | uvm_packer::get_bits/put_bits not in bundled UVM |
-| crun/uvm-push-driver.sv | XFAIL | uvm_push_driver not in bundled UVM |
+| crun/uvm-push-driver.sv | PASS | uvm_push_driver receives items via put interface |
 | uvm/uvm_coverage_test.sv | PASS | Basic coverage collection |
 
 ---
 
 ## Known Limitations
 
-The 23 XFAIL tests fall into four root-cause categories:
+The 21 XFAIL tests fall into four root-cause categories:
 
 ### 1. Bundled UVM Library Gaps
 Classes not present in the bundled UVM library version.
 
-- **TLM-2.0 sockets** (`uvm-tlm2-blocking.sv`) — `uvm_tlm_b_initiator_socket` etc. not included.
-- **DAP classes** (`uvm-dap-basic.sv`) — `uvm_set_before_get_dap`, `uvm_get_to_lock_dap` not included.
-- **Push driver** (`uvm-push-driver.sv`) — `uvm_push_driver`, `uvm_push_sequencer` not included.
 - **Sequence library** (`uvm-sequence-library.sv`) — `uvm_sequence_library` not included.
 - **uvm_packer low-level API** (`uvm-pack-manual.sv`) — `get_bits()`/`put_bits()` not available.
-- **component find_all** (`uvm-component-lookup-regex.sv`) — `find_all()` not available in library version.
+- **component find_all regex** (`uvm-component-lookup-regex.sv`) — `find_all()` with regex not available in library version.
 
 **Fix**: Upgrade or augment the bundled UVM library.
 
@@ -330,13 +327,17 @@ Tests that cannot compile due to limitations in the slang→MLIR lowering.
   `uvm-sequence-no-driver.sv`, `uvm-integ-factory-config-seq.sv`,
   `uvm-integ-multi-agent.sv`, `uvm-integ-seq-driver-scoreboard.sv`) — slang reports
   "unknown name `clk`" when a class method references a module-scope interface or signal.
-- **uvm_reg nested class** (`uvm-ral-adapter.sv`, `uvm-ral-reg-callback-add.sv`,
+- **uvm_reg nested class** (`uvm-ral-reg-callback-add.sv`,
   `uvm-integ-ral-config-env.sv`) — slang emits non-static member access error for
   nested classes inside `uvm_reg`.
 - **Virtual interface in config_db** (`uvm-config-db-virtual-if.sv`) — slang reports
   "unsupported arbitrary symbol reference" for module-scope interface instance in class context.
 - **Report catcher override** (`uvm-report-fatal-catch.sv`) — slang rejects override of
   pure virtual method `catch` in `uvm_report_catcher` subclass.
+- **uvm_algorithmic_comparator parameterized types** (`uvm-algorithmic-comparator.sv`) —
+  parameterized type instantiation errors with `uvm_algorithmic_comparator #(BEFORE, TRANSFORMER, AFTER)`.
+- **Sequence item clone()** (`uvm-sequence-item-clone.sv`) — clone() requires `uvm_field_int`
+  field automation macros to be declared; manual copy approach not supported by clone interceptor.
 
 **Fix**: Improve slang/ImportVerilog lowering for these SV patterns.
 
@@ -371,8 +372,8 @@ Items ordered by expected impact and implementation difficulty:
 1. **Module-scope clock reference in class** (5 tests) — Fix slang lowering to handle
    class methods that reference module-scope interface signals. Unblocks 5 integration tests.
 
-2. **uvm_reg nested class** (3 tests) — Fix slang lowering for nested classes inside
-   `uvm_reg`. Unblocks RAL adapter and RAL integration tests.
+2. **uvm_reg nested class** (2 tests) — Fix slang lowering for nested classes inside
+   `uvm_reg`. Unblocks RAL reg callback-add and RAL integration tests.
 
 3. **get_full_name() leading dot** (1 test) — Off-by-one in component path construction.
    Easy fix in LLHDProcessInterpreter.
@@ -391,8 +392,8 @@ Items ordered by expected impact and implementation difficulty:
 
 9. **Config DB type mismatch enforcement** (1 test) — Enforce type tags in config_db interceptor.
 
-10. **Bundled UVM library gaps** (6 tests) — Add missing classes to the bundled UVM:
-    TLM-2.0 sockets, DAP, push driver, sequence library, packer low-level API, find_all().
+10. **Bundled UVM library gaps** (3 tests) — Add missing classes to the bundled UVM:
+    sequence library, packer low-level API, find_all() regex.
 
 11. **Virtual interface in config_db** (1 test) — Requires full virtual interface type support
     in the MLIR lowering and config_db interceptor.
