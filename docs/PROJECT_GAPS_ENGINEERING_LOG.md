@@ -1175,3 +1175,26 @@
   - `utils/ninja-with-lock.sh -C build_test circt-verilog`
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv test/Conversion/ImportVerilog/sva-open-range-nexttime-sequence.sv test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
   - result: 4/4 passed.
+
+### ImportVerilog: de-XFAIL `basic.sv` by updating stale LTL/disable-iff checks
+- Repro:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/basic.sv`
+  - Failure points were stale FileCheck expectations after upstream lowering
+    changes (not translator crashes):
+    - `a until_with b` expected older `not(until) || and` shape.
+    - clocked assertion expected `ltl.clock` without
+      `{sva.explicit_clocking}`.
+    - `disable iff` checks expected legacy `logic_to_int`/`to_builtin_int`
+      conversion chain.
+- Root cause:
+  - `basic.sv` had already moved out of parser-failure territory, but kept
+    legacy brittle checks and an `XFAIL` marker from an older lowering shape.
+- Fix:
+  - Removed `XFAIL` from `test/Conversion/ImportVerilog/basic.sv`.
+  - Updated check patterns to current lowering:
+    - `until_with` now checks `ltl.and` feeding `ltl.until`.
+    - `ltl.clock` check includes `{sva.explicit_clocking}`.
+    - `disable iff` checks use `moore.to_builtin_bool` consistently.
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/basic.sv`
+  - result: 1/1 passed.
