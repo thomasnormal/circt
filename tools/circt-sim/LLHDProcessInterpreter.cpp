@@ -42839,8 +42839,125 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
     }
   }
 
-  // Call the interpreter.
+  // Trampoline calls from native call_indirect can bypass call-site fast paths
+  // in interpretFuncCall/interpretFuncCallIndirect. Apply a small set of
+  // dispatch-agnostic UVM fast paths here before interpreting the body.
   llvm::SmallVector<InterpretedValue, 2> interpResults;
+  auto appendZeroTrampolineResults = [&]() {
+    interpResults.clear();
+    for (mlir::Type ty : resultTypes) {
+      unsigned bits = std::max(1u, getScalarOrStructBitWidth(ty));
+      interpResults.push_back(InterpretedValue(llvm::APInt::getZero(bits)));
+    }
+  };
+  auto setIntegerTrampolineResult = [&](unsigned index, uint64_t value) {
+    if (index >= resultTypes.size())
+      return;
+    unsigned bits = std::max(1u, getScalarOrStructBitWidth(resultTypes[index]));
+    if (interpResults.size() < resultTypes.size())
+      appendZeroTrampolineResults();
+    interpResults[index] =
+        InterpretedValue(llvm::APInt(bits, value).zextOrTrunc(bits));
+  };
+  auto handleUvmTrampolineFastPath =
+      [&](llvm::StringRef trampName) -> bool {
+    auto defaultUvmActionForSeverity = [](uint64_t sev) -> uint64_t {
+      switch (sev) {
+      case 0:
+        return 1; // UVM_INFO -> UVM_DISPLAY
+      case 1:
+        return 1; // UVM_WARNING -> UVM_DISPLAY
+      case 2:
+        return 41; // UVM_ERROR -> UVM_DISPLAY | UVM_COUNT | UVM_EXIT
+      case 3:
+        return 33; // UVM_FATAL -> UVM_DISPLAY | UVM_EXIT
+      default:
+        return 1;
+      }
+    };
+    if (trampName.contains("uvm_printer::print_field_int") ||
+        trampName.contains("uvm_printer::print_field") ||
+        trampName.contains("uvm_printer::print_generic_element") ||
+        trampName.contains("uvm_printer::print_generic") ||
+        trampName.contains("uvm_printer::print_time") ||
+        trampName.contains("uvm_printer::print_string") ||
+        trampName.contains("uvm_printer::print_real") ||
+        trampName.contains("uvm_printer::print_array_header") ||
+        trampName.contains("uvm_printer::print_array_footer") ||
+        trampName.contains("uvm_printer::print_array_range") ||
+        trampName.contains("uvm_printer::print_object_header") ||
+        trampName.contains("uvm_printer::print_object")) {
+      appendZeroTrampolineResults();
+      return true;
+    }
+    if ((fastPathUvmReportInfo &&
+         trampName.contains("uvm_report_object::uvm_report_info")) ||
+        (fastPathUvmReportWarning &&
+         trampName.contains("uvm_report_object::uvm_report_warning"))) {
+      appendZeroTrampolineResults();
+      return true;
+    }
+    if (trampName.contains("uvm_report_object::get_report_verbosity_level")) {
+      appendZeroTrampolineResults();
+      setIntegerTrampolineResult(0, 200);
+      return true;
+    }
+    if (trampName.contains("uvm_report_object::get_report_action") &&
+        interpArgs.size() >= 2 && !interpArgs[1].isX()) {
+      appendZeroTrampolineResults();
+      setIntegerTrampolineResult(0,
+                                 defaultUvmActionForSeverity(
+                                     interpArgs[1].getUInt64()));
+      return true;
+    }
+    if (trampName.contains("uvm_report_handler") &&
+        trampName.contains("::get_verbosity_level")) {
+      appendZeroTrampolineResults();
+      setIntegerTrampolineResult(0, 200);
+      return true;
+    }
+    if (trampName.contains("uvm_report_handler") &&
+        trampName.contains("::get_action") && interpArgs.size() >= 2 &&
+        !interpArgs[1].isX()) {
+      appendZeroTrampolineResults();
+      setIntegerTrampolineResult(0,
+                                 defaultUvmActionForSeverity(
+                                     interpArgs[1].getUInt64()));
+      return true;
+    }
+    if (trampName.contains("uvm_report_handler") &&
+        (trampName.contains("::set_severity_file") ||
+         trampName.contains("::set_severity_action"))) {
+      appendZeroTrampolineResults();
+      return true;
+    }
+    if (trampName.contains("uvm_tlm_if_base") && trampName.contains("::write")) {
+      appendZeroTrampolineResults();
+      return true;
+    }
+    return false;
+  };
+  auto packTrampolineResults = [&]() {
+    if (interpResults.empty() || numRets == 0)
+      return;
+    uint32_t retSlotIdx = 0;
+    for (unsigned i = 0;
+         i < interpResults.size() && retSlotIdx < numRets; ++i) {
+      mlir::Type retTy = (i < resultTypes.size()) ? resultTypes[i] : nullptr;
+      if (retTy) {
+        packTrampolineResult(retTy, interpResults[i], rets, retSlotIdx,
+                             numRets);
+      } else {
+        rets[retSlotIdx++] = interpResults[i].getUInt64();
+      }
+    }
+  };
+  if (hasFuncOp && handleUvmTrampolineFastPath(funcOp.getSymName())) {
+    packTrampolineResults();
+    return;
+  }
+
+  // Call the interpreter.
   auto &callState = processStates[procId];
   if (callState.callDepth >= 200) {
     llvm::errs() << "[circt-sim] WARNING: trampoline call depth exceeded 200"
@@ -42867,20 +42984,7 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
     return;
 
   // Convert results back to uint64_t (handle structs consuming multiple slots).
-  if (!interpResults.empty() && numRets > 0) {
-    uint32_t retSlotIdx = 0;
-    for (unsigned i = 0;
-         i < interpResults.size() && retSlotIdx < numRets; ++i) {
-      mlir::Type retTy =
-          (i < resultTypes.size()) ? resultTypes[i] : nullptr;
-      if (retTy) {
-        packTrampolineResult(retTy, interpResults[i], rets, retSlotIdx,
-                             numRets);
-      } else {
-        rets[retSlotIdx++] = interpResults[i].getUInt64();
-      }
-    }
-  }
+  packTrampolineResults();
 }
 
 void LLHDProcessInterpreter::loadCompiledProcesses(
