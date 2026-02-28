@@ -989,10 +989,12 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
   }
 
   auto [finalAddr, finalStrongHint] = promoteToSequencerQueue(queueAddr);
-  if (finalAddr != queueAddr)
+  if (finalAddr != 0 && finalAddr != queueAddr)
     strongHint = true;
   queueAddr = finalAddr;
   strongHint = strongHint || finalStrongHint;
+  if (queueAddr == 0)
+    return false;
   if (queueAddr != 0 && sequencerItemFifo.contains(queueAddr))
     strongHint = true;
   return strongHint;
