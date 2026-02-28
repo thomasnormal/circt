@@ -317,6 +317,21 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
     normalized = phaseAddr;
 
   uint64_t phaseImpAddr = readUvmPhaseImpAddress(procId, normalized);
+  // Static phase handles (e.g. uvm_build_phase::get()) can point at IMP
+  // objects, while runtime traversal expects wrapper nodes whose m_imp points
+  // back to that IMP. Canonicalize IMP addresses to wrapper addresses first.
+  if (phaseImpAddr == 0) {
+    constexpr uint64_t kCommonWrapperDelta = 0xD0;
+    if (normalized <= std::numeric_limits<uint64_t>::max() - kCommonWrapperDelta) {
+      uint64_t wrapperCandidate = normalized + kCommonWrapperDelta;
+      uint64_t wrapperImpAddr = readUvmPhaseImpAddress(procId, wrapperCandidate);
+      if (wrapperImpAddr == normalized) {
+        normalized = wrapperCandidate;
+        phaseImpAddr = wrapperImpAddr;
+      }
+    }
+  }
+
   if (phaseImpAddr == 0) {
     // Root/common-domain wrappers can have m_imp==0. In stale-domain waits we
     // still need to remap those wrappers onto the active common domain.
@@ -467,11 +482,18 @@ void LLHDProcessInterpreter::maybeRemapUvmPhaseArgsToActiveGraph(
       !args.empty() && !args[0].isX() &&
       (calleeName == "uvm_pkg::uvm_phase::wait_for_state" ||
        calleeName == "uvm_pkg::uvm_phase::get_predecessors" ||
-       calleeName == "uvm_pkg::uvm_phase::get_sync_relationships");
-  bool remapJumpTargetToActiveGraph =
+       calleeName == "uvm_pkg::uvm_phase::get_sync_relationships" ||
+       calleeName == "uvm_pkg::uvm_phase::find" ||
+       calleeName == "uvm_pkg::uvm_phase::find_by_name" ||
+       calleeName == "uvm_pkg::uvm_phase::is_before" ||
+       calleeName == "uvm_pkg::uvm_phase::is_after");
+  bool remapArg1PhaseToActiveGraph =
       args.size() >= 2 && !args[1].isX() &&
-      calleeName == "uvm_pkg::uvm_phase::set_jump_phase";
-  if (!remapArg0ToActiveGraph && !remapJumpTargetToActiveGraph)
+      (calleeName == "uvm_pkg::uvm_phase::set_jump_phase" ||
+       calleeName == "uvm_pkg::uvm_phase::find" ||
+       calleeName == "uvm_pkg::uvm_phase::is_before" ||
+       calleeName == "uvm_pkg::uvm_phase::is_after");
+  if (!remapArg0ToActiveGraph && !remapArg1PhaseToActiveGraph)
     return;
 
   static bool tracePhaseRemap = []() {
@@ -526,7 +548,7 @@ void LLHDProcessInterpreter::maybeRemapUvmPhaseArgsToActiveGraph(
       rewriteArg(0, newPhase);
   }
 
-  if (remapJumpTargetToActiveGraph) {
+  if (remapArg1PhaseToActiveGraph) {
     uint64_t oldPhase = args[1].getUInt64();
     uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
     if (tracePhaseRemap) {

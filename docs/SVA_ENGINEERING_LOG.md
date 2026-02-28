@@ -9881,3 +9881,38 @@
   - this workspace currently shows intermittent unrelated front-end/runtime instability
     in some UVM lit runs (sporadic malformed MLIR tokenization / parser failures in generated
     `%t.mlir`), separate from the config_db semantic fix above.
+
+## 2026-02-28 - UVM phase ordering semantics from static phase handles (is_before/is_after)
+
+- realization:
+  - Added a new semantic regression `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv` to validate phase ordering APIs in real runtime execution (not syntax-only checks).
+  - Failing-before-fix behavior:
+    - `uvm_build_phase::get().is_before(uvm_run_phase::get())` returned `0`.
+    - `uvm_run_phase::get().is_after(uvm_build_phase::get())` returned `0`.
+  - Root cause was in circt-sim phase remapping/canonicalization:
+    - static phase handles commonly point to phase IMP objects,
+    - while traversal/order logic expects wrapper nodes (`m_imp`-linked graph nodes),
+    - and IMP addresses were not canonicalized to wrappers before active-graph remap.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - `mapUvmPhaseAddressToActiveGraph(...)` now canonicalizes IMP pointers to wrapper pointers using the common wrapper delta probe (`+0xD0`) when wrapper `m_imp` points back to the IMP.
+    - `maybeRemapUvmPhaseArgsToActiveGraph(...)` now remaps:
+      - receiver arg0 for `uvm_phase::{find,find_by_name,is_before,is_after}` in addition to existing wait/sync methods,
+      - phase arg1 for `uvm_phase::{find,is_before,is_after}` in addition to `set_jump_phase`.
+  - Added `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv` with runtime pass/fail checks for:
+    - `build.is_before(run)`
+    - `run.is_after(build)`
+    - `run.is_before(extract)`
+    - `run.find_by_name("build",1)`
+
+- validation:
+  - failing-before-fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - passing-after-fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
+  - focused UVM regression sweep after fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_set_jump_null_active_test.sv test/Runtime/uvm/uvm_phase_add_scope_validation_test.sv test/Runtime/uvm/config_db_test.sv test/Runtime/uvm/uvm_simple_test.sv`
+

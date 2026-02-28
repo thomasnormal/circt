@@ -964,15 +964,19 @@ Status update (2026-02-28): this gap is closed in this workspace. `uvm_phase::ad
 State-change callback payload fields are manually poked with a comment noting no official setter path, which indicates API design debt around phase-state transitions. What is missing is a sanctioned constructor/setter interface for `m_state_chg` updates. The fix is to introduce a formal update helper/API and route all state transitions through it.
 
 ### [ ] 320. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:1383`
+Status update (2026-02-28): common-domain runtime semantics for phase lookup now have explicit regression coverage (`test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`), and circt-sim remapping now canonicalizes static phase handles for `find` calls. Remaining gap: full-search semantics in all scope/topology cases, as marked by the upstream TODO.
 `find` is explicitly marked as not doing a full search, so phase lookup coverage is intentionally incomplete in some graph/scope patterns. What is missing is comprehensive traversal semantics (with proper scope controls) for phase search. The fix is to implement full search behavior with cycle-safe traversal and regression tests for in-scope and cross-scope queries.
 
 ### [ ] 321. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:1403`
+Status update (2026-02-28): common-domain `find_by_name` runtime behavior is now semantically exercised in `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv` with active-graph phase remap enabled for static handles. Remaining gap: full-search parity for all scoped/cross-scope graph patterns, as marked by the upstream TODO.
 `find_by_name` is still marked `TBD full search`, so lookup behavior remains intentionally partial for some graph/scope cases. What is missing is full traversal parity with expected UVM phase graph semantics. The fix is to implement complete predecessor/successor search with scope controls and add regressions for ambiguous/cross-scope names.
 
 ### [ ] 322. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:1432`
+Status update (2026-02-28): default ordering semantics from static phase handles are now covered and fixed in this workspace (`test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`; circt-sim phase IMP->wrapper canonicalization + active-graph remap). Remaining gap: explicit `stay_in_scope` support in the UVM API implementation.
 `is_before` currently hardcodes out-of-scope traversal (`m_find_successor(..., 0, ...)`) and explicitly lacks `stay_in_scope=1` support. What is missing is scope-aware ordering queries. The fix is to add a scoped variant (or parameter) and ensure phase-order checks honor domain/schedule boundaries when requested.
 
 ### [ ] 323. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:1442`
+Status update (2026-02-28): same partial closure as entry 322 in this workspace; default `is_after` behavior is now semantically validated for static handles, but scoped ordering semantics remain unresolved in upstream API logic.
 Same gap as entry 322 for `is_after`: it does not yet support scoped ordering semantics. What is missing is symmetric `stay_in_scope` behavior for both before/after APIs. The fix is parallel implementation and tests that prove `is_before`/`is_after` stay consistent under scoped and unscoped modes.
 
 ### [ ] 324. `lib/Tools/arcilator/pipelines.cpp:98`
