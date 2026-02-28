@@ -98,6 +98,19 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
     return value
 
 
+def parse_nonnegative_int_list(raw: str, name: str) -> list[int]:
+    tokenized = raw.strip()
+    if not tokenized:
+        return []
+    values: list[int] = []
+    for index, token in enumerate(tokenized.split(","), start=1):
+        item = token.strip()
+        if not item:
+            fail(f"invalid {name}: empty item at index {index}")
+        values.append(parse_nonnegative_int(item, f"{name}[{index}]"))
+    return values
+
+
 def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
     exact: set[str] = set()
     prefixes: list[str] = []
@@ -823,6 +836,31 @@ def is_always_comb_multi_driver_retryable_failure(log_text: str) -> bool:
     return "driven by always_comb procedure" in log_text.lower()
 
 
+def is_resource_guard_rss_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return "resource guard triggered: rss" in low and "exceeded limit" in low
+
+
+def has_explicit_resource_guard_policy(args: list[str]) -> bool:
+    explicit_limit_options = (
+        "--max-rss-mb",
+        "--max-vmem-mb",
+        "--max-malloc-mb",
+        "--max-wall-ms",
+    )
+    if has_command_option(args, "--no-resource-guard"):
+        return True
+    if any(has_command_option(args, option) for option in explicit_limit_options):
+        return True
+    explicit_env_vars = (
+        "CIRCT_MAX_RSS_MB",
+        "CIRCT_MAX_VMEM_MB",
+        "CIRCT_MAX_MALLOC_MB",
+        "CIRCT_MAX_WALL_MS",
+    )
+    return any(os.environ.get(name, "").strip() for name in explicit_env_vars)
+
+
 def is_temporal_approx_retryable_failure(log_text: str) -> bool:
     low = log_text.lower()
     return (
@@ -1304,6 +1342,41 @@ def main() -> int:
                 f"{verilog_always_comb_multi_driver_mode} (expected auto|on|off)"
             )
         )
+    verilog_auto_relax_resource_guard_raw = os.environ.get(
+        "LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD", "1"
+    )
+    if verilog_auto_relax_resource_guard_raw not in {"0", "1"}:
+        fail(
+            (
+                "invalid LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD: "
+                f"{verilog_auto_relax_resource_guard_raw} (expected 0 or 1)"
+            )
+        )
+    verilog_auto_relax_resource_guard = (
+        verilog_auto_relax_resource_guard_raw == "1"
+    )
+    verilog_auto_relax_resource_guard_max_rss_mb = parse_nonnegative_int(
+        os.environ.get("LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB", "24576"),
+        "LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB",
+    )
+    verilog_auto_relax_resource_guard_rss_ladder_mb = parse_nonnegative_int_list(
+        os.environ.get("LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB", ""),
+        "LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB",
+    )
+    if (
+        not verilog_auto_relax_resource_guard_rss_ladder_mb
+        and verilog_auto_relax_resource_guard_max_rss_mb > 0
+    ):
+        verilog_auto_relax_resource_guard_rss_ladder_mb = [
+            verilog_auto_relax_resource_guard_max_rss_mb
+        ]
+    verilog_auto_relax_resource_guard_rss_ladder_mb = sorted(
+        {
+            value
+            for value in verilog_auto_relax_resource_guard_rss_ladder_mb
+            if value > 0
+        }
+    )
     temporal_approx_mode = os.environ.get(
         "LEC_TEMPORAL_APPROX_MODE", "auto"
     ).strip().lower()
@@ -1528,6 +1601,9 @@ def main() -> int:
         has_explicit_multi_driver = has_command_option(
             circt_verilog_args, "--allow-multi-always-comb-drivers"
         )
+        has_explicit_verilog_resource_guard_policy = has_explicit_resource_guard_policy(
+            circt_verilog_args
+        )
         has_explicit_temporal_approx = has_command_option(
             circt_lec_args, "--approx-temporal"
         )
@@ -1601,6 +1677,9 @@ def main() -> int:
                 shared_always_comb_log = (
                     shared_dir / "circt-verilog.always-comb-multi-driver.log"
                 )
+                shared_resource_guard_log = (
+                    shared_dir / "circt-verilog.resource-guard-rss.log"
+                )
 
                 with shared_checker_sv.open("w", encoding="utf-8") as handle:
                     for case in batch_cases:
@@ -1611,9 +1690,12 @@ def main() -> int:
 
                 batch_timescale_override = verilog_timescale_override
                 batch_allow_multi_driver = verilog_allow_multi_always_comb_drivers
+                batch_verilog_max_rss_mb: int | None = None
 
                 def build_shared_verilog_cmd(
-                    timescale_override: str | None, allow_multi_driver: bool
+                    timescale_override: str | None,
+                    allow_multi_driver: bool,
+                    max_rss_mb: int | None,
                 ) -> list[str]:
                     cmd = [
                         circt_verilog,
@@ -1632,6 +1714,8 @@ def main() -> int:
                         cmd.append(f"--timescale={timescale_override}")
                     if allow_multi_driver and not has_explicit_multi_driver:
                         cmd.append("--allow-multi-always-comb-drivers")
+                    if max_rss_mb is not None and not has_explicit_verilog_resource_guard_policy:
+                        cmd.append(f"--max-rss-mb={max_rss_mb}")
                     if verilog_define_synthesis:
                         cmd.append("-DSYNTHESIS")
                     cmd += circt_verilog_args
@@ -1639,7 +1723,9 @@ def main() -> int:
                     return cmd
 
                 shared_verilog_cmd = build_shared_verilog_cmd(
-                    batch_timescale_override, batch_allow_multi_driver
+                    batch_timescale_override,
+                    batch_allow_multi_driver,
+                    batch_verilog_max_rss_mb,
                 )
                 shared_opt_cmd = [
                     circt_opt,
@@ -1666,6 +1752,11 @@ def main() -> int:
                         shutil.copy2(
                             shared_always_comb_log,
                             case_dir / "circt-verilog.always-comb-multi-driver.log",
+                        )
+                    if shared_resource_guard_log.exists():
+                        shutil.copy2(
+                            shared_resource_guard_log,
+                            case_dir / "circt-verilog.resource-guard-rss.log",
                         )
 
                 frontend_ok = False
@@ -1705,7 +1796,9 @@ def main() -> int:
                                     flush=True,
                                 )
                                 shared_verilog_cmd = build_shared_verilog_cmd(
-                                    batch_timescale_override, batch_allow_multi_driver
+                                    batch_timescale_override,
+                                    batch_allow_multi_driver,
+                                    batch_verilog_max_rss_mb,
                                 )
                                 continue
                             if (
@@ -1728,9 +1821,45 @@ def main() -> int:
                                     flush=True,
                                 )
                                 shared_verilog_cmd = build_shared_verilog_cmd(
-                                    batch_timescale_override, batch_allow_multi_driver
+                                    batch_timescale_override,
+                                    batch_allow_multi_driver,
+                                    batch_verilog_max_rss_mb,
                                 )
                                 continue
+                            if (
+                                verilog_auto_relax_resource_guard
+                                and verilog_auto_relax_resource_guard_rss_ladder_mb
+                                and not has_explicit_verilog_resource_guard_policy
+                                and is_resource_guard_rss_retryable_failure(
+                                    shared_verilog_log_text
+                                )
+                            ):
+                                next_rss_mb: int | None = None
+                                current_rss_mb = batch_verilog_max_rss_mb
+                                for candidate in (
+                                    verilog_auto_relax_resource_guard_rss_ladder_mb
+                                ):
+                                    if current_rss_mb is None or candidate > current_rss_mb:
+                                        next_rss_mb = candidate
+                                        break
+                                if next_rss_mb is not None:
+                                    shutil.copy2(
+                                        shared_verilog_log, shared_resource_guard_log
+                                    )
+                                    batch_verilog_max_rss_mb = next_rss_mb
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-verilog "
+                                        f"with --max-rss-mb={next_rss_mb} for "
+                                        f"batch={batch_index}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    shared_verilog_cmd = build_shared_verilog_cmd(
+                                        batch_timescale_override,
+                                        batch_allow_multi_driver,
+                                        batch_verilog_max_rss_mb,
+                                    )
+                                    continue
                             raise
 
                     if shared_verilog_log.exists():
