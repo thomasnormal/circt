@@ -790,6 +790,27 @@ def has_command_option(args: list[str], option: str) -> bool:
     return any(arg == option or arg.startswith(f"{option}=") for arg in args)
 
 
+def has_preprocessor_define(args: Sequence[str], macro: str) -> bool:
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        payload = ""
+        step = 1
+        if arg == "-D":
+            if index + 1 >= len(args):
+                break
+            payload = args[index + 1]
+            step = 2
+        elif arg.startswith("-D"):
+            payload = arg[2:]
+        if payload:
+            token = payload.strip()
+            if token == macro or token.startswith(f"{macro}="):
+                return True
+        index += step
+    return False
+
+
 def is_missing_timescale_retryable_failure(log_text: str) -> bool:
     low = log_text.lower()
     return (
@@ -1516,6 +1537,21 @@ def main() -> int:
         verilog_allow_multi_always_comb_drivers = (
             verilog_always_comb_multi_driver_mode == "on" and not has_explicit_multi_driver
         )
+        verilog_synthesis_define_mode = (
+            os.environ.get("LEC_VERILOG_SYNTHESIS_DEFINE_MODE", "auto").strip().lower()
+        )
+        if verilog_synthesis_define_mode not in {"auto", "on", "off"}:
+            fail(
+                "invalid LEC_VERILOG_SYNTHESIS_DEFINE_MODE: "
+                f"{verilog_synthesis_define_mode} (expected auto|on|off)"
+            )
+        verilog_define_synthesis = False
+        if verilog_synthesis_define_mode == "on":
+            verilog_define_synthesis = True
+        elif verilog_synthesis_define_mode == "auto":
+            verilog_define_synthesis = not has_preprocessor_define(
+                circt_verilog_args, "SYNTHESIS"
+            )
 
         case_batches: list[list[ConnectivityLECCase]] = []
         by_csv: dict[str, list[ConnectivityLECCase]] = {}
@@ -1596,6 +1632,8 @@ def main() -> int:
                         cmd.append(f"--timescale={timescale_override}")
                     if allow_multi_driver and not has_explicit_multi_driver:
                         cmd.append("--allow-multi-always-comb-drivers")
+                    if verilog_define_synthesis:
+                        cmd.append("-DSYNTHESIS")
                     cmd += circt_verilog_args
                     cmd += source_files + [str(shared_checker_sv)]
                     return cmd
