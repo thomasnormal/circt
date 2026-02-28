@@ -42,7 +42,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
     "MUL_TO_DIV",       "MOD_TO_DIV",     "DIV_TO_MOD",  "INC_TO_DEC",
     "DEC_TO_INC",       "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
-    "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ",    "BAND_EQ_TO_BOR_EQ",
+    "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ",    "SHL_EQ_TO_SHR_EQ",
+    "SHR_EQ_TO_SHL_EQ", "BAND_EQ_TO_BOR_EQ",
     "BOR_EQ_TO_BAND_EQ",
     "SHL_TO_SHR",
     "SHR_TO_SHL",       "SHR_TO_ASHR",    "ASHR_TO_SHR", "CASEEQ_TO_EQ",
@@ -1000,8 +1001,9 @@ static void collectCompoundAssignSites(StringRef text, StringRef token,
                                        ArrayRef<uint8_t> codeMask,
                                        SmallVectorImpl<SiteInfo> &sites) {
   assert((token == "+=" || token == "-=" || token == "*=" || token == "/=" ||
-          token == "&=" || token == "|=") &&
-         "expected +=, -=, *=, /=, &=, or |= compound assignment token");
+          token == "<<=" || token == ">>=" || token == "&=" ||
+          token == "|=") &&
+         "expected +=, -=, *=, /=, <<=, >>=, &=, or |= compound assignment token");
   for (size_t i = 0, e = text.size(); i + token.size() <= e; ++i) {
     if (!isCodeRange(codeMask, i, token.size()))
       continue;
@@ -1016,6 +1018,10 @@ static void collectCompoundAssignSites(StringRef text, StringRef token,
     if (token == "*=" && prev == '*')
       continue;
     if (token == "/=" && prev == '/')
+      continue;
+    if (token == "<<=" && prev == '<')
+      continue;
+    if (token == ">>=" && prev == '>')
       continue;
     if (token == "&=" && prev == '&')
       continue;
@@ -2320,6 +2326,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectCompoundAssignSites(designText, "/=", codeMask, sites);
     return;
   }
+  if (op == "SHL_EQ_TO_SHR_EQ") {
+    collectCompoundAssignSites(designText, "<<=", codeMask, sites);
+    return;
+  }
+  if (op == "SHR_EQ_TO_SHL_EQ") {
+    collectCompoundAssignSites(designText, ">>=", codeMask, sites);
+    return;
+  }
   if (op == "BAND_EQ_TO_BOR_EQ") {
     collectCompoundAssignSites(designText, "&=", codeMask, sites);
     return;
@@ -2398,7 +2412,8 @@ static std::string getOpFamily(StringRef op) {
       op == "MUL_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MUL_EQ")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL" || op == "SHR_TO_ASHR" ||
-      op == "ASHR_TO_SHR")
+      op == "ASHR_TO_SHR" || op == "SHL_EQ_TO_SHR_EQ" ||
+      op == "SHR_EQ_TO_SHL_EQ")
     return "shift";
   if (op == "SIGNED_TO_UNSIGNED" || op == "UNSIGNED_TO_SIGNED")
     return "cast";
@@ -3417,6 +3432,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, 2, "/=");
   if (op == "DIV_EQ_TO_MUL_EQ")
     return replaceTokenAt(mutatedText, pos, 2, "*=");
+  if (op == "SHL_EQ_TO_SHR_EQ")
+    return replaceTokenAt(mutatedText, pos, 3, ">>=");
+  if (op == "SHR_EQ_TO_SHL_EQ")
+    return replaceTokenAt(mutatedText, pos, 3, "<<=");
   if (op == "BAND_EQ_TO_BOR_EQ")
     return replaceTokenAt(mutatedText, pos, 2, "|=");
   if (op == "BOR_EQ_TO_BAND_EQ")

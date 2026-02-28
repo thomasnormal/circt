@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk, input logic [7:0] a,b, output logic [7:0] y0,y1);\n  always_ff @(posedge clk) begin\n    y0 >>>= a;\n    y1 >>= b;\n  end\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_SHR_EQ_TO_SHL_EQ@1\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: y0 >>>= a;
+// MUTANT: y1 <<= b;

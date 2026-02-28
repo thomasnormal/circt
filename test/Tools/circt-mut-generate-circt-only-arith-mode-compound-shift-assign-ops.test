@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk, input logic [7:0] din, output logic [7:0] out);\n  logic [7:0] acc;\n  always_ff @(posedge clk) begin\n    acc <<= 1;\n    acc >>= 2;\n    out <= acc ^ din;\n  end\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 80 --seed 19 --modes arith > %t/log.txt
+// RUN: grep -q 'NATIVE_SHL_EQ_TO_SHR_EQ' %t/mutations.txt
+// RUN: grep -q 'NATIVE_SHR_EQ_TO_SHL_EQ' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 80

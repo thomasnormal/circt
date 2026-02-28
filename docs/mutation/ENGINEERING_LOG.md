@@ -1,5 +1,44 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (compound shift-assignment mutation class + seeded parity hardening)
+
+- realizations:
+  - `<<=`/`>>=` confusion is a realistic sequential datapath/control fault class
+    and was missing from the native mutation operator set.
+  - Seeded parity campaigns need per-mutant timeouts and a safe-op subset;
+    unrestricted arithmetic sets can mutate loop updates and create liveness
+    hangs (for example non-terminating `repeat/for` control).
+  - A transient xrun-vs-circt mismatch in this campaign was harness-induced:
+    `always @*` sanitizer initialization at time-zero is simulator-scheduling
+    sensitive; switching to `always_comb` removed the artifact.
+
+- changes made:
+  - Added native operators:
+    - `SHL_EQ_TO_SHR_EQ`
+    - `SHR_EQ_TO_SHL_EQ`
+  - Integrated operators into:
+    - native op catalog, site collection, family classification, and apply:
+      `tools/circt-mut/NativeMutationPlanner.cpp`
+    - CIRCT-only mode mappings (`arith`, `invert`, `inv`, `balanced/all`):
+      `tools/circt-mut/circt-mut.cpp`
+    - native-op validator:
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-compound-shift-assign-ops.test`
+    - `test/Tools/native-create-mutated-shl-eq-to-shr-eq-site-index.test`
+    - `test/Tools/native-create-mutated-shr-eq-to-shl-eq-site-index.test`
+    - `test/Tools/native-create-mutated-shr-eq-to-shl-eq-skip-ashr-assign.test`
+
+- validation:
+  - Red-first: all four new tests fail before implementation, pass after.
+  - Focused lit slices over compound-assign/native-plan/native-backend tests:
+    all passing (`22 passed` in touched slice).
+  - Seeded xrun-vs-circt parity campaign on deterministic `cov_intro_seeded`
+    harness with safe native op subset (including both new ops):
+    - `count=20`, `seed=20260228`
+    - result: `match=20`, `mismatch=0`
+    - campaign workspace: `/tmp/mut_parity_shift_740018`
+
 ## 2026-02-28 (compound-assign realism + array-index sentinel parity bug)
 
 - realizations:
