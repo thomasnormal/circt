@@ -11854,3 +11854,39 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realization
 - Current interpreted AVIP blocker has shifted from runtime liveness into frontend throughput: LLHD generation is currently too slow to reach simulation.
 - Keeping the skip flag opt-in preserves compiled-mode and non-AVIP behavior while enabling targeted throughput recovery once rebuilt binaries include the new switch.
+
+## 2026-02-28 APB liveness: experiment-verified kill-tree orphan bug
+
+### Experiment-first validation
+- Reproduced APB interpret stall at `--max-time=400000000` and traced phase/sequence teardown.
+- Verified `uvm_sequencer_base::stop_phase_sequence` is called, but `start_phase_sequence` never appears in this test, so default-phase sequence stop is not the root cause.
+- Added focused trace (`CIRCT_SIM_TRACE_SEQ`, phase-state, objection trace) and confirmed the problematic outstanding sequence was from manual `seq.start(...)` fork/join_none flow, not default phase sequence machinery.
+
+### TDD regression
+- Added `test/Tools/circt-sim/process-kill-orphan-descendant.sv`.
+- This reproduces: parent kill with a finished intermediate child and a still-running grandchild.
+- Pre-fix result: failed with `leaf status after root kill: NOT-KILLED`.
+
+### Root cause and fix
+- Root cause: `killProcessTree` only recursed into non-halted direct fork children, so active descendants could be stranded behind halted intermediate ancestors.
+- Fix in `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+  - recurse through children when they are active **or** still have active descendants,
+  - include a parent-link (`parentProcessId`) fallback child discovery path,
+  - avoid re-visiting nodes.
+
+### Post-fix validation
+- New regression passes.
+- Focused fork/process control slice passes:
+  - `process-kill-await.sv`
+  - `syscall-process-control.sv`
+  - `fork-disable-ready-wakeup.sv`
+  - `disable-fork-halt.mlir`
+  - `fork-halt-waits-children.mlir`
+  - `fork-join-basic.mlir`
+  - `fork-join-none-nested-join-body.mlir`
+  - `process-kill-orphan-descendant.sv`
+- Full AOT sweep remains green: `llvm-lit -j 1 -sv test/Tools/circt-sim/aot*` => `125/125` passed.
+- APB bounded run after fix no longer strands the parent `start` wrapper (`proc 108` terminates; sequencer `waiters=0`), confirming the orphan-kill bug is removed.
+
+### Realization
+- AVIP fork/join_none liveness requires subtree-kill semantics based on *active descendant reachability*, not only direct non-halted children.

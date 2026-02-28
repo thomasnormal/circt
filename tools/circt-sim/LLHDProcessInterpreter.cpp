@@ -12658,8 +12658,18 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   }
 
   dropSequencePendingForProc();
-  if (forkJoinManager.getForkGroupForChild(procId))
+  if (auto *forkGroup = forkJoinManager.getForkGroupForChild(procId)) {
+    ProcessId parentProcId = forkGroup->parentProcess;
     forkJoinManager.markChildComplete(procId);
+    // ForkJoinManager updates scheduler process state, but interpreter-level
+    // `waiting` must also be cleared when the parent is resumed.
+    if (auto *parentProc = scheduler.getProcess(parentProcId);
+        parentProc && parentProc->getState() == ProcessState::Ready) {
+      if (auto parentStateIt = processStates.find(parentProcId);
+          parentStateIt != processStates.end())
+        parentStateIt->second.waiting = false;
+    }
+  }
 
   dropDequeuedForProc();
   scheduler.terminateProcess(procId);
@@ -12667,18 +12677,48 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
 }
 
 void LLHDProcessInterpreter::killProcessTree(ProcessId procId) {
-  // First, recursively kill all fork children of this process.
-  for (ForkId forkId : forkJoinManager.getForksForParent(procId)) {
-    if (auto *group = forkJoinManager.getForkGroup(forkId)) {
-      for (ProcessId childId : group->childProcesses) {
-        auto childIt = processStates.find(childId);
-        if (childIt != processStates.end() && !childIt->second.halted)
-          killProcessTree(childId); // Recurse into grandchildren
-      }
+  llvm::DenseSet<ProcessId> visited;
+  auto killSubtree = [&](auto &&self, ProcessId rootId) -> void {
+    if (!visited.insert(rootId).second)
+      return;
+
+    llvm::SmallVector<ProcessId, 8> childIds;
+
+    // Prefer explicit fork ancestry.
+    for (ForkId forkId : forkJoinManager.getForksForParent(rootId)) {
+      if (auto *group = forkJoinManager.getForkGroup(forkId))
+        for (ProcessId childId : group->childProcesses)
+          childIds.push_back(childId);
     }
-  }
-  // Then kill this process itself.
-  finalizeProcess(procId, /*killed=*/true);
+
+    // Backstop: include children linked only by parentProcessId.
+    processStates.forEachUntil(
+        [&](ProcessId childId, ProcessExecutionState &childState) {
+          if (childState.parentProcessId == rootId)
+            childIds.push_back(childId);
+          return false;
+        });
+
+    llvm::sort(childIds);
+    childIds.erase(std::unique(childIds.begin(), childIds.end()),
+                   childIds.end());
+
+    for (ProcessId childId : childIds) {
+      auto childIt = processStates.find(childId);
+      if (childIt == processStates.end())
+        continue;
+      // Recurse through halted intermediates when they still own active
+      // descendants; otherwise they can strand live grandchildren.
+      if (!childIt->second.halted || hasActiveProcessDescendants(childId))
+        self(self, childId);
+    }
+
+    auto rootIt = processStates.find(rootId);
+    if (rootIt != processStates.end() && !rootIt->second.halted)
+      finalizeProcess(rootId, /*killed=*/true);
+  };
+
+  killSubtree(killSubtree, procId);
 }
 
 bool LLHDProcessInterpreter::isProcessSubtreeAlive(ProcessId rootProcId) const {
