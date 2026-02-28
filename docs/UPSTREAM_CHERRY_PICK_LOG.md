@@ -74,3 +74,78 @@ Command to refresh candidate window:
 ```bash
 git log --oneline --no-merges origin/main..upstream/main
 ```
+
+## Refresh (2026-02-28, later pass)
+
+- Current staging head: `0a9d22958`
+- Current upstream tip: `5f7d374a7`
+- Stack size vs `origin/main`: `42` commits ahead
+
+### Additional Picks Since The Initial Log
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `29f81dbaa` | `debd22694` | [FIRRTL] Add conservative IMDCE handling for InstanceChoiceOp (#9710) |
+| `9010819e8` | `5ade31e47` | [FIRRTL] Support FInstanceLike operations in ModuleInliner (#9688) |
+| `228e21581` | `70d66d7f4` | [FIRRTL][LowerToHW] Add InstanceChoiceOp lowering, Part 1 (#9742) |
+| `0cbd42b69` | `274eeb55d` | [FIRRTL] Add domain create op (#9774) |
+| `9c25e1e46` | `3d5455330` | [FIRRTL] Add instance macro attribute to InstanceChoice for Lowering (#9760) |
+| `0f1439c64` | `15f3650af` | [FIRRTL] Change FInstanceLike to consider multiple referred modules (#9676) |
+| `54045c245` | `ec285f538` | [firtool] Add --num-threads/-j option to control parallel compilation (#9551) |
+| `7fac47214` | `e5d5eb6b0` | [SCFToCalyx] Fix incorrect assert in setResultRegs for scf::IfOp (#9721) |
+| `4e5e4ff21` | `ee4badcde` | [circt-bmc] Add LTLToCore to pipeline (#9735) |
+| `ecf557539` | `10fbfc9b1` | [FIRRTL][Reduce] Fix module-port-pruner crash with probe ports (#9694) |
+| `7be632221` | `179c31994` | [circt-lec] Add lowering from Synth to Comb (#9725) |
+| `8b6cb92f1` | `def39e7c7` | [FIRRTL] Add CheckCombLoops handling for InstanceChoiceOp (#9711) |
+| `f9bfb6126` | `e3964f818` | [FIRRTL][IMCP] Add conservative support for InstanceChoiceOp (#9692) |
+| `d7418d057` | `8f953acab` | [FIRRTL][LayerSink] Support InstanceChoice (#9696) |
+| `ba1dbecf3` | `0e9f82038` | [FIRRTL][LowerLayers] Fix instance input port capture |
+| `bdea0c823` | `b2ab3aff0` | [FIRRTL] Dedup: fix non-deduplicatable public module handling (#9702) |
+| `116518665` | `e089efd1f` | [FIRRTL][SpecializeOption] Erase all options with default flag |
+| `af6209414` | `9f9da0678` | [HWAggregateToComb] Support hw.sturct_extruct and hw.struct_create (#9675) |
+| `9cf58aa41` | `36828e715` | Fix ambiguous call to ServiceImplRecordOp::create in ESIServices.cpp (#9707) |
+| `8cd1ab33d` | `eb22f87b1` | [CombToSynth] Remove operation type restriction |
+| `4e63160e3` | `f21dbe7c3` | [circt-reduce] Use per-port matching for FIRRTL port pruners (#9755) |
+| `092be06f3` | `6542026a9` | [FIRRTL] Improve error messages for domain symbol verification (#9776) |
+| `dffde85f9` | `6e3d168f6` | [ESI][Runtime] Don't crash on unsupported type (#9768) |
+| `2bb16b0e1` | `5f7d374a7` | [FIRRTL] Support merging layers in LinkCircuits (#9677) |
+| `0a9d22958` | `6434ee4c1` | [HW][circt-reduce] Add HW name sanitization (#9730) |
+
+Local follow-up commits kept in stack:
+
+- `42eee6923` [Upstream] Fix follow-up conflicts in firtool and circt-lec picks
+
+### Deferred In This Pass
+
+- `17330f8a9` [Moore][ImportVerilog] fork-join lowering:
+  conflicts with this branch's existing `moore.fork` model and would introduce
+  a second incompatible fork op path.
+- `d3ddbe121`, `79369384c`, `bc7cf6bfc` (ImportVerilog/Moore queue series):
+  conflict-heavy on this baseline (multiple core files). Revisit in a dedicated
+  ImportVerilog sync pass.
+
+### Validation Added In This Pass
+
+- Build:
+  - `utils/ninja-with-lock.sh -C build_stage circt-opt circt-reduce`
+- Lit tests:
+  - `build_stage/test/Dialect/FIRRTL/errors.mlir`
+  - `build_stage/test/Dialect/FIRRTL/link-layers.mlir`
+  - `build_stage/test/Dialect/FIRRTL/link-layers-errors.mlir`
+  - `build_stage/test/Dialect/FIRRTL/Reduction/pattern-registration.mlir`
+  - `build_stage/test/Dialect/FIRRTL/Reduction/module-port-pruner.mlir`
+  - `build_stage/test/Dialect/FIRRTL/Reduction/module-port-pruner-probe.mlir`
+  - `build_stage/test/Dialect/FIRRTL/Reduction/port-pruner.mlir`
+  - `build_stage/test/Dialect/HW/Reduction/hw-module-internal-name-sanitizer.mlir`
+  - `build_stage/test/Dialect/HW/Reduction/hw-module-name-sanitizer.mlir`
+  - `build_stage/test/Dialect/HW/Reduction/hw-sv-namehint-remover.mlir`
+- Runtime python sanity:
+  - `python3 -m py_compile lib/Dialect/ESI/runtime/python/esiaccel/codegen.py`
+
+### Engineering Notes
+
+- `ee4badcde` looked unpicked via patch-id, but functionality was already
+  present in the local `circt-bmc` rewrite; re-picking only produced noisy
+  conflicts.
+- ImportVerilog queue/fork commits are high value but no longer "easy picks"
+  on this tree due substantial local frontend/runtime divergence.
