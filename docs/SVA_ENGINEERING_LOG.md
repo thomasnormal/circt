@@ -9704,3 +9704,24 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_override_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
   - targeted manual runs of each new semantic scenario (`+UVM_TESTNAME`) confirmed expected pass markers and no UVM errors.
+
+## 2026-02-28 - UVM TLM FIFO semantic coverage + bounded try_put enforcement
+
+- realization:
+  - `test/Runtime/uvm/uvm_tlm_fifo_test.sv` was parse-only and, when run semantically, exposed two issues:
+    - test expectations used `size()` as occupancy (for bounded FIFOs, `size()` is capacity).
+    - `try_put` on a full bounded FIFO succeeded under `circt-sim` flow, violating FIFO semantics.
+
+- implemented:
+  - `test/Runtime/uvm/uvm_tlm_fifo_test.sv`
+    - converted to semantic lit coverage (`--ir-hw` + `circt-sim` + `FileCheck`).
+    - corrected occupancy checks to use `used()` while keeping `size()` checks as capacity semantics.
+    - added aggregate pass/fail reporting in `tlm_fifo_test::report_phase` with explicit marker:
+      - `UVM_TLM_FIFO_TEST_PASS`.
+    - increased sim timeout in RUN line (`2_000_000_000`) so report-phase marker is emitted after objection drop.
+  - `lib/Runtime/uvm-core/src/tlm1/uvm_tlm_fifos.svh`
+    - hardened `uvm_tlm_fifo::try_put` with explicit bounded-capacity guard using local `m_size/m.num` before mailbox delegation, ensuring nonblocking puts on full FIFO return failure.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_tlm_fifo_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_send_request_test.sv`

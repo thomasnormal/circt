@@ -1,7 +1,10 @@
 //===----------------------------------------------------------------------===//
 // UVM TLM FIFO Pattern Test
 //===----------------------------------------------------------------------===//
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=2000000000 2>&1 | FileCheck %s --check-prefix=SIM
+// SIM: UVM_TLM_FIFO_TEST_PASS
 //
 // This test validates UVM TLM FIFO patterns including:
 // 1. uvm_tlm_fifo basic operations (put, get, peek)
@@ -102,19 +105,19 @@ package tlm_fifo_test_pkg;
         `uvm_info(get_type_name(),
                   $sformatf("  Put transaction: %s", txn.convert2string()), UVM_HIGH)
       end
-      if (fifo.size() == 5) begin
+      if (fifo.used() == 5) begin
         `uvm_info(get_type_name(), "  PASS: Put 5 transactions successfully", UVM_MEDIUM)
         pass_count++;
       end else begin
         `uvm_error(get_type_name(),
-                   $sformatf("  FAIL: Expected size 5, got %0d", fifo.size()))
+                   $sformatf("  FAIL: Expected used 5, got %0d", fifo.used()))
         fail_count++;
       end
 
       // Test 1.2: Blocking peek (should not remove item)
       `uvm_info(get_type_name(), "Test 1.2: Blocking peek", UVM_MEDIUM)
       fifo.peek(retrieved);
-      if (retrieved.id == 0 && fifo.size() == 5) begin
+      if (retrieved.id == 0 && fifo.used() == 5) begin
         `uvm_info(get_type_name(),
                   $sformatf("  PASS: Peek returned first item without removal: %s",
                             retrieved.convert2string()), UVM_MEDIUM)
@@ -138,12 +141,12 @@ package tlm_fifo_test_pkg;
           fail_count++;
         end
       end
-      if (fifo.size() == 2) begin
+      if (fifo.used() == 2) begin
         `uvm_info(get_type_name(), "  PASS: Got 3 transactions, 2 remaining", UVM_MEDIUM)
         pass_count++;
       end else begin
         `uvm_error(get_type_name(),
-                   $sformatf("  FAIL: Expected size 2, got %0d", fifo.size()))
+                   $sformatf("  FAIL: Expected used 2, got %0d", fifo.used()))
         fail_count++;
       end
 
@@ -205,13 +208,13 @@ package tlm_fifo_test_pkg;
         txn.write = 1;
         analysis_port.write(txn);
       end
-      if (analysis_fifo.size() == 10) begin
+      if (analysis_fifo.used() == 10) begin
         `uvm_info(get_type_name(),
                   "  PASS: Analysis port wrote 10 transactions", UVM_MEDIUM)
         pass_count++;
       end else begin
         `uvm_error(get_type_name(),
-                   $sformatf("  FAIL: Expected size 10, got %0d", analysis_fifo.size()))
+                   $sformatf("  FAIL: Expected used 10, got %0d", analysis_fifo.used()))
         fail_count++;
       end
 
@@ -229,7 +232,7 @@ package tlm_fifo_test_pkg;
       // Test 2.3: Get from analysis FIFO
       `uvm_info(get_type_name(), "Test 2.3: Get from analysis FIFO", UVM_MEDIUM)
       analysis_fifo.get(retrieved);
-      if (retrieved.id == 100 && analysis_fifo.size() == 9) begin
+      if (retrieved.id == 100 && analysis_fifo.used() == 9) begin
         `uvm_info(get_type_name(),
                   $sformatf("  PASS: Got first transaction: %s", retrieved.convert2string()),
                   UVM_MEDIUM)
@@ -245,13 +248,13 @@ package tlm_fifo_test_pkg;
       txn.id = 200;
       txn.data = 32'hCAFEBABE;
       analysis_fifo.write(txn);
-      if (analysis_fifo.size() == 10) begin
+      if (analysis_fifo.used() == 10) begin
         `uvm_info(get_type_name(),
                   "  PASS: Direct write added transaction", UVM_MEDIUM)
         pass_count++;
       end else begin
         `uvm_error(get_type_name(),
-                   $sformatf("  FAIL: Expected size 10, got %0d", analysis_fifo.size()))
+                   $sformatf("  FAIL: Expected used 10, got %0d", analysis_fifo.used()))
         fail_count++;
       end
 
@@ -302,7 +305,7 @@ package tlm_fifo_test_pkg;
       txn.id = 50;
       txn.data = 32'h12345678;
       success = fifo.try_put(txn);
-      if (success && fifo.size() == 1) begin
+      if (success && fifo.used() == 1) begin
         `uvm_info(get_type_name(), "  PASS: try_put succeeded on empty FIFO", UVM_MEDIUM)
         pass_count++;
       end else begin
@@ -322,7 +325,7 @@ package tlm_fifo_test_pkg;
           fail_count++;
         end
       end
-      if (fifo.is_full() && fifo.size() == 4) begin
+      if (fifo.is_full() && fifo.used() == 4) begin
         `uvm_info(get_type_name(), "  PASS: FIFO is now full", UVM_MEDIUM)
         pass_count++;
       end else begin
@@ -346,7 +349,7 @@ package tlm_fifo_test_pkg;
       // Test 3.4: try_peek
       `uvm_info(get_type_name(), "Test 3.4: try_peek", UVM_MEDIUM)
       success = fifo.try_peek(retrieved);
-      if (success && retrieved.id == 50 && fifo.size() == 4) begin
+      if (success && retrieved.id == 50 && fifo.used() == 4) begin
         `uvm_info(get_type_name(),
                   $sformatf("  PASS: try_peek returned first item: %s",
                             retrieved.convert2string()), UVM_MEDIUM)
@@ -359,7 +362,7 @@ package tlm_fifo_test_pkg;
       // Test 3.5: try_get
       `uvm_info(get_type_name(), "Test 3.5: try_get", UVM_MEDIUM)
       success = fifo.try_get(retrieved);
-      if (success && retrieved.id == 50 && fifo.size() == 3) begin
+      if (success && retrieved.id == 50 && fifo.used() == 3) begin
         `uvm_info(get_type_name(),
                   $sformatf("  PASS: try_get returned and removed first item: %s",
                             retrieved.convert2string()), UVM_MEDIUM)
@@ -578,13 +581,17 @@ package tlm_fifo_test_pkg;
         fail_count++;
       end
 
-      // Test 5.2: Initial size is 0
-      `uvm_info(get_type_name(), "Test 5.2: Initial size is 0", UVM_MEDIUM)
-      if (bounded_fifo.size() == 0 && unbounded_fifo.size() == 0) begin
-        `uvm_info(get_type_name(), "  PASS: Both FIFOs have size 0", UVM_MEDIUM)
+      // Test 5.2: size() reports configured capacity
+      `uvm_info(get_type_name(), "Test 5.2: size() reports configured capacity", UVM_MEDIUM)
+      if (bounded_fifo.size() == 5 && unbounded_fifo.size() == 0) begin
+        `uvm_info(get_type_name(),
+                  "  PASS: size() matches configured capacity (5 bounded, 0 unbounded)",
+                  UVM_MEDIUM)
         pass_count++;
       end else begin
-        `uvm_error(get_type_name(), "  FAIL: FIFOs should have size 0")
+        `uvm_error(get_type_name(),
+                   $sformatf("  FAIL: Expected size bounded=5/unbounded=0, got bounded=%0d unbounded=%0d",
+                             bounded_fifo.size(), unbounded_fifo.size()))
         fail_count++;
       end
 
@@ -623,7 +630,7 @@ package tlm_fifo_test_pkg;
         txn.id = i;
         unbounded_fifo.put(txn);
       end
-      if (!unbounded_fifo.is_full() && unbounded_fifo.size() == 100) begin
+      if (!unbounded_fifo.is_full() && unbounded_fifo.used() == 100) begin
         `uvm_info(get_type_name(),
                   "  PASS: Unbounded FIFO is not full with 100 items", UVM_MEDIUM)
         pass_count++;
@@ -647,20 +654,20 @@ package tlm_fifo_test_pkg;
         fail_count++;
       end
 
-      // Test 5.7: size and used should be equal
-      `uvm_info(get_type_name(), "Test 5.7: size equals used", UVM_MEDIUM)
+      // Test 5.7: bounded size stays capacity while used tracks occupancy
+      `uvm_info(get_type_name(), "Test 5.7: bounded size vs used semantics", UVM_MEDIUM)
       // Put 3 items in bounded FIFO
       for (int i = 0; i < 3; i++) begin
         txn = fifo_transaction::type_id::create($sformatf("size_test_txn_%0d", i));
         txn.id = i;
         bounded_fifo.put(txn);
       end
-      if (bounded_fifo.size() == bounded_fifo.used() && bounded_fifo.size() == 3) begin
-        `uvm_info(get_type_name(), "  PASS: size() == used() == 3", UVM_MEDIUM)
+      if (bounded_fifo.size() == 5 && bounded_fifo.used() == 3) begin
+        `uvm_info(get_type_name(), "  PASS: size()=5 capacity, used()=3 occupancy", UVM_MEDIUM)
         pass_count++;
       end else begin
         `uvm_error(get_type_name(),
-                   $sformatf("  FAIL: size=%0d, used=%0d, expected 3",
+                   $sformatf("  FAIL: size=%0d, used=%0d, expected size=5 used=3",
                              bounded_fifo.size(), bounded_fifo.used()))
         fail_count++;
       end
@@ -708,11 +715,13 @@ package tlm_fifo_test_pkg;
       // Test 6.1: Flush empty FIFO (should be safe)
       `uvm_info(get_type_name(), "Test 6.1: Flush empty FIFO", UVM_MEDIUM)
       fifo.flush();
-      if (fifo.is_empty() && fifo.size() == 0) begin
+      if (fifo.is_empty() && fifo.used() == 0) begin
         `uvm_info(get_type_name(), "  PASS: Flush on empty FIFO is safe", UVM_MEDIUM)
         pass_count++;
       end else begin
-        `uvm_error(get_type_name(), "  FAIL: FIFO should remain empty after flush")
+        `uvm_error(get_type_name(),
+                   $sformatf("  FAIL: Expected empty/used=0 after flush, got is_empty=%0b used=%0d",
+                             fifo.is_empty(), fifo.used()))
         fail_count++;
       end
 
@@ -724,16 +733,16 @@ package tlm_fifo_test_pkg;
         txn.data = 32'hFFFFFFFF - i;
         fifo.put(txn);
       end
-      if (fifo.size() == 7) begin
+      if (fifo.used() == 7) begin
         `uvm_info(get_type_name(), "  Added 7 transactions", UVM_HIGH)
       end
       fifo.flush();
-      if (fifo.is_empty() && fifo.size() == 0) begin
+      if (fifo.is_empty() && fifo.used() == 0) begin
         `uvm_info(get_type_name(), "  PASS: Flush cleared all items", UVM_MEDIUM)
         pass_count++;
       end else begin
         `uvm_error(get_type_name(),
-                   $sformatf("  FAIL: Expected empty after flush, got size=%0d", fifo.size()))
+                   $sformatf("  FAIL: Expected empty after flush, got used=%0d", fifo.used()))
         fail_count++;
       end
 
@@ -849,6 +858,7 @@ package tlm_fifo_test_pkg;
     endtask
 
     virtual function void report_phase(uvm_phase phase);
+      int total_fail;
       super.report_phase(phase);
       `uvm_info(get_type_name(), "", UVM_LOW)
       `uvm_info(get_type_name(), "============================================", UVM_LOW)
@@ -863,6 +873,16 @@ package tlm_fifo_test_pkg;
       `uvm_info(get_type_name(), "  5. Size and fullness (size, used, is_empty, is_full)", UVM_LOW)
       `uvm_info(get_type_name(), "  6. Flush operation", UVM_LOW)
       `uvm_info(get_type_name(), "", UVM_LOW)
+
+      total_fail = env.test1_basic.fail_count + env.test2_analysis.fail_count +
+                   env.test3_nonblocking.fail_count + env.test4_availability.fail_count +
+                   env.test5_size.fail_count + env.test6_flush.fail_count;
+      if (total_fail == 0)
+        $display("UVM_TLM_FIFO_TEST_PASS");
+      else
+        `uvm_error(get_type_name(),
+                   $sformatf("UVM TLM FIFO semantic test failed with %0d component failures",
+                             total_fail))
     endfunction
 
   endclass
