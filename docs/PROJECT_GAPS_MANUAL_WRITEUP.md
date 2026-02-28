@@ -3892,8 +3892,8 @@ Net lowering supports a fixed set of net kinds and rejects others. What is missi
 ### [ ] 1296. `lib/Conversion/MooreToCore/MooreToCore.cpp:7132`
 Same four-valued-core dependency as entry 1292, now in net initialization/handling path.
 
-### [ ] 1297. `lib/Conversion/MooreToCore/MooreToCore.cpp:7819`
-Extract lowering has known TODO for out-of-bounds behavior in four-valued domains (should produce X semantics). What is missing is correct OOB semantics for four-state extraction.
+### [x] 1297. `lib/Conversion/MooreToCore/MooreToCore.cpp:7819`
+Status update (2026-02-28): this entry is stale and closed. Four-state extract lowering already models out-of-bounds portions via unknown-mask fill, and runtime regression `test/Tools/circt-sim/dyn-bit-select-oob-read-x.sv` confirms dynamic OOB reads produce `X` for `logic` and `0` for `bit`.
 
 ### [ ] 1298. `lib/Conversion/MooreToCore/MooreToCore.cpp:8108`
 `ExtractRef` lowering still lacks complete out-of-bounds handling. What is missing is bounds-aware lowering semantics for reference extraction.

@@ -9280,3 +9280,22 @@
 
 - validation:
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm --filter=uvm_timeout_plusarg_test.sv`
+
+## 2026-02-28 - MooreToCore dynamic OOB packed bit-select read semantics
+
+- realization:
+  - the manual gap entry for `ExtractOp` four-state out-of-bounds behavior was
+    stale; lowering already propagated unknown-mask ones on OOB portions.
+  - there was no focused runtime regression proving dynamic OOB behavior for
+    both 4-state (`logic`) and 2-state (`bit`) packed bit-select reads.
+
+- implemented:
+  - added `test/Tools/circt-sim/dyn-bit-select-oob-read-x.sv`:
+    - drives a dynamic OOB index (`$urandom_range(8,8)`) into `[7:0]` vectors.
+    - asserts `logic` read returns `x` and `bit` read returns `0`.
+  - updated stale `ExtractOpConversion` TODO comment in
+    `lib/Conversion/MooreToCore/MooreToCore.cpp` to reflect current behavior.
+  - marked gap entry 1297 closed in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=dyn-bit-select-oob-read-x.sv`

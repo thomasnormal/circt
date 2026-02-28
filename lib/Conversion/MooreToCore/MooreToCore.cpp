@@ -7966,8 +7966,8 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
   LogicalResult
   matchAndRewrite(ExtractOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: return X if the domain is four-valued for out-of-bounds accesses
-    // once we support four-valued lowering
+    // For 4-state inputs, the lowering below models out-of-bounds bits as
+    // unknown by filling the unknown mask with ones on OOB portions.
     Type resultType = typeConverter->convertType(op.getResult().getType());
     Type inputType = adaptor.getInput().getType();
     int32_t low = adaptor.getLowBit();
