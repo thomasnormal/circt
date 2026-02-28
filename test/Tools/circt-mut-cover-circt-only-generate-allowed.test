@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: not env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut cover --generate-mutations 1 --formal-global-propagate-circt-lec=/bin/true > %t/log.txt 2>&1
+// RUN: FileCheck %s < %t/log.txt
+//
+// CHECK: circt-mut cover: CIRCT-only mode requires an explicit --create-mutated-script
+// CHECK-NOT: --generate-mutations is disabled in CIRCT-only mode

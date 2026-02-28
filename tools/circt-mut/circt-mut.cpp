@@ -14814,8 +14814,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   if (modeName == "control") {
     appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP"});
+               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
+               "NBA_TO_BA", "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
     return;
   }
   if (modeName == "stuck") {
@@ -14827,11 +14827,11 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
-               "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
-               "CASEEQ_TO_EQ",
+               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
+               "NBA_TO_BA", "UNARY_NOT_DROP", "UNARY_BNOT_DROP", "ADD_TO_SUB",
+               "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL",
+               "MUL_TO_DIV", "UNARY_MINUS_DROP", "SHL_TO_SHR", "SHR_TO_SHL",
+               "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ",
                "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ"});
     appendAll({"SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
@@ -14839,7 +14839,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   if (modeName == "connect") {
     appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR"});
+               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
+               "NBA_TO_BA"});
     return;
   }
   if (modeName == "balanced" || modeName == "all") {
@@ -14847,13 +14848,13 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP", "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB",
-               "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL",
-               "MUL_TO_DIV", "UNARY_MINUS_DROP", "SHL_TO_SHR", "SHR_TO_SHL",
-               "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
-               "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
-               "UNSIGNED_TO_SIGNED"});
+               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
+               "NBA_TO_BA", "UNARY_NOT_DROP", "UNARY_BNOT_DROP", "CONST0_TO_1",
+               "CONST1_TO_0", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
+               "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
+               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
+               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ",
+               "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
 
@@ -14863,12 +14864,13 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
-               "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
-               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ",
-               "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
+               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
+               "NBA_TO_BA", "UNARY_NOT_DROP", "UNARY_BNOT_DROP", "ADD_TO_SUB",
+               "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL",
+               "MUL_TO_DIV", "UNARY_MINUS_DROP", "SHL_TO_SHR", "SHR_TO_SHL",
+               "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
+               "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
+               "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "const0") {
@@ -14882,7 +14884,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   if (modeName == "cnot0" || modeName == "cnot1") {
     appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR"});
+               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
+               "NBA_TO_BA"});
     return;
   }
 }

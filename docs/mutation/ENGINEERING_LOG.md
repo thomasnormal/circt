@@ -1,5 +1,43 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (assignment timing faults and seeded parity campaigns)
+
+- realizations:
+  - Assignment-style timing mutations (`=` vs `<=`) are a realistic RTL bug
+    class and should be modeled explicitly instead of only via operator swaps.
+  - Seeded parity campaigns need deterministic initialization boundaries; when a
+    signature depends on uninitialized/X-heavy state, xrun-vs-circt mismatches
+    can be false alarms for mutation parity.
+  - Some constant-flip mutants on clock-generator literals produce liveness
+    failures (`both_fail`) in both simulators; these should be classified as
+    non-parity failures, not semantic mismatches.
+  - Cross-instance scheduling in current `circt-sim` can shift observation
+    timing for NBA-fed control signals in seeded harnesses; single-module
+    parity harnesses are currently more reliable for mutation equivalence runs.
+
+- changes made:
+  - Added native assignment operators:
+    - `BA_TO_NBA`
+    - `NBA_TO_BA`
+  - Added planner and mutator site detection with context guards to avoid:
+    - declaration/typedef/port contexts,
+    - comparator/assignment-token collisions,
+    - continuous-assignment contexts.
+  - Added CIRCT-only mode mapping coverage for assignment faults in
+    `control`, `connect`, `cnot0/cnot1`, `inv`/`invert`, and `balanced/all`.
+  - Added regression tests for assignment site indexing and safety filters:
+    - `native-create-mutated-ba-to-nba-site-index`
+    - `native-create-mutated-nba-to-ba-site-index`
+    - `native-create-mutated-ba-skip-decl-and-comparator`
+    - `native-create-mutated-ba-skip-continuous-assign`
+    - `circt-mut-generate-circt-only-control-mode-assignment-ops`
+  - Re-ran focused lit coverage for new assignment operators: all targeted
+    tests pass.
+  - Ran multiple seeded mutation parity campaigns:
+    - assignment-focused campaign: `ok=24 mismatch=0 fail=0`
+    - broader deterministic single-module campaign:
+      `ok=37 mismatch=0 fail=11` (`both_fail` liveness mutants)
+
 ## 2026-02-27
 
 - realizations:
