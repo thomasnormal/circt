@@ -20636,6 +20636,14 @@ bool LLHDProcessInterpreter::isUvmFactoryOverrideSetter(
          calleeName == "set_type_override";
 }
 
+bool LLHDProcessInterpreter::isNativeAnalysisWriteCallee(
+    llvm::StringRef calleeName) {
+  if (!calleeName.contains("::write") || calleeName.contains("write_m_"))
+    return false;
+  return calleeName.contains("analysis_port") ||
+         calleeName.contains("uvm_tlm_if_base");
+}
+
 bool LLHDProcessInterpreter::isCoverageRuntimeCallee(
     llvm::StringRef calleeName) {
   return calleeName.starts_with("__moore_coverage_") ||
@@ -21398,44 +21406,79 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     // Fall through to normal MLIR interpretation
   }
 
+  bool traceUvmFactoryByType = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_UVM_FACTORY_BY_TYPE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
   auto tryInvokeWrapperFactoryMethod =
       [&](uint64_t wrapperAddr, uint64_t slotIndex,
           llvm::ArrayRef<InterpretedValue> extraArgs,
           InterpretedValue &outResult) -> bool {
     uint64_t off = 0;
     MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-    if (!blk || !blk->initialized || off + 8 > blk->size)
+    if (!blk || !blk->initialized || off + 8 > blk->size) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: wrapper-vtable ptr unreadable"
+                     << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
+                     << " slot=" << slotIndex << "\n";
       return false;
+    }
 
     uint64_t vtableAddr = 0;
     for (unsigned i = 0; i < 8; ++i)
       vtableAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-    if (vtableAddr == 0)
+    if (vtableAddr == 0) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: wrapper vtable is null"
+                     << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
+                     << " slot=" << slotIndex << "\n";
       return false;
+    }
 
     uint64_t off2 = 0;
     MemoryBlock *vtBlk = findBlockByAddress(vtableAddr + slotIndex * 8, off2);
-    if (!vtBlk || !vtBlk->initialized || off2 + 8 > vtBlk->size)
+    if (!vtBlk || !vtBlk->initialized || off2 + 8 > vtBlk->size) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: slot unreadable"
+                     << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
+                     << " vtable=0x" << llvm::format_hex(vtableAddr, 16)
+                     << " slot=" << slotIndex << "\n";
       return false;
+    }
 
     uint64_t funcAddr = 0;
     for (unsigned i = 0; i < 8; ++i)
       funcAddr |= static_cast<uint64_t>(vtBlk->bytes()[off2 + i]) << (i * 8);
     auto funcIt = addressToFunction.find(funcAddr);
-    if (funcIt == addressToFunction.end())
+    if (funcIt == addressToFunction.end()) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: slot target unmapped"
+                     << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
+                     << " slot=" << slotIndex
+                     << " func=0x" << llvm::format_hex(funcAddr, 16) << "\n";
       return false;
+    }
 
     auto funcOp = rootModule.lookupSymbol<mlir::func::FuncOp>(funcIt->second);
-    if (!funcOp)
+    if (!funcOp) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: func symbol unavailable "
+                     << funcIt->second << "\n";
       return false;
+    }
 
     SmallVector<InterpretedValue, 4> invokeArgs;
     invokeArgs.push_back(InterpretedValue(wrapperAddr, 64));
     invokeArgs.append(extraArgs.begin(), extraArgs.end());
     SmallVector<InterpretedValue, 1> results;
     if (failed(interpretFuncBody(procId, funcOp, invokeArgs, results)) ||
-        results.empty())
+        results.empty()) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: callee failed "
+                     << funcIt->second << "\n";
       return false;
+    }
     outResult = results.front();
 
     if (!outResult.isX()) {
@@ -21466,8 +21509,15 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           }
         }
 
-        if (haveClassHandle && classHandle == 0)
+        if (haveClassHandle && classHandle == 0) {
+          if (traceUvmFactoryByType)
+            llvm::errs() << "[UVM-BYTYPE] invoke miss: class-handle=0"
+                         << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
+                         << " slot=" << slotIndex
+                         << " obj=0x" << llvm::format_hex(objAddr, 16)
+                         << " callee=" << funcIt->second << "\n";
           return false;
+        }
       }
     }
     return true;
@@ -21478,6 +21528,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // observe transient null returns in startup paths even with a valid wrapper
   // pointer. We bypass the indirection and dispatch directly through the
   // wrapper vtable.
+  if (traceUvmFactoryByType && calleeName.starts_with("create_by_type")) {
+    llvm::errs() << "[UVM-BYTYPE] helper call=" << calleeName
+                 << " overrides_configured="
+                 << (nativeFactoryOverridesConfigured ? 1 : 0)
+                 << " numOps=" << callOp.getNumOperands() << "\n";
+  }
   if (!nativeFactoryOverridesConfigured &&
       calleeName.starts_with("create_by_type_") &&
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 4) {
@@ -22074,6 +22130,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Intercept uvm_port_base::connect() at func.call level.
   // Some UVM code paths call connect directly instead of through vtables.
+  // Record the native connection graph, but do not bypass UVM connect()
+  // bookkeeping. UVM must still populate m_provided_by/m_provided_to so
+  // resolve_bindings builds m_imp_list for standard TLM port operations.
   auto isNativeConnectCallee = [&](llvm::StringRef name) {
     if (!name.contains("::connect"))
       return false;
@@ -22101,8 +22160,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           ++analysisPortTerminalCacheInvalidations;
       }
     }
-    // [SEQ-CONN] func.call connect diagnostic removed
-    return success();
+    // Fall through to the canonical UVM connect() implementation.
   }
 
   // Intercept uvm_port_base::size() only when the port is tracked in our
@@ -22140,12 +22198,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  // Intercept analysis_port::write at func.call level.
-  // uvm_analysis_port::write() is a non-virtual method, so it's called via
-  // func.call rather than call_indirect. We broadcast to connected subscribers
-  // using the same native connection map used by the call_indirect handler.
-  if (calleeName.contains("analysis_port") && calleeName.contains("::write") &&
-      !calleeName.contains("write_m_") && callOp.getNumOperands() >= 2) {
+  // Intercept analysis write entrypoints at func.call level.
+  // uvm_analysis_port::write() is usually direct func.call, while
+  // uvm_tlm_if_base::*::write may appear in virtualized forms.
+  if (isNativeAnalysisWriteCallee(calleeName) &&
+      callOp.getNumOperands() >= 2) {
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
     InterpretedValue txnVal = getValue(procId, callOp.getOperand(1));
     uint64_t rawPortAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
@@ -22237,6 +22294,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                callOp);
         --cState.callDepth;
       }
+      return success();
+    }
+    if (calleeName.contains("uvm_tlm_if_base")) {
+      if (traceAnalysisEnabled)
+        llvm::errs() << "[ANALYSIS-WRITE] NO terminals for tlm_if_base self=0x"
+                     << llvm::format_hex(portAddr, 0)
+                     << " (no-op)\n";
       return success();
     }
     // If no native connections, fall through to normal execution.
@@ -30272,6 +30336,115 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return std::nullopt;
     return addrOfOp.getGlobalName().str();
   };
+  auto tryResolveIndirectFromVtable = [&](Value calleeOperand)
+      -> std::optional<std::string> {
+    Value rawPtr = calleeOperand;
+    if (auto castOp = rawPtr.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getNumOperands() == 1 &&
+          isa<LLVM::LLVMPointerType>(castOp.getOperand(0).getType()))
+        rawPtr = castOp.getOperand(0);
+    }
+
+    auto funcPtrLoad = rawPtr.getDefiningOp<LLVM::LoadOp>();
+    if (!funcPtrLoad)
+      return std::nullopt;
+    auto vtableGEP = funcPtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+    if (!vtableGEP)
+      return std::nullopt;
+    auto vtableIndices = vtableGEP.getIndices();
+    if (vtableIndices.empty())
+      return std::nullopt;
+
+    int64_t methodIndex = -1;
+    auto lastIdx = vtableIndices[vtableIndices.size() - 1];
+    if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(lastIdx))
+      methodIndex = intAttr.getInt();
+    else if (auto dynIdx = llvm::dyn_cast_if_present<Value>(lastIdx)) {
+      InterpretedValue dynVal = getValue(procId, dynIdx);
+      if (!dynVal.isX())
+        methodIndex = static_cast<int64_t>(dynVal.getUInt64());
+    }
+    if (methodIndex < 0)
+      return std::nullopt;
+
+    // Direct vtable reference: resolve from vtable metadata.
+    if (auto addrOfOp = vtableGEP.getBase().getDefiningOp<LLVM::AddressOfOp>()) {
+      Operation *foundSymbol = mlir::SymbolTable::lookupNearestSymbolFrom(
+          callOp.getOperation(), addrOfOp.getGlobalNameAttr());
+      auto vtableGlobal = dyn_cast_or_null<LLVM::GlobalOp>(foundSymbol);
+      if (!vtableGlobal)
+        return std::nullopt;
+      auto vtableEntriesAttr =
+          dyn_cast_or_null<ArrayAttr>(vtableGlobal->getAttr("circt.vtable_entries"));
+      if (!vtableEntriesAttr)
+        return std::nullopt;
+      for (Attribute entryAttr : vtableEntriesAttr) {
+        auto entryArray = dyn_cast<ArrayAttr>(entryAttr);
+        if (!entryArray || entryArray.size() < 2)
+          continue;
+        auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+        auto symbolAttr = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+        if (!indexAttr || !symbolAttr)
+          continue;
+        if (indexAttr.getInt() == methodIndex)
+          return symbolAttr.getValue().str();
+      }
+      return std::nullopt;
+    }
+
+    // Indirect through object.vtable: derive global vtable symbol, then resolve
+    // method slot via global memory + addressToFunction.
+    auto vtablePtrLoad = vtableGEP.getBase().getDefiningOp<LLVM::LoadOp>();
+    if (!vtablePtrLoad)
+      return std::nullopt;
+    auto objGEP = vtablePtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+    if (!objGEP)
+      return std::nullopt;
+
+    std::string vtableGlobalName;
+    if (auto structTy = dyn_cast<LLVM::LLVMStructType>(objGEP.getElemType()))
+      if (structTy.isIdentified())
+        vtableGlobalName = (structTy.getName() + "::__vtable__").str();
+    if (vtableGlobalName.empty())
+      return std::nullopt;
+
+    // Prefer runtime vtable target when available (derived override dispatch).
+    InterpretedValue vtablePtrFieldAddrVal = getValue(procId, vtablePtrLoad.getAddr());
+    if (!vtablePtrFieldAddrVal.isX()) {
+      uint64_t fieldAddr = vtablePtrFieldAddrVal.getUInt64();
+      uint64_t fieldOff = 0;
+      MemoryBlock *fieldBlock = findMemoryBlockByAddress(fieldAddr, procId, &fieldOff);
+      if (fieldBlock && fieldBlock->initialized && fieldOff + 8 <= fieldBlock->size) {
+        uint64_t runtimeVtableAddr = 0;
+        for (unsigned i = 0; i < 8; ++i)
+          runtimeVtableAddr |=
+              static_cast<uint64_t>(fieldBlock->bytes()[fieldOff + i]) << (i * 8);
+        if (auto globalIt = addressToGlobal.find(runtimeVtableAddr);
+            globalIt != addressToGlobal.end() &&
+            globalMemoryBlocks.count(globalIt->second))
+          vtableGlobalName = globalIt->second;
+      }
+    }
+
+    auto globalIt = globalMemoryBlocks.find(vtableGlobalName);
+    if (globalIt == globalMemoryBlocks.end())
+      return std::nullopt;
+    auto &vtableBlock = globalIt->second;
+    uint64_t slotOffset = static_cast<uint64_t>(methodIndex) * 8;
+    if (slotOffset + 8 > vtableBlock.size)
+      return std::nullopt;
+
+    uint64_t resolvedFuncAddr = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      resolvedFuncAddr |=
+          static_cast<uint64_t>(vtableBlock[slotOffset + i]) << (i * 8);
+    if (resolvedFuncAddr == 0)
+      return std::nullopt;
+    if (auto funcIt = addressToFunction.find(resolvedFuncAddr);
+        funcIt != addressToFunction.end())
+      return funcIt->second;
+    return std::nullopt;
+  };
   auto findDirectCoverageRuntimeCalleeInSymbol = [&](StringRef symbolName)
       -> std::optional<std::string> {
     ModuleOp moduleOp = callOp->getParentOfType<ModuleOp>();
@@ -30407,18 +30580,33 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       InterpretedValue funcPtrVal = getValue(procId, calleeOperand);
       if (!funcPtrVal.isX()) {
         uint64_t funcAddr = funcPtrVal.getUInt64();
-        auto it = addressToFunction.find(funcAddr);
-        if (it != addressToFunction.end()) {
+        auto tryResolveByAddr = [&](uint64_t candidateAddr) -> bool {
+          auto it = addressToFunction.find(candidateAddr);
+          if (it == addressToFunction.end())
+            return false;
           resolvedCalleeName = it->second;
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: resolved indirect call 0x"
-                                  << llvm::format_hex(funcAddr, 16)
+                                  << llvm::format_hex(candidateAddr, 16)
                                   << " -> " << resolvedCalleeName << "\n");
-        } else {
+          return true;
+        };
+        if (!tryResolveByAddr(funcAddr)) {
+          const uint64_t maskedCandidates[] = {
+              funcAddr & ~uint64_t(1), funcAddr & ~uint64_t(3),
+              funcAddr & ~uint64_t(7)};
+          for (uint64_t masked : maskedCandidates)
+            if (tryResolveByAddr(masked))
+              break;
+        }
+        if (resolvedCalleeName.empty()) {
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: indirect call to 0x"
                                   << llvm::format_hex(funcAddr, 16)
                                   << " not in vtable map\n");
         }
       }
+      if (resolvedCalleeName.empty())
+        if (auto staticResolved = tryResolveIndirectFromVtable(calleeOperand))
+          resolvedCalleeName = *staticResolved;
     }
 
     if (resolvedCalleeName.empty()) {
@@ -30688,7 +30876,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       SmallVector<InterpretedValue, 4> args;
       SmallVector<Value, 4> callOperands;
-      for (Value arg : callOp.getOperands()) {
+      for (Value arg : callOp.getArgOperands()) {
         args.push_back(getValue(procId, arg));
         callOperands.push_back(arg);
       }
@@ -30800,7 +30988,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       SmallVector<InterpretedValue, 4> args;
       SmallVector<Value, 4> callOperands;
-      for (Value arg : callOp.getOperands()) {
+      for (Value arg : callOp.getArgOperands()) {
         args.push_back(getValue(procId, arg));
         callOperands.push_back(arg);
       }

@@ -1,5 +1,8 @@
-// RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm %s 2>&1 | FileCheck %s
+// RUN: circt-verilog --ir-moore --uvm-path=%S/../../../lib/Runtime/uvm-core %s 2>&1 | FileCheck %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top uvm_tlm_port_test_top --max-time=2000000000 2>&1 | FileCheck %s --check-prefix=SIM
 // REQUIRES: slang
+// REQUIRES: circt-sim
 
 //===----------------------------------------------------------------------===//
 // UVM TLM Port/Export/Imp Test
@@ -264,11 +267,13 @@ class fifo_tester extends uvm_component;
       txn.data = i * 1000;
       fifo.put(txn);
     end
-    if (fifo.size() == 3) begin
+    if (fifo.used() == 3 && fifo.size() == 4) begin
       `uvm_info(get_type_name(), "Test 2 PASS: Put 3 transactions", UVM_MEDIUM)
       test_pass_count++;
     end else begin
-      `uvm_error(get_type_name(), $sformatf("Test 2 FAIL: Expected size 3, got %0d", fifo.size()))
+      `uvm_error(get_type_name(),
+                 $sformatf("Test 2 FAIL: Expected used=3 size=4, got used=%0d size=%0d",
+                           fifo.used(), fifo.size()))
       test_fail_count++;
     end
 
@@ -287,11 +292,12 @@ class fifo_tester extends uvm_component;
     end
 
     // Test 4: Size unchanged after peek
-    if (fifo.size() == 3) begin
+    if (fifo.used() == 3) begin
       `uvm_info(get_type_name(), "Test 4 PASS: Size unchanged after peek", UVM_MEDIUM)
       test_pass_count++;
     end else begin
-      `uvm_error(get_type_name(), $sformatf("Test 4 FAIL: Size changed after peek: %0d", fifo.size()))
+      `uvm_error(get_type_name(),
+                 $sformatf("Test 4 FAIL: used changed after peek: %0d", fifo.used()))
       test_fail_count++;
     end
 
@@ -310,11 +316,12 @@ class fifo_tester extends uvm_component;
     end
 
     // Test 6: Size reduced after get
-    if (fifo.size() == 2) begin
+    if (fifo.used() == 2) begin
       `uvm_info(get_type_name(), "Test 6 PASS: Size reduced after get", UVM_MEDIUM)
       test_pass_count++;
     end else begin
-      `uvm_error(get_type_name(), $sformatf("Test 6 FAIL: Expected size 2, got %0d", fifo.size()))
+      `uvm_error(get_type_name(),
+                 $sformatf("Test 6 FAIL: Expected used 2, got %0d", fifo.used()))
       test_fail_count++;
     end
 
@@ -467,3 +474,10 @@ module uvm_tlm_port_test_top;
 endmodule
 
 // CHECK: moore.module @uvm_tlm_port_test_top
+
+// SIM: UVM TLM Port/Export/Imp Test
+// SIM: Test 10 PASS: can_get/can_peek false on empty
+// SIM: FIFO Tests: 10 passed, 0 failed
+// SIM: TLM Port/Export/Imp test complete
+// SIM-NOT: UVM_ERROR
+// SIM-NOT: UVM_FATAL

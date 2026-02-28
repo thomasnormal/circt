@@ -927,9 +927,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break;
         }
 
-        // Record port connect() in X-fallback path and bypass UVM body.
-        // This avoids uvm_port_base phase checks rejecting valid native
-        // connections as "late" while still preserving routing info.
+        // Record port connect() in X-fallback path.
+        // Do not bypass UVM connect() bookkeeping; allow canonical behavior.
         if (resolvedName.contains("uvm_port_base") &&
             resolvedName.contains("::connect") &&
             !resolvedName.contains("connect_phase") && args.size() >= 2) {
@@ -949,9 +948,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 ++analysisPortTerminalCacheInvalidations;
             }
           }
-          // [SEQ-CONN] X-fallback connect diagnostic removed
-          resolved = true;
-          break;
         }
 
         // Intercept analysis write entrypoints in X-fallback path.
@@ -1015,13 +1011,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             break;
           }
           // If no native connections, fall through to normal UVM body dispatch.
-        }
-
-        // Intercept resolve_bindings in X-fallback path — skip it.
-        if (resolvedName.contains("uvm_port_base") &&
-            resolvedName.contains("::resolve_bindings")) {
-          resolved = true;
-          break;
         }
 
         // Dispatch the call
@@ -1395,8 +1384,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break;
         }
 
-        // Record port connect() in static fallback path and bypass UVM body.
-        // This mirrors the direct call_indirect connect interceptor behavior.
+        // Record port connect() in static fallback path.
+        // Do not bypass UVM connect() bookkeeping; allow canonical behavior.
         if (resolvedName.contains("uvm_port_base") &&
             resolvedName.contains("::connect") &&
             !resolvedName.contains("connect_phase") && sArgs.size() >= 2) {
@@ -1410,9 +1399,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               invalidateUvmSequencerQueueCache(selfAddr3);
             }
           }
-          // [SEQ-CONN] static-fallback connect diagnostic removed
-          staticResolved = true;
-          break;
         }
 
         // Intercept resource_db in static fallback path.
@@ -1808,13 +1794,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             break;
           }
           // If no native connections, fall through to normal UVM body dispatch.
-        }
-
-        // Intercept resolve_bindings in non-X static fallback path.
-        if (resolvedName.contains("uvm_port_base") &&
-            resolvedName.contains("::resolve_bindings")) {
-          staticResolved = true;
-          break;
         }
 
         // [SEQ-UNMAPPED] diagnostic removed
@@ -4433,12 +4412,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     }
 
     // Intercept UVM port connect() via call_indirect.
-    // Stores port→provider connections natively and returns immediately,
-    // bypassing the UVM "Late Connection" phase check that incorrectly
-    // rejects connections when the phase hopper's state tracking marks
-    // end_of_elaboration as DONE before connect_phase callbacks finish.
-    // The native connection map is used by get_next_item, item_done,
-    // analysis write entrypoints, and other TLM operations.
+    // Record port→provider connections in the native map, but still execute the
+    // original UVM connect() implementation so m_provided_by/m_provided_to and
+    // resolved m_if pointers are populated for regular TLM port operations.
+    // The native map remains useful for analysis fast paths and sequencer
+    // rendezvous fallbacks.
     auto isNativeConnectCallee = [&](llvm::StringRef name) {
       if (!name.contains("::connect"))
         return false;
@@ -4468,21 +4446,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                      << " self=0x" << llvm::format_hex(selfAddr, 0)
                      << " provider=0x" << llvm::format_hex(providerAddr, 0)
                      << "\n";
-      // Return immediately — don't fall through to UVM code which would
-      // issue "Late Connection" warning and reject the connection.
-      return success();
-    }
-
-    // Intercept resolve_bindings on UVM ports — since we handle connections
-    // natively (bypassing UVM's m_provided_by/m_provided_to), the
-    // resolve_bindings check would fail with "connection count of 0 does not
-    // meet required minimum". We skip it entirely; our native connection map
-    // in analysisPortConnections handles all TLM routing.
-    if (calleeName.contains("uvm_port_base") &&
-        calleeName.contains("::resolve_bindings")) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  call_indirect: resolve_bindings intercepted (no-op)\n");
-      return success();
+      // Fall through to UVM connect() for canonical bookkeeping.
     }
 
     // Intercept analysis write entrypoints to broadcast to connected ports.
