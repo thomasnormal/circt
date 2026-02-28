@@ -14865,7 +14865,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
-               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+               "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
@@ -14887,7 +14888,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
-               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+               "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
@@ -14914,7 +14916,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
-               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+               "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
     return;
@@ -14931,7 +14934,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
-               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+               "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
@@ -14962,7 +14966,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
                "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
-               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+               "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
@@ -14987,19 +14992,12 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     out.push_back("CONST0_TO_1");
     return;
   }
-  if (modeName == "cnot0" || modeName == "cnot1") {
-    appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
-               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
-               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
-               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
-               "BXOR_EQ_TO_BOR_EQ", "BXOR_EQ_TO_BAND_EQ",
-               "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
-               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
-               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
-               "RESET_COND_NEGATE",
-               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
+  if (modeName == "cnot0") {
+    appendAll({"IF_COND_FALSE", "MUX_FORCE_FALSE"});
+    return;
+  }
+  if (modeName == "cnot1") {
+    appendAll({"IF_COND_TRUE", "MUX_FORCE_TRUE"});
     return;
   }
 }

@@ -16,6 +16,8 @@ intended mapping to Yosys `mutate -list` concepts.
 - `--mode NAME` / `--modes CSV`
   - accepted names: `inv|const0|const1|cnot0|cnot1|arith|control|balanced|all|stuck|invert|connect`
   - mode names map to native text-operator subsets (approximate Yosys-family mapping)
+  - `cnot0`/`cnot1` are polarity-specific in CIRCT-only mode (`if`/mux control
+    forced-low vs forced-high style mutations).
 - `--mode-count NAME=COUNT` / `--mode-counts CSV`
   - accepted in CIRCT-only mode
   - total must match `--count`
@@ -100,8 +102,19 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
 - Division/multiplication confusion mutations (`DIV_TO_MUL`, `MUL_TO_DIV`) use
   binary-site detection and intentionally skip operator-assignment/comment-like
   contexts (`/=`, `//`) and `[...]` range/index expressions.
+- Modulo/division confusion mutations (`MOD_TO_DIV`, `DIV_TO_MOD`) use the same
+  binary-site detection guardrails and skip operator-assignment contexts
+  (`%=`, `/=`) and `[...]` range/index expressions.
 - Unary arithmetic sign mutations (`UNARY_MINUS_DROP`) target unary-minus sites
   and avoid binary/compound contexts (`a-b`, `--`, `->`).
+- Compound-assignment arithmetic confusion mutations
+  (`PLUS_EQ_TO_MINUS_EQ`, `MINUS_EQ_TO_PLUS_EQ`, `MUL_EQ_TO_DIV_EQ`,
+  `DIV_EQ_TO_MUL_EQ`) target procedural compound-assignment tokens with
+  declaration/context guards and deterministic site indexing.
+- Compound-assignment shift-direction confusion mutations
+  (`SHL_EQ_TO_SHR_EQ`, `SHR_EQ_TO_SHL_EQ`) target procedural shift-assignment
+  tokens (`<<=`, `>>=`) and exclude arithmetic-shift assignment overlap
+  (`<<<=`, `>>>=`) via token-boundary guards.
 - Shift site detection (`SHL_TO_SHR`, `SHR_TO_SHL`) excludes triple-shift and
   shift-assignment spellings (`<<<`, `>>>`, `<<=`, `>>=`).
 - Signed right-shift mutations (`SHR_TO_ASHR`, `ASHR_TO_SHR`) distinguish
@@ -146,10 +159,17 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `MUX_SWAP_ARMS` targets assignment-context ternary expressions
     (`cond ? tval : fval`) and rewrites to (`cond ? fval : tval`) with
     statement-level disqualifier guards to avoid wildcard-case token confusion.
+- Ternary mux control-stuck mutations model control-value forcing bugs:
+  - `MUX_FORCE_TRUE` targets assignment-context ternary expressions and rewrites
+    to an always-true-arm equivalent (`cond ? tval : tval`).
+  - `MUX_FORCE_FALSE` targets assignment-context ternary expressions and
+    rewrites to an always-false-arm equivalent (`cond ? fval : fval`).
 - Conditional-polarity mutations model inverted control intent:
   - `IF_COND_NEGATE` targets `if (cond)` headers and rewrites to
     `if (!(cond))` with word-boundary token matching and balanced-parenthesis
     guards.
+  - `IF_COND_TRUE` and `IF_COND_FALSE` force `if` conditions to `1'b1` and
+    `1'b0` respectively.
 - Edge-polarity mutations model clock/reset sensitivity bugs:
   - `POSEDGE_TO_NEGEDGE` targets `posedge` event-control keywords with
     identifier-boundary guards.

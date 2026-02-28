@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic s,a,b,c,d, output logic y0,y1,y2);\n  always_comb begin\n    y0 = s ? a : b;\n    y1 = s ? c : d;\n    if (a && b) y2 = 1'b1; else y2 = 1'b0;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/cnot0.txt --count 80 --seed 9 --modes cnot0
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/cnot1.txt --count 80 --seed 9 --modes cnot1
+// RUN: grep -q 'NATIVE_IF_COND_FALSE' %t/cnot0.txt
+// RUN: grep -q 'NATIVE_MUX_FORCE_FALSE' %t/cnot0.txt
+// RUN: not grep -q 'NATIVE_IF_COND_TRUE' %t/cnot0.txt
+// RUN: not grep -q 'NATIVE_MUX_FORCE_TRUE' %t/cnot0.txt
+// RUN: grep -q 'NATIVE_IF_COND_TRUE' %t/cnot1.txt
+// RUN: grep -q 'NATIVE_MUX_FORCE_TRUE' %t/cnot1.txt
+// RUN: not grep -q 'NATIVE_IF_COND_FALSE' %t/cnot1.txt
+// RUN: not grep -q 'NATIVE_MUX_FORCE_FALSE' %t/cnot1.txt

@@ -36,6 +36,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "NBA_TO_BA",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+    "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
     "IF_COND_NEGATE",   "RESET_COND_NEGATE", "IF_COND_TRUE",   "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
@@ -266,6 +267,34 @@ static void buildCodeMask(StringRef text, SmallVectorImpl<uint8_t> &mask) {
         state = State::Normal;
       continue;
     }
+  }
+
+  // Preprocessor directives (for example `timescale, `define, `include) are
+  // not semantic mutation targets and rewriting them can invalidate the file.
+  // Mask directive lines after the lexical pass so operator scanners skip them.
+  for (size_t lineStart = 0, e = text.size(); lineStart < e;) {
+    size_t lineEnd = text.find('\n', lineStart);
+    if (lineEnd == StringRef::npos)
+      lineEnd = e;
+
+    size_t i = lineStart;
+    while (i < lineEnd) {
+      if (!mask[i]) {
+        ++i;
+        continue;
+      }
+      if (std::isspace(static_cast<unsigned char>(text[i]))) {
+        ++i;
+        continue;
+      }
+      break;
+    }
+
+    if (i < lineEnd && mask[i] && text[i] == '`')
+      for (size_t k = i; k < lineEnd; ++k)
+        mask[k] = 0;
+
+    lineStart = lineEnd < e ? lineEnd + 1 : e;
   }
 }
 
@@ -2224,6 +2253,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectMuxSwapArmSites(designText, codeMask, sites);
     return;
   }
+  if (op == "MUX_FORCE_TRUE") {
+    collectMuxSwapArmSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "MUX_FORCE_FALSE") {
+    collectMuxSwapArmSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "IF_COND_NEGATE") {
     collectIfConditionNegateSites(designText, codeMask, sites);
     return;
@@ -2436,7 +2473,8 @@ static std::string getOpFamily(StringRef op) {
       op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE" ||
       op == "RESET_POSEDGE_TO_NEGEDGE" || op == "RESET_NEGEDGE_TO_POSEDGE")
     return "timing";
-  if (op == "MUX_SWAP_ARMS")
+  if (op == "MUX_SWAP_ARMS" || op == "MUX_FORCE_TRUE" ||
+      op == "MUX_FORCE_FALSE")
     return "mux";
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
@@ -3271,6 +3309,46 @@ static bool applyMuxSwapArmsAt(StringRef text, ArrayRef<uint8_t> codeMask,
   return true;
 }
 
+static bool applyMuxForceArmAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                               size_t questionPos, bool forceTrueArm,
+                               std::string &mutatedText) {
+  size_t colonPos = findMatchingTernaryColon(text, codeMask, questionPos);
+  if (colonPos == StringRef::npos)
+    return false;
+  size_t endDelim = findTernaryEndDelimiter(text, codeMask, colonPos);
+  if (endDelim == StringRef::npos)
+    return false;
+
+  size_t trueStart = findNextCodeNonSpace(text, codeMask, questionPos + 1);
+  size_t trueEnd = findPrevCodeNonSpace(text, codeMask, colonPos);
+  size_t falseStart = findNextCodeNonSpace(text, codeMask, colonPos + 1);
+  size_t falseEnd = findPrevCodeNonSpace(text, codeMask, endDelim);
+  if (trueStart == StringRef::npos || trueEnd == StringRef::npos ||
+      falseStart == StringRef::npos || falseEnd == StringRef::npos ||
+      trueStart > trueEnd || falseStart > falseEnd)
+    return false;
+
+  StringRef selectedExpr = forceTrueArm ? text.slice(trueStart, trueEnd + 1)
+                                        : text.slice(falseStart, falseEnd + 1);
+  StringRef trueToColonWS = text.slice(trueEnd + 1, colonPos);
+  StringRef colonToFalseWS = text.slice(colonPos + 1, falseStart);
+  StringRef falseSuffixWS = text.slice(falseEnd + 1, endDelim);
+
+  std::string forced;
+  forced.reserve(text.size() + 8);
+  forced += text.slice(0, trueStart).str();
+  forced += selectedExpr.str();
+  forced += trueToColonWS.str();
+  forced.push_back(':');
+  forced += colonToFalseWS.str();
+  forced += selectedExpr.str();
+  forced += falseSuffixWS.str();
+  forced += text.drop_front(endDelim).str();
+
+  mutatedText = std::move(forced);
+  return true;
+}
+
 static bool applyIfElseSwapAt(StringRef text, ArrayRef<uint8_t> codeMask,
                               size_t ifPos, std::string &mutatedText) {
   size_t condOpen = StringRef::npos;
@@ -3410,6 +3488,12 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, strlen("negedge"), "posedge");
   if (op == "MUX_SWAP_ARMS")
     return applyMuxSwapArmsAt(text, codeMask, pos, mutatedText);
+  if (op == "MUX_FORCE_TRUE")
+    return applyMuxForceArmAt(text, codeMask, pos, /*forceTrueArm=*/true,
+                              mutatedText);
+  if (op == "MUX_FORCE_FALSE")
+    return applyMuxForceArmAt(text, codeMask, pos, /*forceTrueArm=*/false,
+                              mutatedText);
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE") {
     size_t condOpen = StringRef::npos;

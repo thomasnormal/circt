@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf '`timescale 1ns/1ns\nmodule top(input logic [7:0] a, b, output logic [7:0] y);\n  assign y = a / b;\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_DIV_TO_MOD@1\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: `timescale 1ns/1ns
+// MUTANT: assign y = a % b;

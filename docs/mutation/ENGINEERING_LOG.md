@@ -1,5 +1,80 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (cnot polarity tightening + preprocessor-safe div/mul mutations)
+
+- realizations:
+  - `cnot0` and `cnot1` in CIRCT-only mode were effectively the same broad
+    control set, which reduced semantic distinctness versus Yosys-style
+    polarity intent.
+  - Weighted parity sweeps surfaced a real native-mutator bug: division-family
+    rewrites could mutate `` `timescale 1ns/1ns`` into invalid directives
+    (for example `1ns%1ns`, `1ns*1ns`), causing xrun parse failures.
+
+- changes made:
+  - Added native control-stuck mux operators:
+    - `MUX_FORCE_TRUE` (`cond ? t : t`)
+    - `MUX_FORCE_FALSE` (`cond ? f : f`)
+  - Integrated these in:
+    - planner op catalog, site collection, family classification, and apply
+      rewrites (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`control`, `connect`, `invert`, `inv`,
+      `balanced/all`) in `tools/circt-mut/circt-mut.cpp`
+  - Tightened primitive mode semantics:
+    - `cnot0` now emits `IF_COND_FALSE`/`MUX_FORCE_FALSE`
+    - `cnot1` now emits `IF_COND_TRUE`/`MUX_FORCE_TRUE`
+  - Fixed preprocessor mutation bug:
+    - directive lines whose first non-space token is backtick are masked from
+      mutation-site scanning in `buildCodeMask`.
+  - Updated native-op validator allowlist:
+    - `utils/run_mutation_mcy_examples.sh` now accepts
+      `IF_COND_TRUE|IF_COND_FALSE|MUX_FORCE_TRUE|MUX_FORCE_FALSE`.
+  - Added TDD regressions:
+    - `test/Tools/native-create-mutated-mux-force-true-site-index.test`
+    - `test/Tools/native-create-mutated-mux-force-false-site-index.test`
+    - `test/Tools/circt-mut-generate-circt-only-cnot-polarity-distinct.test`
+    - `test/Tools/native-create-mutated-div-to-mod-skip-timescale-directive.test`
+
+- validation:
+  - Focused lit slice over new and adjacent tests: `6 passed`.
+  - Deterministic baseline parity on seeded harness:
+    - xrun: `COV=87.50`, `SIG=38962b64`
+    - circt: `COV=87.50`, `SIG=38962b64`
+  - cnot-focused parity campaign (`count=20`, `seed=20260228`):
+    `ok=20`, `mismatch=0`, `fail=0`.
+  - weighted all-mode parity campaign (`count=40`, `seed=20260229`):
+    - before fix: `ok=37`, `xrun_fail=3` (all due malformed `timescale`)
+    - after fix: `ok=40`, `mismatch=0`, `fail=0`.
+
+## 2026-02-28 (empty-sensitivity wait semantics parity fix)
+
+- realizations:
+  - A deterministic parity mismatch (`NATIVE_IF_COND_TRUE@2`) was not random;
+    circt-sim hit `DELTA_OVERFLOW` at time 0 while xrun completed.
+  - The mismatch came from simulator semantics, not mutation generation:
+    mutated `always_comb` lowered to `llhd.wait ^bb1` (no delay, no observed).
+  - LLHD-correct behavior here is "wait forever" (no wake condition), not
+    per-delta re-arm.
+
+- root cause:
+  - `LLHDProcessInterpreter::interpretWait` had an empty-sensitivity
+    `scheduleNextDelta` re-arm path, creating an artificial zero-time loop.
+
+- fix:
+  - Removed delta re-arm fallback for empty-sensitivity waits.
+  - Implemented semantic handling via
+    `suspendProcessForEvents(procId, SensitivityList())`.
+  - Removed dead fallback bookkeeping field
+    `emptySensitivityFallbackExecuted`.
+
+- validation:
+  - Added regression:
+    `test/Tools/circt-sim/always-comb-constant-no-sensitivity.sv`.
+  - Full `test/Tools/circt-sim` sweep: `898/898 passed`.
+  - Re-ran mutation parity on generated batch (`m1..m23`) with functional
+    coverage enabled in xrun:
+    `23/23` summary matches in
+    `/tmp/mut_parity_broad_1772286797/parity_after_fix.tsv`.
+
 ## 2026-02-28 (compound modulo/division assignment mutation class)
 
 - realizations:
