@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, rst_n, input logic a, output logic y);\n  always_ff @(posedge clk or negedge rst_n) begin\n    if (!rst_n) y <= 1'b0;\n    else y <= a;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 200 --seed 9 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_POSEDGE_TO_NEGEDGE' %t/mutations.txt
+// RUN: grep -q 'NATIVE_NEGEDGE_TO_POSEDGE' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 200

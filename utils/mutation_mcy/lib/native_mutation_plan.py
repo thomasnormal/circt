@@ -17,9 +17,12 @@ NATIVE_OPS_ALL = [
     "AND_TO_OR",
     "OR_TO_AND",
     "XOR_TO_OR",
+    "IF_COND_NEGATE",
     "UNARY_NOT_DROP",
     "CONST0_TO_1",
     "CONST1_TO_0",
+    "POSEDGE_TO_NEGEDGE",
+    "NEGEDGE_TO_POSEDGE",
     "MUX_SWAP_ARMS",
 ]
 
@@ -36,6 +39,8 @@ OP_PATTERNS = {
     "UNARY_NOT_DROP": r"!\s*(?=[A-Za-z_(])",
     "CONST0_TO_1": r"1'b0|1'd0",
     "CONST1_TO_0": r"1'b1|1'd1",
+    "POSEDGE_TO_NEGEDGE": r"\bposedge\b",
+    "NEGEDGE_TO_POSEDGE": r"\bnegedge\b",
 }
 
 
@@ -109,6 +114,10 @@ def is_code_span(mask: list[bool], start: int, end: int) -> bool:
 
 def is_code_at(mask: list[bool], pos: int) -> bool:
     return 0 <= pos < len(mask) and mask[pos]
+
+
+def is_identifier_body(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", "$")
 
 
 def find_prev_code_nonspace(text: str, mask: list[bool], pos: int) -> int:
@@ -409,6 +418,59 @@ def find_matching_ternary_colon(text: str, mask: list[bool], question_pos: int) 
     return -1
 
 
+def find_matching_paren(text: str, mask: list[bool], open_pos: int) -> int:
+    if open_pos < 0 or open_pos >= len(text):
+        return -1
+    if not is_code_at(mask, open_pos) or text[open_pos] != "(":
+        return -1
+    depth = 0
+    i = open_pos
+    n = len(text)
+    while i < n:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+            if depth < 0:
+                return -1
+        i += 1
+    return -1
+
+
+def count_if_cond_negate_sites(text: str, mask: list[bool]) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(mask, i, i + 2) or not text.startswith("if", i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+        nxt = text[i + 2] if i + 2 < n and is_code_at(mask, i + 2) else ""
+        if (prev and is_identifier_body(prev)) or (nxt and is_identifier_body(nxt)):
+            i += 1
+            continue
+        j = i + 2
+        while j < n and ((not is_code_at(mask, j)) or text[j].isspace()):
+            j += 1
+        if j >= n or not is_code_at(mask, j) or text[j] != "(":
+            i += 1
+            continue
+        k = find_matching_paren(text, mask, j)
+        if k < 0:
+            i += 1
+            continue
+        count += 1
+        i += 1
+    return count
+
+
 def count_mux_swap_arms_sites(text: str, mask: list[bool]) -> int:
     count = 0
     for i, ch in enumerate(text):
@@ -445,6 +507,27 @@ def count_literal_token(text: str, token: str, mask: list[bool]) -> int:
         if is_code_span(mask, pos, pos + len(token)):
             count += 1
         pos += len(token)
+
+
+def count_keyword_token(text: str, token: str, mask: list[bool]) -> int:
+    if not token:
+        return 0
+    count = 0
+    i = 0
+    n = len(text)
+    tlen = len(token)
+    while i + tlen <= n:
+        if not is_code_span(mask, i, i + tlen) or not text.startswith(token, i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+        nxt = text[i + tlen] if i + tlen < n and is_code_at(mask, i + tlen) else ""
+        prev_boundary = (not prev) or (not is_identifier_body(prev))
+        next_boundary = (not nxt) or (not is_identifier_body(nxt))
+        if prev_boundary and next_boundary:
+            count += 1
+        i += 1
+    return count
 
 
 def count_relational_comparator_token(text: str, token: str, mask: list[bool]) -> int:
@@ -499,8 +582,14 @@ def count_relational_comparator_token(text: str, token: str, mask: list[bool]) -
 
 
 def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> int:
+    if op == "IF_COND_NEGATE":
+        return count_if_cond_negate_sites(design_text, mask)
     if op == "MUX_SWAP_ARMS":
         return count_mux_swap_arms_sites(design_text, mask)
+    if op == "POSEDGE_TO_NEGEDGE":
+        return count_keyword_token(design_text, "posedge", mask)
+    if op == "NEGEDGE_TO_POSEDGE":
+        return count_keyword_token(design_text, "negedge", mask)
     if op == "LE_TO_LT":
         return count_relational_comparator_token(design_text, "<=", mask)
     if op == "GE_TO_GT":

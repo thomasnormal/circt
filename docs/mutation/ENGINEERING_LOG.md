@@ -1,5 +1,35 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (if-condition polarity mutation class)
+
+- realizations:
+  - Inverted `if` conditions are a common and realistic control-path bug class
+    not captured by pure operator substitutions.
+  - Mutation campaigns need explicit liveness caps (`timeout`, `--max-time`,
+    `--max-deltas`) because some control mutations intentionally create
+    non-terminating behavior (for example clock-toggle logic inversion).
+  - Intermittent `Permission denied` on `circt-sim` invocation appears as an
+    infra flake; re-running the same command in-place succeeds and should be
+    treated as non-semantic noise in parity campaigns.
+
+- changes made:
+  - Added native operator `IF_COND_NEGATE`:
+    - planner site detection via `if` word-boundary token matching and
+      balanced-parenthesis parsing,
+    - mutator rewrite from `if (cond)` to `if (!(cond))`,
+    - fallback planner support in `native_mutation_plan.py`.
+  - Extended CIRCT-only mode mappings (`control`, `connect`, `cnot0/cnot1`,
+    `inv`/`invert`, `balanced/all`) to include `IF_COND_NEGATE`.
+  - Added regression tests:
+    - `native-create-mutated-if-cond-negate-site-index`
+    - `native-create-mutated-if-cond-negate-nested-cond`
+    - `circt-mut-generate-circt-only-control-mode-if-cond-negate-op`
+  - Re-ran seeded xrun-vs-circt campaigns:
+    - single-module signature campaign (`24` mutants): `ok=22`,
+      no mismatches; remaining failures were bounded liveness/infra cases.
+    - `cov_intro_seeded`-style coverage campaign (`24` mutants): no semantic
+      mismatches on terminating mutants; `IF_COND_NEGATE` parity matched.
+
 ## 2026-02-28 (mux-arm swap mutation class)
 
 - realizations:
@@ -390,3 +420,50 @@
   - direct-op parity checks:
     - `NATIVE_EQ_TO_CASEEQ@1`: `circt_sig==xrun_sig`
     - `NATIVE_NEQ_TO_CASENEQ@1`: `circt_sig==xrun_sig`
+
+## 2026-02-28 (edge-polarity fault class + native-op validator alignment)
+
+- realizations:
+  - Event-control edge polarity (`posedge` vs `negedge`) is a realistic and
+    semantically distinct control/timing fault class (clock/reset sensitivity
+    bugs).
+  - `run_mutation_mcy_examples.sh` had drifted to a legacy native-op allowlist;
+    the validator rejected many supported native operators and needed to be
+    synchronized with current CIRCT-only operator coverage.
+  - Xcelium/xrun does not enable covergroup methods by default; parity harnesses
+    should use explicit signatures/counters unless functional coverage is
+    explicitly enabled.
+
+- changes made:
+  - Added native operators:
+    - `POSEDGE_TO_NEGEDGE`
+    - `NEGEDGE_TO_POSEDGE`
+  - Implemented planner-side keyword site detection with identifier-boundary
+    checks and integrated both operators into timing-family classification.
+  - Implemented mutator-side rewrites and site-index behavior for both
+    operators.
+  - Integrated operators into CIRCT-only mode mappings:
+    - `control`, `connect`, `inv`/`invert`, `balanced/all`, and primitive
+      `cnot0/cnot1`.
+  - Extended Python fallback planner (`native_mutation_plan.py`) with matching
+    operator support and keyword site counting.
+  - Added/updated regression tests:
+    - `native-create-mutated-posedge-to-negedge-site-index`
+    - `native-create-mutated-negedge-to-posedge-site-index`
+    - `native-mutation-plan-edge-polarity`
+    - `circt-mut-generate-circt-only-control-mode-edge-polarity-ops`
+    - `run-mutation-mcy-examples-native-mutation-ops-edge-polarity-pass`
+    - updated `circt-mut-generate-circt-only-weighted-fault-class-diversity`
+      to include edge-polarity operators in control-family coverage checks.
+  - Synchronized `run_mutation_mcy_examples.sh` native-op token validation with
+    the full native CIRCT-only operator set.
+
+- validation:
+  - focused lit slice for new edge operators and script validation: `7 passed`
+  - targeted xrun-vs-circt parity checks on fixed-seed `cov_intro_seeded`
+    harness:
+    - baseline: `SIG=2921849304`, `COV_TOTAL=84.38` (match)
+    - `NATIVE_POSEDGE_TO_NEGEDGE@1`: match
+    - `NATIVE_NEGEDGE_TO_POSEDGE@1`: match
+    - `NATIVE_IF_COND_NEGATE@1`: match
+  - seeded mini-campaign (`10` balanced mutants): `ok=10 mismatch=0 fail=0`.

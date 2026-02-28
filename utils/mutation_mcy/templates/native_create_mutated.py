@@ -449,6 +449,93 @@ def statement_looks_like_typed_declaration(stmt_start: int, pos: int) -> bool:
     return True
 
 
+def is_identifier_body(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", "$")
+
+
+def find_matching_paren(open_pos: int) -> int:
+    if open_pos < 0 or open_pos >= len(text):
+        return -1
+    if not is_code_at(open_pos) or text[open_pos] != "(":
+        return -1
+    depth = 0
+    i = open_pos
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+            if depth < 0:
+                return -1
+        i += 1
+    return -1
+
+
+def find_if_cond_token(nth: int):
+    if nth < 1:
+        return (-1, -1, -1)
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(i, i + 2) or not text.startswith("if", i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 2] if i + 2 < n and is_code_at(i + 2) else ""
+        if (prev and is_identifier_body(prev)) or (nxt and is_identifier_body(nxt)):
+            i += 1
+            continue
+        j = i + 2
+        while j < n and ((not is_code_at(j)) or text[j].isspace()):
+            j += 1
+        if j >= n or not is_code_at(j) or text[j] != "(":
+            i += 1
+            continue
+        k = find_matching_paren(j)
+        if k < 0:
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return (i, j, k)
+        i += 1
+        continue
+    return (-1, -1, -1)
+
+
+def find_keyword_token(keyword: str, nth: int) -> int:
+    if nth < 1 or not keyword:
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    klen = len(keyword)
+    while i + klen <= n:
+        if not is_code_span(i, i + klen) or not text.startswith(keyword, i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + klen] if i + klen < n and is_code_at(i + klen) else ""
+        prev_boundary = (not prev) or (not is_identifier_body(prev))
+        next_boundary = (not nxt) or (not is_identifier_body(nxt))
+        if not prev_boundary or not next_boundary:
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_matching_ternary_colon(question_pos: int) -> int:
     paren_depth = 0
     bracket_depth = 0
@@ -1440,6 +1527,16 @@ elif op == 'NBA_TO_BA':
     if idx >= 0:
         text = text[:idx] + '=' + text[idx + 2:]
         changed = True
+elif op == 'POSEDGE_TO_NEGEDGE':
+    idx = find_keyword_token('posedge', site_index)
+    if idx >= 0:
+        text = text[:idx] + 'negedge' + text[idx + len('posedge'):]
+        changed = True
+elif op == 'NEGEDGE_TO_POSEDGE':
+    idx = find_keyword_token('negedge', site_index)
+    if idx >= 0:
+        text = text[:idx] + 'posedge' + text[idx + len('negedge'):]
+        changed = True
 elif op == 'MUX_SWAP_ARMS':
     q_idx, colon_idx, end_delim = find_ternary_mux_token(site_index)
     if q_idx >= 0 and colon_idx >= 0 and end_delim >= 0:
@@ -1467,6 +1564,12 @@ elif op == 'MUX_SWAP_ARMS':
             )
             text = swapped
             changed = True
+elif op == 'IF_COND_NEGATE':
+    _, cond_open, cond_close = find_if_cond_token(site_index)
+    if cond_open >= 0 and cond_close >= cond_open:
+        cond_expr = text[cond_open + 1:cond_close]
+        text = text[:cond_open + 1] + '!(' + cond_expr + ')' + text[cond_close:]
+        changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
 elif op == 'UNARY_BNOT_DROP':
