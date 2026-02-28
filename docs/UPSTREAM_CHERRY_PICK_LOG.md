@@ -254,3 +254,41 @@ Local follow-up commits kept in stack:
   upstream picks above; targeted build/test validation was used instead.
 - The Arc time-lowering pick was effectively already present in code; only a
   minor test-file whitespace delta remained after conflict reconciliation.
+
+## Refresh (2026-02-28, RTG/ImportVerilog incremental pass)
+
+- Starting staging head for this pass: `b13803546`
+- Current staging head after this pass: `9c15977a3`
+- Stack size vs `origin/main`: `70` commits ahead
+
+### Additional Picks In This Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `9e60e9805` | `353ac13ab` | [RTG][LinearScanRegisterAllocation] Fix nightly (#9728) |
+| `9c15977a3` | `89778e1be` | [ImportVerilog] Fix silent failure on unsupported system calls (#9556) |
+
+### Validation Added In This Pass
+
+- Build:
+  - `utils/ninja-with-lock.sh -C build_stage circt-opt`
+- RTG-focused lit:
+  - `/home/thomas-ahle/circt/build_test/bin/llvm-lit -sv build_stage/test/Dialect/RTG/Transform/linear-scan-register-allocation.mlir build_stage/test/Dialect/RTG/Transform/elaboration.mlir`
+  - `/home/thomas-ahle/circt/build_test/bin/llvm-lit -sv build_stage/test/Dialect/RTG/IR/basic.mlir build_stage/test/Dialect/RTG/IR/canonicalization.mlir build_stage/test/circt-verilog/library-files.sv build_stage/test/circt-verilog/library-locations.sv build_stage/test/circt-verilog/command-files.sv`
+- ImportVerilog `errors.sv` validation status:
+  - `llvm-lit` invocation of `build_stage/test/Conversion/ImportVerilog/errors.sv` is not usable in this staging build because `build_stage/bin/circt-translate` lacks `--import-verilog`.
+  - The regression test update was still retained; this environment mismatch is pre-existing and unrelated to the patch logic.
+
+### Deferred / Superseded In This Pass
+
+- Conflicted and skipped as superseded by newer local implementations:
+  - `d3ddbe121` (queue `$` indexing), `79369384c` (`$sampled` result usability), `fd13bc452` (`NegRealOp` conversion test/addition), `e0b24742a` (`VerifToSMT` assertions-in-functions), `0f99432e5` (Arc time-op lowering).
+- Attempted and resolved to empty cherry-picks (already present functionally):
+  - `c1ef24514`, `11cc66244`, `ec285f538`, `a0b58ccce`, `7a25c970c`, `49e7f3af0`, `6e3d168f6`, `6542026a9`, `5f7d374a7`.
+- Skipped due path/layout divergence:
+  - `16b706093` (`TraceEncoder.h` modify/delete conflict; file layout diverged locally).
+
+### Engineering Notes
+
+- The current branch already carries a large portion of recent upstream fixes under different local commit hashes, so many `git cherry` `+` candidates become empty when re-applied.
+- RTG cherry-picks remain the highest-signal/lowest-risk area for this tree at the moment; ImportVerilog queue/sampled series should be handled in a dedicated sync pass because local frontend changes are substantial.
