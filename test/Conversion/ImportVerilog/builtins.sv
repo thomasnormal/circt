@@ -403,17 +403,34 @@ module SampleValueBuiltins #() (
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   rising_clk: assert property (@(posedge clk_i) clk_i |=> $rose(clk_i));
+  // Check that sampled-value function results are usable by non-LTL Moore ops.
+  // CHECK: moore.int_to_logic
+  // CHECK: moore.eq {{.*}} : l1 -> l1
+  // CHECK: verif.{{(clocked_)?}}assert {{.*}} label "rose_eq"
+  rose_eq: assert property (@(posedge clk_i) clk_i == $rose(clk_i));
   // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.not
   // CHECK: moore.and
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
+  // CHECK: moore.int_to_logic
+  // CHECK: moore.eq {{.*}} : l1 -> l1
+  // CHECK: verif.{{(clocked_)?}}assert {{.*}} label "fell_eq"
+  fell_eq: assert property (@(posedge clk_i) clk_i == $fell(clk_i));
   // CHECK: moore.past %{{.+}} delay 1
   // CHECK: moore.case_eq
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));
+  // CHECK: moore.int_to_logic
+  // CHECK: moore.eq {{.*}} : l1 -> l1
+  // CHECK: verif.{{(clocked_)?}}assert {{.*}} label "stable_eq"
+  stable_eq: assert property (@(posedge clk_i) clk_i == $stable(clk_i));
+  // CHECK: moore.int_to_logic
+  // CHECK: moore.eq {{.*}} : l1 -> l1
+  // CHECK: verif.{{(clocked_)?}}assert {{.*}} label "changed_eq"
+  changed_eq: assert property (@(posedge clk_i) clk_i == $changed(clk_i));
 
 endmodule
 

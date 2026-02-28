@@ -145,6 +145,28 @@ module QueueDollarSliceTest;
     end
 endmodule
 
+/// Test nested use of `$` in queue index arithmetic.
+/// This mirrors expressions like q1[$ + q2[$]], where each `$` must bind to
+/// the queue in its own indexing context.
+// CHECK-LABEL: moore.module @QueueNestedDollarIndexTest() {
+module QueueNestedDollarIndexTest;
+    int q1[$];
+    int q2[$];
+    int res;
+
+    initial begin
+        // CHECK: moore.array.size
+        // CHECK: moore.sub
+        // CHECK: moore.array.size
+        // CHECK: moore.sub
+        // CHECK: moore.dyn_extract
+        // CHECK: moore.add
+        // CHECK: moore.dyn_extract
+        // CHECK: moore.blocking_assign %res
+        res = q1[$ + q2[$]];
+    end
+endmodule
+
 /// Test queue with different element types
 // CHECK-LABEL: moore.module @QueueTypesTest() {
 module QueueTypesTest;

@@ -292,3 +292,35 @@ Local follow-up commits kept in stack:
 
 - The current branch already carries a large portion of recent upstream fixes under different local commit hashes, so many `git cherry` `+` candidates become empty when re-applied.
 - RTG cherry-picks remain the highest-signal/lowest-risk area for this tree at the moment; ImportVerilog queue/sampled series should be handled in a dedicated sync pass because local frontend changes are substantial.
+
+## ImportVerilog Regression Coverage Sync (2026-02-28, queue/sampled follow-up)
+
+- Starting staging head for this pass: `9c15977a3`
+- Current staging head after this pass: pending commit
+
+### Scope
+
+- Follow-up to previously deferred upstream commits:
+  - `d3ddbe121` (`$` literal in queue indexing)
+  - `79369384c` (sampled-value results usable by Moore ops)
+- Local tree already had the functional lowering support, but test coverage was missing for:
+  - nested queue `$` indexing paths in `queues.sv`
+  - direct `== $rose/$fell/$stable/$changed` assertion forms in `builtins.sv`
+
+### Local Changes
+
+- Added `QueueNestedDollarIndexTest` to `test/Conversion/ImportVerilog/queues.sv`.
+- Added explicit sampled-value equality checks (`rose_eq`, `fell_eq`, `stable_eq`, `changed_eq`) to `test/Conversion/ImportVerilog/builtins.sv`.
+
+### Validation Added In This Pass
+
+- Targeted FileCheck + frontend parsing checks:
+  - `/home/thomas-ahle/circt/build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/queues.sv | /home/thomas-ahle/circt/build_test/bin/FileCheck test/Conversion/ImportVerilog/queues.sv`
+  - `/home/thomas-ahle/circt/build_test/bin/circt-verilog --ir-moore test/Conversion/ImportVerilog/queues.sv`
+  - `/home/thomas-ahle/circt/build_test/bin/circt-translate --import-verilog test/Conversion/ImportVerilog/builtins.sv | /home/thomas-ahle/circt/build_test/bin/FileCheck test/Conversion/ImportVerilog/builtins.sv`
+  - `/home/thomas-ahle/circt/build_test/bin/circt-verilog --no-uvm-auto-include --ir-moore test/Conversion/ImportVerilog/builtins.sv`
+
+### Engineering Notes
+
+- The first version of the new `builtins.sv` checks was too strict about SSA/value ordering and assertion op flavor (`verif.clocked_assert` vs `verif.assert`), and failed.
+- Checks were relaxed to assert semantic presence (`moore.int_to_logic`, `moore.eq`, labeled assert) without constraining unstable textual details.
