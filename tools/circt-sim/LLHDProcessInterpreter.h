@@ -1896,10 +1896,6 @@ private:
   mlir::LogicalResult checkUvmRunTestEntry(ProcessId procId,
                                            llvm::StringRef calleeName);
 
-  /// Returns true when the active function/call stack is within UVM phase
-  /// execution (phase or phase_hopper frames).
-  bool isInUvmPhaseStackContext(ProcessId procId);
-
   /// Returns true when the active function/call stack is within run_test().
   bool isInUvmRunTestContext(ProcessId procId);
 
