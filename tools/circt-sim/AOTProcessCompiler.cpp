@@ -1148,9 +1148,30 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
   processOp.walk([&](llhd::WaitOp w) { waits.push_back(w); });
 
   if (waits.empty()) {
-    // No wait ops → one-shot callback (seq.initial, llhd.combinational).
+    // No wait ops can still hide suspension-sensitive behavior behind calls
+    // (for example UVM startup helpers reached from the process body). Keep
+    // these on interpreter/coroutine semantics until process-call native
+    // policy is unified with func.call/call_indirect dispatch guards.
+    bool hasCallOps = false;
+    processOp.walk([&](Operation *op) {
+      if (isa<func::CallOp, func::CallIndirectOp, LLVM::CallOp>(op)) {
+        hasCallOps = true;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (hasCallOps) {
+      plan.model = ExecModel::Coroutine;
+      LLVM_DEBUG(
+          llvm::dbgs()
+          << "[classify] → Coroutine: no waits but contains call op(s)\n");
+      return plan;
+    }
+
+    // Pure no-wait process with no calls → one-shot callback.
     plan.model = ExecModel::OneShotCallback;
-    LLVM_DEBUG(llvm::dbgs() << "[classify] → OneShotCallback: no waits\n");
+    LLVM_DEBUG(llvm::dbgs()
+               << "[classify] → OneShotCallback: no waits, no calls\n");
     return plan;
   }
 

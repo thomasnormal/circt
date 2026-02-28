@@ -1,6 +1,7 @@
 // RUN: circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=STATS
+// RUN: env CIRCT_AOT_TRACE_COMPILED_PROCESSES=1 circt-sim %s --compiled=%t.so --max-time=1 2>&1 | FileCheck %s --check-prefix=TRACE
 //
 // One-shot processes with call sites are conservatively kept on interpreted
 // dispatch. Native one-shot process callbacks bypass func.call/call_indirect
@@ -12,6 +13,8 @@
 //
 // STATS: Compiled callback invocations:   0
 // STATS: call=1
+//
+// TRACE: compiled-proc name={{.*}} kind=CALLBACK model=Coroutine install=deferred
 
 llvm.func @id_llvm(%x: i1) -> i1 {
   llvm.return %x : i1
