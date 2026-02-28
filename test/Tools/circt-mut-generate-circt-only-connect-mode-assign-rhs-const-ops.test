@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, input logic a,b,c,d, output logic y,z,w,q);\n  assign y = a;\n  assign q = d;\n  always_ff @(posedge clk) begin\n    z <= b;\n    w = c;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 160 --seed 29 --modes connect > %t/log.txt
+// RUN: grep -q 'NATIVE_ASSIGN_RHS_TO_CONST0' %t/mutations.txt
+// RUN: grep -q 'NATIVE_ASSIGN_RHS_TO_CONST1' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 160

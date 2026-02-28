@@ -33,7 +33,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "XNOR_TO_XOR",      "REDAND_TO_REDOR", "REDOR_TO_REDAND",
     "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
-    "NBA_TO_BA",
+    "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -1595,6 +1595,181 @@ static void collectProceduralNonblockingAssignSites(
   }
 }
 
+static size_t findStatementSemicolon(StringRef text, ArrayRef<uint8_t> codeMask,
+                                     size_t start) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+  for (size_t i = start, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && ch == ';')
+      return i;
+  }
+  return StringRef::npos;
+}
+
+static bool findSimpleAssignmentRhsIdentifierSpan(StringRef text,
+                                                  ArrayRef<uint8_t> codeMask,
+                                                  size_t assignPos,
+                                                  size_t &rhsStart,
+                                                  size_t &rhsEnd) {
+  if (assignPos >= text.size() || !isCodeAt(codeMask, assignPos))
+    return false;
+
+  size_t assignLen = 0;
+  if (isCodeRange(codeMask, assignPos, 2) &&
+      text.substr(assignPos).starts_with("<=")) {
+    char prev =
+        (assignPos == 0 || !isCodeAt(codeMask, assignPos - 1))
+            ? '\0'
+            : text[assignPos - 1];
+    char next = (assignPos + 2 < text.size() && isCodeAt(codeMask, assignPos + 2))
+                    ? text[assignPos + 2]
+                    : '\0';
+    if (prev == '<' || prev == '=' || prev == '!' || prev == '>' ||
+        next == '=' || next == '>')
+      return false;
+    assignLen = 2;
+  } else if (text[assignPos] == '=') {
+    char prev =
+        (assignPos == 0 || !isCodeAt(codeMask, assignPos - 1))
+            ? '\0'
+            : text[assignPos - 1];
+    char next = (assignPos + 1 < text.size() && isCodeAt(codeMask, assignPos + 1))
+                    ? text[assignPos + 1]
+                    : '\0';
+    if (prev == '=' || prev == '!' || prev == '<' || prev == '>' ||
+        next == '=' || next == '>')
+      return false;
+    assignLen = 1;
+  } else {
+    return false;
+  }
+
+  size_t prevSig = findPrevCodeNonSpace(text, codeMask, assignPos);
+  size_t nextSig = findNextCodeNonSpace(text, codeMask, assignPos + assignLen);
+  if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+    return false;
+  if (!isOperandEndChar(text[prevSig]) || !isOperandStartChar(text[nextSig]))
+    return false;
+
+  size_t stmtStart = findStatementStart(text, codeMask, assignPos);
+  if (statementHasDeclarativeDisqualifier(text, codeMask, stmtStart, assignPos))
+    return false;
+  if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, assignPos))
+    return false;
+  if (statementHasPlainAssignBefore(text, codeMask, stmtStart, assignPos))
+    return false;
+
+  rhsStart = findNextCodeNonSpace(text, codeMask, assignPos + assignLen);
+  if (rhsStart == StringRef::npos)
+    return false;
+
+  size_t semiPos = findStatementSemicolon(text, codeMask, rhsStart);
+  if (semiPos == StringRef::npos)
+    return false;
+  rhsEnd = findPrevCodeNonSpace(text, codeMask, semiPos);
+  if (rhsEnd == StringRef::npos || rhsStart > rhsEnd)
+    return false;
+
+  size_t parsePos = rhsStart;
+  size_t parseLimit = rhsEnd + 1;
+  if (!parseIdentifierToken(text, codeMask, parsePos, parseLimit))
+    return false;
+  parsePos = skipCodeWhitespace(text, codeMask, parsePos, parseLimit);
+  return parsePos == parseLimit;
+}
+
+static void collectAssignRhsIdentifierSites(
+    StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+
+    bool isAssignToken = false;
+    if (ch == '=')
+      isAssignToken = true;
+    else if (ch == '<' && i + 1 < e && isCodeRange(codeMask, i, 2) &&
+             text.substr(i).starts_with("<="))
+      isAssignToken = true;
+    if (!isAssignToken)
+      continue;
+    if (parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+      continue;
+
+    size_t rhsStart = StringRef::npos;
+    size_t rhsEnd = StringRef::npos;
+    if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, i, rhsStart,
+                                               rhsEnd))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static size_t findMatchingTernaryColon(StringRef text, ArrayRef<uint8_t> codeMask,
                                        size_t questionPos) {
   int parenDepth = 0;
@@ -2557,6 +2732,10 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectProceduralNonblockingAssignSites(designText, codeMask, sites);
     return;
   }
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1") {
+    collectAssignRhsIdentifierSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "POSEDGE_TO_NEGEDGE") {
     collectAlwaysSensitivityEdgeKeywordSites(designText, "posedge", "negedge",
                                              codeMask, sites);
@@ -2835,6 +3014,8 @@ static std::string getOpFamily(StringRef op) {
       op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE" ||
       op == "RESET_POSEDGE_TO_NEGEDGE" || op == "RESET_NEGEDGE_TO_POSEDGE")
     return "timing";
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1")
+    return "connect";
   if (op == "MUX_SWAP_ARMS" || op == "MUX_FORCE_TRUE" ||
       op == "MUX_FORCE_FALSE")
     return "mux";
@@ -3876,6 +4057,16 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, 1, "<=");
   if (op == "NBA_TO_BA")
     return replaceTokenAt(mutatedText, pos, 2, "=");
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1") {
+    size_t rhsStart = StringRef::npos;
+    size_t rhsEnd = StringRef::npos;
+    if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, pos, rhsStart,
+                                               rhsEnd))
+      return false;
+    const char *replacement =
+        (op == "ASSIGN_RHS_TO_CONST0") ? "1'b0" : "1'b1";
+    return replaceSpan(mutatedText, rhsStart, rhsEnd + 1, replacement);
+  }
   if (op == "POSEDGE_TO_NEGEDGE")
     return replaceTokenAt(mutatedText, pos, strlen("posedge"), "negedge");
   if (op == "NEGEDGE_TO_POSEDGE")
