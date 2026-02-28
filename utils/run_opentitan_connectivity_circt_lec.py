@@ -70,6 +70,7 @@ class ConnectivityLECCase:
     checker_sv: Path
     ref_module: str
     impl_module: str
+    bind_top: str
 
 
 CONNECTIVITY_LEC_STATUS_FIELDS = (
@@ -1533,29 +1534,10 @@ def main() -> int:
         toplevels = parse_toplevels(eda_obj.get("toplevel"))
         if not toplevels:
             fail(f"no toplevel in EDA description: {eda_yml}")
-        top_module = toplevels[0]
+        default_top_module = toplevels[0]
         source_files, include_dirs = resolve_eda_paths(eda_obj.get("files"), eda_yml.parent)
         source_files = apply_platform_file_filter(target.rel_path, source_files)
         source_files = apply_prim_impl_file_filter(target.target_name, source_files)
-        selected_top = top_module
-        rule_top_override = infer_rule_top_override(selected_groups)
-        if rule_top_override:
-            selected_top = rule_top_override
-        hierarchy_top_fallback = infer_external_hierarchy_top_fallback(
-            selected_groups, selected_top, target.target_name, source_files
-        )
-        if hierarchy_top_fallback:
-            print(
-                "opentitan connectivity lec: using chip-wrapper top fallback "
-                f"{hierarchy_top_fallback} (eda_top={toplevels[0]})",
-                file=sys.stderr,
-                flush=True,
-            )
-            selected_top = hierarchy_top_fallback
-        source_files = apply_top_override_source_prune(
-            source_files, top_module, selected_top
-        )
-        top_module = selected_top
         if not source_files:
             fail(f"no source files resolved from EDA description: {eda_yml}")
         explicit_incdirs = [
@@ -1570,16 +1552,35 @@ def main() -> int:
         checks_dir.mkdir(parents=True, exist_ok=True)
         cases: list[ConnectivityLECCase] = []
         skipped_connections = 0
+        fallback_tops_used: set[str] = set()
+        case_tops_used: set[str] = set()
         for index, group in enumerate(selected_groups):
+            case_top_module = default_top_module
+            rule_top_override = infer_rule_top_override((group,))
+            if rule_top_override:
+                case_top_module = rule_top_override
+            hierarchy_top_fallback = infer_external_hierarchy_top_fallback(
+                (group,), case_top_module, target.target_name, source_files
+            )
+            if hierarchy_top_fallback:
+                fallback_tops_used.add(hierarchy_top_fallback)
+                case_top_module = hierarchy_top_fallback
+            case_tops_used.add(case_top_module)
             rule = group.connection
-            src_expr_raw = block_signal_expr(rule.src_block, rule.src_signal, top_module)
-            dst_expr_raw = block_signal_expr(rule.dest_block, rule.dest_signal, top_module)
+            src_expr_raw = block_signal_expr(
+                rule.src_block, rule.src_signal, case_top_module
+            )
+            dst_expr_raw = block_signal_expr(
+                rule.dest_block, rule.dest_signal, case_top_module
+            )
             if not src_expr_raw or not dst_expr_raw:
                 skipped_connections += 1
                 continue
             src_expr = rewrite_const_indexed_bit(scope_under_instance(src_expr_raw, "dut"))
             dst_expr = rewrite_const_indexed_bit(scope_under_instance(dst_expr_raw, "dut"))
-            guard_expr = build_condition_guard_expr(group.conditions, top_module, "dut")
+            guard_expr = build_condition_guard_expr(
+                group.conditions, case_top_module, "dut"
+            )
             module_token = sanitize_token(f"conn_rule_{index}_{rule.rule_name}")
             if not module_token:
                 module_token = f"conn_rule_{index}"
@@ -1590,7 +1591,7 @@ def main() -> int:
                 checker_sv,
                 ref_module,
                 impl_module,
-                top_module,
+                case_top_module,
                 src_expr,
                 dst_expr,
                 rule.rule_id,
@@ -1604,6 +1605,7 @@ def main() -> int:
                     checker_sv=checker_sv,
                     ref_module=ref_module,
                     impl_module=impl_module,
+                    bind_top=case_top_module,
                 )
             )
 
@@ -1627,13 +1629,23 @@ def main() -> int:
             contract_backend_mode = "smtlib" if lec_run_smtlib else "jit"
         contract_z3_path = z3_bin if contract_backend_mode == "smtlib" else ""
         contract_lec_args = shlex.join(circt_lec_args)
+        for fallback_top in sorted(fallback_tops_used):
+            print(
+                "opentitan connectivity lec: using chip-wrapper top fallback "
+                f"{fallback_top} (eda_top={default_top_module})",
+                file=sys.stderr,
+                flush=True,
+            )
+        case_top_summary = (
+            next(iter(case_tops_used)) if len(case_tops_used) == 1 else "mixed"
+        )
 
         print(
             "opentitan connectivity lec: "
             f"target={target.target_name} selected_connections={len(selected_groups)} "
             f"selected_conditions={sum(len(group.conditions) for group in selected_groups)} "
             f"generated_cases={len(cases)} skipped_connections={skipped_connections} "
-            f"top={top_module} shard={rule_shard_index}/{rule_shard_count}",
+            f"top={case_top_summary} shard={rule_shard_index}/{rule_shard_count}",
             file=sys.stderr,
             flush=True,
         )
@@ -1732,11 +1744,50 @@ def main() -> int:
                 drop_remark_seen_case_reasons.add(key)
                 drop_remark_reason_rows.append((case.case_id, case.case_path, reason))
 
+        def split_batch_by_bind_top(
+            batch_cases: list[ConnectivityLECCase],
+        ) -> list[list[ConnectivityLECCase]]:
+            by_top: dict[str, list[ConnectivityLECCase]] = {}
+            ordered_tops: list[str] = []
+            for case in batch_cases:
+                top = case.bind_top
+                if top not in by_top:
+                    by_top[top] = []
+                    ordered_tops.append(top)
+                by_top[top].append(case)
+            return [by_top[top] for top in ordered_tops]
+
         batch_counter = 0
         for initial_batch in case_batches:
             pending_batches: list[list[ConnectivityLECCase]] = [initial_batch]
             while pending_batches:
                 batch_cases = pending_batches.pop(0)
+                batch_tops = {case.bind_top for case in batch_cases}
+                if len(batch_tops) > 1:
+                    split_batches = split_batch_by_bind_top(batch_cases)
+                    for split_batch in reversed(split_batches):
+                        pending_batches.insert(0, split_batch)
+                    continue
+                batch_top = next(iter(batch_tops))
+                batch_source_files = source_files
+                if (
+                    batch_top != default_top_module
+                    and batch_top not in fallback_tops_used
+                ):
+                    batch_source_files = apply_top_override_source_prune(
+                        batch_source_files, default_top_module, batch_top
+                    )
+                for fallback_top in sorted(fallback_tops_used):
+                    if batch_top == fallback_top:
+                        continue
+                    batch_source_files = apply_top_override_source_prune(
+                        batch_source_files, fallback_top, batch_top
+                    )
+                if not batch_source_files:
+                    fail(
+                        "no source files resolved after per-rule top override pruning: "
+                        f"eda_top={default_top_module} case_top={batch_top}"
+                    )
                 batch_index = batch_counter
                 batch_counter += 1
 
@@ -1803,7 +1854,7 @@ def main() -> int:
                     if verilog_define_synthesis:
                         cmd.append("-DSYNTHESIS")
                     cmd += circt_verilog_args
-                    cmd += source_files + [str(shared_checker_sv)]
+                    cmd += batch_source_files + [str(shared_checker_sv)]
                     return cmd
 
                 shared_verilog_cmd = build_shared_verilog_cmd(

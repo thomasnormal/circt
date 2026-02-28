@@ -118,3 +118,46 @@
       `CIRCT_TIMEOUT_SECS=60` +
       `LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS=180`
       produced `PASS ... EQ` after canonicalizer-timeout retry.
+
+## 2026-02-28 - Mixed-top connectivity batch isolation (per-batch source pruning)
+
+- realization:
+  - mixed-rule OpenTitan runs can require different bind tops in one invocation
+    (for example local `top_earlgrey.*` rules plus `u_ast.*` rules that require
+    chip-wrapper fallback).
+  - global source pruning was insufficient: a local-top case could still ingest
+    chip-wrapper sources and fail in `circt-verilog` with
+    `CIRCT_VERILOG_ERROR`, even though the fallback case itself was valid.
+  - source pruning is asymmetric:
+    - local-top batches should drop chip-wrapper sources where possible.
+    - fallback chip-wrapper batches must keep inner top sources.
+
+- TDD:
+  - updated
+    `test/Tools/run-opentitan-connectivity-circt-lec-per-rule-top-mixed.test`
+    to require:
+    - mixed bind tops are split into separate frontend batches,
+    - local-top batch prunes chip-wrapper sources,
+    - chip-wrapper fallback batch still includes chip-wrapper source.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - `ConnectivityLECCase` now carries `bind_top`.
+    - mixed-top `batch_cases` are split by `bind_top` before shared frontend
+      invocation.
+    - source pruning is now computed per batch (not globally):
+      - default-top prune for non-fallback override batches,
+      - fallback-top prune for non-fallback batches,
+      - preserve full source set for fallback-top batches that require nested
+        hierarchy modules.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    28/28 pass.
+  - real OpenTitan Z3 replay:
+    - filter: `ALERT_HANDLER_PWRMGR_ESC_CLK|AST_CLK_ES_IN`
+    - result: `2/2 PASS` with isolated shared batches:
+      - batch 0 wrappers bind `top_earlgrey`
+      - batch 1 wrappers bind `chip_earlgrey_asic`
