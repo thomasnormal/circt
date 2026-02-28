@@ -4799,23 +4799,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           found = true;
         }
       }
-      // Use global FIFO fallback only when queue routing is completely
-      // unresolved. If we already have a queue hint, keep the waiter bound
-      // to that queue even before the first push creates FIFO state.
       bool allowGlobalFallbackSearch = (seqrQueueAddr == 0);
-      // Fallback: when the port-to-sequencer resolution fails (no UVM
-      // connection chain), scan all FIFOs for any available item. This
-      // handles simple test cases with a single sequencer-driver pair.
-      if (!found && allowGlobalFallbackSearch && !isTryNextItem) {
-        for (auto &[qAddr, fifo] : sequencerItemFifo) {
-          if (!fifo.empty()) {
-            seqrQueueAddr = qAddr;
-            itemAddr = fifo.front();
-            fifo.pop_front();
-            found = true;
-            fromFallbackSearch = true;
-            break;
-          }
+      bool allowSingleQueueFallback =
+          allowGlobalFallbackSearch && !isTryNextItem &&
+          sequencerItemFifo.size() == 1;
+      if (!found && allowSingleQueueFallback) {
+        auto it = sequencerItemFifo.begin();
+        if (it != sequencerItemFifo.end() && !it->second.empty()) {
+          seqrQueueAddr = it->first;
+          itemAddr = it->second.front();
+          it->second.pop_front();
+          found = true;
+          fromFallbackSearch = true;
         }
       }
       if (found && itemAddr != 0) {

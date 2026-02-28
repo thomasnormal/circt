@@ -873,8 +873,12 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
     return {0, false};
   };
 
+  uint64_t rawQueueAddr = queueAddr;
   auto [promotedAddr, promotedStrongHint] = promoteToSequencerQueue(queueAddr);
-  queueAddr = promotedAddr;
+  // Preserve unresolved raw pull-port candidates long enough to run
+  // get_parent/get_comp owner resolution. Dropping to zero here prevents
+  // valid terminals from ever reaching their owning sequencer queue.
+  queueAddr = (promotedAddr != 0) ? promotedAddr : rawQueueAddr;
   strongHint = strongHint || promotedStrongHint;
 
   auto resolvePortOwner =
@@ -1070,6 +1074,39 @@ bool LLHDProcessInterpreter::resolveUvmSequencerQueueAddress(
   llvm::SmallVector<uint64_t, 4> terminals;
 
   bool hasStrongHint = false;
+  for (uint64_t portLookupKey : portLookupKeys) {
+    uint64_t candidate = portLookupKey;
+    bool candidateStrong =
+        canonicalizeUvmSequencerQueueAddress(procId, candidate, callSite);
+    bool inFifo = candidate != 0 && sequencerItemFifo.contains(candidate);
+    bool changed = candidate != 0 && candidate != portLookupKey;
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] direct key=0x"
+                   << llvm::format_hex(portLookupKey, 16)
+                   << " -> candidate=0x" << llvm::format_hex(candidate, 16)
+                   << " strong=" << (candidateStrong ? 1 : 0)
+                   << " changed=" << (changed ? 1 : 0)
+                   << " in_fifo=" << (inFifo ? 1 : 0) << "\n";
+    // Ignore no-op self mappings when they are not backed by active FIFO
+    // state; these are commonly unresolved raw port object pointers.
+    if (candidate == 0 || (!candidateStrong && !inFifo && !changed))
+      continue;
+    if (queueAddr == 0) {
+      queueAddr = candidate;
+      hasStrongHint = candidateStrong;
+    } else if (!hasStrongHint && candidateStrong) {
+      queueAddr = candidate;
+      hasStrongHint = true;
+    }
+    if (inFifo) {
+      queueAddr = candidate;
+      if (traceResolve)
+        llvm::errs() << "[SEQ-RESOLVE] select direct queue=0x"
+                     << llvm::format_hex(queueAddr, 16) << "\n";
+      return true;
+    }
+  }
+
   for (uint64_t portLookupKey : portLookupKeys) {
     collectNativeUvmPortTerminals(analysisPortConnections, portLookupKey, terminals);
     if (traceResolve)
