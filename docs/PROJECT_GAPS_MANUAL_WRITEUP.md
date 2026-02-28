@@ -1780,8 +1780,8 @@ Status update (2026-02-28): this gap is closed in this workspace. `uvm_component
 ### [x] 592. `lib/Runtime/uvm-core/src/base/uvm_component.svh:2577`
 Status update (2026-02-28): this gap is closed in this workspace. `uvm_component::resume()` now resumes the tracked phase task process and clears explicit suspension state in the interpreter. Regression coverage was added in `test/Runtime/uvm/uvm_component_suspend_resume_test.sv` and passes with targeted process/UVM suites.
 
-### [ ] 593. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3337`
-This is the same known sorting TODO as earlier: still using `sort_by_precedence` and not `sort_by_precedence_q` (Mantis 7354). What is missing is migration to the newer precedence sort path. The fix is to adopt the newer API once dependency behavior is validated.
+### [x] 593. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3337`
+Status update (2026-02-28): this entry is stale duplicate tracking. The active open gap for this TODO remains entry 361.
 
 ### [x] 594. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3542`
 Status update (2026-02-28): this entry is stale. `m_unsupported_set_local` is identifier-level naming in override plumbing, not an unresolved feature gap.
@@ -6127,11 +6127,11 @@ Status update (2026-02-28): this entry is stale. This is test-intent commentary,
 ### [x] 2041. `test/Conversion/ImportVerilog/system-calls-complete.sv:8`
 Status update (2026-02-28): same closure as entry 2040.
 
-### [ ] 2042. `test/Conversion/ImportVerilog/cross-select-intersect-plusminus-unsupported.sv:3`
-Module name containing `Unsupported` is negative-test naming, not a direct TODO marker.
+### [x] 2042. `test/Conversion/ImportVerilog/cross-select-intersect-plusminus-unsupported.sv:3`
+Status update (2026-02-28): this entry is stale. The matched token is a fixture module identifier, not unresolved implementation debt.
 
-### [ ] 2043. `test/Conversion/ImportVerilog/cross-select-intersect-plusminus-unsupported.sv:17`
-Expected-error text for unsupported non-constant intersect ranges is negative-test oracle content; it reflects a real current capability boundary but this line itself is fixture text.
+### [x] 2043. `test/Conversion/ImportVerilog/cross-select-intersect-plusminus-unsupported.sv:17`
+Status update (2026-02-28): this entry is stale as a line-level tracker. It is expected-error oracle text; underlying cross-select capability gaps remain tracked at implementation-site entries.
 
 ### [ ] 2044. `test/Conversion/ImportVerilog/sva-sequence-match-item-coverage-sdf-static-subroutine.sv:18`
 This diagnostic text captures a real runtime gap: `$sdf_annotate` is intentionally warned as unsupported because SDF timing annotation is not implemented in `circt-sim`.

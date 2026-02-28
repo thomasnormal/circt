@@ -1616,6 +1616,9 @@
     2011, 2012, 2019, 2024, 2030, 2032, 2033, 2038, 2040, 2041.
   - Closed additional ImportVerilog SVA fixture/oracle entries:
     2045-2053, 2058-2068, 2069-2071.
+  - Closed duplicate/fixture false positives:
+    - duplicate UVM tracking entry 593 (kept 361 open as canonical)
+    - ImportVerilog fixture entries 2042, 2043
 - Validation:
   - `build_test/bin/llvm-lit -a -v` on:
     - `assoc_arrays.sv`
