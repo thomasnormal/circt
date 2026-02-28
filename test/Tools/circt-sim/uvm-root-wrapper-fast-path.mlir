@@ -1,13 +1,10 @@
 // RUN: circt-sim %s | FileCheck %s
-// XFAIL: *
 //
 // Verify global-root wrapper interception:
 //   - m_uvm_get_root()
 //   - uvm_pkg::uvm_get_report_object()
 // Both should return uvm_root::m_inst once initialized, even if function
 // bodies would otherwise return null.
-// FIXME: root/report-object wrapper fast-path interception currently misses in
-// this runtime path (`root fast-path = 0`, `report-object fast-path = 0`).
 
 module {
   llvm.mlir.global internal @"uvm_pkg::uvm_pkg::uvm_root::m_inst"(#llvm.zero) {

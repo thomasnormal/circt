@@ -12,11 +12,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "LLHDProcessInterpreter.h"
+#include "circt/Runtime/MooreRuntime.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 
 using namespace mlir;
 using namespace circt;
@@ -119,6 +121,350 @@ uint64_t LLHDProcessInterpreter::canonicalizeUvmObjectAddress(ProcessId procId,
       nativeOff != 0 && nativeOff < nativeSize)
     return addr - nativeOff;
   return addr;
+}
+
+uint64_t LLHDProcessInterpreter::readUvmPhaseImpAddress(ProcessId procId,
+                                                        uint64_t phaseAddr) {
+  if (phaseAddr == 0)
+    return 0;
+
+  static std::optional<unsigned> cachedImpOffset;
+  unsigned impOffset = 44;
+  if (!cachedImpOffset) {
+    if (rootModule) {
+      if (auto getImpFunc = rootModule.lookupSymbol<func::FuncOp>(
+              "uvm_pkg::uvm_phase::get_imp")) {
+        for (Block &block : getImpFunc.getBody()) {
+          for (Operation &op : block) {
+            auto gepOp = dyn_cast<LLVM::GEPOp>(&op);
+            if (!gepOp)
+              continue;
+            auto structTy = dyn_cast<LLVM::LLVMStructType>(gepOp.getElemType());
+            if (!structTy || !structTy.isIdentified() ||
+                !structTy.getName().contains("uvm_phase"))
+              continue;
+            impOffset = getLLVMStructFieldOffset(structTy, 3);
+            cachedImpOffset = impOffset;
+            break;
+          }
+          if (cachedImpOffset)
+            break;
+        }
+      }
+    }
+    if (!cachedImpOffset)
+      cachedImpOffset = impOffset;
+  } else {
+    impOffset = *cachedImpOffset;
+  }
+
+  uint64_t impAddrField = phaseAddr + impOffset;
+  uint64_t off = 0;
+  if (MemoryBlock *blk = findMemoryBlockByAddress(impAddrField, procId, &off)) {
+    if (blk->initialized && off + 8 <= blk->size) {
+      uint64_t impAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        impAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
+      return impAddr;
+    }
+  }
+
+  if (MemoryBlock *blk = findBlockByAddress(impAddrField, off)) {
+    if (blk->initialized && off + 8 <= blk->size) {
+      uint64_t impAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        impAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
+      return impAddr;
+    }
+  }
+
+  uint64_t nativeOff = 0;
+  size_t nativeSize = 0;
+  if (findNativeMemoryBlockByAddress(impAddrField, &nativeOff, &nativeSize) &&
+      nativeOff + 8 <= nativeSize) {
+    uint64_t impAddr = 0;
+    std::memcpy(&impAddr, reinterpret_cast<void *>(impAddrField),
+                sizeof(impAddr));
+    return impAddr;
+  }
+
+  return 0;
+}
+
+void LLHDProcessInterpreter::recordUvmPhaseAddSequence(
+    ProcessId procId, llvm::ArrayRef<InterpretedValue> args) {
+  if (args.size() < 2 || args[0].isX() || args[1].isX())
+    return;
+
+  uint64_t rootAddr = normalizeUvmObjectKey(procId, args[0].getUInt64());
+  if (rootAddr == 0)
+    rootAddr = args[0].getUInt64();
+  uint64_t phaseImpAddr = args[1].getUInt64();
+  if (rootAddr == 0 || phaseImpAddr == 0)
+    return;
+
+  auto &sequence = phaseRootImpSequence[rootAddr];
+  if (std::find(sequence.begin(), sequence.end(), phaseImpAddr) ==
+      sequence.end())
+    sequence.push_back(phaseImpAddr);
+}
+
+uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
+    ProcessId procId, uint64_t phaseAddr) {
+  static bool tracePhaseRemap = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto traceReturn = [&](llvm::StringRef reason, uint64_t ret,
+                         uint64_t normalized = 0, uint64_t imp = 0,
+                         uint64_t mappedImp = 0) -> uint64_t {
+    if (tracePhaseRemap) {
+      auto readPhaseName = [&](uint64_t addr) -> std::string {
+        if (addr == 0)
+          return {};
+        uint64_t nameOff = 0;
+        MemoryBlock *nameBlk = findBlockByAddress(addr + 12, nameOff);
+        if (!nameBlk || nameOff + 16 > nameBlk->size)
+          return {};
+        uint64_t namePtr = 0;
+        uint64_t nameLen = 0;
+        for (int i = 0; i < 8; ++i) {
+          namePtr |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + i])
+                     << (i * 8);
+          nameLen |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + 8 + i])
+                     << (i * 8);
+        }
+        if (namePtr == 0 || nameLen == 0 || nameLen > 128)
+          return {};
+        uint64_t strOff = 0;
+        MemoryBlock *strBlk = findBlockByAddress(namePtr, strOff);
+        if (!strBlk || strOff + nameLen > strBlk->size)
+          return {};
+        return std::string(
+            reinterpret_cast<const char *>(strBlk->bytes() + strOff),
+            static_cast<size_t>(nameLen));
+      };
+      std::string normalizedName = readPhaseName(normalized);
+      std::string retName = readPhaseName(ret);
+      llvm::errs() << "[PHASE-REMAP-DETAIL] proc=" << procId
+                   << " phase=" << llvm::format_hex(phaseAddr, 16)
+                   << " normalized=" << llvm::format_hex(normalized, 16)
+                   << " active_root="
+                   << llvm::format_hex(activePhaseRootAddr, 16)
+                   << " imp=" << llvm::format_hex(imp, 16)
+                   << " mapped_imp=" << llvm::format_hex(mappedImp, 16)
+                   << " ret=" << llvm::format_hex(ret, 16)
+                   << " normalized_name=\""
+                   << (normalizedName.empty() ? "<unknown>" : normalizedName)
+                   << "\""
+                   << " ret_name=\"" << (retName.empty() ? "<unknown>" : retName)
+                   << "\""
+                   << " reason=" << reason << "\n";
+    }
+    return ret;
+  };
+  if (phaseAddr == 0 || activePhaseRootAddr == 0)
+    return traceReturn("phase-or-active-root-zero", phaseAddr);
+
+  uint64_t normalized = normalizeUvmObjectKey(procId, phaseAddr);
+  if (normalized == 0)
+    normalized = phaseAddr;
+
+  uint64_t phaseImpAddr = readUvmPhaseImpAddress(procId, normalized);
+  if (phaseImpAddr == 0) {
+    // Root/common-domain wrappers can have m_imp==0. In stale-domain waits we
+    // still need to remap those wrappers onto the active common domain.
+    auto activeSeqIt = phaseRootImpSequence.find(activePhaseRootAddr);
+    if (activeSeqIt != phaseRootImpSequence.end()) {
+      if (phaseRootImpSequence.find(normalized) != phaseRootImpSequence.end() &&
+          normalized != activePhaseRootAddr) {
+        return traceReturn("phase-imp-zero-root-key", activePhaseRootAddr,
+                           normalized, phaseImpAddr);
+      }
+      constexpr uint64_t kCommonWrapperDelta = 0xD0;
+      if (normalized > kCommonWrapperDelta) {
+        uint64_t maybeRootKey = normalized - kCommonWrapperDelta;
+        if (phaseRootImpSequence.find(maybeRootKey) !=
+                phaseRootImpSequence.end() &&
+            maybeRootKey != activePhaseRootAddr) {
+          return traceReturn("phase-imp-zero-wrapper-root-key",
+                             activePhaseRootAddr, normalized, phaseImpAddr);
+        }
+      }
+    }
+    return traceReturn("phase-imp-zero", normalized, normalized, phaseImpAddr);
+  }
+
+  auto activeSeqIt = phaseRootImpSequence.find(activePhaseRootAddr);
+  if (activeSeqIt == phaseRootImpSequence.end() || activeSeqIt->second.empty())
+    return traceReturn("active-seq-missing", normalized, normalized,
+                       phaseImpAddr);
+  const auto &activeSeq = activeSeqIt->second;
+
+  auto readPhaseName = [&](uint64_t addr) -> std::string {
+    if (addr == 0)
+      return {};
+    uint64_t nameOff = 0;
+    MemoryBlock *nameBlk = findBlockByAddress(addr + 12, nameOff);
+    if (!nameBlk || nameOff + 16 > nameBlk->size)
+      return {};
+    uint64_t namePtr = 0;
+    uint64_t nameLen = 0;
+    for (int i = 0; i < 8; ++i) {
+      namePtr |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + i])
+                 << (i * 8);
+      nameLen |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + 8 + i])
+                 << (i * 8);
+    }
+    if (namePtr == 0 || nameLen == 0 || nameLen > 128)
+      return {};
+    uint64_t strOff = 0;
+    MemoryBlock *strBlk = findBlockByAddress(namePtr, strOff);
+    if (!strBlk || strOff + nameLen > strBlk->size)
+      return {};
+    return std::string(reinterpret_cast<const char *>(strBlk->bytes() + strOff),
+                       static_cast<size_t>(nameLen));
+  };
+
+  auto activePos =
+      std::find(activeSeq.begin(), activeSeq.end(), phaseImpAddr);
+  std::string phaseName;
+  if (activePos == activeSeq.end()) {
+    phaseName = readPhaseName(normalized);
+    if (phaseName.empty())
+      phaseName = readPhaseName(phaseImpAddr);
+    auto isLegacyRuntimePhaseName = [&](llvm::StringRef name) {
+      return name == "pre_reset" || name == "reset" || name == "post_reset" ||
+             name == "pre_configure" || name == "configure" ||
+             name == "post_configure" || name == "pre_main" ||
+             name == "main" || name == "post_main" ||
+             name == "pre_shutdown" || name == "shutdown" ||
+             name == "post_shutdown";
+    };
+    if (!phaseName.empty() && isLegacyRuntimePhaseName(phaseName)) {
+      return traceReturn("legacy-runtime-phase-to-active-root",
+                         activePhaseRootAddr, normalized, phaseImpAddr);
+    }
+    // If we cannot identify the stale phase reliably, prefer converging onto
+    // the active root over index-based remaps, which can deadlock waits by
+    // targeting unrelated active phases.
+    if (phaseName.empty()) {
+      return traceReturn("unknown-stale-phase-to-active-root",
+                         activePhaseRootAddr, normalized, phaseImpAddr);
+    }
+  }
+  if (activePos != activeSeq.end())
+    return traceReturn("already-in-active-seq", normalized, normalized,
+                       phaseImpAddr, phaseImpAddr);
+
+  uint64_t mappedImpAddr = 0;
+  for (const auto &entry : phaseRootImpSequence) {
+    if (entry.first == activePhaseRootAddr)
+      continue;
+    const auto &seq = entry.second;
+    auto pos = std::find(seq.begin(), seq.end(), phaseImpAddr);
+    if (pos == seq.end())
+      continue;
+    size_t index = static_cast<size_t>(pos - seq.begin());
+    // Some legacy/stale phase graphs include extra leading runtime phases
+    // (e.g. pre_reset/reset) that are absent from the active common-domain
+    // graph. Align by dropping those leading entries and map dropped ones to
+    // the active root.
+    if (seq.size() > activeSeq.size()) {
+      size_t leadingExtra = seq.size() - activeSeq.size();
+      if (index < leadingExtra)
+        return traceReturn("index-in-legacy-leading-extra",
+                           activePhaseRootAddr, normalized, phaseImpAddr);
+      index -= leadingExtra;
+    }
+    if (index < activeSeq.size())
+      mappedImpAddr = activeSeq[index];
+    break;
+  }
+  if (mappedImpAddr == 0)
+    return traceReturn("mapped-imp-missing", normalized, normalized,
+                       phaseImpAddr, mappedImpAddr);
+
+  auto tryCandidate = [&](uint64_t delta) -> uint64_t {
+    if (delta > std::numeric_limits<uint64_t>::max() - mappedImpAddr)
+      return 0;
+    uint64_t candidate = mappedImpAddr + delta;
+    return readUvmPhaseImpAddress(procId, candidate) == mappedImpAddr
+               ? candidate
+               : 0;
+  };
+
+  uint64_t delta = normalized > phaseImpAddr ? (normalized - phaseImpAddr) : 0;
+  if (delta <= 0x1000) {
+    if (uint64_t candidate = tryCandidate(delta))
+      return traceReturn("candidate-from-delta", candidate, normalized,
+                         phaseImpAddr, mappedImpAddr);
+  }
+  if (uint64_t candidate = tryCandidate(/*common wrapper delta=*/0xD0))
+    return traceReturn("candidate-from-wrapper-delta", candidate, normalized,
+                       phaseImpAddr, mappedImpAddr);
+
+  for (const auto &[phaseKey, _] : phaseObjectionHandles) {
+    if (readUvmPhaseImpAddress(procId, phaseKey) == mappedImpAddr)
+      return traceReturn("candidate-from-objection-map", phaseKey, normalized,
+                         phaseImpAddr, mappedImpAddr);
+  }
+
+  return traceReturn("fallback-normalized", normalized, normalized,
+                     phaseImpAddr, mappedImpAddr);
+}
+
+void LLHDProcessInterpreter::maybeCanonicalizeUvmPhasePredecessorSet(
+    ProcessId procId, llvm::StringRef calleeName,
+    llvm::ArrayRef<InterpretedValue> args) {
+  if (args.size() < 2)
+    return;
+  bool isPhaseSetGetter =
+      calleeName == "uvm_pkg::uvm_phase::get_predecessors" ||
+      calleeName == "uvm_pkg::uvm_phase::get_sync_relationships";
+  if (!isPhaseSetGetter)
+    return;
+  if (args[1].isX())
+    return;
+
+  uint64_t assocAddr = args[1].getUInt64();
+  if (assocAddr == 0)
+    return;
+
+  std::vector<std::pair<uint64_t, uint64_t>> rewrites;
+  uint64_t key = 0;
+  void *assocPtr = reinterpret_cast<void *>(assocAddr);
+  if (!__moore_assoc_first(assocPtr, &key))
+    return;
+  do {
+    uint64_t mappedKey = mapUvmPhaseAddressToActiveGraph(procId, key);
+    if (mappedKey != 0 && mappedKey != key)
+      rewrites.emplace_back(key, mappedKey);
+  } while (__moore_assoc_next(assocPtr, &key));
+
+  if (rewrites.empty())
+    return;
+
+  static bool tracePhasePredCanonicalization = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_PRED_CANON");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+
+  for (const auto &[oldKey, newKey] : rewrites) {
+    uint64_t keyToInsert = newKey;
+    if (void *ref = __moore_assoc_get_ref(assocPtr, &keyToInsert,
+                                          /*value_size=*/1))
+      *reinterpret_cast<uint8_t *>(ref) = 1;
+    uint64_t keyToDelete = oldKey;
+    __moore_assoc_delete_key(assocPtr, &keyToDelete);
+
+    if (tracePhasePredCanonicalization) {
+      llvm::errs() << "[PHASE-PRED-CANON] proc=" << procId
+                   << " fn=" << calleeName
+                   << " old=0x" << llvm::format_hex(oldKey, 16)
+                   << " new=0x" << llvm::format_hex(newKey, 16) << "\n";
+    }
+  }
 }
 
 uint64_t LLHDProcessInterpreter::normalizeNativeCallPointerArg(
@@ -520,7 +866,11 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
       return {candidateAddr, false};
     }
 
-    return {candidateAddr, false};
+    // Reject unresolved/non-backed candidates to avoid binding waiters to
+    // malformed packed values (for example ptr|metadata composites).
+    // Callers can still fall back to unresolved queue behavior (queue=0),
+    // which is later woken by producer pushes.
+    return {0, false};
   };
 
   auto [promotedAddr, promotedStrongHint] = promoteToSequencerQueue(queueAddr);

@@ -618,3 +618,24 @@
 - Post-fix validation:
   - `build_test/bin/llvm-lit -sv test/Tools/circt-sim`
   - result: `868 passed`, `4 expected-fail`, `0 failed`.
+
+### UVM sequencer handshake: resolve malformed queue hints as unresolved
+- Repro (from `uvm-sequencer-wait-for-grant-send-request-runtime.sv`):
+  - Driver `get_next_item` could bind to a malformed queue key (packed ptr+meta)
+    while sequence `send_request` pushed into the real sequencer queue.
+  - This left producer/consumer on different queues and stalled handshake flow.
+- Fix:
+  - In `canonicalizeUvmSequencerQueueAddress`'s queue promotion helper,
+    reject unresolved/non-memory-backed queue candidates instead of accepting
+    them as weak queue hints.
+  - This forces unresolved routing to stay on `queue=0` fallback until a valid
+    queue is observed, so push wakeups can still progress waiting getters.
+- Test updates:
+  - Removed `XFAIL` from
+    `test/Tools/circt-sim/uvm-sequencer-wait-for-grant-send-request-runtime.sv`.
+- Validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-sim circt-verilog`
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-sequencer-wait-for-grant-send-request-runtime.sv`
+    - now passes (was XPASS under old XFAIL marker).
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim`
+    - no unexpected failures after this change.
