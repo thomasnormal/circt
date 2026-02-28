@@ -697,11 +697,11 @@ This `UNSUPPORTED: valgrind` marker is the same class as entries 215/222/228: te
 ### [ ] 231. `lib/Dialect/LLHD/Transforms/Deseq.cpp:824`
 This TODO is a real correctness gap in deseq simplification: values that depend on trigger signals are currently accepted and folded through `getKnownValue`, which can hide trigger-coupled behavior. What is missing is explicit dependence rejection for trigger-derived values. The fix is to run a backward dependence walk against trigger SSA roots and refuse simplification when dependence is detected.
 
-### [ ] 232. `lib/Runtime/uvm-core/src/base/uvm_root.svh:1280`
-This `TBD` is a real lifecycle-design concern: the run-phase zero-time check is currently piggybacking on assumptions about `uvm_root` behavior. What is missing is a callback location with explicit ordering guarantees. The fix is to move the check into a phase callback with defined semantics (as noted by the nearby comment) and add phase-order regression tests.
+### [x] 232. `lib/Runtime/uvm-core/src/base/uvm_root.svh:1280`
+Status update (2026-02-28): this gap is closed in this workspace. Run-phase time-zero guarding was centralized into `m_check_run_phase_start_time()` and wired into `run_test` and phase lifecycle callbacks, removing reliance on the previous inline TODO site. Regression coverage was added in `test/Runtime/uvm/uvm_run_phase_time_zero_guard_test.sv`.
 
-### [ ] 233. `lib/Runtime/uvm-core/src/base/uvm_root.svh:1281`
-Same issue as entry 232: this TODO marks uncertainty about where run-phase initialization validation belongs. The missing piece is a formally correct hook point for this policy. The fix is to migrate to `phase_started` (or equivalent authoritative callback), then lock behavior with UVM phase-timing tests.
+### [x] 233. `lib/Runtime/uvm-core/src/base/uvm_root.svh:1281`
+Status update (2026-02-28): same closure as entry 232.
 
 ### [ ] 234. `lib/Tools/circt-verilog-lsp-server/VerilogServerImpl/VerilogIndex.cpp:86`
 Expanded macros are explicitly not handled in this range-processing path, which means symbol indexing/navigation can silently miss or misplace macro-origin entities. What is missing is macro-expansion-aware source mapping. The fix is to resolve expansion vs spelling locations through Slang source manager APIs and add macro-heavy LSP index tests.

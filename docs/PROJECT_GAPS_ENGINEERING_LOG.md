@@ -1821,3 +1821,29 @@
 - Realization:
   - The smallest UVM maintainability fixes often come from consolidating
     duplicated phase predicates in the core library while preserving behavior.
+
+### UVM run-phase time-zero guard: move check to authoritative startup path
+- Repro/verification (TDD):
+  - Added `test/Runtime/uvm/uvm_run_phase_time_zero_guard_test.sv` that delays
+    `run_test()` by `#1` and checks for `RUNPHSTIME` fatal text.
+  - Initial attempt expected nonzero simulator exit; observed that `circt-sim`
+    currently reports UVM fatals in output but still exits successfully.
+  - Adjusted regression to assert fatal diagnostics in output rather than process
+    exit status.
+- Root cause:
+  - The existing time-zero check lived in `uvm_root::run_phase` behind TODO notes
+    and did not provide reliable enforcement at the actual `run_test` startup
+    boundary.
+- Fix:
+  - In `lib/Runtime/uvm-core/src/base/uvm_root.svh`:
+    - added helper `m_check_run_phase_start_time()`,
+    - invoked it from `run_test()` entry,
+    - invoked it from `phase_started` on `run_ph`,
+    - kept `run_phase` using the same helper for compatibility.
+- Validation:
+  - `build_test/bin/llvm-lit -a -v test/Runtime/uvm/uvm_run_phase_time_zero_guard_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv`
+  - `build_test/bin/llvm-lit -a -v test/Runtime/uvm/uvm_simple_test.sv`
+  - Result: all passing.
+- Realization:
+  - In this runtime, fatal diagnostics may not imply nonzero process exit, so
+    negative tests for UVM fatal behavior should assert output content.
