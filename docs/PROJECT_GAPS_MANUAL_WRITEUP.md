@@ -4198,8 +4198,8 @@ Real maintenance gap: annotation updates are flagged FIXME during instance recre
 ### [ ] 1398. `lib/Dialect/ESI/runtime/cpp/lib/Values.cpp:382`
 `BitVector::toString` rejects non-{2,8,10,16} bases by design. This is API boundary enforcement, not unresolved implementation debt.
 
-### [ ] 1399. `lib/Conversion/ImportVerilog/ImportVerilog.cpp:215`
-This comment documents an existing compatibility rewrite for a subset of format-specifier width/alignment cases. The real gap is partial coverage (subset-only), not a raw TODO at this line.
+### [x] 1399. `lib/Conversion/ImportVerilog/ImportVerilog.cpp:215`
+Status update (2026-02-28): this line-level tracker is stale. The marker points to descriptive implementation text for already-landed format width/alignment compatibility rewriting, not an unresolved TODO at this site. Existing focused format compatibility regressions pass (`format-width-ignored-compat.sv`, `format-n-compat.sv`, `format-vuz-compat.sv`).
 
 ### [x] 1400. `lib/Conversion/ImportVerilog/ImportVerilog.cpp:1838`
 Status update (2026-02-28): this gap is closed. `SimplifyProcedures` is re-enabled in the ImportVerilog module pipeline, and the pass now avoids shadowing read-only globals and preserves reads inside `moore.wait_event` regions so event-control observation remains tied to the correct module-level signals.

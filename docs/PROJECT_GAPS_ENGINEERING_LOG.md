@@ -1931,3 +1931,20 @@
   - Small UVM core utility cleanups are safest when paired with direct,
     behavior-contract tests; this keeps refactors low-risk while reducing API
     drift across helper paths.
+
+### ImportVerilog tracker cleanup: close stale line-level entry 1399
+- Repro/verification:
+  - Re-reviewed `lib/Conversion/ImportVerilog/ImportVerilog.cpp:215`; the line
+    is explanatory text for existing format-width compatibility rewriting, not a
+    TODO marker.
+  - Ran focused compatibility regressions:
+    - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/format-width-ignored-compat.sv test/Conversion/ImportVerilog/format-n-compat.sv test/Conversion/ImportVerilog/format-vuz-compat.sv`
+  - Result: all passing.
+- Fix:
+  - Marked entry 1399 closed (`[x]`) in
+    `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` with stale-tracker rationale and
+    concrete validation references.
+- Realization:
+  - This was metadata debt, not implementation debt; narrowing these stale
+    trackers reduces noise so remaining prioritized ImportVerilog items are
+    better aligned with actual unsupported semantics.
