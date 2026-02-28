@@ -38259,6 +38259,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       std::vector<MooreCrossBinsofFilter> parsedFilters;
       std::vector<std::vector<int32_t>> ownedBinIndices;
       std::vector<std::vector<int64_t>> ownedValues;
+      std::vector<std::vector<int64_t>> ownedRanges;
 
       auto readBytes = [&](uint64_t addr, void *dst, size_t bytes) -> bool {
         if (!addr || !dst || bytes == 0)
@@ -38289,7 +38290,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       };
 
       // MooreToCore lowers cross filters as:
-      //   struct<(i32, ptr, i32, ptr, i32, i1)>
+      //   struct<(i32, ptr, i32, ptr, i32, ptr, i32, i1)>
       // The interpreter models LLVM GEP with packed field layout (no ABI
       // alignment padding), so decode using packed offsets/stride here.
       constexpr uint64_t kFilterCpIndexOff = 0;
@@ -38301,14 +38302,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           kFilterNumBinsOff + sizeof(int32_t);
       constexpr uint64_t kFilterNumValuesOff =
           kFilterValuesOff + sizeof(uint64_t);
-      constexpr uint64_t kFilterNegateOff =
+      constexpr uint64_t kFilterRangesOff =
           kFilterNumValuesOff + sizeof(int32_t);
+      constexpr uint64_t kFilterNumRangesOff =
+          kFilterRangesOff + sizeof(uint64_t);
+      constexpr uint64_t kFilterNegateOff =
+          kFilterNumRangesOff + sizeof(int32_t);
       constexpr uint64_t kFilterStride = kFilterNegateOff + sizeof(uint8_t);
 
       if (filtersAddr && numFilters > 0) {
         parsedFilters.reserve(numFilters);
         ownedBinIndices.reserve(numFilters);
         ownedValues.reserve(numFilters);
+        ownedRanges.reserve(numFilters);
 
         for (int32_t i = 0; i < numFilters; ++i) {
           uint64_t filterAddr =
@@ -38317,8 +38323,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           int32_t cpIndex = 0;
           int32_t numBins = 0;
           int32_t numValues = 0;
+          int32_t numRanges = 0;
           int32_t *binIndices = nullptr;
           int64_t *valuesPtr = nullptr;
+          int64_t *rangesPtr = nullptr;
           bool negate = false;
 
           filterOk &= readI32(filterAddr + kFilterCpIndexOff, cpIndex);
@@ -38369,10 +38377,34 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             numValues = 0;
           }
 
+          uint64_t rangesAddr = 0;
+          filterOk &= readPtr(filterAddr + kFilterRangesOff, rangesAddr);
+          filterOk &= readI32(filterAddr + kFilterNumRangesOff, numRanges);
+          if (!filterOk)
+            continue;
+          if (numRanges > 0 && rangesAddr) {
+            auto &owned = ownedRanges.emplace_back();
+            owned.resize(static_cast<size_t>(numRanges) * 2);
+            bool rangesOk = true;
+            for (int32_t ri = 0; ri < numRanges * 2; ++ri) {
+              rangesOk &= readI64(
+                  rangesAddr + static_cast<uint64_t>(ri) * sizeof(int64_t),
+                  owned[ri]);
+            }
+            if (rangesOk) {
+              rangesPtr = owned.data();
+            } else {
+              numRanges = 0;
+            }
+          } else {
+            numRanges = 0;
+          }
+
           readBool(filterAddr + kFilterNegateOff, negate);
 
           MooreCrossBinsofFilter filter{
-              cpIndex, binIndices, numBins, valuesPtr, numValues, negate};
+              cpIndex, binIndices, numBins, valuesPtr,
+              numValues, rangesPtr, numRanges, negate};
           parsedFilters.push_back(filter);
         }
       }
