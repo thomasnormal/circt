@@ -40,6 +40,7 @@ std::unique_ptr<mlir::Pass> circt::moore::createSimplifyProceduresPass() {
 void SimplifyProceduresPass::runOnOperation() {
   getOperation()->walk([&](ProcedureOp procedureOp) {
     mlir::OpBuilder builder(&getContext());
+    DenseSet<Value> processedGlobals;
 
     // Use to collect blocking assignments that have been replaced by a "shadow"
     // variable.
@@ -51,12 +52,23 @@ void SimplifyProceduresPass::runOnOperation() {
       if (isa<ReadOp>(nestedOp) &&
           isa<SVModuleOp>(
               nestedOp.getOperand(0).getDefiningOp()->getParentOp())) {
+        if (!processedGlobals.insert(nestedOp.getOperand(0)).second)
+          return;
+
         // Collect the users of the global variable that is mentioned above.
         DenseSet<Operation *> users;
         for (auto *user : nestedOp.getOperand(0).getUsers())
           // Ensuring don't handle the users existing in another procedure body.
           if (procedureOp->isAncestor(user))
             users.insert(user);
+
+        // Only create a shadow variable for globals that are modified in this
+        // procedure. Read-only globals must remain direct reads.
+        bool hasBlockingAssignUser = llvm::any_of(users, [](Operation *user) {
+          return isa<BlockingAssignOp>(user);
+        });
+        if (!hasBlockingAssignUser)
+          return;
 
         // Because the operand of moore.event_wait is net.
         if (auto varOp = llvm::dyn_cast_or_null<VariableOp>(
@@ -75,7 +87,12 @@ void SimplifyProceduresPass::runOnOperation() {
           // Replace the users of the global variable with a corresponding
           // "shadow" variable.
           for (auto *user : users) {
-            user->replaceUsesOfWith(user->getOperand(0), newVarOp);
+            // Preserve values read inside explicit event controls. Rewriting
+            // those reads to the local shadow variable would make wait_event
+            // observe a procedure-local value instead of the module signal.
+            if (user->getParentOfType<WaitEventOp>())
+              continue;
+            user->replaceUsesOfWith(varOp.getResult(), newVarOp);
             if (auto assignOp = dyn_cast<BlockingAssignOp>(user))
               assignOps.push_back({assignOp, newVarOp, varOp});
           }

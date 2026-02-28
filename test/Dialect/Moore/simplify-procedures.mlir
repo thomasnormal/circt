@@ -40,11 +40,8 @@ moore.module @Foo() {
 
   // CHECK: moore.procedure always_comb
   moore.procedure always_comb {
+    // Read-only globals should remain direct reads.
     // CHECK: [[TMP:%.+]] = moore.read %a
-    // CHECK: [[LOCAL_A:%.+]] = moore.variable
-    // CHECK: moore.blocking_assign [[LOCAL_A]], [[TMP]]
-
-    // CHECK: [[TMP:%.+]] = moore.read [[LOCAL_A]]
     // CHECK: moore.blocking_assign %y, [[TMP]]
     %0 = moore.read %a : <i32>
     moore.blocking_assign %y, %0 : i32

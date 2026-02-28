@@ -1493,3 +1493,35 @@
     in parallel, which corrupted shared `%t` output files and produced false
     parse errors (`rivate/ivate` token fragments). Rerunning serially confirmed
     the change is stable.
+
+### ImportVerilog: re-enable `SimplifyProcedures` without breaking event controls
+- Repro (test first):
+  - Added `test/Conversion/MooreToCore/simplify-procedures-event-control.mlir`.
+  - Before fix, `--moore-simplify-procedures --convert-moore-to-core` lowered
+    `wait_event` to `llhd.wait` on a shadow-local load (`llvm.alloca`/`load`)
+    instead of the module signal probe, so event wakeups were tied to a stale
+    procedure-local value.
+- Root cause:
+  - `SimplifyProcedures` shadowed all module-variable reads, including:
+    - reads inside `moore.wait_event` regions, and
+    - read-only globals that were never assigned by the procedure.
+  - This made event-control observation drift from module signals to local
+    shadows in affected cases.
+- Fix:
+  - In `lib/Dialect/Moore/Transforms/SimplifyProcedures.cpp`:
+    - only shadow module globals that have a `moore.blocking_assign` user in
+      the same procedure,
+    - track processed globals to avoid duplicate shadowing work,
+    - never rewrite uses inside `moore.wait_event` regions,
+    - replace uses of the actual global value directly
+      (`replaceUsesOfWith(varOp.getResult(), newVarOp)`).
+  - Re-enabled pass in pipeline:
+    - `lib/Conversion/ImportVerilog/ImportVerilog.cpp` now runs
+      `moore::createSimplifyProceduresPass()` in the module pipeline.
+  - Updated `test/Dialect/Moore/simplify-procedures.mlir` to assert that
+    read-only globals remain direct reads.
+- Validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-opt circt-verilog`
+  - `build_test/bin/llvm-lit test/Conversion/MooreToCore/simplify-procedures-event-control.mlir`
+  - `build_test/bin/llvm-lit test/Conversion/ImportVerilog/basic.sv test/Conversion/ImportVerilog/coverage-event-local-assign-new-error.sv test/Conversion/ImportVerilog/coverage-event-local-decl-new-error.sv`
+  - `build_test/bin/llvm-lit test/Dialect/Moore/simplify-procedures.mlir`
