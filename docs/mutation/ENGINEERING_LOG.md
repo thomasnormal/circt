@@ -1,5 +1,42 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (compound modulo/division assignment mutation class)
+
+- realizations:
+  - `%=`/`/=` confusion is a realistic arithmetic implementation bug class in
+    sequential datapath/control updates and complements existing binary
+    `%`/`/` mutation operators.
+  - Lit tests that synthesize SV using shell `printf` require careful `%`
+    escaping (`%%%%`) to avoid format-string interpretation side effects.
+
+- changes made:
+  - Added native operators:
+    - `MOD_EQ_TO_DIV_EQ`
+    - `DIV_EQ_TO_MOD_EQ`
+  - Integrated operators in:
+    - planner op catalog, compound-assignment site detection, family
+      classification, and native apply rewrites
+      (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`arith`, `invert`, `inv`, `balanced/all`)
+      in `tools/circt-mut/circt-mut.cpp`
+    - native-op validator allowlist in
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-compound-mod-assign-ops.test`
+    - `test/Tools/native-create-mutated-mod-eq-to-div-eq-site-index.test`
+    - `test/Tools/native-create-mutated-div-eq-to-mod-eq-site-index.test`
+
+- validation:
+  - Red-first: all new tests fail before implementation and pass after.
+  - Focused lit slice across compound-assign families: `13 passed`.
+  - Seeded xrun-vs-circt parity campaign on `cov_intro_seeded_modassign`
+    variation with safe native-op allowlist:
+    - `count=24`, `seed=20260228`
+    - result: `match=24`, `mismatch=0`
+    - operators observed include both new ops:
+      `NATIVE_MOD_EQ_TO_DIV_EQ`, `NATIVE_DIV_EQ_TO_MOD_EQ`
+    - workspace: `/tmp/mut_parity_modassign_898860`
+
 ## 2026-02-28 (compound arithmetic-shift assignment mutation class)
 
 - realizations:

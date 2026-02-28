@@ -42,9 +42,9 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
     "MUL_TO_DIV",       "MOD_TO_DIV",     "DIV_TO_MOD",  "INC_TO_DEC",
     "DEC_TO_INC",       "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
-    "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ",    "SHL_EQ_TO_SHR_EQ",
-    "SHR_EQ_TO_SHL_EQ", "SHR_EQ_TO_ASHR_EQ",   "ASHR_EQ_TO_SHR_EQ",
-    "BAND_EQ_TO_BOR_EQ",
+    "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ",    "MOD_EQ_TO_DIV_EQ",
+    "DIV_EQ_TO_MOD_EQ", "SHL_EQ_TO_SHR_EQ",    "SHR_EQ_TO_SHL_EQ",
+    "SHR_EQ_TO_ASHR_EQ", "ASHR_EQ_TO_SHR_EQ",  "BAND_EQ_TO_BOR_EQ",
     "BOR_EQ_TO_BAND_EQ",
     "SHL_TO_SHR",
     "SHR_TO_SHL",       "SHR_TO_ASHR",    "ASHR_TO_SHR", "CASEEQ_TO_EQ",
@@ -1002,9 +1002,9 @@ static void collectCompoundAssignSites(StringRef text, StringRef token,
                                        ArrayRef<uint8_t> codeMask,
                                        SmallVectorImpl<SiteInfo> &sites) {
   assert((token == "+=" || token == "-=" || token == "*=" || token == "/=" ||
-          token == "<<=" || token == ">>=" || token == ">>>=" ||
+          token == "%=" || token == "<<=" || token == ">>=" || token == ">>>=" ||
           token == "&=" || token == "|=") &&
-         "expected +=, -=, *=, /=, <<=, >>=, >>>=, &=, or |= compound assignment token");
+         "expected +=, -=, *=, /=, %=, <<=, >>=, >>>=, &=, or |= compound assignment token");
   for (size_t i = 0, e = text.size(); i + token.size() <= e; ++i) {
     if (!isCodeRange(codeMask, i, token.size()))
       continue;
@@ -1019,6 +1019,8 @@ static void collectCompoundAssignSites(StringRef text, StringRef token,
     if (token == "*=" && prev == '*')
       continue;
     if (token == "/=" && prev == '/')
+      continue;
+    if (token == "%=" && prev == '%')
       continue;
     if (token == "<<=" && prev == '<')
       continue;
@@ -2329,6 +2331,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectCompoundAssignSites(designText, "/=", codeMask, sites);
     return;
   }
+  if (op == "MOD_EQ_TO_DIV_EQ") {
+    collectCompoundAssignSites(designText, "%=", codeMask, sites);
+    return;
+  }
+  if (op == "DIV_EQ_TO_MOD_EQ") {
+    collectCompoundAssignSites(designText, "/=", codeMask, sites);
+    return;
+  }
   if (op == "SHL_EQ_TO_SHR_EQ") {
     collectCompoundAssignSites(designText, "<<=", codeMask, sites);
     return;
@@ -2420,7 +2430,8 @@ static std::string getOpFamily(StringRef op) {
       op == "MOD_TO_DIV" || op == "DIV_TO_MOD" ||
       op == "UNARY_MINUS_DROP" || op == "INC_TO_DEC" || op == "DEC_TO_INC" ||
       op == "PLUS_EQ_TO_MINUS_EQ" || op == "MINUS_EQ_TO_PLUS_EQ" ||
-      op == "MUL_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MUL_EQ")
+      op == "MUL_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MUL_EQ" ||
+      op == "MOD_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MOD_EQ")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL" || op == "SHR_TO_ASHR" ||
       op == "ASHR_TO_SHR" || op == "SHL_EQ_TO_SHR_EQ" ||
@@ -3444,6 +3455,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, 2, "/=");
   if (op == "DIV_EQ_TO_MUL_EQ")
     return replaceTokenAt(mutatedText, pos, 2, "*=");
+  if (op == "MOD_EQ_TO_DIV_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "/=");
+  if (op == "DIV_EQ_TO_MOD_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "%=");
   if (op == "SHL_EQ_TO_SHR_EQ")
     return replaceTokenAt(mutatedText, pos, 3, ">>=");
   if (op == "SHR_EQ_TO_SHL_EQ")
