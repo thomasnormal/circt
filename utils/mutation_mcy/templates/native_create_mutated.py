@@ -1063,6 +1063,10 @@ def is_operand_start_char(ch: str) -> bool:
     return ch.isalnum() or ch in ("_", "(", "[", "{", "'", "~", "!", "$")
 
 
+def is_unary_operator_context(ch: str) -> bool:
+    return ch in ("(", "[", "{", ":", ";", ",", "?", "=", "+", "-", "*", "/", "%", "&", "|", "^", "!", "~", "<", ">")
+
+
 def find_binary_arithmetic_token(token: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -1486,6 +1490,81 @@ def find_unary_bitnot_token(nth: int) -> int:
     return -1
 
 
+def find_unary_reduction_token(token: str, nth: int) -> int:
+    if nth < 1:
+        return -1
+    if token not in ("&", "|", "^"):
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        if text[i] != token:
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
+        if token != "^" and (prev == token or nxt == token):
+            i += 1
+            continue
+        if prev == "=" or nxt == "=":
+            i += 1
+            continue
+        if token == "^" and (prev == "~" or nxt == "~"):
+            i += 1
+            continue
+        if prev == "~":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        if prev_sig >= 0 and not is_unary_operator_context(text[prev_sig]):
+            i += 1
+            continue
+        next_sig = find_next_code_nonspace(i + 1)
+        if next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
+def find_unary_reduction_xnor_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(i, i + 2):
+            i += 1
+            continue
+        if not (text.startswith("^~", i) or text.startswith("~^", i)):
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        if prev_sig >= 0 and not is_unary_operator_context(text[prev_sig]):
+            i += 1
+            continue
+        next_sig = find_next_code_nonspace(i + 2)
+        if next_sig < 0 or not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_cast_function_token(name: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -1634,6 +1713,26 @@ elif op == 'XOR_TO_XNOR':
         changed = True
 elif op == 'XNOR_TO_XOR':
     idx = find_binary_xnor_token(site_index)
+    if idx >= 0:
+        text = text[:idx] + '^' + text[idx + 2:]
+        changed = True
+elif op == 'REDAND_TO_REDOR':
+    idx = find_unary_reduction_token('&', site_index)
+    if idx >= 0:
+        text = text[:idx] + '|' + text[idx + 1:]
+        changed = True
+elif op == 'REDOR_TO_REDAND':
+    idx = find_unary_reduction_token('|', site_index)
+    if idx >= 0:
+        text = text[:idx] + '&' + text[idx + 1:]
+        changed = True
+elif op == 'REDXOR_TO_REDXNOR':
+    idx = find_unary_reduction_token('^', site_index)
+    if idx >= 0:
+        text = text[:idx] + '^~' + text[idx + 1:]
+        changed = True
+elif op == 'REDXNOR_TO_REDXOR':
+    idx = find_unary_reduction_xnor_token(site_index)
     if idx >= 0:
         text = text[:idx] + '^' + text[idx + 2:]
         changed = True

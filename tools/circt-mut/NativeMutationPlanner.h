@@ -46,6 +46,9 @@ bool computeOrderedNativeMutationOps(llvm::StringRef designText,
                                      llvm::SmallVectorImpl<std::string> &orderedOps,
                                      std::string &error);
 
+bool hasNativeMutationPatternForOp(llvm::StringRef designText,
+                                   llvm::StringRef op);
+
 void emitNativeMutationPlan(llvm::ArrayRef<std::string> orderedOps,
                             llvm::StringRef designText, uint64_t count,
                             uint64_t seed, const NativeMutationPlannerConfig &config,
