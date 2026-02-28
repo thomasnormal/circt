@@ -988,3 +988,55 @@
     (`76 passed`)
   - `build_test/bin/llvm-lit -sv test/Tools --filter='(circt-mut-apply-basic|native-create-mutated|run-mutation-mcy-examples-native)'`
     (`111 passed`)
+
+## 2026-02-28 (native xor compound-assign ops + parity bug root cause/fix)
+
+- realizations:
+  - Native control-mode compound assignment mutations were missing a realistic
+    xor-assignment fault class (`^=` confusion with `|=` / `&=`).
+  - Seeded xrun-vs-circt parity on xor-assign mutants exposed a CIRCT bug:
+    some mutants diverged with `xrun` showing concrete values while CIRCT
+    printed stale/incorrect values.
+  - Root cause was not mutation planning; it was procedure simplification:
+    `SimplifyProcedures` cached module globals into local shadows once per
+    procedure entry, which is invalid across `wait_*` suspension points.
+
+- changes made:
+  - Added native mutation ops:
+    - `BXOR_EQ_TO_BOR_EQ`
+    - `BXOR_EQ_TO_BAND_EQ`
+  - Planner/apply integration updates:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+      - op catalog, site collection, family classification, apply rewrite.
+    - `tools/circt-mut/circt-mut.cpp`
+      - mode operator sets include new xor compound-assign ops.
+  - Added TDD lit tests for new ops:
+    - `test/Tools/circt-mut-generate-circt-only-control-mode-compound-xor-assign-ops.test`
+    - `test/Tools/native-create-mutated-bxor-eq-to-bor-eq-site-index.test`
+    - `test/Tools/native-create-mutated-bxor-eq-to-band-eq-site-index.test`
+  - Fixed CIRCT bug causing stale globals across waits:
+    - `lib/Dialect/Moore/Transforms/SimplifyProcedures.cpp`
+    - Skip global->local shadow rewriting for procedures containing suspension
+      points (`wait_event`, `wait_condition`, `wait_delay`, `wait_fork`).
+  - Added regression test for the stale-shadow bug:
+    - `test/Tools/circt-sim/blocking-compound-assign-shadow-refresh.sv`
+
+- validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+    - `utils/ninja-with-lock.sh -C build_test circt-verilog`
+  - Red-green tests:
+    - new xor-op lit tests failed before implementation and passed after.
+    - stale-shadow regression failed before fix (`SUMMARY shadow=0`) and passed
+      after fix (`SUMMARY shadow=7`).
+  - Focused lit slice:
+    - 12 targeted tests passed:
+      - new xor-op generation/apply tests
+      - prior compound assign tests
+      - new circt-sim regression
+      - `test/Dialect/Moore/simplify-procedures.mlir`
+  - Seeded parity runs:
+    - xor-assign campaign before fix: `matches=5`, `mismatches=7`
+    - xor-assign campaign after fix: `matches=12`, `mismatches=0`
+    - control-mode campaign on `cov_intro_seeded` class example: all compared
+      mutants matched (`xrun_rc=0`, `circt_rc=0`, identical summary lines).

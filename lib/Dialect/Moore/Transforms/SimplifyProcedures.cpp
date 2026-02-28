@@ -14,6 +14,7 @@
 
 #include "circt/Dialect/Moore/MooreOps.h"
 #include "circt/Dialect/Moore/MoorePasses.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 
 namespace circt {
 namespace moore {
@@ -39,6 +40,21 @@ std::unique_ptr<mlir::Pass> circt::moore::createSimplifyProceduresPass() {
 
 void SimplifyProceduresPass::runOnOperation() {
   getOperation()->walk([&](ProcedureOp procedureOp) {
+    bool hasCallBoundary = false;
+    bool hasSuspensionPoint = false;
+    procedureOp.walk([&](Operation *nestedOp) {
+      if (isa<mlir::func::CallOp, mlir::func::CallIndirectOp>(nestedOp))
+        hasCallBoundary = true;
+      if (isa<WaitEventOp, WaitConditionOp, WaitDelayOp, WaitForkOp>(nestedOp))
+        hasSuspensionPoint = true;
+    });
+    // Procedure-local shadowing of module globals is only safe within a
+    // single activation. If the procedure can suspend (wait/event/delay), the
+    // cached local mirror can go stale across wakeups and break blocking
+    // assignment semantics. Keep direct global reads/writes in that case.
+    if (hasCallBoundary || hasSuspensionPoint)
+      return;
+
     mlir::OpBuilder builder(&getContext());
     DenseSet<Value> processedGlobals;
 

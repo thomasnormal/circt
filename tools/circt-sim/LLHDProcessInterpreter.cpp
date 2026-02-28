@@ -42321,6 +42321,19 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   }
   compiledFuncIsNative.clear();
   compiledFuncIsNative.resize(numCompiledAllFuncs, false);
+  compiledFuncHasTrampoline.clear();
+  compiledFuncHasTrampoline.resize(numCompiledAllFuncs, false);
+  for (uint32_t fid = 0; fid < numCompiledAllFuncs; ++fid) {
+    const char *entryName = loader.getFuncEntryName(fid);
+    if (!entryName)
+      continue;
+    // Entry-table FuncIds are keyed by canonical function names. Mark entries
+    // that have a generated interpreter trampoline so call_indirect can route
+    // non-native entries through the trampoline path instead of forcing
+    // interpreter fallback.
+    if (loader.lookupTrampolineId(entryName) >= 0)
+      compiledFuncHasTrampoline[fid] = true;
+  }
   unsigned nativeCount = 0;
   for (uint32_t fid = 0; fid < numCompiledAllFuncs; ++fid) {
     void *entryPtr = loader.getFuncEntry(fid);

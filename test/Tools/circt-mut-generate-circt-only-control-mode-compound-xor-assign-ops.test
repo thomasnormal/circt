@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk, input logic [7:0] din, output logic [7:0] out);\n  logic [7:0] acc;\n  always_ff @(posedge clk) begin\n    acc ^= din;\n    acc ^= 8''d60;\n    out <= acc;\n  end\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations_or.txt --count 24 --seed 31 --modes control --native-ops BXOR_EQ_TO_BOR_EQ > %t/log_or.txt
+// RUN: grep -q 'NATIVE_BXOR_EQ_TO_BOR_EQ' %t/mutations_or.txt
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations_and.txt --count 24 --seed 31 --modes control --native-ops BXOR_EQ_TO_BAND_EQ > %t/log_and.txt
+// RUN: grep -q 'NATIVE_BXOR_EQ_TO_BAND_EQ' %t/mutations_and.txt
+// RUN: FileCheck %s --check-prefix=LOG-OR < %t/log_or.txt
+// RUN: FileCheck %s --check-prefix=LOG-AND < %t/log_and.txt
+//
+// LOG-OR: Generated mutations: 24
+// LOG-AND: Generated mutations: 24
