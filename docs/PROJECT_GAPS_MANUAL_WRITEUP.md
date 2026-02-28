@@ -1045,8 +1045,8 @@ Service-port object creation still relies on ad hoc type checks without a formal
 ### [ ] 347. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:80`
 DPI lowering currently supports only integer argument types and rejects non-integer ports. What is missing is type lowering support for additional DPI-compatible types (e.g. real, arrays, structs/pointers as intended). The fix is to extend ABI/type mapping plus verification and add conformance tests per supported type class.
 
-### [ ] 348. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:100`
-Referenced external function lookup does not validate that discovered function signatures match expected lowered DPI types. What is missing is signature compatibility checking at bind time. The fix is to compare full function type (arity/types/attrs) and emit precise mismatch diagnostics before lowering proceeds.
+### [x] 348. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:100`
+Status update (2026-02-28): this gap is closed in this workspace. `--sim-lower-dpi-func` now validates that a reused external `func.func` (looked up via `verilogName`) exactly matches the expected lowered DPI signature and emits a targeted mismatch diagnostic before building invalid calls. Regression coverage was added in `test/Dialect/Sim/lower-dpi-errors.mlir`.
 
 ### [ ] 349. `lib/Support/TruthTable.cpp:217`
 Canonicalization currently uses factorial/exponential search (`O(n! * 2^(n+m))`), which does not scale beyond tiny inputs. What is missing is a more efficient semi-canonical or heuristic minimization strategy. The fix is to replace brute-force enumeration with a scalable canonical-form algorithm and benchmark correctness/performance tradeoffs.
@@ -2998,8 +2998,8 @@ DPI lowering currently restricts ports to integer types. What is missing is non-
 ### [ ] 998. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:83`
 This is the explicit diagnostic enforcing the non-integer DPI argument boundary from entry 997. It is a real capability limit, not a separate root cause.
 
-### [ ] 999. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:100`
-Referenced external `func.func` lookup by verilog name does not yet verify signature compatibility. What is missing is function-type matching enforcement during symbol reuse. The fix is to compare expected/generated function types and diagnose mismatches.
+### [x] 999. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:100`
+Status update (2026-02-28): this duplicate of entry 348 is now closed. `LowerDPIFunc` enforces function-type compatibility when binding to an existing `func.func` by `verilogName`, with regression coverage in `test/Dialect/Sim/lower-dpi-errors.mlir`.
 
 ### [ ] 1000. `lib/Conversion/ExportVerilog/ExportVerilog.cpp:298`
 ExportVerilog type-dimension collection still rejects some verilog-emittable type forms with unsupported-type diagnostics. What is missing is complete type-shape support in dimension extraction. The fix is to extend `getTypeDims` coverage.

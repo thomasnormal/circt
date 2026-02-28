@@ -1639,3 +1639,37 @@
 - Realization:
   - The writeup had multiple entries already diagnosed as non-actionable but
     left unchecked, which obscured truly unresolved gaps.
+
+### Sim DPI: validate reused external function signatures in LowerDPIFunc
+- Repro/verification (TDD):
+  - Added `test/Dialect/Sim/lower-dpi-errors.mlir` with an expected diagnostic
+    for a `sim.func.dpi` whose `verilogName` resolves to an existing
+    `func.func` with mismatched argument type.
+  - Ran the test before the code change:
+    - `build_test/bin/llvm-lit -a -v test/Dialect/Sim/lower-dpi-errors.mlir`
+  - Initial result: failed as expected, with a generic downstream
+    `'func.call' op operand type mismatch` error and no targeted DPI
+    compatibility diagnostic.
+- Root cause:
+  - `LowerDPIFunc` looked up an existing `func.func` by `verilogName` and
+    reused it without checking that the function type matched the generated DPI
+    ABI signature.
+  - This let lowering proceed until call construction/verification produced a
+    less actionable error.
+- Fix:
+  - In `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp`, added an explicit type
+    equality check after symbol lookup:
+    - compare `func.getFunctionType()` against the expected lowered `funcType`,
+    - emit a targeted `sim.func.dpi` error on mismatch and fail the pass early.
+- Validation:
+  - Rebuilt `circt-opt`:
+    - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - Re-ran focused tests:
+    - `build_test/bin/llvm-lit -a -v test/Dialect/Sim/lower-dpi-errors.mlir test/Dialect/Sim/lower-dpi.mlir`
+  - Ran a broader Sim/DPI sweep:
+    - `build_test/bin/llvm-lit -j 8 test/Dialect/Sim test/Conversion/SimToSV/dpi.mlir test/Tools/circt-sim/mailbox-dpi-blocking.mlir test/Tools/circt-sim/mailbox-dpi-blocking-bounded.mlir test/Tools/circt-sim/mailbox-dpi-nonblocking.mlir`
+  - Result: all passing.
+- Realization:
+  - The open TODO at `LowerDPIFunc.cpp:100` was not just documentation debt;
+    it directly affected diagnostic quality and made DPI binding failures harder
+    to debug.

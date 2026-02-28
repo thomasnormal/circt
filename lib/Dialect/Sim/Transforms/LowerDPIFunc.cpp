@@ -97,7 +97,11 @@ LogicalResult LowerDPIFuncPass::lowerDPIFuncOp(sim::DPIFuncOp simFunc,
   // symbol name in MLIR
   if (auto verilogName = simFunc.getVerilogName()) {
     func = symbolTable.lookup<func::FuncOp>(*verilogName);
-    // TODO: Check if function type matches.
+    if (func && func.getFunctionType() != funcType)
+      return simFunc.emitError()
+             << "DPI callee @" << *verilogName << " has type "
+             << func.getFunctionType() << " but expected " << funcType
+             << " for sim.func.dpi @" << simFunc.getSymName();
   }
 
   // If a referred function is not in the same module, create an external
