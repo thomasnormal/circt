@@ -114,6 +114,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   `'1`).
 - Logical mutations (`AND_TO_OR`, `OR_TO_AND`) target short-circuit boolean
   operators (`&&`, `||`).
+- Logical/bitwise confusion mutations (`LAND_TO_BAND`, `LOR_TO_BOR`,
+  `BAND_TO_LAND`, `BOR_TO_LOR`) model swapped boolean-vs-bitwise intent while
+  preserving binary-operator structure.
 - Bitwise mutations (`BAND_TO_BOR`, `BOR_TO_BAND`) target binary bitwise
   operators (`&`, `|`) and exclude reduction/operator-assignment spellings.
 - Unary inversion mutations split logical and bitwise intent:

@@ -25,7 +25,8 @@ namespace circt::mut {
 static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
-    "XOR_TO_OR",        "BAND_TO_BOR",    "BOR_TO_BAND",     "UNARY_NOT_DROP",
+    "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "BAND_TO_BOR",
+    "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
     "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
     "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
@@ -261,6 +262,13 @@ static bool isCodeRange(ArrayRef<uint8_t> codeMask, size_t pos, size_t len) {
   return true;
 }
 
+static size_t findPrevCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t pos);
+static size_t findNextCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t pos);
+static bool isOperandEndChar(char c);
+static bool isOperandStartChar(char c);
+
 static void collectLiteralTokenSites(StringRef text, StringRef token,
                                      ArrayRef<uint8_t> codeMask,
                                      SmallVectorImpl<SiteInfo> &sites) {
@@ -274,6 +282,35 @@ static void collectLiteralTokenSites(StringRef text, StringRef token,
     if (isCodeRange(codeMask, pos, token.size()))
       sites.push_back({pos});
     pos += token.size();
+  }
+}
+
+static void collectLogicalTokenSites(StringRef text, StringRef token,
+                                     ArrayRef<uint8_t> codeMask,
+                                     SmallVectorImpl<SiteInfo> &sites) {
+  assert((token == "&&" || token == "||") && "expected logical token");
+  char marker = token[0];
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!isCodeRange(codeMask, i, token.size()))
+      continue;
+    if (!text.substr(i).starts_with(token))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next =
+        (i + 2 < e && isCodeAt(codeMask, i + 2)) ? text[i + 2] : '\0';
+    if (prev == marker || next == marker)
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 2);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+
+    sites.push_back({i});
   }
 }
 
@@ -831,6 +868,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectLiteralTokenSites(designText, "||", codeMask, sites);
     return;
   }
+  if (op == "LAND_TO_BAND") {
+    collectLogicalTokenSites(designText, "&&", codeMask, sites);
+    return;
+  }
+  if (op == "LOR_TO_BOR") {
+    collectLogicalTokenSites(designText, "||", codeMask, sites);
+    return;
+  }
   if (op == "XOR_TO_OR") {
     collectBinaryXorSites(designText, codeMask, sites);
     return;
@@ -840,6 +885,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "BOR_TO_BAND") {
+    collectBinaryBitwiseSites(designText, '|', codeMask, sites);
+    return;
+  }
+  if (op == "BAND_TO_LAND") {
+    collectBinaryBitwiseSites(designText, '&', codeMask, sites);
+    return;
+  }
+  if (op == "BOR_TO_LOR") {
     collectBinaryBitwiseSites(designText, '|', codeMask, sites);
     return;
   }
@@ -937,9 +990,10 @@ static std::string getOpFamily(StringRef op) {
     return "compare";
   if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
     return "xcompare";
-  if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "XOR_TO_OR" ||
-      op == "BAND_TO_BOR" || op == "BOR_TO_BAND" || op == "UNARY_NOT_DROP" ||
-      op == "UNARY_BNOT_DROP")
+  if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "LAND_TO_BAND" ||
+      op == "LOR_TO_BOR" || op == "XOR_TO_OR" || op == "BAND_TO_BOR" ||
+      op == "BOR_TO_BAND" || op == "BAND_TO_LAND" || op == "BOR_TO_LOR" ||
+      op == "UNARY_NOT_DROP" || op == "UNARY_BNOT_DROP")
     return "logic";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";

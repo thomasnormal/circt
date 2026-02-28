@@ -185,3 +185,32 @@
     stale fixed op-count window (`circt-mut-generate-circt-only-xcompare-mode-ops`).
   - Ran seeded xrun-vs-circt parity campaign including shift-class mutations
     (`40` mutants, `SHR_TO_ASHR=6`, `ASHR_TO_SHR=6`): `ok=40 mismatch=0 fail=0`.
+
+## 2026-02-27 (logical vs bitwise confusion fault class)
+
+- realizations:
+  - Confusing short-circuit logical operators with bitwise operators
+    (`&&`/`||` vs `&`/`|`) is a realistic RTL bug class and semantically
+    distinct from pure invert/swap mutations.
+  - Logical token matching should avoid assertion-style triple tokens so site
+    indexing remains structurally valid.
+
+- changes made:
+  - Added native operators:
+    - `LAND_TO_BAND`, `LOR_TO_BOR`
+    - `BAND_TO_LAND`, `BOR_TO_LOR`
+  - Implemented planner-side logical token detection with triple-token guards
+    and operand-boundary checks.
+  - Implemented mutator-side rewrites for all four operators with matching
+    site-index behavior.
+  - Integrated the new operators into CIRCT-only `control`, `connect`,
+    `inv`/`invert`, and `balanced/all` mode mappings.
+  - Added regression tests:
+    - `native-create-mutated-land-to-band-site-index`
+    - `native-create-mutated-band-to-land-site-index`
+    - `circt-mut-generate-circt-only-control-mode-logbit-ops`
+  - Updated brittle default-sequence regression to reflect deterministic op
+    ordering after the new operator family was added.
+  - Ran seeded xrun-vs-circt parity campaign including logical/bitwise
+    confusion mutations (`40` mutants, each new op present 5 times):
+    `ok=40 mismatch=0 fail=0`.
