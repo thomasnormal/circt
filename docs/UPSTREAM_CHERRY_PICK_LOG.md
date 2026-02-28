@@ -324,3 +324,38 @@ Local follow-up commits kept in stack:
 
 - The first version of the new `builtins.sv` checks was too strict about SSA/value ordering and assertion op flavor (`verif.clocked_assert` vs `verif.assert`), and failed.
 - Checks were relaxed to assert semantic presence (`moore.int_to_logic`, `moore.eq`, labeled assert) without constraining unstable textual details.
+
+## CI Concurrency Follow-up (2026-02-28)
+
+- Starting staging head for this pass: `4169bfd64`
+- Current staging head after this pass: `21ebc4af5`
+
+### Additional Picks In This Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `21ebc4af5` | `a0b58ccce` | [CI] Cancel in-progress PR builds on new push (#9751) |
+
+### Local Conflict Resolution/Adaptation
+
+- Upstream commit touched four workflows, but this tree already had local concurrency tuning in two of them.
+- Kept exactly one `concurrency` block per workflow and retained existing behavior where appropriate.
+- Applied upstream PR-scoped cancellation semantics to:
+  - `.github/workflows/buildAndTest.yml`
+  - `.github/workflows/buildAndTestWindows.yml`
+- Left existing local short-integration cancellation behavior unchanged (removing accidental duplicate block introduced during cherry-pick resolution).
+- Removed duplicate `concurrency` block in `testPycdeESI.yml` generated during initial conflict application.
+
+### Validation Added In This Pass
+
+- Structural workflow sanity checks:
+  - `rg -n "^concurrency:|cancel-in-progress|group:" .github/workflows/buildAndTest.yml .github/workflows/buildAndTestWindows.yml .github/workflows/shortIntegrationTests.yml .github/workflows/testPycdeESI.yml`
+  - Verified one `concurrency` block per file and expected `cancel-in-progress` expressions.
+
+### Deferred / Superseded In This Pass
+
+- Skipped as effectively already present or incompatible with local evolved implementation:
+  - `17330f8a9` (fork-join blocks; conflicts with current `ForkOp`/`ForkTerminatorOp` path)
+  - `0f99432e5` (Arc time lowering; resolved to empty)
+  - `afcefdc19` (Comb canonicalization; overlaps with local SextMatcher hardening and test evolution)
+  - `2b9e89d41` (MooreToCore unreachable default removal; empty on this branch)
