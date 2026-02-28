@@ -37,7 +37,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
-    "CASE_TO_CASEZ", "CASEZ_TO_CASE",
+    "CASE_TO_CASEZ", "CASEZ_TO_CASE", "CASE_TO_CASEX", "CASEX_TO_CASE",
+    "CASEZ_TO_CASEX", "CASEX_TO_CASEZ",
     "IF_COND_NEGATE",   "RESET_COND_NEGATE", "RESET_COND_TRUE",
     "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
@@ -336,6 +337,8 @@ static size_t findStatementStart(StringRef text, ArrayRef<uint8_t> codeMask,
                                  size_t pos);
 static size_t findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
                                 size_t openPos);
+static bool matchKeywordTokenAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t pos, StringRef keyword);
 static bool isOperandEndChar(char c);
 static bool isOperandStartChar(char c);
 static bool isUnaryOperatorContext(char c);
@@ -1398,6 +1401,58 @@ static bool statementLooksLikeTypedDeclaration(StringRef text,
   return true;
 }
 
+static bool
+findNearestProceduralHeadBefore(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t anchor, StringRef &head,
+                                size_t &headPos) {
+  head = StringRef();
+  headPos = StringRef::npos;
+  if (anchor == StringRef::npos || anchor == 0)
+    return false;
+
+  static constexpr const char *kHeads[] = {"always_comb", "always_latch",
+                                           "always_ff",   "always",
+                                           "initial"};
+  for (size_t off = anchor; off > 0; --off) {
+    size_t i = off - 1;
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (matchKeywordTokenAt(text, codeMask, i, "endmodule"))
+      break;
+    for (const char *kw : kHeads) {
+      if (matchKeywordTokenAt(text, codeMask, i, kw)) {
+        head = StringRef(kw);
+        headPos = i;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static bool shouldSkipTimingAssignmentMutation(StringRef text,
+                                               ArrayRef<uint8_t> codeMask,
+                                               size_t stmtStart,
+                                               bool sourceIsNonblocking) {
+  StringRef head;
+  size_t headPos = StringRef::npos;
+  if (!findNearestProceduralHeadBefore(text, codeMask, stmtStart, head,
+                                       headPos))
+    return false;
+
+  // Mixed BA/NBA rewrites in always_comb/always_latch are non-portable and can
+  // produce simulator-dependent behavior.
+  if (head == "always_comb" || head == "always_latch")
+    return true;
+
+  // NBA->BA in initial blocks frequently creates same-edge races against
+  // clocked logic. Keep these sites out of deterministic campaigns.
+  if (sourceIsNonblocking && head == "initial")
+    return true;
+
+  return false;
+}
+
 static void collectProceduralBlockingAssignSites(
     StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
   int parenDepth = 0;
@@ -1460,6 +1515,9 @@ static void collectProceduralBlockingAssignSites(
     if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
       continue;
     if (statementHasPlainAssignBefore(text, codeMask, stmtStart, i))
+      continue;
+    if (shouldSkipTimingAssignmentMutation(text, codeMask, stmtStart,
+                                           /*sourceIsNonblocking=*/false))
       continue;
 
     sites.push_back({i});
@@ -1528,6 +1586,9 @@ static void collectProceduralNonblockingAssignSites(
     if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
       continue;
     if (statementHasPlainAssignBefore(text, codeMask, stmtStart, i))
+      continue;
+    if (shouldSkipTimingAssignmentMutation(text, codeMask, stmtStart,
+                                           /*sourceIsNonblocking=*/true))
       continue;
 
     sites.push_back({i});
@@ -2522,6 +2583,22 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectKeywordTokenSites(designText, "casez", codeMask, sites);
     return;
   }
+  if (op == "CASE_TO_CASEX") {
+    collectKeywordTokenSites(designText, "case", codeMask, sites);
+    return;
+  }
+  if (op == "CASEX_TO_CASE") {
+    collectKeywordTokenSites(designText, "casex", codeMask, sites);
+    return;
+  }
+  if (op == "CASEZ_TO_CASEX") {
+    collectKeywordTokenSites(designText, "casez", codeMask, sites);
+    return;
+  }
+  if (op == "CASEX_TO_CASEZ") {
+    collectKeywordTokenSites(designText, "casex", codeMask, sites);
+    return;
+  }
   if (op == "MUX_SWAP_ARMS") {
     collectMuxSwapArmSites(designText, codeMask, sites);
     return;
@@ -2765,6 +2842,8 @@ static std::string getOpFamily(StringRef op) {
       op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
       op == "CASE_TO_CASEZ" || op == "CASEZ_TO_CASE" ||
+      op == "CASE_TO_CASEX" || op == "CASEX_TO_CASE" ||
+      op == "CASEZ_TO_CASEX" || op == "CASEX_TO_CASEZ" ||
       op == "IF_ELSE_SWAP_ARMS" || op == "CASE_ITEM_SWAP_ARMS")
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
@@ -3809,6 +3888,14 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, strlen("case"), "casez");
   if (op == "CASEZ_TO_CASE")
     return replaceTokenAt(mutatedText, pos, strlen("casez"), "case");
+  if (op == "CASE_TO_CASEX")
+    return replaceTokenAt(mutatedText, pos, strlen("case"), "casex");
+  if (op == "CASEX_TO_CASE")
+    return replaceTokenAt(mutatedText, pos, strlen("casex"), "case");
+  if (op == "CASEZ_TO_CASEX")
+    return replaceTokenAt(mutatedText, pos, strlen("casez"), "casex");
+  if (op == "CASEX_TO_CASEZ")
+    return replaceTokenAt(mutatedText, pos, strlen("casex"), "casez");
   if (op == "MUX_SWAP_ARMS")
     return applyMuxSwapArmsAt(text, codeMask, pos, mutatedText);
   if (op == "MUX_FORCE_TRUE")

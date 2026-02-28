@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic [1:0] s, input logic a,b,c, output logic y0,y1);\n  always_comb begin\n    case (s)\n      2'b00: y0 = a;\n      2'b01: y0 = b;\n      default: y0 = c;\n    endcase\n    casex (s)\n      2'b1x: y1 = a;\n      default: y1 = c;\n    endcase\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_CASE_TO_CASEX@1\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: casex (s)
+// MUTANT: casex (s)

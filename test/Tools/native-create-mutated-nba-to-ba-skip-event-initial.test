@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  logic clk = 0;\n  always #5 clk = ~clk;\n  logic a = 0;\n  initial begin\n    @(posedge clk);\n    a <= 1'b1;\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_NBA_TO_BA@1\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUT < %t/mutant.sv
+//
+// MUT: a <= 1'b1;
+// MUT: // native_mutation_noop_fallback NATIVE_NBA_TO_BA@1
