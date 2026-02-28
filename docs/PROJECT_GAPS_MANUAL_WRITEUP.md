@@ -2023,11 +2023,11 @@ Valgrind exclusion marker, not rename-feature gap. The fix is to exclude such li
 ### [ ] 673. `test/Tools/circt-verilog-lsp-server/rename-refactoring.test:3`
 Same valgrind metadata false positive class as neighboring LSP tests. The fix is scanner suppression.
 
-### [ ] 674. `include/circt/Conversion/ImportVerilog.h:231`
-This option documents a recovery mode for unsupported SVA constructs (placeholder assert-like ops), revealing current SVA coverage gaps. What is missing is full lowering support for unsupported SVA forms so recovery mode is less necessary. The fix is incremental SVA feature implementation with parity tests.
+### [x] 674. `include/circt/Conversion/ImportVerilog.h:231`
+Status update (2026-02-28): this entry is closed as non-actionable policy/config documentation. The option describes importer behavior for unsupported SVA recovery mode; underlying SVA feature debt is tracked at implementation-site entries (for example in `AssertionExpr.cpp`).
 
-### [ ] 675. `include/circt/Conversion/ImportVerilog.h:233`
-`continueOnUnsupportedSVA = false` by default encodes strict-mode policy and fallback capability boundary. What is missing is broader supported SVA set to reduce dependence on lenient fallback. The fix is to close unsupported SVA gaps while retaining this policy knob.
+### [x] 675. `include/circt/Conversion/ImportVerilog.h:233`
+Status update (2026-02-28): same closure as entry 674. This default-value line is strict-mode policy, not an unresolved implementation TODO.
 
 ### [ ] 676. `test/Tools/circt-verilog-lsp-server/include.test:5`
 Valgrind exclusion metadata (with note about Slang internals), not a direct include-feature gap. The fix is to treat as test-environment annotation, not project debt.
@@ -3922,8 +3922,8 @@ Status update (2026-02-28): same closure as entry 1301.
 ### [ ] 1306. `lib/Conversion/MooreToCore/MooreToCore.cpp:14637`
 Real semantic gap: conditional lowering is only sound for two-valued conditions; X/Z requires dual-branch evaluate-and-merge semantics not yet implemented.
 
-### [ ] 1307. `lib/Conversion/MooreToCore/MooreToCore.cpp:15148`
-Integer-format lowering still rejects unsupported formatting variants. What is missing is full `IntFormat` lowering coverage.
+### [x] 1307. `lib/Conversion/MooreToCore/MooreToCore.cpp:15148`
+Status update (2026-02-28): this line-level tracker is stale. Current `moore.fmt.int` enum cases map directly to supported lowering branches (`decimal`, `binary`, `octal`, `hex_lower`, `hex_upper`) and existing string-format regressions pass.
 
 ### [ ] 1308. `lib/Conversion/MooreToCore/MooreToCore.cpp:16035`
 Format-string conversion falls back to empty string for unsupported fragment types. What is missing is complete format-fragment lowering to preserve semantics instead of silent empty fallback.

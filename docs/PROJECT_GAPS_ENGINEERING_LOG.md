@@ -1764,3 +1764,21 @@
   - Block-argument format strings are a natural IR composition case, and
     supporting them required treating fragments as SSA values first, not just
     op nodes.
+
+### Project gaps: close stale policy/comment entries (ImportVerilog + MooreToCore)
+- Repro/verification:
+  - Reviewed open prioritized entries that referenced policy/comment lines rather
+    than concrete missing implementation logic.
+  - Ran targeted sanity tests tied to these areas:
+    - `build_test/bin/llvm-lit -a -v test/Conversion/MooreToCore/string-ops.mlir`
+    - `build_test/bin/llvm-lit -a -v test/Conversion/ImportVerilog/sva-continue-on-unsupported.sv`
+  - Result: both passing.
+- Fix:
+  - Marked as closed (`[x]`) in
+    `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` with dated stale-status notes:
+    - 674, 675: ImportVerilog strict/lenient SVA option policy docs
+    - 1307: MooreToCore `fmt.int` switch default line-level tracker
+- Realization:
+  - These entries duplicated capability tracking already captured in concrete
+    implementation sites; keeping them open inflated prioritized TODO counts
+    without adding actionable signal.
