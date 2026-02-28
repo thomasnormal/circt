@@ -1392,3 +1392,38 @@
     crash class for dynamic extract indices; current UVM mini shard now advances
     to long `circt-lec` runtime and can time out, indicating a separate
     scale/perf frontier rather than the earlier strip-path functional gap.
+
+### Sim: wire `__moore_wait_condition` poll callback into run lifecycle (TDD)
+- Repro (failing test first):
+  - Added new regression:
+    - `test/Tools/circt-sim/wait-condition-poll-callback-lifecycle.mlir`
+  - Initial run failed because callback lifecycle was not wired:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/wait-condition-poll-callback-lifecycle.mlir`
+    - failure excerpt: expected `[WAITCOND-CB] install` not found.
+- Root cause:
+  - Runtime had callback API (`__moore_wait_condition_set_poll_callback`), but
+    `circt-sim` never installed/cleared it for simulation runs.
+  - Additionally, `func.call` external `__moore_wait_condition` calls were
+    dropped as generic external func calls in interpreter mode, so the runtime
+    entry (and callback) was never reached.
+- Fix:
+  - Added run-scoped callback bridge in `tools/circt-sim/circt-sim.cpp`:
+    - installs callback at `SimulationContext::run()` entry,
+    - clears callback on scope exit,
+    - optional trace via
+      `CIRCT_SIM_TRACE_WAIT_CONDITION_POLL_CALLBACK=1`:
+      `[WAITCOND-CB] install`, `poll#N`, `clear polls=N`.
+  - Added `func.call` external fallback for
+    `__moore_wait_condition` in
+    `tools/circt-sim/LLHDProcessInterpreter.cpp` so the runtime function is
+    invoked rather than silently returning X/default external behavior.
+  - Added regression:
+    - `test/Tools/circt-sim/wait-condition-poll-callback-lifecycle.mlir`
+- Validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - New regression:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/wait-condition-poll-callback-lifecycle.mlir`
+  - Focused wait-condition + UVM checks:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/wait-condition-*.mlir test/Tools/circt-sim/fork-execute-phase-monitor-intercept-single-shot.mlir test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv -j 8`
+    - result: 14/14 passed.

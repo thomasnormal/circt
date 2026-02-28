@@ -254,6 +254,47 @@ extern "C" void __circt_sim_call_interpreted(CirctSimCtx * /*ctx*/,
 /// without going through the opaque CirctSimCtx pointer.
 static ProcessScheduler *g_aotScheduler = nullptr;
 
+namespace {
+
+/// Bridges runtime __moore_wait_condition polling to the simulator lifecycle.
+/// The current bridge preserves legacy "poll once and continue" behavior while
+/// making callback install/clear explicit around a simulation run.
+class WaitConditionPollCallbackBridge {
+public:
+  WaitConditionPollCallbackBridge() {
+    traceEnabled =
+        std::getenv("CIRCT_SIM_TRACE_WAIT_CONDITION_POLL_CALLBACK") != nullptr;
+    if (traceEnabled)
+      llvm::errs() << "[WAITCOND-CB] install\n";
+    __moore_wait_condition_set_poll_callback(&WaitConditionPollCallbackBridge::poll,
+                                             this);
+  }
+
+  ~WaitConditionPollCallbackBridge() {
+    __moore_wait_condition_set_poll_callback(nullptr, nullptr);
+    if (traceEnabled)
+      llvm::errs() << "[WAITCOND-CB] clear polls=" << pollCount.load() << "\n";
+  }
+
+private:
+  static int32_t poll(void *userData) {
+    auto *bridge = static_cast<WaitConditionPollCallbackBridge *>(userData);
+    if (!bridge)
+      return 1;
+    uint64_t count = bridge->pollCount.fetch_add(1) + 1;
+    if (bridge->traceEnabled)
+      llvm::errs() << "[WAITCOND-CB] poll#" << count << "\n";
+    // Keep runtime fallback semantics: a false condition re-checks once and
+    // returns to caller.
+    return 1;
+  }
+
+  std::atomic<uint64_t> pollCount{0};
+  bool traceEnabled = false;
+};
+
+} // namespace
+
 /// Static hot data struct returned by __circt_sim_get_hot().
 /// Filled once when the pointer is first requested; refreshed if the
 /// scheduler's signal memory is reallocated (which shouldn't happen after
@@ -2088,6 +2129,7 @@ LogicalResult SimulationContext::run() {
   startWatchdogThread();
   simulationStarted.store(true);
   stoppedByMaxTime = false;
+  WaitConditionPollCallbackBridge waitConditionPollCallbackBridge;
 
   // Write VCD header
   if (vcdWriter) {
