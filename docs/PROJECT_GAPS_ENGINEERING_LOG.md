@@ -1299,3 +1299,20 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm -j 8`
   - result: targeted tests pass; full UVM runtime suite 17/17 passed.
+
+### MooreToCore/UVM scoped gap writeup cleanup: retire stale TODO debt entries
+- Repro:
+  - `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` still tracked several stale entries:
+    - UVM phase tests (entries 87/88) described as non-executed infrastructure gaps.
+    - MooreToCore entries (2001/2003/2004) described as active FIXME/TODO debt.
+- Root cause:
+  - The writeup snapshot lagged behind already-landed tests/regressions.
+- Fix:
+  - Updated manual writeup entries to reflect current status:
+    - 87/88: now execution-backed via `circt-sim`.
+    - 2001: no active FIXME/XFAIL; regression verifies wait-event lowering after inlining.
+    - 2003/2004: `always_comb`/`always_latch` coverage exists in dedicated tests.
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Conversion/MooreToCore -j 8`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm -j 8`
+  - result: both suites pass (MooreToCore 133/133, Runtime/uvm 17/17).

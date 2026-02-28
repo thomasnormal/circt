@@ -263,10 +263,10 @@ This is the fourth consecutive `mktemp` false positive in the same block and con
 `raise ValueError("unsupported type")` in `_FromCirctType` is a hard boundary for type conversion coverage in PyRTG. The missing behavior is support for additional CIRCT/RTG type nodes that users can encounter from evolving dialect features. The fix is to add new type cases as dialect support grows and include round-trip tests that confirm Python wrappers are generated for each supported type form.
 
 ### 87. `test/Runtime/uvm/uvm_phase_wait_for_state_test.sv:2`
-`// UNSUPPORTED: true` here intentionally disables the test in the current harness, so this line marks a real testing coverage gap rather than code semantics ambiguity. What is missing is an execution path in CI that can run UVM runtime simulation tests instead of only compile-only checks. The fix is to stand up a dedicated runtime-capable test lane for these UVM tests and remove blanket `UNSUPPORTED` once infrastructure is available.
+Status update (2026-02-28): this gap is closed. The test now has execution-backed `circt-sim` RUN lines and `FileCheck` assertions in addition to parse-only coverage, so runtime behavior is exercised in the standard lit workflow.
 
 ### 88. `test/Runtime/uvm/uvm_phase_aliases_test.sv:2`
-This is the same infrastructure-driven testing gap as entry 87: the test exists, but the harness does not yet execute it. The missing capability is runtime UVM test integration in the standard test workflow. The fix is to add that runtime lane and convert this test from permanently unsupported to actively validated behavior.
+Status update (2026-02-28): this gap is closed. The test now includes LLHD lowering + `circt-sim` execution checks with `FileCheck`, so phase-handle alias behavior is validated beyond parse-only.
 
 ### 89. `utils/run_avip_circt_sim.sh:249`
 Rejecting `AVIP_SET` values outside `core8|all9` is likely an intentional guard, but it also hard-codes set names and blocks extension without script edits. What is missing is a configurable registry for AVIP sets so users can add curated subsets without patching the script. The fix is to load sets from a config file (or env-provided manifest) and keep these strict checks as validation against that dynamic registry.
@@ -6005,16 +6005,16 @@ Expected-error text for unsupported Verilog type `f32` is negative-test oracle c
 `@unsupportedConversion` is negative-test function naming; the actionable gap is asserted by its expected-error line, not this declaration itself.
 
 ### 2001. `test/Conversion/MooreToCore/interface-timing-after-inlining.sv:8`
-This `FIXME` in a conversion test documents a real MooreToCore lowering gap (`moore.wait_event/detect_event` inside `func.func`), but the line itself is fixture commentary. Actionable work is to complete that lowering path and then retire the FIXME/XFAIL once covered by passing regressions.
+Status update (2026-02-28): this item is stale. The test now serves as a regression that asserts `moore.wait_event`/`moore.detect_event` are lowered away after inlining; there is no active `FIXME`/`XFAIL` debt remaining for this case.
 
 ### 2002. `test/Conversion/MooreToCore/basic.mlir:173`
 `moore.constant bXXXXXX` is expected unknown-value test payload in a regression fixture, not unresolved implementation debt at this line.
 
 ### 2003. `test/Conversion/MooreToCore/basic.mlir:628`
-`// TODO: moore.procedure always_comb` is test-suite commentary about conversion coverage boundaries. The underlying enhancement is broader `always_comb` lowering coverage, but this line is not code debt by itself.
+Status update (2026-02-28): this entry is stale. `always_comb` coverage exists in dedicated MooreToCore regression tests (for example `procedure-always-comb-latch.mlir` and related tests), and current suite passes.
 
 ### 2004. `test/Conversion/MooreToCore/basic.mlir:629`
-Same as entry 2003 for `always_latch`: this is fixture TODO commentary indicating coverage/work still pending in conversion support.
+Status update (2026-02-28): same as entry 2003. `always_latch` lowering is covered in dedicated regressions, so this should no longer be tracked as an open TODO gap.
 
 ### 2005. `test/Conversion/FSMToSV/test_errors.mlir:4`
 Expected-error text (`op is unsupported`) is negative-test oracle content validating diagnostics, not unresolved implementation debt at this line.
