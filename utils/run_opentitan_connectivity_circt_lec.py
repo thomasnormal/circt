@@ -1461,6 +1461,12 @@ def main() -> int:
         os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS", "180"),
         "LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS",
     )
+    canonicalizer_timeout_retry_auto_preenable_timeout_secs = parse_nonnegative_int(
+        os.environ.get(
+            "LEC_CANONICALIZER_TIMEOUT_RETRY_AUTO_PREENABLE_TIMEOUT_SECS", "120"
+        ),
+        "LEC_CANONICALIZER_TIMEOUT_RETRY_AUTO_PREENABLE_TIMEOUT_SECS",
+    )
     if canonicalizer_timeout_retry_mode != "off":
         if (
             canonicalizer_timeout_retry_max_iterations <= 0
@@ -1753,7 +1759,32 @@ def main() -> int:
         # Learned per-run LEC retry state. Once a canonicalizer-timeout retry
         # proved necessary, start later cases with the bounded budget enabled
         # to avoid repeated timeout-first retries.
-        learned_canonicalizer_timeout_budget = False
+        #
+        # In auto mode for low-timeout Z3 runs, pre-enable the bounded budget
+        # from case 1 to avoid deterministic first-case timeout churn on known
+        # OpenTitan timeout-frontier rules.
+        auto_preenable_canonicalizer_timeout_budget = (
+            canonicalizer_timeout_retry_mode == "auto"
+            and lec_run_smtlib
+            and not lec_smoke_only
+            and not has_explicit_canonicalizer_budget
+            and timeout_secs > 0
+            and canonicalizer_timeout_retry_auto_preenable_timeout_secs > 0
+            and timeout_secs
+            <= canonicalizer_timeout_retry_auto_preenable_timeout_secs
+        )
+        learned_canonicalizer_timeout_budget = (
+            auto_preenable_canonicalizer_timeout_budget
+        )
+        if auto_preenable_canonicalizer_timeout_budget:
+            print(
+                "opentitan connectivity lec: pre-enabling bounded canonicalizer "
+                "budget for low-timeout z3 run "
+                f"(timeout={timeout_secs}s<=auto-threshold="
+                f"{canonicalizer_timeout_retry_auto_preenable_timeout_secs}s)",
+                file=sys.stderr,
+                flush=True,
+            )
         # Learned per-run LEC retry state for LLHD abstraction UNKNOWN outcomes.
         learned_assume_known_inputs = has_assume_known_inputs
 

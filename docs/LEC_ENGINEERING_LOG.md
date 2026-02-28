@@ -294,3 +294,49 @@
     - diag split: `EQ=6`, `LLHD_ABSTRACTION=5`.
     - confirms formerly failing `clkmgr_cg_en` alert rows now pass in
       mixed `alert_handler/clkmgr/rstmgr` shard context.
+
+## 2026-02-28 - Proactive canonicalizer budget on low-timeout Z3 runs
+
+- realization:
+  - timeout-frontier OpenTitan AST runs were still paying a deterministic
+    first-case timeout in `auto` mode before learning canonicalizer budget.
+  - direct timing profile for
+    `connectivity::ast_clkmgr.csv:AST_CLK_SNS_IN` with bounded rewrites:
+    - total wall: ~104.26s
+    - `Run SMT-LIB via z3`: ~0.0071s
+    - dominant wall passes remained frontend/lowering:
+      - `FlattenModules` ~30.11s
+      - `'hw.module' Pipeline` ~24.90s
+      - `Canonicalizer` (late) ~8.85s
+  - confirms timeout frontier is primarily lowering-side, not solver-side.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added
+      `LEC_CANONICALIZER_TIMEOUT_RETRY_AUTO_PREENABLE_TIMEOUT_SECS`
+      (default `120`).
+    - when retry mode is `auto`, `LEC_RUN_SMTLIB=1`, no explicit canonicalizer
+      budget is provided, and `CIRCT_TIMEOUT_SECS` is non-zero and at/below
+      threshold, the run now pre-enables bounded canonicalizer rewrites from
+      case 1 (instead of paying timeout-first retry churn).
+    - emits explicit stderr diagnostic when this pre-enable path activates.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-auto-preenable.test`.
+  - test asserts first case starts with bounded canonicalizer budget in `auto`
+    mode and avoids creation of `circt-lec.canonicalizer-timeout.log`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `33/33` pass.
+  - real OpenTitan Z3 replay:
+    - filter: `AST_CLK_SNS_IN|AST_CLK_ES_IN|AST_HISPEED_SEL_IN`,
+      `CIRCT_TIMEOUT_SECS=60`.
+    - before change: first case hit timeout then retried with bounded
+      canonicalizer budget.
+    - after change: startup logs pre-enable diagnostic and no
+      `retrying circt-lec with bounded canonicalizer budget` line appears.
+    - result remains `3/3 PASS`.
