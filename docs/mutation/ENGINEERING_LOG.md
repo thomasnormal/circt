@@ -214,3 +214,29 @@
   - Ran seeded xrun-vs-circt parity campaign including logical/bitwise
     confusion mutations (`40` mutants, each new op present 5 times):
     `ok=40 mismatch=0 fail=0`.
+
+## 2026-02-27 (xor/xnor confusion fault class)
+
+- realizations:
+  - XOR vs XNOR confusion is a realistic logic fault class and is semantically
+    distinct from the existing `XOR_TO_OR` mutation.
+  - `XNOR_TO_XOR` must avoid reduction-XNOR forms so binary-site indexing stays
+    aligned and structurally valid.
+
+- changes made:
+  - Added native operators `XOR_TO_XNOR` and `XNOR_TO_XOR`.
+  - Implemented planner-side binary XNOR site detection for `^~` and `~^` with
+    operand-boundary checks.
+  - Implemented mutator-side rewrites for both directions with site-index
+    parity against planner behavior.
+  - Integrated XOR/XNOR operators into CIRCT-only `control`, `connect`,
+    `inv`/`invert`, and `balanced/all` mode mappings.
+  - Added regression tests:
+    - `native-create-mutated-xor-to-xnor-site-index`
+    - `native-create-mutated-xnor-to-xor-site-index`
+    - `native-create-mutated-xnor-skip-reduction`
+    - `circt-mut-generate-circt-only-control-mode-xnor-ops`
+  - Updated weighted diversity regression to include the expanded logic-op set.
+  - Ran seeded xrun-vs-circt parity campaign including xor/xnor mutations
+    (`40` mutants, `XOR_TO_XNOR=8`, `XNOR_TO_XOR=8`):
+    `ok=40 mismatch=0 fail=0`.

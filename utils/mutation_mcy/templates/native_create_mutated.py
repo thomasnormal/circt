@@ -576,6 +576,34 @@ def find_binary_xor_token(nth: int) -> int:
     return -1
 
 
+def find_binary_xnor_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(i, i + 2):
+            i += 1
+            continue
+        if text.startswith("^~", i) or text.startswith("~^", i):
+            prev_sig = find_prev_code_nonspace(i)
+            next_sig = find_next_code_nonspace(i + 2)
+            if prev_sig < 0 or next_sig < 0:
+                i += 1
+                continue
+            if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+                text[next_sig]
+            ):
+                i += 1
+                continue
+            seen += 1
+            if seen == nth:
+                return i
+        i += 1
+    return -1
+
+
 def find_binary_bitwise_token(token: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -760,6 +788,16 @@ elif op == 'XOR_TO_OR':
     idx = find_binary_xor_token(site_index)
     if idx >= 0:
         text = text[:idx] + '|' + text[idx + 1:]
+        changed = True
+elif op == 'XOR_TO_XNOR':
+    idx = find_binary_xor_token(site_index)
+    if idx >= 0:
+        text = text[:idx] + '^~' + text[idx + 1:]
+        changed = True
+elif op == 'XNOR_TO_XOR':
+    idx = find_binary_xnor_token(site_index)
+    if idx >= 0:
+        text = text[:idx] + '^' + text[idx + 2:]
         changed = True
 elif op == 'BAND_TO_BOR':
     idx = find_binary_bitwise_token('&', site_index)

@@ -25,8 +25,9 @@ namespace circt::mut {
 static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
     "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
-    "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "BAND_TO_BOR",
-    "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "UNARY_NOT_DROP",
+    "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "XOR_TO_XNOR",
+    "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
+    "BOR_TO_LOR",       "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
     "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
     "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
@@ -632,6 +633,25 @@ static void collectBinaryXorSites(StringRef text, ArrayRef<uint8_t> codeMask,
   }
 }
 
+static void collectBinaryXnorSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!isCodeRange(codeMask, i, 2))
+      continue;
+    if (!text.substr(i).starts_with("^~") && !text.substr(i).starts_with("~^"))
+      continue;
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 2);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    char prevSigChar = text[prevSig];
+    char nextSigChar = text[nextSig];
+    if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+    sites.push_back({i});
+  }
+}
+
 static void collectBinaryBitwiseSites(StringRef text, char needle,
                                       ArrayRef<uint8_t> codeMask,
                                       SmallVectorImpl<SiteInfo> &sites) {
@@ -880,6 +900,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryXorSites(designText, codeMask, sites);
     return;
   }
+  if (op == "XOR_TO_XNOR") {
+    collectBinaryXorSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "XNOR_TO_XOR") {
+    collectBinaryXnorSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "BAND_TO_BOR") {
     collectBinaryBitwiseSites(designText, '&', codeMask, sites);
     return;
@@ -991,9 +1019,10 @@ static std::string getOpFamily(StringRef op) {
   if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
     return "xcompare";
   if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "LAND_TO_BAND" ||
-      op == "LOR_TO_BOR" || op == "XOR_TO_OR" || op == "BAND_TO_BOR" ||
-      op == "BOR_TO_BAND" || op == "BAND_TO_LAND" || op == "BOR_TO_LOR" ||
-      op == "UNARY_NOT_DROP" || op == "UNARY_BNOT_DROP")
+      op == "LOR_TO_BOR" || op == "XOR_TO_OR" || op == "XOR_TO_XNOR" ||
+      op == "XNOR_TO_XOR" || op == "BAND_TO_BOR" || op == "BOR_TO_BAND" ||
+      op == "BAND_TO_LAND" || op == "BOR_TO_LOR" || op == "UNARY_NOT_DROP" ||
+      op == "UNARY_BNOT_DROP")
     return "logic";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
