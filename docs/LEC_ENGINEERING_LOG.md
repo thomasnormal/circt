@@ -340,3 +340,44 @@
     - after change: startup logs pre-enable diagnostic and no
       `retrying circt-lec with bounded canonicalizer budget` line appears.
     - result remains `3/3 PASS`.
+
+## 2026-02-28 - Runner launch robustness for transient tool invocation errors
+
+- realization:
+  - broader OpenTitan shard replays can hit transient process-launch failures
+    (for example `PermissionError`/`EACCES` on `build_test/bin/circt-verilog`
+    during active local rebuild races), which previously surfaced as uncaught
+    Python exceptions and aborted the full run.
+  - these failures should be treated as normal per-case tool failures (with
+    logs and `ERROR` rows), not framework crashes.
+
+- implemented:
+  - `utils/formal/lib/runner_common.py`:
+    - `run_command_logged` now catches `OSError` from `subprocess.run`,
+      records diagnostic log text, applies existing retry policy hooks
+      (`retryable_exit_codes`/`retryable_output_patterns`), and raises a
+      normalized `CalledProcessError(returncode=127)` when retries are
+      exhausted.
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - fallback (no-shared-helper) `run_and_log` now mirrors the same
+      normalization for `OSError` launch failures.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-tool-invoke-permission-error.test`
+    to enforce:
+    - no traceback on non-executable `CIRCT_VERILOG`,
+    - per-case log contains `PermissionError`,
+    - result row is `ERROR ... CIRCT_VERILOG_ERROR`.
+  - added
+    `test/Tools/formal-runner-common-tool-invoke-permission-error.test`
+    to enforce shared helper normalization:
+    `CalledProcessError` with return code `127` and logged `PermissionError`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    `utils/formal/lib/runner_common.py` passes.
+  - `llvm-lit -sv`
+    `test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+    `test/Tools/formal-runner-common-tool-invoke-permission-error.test`:
+    `35/35` pass.

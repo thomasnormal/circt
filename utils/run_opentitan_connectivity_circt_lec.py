@@ -939,6 +939,14 @@ def run_and_log(
         if out_path is not None:
             out_path.write_text(stdout, encoding="utf-8")
         raise
+    except OSError as exc:
+        err_text = f"{exc.__class__.__name__}: {exc}"
+        write_log(log_path, "", err_text)
+        if out_path is not None:
+            out_path.write_text("", encoding="utf-8")
+        raise subprocess.CalledProcessError(
+            127, cmd, output="", stderr=err_text
+        ) from exc
     stdout = _coerce_text(result.stdout)
     stderr = _coerce_text(result.stderr)
     write_log(log_path, stdout, stderr)

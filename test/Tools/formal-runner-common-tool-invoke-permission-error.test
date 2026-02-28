@@ -1,0 +1,11 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nraise SystemExit(0)\n' > %t/bin/nonexec-tool
+// RUN: chmod -x %t/bin/nonexec-tool
+// RUN: printf 'import subprocess\nimport sys\nfrom pathlib import Path\nsys.path.insert(0, \"%S/../../utils/formal/lib\")\nfrom runner_common import run_command_logged\nlog = Path(\"%t/log.txt\")\ntry:\n  run_command_logged([str(Path(\"%t/bin/nonexec-tool\"))], log)\n  print(\"UNEXPECTED_OK\")\nexcept subprocess.CalledProcessError as exc:\n  print(f\"RC={exc.returncode}\")\n  print(f\"STDERR={exc.stderr}\")\nprint(\"LOG=\" + log.read_text(encoding=\"utf-8\").strip())\n' > %t/probe.py
+// RUN: python3 %t/probe.py > %t/out.txt
+// RUN: FileCheck %s < %t/out.txt
+//
+// CHECK: RC=127
+// CHECK: PermissionError: [Errno 13] Permission denied
+// CHECK: LOG=PermissionError: [Errno 13] Permission denied

@@ -134,14 +134,24 @@ def is_allowlisted(token: str, allowlist: Allowlist) -> bool:
     return False
 
 
-def write_log(path: Path, stdout: str, stderr: str) -> None:
+def _coerce_text(payload: str | bytes | None) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", errors="replace")
+    return payload
+
+
+def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    stdout_text = _coerce_text(stdout)
+    stderr_text = _coerce_text(stderr)
     payload = ""
-    if stdout:
-        payload += stdout
+    if stdout_text:
+        payload += stdout_text
         if not payload.endswith("\n"):
             payload += "\n"
-    if stderr:
-        payload += stderr
+    if stderr_text:
+        payload += stderr_text
     path.write_text(payload, encoding="utf-8")
 
 
@@ -171,8 +181,8 @@ def run_command_logged(
                 timeout=timeout_secs if timeout_secs > 0 else None,
             )
         except subprocess.TimeoutExpired as exc:
-            last_stdout = exc.stdout or ""
-            last_stderr = exc.stderr or ""
+            last_stdout = _coerce_text(exc.stdout)
+            last_stderr = _coerce_text(exc.stderr)
             write_log(log_path, last_stdout, last_stderr)
             if out_path is not None:
                 out_path.write_text(last_stdout, encoding="utf-8")
@@ -181,6 +191,25 @@ def run_command_logged(
                     time.sleep(retry_backoff_secs)
                 continue
             raise
+        except OSError as exc:
+            last_stdout = ""
+            last_stderr = f"{exc.__class__.__name__}: {exc}"
+            write_log(log_path, last_stdout, last_stderr)
+            if out_path is not None:
+                out_path.write_text(last_stdout, encoding="utf-8")
+            retryable = 127 in retry_codes
+            if not retryable and output_patterns:
+                retryable = any(pattern in last_stderr.lower() for pattern in output_patterns)
+            if retryable and attempt < attempts:
+                if retry_backoff_secs > 0.0:
+                    time.sleep(retry_backoff_secs)
+                continue
+            raise subprocess.CalledProcessError(
+                127,
+                cmd,
+                output=last_stdout,
+                stderr=last_stderr,
+            ) from exc
 
         last_stdout = result.stdout or ""
         last_stderr = result.stderr or ""
