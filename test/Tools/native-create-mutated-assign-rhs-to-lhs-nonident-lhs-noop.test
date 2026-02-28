@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic [3:0] a, output logic [3:0] y);\n  always_comb begin\n    y[0] = a[0];\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_ASSIGN_RHS_TO_LHS@1\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUT < %t/mutant.sv
+//
+// MUT: y[0] = a[0];
+// MUT: // native_mutation_noop_fallback NATIVE_ASSIGN_RHS_TO_LHS@1

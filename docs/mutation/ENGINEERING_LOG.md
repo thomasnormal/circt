@@ -1463,3 +1463,47 @@
       `Permission denied` launching `build_test/bin/circt-verilog`).
     - targeted recheck of failed IDs (`28/29`) after relink window:
       both rechecked `ok` with matching `COV`/`SIG` vs xrun.
+
+## 2026-02-28 (ASSIGN_RHS_TO_LHS connect-class fault)
+
+- realizations:
+  - We lacked a direct stale-self/update-loss assignment fault:
+    replacing RHS with LHS (`x = x`) is a common realistic bug class in
+    hand-written RTL edits and refactors.
+  - This operator belongs to dataflow/connectivity faults, not arithmetic.
+
+- changes made:
+  - Added native operator:
+    - `ASSIGN_RHS_TO_LHS`
+  - Integrated in planner/apply path:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+      - op catalog (`kNativeMutationOpsAll`)
+      - assign-RHS op detection
+      - family mapping (`connect`)
+      - apply rewrite (`rhs -> lhs`) gated to simple identifier LHS only
+        for structural safety.
+  - Updated CIRCT-only mode allowlists:
+    - `tools/circt-mut/circt-mut.cpp`
+      - included in `connect`, `balanced/all`, `invert`, `inv`.
+  - Updated native-op token validation:
+    - `utils/run_mutation_mcy_examples.sh`
+  - Added TDD tests:
+    - `test/Tools/native-create-mutated-assign-rhs-to-lhs-site-index.test`
+    - `test/Tools/native-mutation-plan-assign-rhs-to-lhs-force.test`
+    - `test/Tools/native-create-mutated-assign-rhs-to-lhs-nonident-lhs-noop.test`
+      (ensures non-identifier LHS degrades to explicit noop-fallback marker).
+  - Updated expectation tests impacted by expanded connect-family candidate set:
+    - `test/Tools/circt-mut-generate-circt-only-connect-mode-assign-rhs-const-ops.test`
+    - `test/Tools/circt-mut-generate-circt-only-weighted-fault-class-diversity.test`
+    - `test/Tools/circt-mut-generate-circt-only-modes-basic.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slices:
+    - assign-rhs + connect/mode/weighted filters: `31 passed`.
+  - seeded xrun-vs-circt parity (operator-restricted):
+    - `/tmp/cov_intro_seeded_assign_rhs_tolhs_parity_1772297748`
+      - `ok=12 mismatch=0 fail=0`
+    - `/tmp/cov_seeded_rhsconst_assign_rhs_tolhs_parity_1772297785`
+      - `ok=12 mismatch=0 fail=0`

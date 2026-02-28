@@ -3,6 +3,7 @@
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 160 --seed 29 --modes connect > %t/log.txt
 // RUN: grep -q 'NATIVE_ASSIGN_RHS_TO_CONST0' %t/mutations.txt
 // RUN: grep -q 'NATIVE_ASSIGN_RHS_TO_CONST1' %t/mutations.txt
+// RUN: grep -q 'NATIVE_ASSIGN_RHS_TO_LHS' %t/mutations.txt
 // RUN: grep -q 'NATIVE_ASSIGN_RHS_INVERT' %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //

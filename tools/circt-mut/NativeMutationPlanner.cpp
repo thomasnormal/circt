@@ -34,8 +34,9 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
-    "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE", "ASSIGN_RHS_MINUS_ONE",
-    "ASSIGN_RHS_NEGATE", "ASSIGN_RHS_SHL_ONE", "ASSIGN_RHS_SHR_ONE",
+    "ASSIGN_RHS_TO_LHS", "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE",
+    "ASSIGN_RHS_MINUS_ONE", "ASSIGN_RHS_NEGATE", "ASSIGN_RHS_SHL_ONE",
+    "ASSIGN_RHS_SHR_ONE",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -1642,7 +1643,9 @@ static size_t findStatementSemicolon(StringRef text, ArrayRef<uint8_t> codeMask,
 
 static bool findSimpleAssignmentRhsSpan(StringRef text, ArrayRef<uint8_t> codeMask,
                                         size_t assignPos, size_t &rhsStart,
-                                        size_t &rhsEnd) {
+                                        size_t &rhsEnd,
+                                        size_t *lhsStartOut = nullptr,
+                                        size_t *lhsEndOut = nullptr) {
   if (assignPos >= text.size() || !isCodeAt(codeMask, assignPos))
     return false;
 
@@ -1691,6 +1694,18 @@ static bool findSimpleAssignmentRhsSpan(StringRef text, ArrayRef<uint8_t> codeMa
   if (statementHasPlainAssignBefore(text, codeMask, stmtStart, assignPos))
     return false;
 
+  if (lhsStartOut || lhsEndOut) {
+    size_t lhsStart = findNextCodeNonSpace(text, codeMask, stmtStart);
+    size_t lhsEnd = findPrevCodeNonSpace(text, codeMask, assignPos);
+    if (lhsStart == StringRef::npos || lhsEnd == StringRef::npos ||
+        lhsStart > lhsEnd)
+      return false;
+    if (lhsStartOut)
+      *lhsStartOut = lhsStart;
+    if (lhsEndOut)
+      *lhsEndOut = lhsEnd;
+  }
+
   rhsStart = findNextCodeNonSpace(text, codeMask, assignPos + assignLen);
   if (rhsStart == StringRef::npos)
     return false;
@@ -1707,13 +1722,15 @@ static bool findSimpleAssignmentRhsSpan(StringRef text, ArrayRef<uint8_t> codeMa
 
 static bool isAssignRhsMutationOp(StringRef op) {
   return op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-         op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
-         op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE" ||
-         op == "ASSIGN_RHS_SHL_ONE" || op == "ASSIGN_RHS_SHR_ONE";
+         op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_INVERT" ||
+         op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
+         op == "ASSIGN_RHS_NEGATE" || op == "ASSIGN_RHS_SHL_ONE" ||
+         op == "ASSIGN_RHS_SHR_ONE";
 }
 
 static StringRef getAssignRhsMutationFamily(StringRef op) {
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1")
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
+      op == "ASSIGN_RHS_TO_LHS")
     return "connect";
   if (op == "ASSIGN_RHS_INVERT")
     return "logic";
@@ -1724,7 +1741,8 @@ static StringRef getAssignRhsMutationFamily(StringRef op) {
   return "";
 }
 
-static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
+static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
+                                              StringRef rhsExpr,
                                               std::string &replacement) {
   StringRef rhs = rhsExpr.trim();
   auto isSimpleIdentifier = [](StringRef expr) -> bool {
@@ -1750,6 +1768,13 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
   }
   if (op == "ASSIGN_RHS_TO_CONST1") {
     replacement = "1'b1";
+    return true;
+  }
+  if (op == "ASSIGN_RHS_TO_LHS") {
+    StringRef lhs = lhsExpr.trim();
+    if (!isSimpleIdentifier(lhs))
+      return false;
+    replacement = lhs.str();
     return true;
   }
   if (op == "ASSIGN_RHS_INVERT") {
@@ -4128,10 +4153,14 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   if (isAssignRhsMutationOp(op)) {
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
-    if (!findSimpleAssignmentRhsSpan(text, codeMask, pos, rhsStart, rhsEnd))
+    size_t lhsStart = StringRef::npos;
+    size_t lhsEnd = StringRef::npos;
+    if (!findSimpleAssignmentRhsSpan(text, codeMask, pos, rhsStart, rhsEnd,
+                                     &lhsStart, &lhsEnd))
       return false;
     std::string replacement;
-    if (!buildAssignRhsMutationReplacement(op, text.slice(rhsStart, rhsEnd + 1),
+    if (!buildAssignRhsMutationReplacement(op, text.slice(lhsStart, lhsEnd + 1),
+                                           text.slice(rhsStart, rhsEnd + 1),
                                            replacement))
       return false;
     return replaceSpan(mutatedText, rhsStart, rhsEnd + 1, replacement);
