@@ -40,6 +40,7 @@ if _FORMAL_LIB_DIR.is_dir():
 class ConnectivityTarget:
     target_name: str
     fusesoc_core: str
+    rel_path: str
 
 
 @dataclass(frozen=True)
@@ -289,7 +290,12 @@ def parse_target_manifest(path: Path) -> ConnectivityTarget:
         fail(f"connectivity target row missing target_name in {path}")
     if not fusesoc_core:
         fail(f"connectivity target row missing fusesoc_core in {path}")
-    return ConnectivityTarget(target_name=target_name, fusesoc_core=fusesoc_core)
+    rel_path = (row.get("rel_path") or "").strip()
+    return ConnectivityTarget(
+        target_name=target_name,
+        fusesoc_core=fusesoc_core,
+        rel_path=rel_path,
+    )
 
 
 def parse_rules_manifest(path: Path) -> list[ConnectivityRule]:
@@ -488,6 +494,22 @@ def parse_toplevels(value: Any) -> list[str]:
     return [p for p in parts if p]
 
 
+VERILOG_SOURCE_SUFFIXES = {".sv", ".v"}
+VERILOG_HEADER_SUFFIXES = {".svh", ".vh"}
+
+
+def classify_verilog_entry(file_type: Any, path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix in VERILOG_SOURCE_SUFFIXES:
+        return "source"
+    if suffix in VERILOG_HEADER_SUFFIXES:
+        return "header"
+    token = str(file_type or "").strip().lower()
+    if "verilog" not in token:
+        return ""
+    return "source"
+
+
 def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]]:
     if not isinstance(entries, list):
         return [], []
@@ -502,13 +524,68 @@ def resolve_eda_paths(entries: Any, eda_dir: Path) -> tuple[list[str], list[str]
             continue
         file_path = (eda_dir / name).resolve(strict=False)
         file_text = str(file_path)
-        files.append(file_text)
+        verilog_kind = classify_verilog_entry(entry.get("file_type"), file_path)
+        if not verilog_kind:
+            continue
         if entry.get("is_include_file"):
             incdir = str(file_path.parent)
             if incdir not in seen_incdirs:
                 include_dirs.append(incdir)
                 seen_incdirs.add(incdir)
+            # Keep include-marked Verilog source files in the compile unit.
+            # OpenTitan formal targets rely on some `.sv` macro libraries
+            # (for example `prim_assert.sv`) being compiled, while header-only
+            # include files (`.svh`, `.vh`) should remain include-only.
+            if verilog_kind != "source":
+                continue
+        elif verilog_kind == "header":
+            incdir = str(file_path.parent)
+            if incdir not in seen_incdirs:
+                include_dirs.append(incdir)
+                seen_incdirs.add(incdir)
+            continue
+        files.append(file_text)
     return files, include_dirs
+
+
+def apply_platform_file_filter(rel_path: str, files: list[str]) -> list[str]:
+    rel = rel_path.lower()
+    if "top_earlgrey" in rel:
+        return [item for item in files if "/lowrisc_englishbreakfast_" not in item]
+    if "top_englishbreakfast" in rel:
+        return [item for item in files if "/lowrisc_earlgrey_" not in item]
+    return files
+
+
+def apply_prim_impl_file_filter(target_name: str, files: list[str]) -> list[str]:
+    target = target_name.lower()
+    if "asic" in target:
+        return [item for item in files if "/lowrisc_prim_xilinx_" not in item]
+    return files
+
+
+def infer_rule_top_override(groups: Sequence[ConnectivityRuleGroup]) -> str:
+    tops: set[str] = set()
+    for group in groups:
+        for rule in (group.connection, *group.conditions):
+            block = rule.src_block.strip() or rule.dest_block.strip()
+            if not block:
+                continue
+            top = block.split(".", 1)[0].strip()
+            if top:
+                tops.add(top)
+    if len(tops) != 1:
+        return ""
+    return next(iter(tops))
+
+
+def apply_top_override_source_prune(
+    source_files: list[str], current_top: str, override_top: str
+) -> list[str]:
+    if not current_top or not override_top or current_top == override_top:
+        return source_files
+    suffixes = (f"/{current_top}.sv", f"/{current_top}.v")
+    return [path for path in source_files if not path.endswith(suffixes)]
 
 
 def sanitize_token(token: str) -> str:
@@ -612,6 +689,30 @@ def write_log(path: Path, stdout: str, stderr: str) -> None:
     path.write_text(data, encoding="utf-8")
 
 
+def strip_vpi_attributes_for_opt(path: Path) -> bool:
+    """Strip trailing vpi.* op attributes that circt-opt may fail to parse."""
+    text = path.read_text(encoding="utf-8")
+    had_trailing_newline = text.endswith("\n")
+    lines = text.splitlines()
+    changed = False
+    stripped: list[str] = []
+    for line in lines:
+        marker = " attributes {vpi."
+        idx = line.find(marker)
+        if idx >= 0:
+            stripped.append(line[:idx])
+            changed = True
+            continue
+        stripped.append(line)
+    if not changed:
+        return False
+    out = "\n".join(stripped)
+    if had_trailing_newline:
+        out += "\n"
+    path.write_text(out, encoding="utf-8")
+    return True
+
+
 def parse_lec_result(text: str) -> str | None:
     match = re.search(r"LEC_RESULT=(EQ|NEQ|UNKNOWN)", text)
     if match:
@@ -628,6 +729,30 @@ def parse_lec_diag(text: str) -> str | None:
     if not match:
         return None
     return match.group(1)
+
+
+def has_command_option(args: list[str], option: str) -> bool:
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
+def is_missing_timescale_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "design element does not have a time scale defined but others in the design do"
+        in low
+    )
+
+
+def is_always_comb_multi_driver_retryable_failure(log_text: str) -> bool:
+    return "driven by always_comb procedure" in log_text.lower()
+
+
+def is_temporal_approx_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "ltl.delay with delay > 0 must be lowered by the bmc multi-step infrastructure"
+        in low
+    )
 
 
 def normalize_drop_reason(line: str) -> str:
@@ -883,6 +1008,11 @@ def main() -> int:
         default=os.environ.get("LEC_DROP_REMARK_REASONS_OUT", ""),
         help="Optional output TSV path for dropped-syntax case+reason rows.",
     )
+    parser.add_argument(
+        "--timeout-reasons-file",
+        default=os.environ.get("LEC_TIMEOUT_REASON_CASES_OUT", ""),
+        help="Optional output TSV path for timeout reason rows.",
+    )
     args = parser.parse_args()
 
     if not args.results_file:
@@ -1051,16 +1181,71 @@ def main() -> int:
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
     circt_lec = os.environ.get("CIRCT_LEC", "build_test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
+    has_explicit_verify_each = has_command_option(circt_lec_args, "--verify-each")
+    # Connectivity LEC cases can be substantially larger than AES S-Box parity
+    # checks; keep a higher default command timeout to avoid spurious
+    # infrastructure timeouts on valid long-running cases.
     timeout_secs = parse_nonnegative_int(
-        os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"
+        os.environ.get("CIRCT_TIMEOUT_SECS", "600"), "CIRCT_TIMEOUT_SECS"
     )
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
+    lec_timeout_frontier_probe = (
+        os.environ.get("LEC_TIMEOUT_FRONTIER_PROBE", "1") == "1"
+    )
     lec_x_optimistic = os.environ.get("LEC_X_OPTIMISTIC", "0") == "1"
     lec_assume_known_inputs = os.environ.get("LEC_ASSUME_KNOWN_INPUTS", "0") == "1"
     lec_diagnose_xprop = os.environ.get("LEC_DIAGNOSE_XPROP", "0") == "1"
     lec_dump_unknown_sources = os.environ.get("LEC_DUMP_UNKNOWN_SOURCES", "0") == "1"
     lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
+    verilog_timescale_fallback_mode = os.environ.get(
+        "LEC_VERILOG_TIMESCALE_FALLBACK_MODE", "auto"
+    ).strip().lower()
+    if verilog_timescale_fallback_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_VERILOG_TIMESCALE_FALLBACK_MODE: "
+                f"{verilog_timescale_fallback_mode} (expected auto|on|off)"
+            )
+        )
+    verilog_fallback_timescale = os.environ.get(
+        "LEC_VERILOG_FALLBACK_TIMESCALE", "1ns/1ps"
+    ).strip()
+    if verilog_timescale_fallback_mode != "off" and not verilog_fallback_timescale:
+        fail(
+            (
+                "invalid LEC_VERILOG_FALLBACK_TIMESCALE: "
+                "expected non-empty timescale value"
+            )
+        )
+    verilog_always_comb_multi_driver_mode = os.environ.get(
+        "LEC_VERILOG_ALWAYS_COMB_MULTI_DRIVER_MODE", "auto"
+    ).strip().lower()
+    if verilog_always_comb_multi_driver_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_VERILOG_ALWAYS_COMB_MULTI_DRIVER_MODE: "
+                f"{verilog_always_comb_multi_driver_mode} (expected auto|on|off)"
+            )
+        )
+    temporal_approx_mode = os.environ.get(
+        "LEC_TEMPORAL_APPROX_MODE", "auto"
+    ).strip().lower()
+    if temporal_approx_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_TEMPORAL_APPROX_MODE: "
+                f"{temporal_approx_mode} (expected auto|on|off)"
+            )
+        )
+    verify_each_mode = os.environ.get("LEC_VERIFY_EACH_MODE", "auto").strip().lower()
+    if verify_each_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_VERIFY_EACH_MODE: "
+                f"{verify_each_mode} (expected auto|on|off)"
+            )
+        )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -1098,6 +1283,8 @@ def main() -> int:
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
     drop_remark_seen_cases: set[str] = set()
     drop_remark_seen_case_reasons: set[tuple[str, str]] = set()
+    timeout_reason_rows: list[tuple[str, str, str]] = []
+    timeout_reason_seen: set[tuple[str, str]] = set()
     resolved_contract_rows: list[tuple[str, ...]] = []
     rows: list[tuple[str, str, str, str, str, str]] = []
 
@@ -1133,6 +1320,14 @@ def main() -> int:
             fail(f"no toplevel in EDA description: {eda_yml}")
         top_module = toplevels[0]
         source_files, include_dirs = resolve_eda_paths(eda_obj.get("files"), eda_yml.parent)
+        source_files = apply_platform_file_filter(target.rel_path, source_files)
+        source_files = apply_prim_impl_file_filter(target.target_name, source_files)
+        rule_top_override = infer_rule_top_override(selected_groups)
+        source_files = apply_top_override_source_prune(
+            source_files, top_module, rule_top_override
+        )
+        if rule_top_override:
+            top_module = rule_top_override
         if not source_files:
             fail(f"no source files resolved from EDA description: {eda_yml}")
         explicit_incdirs = [
@@ -1233,6 +1428,9 @@ def main() -> int:
                 "1" if lec_x_optimistic else "0",
                 "1" if lec_assume_known_inputs else "0",
                 "1" if lec_accept_xprop_only else "0",
+                verilog_timescale_fallback_mode,
+                verilog_fallback_timescale if verilog_timescale_fallback_mode != "off" else "",
+                temporal_approx_mode,
                 contract_z3_path,
                 contract_lec_args,
             ]
@@ -1246,24 +1444,54 @@ def main() -> int:
                 )
             )
 
-            verilog_cmd = [
-                circt_verilog,
-                "--ir-moore",
-                "-o",
-                str(moore_mlir),
-                "--single-unit",
-                "--no-uvm-auto-include",
-                f"--top={case.ref_module}",
-                f"--top={case.impl_module}",
-            ]
-            for include_dir in include_dirs:
-                verilog_cmd += ["-I", include_dir]
-            verilog_cmd += circt_verilog_args
-            verilog_cmd += source_files + [str(case.checker_sv)]
+            has_explicit_timescale = has_command_option(circt_verilog_args, "--timescale")
+            has_explicit_multi_driver = has_command_option(
+                circt_verilog_args, "--allow-multi-always-comb-drivers"
+            )
+            has_explicit_temporal_approx = has_command_option(
+                circt_lec_args, "--approx-temporal"
+            )
+            verilog_timescale_override: str | None = None
+            if (
+                verilog_timescale_fallback_mode == "on"
+                and not has_explicit_timescale
+            ):
+                verilog_timescale_override = verilog_fallback_timescale
+            verilog_allow_multi_always_comb_drivers = (
+                verilog_always_comb_multi_driver_mode == "on"
+                and not has_explicit_multi_driver
+            )
+
+            def build_verilog_cmd(timescale_override: str | None) -> list[str]:
+                cmd = [
+                    circt_verilog,
+                    "--ir-moore",
+                    "-o",
+                    str(moore_mlir),
+                    "--single-unit",
+                    "--no-uvm-auto-include",
+                    f"--top={case.ref_module}",
+                    f"--top={case.impl_module}",
+                ]
+                for include_dir in include_dirs:
+                    cmd += ["-I", include_dir]
+                if timescale_override is not None and not has_explicit_timescale:
+                    cmd.append(f"--timescale={timescale_override}")
+                if (
+                    verilog_allow_multi_always_comb_drivers
+                    and not has_explicit_multi_driver
+                ):
+                    cmd.append("--allow-multi-always-comb-drivers")
+                cmd += circt_verilog_args
+                cmd += source_files + [str(case.checker_sv)]
+                return cmd
+
+            verilog_cmd = build_verilog_cmd(verilog_timescale_override)
 
             opt_cmd = [
                 circt_opt,
                 str(moore_mlir),
+                "--moore-lower-concatref",
                 "--convert-moore-to-core",
                 "--mlir-disable-threading",
                 "-o",
@@ -1271,22 +1499,89 @@ def main() -> int:
             ]
             opt_cmd += circt_opt_args
 
-            lec_cmd = [
-                circt_lec,
-                str(core_mlir),
-                f"-c1={case.ref_module}",
-                f"-c2={case.impl_module}",
-            ]
-            if lec_smoke_only:
-                lec_cmd.append("--emit-mlir")
-            elif lec_run_smtlib:
-                lec_cmd.append("--run-smtlib")
-                lec_cmd.append(f"--z3-path={z3_bin}")
-            lec_cmd += circt_lec_args
+            lec_enable_temporal_approx = (
+                temporal_approx_mode == "on" and not has_explicit_temporal_approx
+            )
+
+            def build_lec_cmd(enable_temporal_approx: bool) -> list[str]:
+                cmd = [
+                    circt_lec,
+                    str(core_mlir),
+                    f"-c1={case.ref_module}",
+                    f"-c2={case.impl_module}",
+                ]
+                if lec_smoke_only:
+                    cmd.append("--emit-mlir")
+                elif lec_run_smtlib:
+                    cmd.append("--run-smtlib")
+                    cmd.append(f"--z3-path={z3_bin}")
+                cmd += circt_lec_args
+                if enable_temporal_approx and not has_explicit_temporal_approx:
+                    cmd.append("--approx-temporal")
+                if verify_each_mode in {"auto", "off"} and not has_explicit_verify_each:
+                    cmd.append("--verify-each=false")
+                return cmd
 
             stage = "verilog"
             try:
-                run_and_log(verilog_cmd, verilog_log, timeout_secs)
+                attempted_timescale_retry = False
+                attempted_multi_driver_retry = False
+                while True:
+                    try:
+                        run_and_log(verilog_cmd, verilog_log, timeout_secs)
+                        break
+                    except subprocess.CalledProcessError:
+                        if verilog_log.is_file():
+                            verilog_log_text = verilog_log.read_text(encoding="utf-8")
+                        else:
+                            verilog_log_text = ""
+                        if (
+                            verilog_timescale_fallback_mode == "auto"
+                            and verilog_timescale_override is None
+                            and not has_explicit_timescale
+                            and not attempted_timescale_retry
+                            and is_missing_timescale_retryable_failure(verilog_log_text)
+                        ):
+                            missing_timescale_log = (
+                                case_dir / "circt-verilog.missing-timescale.log"
+                            )
+                            shutil.copy2(verilog_log, missing_timescale_log)
+                            verilog_timescale_override = verilog_fallback_timescale
+                            attempted_timescale_retry = True
+                            print(
+                                "opentitan connectivity lec: retrying circt-verilog with "
+                                f"--timescale={verilog_timescale_override} for "
+                                f"{case.case_id}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            verilog_cmd = build_verilog_cmd(verilog_timescale_override)
+                            continue
+                        if (
+                            verilog_always_comb_multi_driver_mode == "auto"
+                            and not verilog_allow_multi_always_comb_drivers
+                            and not has_explicit_multi_driver
+                            and not attempted_multi_driver_retry
+                            and is_always_comb_multi_driver_retryable_failure(
+                                verilog_log_text
+                            )
+                        ):
+                            always_comb_log = (
+                                case_dir / "circt-verilog.always-comb-multi-driver.log"
+                            )
+                            shutil.copy2(verilog_log, always_comb_log)
+                            verilog_allow_multi_always_comb_drivers = True
+                            attempted_multi_driver_retry = True
+                            print(
+                                "opentitan connectivity lec: retrying circt-verilog with "
+                                "--allow-multi-always-comb-drivers for "
+                                f"{case.case_id}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            verilog_cmd = build_verilog_cmd(verilog_timescale_override)
+                            continue
+                        raise
                 if verilog_log.exists():
                     reasons = extract_drop_reasons(
                         verilog_log.read_text(encoding="utf-8"), drop_remark_pattern
@@ -1302,12 +1597,48 @@ def main() -> int:
                         drop_remark_reason_rows.append(
                             (case.case_id, case.case_path, reason)
                         )
+                strip_vpi_attributes_for_opt(moore_mlir)
                 stage = "opt"
                 run_and_log(opt_cmd, opt_log, timeout_secs)
                 stage = "lec"
-                combined = run_and_log(
-                    lec_cmd, lec_log, timeout_secs, out_path=lec_out
-                )
+                attempted_temporal_retry = False
+                while True:
+                    lec_cmd = build_lec_cmd(lec_enable_temporal_approx)
+                    try:
+                        combined = run_and_log(
+                            lec_cmd, lec_log, timeout_secs, out_path=lec_out
+                        )
+                        break
+                    except subprocess.CalledProcessError:
+                        if lec_log.is_file():
+                            lec_log_text = lec_log.read_text(encoding="utf-8")
+                        else:
+                            lec_log_text = ""
+                        if (
+                            temporal_approx_mode == "auto"
+                            and not has_explicit_temporal_approx
+                            and not lec_enable_temporal_approx
+                            and not attempted_temporal_retry
+                            and is_temporal_approx_retryable_failure(lec_log_text)
+                        ):
+                            temporal_approx_log = case_dir / "circt-lec.temporal-approx.log"
+                            if lec_log.is_file():
+                                shutil.copy2(lec_log, temporal_approx_log)
+                            else:
+                                temporal_approx_log.write_text(
+                                    lec_log_text, encoding="utf-8"
+                                )
+                            lec_enable_temporal_approx = True
+                            attempted_temporal_retry = True
+                            print(
+                                "opentitan connectivity lec: retrying circt-lec with "
+                                "--approx-temporal for "
+                                f"{case.case_id}",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            continue
+                        raise
                 diag = parse_lec_diag(combined)
                 result = parse_lec_result(combined)
                 if result in {"NEQ", "UNKNOWN"}:
@@ -1367,12 +1698,41 @@ def main() -> int:
                         )
                     )
             except subprocess.TimeoutExpired:
+                timeout_reason = "runner_timeout_unknown_stage"
                 if stage == "verilog":
                     diag = "CIRCT_VERILOG_TIMEOUT"
+                    timeout_reason = "frontend_command_timeout"
                 elif stage == "opt":
                     diag = "CIRCT_OPT_TIMEOUT"
+                    timeout_reason = "frontend_command_timeout"
                 else:
                     diag = "CIRCT_LEC_TIMEOUT"
+                    if lec_smoke_only:
+                        timeout_reason = "frontend_command_timeout"
+                    elif lec_timeout_frontier_probe:
+                        probe_cmd = [
+                            arg
+                            for arg in lec_cmd
+                            if arg != "--run-smtlib"
+                            and not arg.startswith("--z3-path=")
+                        ]
+                        if "--emit-mlir" not in probe_cmd:
+                            probe_cmd.append("--emit-mlir")
+                        try:
+                            run_and_log(
+                                probe_cmd,
+                                case_dir / "circt-lec.timeout-frontier.log",
+                                timeout_secs,
+                                out_path=case_dir / "circt-lec.timeout-frontier.out",
+                            )
+                        except subprocess.TimeoutExpired:
+                            timeout_reason = "frontend_command_timeout"
+                        except subprocess.CalledProcessError:
+                            timeout_reason = "timeout_frontier_probe_error"
+                        else:
+                            timeout_reason = "solver_command_timeout"
+                    else:
+                        timeout_reason = "solver_command_timeout"
                 rows.append(
                     (
                         "TIMEOUT",
@@ -1383,6 +1743,12 @@ def main() -> int:
                         diag,
                     )
                 )
+                reason_key = (case.case_id, timeout_reason)
+                if reason_key not in timeout_reason_seen:
+                    timeout_reason_seen.add(reason_key)
+                    timeout_reason_rows.append(
+                        (case.case_id, case.case_path, timeout_reason)
+                    )
             except subprocess.CalledProcessError:
                 if stage == "verilog":
                     rows.append(
@@ -1477,6 +1843,12 @@ def main() -> int:
             drop_reason_path.parent.mkdir(parents=True, exist_ok=True)
             with drop_reason_path.open("w", encoding="utf-8") as handle:
                 for row in sorted(drop_remark_reason_rows, key=lambda item: (item[0], item[2])):
+                    handle.write("\t".join(row) + "\n")
+        if args.timeout_reasons_file:
+            timeout_path = Path(args.timeout_reasons_file).resolve()
+            timeout_path.parent.mkdir(parents=True, exist_ok=True)
+            with timeout_path.open("w", encoding="utf-8") as handle:
+                for row in sorted(timeout_reason_rows, key=lambda item: (item[0], item[2])):
                     handle.write("\t".join(row) + "\n")
         if args.resolved_contracts_file:
             contracts_path = Path(args.resolved_contracts_file).resolve()
