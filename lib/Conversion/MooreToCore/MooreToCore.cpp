@@ -14032,28 +14032,6 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       return success();
     }
 
-    // Check if destination is an llhd.ref block argument in a function context.
-    // Function ref parameters should use llvm.store since the simulator can't
-    // track signal references through function call boundaries.
-    if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
-      if (auto blockArg = dyn_cast<BlockArgument>(dst)) {
-        // Check if we're in a function context (not hw.module/llhd.process)
-        if (auto funcOp = dyn_cast<func::FuncOp>(
-                blockArg.getOwner()->getParentOp())) {
-          // For function ref parameters, use llvm.store
-          auto ptrType = LLVM::LLVMPointerType::get(op.getContext());
-          Value ptrValue = UnrealizedConversionCastOp::create(
-                               rewriter, loc, ptrType, dst)
-                               .getResult(0);
-
-          Value storeVal = convertValueToLLVMType(adaptor.getSrc(), loc, rewriter);
-          LLVM::StoreOp::create(rewriter, loc, storeVal, ptrValue);
-          rewriter.eraseOp(op);
-          return success();
-        }
-      }
-    }
-
     // Determine the delay for the assignment.
     Value delay;
     if constexpr (std::is_same_v<OpTy, ContinuousAssignOp> ||
@@ -14704,15 +14682,15 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     }
 
     // Handle function output parameters: when the destination is a block
-    // argument with llhd.ref type containing an LLVM type, and we're inside a
-    // func::FuncOp, use llvm.store instead of llhd.drv. This is necessary
-    // because the simulator cannot track signal references through function
-    // calls, causing llhd.drv to fail when the destination is a function
-    // Handle function output parameters: when the destination is a block
-    // argument (function parameter) with llhd.ref type containing an LLVM type,
-    // use llvm.store instead of llhd.drv. This is necessary because the
-    // simulator cannot track signal references through function calls, causing
-    // llhd.drv to fail when the destination is a function parameter.
+    // argument (function parameter) with llhd.ref type, use llvm.store instead
+    // of llhd.drv for immediate assignment kinds. Function ref parameters are
+    // modeled as memory pointers across call boundaries; using llhd.drv here
+    // would not be observed by corresponding llvm.load reads in function scope.
+    //
+    // Preserve nonblocking timing semantics. Nonblocking assignments must
+    // remain llhd.drv-based so their delta-delay behavior is visible to callers
+    // (e.g. a read after a task call in the same timestep must still see the
+    // old value).
     //
     // Check both the original destination (which might be the old block arg)
     // and the converted destination (which might be the new block arg).
@@ -14720,49 +14698,38 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
     bool origIsBlockArg = isa<BlockArgument>(origDst);
     bool dstIsBlockArg = isa<BlockArgument>(dst);
 
-    if (origIsBlockArg || dstIsBlockArg) {
-      // Check if the converted type is llhd.ref - for function parameters,
-      // we need to use LLVM store instead of llhd.drv because the interpreter
-      // doesn't track refs passed through function calls (only signals).
+    constexpr bool isNonBlockingAssign =
+        std::is_same_v<OpTy, NonBlockingAssignOp> ||
+        std::is_same_v<OpTy, DelayedNonBlockingAssignOp>;
+
+    if (!isNonBlockingAssign && (origIsBlockArg || dstIsBlockArg)) {
+      // Check if the converted type is llhd.ref.
       if (auto refType = dyn_cast<llhd::RefType>(dst.getType())) {
-        // Only use llvm.store when the nested type is an LLVM type (e.g.,
-        // !llvm.ptr for class handles). Signal refs have HW types (like i42)
-        // as the nested type and should use llhd.drv.
-        Type nestedType = refType.getNestedType();
-        bool nestedIsLLVMType = isa<LLVM::LLVMPointerType, LLVM::LLVMStructType,
-                                    LLVM::LLVMArrayType>(nestedType);
+        bool inFuncOp = op->template getParentOfType<func::FuncOp>() != nullptr;
+        bool inProcess = op->template getParentOfType<llhd::ProcessOp>() != nullptr;
+        bool inInitial = op->template getParentOfType<seq::InitialOp>() != nullptr;
 
-        // Only apply this for function contexts with LLVM nested types.
-        // Signal refs (with HW nested types) should use llhd.drv even in
-        // function contexts.
-        if (nestedIsLLVMType) {
-          bool inFuncOp = op->template getParentOfType<func::FuncOp>() != nullptr;
-          bool inProcess = op->template getParentOfType<llhd::ProcessOp>() != nullptr;
-          bool inInitial = op->template getParentOfType<seq::InitialOp>() != nullptr;
+        if (inFuncOp && !inProcess && !inInitial) {
+          // Convert the ref to an LLVM pointer and store through it.
+          Value refAsPtr = UnrealizedConversionCastOp::create(
+                               rewriter, loc,
+                               LLVM::LLVMPointerType::get(rewriter.getContext()),
+                               dst)
+                               .getResult(0);
 
-          if (inFuncOp && !inProcess && !inInitial) {
-            // For function output parameters with LLVM types (class handles),
-            // use llvm.store instead of llhd.drv.
-            // Convert the ref to an LLVM pointer and store through it.
-            Value refAsPtr = UnrealizedConversionCastOp::create(
-                                 rewriter, loc, LLVM::LLVMPointerType::get(rewriter.getContext()),
-                                 dst)
-                                 .getResult(0);
-
-            // Convert the source value to LLVM type if needed.
-            Value storeVal = srcValue;
-            Type storeType = storeVal.getType();
-            Type llvmStoreType = convertToLLVMType(storeType);
-            if (storeType != llvmStoreType) {
-              storeVal = UnrealizedConversionCastOp::create(
-                             rewriter, loc, llvmStoreType, storeVal)
-                             .getResult(0);
-            }
-
-            LLVM::StoreOp::create(rewriter, loc, storeVal, refAsPtr);
-            rewriter.eraseOp(op);
-            return success();
+          // Convert the source value to LLVM type if needed.
+          Value storeVal = srcValue;
+          Type storeType = storeVal.getType();
+          Type llvmStoreType = convertToLLVMType(storeType);
+          if (storeType != llvmStoreType) {
+            storeVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmStoreType, storeVal)
+                           .getResult(0);
           }
+
+          LLVM::StoreOp::create(rewriter, loc, storeVal, refAsPtr);
+          rewriter.eraseOp(op);
+          return success();
         }
       }
     }

@@ -6007,8 +6007,8 @@ Expected-error text for unsupported Verilog type `f32` is negative-test oracle c
 ### [x] 2001. `test/Conversion/MooreToCore/interface-timing-after-inlining.sv:8`
 Status update (2026-02-28): this item is stale. The test now serves as a regression that asserts `moore.wait_event`/`moore.detect_event` are lowered away after inlining; there is no active `FIXME`/`XFAIL` debt remaining for this case.
 
-### [ ] 2002. `test/Conversion/MooreToCore/basic.mlir:173`
-`moore.constant bXXXXXX` is expected unknown-value test payload in a regression fixture, not unresolved implementation debt at this line.
+### [x] 2002. `test/Conversion/MooreToCore/basic.mlir:173`
+Status update (2026-02-28): this entry is stale. `moore.constant bXXXXXX` is expected unknown-value regression payload (not a TODO marker), and current MooreToCore regression coverage remains passing.
 
 ### [x] 2003. `test/Conversion/MooreToCore/basic.mlir:628`
 Status update (2026-02-28): this entry is stale. `always_comb` coverage exists in dedicated MooreToCore regression tests (for example `procedure-always-comb-latch.mlir` and related tests), and current suite passes.

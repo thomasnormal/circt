@@ -1551,3 +1551,28 @@
         `<unsupported format>` output.
     - `build_test/bin/llvm-lit test/Tools/circt-sim/fmt-mux-dynamic.mlir test/Tools/circt-sim/fmt-select.mlir -v`
       - passed after fix.
+
+### MooreToCore/Sim: preserve NBA timing for function ref parameters (TDD)
+- Repro (test first):
+  - Added `test/Tools/circt-sim/task-nonblocking-assign-in-task-order.sv`.
+  - Before fix, `AFTER_CALL x` observed `1` immediately after a task call that
+    performed `x <= 1;`, but NBA semantics require `x` to remain old value (`0`)
+    until the NBA region.
+- Root cause:
+  - `AssignOpConversion` used `llvm.store` for function `llhd.ref` parameters
+    across assignment kinds, including nonblocking assigns.
+  - `llvm.store` made the update visible immediately, bypassing delta/NBA timing.
+- Fix:
+  - In `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+    - keep `llvm.store` fast-path for immediate assignment kinds in function
+      scope,
+    - explicitly exclude `moore.nonblocking_assign` and
+      `moore.delayed_nonblocking_assign` from that fast-path,
+    - keep NBA lowering on `llhd.drv` with delay.
+  - Updated `test/Conversion/MooreToCore/basic.mlir` expectations for
+    `@NonBlockingAssignment` to check `llhd.drv` instead of `llvm.store`.
+- Validation:
+  - `build_test/bin/llvm-lit -a -v test/Tools/circt-sim/task-nonblocking-assign-in-task-order.sv`
+  - `build_test/bin/llvm-lit -a -v test/Conversion/MooreToCore/basic.mlir`
+  - `build_test/bin/llvm-lit -j 8 test/Conversion/ImportVerilog test/Conversion/MooreToCore test/Tools/circt-sim test/Runtime/uvm`
+  - Result: `1588/1588` passed in prioritized suite.
