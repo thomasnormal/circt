@@ -22657,6 +22657,18 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Check if function body is available (external functions cannot be called)
   if (funcOp.isExternal()) {
+    // Func dialect fallback for wait(condition) calls that survive as
+    // func.call symbols instead of llvm.call. Route these through the Moore
+    // runtime entry so circt-sim's wait-condition poll bridge is exercised.
+    if (calleeName == "__moore_wait_condition" &&
+        callOp.getNumOperands() >= 1) {
+      InterpretedValue condValue = getValue(procId, callOp.getOperand(0));
+      int32_t condition =
+          condValue.isX() ? 0 : static_cast<int32_t>(condValue.getUInt64());
+      __moore_wait_condition(condition);
+      return success();
+    }
+
     // Coverage runtime calls must never silently fall through to generic
     // external call handling in func.call mode.
     if (isCoverageRuntimeCallee(calleeName)) {
