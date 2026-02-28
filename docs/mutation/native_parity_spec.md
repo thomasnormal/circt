@@ -109,6 +109,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   forms (`>>>=`).
 - `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign
   forms like `^a`, `^~`, `~^`, `^=`).
+- Relational polarity swaps (`LT_TO_GT`, `GT_TO_LT`, `LE_TO_GE`, `GE_TO_LE`)
+  reuse standalone/relational comparator site detection to preserve structural
+  validity and deterministic site-index contracts.
 - XOR/XNOR confusion mutations:
   - `XOR_TO_XNOR` uses the same binary-XOR site detection as `XOR_TO_OR`.
   - `XNOR_TO_XOR` targets binary XNOR spellings (`^~`, `~^`) and skips

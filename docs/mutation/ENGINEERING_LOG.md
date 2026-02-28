@@ -240,3 +240,39 @@
   - Ran seeded xrun-vs-circt parity campaign including xor/xnor mutations
     (`40` mutants, `XOR_TO_XNOR=8`, `XNOR_TO_XOR=8`):
     `ok=40 mismatch=0 fail=0`.
+
+## 2026-02-28 (relational polarity swap fault class)
+
+- realizations:
+  - Opposite-direction relational swaps (`<`↔`>`, `<=`↔`>=`) are a realistic
+    fault class and distinct from the existing widen/narrow comparator class
+    (`LT_TO_LE`, `LE_TO_LT`, etc.).
+  - Several generation regressions were brittle to exact operator-count
+    windows; they needed to assert properties rather than fixed cycle lengths.
+
+- changes made:
+  - Added native operators:
+    - `LT_TO_GT`, `GT_TO_LT`
+    - `LE_TO_GE`, `GE_TO_LE`
+  - Integrated operators in native planner op catalog and site detection.
+  - Integrated operators in CIRCT-only mode mappings for `arith`,
+    `inv`/`invert`, and `balanced/all`.
+  - Extended native mutator rewrites and refactored standalone `<`/`>` token
+    lookup into one helper to avoid duplicated matcher logic.
+  - Added/updated regression coverage:
+    - `native-create-mutated-lt-to-gt-site-index`
+    - `native-create-mutated-gt-to-lt-site-index`
+    - `native-create-mutated-le-to-ge-site-index`
+    - `native-create-mutated-ge-to-le-site-index`
+    - `circt-mut-generate-circt-only-arith-mode-relpol-ops`
+  - Hardened brittle schedule-dependent tests:
+    - `circt-mut-generate-circt-only-ignore-comments-strings`
+    - `circt-mut-generate-circt-only-site-aware-cycle`
+    - `circt-mut-generate-circt-only-weighted-fault-class-diversity`
+  - Validation:
+    - focused relpol lit slice: `5 passed`
+    - broader CIRCT-only mutation suite: `83 passed`
+    - seeded parity campaign on relational-signature mini design
+      (`20` mutants): `ok=20 mismatch=0 fail=0`
+    - seeded parity campaign on `cov_intro_seeded` (`12` mutants):
+      `ok=12 mismatch=0 fail=0`

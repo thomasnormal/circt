@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [3:0] a,b,c,d,e,f,g,h, output logic y0,y1,y2,y3);\n  assign y0 = (a < b);\n  assign y1 = (c > d);\n  assign y2 = (e <= f);\n  assign y3 = (g >= h);\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 180 --seed 31 --modes arith > %t/log.txt
+// RUN: grep -q 'NATIVE_LT_TO_GT' %t/mutations.txt
+// RUN: grep -q 'NATIVE_GT_TO_LT' %t/mutations.txt
+// RUN: grep -q 'NATIVE_LE_TO_GE' %t/mutations.txt
+// RUN: grep -q 'NATIVE_GE_TO_LE' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 180

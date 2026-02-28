@@ -24,7 +24,8 @@ namespace circt::mut {
 
 static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_NEQ",        "NEQ_TO_EQ",      "LT_TO_LE",        "GT_TO_GE",
-    "LE_TO_LT",         "GE_TO_GT",       "AND_TO_OR",       "OR_TO_AND",
+    "LE_TO_LT",         "GE_TO_GT",       "LT_TO_GT",        "GT_TO_LT",
+    "LE_TO_GE",         "GE_TO_LE",       "AND_TO_OR",       "OR_TO_AND",
     "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "XOR_TO_XNOR",
     "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
     "BOR_TO_LOR",       "UNARY_NOT_DROP",
@@ -880,6 +881,22 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectRelationalComparatorSites(designText, ">=", codeMask, sites);
     return;
   }
+  if (op == "LT_TO_GT") {
+    collectStandaloneCompareSites(designText, '<', codeMask, sites);
+    return;
+  }
+  if (op == "GT_TO_LT") {
+    collectStandaloneCompareSites(designText, '>', codeMask, sites);
+    return;
+  }
+  if (op == "LE_TO_GE") {
+    collectRelationalComparatorSites(designText, "<=", codeMask, sites);
+    return;
+  }
+  if (op == "GE_TO_LE") {
+    collectRelationalComparatorSites(designText, ">=", codeMask, sites);
+    return;
+  }
   if (op == "AND_TO_OR") {
     collectLiteralTokenSites(designText, "&&", codeMask, sites);
     return;
@@ -1014,7 +1031,9 @@ static bool hasNativeMutationPattern(StringRef designText,
 
 static std::string getOpFamily(StringRef op) {
   if (op == "EQ_TO_NEQ" || op == "NEQ_TO_EQ" || op == "LT_TO_LE" ||
-      op == "GT_TO_GE" || op == "LE_TO_LT" || op == "GE_TO_GT")
+      op == "GT_TO_GE" || op == "LE_TO_LT" || op == "GE_TO_GT" ||
+      op == "LT_TO_GT" || op == "GT_TO_LT" || op == "LE_TO_GE" ||
+      op == "GE_TO_LE")
     return "compare";
   if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
     return "xcompare";
