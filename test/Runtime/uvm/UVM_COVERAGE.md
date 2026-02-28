@@ -8,16 +8,16 @@ Baseline: circt-sim commit cc7261bdb
 This matrix tracks UVM feature coverage across two test suites:
 
 - **test/Tools/crun/uvm-*.sv** — 168 targeted feature tests (147 PASS, 21 XFAIL)
-- **test/Runtime/uvm/\*.sv** — 25 integration/regression tests (25 PASS, 0 XFAIL)
+- **test/Runtime/uvm/\*.sv** — 26 integration/regression tests (26 PASS, 0 XFAIL)
 
-**Grand total: 193 tests, 172 PASS, 21 XFAIL**
+**Grand total: 194 tests, 173 PASS, 21 XFAIL**
 
 ## Summary by Category
 
 | Category | crun PASS | crun XFAIL | crun Total | Runtime PASS | Grand Total |
 |----------|-----------|------------|------------|--------------|-------------|
 | Phase Lifecycle | 12 | 1 | 13 | 8 | 21 |
-| Objection | 4 | 0 | 4 | 0 | 4 |
+| Objection | 4 | 0 | 4 | 1 | 5 |
 | Factory | 8 | 2 | 10 | 2 | 12 |
 | Config DB | 9 | 2 | 11 | 1 | 12 |
 | Sequences | 11 | 4 | 15 | 4 | 19 |
@@ -31,7 +31,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | Barriers / Pools / Queues | 8 | 0 | 8 | 0 | 8 |
 | Integration | 8 | 4 | 12 | 3 | 15 |
 | Miscellaneous | 21 | 2 | 23 | 1 | 24 |
-| **Total** | **147** | **21** | **168** | **25** | **193** |
+| **Total** | **147** | **21** | **168** | **26** | **194** |
 
 ---
 
@@ -63,7 +63,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | uvm/uvm_timeout_plusarg_test.sv | PASS | +UVM_TIMEOUT plusarg handling |
 | uvm/uvm_simple_test.sv | PASS | Basic UVM test lifecycle |
 
-### Objection (4 crun = 4 total)
+### Objection (4 crun + 1 Runtime = 5 total)
 
 | Test File | Status | Notes |
 |-----------|--------|-------|
@@ -71,6 +71,7 @@ This matrix tracks UVM feature coverage across two test suites:
 | crun/uvm-objection-callback.sv | PASS | Objection raised/dropped callbacks fire |
 | crun/uvm-objection-callback-drain.sv | PASS | Drain callback fires after final drop |
 | crun/uvm-objection-count.sv | PASS | get_objection_count() tracking works |
+| uvm/uvm_objection_count_semantic_test.sv | PASS | Per-component and total objection count semantics |
 
 ### Factory (10 crun + 2 Runtime = 12 total)
 
