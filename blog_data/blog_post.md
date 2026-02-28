@@ -1,6 +1,6 @@
 # Building an Open-Source Verilog Simulator with AI: 580K Lines in 43 Days
 
-Commercial Verilog simulators like Cadence Xcelium and Synopsys VCS cost hundreds of thousands of dollars per seat per year.
+Commercial Verilog simulators can cost hundreds of thousands of dollars per seat per year.
 For most hardware teams, these tools are the single largest line item in their EDA budget — and yet the core algorithms are well-understood, the specifications are public (IEEE 1800-2017), and open-source compiler infrastructure like [CIRCT](https://circt.llvm.org/) already exists.
 
 What if you could close the gap with agentic AI?
@@ -327,11 +327,11 @@ The orchestrator handles lane selection, retry logic, parity checking against re
 ## What This Means for EDA
 
 The EDA industry has operated for decades on a simple assumption: verification tools are too complex for anything but large, well-funded teams to build.
-Xcelium and VCS represent millions of person-years of engineering effort.
+Incumbent commercial simulators represent millions of person-years of engineering effort.
 
 That assumption may no longer hold.
 
-This fork is not a replacement for Xcelium — it's slower, less complete, and hasn't been hardened by decades of production use.
+This fork is not a replacement for mature commercial simulators — it's slower, less complete, and hasn't been hardened by decades of production use.
 But it demonstrates something important: **a single engineer with AI assistance can build a functional verification stack in weeks, not years.**
 
 The 580,000 lines of code in this fork are not all high-quality production code.

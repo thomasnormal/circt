@@ -1,5 +1,60 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (case wildcard expansion + BA/NBA context guards + parity hardening)
+
+- realizations:
+  - Wildcard decode confusion coverage was still incomplete after
+    `case<->casez` and `case<->casex`; we were missing direct
+    `casez<->casex` transitions.
+  - Two earlier xrun-vs-circt “fail” rows were not semantic mismatches; they
+    were transient `Permission denied` executions while `circt-sim` was being
+    relinked in-place by a concurrent build.
+  - Parity harnesses must avoid declaration initialization on
+    `always_comb`/`always_ff` targets to remain portable across simulators.
+
+- changes made:
+  - Added native operators:
+    - `CASEZ_TO_CASEX`
+    - `CASEX_TO_CASEZ`
+  - Integrated these operators in:
+    - planner op catalog, site collection, family classification, and apply
+      rewrites (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`control`, `connect`, `invert`, `inv`,
+      `balanced/all`) in `tools/circt-mut/circt-mut.cpp`
+    - native-op validator allowlist in
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/native-create-mutated-casez-to-casex-site-index.test`
+    - `test/Tools/native-create-mutated-casex-to-casez-site-index.test`
+    - `test/Tools/native-mutation-plan-case-keyword-zx-swap.test`
+    - `test/Tools/circt-mut-generate-circt-only-control-mode-case-keyword-zx-ops.test`
+  - Hardened assignment-timing site selection to reduce simulator-dependent
+    race mutations:
+    - skip `BA_TO_NBA`/`NBA_TO_BA` in `always_comb` and `always_latch`
+    - skip `NBA_TO_BA` in `initial`
+  - Added timing-skip regressions:
+    - `test/Tools/native-create-mutated-ba-to-nba-skip-always-comb.test`
+    - `test/Tools/native-create-mutated-nba-to-ba-skip-event-initial.test`
+
+- validation:
+  - Red/green for new wildcard-case tests: all 4 fail before implementation and
+    pass after.
+  - Focused lit slice over case keyword + BA/NBA guard tests:
+    - `13 passed`
+  - Seeded broad parity rerun after BA/NBA guarding (`count=40`, `seed=506`,
+    `--modes all`):
+    - definitive rerun result: `ok=40`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_casex_parity_after_banba_guard3_1772291633`
+  - Seeded wildcard-case parity campaign including all 6 case-keyword ops
+    (`count=36`, `seed=601`):
+    - deterministic baseline: xrun/circt `COV=100.00`, `SIG=e95c999c`
+    - definitive rerun result: `ok=36`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_casezx_parity3_1772291987`
+  - Additional all-mode sweep on the same wildcard harness (`count=40`,
+    `seed=707`, `--modes all`):
+    - result: `ok=40`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_casezx_allmode_parity_1772292117`
+
 ## 2026-02-28 (case/casez keyword mutation class + seeded parity campaign)
 
 - realizations:

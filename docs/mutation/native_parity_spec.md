@@ -155,6 +155,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `NBA_TO_BA` targets procedural nonblocking assignments (`<=`) and rewrites
     to blocking (`=`) with matching site-index guards and the same typed-
     declaration exclusion.
+  - Timing rewrites are intentionally skipped in `always_comb`/`always_latch`,
+    and `NBA_TO_BA` is skipped in `initial`, to avoid simulator-dependent race
+    behavior in deterministic parity campaigns.
 - Ternary mux-arm mutations model swapped-data control bugs:
   - `MUX_SWAP_ARMS` targets assignment-context ternary expressions
     (`cond ? tval : fval`) and rewrites to (`cond ? fval : tval`) with
@@ -173,6 +176,10 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
 - Wildcard-case keyword mutations model decode wildcard confusion:
   - `CASE_TO_CASEZ` rewrites `case (...)` to `casez (...)`.
   - `CASEZ_TO_CASE` rewrites `casez (...)` to `case (...)`.
+  - `CASE_TO_CASEX` rewrites `case (...)` to `casex (...)`.
+  - `CASEX_TO_CASE` rewrites `casex (...)` to `case (...)`.
+  - `CASEZ_TO_CASEX` rewrites `casez (...)` to `casex (...)`.
+  - `CASEX_TO_CASEZ` rewrites `casex (...)` to `casez (...)`.
 - Conditional-polarity mutations model inverted control intent:
   - `IF_COND_NEGATE` targets `if (cond)` headers and rewrites to
     `if (!(cond))` with word-boundary token matching and balanced-parenthesis
