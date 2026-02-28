@@ -1885,6 +1885,7 @@ struct ModuleVisitor : public BaseVisitor {
         }
       }
     }
+    }
     return success();
   }
 

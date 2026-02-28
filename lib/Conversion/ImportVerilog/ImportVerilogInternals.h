@@ -572,11 +572,6 @@ struct Context {
   DenseMap<const slang::ast::CovergroupType *,
            std::unique_ptr<CovergroupLowering>>
       covergroups;
-  /// Covergroup handle variables for which implicit sampling-event procedures
-  /// have already been synthesized.
-  DenseSet<const slang::ast::VariableSymbol *>
-      covergroupImplicitSamplingVars;
-
   /// A table of defined values, such as variables, that may be referred to by
   /// name in expressions. The expressions use this table to lookup the MLIR
   /// value that was created for a given declaration in the Slang AST node.
