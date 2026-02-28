@@ -1009,11 +1009,11 @@ Same feature gap as entry 333 in statement matching: template-argument calls are
 ### [ ] 335. `lib/Dialect/Handshake/Transforms/Materialization.cpp:83`
 The pass uses op-kind checks as a proxy for “already replaced/erased” state and questions this indicator, so transformation bookkeeping is brittle. What is missing is a robust explicit marker/state model for replaced operations. The fix is to track replacement status directly (attribute/set/map) instead of inferring from opcode classes.
 
-### [ ] 336. `lib/Dialect/Sim/SimOps.cpp:97`
-`convertToDouble()` here is normal float formatting logic, not a TODO/FIXME/unsupported marker. This is a scanner false positive. The fix is to avoid matching generic tokens like `convertToDouble` when generating debt lists.
+### [x] 336. `lib/Dialect/Sim/SimOps.cpp:97`
+Status update (2026-02-28): this entry is closed as stale scanner noise. `convertToDouble()` in this context is normal formatting code and not unresolved Sim implementation debt.
 
-### [ ] 337. `lib/Dialect/Sim/SimOps.cpp:100`
-Same as entry 336: ordinary formatting code in the same function, non-actionable from gap perspective. The fix is scanner filtering, not code change.
+### [x] 337. `lib/Dialect/Sim/SimOps.cpp:100`
+Status update (2026-02-28): same closure as entry 336.
 
 ### [ ] 338. `lib/Dialect/Handshake/Transforms/LockFunctions.cpp:61`
 The `TODO is this UB?` comment flags uncertainty about `replaceAllUsesExcept` on function args during sync insertion, which is a correctness-risk marker. What is missing is a proven legality argument (or safer rewrite sequence) for this mutation pattern. The fix is to formalize dominance/use constraints, assert them, and add a regression that would fail if UB-like behavior occurs.
@@ -2905,11 +2905,11 @@ UNR-only assume lowering relies on stringly guard inspection rather than structu
 ### [ ] 967. `lib/Dialect/OM/Evaluator/Evaluator.cpp:208`
 Diagnostic streaming for actual parameters requires manual loop formatting because direct stream insertion is broken. What is missing is a reliable printer/formatter path for parameter lists in diagnostics. The fix is either operator overload support or shared helper formatting utilities.
 
-### [ ] 968. `lib/Dialect/Sim/SimOps.cpp:97`
-`convertToDouble()` here is ordinary float formatting code (`snprintf`) and not TODO/unsupported debt. This is scanner false positive noise.
+### [x] 968. `lib/Dialect/Sim/SimOps.cpp:97`
+Status update (2026-02-28): this duplicate of entry 336 is closed as scanner false-positive noise.
 
-### [ ] 969. `lib/Dialect/Sim/SimOps.cpp:100`
-Same as entry 968: routine numeric conversion call, non-actionable from gap perspective.
+### [x] 969. `lib/Dialect/Sim/SimOps.cpp:100`
+Status update (2026-02-28): same closure as entry 968.
 
 ### [ ] 970. `lib/Dialect/Handshake/Transforms/Materialization.cpp:83`
 Pass currently infers “already erased/replaced” ops by dialect/op-kind checks, with TODO questioning robustness of that indicator. What is missing is explicit marking or tracking for replaced ops during materialization. The fix is to use a stronger state marker instead of heuristic op-type filtering.

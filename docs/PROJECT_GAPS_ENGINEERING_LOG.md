@@ -1717,3 +1717,16 @@
 - Realization:
   - Leaving known non-actionable entries unchecked obscures actual conversion
     debt and slows prioritization in this high-volume tracker.
+
+### Project gaps: close duplicate Sim `convertToDouble` false positives
+- Repro/verification:
+  - Reviewed open Sim entries pointing to `lib/Dialect/Sim/SimOps.cpp:97` and
+    `:100` and confirmed they correspond to ordinary `snprintf` float-formatting
+    code, not TODO/FIXME/unsupported implementation markers.
+- Fix:
+  - Marked as closed (`[x]`) in
+    `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` with dated stale-status notes:
+    - 336, 337, 968, 969
+- Realization:
+  - Duplicate scanner hits on common API names materially inflated remaining-gap
+    counts for Sim and obscured actionable work.
