@@ -1844,6 +1844,9 @@ void LLHDProcessInterpreter::rebuildAddrRangeIndex() {
 
 void LLHDProcessInterpreter::noteMallocBlockAllocated(uint64_t baseAddr,
                                                       uint64_t size) {
+  // Keep native pointer range tracking in sync with interpreter malloc blocks.
+  // Some runtime helper paths resolve via nativeMemoryBlocks first.
+  nativeMemoryBlocks[baseAddr] = static_cast<size_t>(size);
   if (addrRangeIndexDirty)
     return;
   addrRangeIndex[baseAddr] = {baseAddr + size, {}, true};
@@ -30509,6 +30512,10 @@ bool LLHDProcessInterpreter::findNativeMemoryBlockByAddress(
   constexpr uint64_t kMinReasonablePtr = 0x10000ULL;
   constexpr uint64_t kMaxCanonicalUserPtr = 0x0000FFFFFFFFFFFFULL;
   constexpr uint64_t kMaxReasonableLen = 1ULL << 30; // 1 GiB hard cap.
+  bool found = false;
+  uint64_t bestBase = 0;
+  size_t bestSize = 0;
+  uint64_t bestOffset = 0;
 
   for (auto &entry : nativeMemoryBlocks) {
     uint64_t baseAddr = entry.first;
@@ -30521,11 +30528,57 @@ bool LLHDProcessInterpreter::findNativeMemoryBlockByAddress(
     if (__builtin_add_overflow(baseAddr, static_cast<uint64_t>(blockSize),
                                &endAddr))
       continue;
-    if (addr >= baseAddr && addr < endAddr) {
-      if (outOffset) *outOffset = addr - baseAddr;
-      if (outSize) *outSize = blockSize;
-      return true;
+    if (addr < baseAddr || addr >= endAddr)
+      continue;
+
+    uint64_t offset = addr - baseAddr;
+    if (!found) {
+      found = true;
+      bestBase = baseAddr;
+      bestSize = blockSize;
+      bestOffset = offset;
+      continue;
     }
+
+    // Prefer an exact-base match whenever available.
+    if (bestOffset != 0 && offset == 0) {
+      bestBase = baseAddr;
+      bestSize = blockSize;
+      bestOffset = offset;
+      continue;
+    }
+    if (bestOffset == 0 && offset != 0)
+      continue;
+
+    // Otherwise prefer the candidate with the smallest offset (closest base).
+    if (offset < bestOffset) {
+      bestBase = baseAddr;
+      bestSize = blockSize;
+      bestOffset = offset;
+      continue;
+    }
+    if (offset > bestOffset)
+      continue;
+
+    // If equally specific, prefer larger block size to avoid truncation.
+    if (blockSize > bestSize) {
+      bestBase = baseAddr;
+      bestSize = blockSize;
+      bestOffset = offset;
+      continue;
+    }
+    if (blockSize == bestSize && baseAddr > bestBase) {
+      bestBase = baseAddr;
+      bestSize = blockSize;
+      bestOffset = offset;
+    }
+  }
+  if (found) {
+    if (outOffset)
+      *outOffset = bestOffset;
+    if (outSize)
+      *outSize = bestSize;
+    return true;
   }
   if (outOffset) *outOffset = 0;
   if (outSize) *outSize = 0;
@@ -37949,6 +38002,75 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    // ---- __moore_dyn_array_new_copy_bytes ----
+    // Signature: (size_bytes: i32, src_data: ptr, src_bytes: i64)
+    //            -> struct<(ptr, i64)>
+    if (calleeName == "__moore_dyn_array_new_copy_bytes") {
+      if (callOp.getNumOperands() >= 3 && callOp.getNumResults() >= 1) {
+        constexpr int32_t kMaxRuntimeDynArrayBytes = 16 * 1024 * 1024;
+        int32_t size = static_cast<int32_t>(
+            getValue(procId, callOp.getOperand(0)).getUInt64());
+        if (size <= 0 || size > kMaxRuntimeDynArrayBytes) {
+          setValue(procId, callOp.getResult(), InterpretedValue(APInt(128, 0)));
+          return success();
+        }
+
+        uint64_t srcAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t srcBytes = getValue(procId, callOp.getOperand(2)).getUInt64();
+
+        MooreQueue result = __moore_dyn_array_new(size);
+        if (result.data && srcAddr != 0 && srcBytes > 0) {
+          size_t copyBound =
+              std::min<size_t>(static_cast<size_t>(size),
+                               static_cast<size_t>(srcBytes));
+          bool copied = false;
+
+          uint64_t srcOffset = 0;
+          if (auto *srcBlock = findMemoryBlockByAddress(srcAddr, procId, &srcOffset);
+              srcBlock && srcBlock->initialized && srcOffset < srcBlock->size) {
+            size_t avail = static_cast<size_t>(srcBlock->size - srcOffset);
+            size_t copySize = std::min(copyBound, avail);
+            if (copySize > 0) {
+              std::memcpy(result.data, srcBlock->bytes() + srcOffset, copySize);
+              copied = true;
+            }
+          }
+
+          if (!copied) {
+            uint64_t nativeOffset = 0;
+            size_t nativeSize = 0;
+            if (findNativeMemoryBlockByAddress(srcAddr, &nativeOffset,
+                                               &nativeSize) &&
+                nativeSize > nativeOffset) {
+              size_t avail = nativeSize - nativeOffset;
+              size_t copySize = std::min(copyBound, avail);
+              if (copySize > 0) {
+                std::memcpy(result.data, reinterpret_cast<const void *>(srcAddr),
+                            copySize);
+                copied = true;
+              }
+            }
+          }
+
+          (void)copied;
+        }
+
+        auto ptrVal = reinterpret_cast<uint64_t>(result.data);
+        auto lenVal = static_cast<uint64_t>(result.len);
+        APInt packedResult(128, 0);
+        safeInsertBits(packedResult, APInt(64, ptrVal), 0);
+        safeInsertBits(packedResult, APInt(64, lenVal), 64);
+        setValue(procId, callOp.getResult(), InterpretedValue(packedResult));
+        if (result.data && size > 0)
+          nativeMemoryBlocks[ptrVal] = static_cast<uint64_t>(size);
+        LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_dyn_array_new_copy_bytes("
+                                << size << ", 0x"
+                                << llvm::format_hex(srcAddr, 16) << ", "
+                                << srcBytes << ")\n");
+      }
+      return success();
+    }
+
     // Helper to build bounded, stable state keys for
     // rand_mode/constraint_mode maps. Avoid unbounded C-string reads from
     // raw pointers, which can trigger runaway allocations when the pointer is
@@ -38359,9 +38481,15 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         int64_t elemSize = static_cast<int64_t>(
             getValue(procId, callOp.getOperand(2)).getUInt64());
 
-        // Compute total length
+        // Compute total length and resolve source spans.
         int64_t totalLen = 0;
-        std::vector<std::pair<void *, int64_t>> srcs;
+        struct SrcSpan {
+          const uint8_t *ptr = nullptr;
+          size_t availBytes = 0;
+          int64_t len = 0;
+          uint64_t offset = 0;
+        };
+        std::vector<SrcSpan> srcs;
         if (queuesAddr != 0 && count > 0 && elemSize > 0) {
           uint64_t qOff = 0;
           auto *qBlock =
@@ -38380,11 +38508,40 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 ln |= static_cast<int64_t>(
                            qBlock->bytes()[base + 8 + b])
                       << (b * 8);
-              // Only use dp as native pointer if it's in native memory range
-              if (dp >= 0x10000000000ULL)
-                srcs.push_back({reinterpret_cast<void *>(dp), ln});
-              else
-                srcs.push_back({nullptr, 0});
+
+              SrcSpan span;
+              span.len = ln;
+              if (dp != 0 && ln > 0) {
+                uint64_t nativeOffset = 0;
+                size_t nativeSize = 0;
+                if (findNativeMemoryBlockByAddress(dp, &nativeOffset,
+                                                   &nativeSize) &&
+                    nativeSize > nativeOffset) {
+                  span.ptr = reinterpret_cast<const uint8_t *>(dp);
+                  span.availBytes = nativeSize - nativeOffset;
+                  span.offset = nativeOffset;
+                } else {
+                  uint64_t srcOff = 0;
+                  auto *srcBlock =
+                      findMemoryBlockByAddress(dp, procId, &srcOff);
+                  if (srcBlock && srcBlock->initialized &&
+                      srcOff < srcBlock->size) {
+                    span.ptr = srcBlock->bytes() + srcOff;
+                    span.availBytes =
+                        static_cast<size_t>(srcBlock->size - srcOff);
+                    span.offset = srcOff;
+                  }
+                }
+              }
+              if (traceQueueOpsEnabled()) {
+                llvm::errs() << "[QUEUE] proc=" << procId
+                             << " op=concat_src idx=" << i << " dp=0x"
+                             << llvm::format_hex(dp, 16) << " len=" << ln
+                             << " resolved=" << (span.ptr ? 1 : 0)
+                             << " off=" << span.offset
+                             << " avail=" << span.availBytes << "\n";
+              }
+              srcs.push_back(span);
               totalLen += ln;
             }
           }
@@ -38394,19 +38551,43 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             static_cast<int32_t>(totalLen * elemSize));
         if (result.data) {
           int64_t offset = 0;
-          for (auto &[srcPtr, srcLen] : srcs) {
-            if (srcPtr && srcLen > 0) {
-              std::memcpy(static_cast<char *>(result.data) +
-                              offset * elemSize,
-                          srcPtr, srcLen * elemSize);
-              offset += srcLen;
+          for (auto &src : srcs) {
+            if (src.ptr && src.len > 0) {
+              size_t reqBytes = 0;
+              if (src.len > 0 &&
+                  static_cast<uint64_t>(src.len) <=
+                      std::numeric_limits<size_t>::max() /
+                          static_cast<size_t>(elemSize)) {
+                reqBytes = static_cast<size_t>(src.len) *
+                           static_cast<size_t>(elemSize);
+              }
+              size_t copyBytes = std::min(reqBytes, src.availBytes);
+              if (copyBytes > 0) {
+                std::memcpy(static_cast<char *>(result.data) +
+                                offset * elemSize,
+                            src.ptr, copyBytes);
+              }
             }
+            offset += src.len;
           }
           result.len = totalLen;
         }
 
+        if (result.data && result.len > 0 && elemSize > 0) {
+          uint64_t resultBytes = 0;
+          if (!__builtin_mul_overflow(static_cast<uint64_t>(result.len),
+                                      static_cast<uint64_t>(elemSize),
+                                      &resultBytes))
+            nativeMemoryBlocks[reinterpret_cast<uint64_t>(result.data)] =
+                static_cast<size_t>(resultBytes);
+        }
+
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);
         auto lenVal = static_cast<uint64_t>(result.len);
+        if (traceQueueOpsEnabled())
+          llvm::errs() << "[QUEUE] proc=" << procId
+                       << " op=concat_result total_len=" << totalLen
+                       << " ptr=0x" << llvm::format_hex(ptrVal, 16) << "\n";
         APInt packedResult(128, 0);
         safeInsertBits(packedResult,APInt(64, ptrVal), 0);
         safeInsertBits(packedResult,APInt(64, lenVal), 64);
