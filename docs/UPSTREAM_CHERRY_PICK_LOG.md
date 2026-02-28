@@ -28,6 +28,8 @@ Branch: `staging-upstream-easy-picks`
 | `69b64e842` | `73e28e09a` | [CalyxToHW] Fix missing i1-to-clock conversion in convertPipelineOp (#9715) |
 | `d1e5b472c` | `52c919970` | [FIRRTL] Allow full reset module instances outside of reset domain (#9754) |
 | `dc8c1e05c` | `a0ddbccf0` | [FIRRTL] Fix domain info updates in cloneWithInsertedPorts (#9758) |
+| `8c0c5a148` | `0f99432e5` | [Arc] Lower time operations to LLVM IR (#9757) |
+| `7a7ee71ab` | n/a (follow-up) | [ArcToLLVM] Fix LLHD include path for time-op lowering |
 
 ## Triaged But Not Picked
 
@@ -39,7 +41,6 @@ Branch: `staging-upstream-easy-picks`
 
 ### Conflicted in dry-run (needs manual integration)
 
-- `0f99432e5` [Arc] Lower time operations to LLVM IR (#9757)
 - `afcefdc19` [comb] New Canonicalization ~sext(x) = sext(~x) (#9637)
 - `db50d3131` [LLHD] Fix mem2reg to capture all live values across wait ops (#9552)
 
@@ -65,9 +66,8 @@ Branch: `staging-upstream-easy-picks`
 
 For the next mining pass, start from these unresolved high-value candidates:
 
-1. `0f99432e5` ([Arc] Lower time operations to LLVM IR)
-2. `db50d3131` ([LLHD] mem2reg live-value fix)
-3. `afcefdc19` ([comb] ~sext canonicalization)
+1. `db50d3131` ([LLHD] mem2reg live-value fix)
+2. `afcefdc19` ([comb] ~sext canonicalization)
 
 Command to refresh candidate window:
 
