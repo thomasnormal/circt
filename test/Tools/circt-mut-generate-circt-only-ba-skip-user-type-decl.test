@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, input logic d);\n  typedef logic [3:0] nib_t;\n  nib_t q = 4'h0;\n  logic y;\n  always_ff @(posedge clk) begin\n    y = d;\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 120 --seed 11 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_BA_TO_NBA' %t/mutations.txt
+// RUN: not grep -q 'NATIVE_BA_TO_NBA@2' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 120

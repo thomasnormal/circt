@@ -254,9 +254,69 @@ def statement_has_plain_assign_before(stmt_start: int, pos: int) -> bool:
     return False
 
 
-def statement_has_assignment_disqualifier(stmt_start: int, pos: int) -> bool:
+def statement_has_assignment_before(stmt_start: int, pos: int) -> bool:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    i = max(0, stmt_start)
+    end = min(pos, len(text))
+    while i < end:
+        if not is_code_at(i):
+            i += 1
+            continue
+
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+
+        if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+
+        if ch == "=":
+            prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+            nxt = text[i + 1] if i + 1 < len(text) and is_code_at(i + 1) else ""
+            if prev in ("=", "!", "<", ">") or nxt in ("=", ">"):
+                i += 1
+                continue
+            return True
+
+        if is_code_span(i, i + 2) and text.startswith("<=", i):
+            prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+            nxt = text[i + 2] if i + 2 < len(text) and is_code_at(i + 2) else ""
+            if prev in ("<", "=", "!", ">") or nxt in ("=", ">"):
+                i += 1
+                continue
+            return True
+
+        i += 1
+    return False
+
+
+def statement_has_assignment_disqualifier(stmt_start: int, pos: int, include_assign: bool = True) -> bool:
     disqualifiers = {
-        "assign",
         "parameter",
         "localparam",
         "typedef",
@@ -287,6 +347,8 @@ def statement_has_assignment_disqualifier(stmt_start: int, pos: int) -> bool:
         "function",
         "task",
     }
+    if include_assign:
+        disqualifiers.add("assign")
     i = max(0, stmt_start)
     end = min(pos, len(text))
     while i < end:
@@ -303,6 +365,262 @@ def statement_has_assignment_disqualifier(stmt_start: int, pos: int) -> bool:
         if token in disqualifiers:
             return True
     return False
+
+
+def _skip_code_ws(i: int, end: int) -> int:
+    while i < end:
+        if not is_code_at(i):
+            i += 1
+            continue
+        if text[i].isspace():
+            i += 1
+            continue
+        break
+    return i
+
+
+def _parse_identifier_token(i: int, end: int):
+    if i >= end or not is_code_at(i):
+        return (-1, -1)
+    ch = text[i]
+    if not (ch.isalpha() or ch == "_"):
+        return (-1, -1)
+    start = i
+    i += 1
+    while i < end and is_code_at(i) and (text[i].isalnum() or text[i] in ("_", "$")):
+        i += 1
+    return (start, i)
+
+
+def _skip_balanced(i: int, end: int, open_ch: str, close_ch: str) -> int:
+    if i >= end or not is_code_at(i) or text[i] != open_ch:
+        return i
+    depth = 0
+    while i < end:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return end
+
+
+def statement_looks_like_typed_declaration(stmt_start: int, pos: int) -> bool:
+    end = min(pos, len(text))
+    i = _skip_code_ws(max(0, stmt_start), end)
+    first_start, first_end = _parse_identifier_token(i, end)
+    if first_start < 0:
+        return False
+    first_token = text[first_start:first_end].lower()
+    if first_token in {"assign", "if", "for", "while", "case", "foreach", "return", "begin", "end"}:
+        return False
+    i = first_end
+
+    while True:
+        i = _skip_code_ws(i, end)
+        if i + 1 < end and is_code_span(i, i + 2) and text.startswith("::", i):
+            i = _skip_code_ws(i + 2, end)
+            _, i = _parse_identifier_token(i, end)
+            if i < 0:
+                return False
+            continue
+        if i < end and is_code_at(i) and text[i] == "#":
+            i = _skip_code_ws(i + 1, end)
+            i = _skip_balanced(i, end, "(", ")")
+            continue
+        if i < end and is_code_at(i) and text[i] == "[":
+            i = _skip_balanced(i, end, "[", "]")
+            continue
+        break
+
+    i = _skip_code_ws(i, end)
+    second_start, _ = _parse_identifier_token(i, end)
+    if second_start < 0:
+        return False
+    prev_sig = find_prev_code_nonspace(second_start)
+    if prev_sig >= 0 and text[prev_sig] == ".":
+        return False
+    return True
+
+
+def find_matching_ternary_colon(question_pos: int) -> int:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    nested_ternary = 0
+    i = question_pos + 1
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if paren_depth == 0:
+                return -1
+            paren_depth -= 1
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            if bracket_depth == 0:
+                return -1
+            bracket_depth -= 1
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            if brace_depth == 0:
+                return -1
+            brace_depth -= 1
+            i += 1
+            continue
+
+        if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+
+        if ch == "?":
+            nested_ternary += 1
+            i += 1
+            continue
+        if ch == ":":
+            if nested_ternary == 0:
+                return i
+            nested_ternary -= 1
+            i += 1
+            continue
+        if ch in (";", ","):
+            return -1
+        i += 1
+    return -1
+
+
+def find_ternary_end_delimiter(colon_pos: int) -> int:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    nested_ternary = 0
+    i = colon_pos + 1
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0 and nested_ternary == 0:
+                return i
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0 and nested_ternary == 0:
+                return i
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0 and nested_ternary == 0:
+                return i
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+
+        if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0:
+            if ch == "?":
+                nested_ternary += 1
+                i += 1
+                continue
+            if ch == ":":
+                if nested_ternary == 0:
+                    return i
+                nested_ternary -= 1
+                i += 1
+                continue
+            if nested_ternary == 0 and ch in (";", ","):
+                return i
+        i += 1
+    return n
+
+
+def find_ternary_mux_token(nth: int):
+    if nth < 1:
+        return (-1, -1, -1)
+    seen = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(i) or text[i] != "?":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 1)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        stmt_start = find_statement_start(i)
+        if statement_has_assignment_disqualifier(stmt_start, i, include_assign=False):
+            i += 1
+            continue
+        if statement_looks_like_typed_declaration(stmt_start, i):
+            i += 1
+            continue
+        if not statement_has_assignment_before(stmt_start, i):
+            i += 1
+            continue
+        colon_idx = find_matching_ternary_colon(i)
+        if colon_idx < 0:
+            i += 1
+            continue
+        true_start = find_next_code_nonspace(i + 1)
+        true_end = find_prev_code_nonspace(colon_idx)
+        false_start = find_next_code_nonspace(colon_idx + 1)
+        if true_start < 0 or true_end < 0 or false_start < 0 or true_start > true_end:
+            i += 1
+            continue
+        end_delim = find_ternary_end_delimiter(colon_idx)
+        false_end = find_prev_code_nonspace(end_delim)
+        if false_end < false_start:
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return (i, colon_idx, end_delim)
+        i += 1
+        continue
+    return (-1, -1, -1)
 
 
 def find_procedural_blocking_assign_token(nth: int) -> int:
@@ -366,6 +684,9 @@ def find_procedural_blocking_assign_token(nth: int) -> int:
             continue
         stmt_start = find_statement_start(i)
         if statement_has_assignment_disqualifier(stmt_start, i):
+            i += 1
+            continue
+        if statement_looks_like_typed_declaration(stmt_start, i):
             i += 1
             continue
         if statement_has_plain_assign_before(stmt_start, i):
@@ -439,6 +760,9 @@ def find_procedural_nonblocking_assign_token(nth: int) -> int:
             continue
         stmt_start = find_statement_start(i)
         if statement_has_assignment_disqualifier(stmt_start, i):
+            i += 1
+            continue
+        if statement_looks_like_typed_declaration(stmt_start, i):
             i += 1
             continue
         if statement_has_plain_assign_before(stmt_start, i):
@@ -1116,6 +1440,33 @@ elif op == 'NBA_TO_BA':
     if idx >= 0:
         text = text[:idx] + '=' + text[idx + 2:]
         changed = True
+elif op == 'MUX_SWAP_ARMS':
+    q_idx, colon_idx, end_delim = find_ternary_mux_token(site_index)
+    if q_idx >= 0 and colon_idx >= 0 and end_delim >= 0:
+        true_start = find_next_code_nonspace(q_idx + 1)
+        true_end = find_prev_code_nonspace(colon_idx)
+        false_start = find_next_code_nonspace(colon_idx + 1)
+        false_end = find_prev_code_nonspace(end_delim)
+        if true_start >= 0 and true_end >= true_start and false_start >= 0 and false_end >= false_start:
+            lhs = text[q_idx + 1:true_start]
+            true_expr = text[true_start:true_end + 1]
+            true_to_colon_ws = text[true_end + 1:colon_idx]
+            colon_to_false_ws = text[colon_idx + 1:false_start]
+            false_expr = text[false_start:false_end + 1]
+            false_suffix_ws = text[false_end + 1:end_delim]
+            swapped = (
+                text[:q_idx + 1]
+                + lhs
+                + false_expr
+                + true_to_colon_ws
+                + ':'
+                + colon_to_false_ws
+                + true_expr
+                + false_suffix_ws
+                + text[end_delim:]
+            )
+            text = swapped
+            changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
 elif op == 'UNARY_BNOT_DROP':

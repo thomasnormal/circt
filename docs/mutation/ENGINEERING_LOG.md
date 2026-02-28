@@ -1,5 +1,43 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (mux-arm swap mutation class)
+
+- realizations:
+  - Swapping ternary mux arms (`sel ? a : b` -> `sel ? b : a`) is a realistic
+    control/data bug class and complements assignment-timing faults.
+  - Ternary token matching must be assignment-context aware; wildcard case-item
+    patterns (`2'b0?`) can otherwise be misclassified as ternary operators.
+
+- changes made:
+  - Added native operator `MUX_SWAP_ARMS` to CIRCT-only planner op set.
+  - Implemented site detection with:
+    - assignment-context gating (`=` or `<=` before the `?` at statement depth),
+    - declaration/port/type disqualifier filtering,
+    - nested-ternary-aware `?`/`:` pairing.
+  - Added mutator rewrite support to swap ternary true/false arms while
+    preserving surrounding whitespace slices.
+  - Extended CIRCT-only mode mappings (`control`, `connect`, `cnot0/cnot1`,
+    `inv`/`invert`, `balanced/all`) to include `MUX_SWAP_ARMS`.
+  - Updated fallback native planner utility (`native_mutation_plan.py`) and
+    native-op validation in `run_mutation_mcy_examples.sh`.
+  - Added regression tests:
+    - `native-create-mutated-mux-swap-arms-site-index`
+    - `native-create-mutated-mux-swap-arms-nba`
+    - `native-create-mutated-mux-skip-case-item`
+    - `circt-mut-generate-circt-only-control-mode-mux-swap-op`
+  - Added declaration-safety regression coverage for assignment timing:
+    - `native-create-mutated-ba-skip-user-type-decl`
+    - `circt-mut-generate-circt-only-ba-skip-user-type-decl`
+  - Fixed a real mutation bug where `BA_TO_NBA` could rewrite typed
+    declarations (`my_t v = ...`) into invalid syntax (`<=` in declarations).
+    Added typed-declaration filters to both planner and mutator paths.
+  - Re-ran seeded parity campaigns after the fix:
+    - control-mode single-module signature campaign: `ok=24 mismatch=0 fail=0`
+      (includes `MUX_SWAP_ARMS` mutants),
+    - `cov_intro_seeded`-style coverage campaign: no xrun-vs-circt mismatches on
+      terminating mutants; remaining failures are liveness/time-limit cases from
+      clock-killing mutants (for example `UNARY_BNOT_DROP` on `clk = ~clk`).
+
 ## 2026-02-28 (assignment timing faults and seeded parity campaigns)
 
 - realizations:

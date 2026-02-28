@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic s0,s1,a,b,c,d, output logic y0,y1);\n  always_comb begin\n    y0 = s0 ? a : b;\n    y1 <= s1 ? c : d;\n  end\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 120 --seed 29 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_MUX_SWAP_ARMS' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 120
