@@ -1,8 +1,6 @@
 // RUN: circt-verilog --parse-only --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s
 // RUN: circt-verilog --ir-moore --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv %s | FileCheck %s --check-prefix=MOORE
 // REQUIRES: slang
-// XFAIL: *
-// Currently trips always_ff driver legality checks in imported UVM code.
 
 //===----------------------------------------------------------------------===//
 // AVIP End-to-End Testbench - Iteration 63 Track A
@@ -661,7 +659,7 @@ module apb_memory (
   assign prdata = mem[paddr[9:2]];
 
   // Memory write
-  always_ff @(posedge clk or negedge rst_n) begin
+  always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       // Reset handled by initial block
     end else if (pselx && penable && pwrite) begin

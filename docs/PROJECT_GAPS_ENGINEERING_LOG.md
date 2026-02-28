@@ -1198,3 +1198,23 @@
 - Validation:
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/basic.sv`
   - result: 1/1 passed.
+
+### ImportVerilog: remove `avip-e2e-testbench.sv` XFAIL (always_ff mixed-driver legality)
+- Repro:
+  - `build_test/bin/circt-verilog --ir-moore --no-uvm-auto-include -I ~/uvm-core/src ~/uvm-core/src/uvm_pkg.sv test/Conversion/ImportVerilog/avip-e2e-testbench.sv`
+  - Error:
+    - `variable 'mem' driven by always_ff procedure`
+- Root cause:
+  - The DUT memory array `mem` was written in both:
+    - an `initial` block (array initialization), and
+    - an `always_ff` block (byte-lane writes).
+  - `always_ff` enforces single procedural writer legality, so the mixed
+    writer pattern is rejected.
+- Fix:
+  - Changed DUT write block from `always_ff` to `always` in
+    `test/Conversion/ImportVerilog/avip-e2e-testbench.sv`.
+  - Removed file-level `XFAIL` marker and stale failure comment.
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/avip-e2e-testbench.sv`
+  - `build_test/bin/llvm-lit -sv --show-xfail test/Conversion/ImportVerilog -j 8`
+  - result: targeted test passes; full ImportVerilog suite is 550/550 passed.
