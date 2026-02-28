@@ -539,3 +539,47 @@
     `4/4` pass.
   - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
     `37/37` pass.
+
+## 2026-02-28 - Connectivity LEC symbol-pruning parity with auto fallback
+
+- realization:
+  - connectivity runner did not enable `circt-lec --prune-unreachable-symbols`,
+    leaving large shared-core symbol sets active for each case even though LEC
+    compares only selected `-c1/-c2` modules.
+  - this is a direct gap vs commercial-style frontends that aggressively prune
+    unreachable design fragments before heavy lowering/canonicalization.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - new env knob:
+      `LEC_PRUNE_UNREACHABLE_SYMBOLS_MODE` (`auto|on|off`, default `auto`).
+    - in `auto/on`, injects `--prune-unreachable-symbols` into per-case
+      `circt-lec` invocation unless user already set
+      `--prune-unreachable-symbols`/`--no-prune-unreachable-symbols`.
+    - `auto` fallback: if tool reports unknown option for
+      `--prune-unreachable-symbols`, retry once without the flag and propagate
+      learned disabled state to later cases.
+    - mirrors first-failure log to
+      `circt-lec.prune-unreachable-symbols.log`.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-prune-unreachable-default.test`
+    to require default flag injection.
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-prune-unreachable-auto-fallback.test`
+    to require unknown-option retry and clean final success without the flag.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `39/39` pass.
+
+- profiling note:
+  - real OpenTitan direct A/B on
+    `ALERT_HANDLER_LC_CTRL_ESC0_RST` under current host load (`~100` load avg,
+    many concurrent formal jobs) caused both baseline and pruned direct runs to
+    hit a hard `timeout 360` cap.
+  - deterministic lit coverage now guards behavior; clean wall-time quantification
+    of this optimization should be repeated on a quieter host.

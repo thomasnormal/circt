@@ -895,6 +895,17 @@ def is_opt_emit_bytecode_retryable_failure(log_text: str) -> bool:
     )
 
 
+def is_prune_unreachable_symbols_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "--prune-unreachable-symbols" in low
+        and (
+            "unknown command line argument" in low
+            or "unknown argument" in low
+        )
+    )
+
+
 def is_disable_threading_retryable_failure(returncode: int, log_text: str) -> bool:
     if returncode in {-11, -6, 134, 139}:
         return True
@@ -1528,6 +1539,16 @@ def main() -> int:
                 f"{opt_emit_bytecode_mode} (expected auto|on|off)"
             )
         )
+    prune_unreachable_symbols_mode = os.environ.get(
+        "LEC_PRUNE_UNREACHABLE_SYMBOLS_MODE", "auto"
+    ).strip().lower()
+    if prune_unreachable_symbols_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_PRUNE_UNREACHABLE_SYMBOLS_MODE: "
+                f"{prune_unreachable_symbols_mode} (expected auto|on|off)"
+            )
+        )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -1768,6 +1789,10 @@ def main() -> int:
         has_assume_known_inputs = has_command_option(
             circt_lec_args, "--assume-known-inputs"
         )
+        has_explicit_prune_unreachable_symbols = (
+            has_command_option(circt_lec_args, "--prune-unreachable-symbols")
+            or has_command_option(circt_lec_args, "--no-prune-unreachable-symbols")
+        )
         has_explicit_canonicalizer_budget = (
             has_explicit_canonicalizer_max_iterations
             or has_explicit_canonicalizer_max_num_rewrites
@@ -1840,6 +1865,10 @@ def main() -> int:
             )
         # Learned per-run LEC retry state for LLHD abstraction UNKNOWN outcomes.
         learned_assume_known_inputs = has_assume_known_inputs
+        learned_prune_unreachable_symbols = (
+            prune_unreachable_symbols_mode in {"auto", "on"}
+            and not has_explicit_prune_unreachable_symbols
+        )
 
         case_batches: list[list[ConnectivityLECCase]] = []
         by_csv: dict[str, list[ConnectivityLECCase]] = {}
@@ -2283,9 +2312,13 @@ def main() -> int:
                     lec_canonicalizer_timeout_rewrite_budget = (
                         learned_canonicalizer_timeout_rewrite_budget
                     )
+                    lec_enable_prune_unreachable_symbols = (
+                        learned_prune_unreachable_symbols
+                    )
                     attempted_disable_threading_retry = False
                     attempted_llhd_abstraction_retry = False
                     attempted_canonicalizer_timeout_retry = False
+                    attempted_prune_unreachable_symbols_retry = False
                     can_retry_disable_threading = (
                         disable_threading_retry_mode == "on"
                         or (
@@ -2307,6 +2340,10 @@ def main() -> int:
                             and not has_assume_known_inputs
                         )
                     )
+                    can_retry_prune_unreachable_symbols = (
+                        prune_unreachable_symbols_mode == "auto"
+                        and not has_explicit_prune_unreachable_symbols
+                    )
 
                     def build_lec_cmd(
                         enable_temporal_approx: bool,
@@ -2314,6 +2351,7 @@ def main() -> int:
                         enable_assume_known_inputs: bool,
                         enable_canonicalizer_timeout_budget: bool,
                         canonicalizer_timeout_rewrite_budget: int | None,
+                        enable_prune_unreachable_symbols: bool,
                     ) -> list[str]:
                         cmd = [
                             circt_lec,
@@ -2336,6 +2374,11 @@ def main() -> int:
                             cmd.append("--mlir-disable-threading")
                         if enable_assume_known_inputs and not has_assume_known_inputs:
                             cmd.append("--assume-known-inputs")
+                        if (
+                            enable_prune_unreachable_symbols
+                            and not has_explicit_prune_unreachable_symbols
+                        ):
+                            cmd.append("--prune-unreachable-symbols")
                         if (
                             enable_canonicalizer_timeout_budget
                             and not has_explicit_canonicalizer_max_iterations
@@ -2385,6 +2428,7 @@ def main() -> int:
                                 lec_enable_assume_known_inputs,
                                 lec_enable_canonicalizer_timeout_budget,
                                 lec_canonicalizer_timeout_rewrite_budget,
+                                lec_enable_prune_unreachable_symbols,
                             )
                             lec_timeout_secs = timeout_secs
                             if (
@@ -2552,6 +2596,35 @@ def main() -> int:
                                     lec_retry_combined += "\n" + lec_out.read_text(
                                         encoding="utf-8"
                                     )
+                                if (
+                                    can_retry_prune_unreachable_symbols
+                                    and lec_enable_prune_unreachable_symbols
+                                    and not attempted_prune_unreachable_symbols_retry
+                                    and is_prune_unreachable_symbols_retryable_failure(
+                                        lec_retry_combined
+                                    )
+                                ):
+                                    prune_retry_log = (
+                                        case_dir
+                                        / "circt-lec.prune-unreachable-symbols.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, prune_retry_log)
+                                    else:
+                                        prune_retry_log.write_text(
+                                            lec_retry_combined, encoding="utf-8"
+                                        )
+                                    lec_enable_prune_unreachable_symbols = False
+                                    learned_prune_unreachable_symbols = False
+                                    attempted_prune_unreachable_symbols_retry = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec "
+                                        "without --prune-unreachable-symbols for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
                                 if (
                                     can_retry_disable_threading
                                     and not lec_enable_disable_threading
