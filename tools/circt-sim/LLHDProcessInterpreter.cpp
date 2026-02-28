@@ -42122,22 +42122,20 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         (name.contains("::uvm_factory::") ||
          name.contains("::uvm_default_factory::")))
       return true;
-    // Reporting paths manage dynamic report handlers/messages and can crash
-    // under native dispatch before interpreter-level handling runs.
+    // Reporting handler/object paths manage dynamic report state and rely on
+    // interpreter-side behavior for parity.
     //
     // Keep `uvm_report_message::get_severity` native-enabled: assoc/virtual
     // pointer normalization is handled at Moore runtime boundaries now.
     if (!allowNativeUvmReporting &&
         (name.contains("::uvm_report_handler::") ||
          name.contains("::uvm_report_object::") ||
-         name.contains("process_report_message") ||
-         name.contains("::uvm_printer::") ||
-         name.contains("::uvm_table_printer::") ||
-         name.contains("::uvm_tree_printer::") ||
-         name.contains("::uvm_line_printer::") ||
-         name.contains("::uvm_printer_element_proxy::") ||
-         name.contains("::uvm_object::print") ||
-         name.contains("::print_topology")))
+         name.contains("process_report_message")))
+      return true;
+    // Keep this printer-element traversal interpreted by default. Native
+    // dispatch can still be forced with CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING.
+    if (!allowNativeUvmReporting &&
+        name.contains("::uvm_printer_element_proxy::get_immediate_children"))
       return true;
     // Random-seeding paths build dynamic strings and rely on interpreter-side
     // pointer lifetime behavior.
@@ -42199,6 +42197,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     maxNative = 0;
   if (const char *maxEnv = std::getenv("CIRCT_AOT_MAX_NATIVE"))
     maxNative = std::atoi(maxEnv);
+  bool traceInterceptSelection =
+      std::getenv("CIRCT_AOT_TRACE_INTERCEPTED") != nullptr;
   unsigned nativePopulated = 0;
 
   unsigned compiled = 0, nativeEligible = 0, intercepted = 0;
@@ -42212,11 +42212,17 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         // All dispatch disabled — don't populate nativeFuncPtrs at all.
       } else if (isInterceptedFunc(funcOp.getSymName())) {
         ++intercepted;
+        if (traceInterceptSelection)
+          llvm::errs() << "[circt-sim] AOT intercept func.call: "
+                       << funcOp.getSymName() << "\n";
         // Skip: let this function route through interpreter for interceptors.
       } else {
         if (nativePopulated < maxNative) {
           nativeFuncPtrs[funcOp.getOperation()] = ptr;
           ++nativePopulated;
+          if (traceInterceptSelection)
+            llvm::errs() << "[circt-sim] AOT native func.call: "
+                         << funcOp.getSymName() << "\n";
         }
         ++nativeEligible;
       }
