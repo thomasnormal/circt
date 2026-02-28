@@ -54,6 +54,11 @@
     `seed=707`, `--modes all`):
     - result: `ok=40`, `mismatch=0`, `fail=0`
     - workspace: `/tmp/cov_seeded_casezx_allmode_parity_1772292117`
+  - Additional post-fix broad sweep on the `cov_intro_seeded_casex` harness
+    (`count=60`, `seed=912`, `--modes all`):
+    - baseline: xrun/circt `COV=95.83`, `SIG=000607ab`
+    - result: `ok=60`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_casex_postfix_sweep_1772292260`
 
 ## 2026-02-28 (case/casez keyword mutation class + seeded parity campaign)
 
