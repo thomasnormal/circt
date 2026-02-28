@@ -25182,6 +25182,49 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
 
     // Helper: try to extract range bounds from a single comparison op.
     // Returns true if the op was matched and bounds were updated.
+    auto tryExtractBooleanBitConstraint =
+        [&](StringRef propName, bool expectTrue,
+            bool isSoft) -> bool {
+      if (propName.empty())
+        return false;
+
+      auto propIt = propertyMap.find(propName);
+      if (propIt == propertyMap.end())
+        return false;
+      auto intType = dyn_cast<IntType>(propIt->second.second);
+      if (!intType || intType.getWidth() != 1)
+        return false;
+
+      auto &bounds = varBounds[propName];
+      bounds.propName = propName;
+      bounds.isSoft = isSoft;
+      bounds.lower = expectTrue ? 1 : 0;
+      bounds.upper = expectTrue ? 1 : 0;
+      return true;
+    };
+
+    // Handle boolean constraints on 1-bit properties:
+    //   constraint c { b; }   -> b == 1
+    //   constraint c { !b; }  -> b == 0
+    auto tryExtractBooleanConstraint =
+        [&](Operation *defOp, Value cond, bool isSoft) -> bool {
+      if (StringRef propName = getPropertyName(cond); !propName.empty())
+        if (tryExtractBooleanBitConstraint(propName, /*expectTrue=*/true,
+                                           isSoft))
+          return true;
+
+      if (auto notOp = dyn_cast<NotOp>(defOp))
+        if (StringRef propName = getPropertyName(notOp.getInput());
+            !propName.empty())
+          if (tryExtractBooleanBitConstraint(propName, /*expectTrue=*/false,
+                                             isSoft))
+            return true;
+
+      return false;
+    };
+
+    // Helper: try to extract range bounds from a single comparison op.
+    // Returns true if the op was matched and bounds were updated.
     auto tryExtractComparisonBounds =
         [&](Operation *defOp,
             bool isSoft) -> bool {
@@ -25286,6 +25329,10 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         continue;
 
       bool isSoft = exprOp.getIsSoft();
+
+      // Try direct boolean constraints before comparison decomposition.
+      if (tryExtractBooleanConstraint(defOp, cond, isSoft))
+        continue;
 
       // Try to decompose or(and(cmp1, cmp2), and(cmp3, cmp4)) multi-range.
       // Slang compiles `x inside {[a:b], [c:d]}` into this form.

@@ -21299,45 +21299,145 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return true;
   };
 
+  const bool traceUvmFactoryByType = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_UVM_FACTORY_BY_TYPE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto recordByTypeOverride = [&](uint64_t requestedWrapperAddr,
+                                  uint64_t overrideWrapperAddr,
+                                  llvm::StringRef sourceTag) {
+    if (requestedWrapperAddr == 0 || overrideWrapperAddr == 0)
+      return;
+    uint64_t requestedCanonical =
+        canonicalizeUvmObjectAddress(procId, requestedWrapperAddr);
+    uint64_t overrideCanonical =
+        canonicalizeUvmObjectAddress(procId, overrideWrapperAddr);
+    nativeFactoryTypeOverridesByWrapper[requestedWrapperAddr] =
+        overrideWrapperAddr;
+    nativeFactoryTypeOverridesByWrapper[requestedCanonical] = overrideCanonical;
+    if (traceUvmFactoryByType) {
+      llvm::errs() << "[UVM-BYTYPE] override-map set source=" << sourceTag
+                   << " req=0x"
+                   << llvm::format_hex(requestedWrapperAddr, 16)
+                   << " req_canon=0x"
+                   << llvm::format_hex(requestedCanonical, 16) << " -> ovr=0x"
+                   << llvm::format_hex(overrideWrapperAddr, 16)
+                   << " ovr_canon=0x"
+                   << llvm::format_hex(overrideCanonical, 16) << "\n";
+    }
+  };
+  auto lookupRecordedByTypeOverride = [&](uint64_t requestedWrapperAddr)
+      -> uint64_t {
+    auto tryLookup = [&](uint64_t key) -> uint64_t {
+      auto it = nativeFactoryTypeOverridesByWrapper.find(key);
+      if (it == nativeFactoryTypeOverridesByWrapper.end())
+        return 0;
+      if (it->second == 0 || it->second == requestedWrapperAddr)
+        return 0;
+      return it->second;
+    };
+    if (uint64_t direct = tryLookup(requestedWrapperAddr))
+      return direct;
+    uint64_t requestedCanonical =
+        canonicalizeUvmObjectAddress(procId, requestedWrapperAddr);
+    if (requestedCanonical != requestedWrapperAddr)
+      if (uint64_t canonical = tryLookup(requestedCanonical))
+        return canonical;
+    return 0;
+  };
+
+  // Intercept lowered helper wrappers:
+  //   set_type_override_<N>(ovr_wrapper, replace)
+  // These wrappers materialize the requested wrapper via an internal get_<M>()
+  // call and dispatch set_type_override_by_type through call_indirect. Capture
+  // that mapping natively so create_by_type fallbacks can honor overrides.
+  if (calleeName.starts_with("set_type_override_") && rootModule &&
+      callOp.getNumOperands() >= 1) {
+    InterpretedValue overrideWrapperVal = getValue(procId, callOp.getOperand(0));
+    if (!overrideWrapperVal.isX() && overrideWrapperVal.getUInt64() != 0) {
+      auto wrapperFunc = rootModule.lookupSymbol<func::FuncOp>(calleeName);
+      if (wrapperFunc) {
+        std::string requestedGetterName;
+        wrapperFunc.walk([&](func::CallOp nestedCall) {
+          if (!requestedGetterName.empty())
+            return WalkResult::interrupt();
+          StringRef nestedCallee = nestedCall.getCallee();
+          if (nestedCall.getNumOperands() == 0 &&
+              nestedCall.getNumResults() == 1 &&
+              nestedCallee.starts_with("get_")) {
+            requestedGetterName = nestedCallee.str();
+            return WalkResult::interrupt();
+          }
+          return WalkResult::advance();
+        });
+        if (!requestedGetterName.empty()) {
+          auto requestedGetter =
+              rootModule.lookupSymbol<func::FuncOp>(requestedGetterName);
+          if (requestedGetter) {
+            SmallVector<InterpretedValue, 1> getterResults;
+            if (succeeded(interpretFuncBody(procId, requestedGetter, {},
+                                            getterResults,
+                                            callOp.getOperation())) &&
+                !getterResults.empty() && !getterResults.front().isX() &&
+                getterResults.front().getUInt64() != 0) {
+              recordByTypeOverride(getterResults.front().getUInt64(),
+                                   overrideWrapperVal.getUInt64(),
+                                   calleeName);
+            }
+          }
+        }
+      }
+    }
+  }
+
   // Fallback for lowered helper wrappers (e.g. create_by_type_4017) that
   // forward to factory by-type creation via call_indirect. These wrappers can
   // observe transient null returns in startup paths even with a valid wrapper
   // pointer. We bypass the indirection and dispatch directly through the
   // wrapper vtable.
-  if (!nativeFactoryOverridesConfigured &&
-      calleeName.starts_with("create_by_type_") &&
+  if (calleeName.starts_with("create_by_type_") &&
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 4) {
     InterpretedValue wrapperArg = getValue(procId, callOp.getOperand(0));
     InterpretedValue nameArg = getValue(procId, callOp.getOperand(2));
     InterpretedValue parentArg = getValue(procId, callOp.getOperand(3));
     if (!wrapperArg.isX() && wrapperArg.getUInt64() != 0) {
-      auto tryComponentCreate = [&]() -> bool {
-        if (parentArg.isX())
-          return false;
-        InterpretedValue createdObj;
-        if (!tryInvokeWrapperFactoryMethod(wrapperArg.getUInt64(),
-                                           /*slotIndex=*/1,
-                                           {nameArg, parentArg}, createdObj))
-          return false;
-        setValue(procId, callOp.getResult(0), createdObj);
-        return true;
-      };
-      auto tryObjectCreate = [&]() -> bool {
-        InterpretedValue createdObj;
-        if (!tryInvokeWrapperFactoryMethod(wrapperArg.getUInt64(),
-                                           /*slotIndex=*/0, {nameArg},
-                                           createdObj))
-          return false;
-        setValue(procId, callOp.getResult(0), createdObj);
-        return true;
-      };
+      uint64_t requestedWrapperAddr = wrapperArg.getUInt64();
+      uint64_t dispatchWrapperAddr = requestedWrapperAddr;
+      if (uint64_t overrideWrapperAddr =
+              lookupRecordedByTypeOverride(requestedWrapperAddr))
+        dispatchWrapperAddr = overrideWrapperAddr;
+      bool canBypassFactory =
+          !nativeFactoryOverridesConfigured ||
+          dispatchWrapperAddr != requestedWrapperAddr;
+      if (canBypassFactory) {
+        auto tryComponentCreate = [&]() -> bool {
+          if (parentArg.isX())
+            return false;
+          InterpretedValue createdObj;
+          if (!tryInvokeWrapperFactoryMethod(dispatchWrapperAddr,
+                                             /*slotIndex=*/1,
+                                             {nameArg, parentArg}, createdObj))
+            return false;
+          setValue(procId, callOp.getResult(0), createdObj);
+          return true;
+        };
+        auto tryObjectCreate = [&]() -> bool {
+          InterpretedValue createdObj;
+          if (!tryInvokeWrapperFactoryMethod(dispatchWrapperAddr,
+                                             /*slotIndex=*/0, {nameArg},
+                                             createdObj))
+            return false;
+          setValue(procId, callOp.getResult(0), createdObj);
+          return true;
+        };
 
-      bool parentNonNull = !parentArg.isX() && parentArg.getUInt64() != 0;
-      if (parentNonNull) {
-        if (tryComponentCreate() || tryObjectCreate())
+        bool parentNonNull = !parentArg.isX() && parentArg.getUInt64() != 0;
+        if (parentNonNull) {
+          if (tryComponentCreate() || tryObjectCreate())
+            return success();
+        } else if (tryObjectCreate() || tryComponentCreate()) {
           return success();
-      } else if (tryObjectCreate() || tryComponentCreate()) {
-        return success();
+        }
       }
     }
   }
@@ -21345,17 +21445,27 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // Fallback for object by-type creation. The lowered create_by_type path can
   // transiently fail to dispatch factory slot 5 during startup even when a
   // valid wrapper is already provided as arg0.
-  if (!nativeFactoryOverridesConfigured && calleeName == "create_by_type" &&
+  if (calleeName == "create_by_type" &&
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 4) {
     InterpretedValue wrapperArg = getValue(procId, callOp.getOperand(0));
     InterpretedValue nameArg = getValue(procId, callOp.getOperand(2));
     if (!wrapperArg.isX() && wrapperArg.getUInt64() != 0) {
-      InterpretedValue createdObj;
-      if (tryInvokeWrapperFactoryMethod(wrapperArg.getUInt64(),
-                                        /*slotIndex=*/0, {nameArg},
-                                        createdObj)) {
-        setValue(procId, callOp.getResult(0), createdObj);
-        return success();
+      uint64_t requestedWrapperAddr = wrapperArg.getUInt64();
+      uint64_t dispatchWrapperAddr = requestedWrapperAddr;
+      if (uint64_t overrideWrapperAddr =
+              lookupRecordedByTypeOverride(requestedWrapperAddr))
+        dispatchWrapperAddr = overrideWrapperAddr;
+      bool canBypassFactory =
+          !nativeFactoryOverridesConfigured ||
+          dispatchWrapperAddr != requestedWrapperAddr;
+      if (canBypassFactory) {
+        InterpretedValue createdObj;
+        if (tryInvokeWrapperFactoryMethod(dispatchWrapperAddr,
+                                          /*slotIndex=*/0, {nameArg},
+                                          createdObj)) {
+          setValue(procId, callOp.getResult(0), createdObj);
+          return success();
+        }
       }
     }
   }
