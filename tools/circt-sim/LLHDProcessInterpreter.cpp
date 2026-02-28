@@ -27891,6 +27891,17 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   {
     auto phaseIt = currentExecutingPhaseAddr.find(procId);
     bool inPhaseStackContext = isInUvmPhaseStackContext(procId);
+    bool inRunPhaseExecution = false;
+    int phaseOrder = -1;
+    if (phaseIt != currentExecutingPhaseAddr.end() && phaseIt->second != 0) {
+      uint64_t phaseImpAddr = readUvmPhaseImpAddress(procId, phaseIt->second);
+      if (auto orderIt = functionPhaseImpOrder.find(phaseImpAddr);
+          orderIt != functionPhaseImpOrder.end()) {
+        phaseOrder = orderIt->second;
+        // run_phase should not absorb sim.terminate from uvm_root::die.
+        inRunPhaseExecution = phaseOrder == 4;
+      }
+    }
     bool phasesStillRunningForAbsorb = false;
     if (!functionPhaseImpCompleted.empty()) {
       for (auto &[addr, done] : functionPhaseImpCompleted) {
@@ -27901,7 +27912,8 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       }
     }
     if (phaseIt != currentExecutingPhaseAddr.end() && state.callDepth > 0 &&
-        inPhaseStackContext && phasesStillRunningForAbsorb) {
+        inPhaseStackContext && phasesStillRunningForAbsorb &&
+        !inRunPhaseExecution) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  sim.terminate absorbed during phase execution"
                  << " (callDepth=" << state.callDepth << ")\n");
@@ -27915,6 +27927,11 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       // so the phase function can continue. The terminate will fire again
       // later from the main run_test $finish path.
       return mlir::success();
+    }
+    if (traceTerminatePath && phaseIt != currentExecutingPhaseAddr.end() &&
+        state.callDepth > 0 && inPhaseStackContext && inRunPhaseExecution) {
+      llvm::errs() << "[TERM-PATH] run-phase terminate not absorbed proc="
+                   << procId << " phaseOrder=" << phaseOrder << "\n";
     }
     if (traceTerminatePath && phaseIt != currentExecutingPhaseAddr.end() &&
         state.callDepth > 0 && inPhaseStackContext &&
@@ -27947,6 +27964,30 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   bool hasActiveForkChildren = forkJoinManager.hasActiveChildren(procId);
   bool hasActiveDescendants = hasActiveProcessDescendants(procId);
   bool schedulerComplete = scheduler.getEventScheduler().isComplete();
+  auto isUvmRootDieName = [](llvm::StringRef name) {
+    return name == "uvm_pkg::uvm_root::die" ||
+           name.ends_with("::uvm_root::die");
+  };
+  bool inUvmRootDieContext = isUvmRootDieName(state.currentFuncName);
+  if (!inUvmRootDieContext) {
+    for (auto &frame : state.callStack) {
+      if (!frame.isLLVM() && frame.funcOp &&
+          isUvmRootDieName(frame.funcOp.getSymName())) {
+        inUvmRootDieContext = true;
+        break;
+      }
+      if (frame.isLLVM() && frame.llvmFuncOp &&
+          isUvmRootDieName(frame.llvmFuncOp.getSymName())) {
+        inUvmRootDieContext = true;
+        break;
+      }
+    }
+  }
+  bool bypassPhaseOnlyDeferForDie =
+      success && !inGlobalInit && inUvmRootDieContext &&
+      !hasActiveForkChildren && !hasActiveDescendants;
+  bool shouldDeferTerminate = hasActiveForkChildren || hasActiveDescendants ||
+                              (phasesStillRunning && !bypassPhaseOnlyDeferForDie);
   if (traceTerminatePath) {
     llvm::errs() << "[TERM-PATH] precheck proc=" << procId
                  << " activeForkChildren=" << (hasActiveForkChildren ? 1 : 0)
@@ -27954,9 +27995,11 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
                  << " phasesRunning=" << (phasesStillRunning ? 1 : 0)
                  << " topModuleCount=" << topModuleCount
                  << " schedulerComplete=" << (schedulerComplete ? 1 : 0)
+                 << " bypassPhaseDie="
+                 << (bypassPhaseOnlyDeferForDie ? 1 : 0)
                  << " inGlobalInit=" << (inGlobalInit ? 1 : 0) << "\n";
   }
-  if (hasActiveForkChildren || hasActiveDescendants || phasesStillRunning) {
+  if (shouldDeferTerminate) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Terminate deferred - process has active forked children\n");
     if (traceTerminatePath) {
@@ -28001,6 +28044,9 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
 
     return mlir::success();
   }
+  if (traceTerminatePath && bypassPhaseOnlyDeferForDie && phasesStillRunning)
+    llvm::errs() << "[TERM-PATH] bypass phase-only defer for die proc="
+                 << procId << "\n";
 
   // Print diagnostic info about the termination source for debugging
   // This helps identify where fatal errors occur (e.g., UVM die() -> $finish)
@@ -28058,6 +28104,36 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   finalizeProcess(procId, /*killed=*/false);
 
   return mlir::success();
+}
+
+unsigned LLHDProcessInterpreter::getExecutePhaseStartupGracePollLimit(
+    SimTime currentTime) const {
+  // Task-phase execute_phase interception polls at 1 ns once it leaves initial
+  // delta retries. A large fixed startup grace can consume the entire remaining
+  // max-time budget and prevent teardown phases from ever running.
+  constexpr unsigned kDefaultStartupGracePolls = 5000;
+  constexpr unsigned kDeferredTerminateGracePolls = 64;
+  constexpr uint64_t kExecutePhaseZeroPollDelayFs = 1000000; // 1 ns
+  constexpr uint64_t kMaxTimeHeadroomPolls = 32;
+
+  unsigned gracePolls = kDefaultStartupGracePolls;
+  if (deferredSuccessTerminatePending)
+    gracePolls = std::min(gracePolls, kDeferredTerminateGracePolls);
+
+  uint64_t maxSimTime = scheduler.getMaxSimTime();
+  if (maxSimTime > 0 && currentTime.realTime < maxSimTime) {
+    uint64_t remainingFs = maxSimTime - currentTime.realTime;
+    uint64_t remainingPolls = remainingFs / kExecutePhaseZeroPollDelayFs;
+    uint64_t boundedPolls =
+        remainingPolls > kMaxTimeHeadroomPolls
+            ? remainingPolls - kMaxTimeHeadroomPolls
+            : remainingPolls;
+    if (boundedPolls == 0)
+      boundedPolls = 1;
+    gracePolls = std::min<uint64_t>(gracePolls, boundedPolls);
+  }
+
+  return gracePolls;
 }
 
 void LLHDProcessInterpreter::scheduleExecutePhaseMonitorForkPoll(
@@ -28168,9 +28244,10 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   // objections have been observed and dropped, do a short zero-settle phase
   // and then honor configured objection drain time directly in simulation
   // time. This avoids long fixed poll budgets that can overrun short tests.
-  constexpr int kObjectionStartupGrace = 5000;
   constexpr int kObjectionZeroSettlePolls = 3;
   constexpr int kNoChildTailGrace = 10;
+  int startupGracePolls =
+      static_cast<int>(getExecutePhaseStartupGracePollLimit(currentTime));
   bool shouldKeepPolling = false;
   if (sawPositiveObjection) {
     if (yieldCount < kObjectionZeroSettlePolls) {
@@ -28189,7 +28266,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
     }
   } else {
     bool withinGrace =
-        masterChildAlive ? (yieldCount < kObjectionStartupGrace)
+        masterChildAlive ? (yieldCount < startupGracePolls)
                          : (yieldCount < kNoChildTailGrace);
     if (withinGrace) {
       ++yieldCount;
@@ -28480,9 +28557,10 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       // premature completion races. Once objections have been observed and
       // dropped, settle briefly then honor configured drain time directly in
       // simulation time.
-      constexpr int kObjectionStartupGrace = 5000;
       constexpr int kObjectionZeroSettlePolls = 3;
       constexpr int kNoChildTailGrace = 10;
+      int startupGracePolls =
+          static_cast<int>(getExecutePhaseStartupGracePollLimit(currentTime));
 
       bool shouldKeepPolling = false;
       if (count > 0) {
@@ -28509,7 +28587,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         }
       } else {
         bool withinGrace =
-            masterChildAlive ? (yieldCount < kObjectionStartupGrace)
+            masterChildAlive ? (yieldCount < startupGracePolls)
                              : (yieldCount < kNoChildTailGrace);
         if (withinGrace) {
           ++yieldCount;

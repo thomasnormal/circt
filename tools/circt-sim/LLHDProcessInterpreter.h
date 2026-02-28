@@ -1922,6 +1922,8 @@ private:
   /// Poll execute_phase monitor-fork completion without re-executing sim.fork.
   void pollExecutePhaseMonitorFork(ProcessId procId, uint64_t phaseAddr,
                                    uint64_t pollToken);
+  /// Bound startup polling for execute_phase when no objections are raised yet.
+  unsigned getExecutePhaseStartupGracePollLimit(SimTime currentTime) const;
   void scheduleExecutePhaseMonitorForkPoll(ProcessId procId,
                                            uint64_t phaseAddr,
                                            uint64_t pollToken,

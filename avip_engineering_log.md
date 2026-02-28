@@ -11928,3 +11928,56 @@ Based on these findings, the circt-sim compiled process architecture:
 ### Realization
 - The failing behavior was not a missing `sim.terminate` trigger; it was a deferred-finish closure bug.
 - Under background activity, deferred terminate must have an explicit closure condition, not just “wait for child completion,” or it can silently degrade into `maxTime` exits.
+
+## 2026-02-28 UVM terminate-path follow-up: bounded execute_phase startup grace + die phase-only deferral
+
+### Experiment-first root cause isolation
+- Added a minimal failing regression:
+  - `test/Tools/circt-sim/uvm-die-background-clock-terminate.sv`
+- Reproduced failure:
+  - direct run with `--max-time 50000000` exited by
+    `Main loop exit: maxTime reached`.
+- Trace-driven root cause (`CIRCT_SIM_TRACE_EXECUTE_PHASE_POLL=1`):
+  - task-phase monitor poll stayed on
+    `count=0 master_alive=1 saw_positive=0` startup path.
+  - existing startup grace (`5000` polls) consumed short bounded runs before
+    run-phase/cleanup completion.
+  - with larger `--max-time`, same test completed around `~5 us`, confirming
+    grace-budget, not missing terminate trigger, was dominating behavior.
+- APB dual-top reproduce check:
+  - after startup-grace cap fix, APB still showed a second terminate from
+    `uvm_pkg::uvm_root::die` deferred solely by `phasesRunning=1` despite
+    `activeForkChildren=0` and `activeDesc=0`.
+
+### Fix
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+  - added `getExecutePhaseStartupGracePollLimit(SimTime)`:
+    - default startup grace `5000`,
+    - capped to `64` polls while deferred successful terminate is pending,
+    - additionally bounded by remaining `--max-time` budget (with headroom).
+  - applied this bounded startup grace in both execute-phase monitor paths:
+    - `pollExecutePhaseMonitorFork`
+    - join_any interception in `interpretSimFork`.
+  - terminate-path refinement:
+    - when terminate is in `uvm_root::die` context with
+      `activeForkChildren=0` and `activeDesc=0`,
+      bypass phase-only deferral (`phasesRunning` alone no longer blocks).
+    - keeps child/descendant safety checks intact.
+
+### Validation
+- Focused regressions:
+  - `llvm-lit -sv test/Tools/circt-sim/uvm-die-background-clock-terminate.sv`
+    => PASS
+  - `llvm-lit -sv test/Tools/circt-sim/uvm-run-test-background-clock-cleanup.sv test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv test/Tools/circt-sim/uvm-run-phase-driver-blocking-cleanup.sv`
+    => PASS
+- AOT safety sweep:
+  - `llvm-lit -j 1 -sv test/Tools/circt-sim/aot*` => `125/125` PASS
+- APB bounded reproduce (dual-top):
+  - before: `Main loop exit: maxTime reached (400000000 fs)`
+  - after: no max-time exit; simulation completed at `20000000 fs`.
+
+### Realization
+- Fixed poll-count startup grace in execute-phase interception is unstable for
+  short bounded runs; it must be budget-aware.
+- `uvm_root::die` should not be blocked by phase bookkeeping alone once the
+  process has no active descendants.
