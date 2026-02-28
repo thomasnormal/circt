@@ -34,6 +34,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
+    "ASSIGN_RHS_INVERT",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -2732,7 +2733,8 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectProceduralNonblockingAssignSites(designText, codeMask, sites);
     return;
   }
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1") {
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
+      op == "ASSIGN_RHS_INVERT") {
     collectAssignRhsIdentifierSites(designText, codeMask, sites);
     return;
   }
@@ -3014,7 +3016,8 @@ static std::string getOpFamily(StringRef op) {
       op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE" ||
       op == "RESET_POSEDGE_TO_NEGEDGE" || op == "RESET_NEGEDGE_TO_POSEDGE")
     return "timing";
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1")
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
+      op == "ASSIGN_RHS_INVERT")
     return "connect";
   if (op == "MUX_SWAP_ARMS" || op == "MUX_FORCE_TRUE" ||
       op == "MUX_FORCE_FALSE")
@@ -4057,14 +4060,20 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, 1, "<=");
   if (op == "NBA_TO_BA")
     return replaceTokenAt(mutatedText, pos, 2, "=");
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1") {
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
+      op == "ASSIGN_RHS_INVERT") {
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
     if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, pos, rhsStart,
                                                rhsEnd))
       return false;
-    const char *replacement =
-        (op == "ASSIGN_RHS_TO_CONST0") ? "1'b0" : "1'b1";
+    std::string replacement;
+    if (op == "ASSIGN_RHS_TO_CONST0")
+      replacement = "1'b0";
+    else if (op == "ASSIGN_RHS_TO_CONST1")
+      replacement = "1'b1";
+    else
+      replacement = (Twine("~(") + text.slice(rhsStart, rhsEnd + 1) + ")").str();
     return replaceSpan(mutatedText, rhsStart, rhsEnd + 1, replacement);
   }
   if (op == "POSEDGE_TO_NEGEDGE")
