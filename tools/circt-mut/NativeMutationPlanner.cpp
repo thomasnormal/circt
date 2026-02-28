@@ -30,11 +30,13 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
     "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
-    "IF_COND_NEGATE",   "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+    "IF_COND_NEGATE",   "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP",
+    "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
-    "MUL_TO_DIV",       "SHL_TO_SHR",     "SHR_TO_SHL",  "SHR_TO_ASHR",
-    "ASHR_TO_SHR",      "CASEEQ_TO_EQ",   "CASENEQ_TO_NEQ",
+    "MUL_TO_DIV",       "INC_TO_DEC",     "DEC_TO_INC",  "SHL_TO_SHR",
+    "SHR_TO_SHL",       "SHR_TO_ASHR",    "ASHR_TO_SHR", "CASEEQ_TO_EQ",
+    "CASENEQ_TO_NEQ",
     "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
@@ -1373,6 +1375,102 @@ static size_t findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
   return StringRef::npos;
 }
 
+static bool matchKeywordTokenAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t pos, StringRef keyword) {
+  size_t len = keyword.size();
+  if (len == 0 || pos == StringRef::npos || pos + len > text.size())
+    return false;
+  if (!isCodeRange(codeMask, pos, len) || !text.substr(pos).starts_with(keyword))
+    return false;
+  char prev = (pos == 0 || !isCodeAt(codeMask, pos - 1)) ? '\0' : text[pos - 1];
+  char next = (pos + len < text.size() && isCodeAt(codeMask, pos + len))
+                  ? text[pos + len]
+                  : '\0';
+  bool prevBoundary = prev == '\0' || !isIdentifierBodyChar(prev);
+  bool nextBoundary = next == '\0' || !isIdentifierBodyChar(next);
+  return prevBoundary && nextBoundary;
+}
+
+static size_t findMatchingBeginEnd(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t beginPos) {
+  if (!matchKeywordTokenAt(text, codeMask, beginPos, "begin"))
+    return StringRef::npos;
+  int depth = 0;
+  for (size_t i = beginPos, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (matchKeywordTokenAt(text, codeMask, i, "begin")) {
+      ++depth;
+      i += 4;
+      continue;
+    }
+    if (!matchKeywordTokenAt(text, codeMask, i, "end"))
+      continue;
+    --depth;
+    i += 2;
+    if (depth == 0)
+      return i + 1;
+    if (depth < 0)
+      return StringRef::npos;
+  }
+  return StringRef::npos;
+}
+
+static size_t findIfElseBranchEnd(StringRef text, ArrayRef<uint8_t> codeMask,
+                                  size_t branchStart) {
+  size_t i = skipCodeWhitespace(text, codeMask, branchStart, text.size());
+  if (i == StringRef::npos || i >= text.size())
+    return StringRef::npos;
+
+  // Avoid dangling-else ambiguity; we only mutate explicit else branches with
+  // non-if arms or begin/end blocks.
+  if (matchKeywordTokenAt(text, codeMask, i, "if"))
+    return StringRef::npos;
+
+  if (matchKeywordTokenAt(text, codeMask, i, "begin"))
+    return findMatchingBeginEnd(text, codeMask, i);
+
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+  for (size_t e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && ch == ';')
+      return i + 1;
+  }
+  return StringRef::npos;
+}
+
 static void collectIfConditionNegateSites(
     StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
   for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
@@ -1394,6 +1492,46 @@ static void collectIfConditionNegateSites(
 
     size_t closePos = findMatchingParen(text, codeMask, openPos);
     if (closePos == StringRef::npos)
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
+static void collectIfElseSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                      SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!matchKeywordTokenAt(text, codeMask, i, "if"))
+      continue;
+
+    size_t openPos = i + 2;
+    while (openPos < e &&
+           (!isCodeAt(codeMask, openPos) ||
+            std::isspace(static_cast<unsigned char>(text[openPos]))))
+      ++openPos;
+    if (openPos >= e || !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+      continue;
+
+    size_t closePos = findMatchingParen(text, codeMask, openPos);
+    if (closePos == StringRef::npos)
+      continue;
+
+    size_t thenStart = skipCodeWhitespace(text, codeMask, closePos + 1, e);
+    if (thenStart >= e)
+      continue;
+    size_t thenEnd = findIfElseBranchEnd(text, codeMask, thenStart);
+    if (thenEnd == StringRef::npos)
+      continue;
+
+    size_t elsePos = skipCodeWhitespace(text, codeMask, thenEnd, e);
+    if (elsePos >= e || !matchKeywordTokenAt(text, codeMask, elsePos, "else"))
+      continue;
+
+    size_t elseStart = skipCodeWhitespace(text, codeMask, elsePos + 4, e);
+    if (elseStart >= e)
+      continue;
+    size_t elseEnd = findIfElseBranchEnd(text, codeMask, elseStart);
+    if (elseEnd == StringRef::npos)
       continue;
 
     sites.push_back({i});
@@ -1536,6 +1674,10 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectIfConditionNegateSites(designText, codeMask, sites);
     return;
   }
+  if (op == "IF_ELSE_SWAP_ARMS") {
+    collectIfElseSwapArmSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "UNARY_NOT_DROP") {
     collectUnaryNotDropSites(designText, codeMask, sites);
     return;
@@ -1592,6 +1734,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryMulDivSites(designText, '*', codeMask, sites);
     return;
   }
+  if (op == "INC_TO_DEC") {
+    collectLiteralTokenSites(designText, "++", codeMask, sites);
+    return;
+  }
+  if (op == "DEC_TO_INC") {
+    collectLiteralTokenSites(designText, "--", codeMask, sites);
+    return;
+  }
   if (op == "SHL_TO_SHR") {
     collectBinaryShiftSites(designText, "<<", codeMask, sites);
     return;
@@ -1644,13 +1794,13 @@ static std::string getOpFamily(StringRef op) {
     return "timing";
   if (op == "MUX_SWAP_ARMS")
     return "mux";
-  if (op == "IF_COND_NEGATE")
+  if (op == "IF_COND_NEGATE" || op == "IF_ELSE_SWAP_ARMS")
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
       op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
-      op == "UNARY_MINUS_DROP")
+      op == "UNARY_MINUS_DROP" || op == "INC_TO_DEC" || op == "DEC_TO_INC")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL" || op == "SHR_TO_ASHR" ||
       op == "ASHR_TO_SHR")

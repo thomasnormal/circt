@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk, input logic d, output logic q); always_ff @(posedge clk) q <= d; endmodule\n' > %t/design.sv
+// RUN: python3 %S/../../utils/mutation_mcy/lib/native_mutation_plan.py --design %t/design.sv --count 1 --seed 0 --ops-csv POSEDGE_TO_NEGEDGE --out %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=PLAN < %t/mutations.txt
+//
+// PLAN: 1 NATIVE_POSEDGE_TO_NEGEDGE

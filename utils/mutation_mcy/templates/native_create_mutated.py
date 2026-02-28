@@ -511,6 +511,146 @@ def find_if_cond_token(nth: int):
     return (-1, -1, -1)
 
 
+def match_keyword_token(pos: int, keyword: str) -> bool:
+    if pos < 0 or not keyword:
+        return False
+    klen = len(keyword)
+    if pos + klen > len(text):
+        return False
+    if not is_code_span(pos, pos + klen) or not text.startswith(keyword, pos):
+        return False
+    prev = text[pos - 1] if pos > 0 and is_code_at(pos - 1) else ""
+    nxt = text[pos + klen] if pos + klen < len(text) and is_code_at(pos + klen) else ""
+    prev_boundary = (not prev) or (not is_identifier_body(prev))
+    next_boundary = (not nxt) or (not is_identifier_body(nxt))
+    return prev_boundary and next_boundary
+
+
+def find_matching_begin_end(begin_pos: int) -> int:
+    if not match_keyword_token(begin_pos, "begin"):
+        return -1
+    depth = 0
+    i = begin_pos
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        if match_keyword_token(i, "begin"):
+            depth += 1
+            i += len("begin")
+            continue
+        if match_keyword_token(i, "end"):
+            depth -= 1
+            i += len("end")
+            if depth == 0:
+                return i
+            if depth < 0:
+                return -1
+            continue
+        i += 1
+    return -1
+
+
+def find_if_else_branch_end(branch_start: int) -> int:
+    i = find_next_code_nonspace(branch_start)
+    if i < 0:
+        return -1
+
+    # Skip ambiguous dangling-else forms (`else if ...`) to keep rewrites
+    # structurally deterministic and semantically explicit.
+    if match_keyword_token(i, "if"):
+        return -1
+
+    if match_keyword_token(i, "begin"):
+        return find_matching_begin_end(i)
+
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+        if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0 and ch == ";":
+            return i + 1
+        i += 1
+    return -1
+
+
+def find_if_else_swap_token(nth: int):
+    if nth < 1:
+        return (-1, -1, -1, -1, -1, -1)
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not match_keyword_token(i, "if"):
+            i += 1
+            continue
+        j = i + 2
+        while j < n and ((not is_code_at(j)) or text[j].isspace()):
+            j += 1
+        if j >= n or not is_code_at(j) or text[j] != "(":
+            i += 1
+            continue
+        k = find_matching_paren(j)
+        if k < 0:
+            i += 1
+            continue
+        then_start = find_next_code_nonspace(k + 1)
+        if then_start < 0:
+            i += 1
+            continue
+        then_end = find_if_else_branch_end(then_start)
+        if then_end < 0:
+            i += 1
+            continue
+        else_pos = find_next_code_nonspace(then_end)
+        if else_pos < 0 or not match_keyword_token(else_pos, "else"):
+            i += 1
+            continue
+        else_start = find_next_code_nonspace(else_pos + 4)
+        if else_start < 0:
+            i += 1
+            continue
+        else_end = find_if_else_branch_end(else_start)
+        if else_end < 0:
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return (i, then_start, then_end, else_pos, else_start, else_end)
+        i += 1
+    return (-1, -1, -1, -1, -1, -1)
+
+
 def find_keyword_token(keyword: str, nth: int) -> int:
     if nth < 1 or not keyword:
         return -1
@@ -1570,6 +1710,22 @@ elif op == 'IF_COND_NEGATE':
         cond_expr = text[cond_open + 1:cond_close]
         text = text[:cond_open + 1] + '!(' + cond_expr + ')' + text[cond_close:]
         changed = True
+elif op == 'IF_ELSE_SWAP_ARMS':
+    _, then_start, then_end, else_pos, else_start, else_end = find_if_else_swap_token(site_index)
+    if then_start >= 0 and then_end >= then_start and else_pos >= 0 and else_start >= 0 and else_end >= else_start:
+        then_arm = text[then_start:then_end]
+        between_arms = text[then_end:else_pos]
+        else_header = text[else_pos:else_start]
+        else_arm = text[else_start:else_end]
+        text = (
+            text[:then_start]
+            + else_arm
+            + between_arms
+            + else_header
+            + then_arm
+            + text[else_end:]
+        )
+        changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)
 elif op == 'UNARY_BNOT_DROP':
@@ -1630,6 +1786,10 @@ elif op == 'UNARY_MINUS_DROP':
             end += 1
         text = text[:idx] + text[end:]
         changed = True
+elif op == 'INC_TO_DEC':
+    changed = replace_nth(r"\+\+", "--", site_index)
+elif op == 'DEC_TO_INC':
+    changed = replace_nth(r"--", "++", site_index)
 elif op == 'SHL_TO_SHR':
     idx = find_binary_shift_token('<<', site_index)
     if idx >= 0:

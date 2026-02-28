@@ -18,12 +18,15 @@ NATIVE_OPS_ALL = [
     "OR_TO_AND",
     "XOR_TO_OR",
     "IF_COND_NEGATE",
+    "IF_ELSE_SWAP_ARMS",
     "UNARY_NOT_DROP",
     "CONST0_TO_1",
     "CONST1_TO_0",
     "POSEDGE_TO_NEGEDGE",
     "NEGEDGE_TO_POSEDGE",
     "MUX_SWAP_ARMS",
+    "INC_TO_DEC",
+    "DEC_TO_INC",
 ]
 
 OP_PATTERNS = {
@@ -41,6 +44,8 @@ OP_PATTERNS = {
     "CONST1_TO_0": r"1'b1|1'd1",
     "POSEDGE_TO_NEGEDGE": r"\bposedge\b",
     "NEGEDGE_TO_POSEDGE": r"\bnegedge\b",
+    "INC_TO_DEC": r"\+\+",
+    "DEC_TO_INC": r"--",
 }
 
 
@@ -471,6 +476,141 @@ def count_if_cond_negate_sites(text: str, mask: list[bool]) -> int:
     return count
 
 
+def match_keyword_token(text: str, mask: list[bool], pos: int, keyword: str) -> bool:
+    if pos < 0 or not keyword:
+        return False
+    klen = len(keyword)
+    if pos + klen > len(text):
+        return False
+    if not is_code_span(mask, pos, pos + klen) or not text.startswith(keyword, pos):
+        return False
+    prev = text[pos - 1] if pos > 0 and is_code_at(mask, pos - 1) else ""
+    nxt = text[pos + klen] if pos + klen < len(text) and is_code_at(mask, pos + klen) else ""
+    prev_boundary = (not prev) or (not is_identifier_body(prev))
+    next_boundary = (not nxt) or (not is_identifier_body(nxt))
+    return prev_boundary and next_boundary
+
+
+def find_matching_begin_end(text: str, mask: list[bool], begin_pos: int) -> int:
+    if not match_keyword_token(text, mask, begin_pos, "begin"):
+        return -1
+    depth = 0
+    i = begin_pos
+    n = len(text)
+    while i < n:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        if match_keyword_token(text, mask, i, "begin"):
+            depth += 1
+            i += len("begin")
+            continue
+        if match_keyword_token(text, mask, i, "end"):
+            depth -= 1
+            i += len("end")
+            if depth == 0:
+                return i
+            if depth < 0:
+                return -1
+            continue
+        i += 1
+    return -1
+
+
+def find_if_else_branch_end(text: str, mask: list[bool], branch_start: int) -> int:
+    i = find_next_code_nonspace(text, mask, branch_start)
+    if i < 0:
+        return -1
+
+    # Keep deterministic semantics by skipping ambiguous dangling-else forms.
+    if match_keyword_token(text, mask, i, "if"):
+        return -1
+
+    if match_keyword_token(text, mask, i, "begin"):
+        return find_matching_begin_end(text, mask, i)
+
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+        if paren_depth == 0 and bracket_depth == 0 and brace_depth == 0 and ch == ";":
+            return i + 1
+        i += 1
+    return -1
+
+
+def count_if_else_swap_sites(text: str, mask: list[bool]) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not match_keyword_token(text, mask, i, "if"):
+            i += 1
+            continue
+        j = i + 2
+        while j < n and ((not is_code_at(mask, j)) or text[j].isspace()):
+            j += 1
+        if j >= n or not is_code_at(mask, j) or text[j] != "(":
+            i += 1
+            continue
+        k = find_matching_paren(text, mask, j)
+        if k < 0:
+            i += 1
+            continue
+        then_start = find_next_code_nonspace(text, mask, k + 1)
+        if then_start < 0:
+            i += 1
+            continue
+        then_end = find_if_else_branch_end(text, mask, then_start)
+        if then_end < 0:
+            i += 1
+            continue
+        else_pos = find_next_code_nonspace(text, mask, then_end)
+        if else_pos < 0 or not match_keyword_token(text, mask, else_pos, "else"):
+            i += 1
+            continue
+        else_start = find_next_code_nonspace(text, mask, else_pos + 4)
+        if else_start < 0:
+            i += 1
+            continue
+        else_end = find_if_else_branch_end(text, mask, else_start)
+        if else_end < 0:
+            i += 1
+            continue
+        count += 1
+        i += 1
+    return count
+
+
 def count_mux_swap_arms_sites(text: str, mask: list[bool]) -> int:
     count = 0
     for i, ch in enumerate(text):
@@ -584,6 +724,8 @@ def count_relational_comparator_token(text: str, token: str, mask: list[bool]) -
 def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> int:
     if op == "IF_COND_NEGATE":
         return count_if_cond_negate_sites(design_text, mask)
+    if op == "IF_ELSE_SWAP_ARMS":
+        return count_if_else_swap_sites(design_text, mask)
     if op == "MUX_SWAP_ARMS":
         return count_mux_swap_arms_sites(design_text, mask)
     if op == "POSEDGE_TO_NEGEDGE":
@@ -595,7 +737,15 @@ def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> 
     if op == "GE_TO_GT":
         return count_relational_comparator_token(design_text, ">=", mask)
     pattern = OP_PATTERNS[op]
-    if op in ("EQ_TO_NEQ", "NEQ_TO_EQ", "AND_TO_OR", "OR_TO_AND", "XOR_TO_OR"):
+    if op in (
+        "EQ_TO_NEQ",
+        "NEQ_TO_EQ",
+        "AND_TO_OR",
+        "OR_TO_AND",
+        "XOR_TO_OR",
+        "INC_TO_DEC",
+        "DEC_TO_INC",
+    ):
         return count_literal_token(design_text, pattern.replace("\\", ""), mask)
     return sum(1 for m in re.finditer(pattern, design_text) if is_code_span(mask, m.start(), m.end()))
 
