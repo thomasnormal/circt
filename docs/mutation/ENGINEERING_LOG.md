@@ -1812,3 +1812,65 @@
       - per-mutant xrun vs circt `RESULT` line equality
     - result: `ok=20 mismatch=0 fail=0`
     - op distribution: `ASSIGN_RHS_OR_LHS=10`, `ASSIGN_RHS_AND_LHS=10`.
+
+## 2026-02-28 (ASSIGN_RHS_ADD_LHS / ASSIGN_RHS_SUB_LHS fault class)
+
+- realizations:
+  - Assignment-RHS connect mutations covered logical merges with LHS but still
+    missed arithmetic self-composition bugs (`rhs +/- lhs`), which are common in
+    counter/accumulator RTL.
+  - The new operators should follow the same structural constraints as other
+    LHS-based assignment-RHS ops: simple identifier LHS only, skip function
+    result assignments, and avoid `initial` sites to reduce low-signal/liveness
+    mutants.
+  - Running build and lit in parallel can produce stale-binary false negatives;
+    rerunning lit after rebuild is required for trustworthy TDD feedback.
+
+- changes made:
+  - Added native mutation operators:
+    - `ASSIGN_RHS_ADD_LHS`
+    - `ASSIGN_RHS_SUB_LHS`
+  - Integrated in planner/apply path:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+      - op catalog (`kNativeMutationOpsAll`)
+      - assign-RHS op detection
+      - family classification (`arithmetic`)
+      - replacement builders:
+        - `rhs -> (rhs + lhs)`
+        - `rhs -> (rhs - lhs)`
+      - site guards aligned with other LHS-based ops (`initial` +
+        function-result skip).
+  - Integrated in CIRCT-only mode mappings:
+    - `tools/circt-mut/circt-mut.cpp`
+      - included in `arith`, `invert`, `balanced/all`, and `inv`.
+  - Synced native-op validator allowlist:
+    - `utils/run_mutation_mcy_examples.sh`
+  - Added TDD tests:
+    - `test/Tools/native-mutation-plan-assign-rhs-add-lhs-force.test`
+    - `test/Tools/native-mutation-plan-assign-rhs-sub-lhs-force.test`
+    - `test/Tools/native-create-mutated-assign-rhs-add-lhs-site-index.test`
+    - `test/Tools/native-create-mutated-assign-rhs-sub-lhs-site-index.test`
+  - Updated mode/no-applicable coverage tests:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-assign-rhs-plus-one-op.test`
+    - `test/Tools/circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-function-result.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice (new tests + touched tests): all supported tests passed.
+  - assign-RHS slice:
+    - `build_test/bin/llvm-lit -sv $(ls test/Tools/*assign-rhs*.test)`
+    - result: `32 passed`, `7 unsupported`, `0 failed`.
+  - native MCY runner token-validation slice:
+    - `run-mutation-mcy-examples-native-mutation-*` targeted tests: passed.
+
+- parity campaigns (xrun vs circt):
+  - operator-restricted (`ASSIGN_RHS_ADD_LHS,ASSIGN_RHS_SUB_LHS`):
+    - workspace: `/tmp/cov_intro_seeded_orand3_1772302814`
+    - seed/count: `20260302` / `20`
+    - result: `ok=20 mismatch=0 fail=0`
+    - file: `results_addsub_20260302.tsv`
+  - broader `arith` sweep:
+    - same workspace, seed/count: `20260303` / `24`
+    - result: `ok=24 mismatch=0 fail=0`
+    - file: `results_arith_20260303.tsv`

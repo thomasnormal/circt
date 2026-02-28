@@ -164,9 +164,11 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `ASSIGN_RHS_OR_LHS` rewrites RHS to `(rhs | lhs)`.
   - `ASSIGN_RHS_AND_LHS` rewrites RHS to `(rhs & lhs)`.
   - `ASSIGN_RHS_XOR_LHS` rewrites RHS to `(rhs ^ lhs)`.
+  - `ASSIGN_RHS_ADD_LHS` rewrites RHS to `(rhs + lhs)`.
+  - `ASSIGN_RHS_SUB_LHS` rewrites RHS to `(rhs - lhs)`.
   - These are restricted to simple-identifier LHS sites and skip function-result
-    assignments and `initial`-block sites to avoid low-signal/equivalent
-    mutants and clock-liveness artifacts.
+  assignments and `initial`-block sites to avoid low-signal/equivalent
+  mutants and clock-liveness artifacts.
 - Ternary mux-arm mutations model swapped-data control bugs:
   - `MUX_SWAP_ARMS` targets assignment-context ternary expressions
     (`cond ? tval : fval`) and rewrites to (`cond ? fval : tval`) with

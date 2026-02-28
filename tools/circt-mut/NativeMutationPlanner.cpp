@@ -35,7 +35,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
     "ASSIGN_RHS_TO_LHS", "ASSIGN_RHS_OR_LHS", "ASSIGN_RHS_AND_LHS",
-    "ASSIGN_RHS_XOR_LHS", "ASSIGN_RHS_INVERT",
+    "ASSIGN_RHS_XOR_LHS", "ASSIGN_RHS_ADD_LHS", "ASSIGN_RHS_SUB_LHS",
+    "ASSIGN_RHS_INVERT",
     "ASSIGN_RHS_PLUS_ONE",
     "ASSIGN_RHS_MINUS_ONE", "ASSIGN_RHS_NEGATE", "ASSIGN_RHS_SHL_ONE",
     "ASSIGN_RHS_SHR_ONE",
@@ -1830,6 +1831,7 @@ static bool isAssignRhsMutationOp(StringRef op) {
   return op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
          op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_OR_LHS" ||
          op == "ASSIGN_RHS_AND_LHS" || op == "ASSIGN_RHS_XOR_LHS" ||
+         op == "ASSIGN_RHS_ADD_LHS" || op == "ASSIGN_RHS_SUB_LHS" ||
          op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
          op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE" ||
          op == "ASSIGN_RHS_SHL_ONE" || op == "ASSIGN_RHS_SHR_ONE";
@@ -1875,7 +1877,8 @@ static StringRef getAssignRhsMutationFamily(StringRef op) {
     return "connect";
   if (op == "ASSIGN_RHS_INVERT")
     return "logic";
-  if (op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
+  if (op == "ASSIGN_RHS_ADD_LHS" || op == "ASSIGN_RHS_SUB_LHS" ||
+      op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
       op == "ASSIGN_RHS_NEGATE" || op == "ASSIGN_RHS_SHL_ONE" ||
       op == "ASSIGN_RHS_SHR_ONE")
     return "arithmetic";
@@ -1926,6 +1929,20 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
     if (!isSimpleIdentifierExpr(lhs))
       return false;
     replacement = (Twine("(") + rhsForBinaryOp + " ^ " + lhs + ")").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_ADD_LHS") {
+    StringRef lhs = lhsExpr.trim();
+    if (!isSimpleIdentifierExpr(lhs))
+      return false;
+    replacement = (Twine("(") + rhsForBinaryOp + " + " + lhs + ")").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_SUB_LHS") {
+    StringRef lhs = lhsExpr.trim();
+    if (!isSimpleIdentifierExpr(lhs))
+      return false;
+    replacement = (Twine("(") + rhsForBinaryOp + " - " + lhs + ")").str();
     return true;
   }
   if (op == "ASSIGN_RHS_INVERT") {
@@ -2016,7 +2033,8 @@ static void collectAssignRhsSites(StringRef text, StringRef op,
                                         headPos) &&
         head == "initial" &&
         (op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_OR_LHS" ||
-         op == "ASSIGN_RHS_AND_LHS" || op == "ASSIGN_RHS_XOR_LHS"))
+         op == "ASSIGN_RHS_AND_LHS" || op == "ASSIGN_RHS_XOR_LHS" ||
+         op == "ASSIGN_RHS_ADD_LHS" || op == "ASSIGN_RHS_SUB_LHS"))
       continue;
 
     size_t rhsStart = StringRef::npos;
@@ -2034,7 +2052,8 @@ static void collectAssignRhsSites(StringRef text, StringRef op,
         eventControlSignals.contains(lhsIdentifier))
       continue;
     if (op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_OR_LHS" ||
-        op == "ASSIGN_RHS_AND_LHS" || op == "ASSIGN_RHS_XOR_LHS") {
+        op == "ASSIGN_RHS_AND_LHS" || op == "ASSIGN_RHS_XOR_LHS" ||
+        op == "ASSIGN_RHS_ADD_LHS" || op == "ASSIGN_RHS_SUB_LHS") {
       if (!isSimpleIdentifierExpr(lhsExpr))
         continue;
       if (!lhsIdentifier.empty() &&

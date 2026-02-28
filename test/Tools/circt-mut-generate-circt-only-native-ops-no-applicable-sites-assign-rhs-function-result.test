@@ -7,6 +7,10 @@
 // RUN: FileCheck %s --check-prefix=ERR < %t/log-orlhs.txt
 // RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_AND_LHS --out %t/mutations-andlhs.txt > %t/log-andlhs.txt 2>&1
 // RUN: FileCheck %s --check-prefix=ERR < %t/log-andlhs.txt
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_ADD_LHS --out %t/mutations-addlhs.txt > %t/log-addlhs.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR < %t/log-addlhs.txt
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_SUB_LHS --out %t/mutations-sublhs.txt > %t/log-sublhs.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR < %t/log-sublhs.txt
 // RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_XOR_LHS --out %t/mutations-xorlhs.txt > %t/log-xorlhs.txt 2>&1
 // RUN: FileCheck %s --check-prefix=ERR < %t/log-xorlhs.txt
 //
