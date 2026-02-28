@@ -1450,3 +1450,9 @@
     - `/tmp/cov_intro_seeded_allmode_exprrhs_1772296907`
     - result: `ok=100 mismatch=0 fail=0`, including assignment-RHS mutants now
       reaching deeper site indices (`@4`) with xrun/circt agreement.
+  - seeded parity campaign on deterministic `cov_intro_seeded_rhsconst`:
+    - `/tmp/cov_seeded_rhsconst_allmode_exprrhs_recheck_1772297263`
+    - initial run: `ok=78 mismatch=0 fail=2` (both fails were transient
+      `Permission denied` launching `build_test/bin/circt-verilog`).
+    - targeted recheck of failed IDs (`28/29`) after relink window:
+      both rechecked `ok` with matching `COV`/`SIG` vs xrun.
