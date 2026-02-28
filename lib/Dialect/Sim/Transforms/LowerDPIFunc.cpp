@@ -77,10 +77,9 @@ LogicalResult LowerDPIFuncPass::lowerDPIFuncOp(sim::DPIFuncOp simFunc,
 
   llvm::SmallVector<Type> dpiFunctionArgumentTypes;
   for (auto arg : moduleType.getPorts()) {
-    // TODO: Support a non-integer type.
-    if (!arg.type.isInteger())
+    if (!isa<IntegerType, FloatType>(arg.type))
       return simFunc->emitError()
-             << "non-integer type argument is unsupported now";
+             << "unsupported DPI argument type: " << arg.type;
 
     if (arg.dir == hw::ModulePort::Input)
       dpiFunctionArgumentTypes.push_back(arg.type);

@@ -1673,3 +1673,32 @@
   - The open TODO at `LowerDPIFunc.cpp:100` was not just documentation debt;
     it directly affected diagnostic quality and made DPI binding failures harder
     to debug.
+
+### Sim DPI: add scalar float support in LowerDPIFunc
+- Repro/verification (TDD):
+  - Added `test/Dialect/Sim/lower-dpi-float.mlir` expecting
+    `--sim-lower-dpi-func` to lower a DPI declaration with `f64` input/output.
+  - Ran the test before the code change:
+    - `build_test/bin/llvm-lit -a -v test/Dialect/Sim/lower-dpi-float.mlir`
+  - Initial result: failed as expected with
+    `non-integer type argument is unsupported now`.
+- Root cause:
+  - `LowerDPIFunc` hard-rejected any non-integer port type at lowering time,
+    even for scalar floating-point types that can be represented in the same
+    ABI scheme used by the wrapper (`f64` value input, output via alloca+ptr).
+- Fix:
+  - Updated `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp` to accept both
+    `IntegerType` and `FloatType` for DPI ports.
+  - Kept explicit rejection for unsupported classes with a more precise
+    diagnostic: `unsupported DPI argument type: <type>`.
+- Validation:
+  - Rebuilt `circt-opt`:
+    - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - Re-ran focused tests:
+    - `build_test/bin/llvm-lit -a -v test/Dialect/Sim/lower-dpi-float.mlir test/Dialect/Sim/lower-dpi-errors.mlir test/Dialect/Sim/lower-dpi.mlir`
+  - Re-ran broader Sim/DPI sweep:
+    - `build_test/bin/llvm-lit -j 8 test/Dialect/Sim test/Conversion/SimToSV/dpi.mlir test/Tools/circt-sim/mailbox-dpi-blocking.mlir test/Tools/circt-sim/mailbox-dpi-blocking-bounded.mlir test/Tools/circt-sim/mailbox-dpi-nonblocking.mlir`
+  - Result: all passing.
+- Realization:
+  - This was a contained high-value extension: it removes an artificial scalar
+    type restriction without changing the overall wrapper ABI strategy.

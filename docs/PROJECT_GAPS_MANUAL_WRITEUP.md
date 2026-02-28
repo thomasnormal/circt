@@ -1042,8 +1042,8 @@ Service-port object creation still relies on ad hoc type checks without a formal
 ### [ ] 346. `lib/Dialect/ESI/runtime/python/esiaccel/types.py:565`
 `Future.result()` ignores the timeout argument and blocks unconditionally, so API behavior diverges from caller expectations. What is missing is timeout-aware wait/get behavior with appropriate exception semantics. The fix is to pass timeout to the C++ future layer (or poll with deadline) and raise on expiration.
 
-### [ ] 347. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:80`
-DPI lowering currently supports only integer argument types and rejects non-integer ports. What is missing is type lowering support for additional DPI-compatible types (e.g. real, arrays, structs/pointers as intended). The fix is to extend ABI/type mapping plus verification and add conformance tests per supported type class.
+### [x] 347. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:80`
+Status update (2026-02-28): this gap is closed for scalar floating-point support in this workspace. `LowerDPIFunc` now accepts both integer and float DPI port types, and regression coverage was added in `test/Dialect/Sim/lower-dpi-float.mlir`. Non-scalar/aggregate DPI ABI expansion remains future work.
 
 ### [x] 348. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:100`
 Status update (2026-02-28): this gap is closed in this workspace. `--sim-lower-dpi-func` now validates that a reused external `func.func` (looked up via `verilogName`) exactly matches the expected lowered DPI signature and emits a targeted mismatch diagnostic before building invalid calls. Regression coverage was added in `test/Dialect/Sim/lower-dpi-errors.mlir`.
@@ -2992,11 +2992,11 @@ Status update (2026-02-28): this gap is closed and stale in this workspace. Curr
 ### [ ] 996. `lib/Dialect/Sim/Transforms/ProceduralizeSim.cpp:106`
 Proceduralization rejects format strings passed via block arguments. What is missing is support for argument-provided format fragments in triggered/print lowering. The fix is to model block-argument format sources or pre-materialize literals/fragments before this pass.
 
-### [ ] 997. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:80`
-DPI lowering currently restricts ports to integer types. What is missing is non-integer argument lowering support (aggregate, real, etc.) in this transform. The fix is to extend type mapping for additional DPI-compatible types.
+### [x] 997. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:80`
+Status update (2026-02-28): this duplicate of entry 347 is closed for scalar floating-point support. `LowerDPIFunc` now allows integer and float port types, validated by `test/Dialect/Sim/lower-dpi-float.mlir`.
 
-### [ ] 998. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:83`
-This is the explicit diagnostic enforcing the non-integer DPI argument boundary from entry 997. It is a real capability limit, not a separate root cause.
+### [x] 998. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:83`
+Status update (2026-02-28): this line-level boundary changed with the float-support update. The transform no longer enforces an integer-only restriction; it now emits `unsupported DPI argument type` only for still-unsupported non-scalar type classes.
 
 ### [x] 999. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:100`
 Status update (2026-02-28): this duplicate of entry 348 is now closed. `LowerDPIFunc` enforces function-type compatibility when binding to an existing `func.func` by `verilogName`, with regression coverage in `test/Dialect/Sim/lower-dpi-errors.mlir`.
