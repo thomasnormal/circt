@@ -35,6 +35,11 @@
     - `--modes all` (`count=24`, `seed=202`):
       `ok=24`, `mismatch=0`, `fail=0`
     - workspace: `/tmp/cov_seeded_case_parity_broad2_1772290014`
+  - Extended all-mode sweep on same harness
+    (`--modes all`, `count=60`, `seed=303`) with real per-mutant apply:
+    - result: `ok=60`, `mismatch=0`, `fail=0`
+    - includes `NATIVE_CASE_ITEM_SWAP_ARMS@1` in sampled operator set
+    - workspace: `/tmp/cov_seeded_case_parity_postcase_1772290209`
 
 ## 2026-02-28 (reset-condition force mutation class + reset-aware parity campaigns)
 
