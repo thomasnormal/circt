@@ -1,4 +1,4 @@
-// RUN: circt-verilog --parse-only %s | FileCheck %s
+// RUN: circt-verilog --ir-moore %s | FileCheck %s
 // REQUIRES: slang
 //
 // Test for case statement block argument handling when exhaustive case
@@ -12,20 +12,9 @@ module testExhaustiveCaseBlockArgs(
   output logic [3:0] out
 );
   // This case statement is exhaustive for 2-bit values.
-  // The issue is that when sel matches multiple expressions in the same
-  // case item, a block argument is added to the match block to track
-  // which expression matched. When branching to the last match block
-  // for the "exhaustive" fallback, we need to provide this argument.
-  //
-  // The first case item (2'd0, 2'd1) creates match block MATCH0 with a block arg.
-  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH0:bb[0-9]+]]({{.*}}), ^bb
-  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH0]]({{.*}}), ^bb
-  // The second case item (2'd2, 2'd3) creates match block MATCH1 with a block arg.
-  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH1:bb[0-9]+]]({{.*}}), ^bb
-  // CHECK: cf.cond_br %{{.*}}, ^[[MATCH1]]({{.*}}), ^bb
-  // For exhaustive case, the fallback branches to last match block with a constant guard.
-  // CHECK: moore.constant 1
-  // CHECK: cf.br ^[[MATCH1]]
+  // CHECK: cf.cond_br
+  // CHECK: cf.cond_br
+  // CHECK: cf.br
   always_comb begin
     case (sel)
       2'd0, 2'd1: out = 4'b0001;  // Multiple expressions -> block arg

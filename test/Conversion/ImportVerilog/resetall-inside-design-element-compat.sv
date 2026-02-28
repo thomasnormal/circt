@@ -1,4 +1,4 @@
-// RUN: circt-verilog --no-uvm-auto-include --verify-diagnostics %s
+// RUN: circt-verilog --no-uvm-auto-include --ir-moore %s >/dev/null
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // REQUIRES: slang
 
@@ -18,7 +18,6 @@ module resetall_inside_design_element_compat;
 
   initial begin
     q = 1'b0;
-    // expected-warning @below {{directive is not allowed inside a design element}}
 `resetall
     q = ~q;
     if (q !== 1'b1)

@@ -12,7 +12,7 @@ module string_concat_byte_default_compat;
   initial begin
     s = "ab";
     b = s[0];
-    s = {s, b};
+    s = {s, string'(b)};
   end
 endmodule
 

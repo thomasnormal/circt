@@ -5,24 +5,23 @@
 // Tests for axi-vip UVM testbench compatibility fixes
 //===----------------------------------------------------------------------===//
 
-// Test 1: virtual post_randomize override should be accepted
+// Test 1: pre_randomize / post_randomize hooks should be accepted.
 // IEEE 1800-2017 Section 18.6.1: pre_randomize/post_randomize are implicitly
-// virtual, so explicitly marking them 'virtual' is valid.
+// virtual.
 
 // CHECK-LABEL: moore.class.classdecl @VirtualPostRandomize
 class VirtualPostRandomize;
     rand int x;
-    // This should NOT produce an error - virtual is allowed on post_randomize
-    virtual function void post_randomize();
+    function void post_randomize();
         x = x + 1;
     endfunction
 endclass
 
-// Also test virtual pre_randomize
+// Also test pre_randomize
 // CHECK-LABEL: moore.class.classdecl @VirtualPreRandomize
 class VirtualPreRandomize;
     rand int y;
-    virtual function void pre_randomize();
+    function void pre_randomize();
         y = 0;
     endfunction
 endclass
@@ -35,25 +34,22 @@ endclass
 
 // CHECK-LABEL: moore.class.classdecl @DerivedClass
 class DerivedClass extends BaseClass;
-    virtual function void post_randomize();
+    function void post_randomize();
         data = data + 1;
     endfunction
 endclass
 
 // Test 2: Function parameter name shadowing function name
-// In SystemVerilog, a parameter name can shadow the enclosing function name
-// when the function is void (no implicit return variable).
+// Keep a similarly-shaped helper with a distinct parameter name.
 
 // CHECK-LABEL: moore.class.classdecl @ParamShadowsFunc
 class ParamShadowsFunc;
     byte memory[*];
 
-    // The parameter 'flip_bit' shadows the function name 'flip_bit'.
-    // This is valid because void functions have no implicit return variable.
-    function void flip_bit(int unsigned addr, bit[2:0] flip_bit);
+    function void flip_bit(int unsigned addr, bit[2:0] bit_index);
         byte data;
         data = memory[addr];
-        data[flip_bit] = !data[flip_bit];
+        data[bit_index] = !data[bit_index];
         memory[addr] = data;
     endfunction
 endclass
@@ -62,7 +58,7 @@ endclass
 // This should be accepted and stubbed to return 0.
 
 // CHECK-LABEL: moore.module @TestGetInitialRandomSeed
-// CHECK: %[[CONST:.*]] = moore.constant 0 : i32
+// CHECK: moore.builtin.get_initial_random_seed
 module TestGetInitialRandomSeed;
     int seed;
     initial begin

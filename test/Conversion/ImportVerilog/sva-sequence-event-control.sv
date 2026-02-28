@@ -8,7 +8,7 @@ module sva_sequence_event_control(
 );
   sequence write_on_clk;
     @posedge (clk)
-    req ##1 ack
+    req ##1 ack;
   endsequence
 
   property p_write;

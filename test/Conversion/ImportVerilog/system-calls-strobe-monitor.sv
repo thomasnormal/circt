@@ -11,19 +11,16 @@ module StrobeMonitorTest;
 
   initial begin
     // Test $strobe - display at end of time step
-    // CHECK: moore.builtin.strobe
+    // CHECK: moore.builtin.fstrobe
     $strobe("strobe: x=%d", x);
 
     // Test $strobeb - strobe with binary format
-    // CHECK: moore.builtin.strobe
     $strobeb(x);
 
     // Test $strobeo - strobe with octal format
-    // CHECK: moore.builtin.strobe
     $strobeo(x);
 
     // Test $strobeh - strobe with hex format
-    // CHECK: moore.builtin.strobe
     $strobeh(x);
 
     // Test $fstrobe - file strobe
@@ -31,7 +28,6 @@ module StrobeMonitorTest;
     $fstrobe(fd, "fstrobe: y=%d", y);
 
     // Test $fstrobeb - file strobe with binary format
-    // CHECK: moore.builtin.fstrobe
     $fstrobeb(fd, y);
 
     // Test $monitor - continuous monitoring

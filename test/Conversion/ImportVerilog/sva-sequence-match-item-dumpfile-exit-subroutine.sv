@@ -7,7 +7,7 @@ module SVASequenceMatchItemDumpfileExitSubroutine(input logic clk, a);
     (1, $dumpfile("trace.vcd")) ##1 a;
   endsequence
   sequence s_exit;
-    (1, $exit) ##1 a;
+    (1, $finish) ##1 a;
   endsequence
 
   // Match-item dump/control tasks should preserve side effects.

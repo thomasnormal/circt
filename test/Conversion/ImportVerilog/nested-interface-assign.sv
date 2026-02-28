@@ -21,8 +21,8 @@ endmodule
 // CHECK: moore.interface.signal @child : !moore.virtual_interface<@Child>
 // CHECK-LABEL: moore.module @top
 // CHECK: %[[P:.*]] = moore.interface.instance @Parent
-// CHECK: %[[PVAL:.*]] = moore.read %[[P]]
-// CHECK: %[[CHILD_REF:.*]] = moore.virtual_interface.signal_ref %[[PVAL]][@child]
+// CHECK: %[[PCONV:.*]] = moore.conversion %[[P]]
+// CHECK: %[[CHILD_REF:.*]] = moore.virtual_interface.signal_ref %[[PCONV]][@child]
 // CHECK: %[[CHILD_VAL:.*]] = moore.read %[[CHILD_REF]]
 // CHECK: %[[AW_REF:.*]] = moore.virtual_interface.signal_ref %[[CHILD_VAL]][@awvalid]
 // CHECK: %[[X:.*]] = moore.read

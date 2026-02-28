@@ -421,17 +421,17 @@ endmodule
 
 /// Check forward declarations
 
-// CHECK-LABEL:  moore.class.classdecl @testModuleClass {
+// CHECK-LABEL:  moore.class.classdecl @testForwardDeclClass {
 // CHECK:  }
-// CHECK:  func.func private @"testModuleClass::testFunction"(%arg0: !moore.class<@testModuleClass>, %arg1: !moore.i32) -> !moore.i32 {
+// CHECK:  func.func private @"testForwardDeclClass::testFunction"(%arg0: !moore.class<@testForwardDeclClass>, %arg1: !moore.i32) -> !moore.i32 {
 // CHECK:    return %arg1 : !moore.i32
 // CHECK:  }
 
-class testModuleClass;
+class testForwardDeclClass;
     extern function int testFunction(int a);
 endclass
 
-function int testModuleClass::testFunction(int a);
+function int testForwardDeclClass::testFunction(int a);
     return a;
 endfunction
 
@@ -508,14 +508,14 @@ endclass // testModuleClass
 // CHECK-LABEL:  moore.module @testModuleParametrized() {
 // CHECK:    [[T:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass">>
 // CHECK:    [[T2:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass">>
-// CHECK:    [[T3:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass_1">>
+// CHECK:    [[T3:%.+]] = moore.variable : <class<@"testModuleParametrized::testModuleClass{{_[0-9]+}}">>
 // CHECK:    moore.output
 // CHECK:  }
 // CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass" {
 // CHECK:    moore.class.propertydecl @a : !moore.l32
 // CHECK:    moore.class.propertydecl @b : !moore.l4
 // CHECK:  }
-// CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass_1" {
+// CHECK:  moore.class.classdecl @"testModuleParametrized::testModuleClass{{_[0-9]+}}" {
 // CHECK:    moore.class.propertydecl @a : !moore.l16
 // CHECK:    moore.class.propertydecl @b : !moore.l16
 // CHECK:  }
@@ -1166,7 +1166,7 @@ endmodule
 
 // CHECK-LABEL: moore.module @testMailboxNew() {
 // CHECK:   %typedMb = moore.variable : <class<@"std::mailbox">>
-// CHECK:   %untypedMb = moore.variable : <class<@"std::mailbox_0">>
+// CHECK:   %untypedMb = moore.variable : <class<@"std::mailbox{{_[0-9]+}}">>
 // CHECK:   moore.procedure initial {
 // Default new for typed mailbox
 // CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox">
@@ -1175,11 +1175,11 @@ endmodule
 // CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox">
 // CHECK:     moore.blocking_assign %typedMb, %{{[0-9]+}} : class<@"std::mailbox">
 // Default new for untyped mailbox
-// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox_0">
-// CHECK:     moore.blocking_assign %untypedMb, %{{[0-9]+}} : class<@"std::mailbox_0">
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox{{_[0-9]+}}">
+// CHECK:     moore.blocking_assign %untypedMb, %{{[0-9]+}} : class<@"std::mailbox{{_[0-9]+}}">
 // new with bound argument for untyped mailbox
-// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox_0">
-// CHECK:     moore.blocking_assign %untypedMb, %{{[0-9]+}} : class<@"std::mailbox_0">
+// CHECK:     %{{[0-9]+}} = moore.class.new : <@"std::mailbox{{_[0-9]+}}">
+// CHECK:     moore.blocking_assign %untypedMb, %{{[0-9]+}} : class<@"std::mailbox{{_[0-9]+}}">
 // CHECK:     moore.return
 // CHECK:   }
 // CHECK:   moore.output

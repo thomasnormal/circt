@@ -1027,6 +1027,290 @@ static std::string rewriteGenericClassScopeCompat(StringRef text,
   return out;
 }
 
+/// Split a comma-separated argument list while honoring nested delimiters,
+/// comments, and strings.
+static bool
+splitTopLevelArgumentRanges(StringRef text,
+                            SmallVectorImpl<std::pair<size_t, size_t>> &ranges) {
+  size_t argStart = 0;
+  unsigned parenDepth = 0;
+  unsigned bracketDepth = 0;
+  unsigned braceDepth = 0;
+
+  for (size_t i = 0; i < text.size(); ++i) {
+    char c = text[i];
+
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      continue;
+    }
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 >= text.size())
+        return false;
+      ++i;
+      continue;
+    }
+    if (c == '"') {
+      ++i;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"')
+          break;
+        ++i;
+      }
+      if (i >= text.size())
+        return false;
+      continue;
+    }
+
+    switch (c) {
+    case '(':
+      ++parenDepth;
+      break;
+    case ')':
+      if (parenDepth == 0)
+        return false;
+      --parenDepth;
+      break;
+    case '[':
+      ++bracketDepth;
+      break;
+    case ']':
+      if (bracketDepth == 0)
+        return false;
+      --bracketDepth;
+      break;
+    case '{':
+      ++braceDepth;
+      break;
+    case '}':
+      if (braceDepth == 0)
+        return false;
+      --braceDepth;
+      break;
+    case ',':
+      if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+        ranges.emplace_back(argStart, i);
+        argStart = i + 1;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+
+  if (parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+    return false;
+  ranges.emplace_back(argStart, text.size());
+  return true;
+}
+
+/// Rewrite compatibility form `$past(expr, ticks, @(clock))` into standard
+/// `$past(expr, ticks, , @(clock))`.
+static std::string rewritePastClockingArgCompat(StringRef text, bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  auto isPastCallAt = [&](size_t idx) {
+    if (idx + 5 > text.size() || text.substr(idx, 5) != "$past")
+      return false;
+    return idx + 5 == text.size() || !isIdentifierChar(text[idx + 5]);
+  };
+
+  auto isClockingArgument = [&](StringRef arg) {
+    auto maybe = skipTrivia(arg, 0);
+    return maybe && *maybe < arg.size() && arg[*maybe] == '@';
+  };
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.slice(start, i));
+      continue;
+    }
+
+    if (!isPastCallAt(i)) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    size_t pastEnd = i + 5;
+    auto maybeOpenParen = skipTrivia(text, pastEnd);
+    if (!maybeOpenParen || *maybeOpenParen >= text.size() ||
+        text[*maybeOpenParen] != '(') {
+      out.append(text.slice(i, pastEnd));
+      i = pastEnd;
+      continue;
+    }
+    auto maybeCloseParen = scanBalanced(text, *maybeOpenParen, '(', ')');
+    if (!maybeCloseParen) {
+      out.append(text.drop_front(i));
+      break;
+    }
+
+    StringRef args = text.slice(*maybeOpenParen + 1, *maybeCloseParen);
+    SmallVector<std::pair<size_t, size_t>, 8> argRanges;
+    bool isCompatForm = splitTopLevelArgumentRanges(args, argRanges) &&
+                        argRanges.size() == 3 &&
+                        isClockingArgument(args.slice(argRanges[2].first,
+                                                      argRanges[2].second));
+
+    out.append(text.slice(i, *maybeOpenParen + 1));
+    if (!isCompatForm) {
+      out.append(args);
+    } else {
+      out.append(args.slice(0, argRanges[2].first));
+      out.append(", ");
+      out.append(args.drop_front(argRanges[2].first));
+      changed = true;
+    }
+    out.push_back(')');
+    i = *maybeCloseParen + 1;
+  }
+
+  return out;
+}
+
+/// Rewrite compatibility forms like `@posedge (clk)` into standard
+/// `@(posedge (clk))` event controls.
+static std::string rewriteEventControlParenCompat(StringRef text,
+                                                  bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  auto matchKeyword = [&](size_t start) -> std::optional<StringRef> {
+    auto matchOne = [&](StringRef kw) {
+      if (start + kw.size() > text.size() || text.substr(start, kw.size()) != kw)
+        return false;
+      size_t end = start + kw.size();
+      return end == text.size() || !isIdentifierChar(text[end]);
+    };
+    if (matchOne("posedge"))
+      return StringRef("posedge");
+    if (matchOne("negedge"))
+      return StringRef("negedge");
+    if (matchOne("edge"))
+      return StringRef("edge");
+    return std::nullopt;
+  };
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.slice(start, i));
+      continue;
+    }
+
+    if (text[i] != '@') {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    auto maybeKeywordStart = skipTrivia(text, i + 1);
+    if (!maybeKeywordStart) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+    size_t keywordStart = *maybeKeywordStart;
+    auto keyword = matchKeyword(keywordStart);
+    if (!keyword) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    auto maybeOpenParen = skipTrivia(text, keywordStart + keyword->size());
+    if (!maybeOpenParen || *maybeOpenParen >= text.size() ||
+        text[*maybeOpenParen] != '(') {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+    auto maybeCloseParen = scanBalanced(text, *maybeOpenParen, '(', ')');
+    if (!maybeCloseParen) {
+      out.append(text.drop_front(i));
+      break;
+    }
+
+    out.append("@(");
+    out.append(text.slice(keywordStart, *maybeCloseParen + 1));
+    out.push_back(')');
+    changed = true;
+    i = *maybeCloseParen + 1;
+  }
+
+  return out;
+}
+
 /// A converter that can be plugged into a slang `DiagnosticEngine` as a client
 /// that will map slang diagnostics to their MLIR counterpart and emit them.
 class MlirDiagnosticClient : public slang::DiagnosticClient {
@@ -1119,6 +1403,8 @@ const static ImportVerilogOptions defaultOptions;
 /// imports used by BMC/LEC). Keep that phase out of normal lowering flows
 /// until upstream analysis threading is hardened for these workloads.
 static bool shouldRunSlangAnalysis(const ImportVerilogOptions &options) {
+  if (options.runSlangAnalysis.has_value())
+    return *options.runSlangAnalysis;
   return options.mode == ImportVerilogOptions::Mode::OnlyLint;
 }
 
@@ -1350,6 +1636,13 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
     applyRewrite(rewriteRandomizeInlineConstraints,
                  rewrittenText.contains("randomize") &&
                      rewrittenText.contains("this"));
+    applyRewrite(rewritePastClockingArgCompat,
+                 rewrittenText.contains("$past") &&
+                     rewrittenText.contains("@("));
+    applyRewrite(rewriteEventControlParenCompat,
+                 rewrittenText.contains("@posedge (") ||
+                     rewrittenText.contains("@negedge (") ||
+                     rewrittenText.contains("@edge ("));
     applyRewrite(rewriteConfigKeywordIdentifiersCompat,
                  rewrittenText.contains("cell") ||
                      rewrittenText.contains("config") ||

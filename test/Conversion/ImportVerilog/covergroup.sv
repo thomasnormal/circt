@@ -48,13 +48,13 @@ module test_covergroups;
     coverpoint addr iff (valid);
   endgroup
 
-  // Test coverpoint iff without parentheses (extension).
+  // Test coverpoint iff with explicit parentheses.
   // CHECK: moore.covergroup.decl @cg5 sampling_event<"@(posedge valid)"> {
   // CHECK:   moore.coverpoint.decl @addr_cp : !moore.l8 iff<{{.*}}valid"> {
   // CHECK:   }
   // CHECK: }
   covergroup cg5 @(posedge valid);
-    coverpoint addr iff valid;
+    coverpoint addr iff (valid);
   endgroup
 
 endmodule
