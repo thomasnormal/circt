@@ -6218,3 +6218,6 @@ Status update (2026-02-28): same closure as entry 2069.
 
 ### [x] 2071. `test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv:21`
 Status update (2026-02-28): same closure as entry 2069.
+
+### [x] 2072. `test/Runtime/uvm/uvm_sequence_test.sv:12`
+Status update (2026-02-28): this gap is closed in this workspace. The test now has execution-backed semantic coverage (`circt-verilog --ir-hw` + `circt-sim`) with a report-phase pass marker (`UVM_SEQUENCE_PATTERNS_PASS`). Runtime hardening in `uvm_sequence_item::set_id_info` now falls back to parent-sequence ID when request `sequence_id` is unavailable, so response routing in the sequence-pattern flow no longer fails silently.

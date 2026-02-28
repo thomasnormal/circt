@@ -9,7 +9,10 @@
 // 5. get_response pattern
 // 6. Virtual sequences
 //
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=2000000000 2>&1 | FileCheck %s --check-prefix=SIM
+// SIM: UVM_SEQUENCE_PATTERNS_PASS
 
 `timescale 1ns/1ps
 
@@ -17,6 +20,13 @@
 
 package sequence_test_pkg;
   import uvm_pkg::*;
+
+  function bit no_uvm_failures();
+    uvm_report_server rs;
+    rs = uvm_report_server::get_server();
+    return rs.get_severity_count(UVM_ERROR) == 0 &&
+           rs.get_severity_count(UVM_FATAL) == 0;
+  endfunction
 
   //==========================================================================
   // SECTION 1: uvm_sequence_item with constraints
@@ -417,9 +427,6 @@ package sequence_test_pkg;
 
       `uvm_info("RSP_SEQ", $sformatf("Starting response sequence with %0d transactions",
                                      num_transactions), UVM_MEDIUM)
-
-      // Enable response handling
-      use_response_handler(1);
 
       for (int i = 0; i < num_transactions; i++) begin
         req = constrained_item::type_id::create($sformatf("req_%0d", i));
@@ -1057,8 +1064,10 @@ package sequence_test_pkg;
 
       if (env.pri_drv.items_processed > 0 &&
           env.sec_drv.items_processed > 0 &&
-          env.rsp_drv.items_processed > 0) begin
+          env.rsp_drv.items_processed > 0 &&
+          no_uvm_failures()) begin
         `uvm_info("TEST", "ALL SEQUENCE PATTERN TESTS PASSED", UVM_NONE)
+        $display("UVM_SEQUENCE_PATTERNS_PASS");
       end else begin
         `uvm_error("TEST", "TEST FAILED - some drivers received no items")
       end

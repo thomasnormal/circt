@@ -9752,3 +9752,29 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv`
   - regression bundle:
     - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
+
+## 2026-02-28 - UVM sequence-pattern test semantic conversion + response routing hardening
+
+- realization:
+  - `test/Runtime/uvm/uvm_sequence_test.sv` was still parse-only and hid a real response-path failure under semantic execution:
+    - `UVM_FATAL ... [SQRPUT] Driver put a response with null sequence_id`.
+  - request items retained a valid parent-sequence handle, but `set_id_info` could inherit `sequence_id=-1` from the request in this runtime path.
+
+- implemented:
+  - `lib/Runtime/uvm-core/src/seq/uvm_sequence_item.svh`
+    - hardened `set_id_info`:
+      - keep normal behavior (`item.get_sequence_id()`),
+      - fallback to `item.get_parent_sequence().get_sequence_id()` when request `sequence_id` is `-1`.
+    - this preserves response routing robustness for valid parent-sequence contexts.
+  - `test/Runtime/uvm/uvm_sequence_test.sv`
+    - upgraded from parse-only to semantic (`--ir-hw` + `circt-sim` + FileCheck pass marker).
+    - removed `use_response_handler(1)` from the blocking `get_response` flow so response-queue semantics are exercised correctly.
+    - added report-phase pass marker:
+      - `UVM_SEQUENCE_PATTERNS_PASS`
+    - pass criteria now require:
+      - all three drivers processed traffic,
+      - no UVM errors/fatals reported.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_sequence_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_sequence_test.sv test/Runtime/uvm/uvm_factory_test.sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
