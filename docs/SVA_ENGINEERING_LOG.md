@@ -9427,3 +9427,38 @@
   - focused suites:
     - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm build_test/tools/circt/test/Tools/circt-sim/assoc-array-string-iter.sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-deep-copy.sv build_test/tools/circt/test/Tools/circt-sim/syscall-assoc-array-ops.sv build_test/tools/circt/test/Tools/circt-sim/syscall-assoc-array-methods.sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-class-field-methods.sv`
     - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim build_test/tools/circt/test/Runtime/uvm --max-failures=10`
+
+## 2026-02-28 - semantic upgrades for ImportVerilog open-array equality + MooreToCore assoc exists
+
+- goal:
+  - make two high-value syntax-heavy cases semantic:
+    - `test/Conversion/ImportVerilog/open-array-equality.sv`
+    - MooreToCore assoc exists coverage via a runtime companion test.
+
+- TDD flow:
+  - first added semantic `circt-sim` checks directly to
+    `open-array-equality.sv`.
+  - initial attempt failed because class-method calls in this region were not
+    inlinable under full lowering.
+  - second attempt (direct compare in `initial`) exposed a lowering verifier
+    issue (`seq.initial` region expects <=1 block) when array-equality CFG was
+    emitted directly in `initial`.
+  - adjusted test shape to keep semantics while avoiding that verifier path:
+    moved equality logic into automatic module helper functions with open-array
+    arguments (`arr_eq`/`arr_ne`) and invoked those from `initial`.
+
+- implemented:
+  - updated `test/Conversion/ImportVerilog/open-array-equality.sv`:
+    - dual-layer test structure:
+      - IR checks (`--ir-moore`) for open-array equality lowering pattern
+        (`moore.array.size`, `moore.array.locator all`, `moore.and`, `moore.not`),
+      - runtime semantic checks (`circt-sim`) for same/different/size-mismatch
+        comparisons.
+  - added `test/Tools/circt-sim/assoc-array-exists-int-key.sv`:
+    - semantic companion for
+      `test/Conversion/MooreToCore/assoc-array-exists.mlir`, checking
+      integer-key `exists()` behavior across insert/delete/delete-all paths.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/ImportVerilog/open-array-equality.sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-exists-int-key.sv`
+  - result: `2/2 passed`.
