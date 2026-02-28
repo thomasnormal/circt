@@ -1,0 +1,14 @@
+// REQUIRES: native_tools
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic clk, input logic d, input logic [1:0] idx,
+// RUN:            output logic [3:0] arr);
+// RUN:   always_ff @(posedge clk) begin
+// RUN:     arr[idx] <= d;
+// RUN:   end
+// RUN: endmodule
+// RUN: SV
+// RUN: not circt-mut generate --design %t/design.sv --count 1 --seed 0 --native-ops ASSIGN_RHS_XOR_LHS --out %t/mutations.txt > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=ERR < %t/log.txt
+
+// ERR: circt-mut generate: no applicable native mutation sites for selected operators

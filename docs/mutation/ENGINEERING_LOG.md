@@ -1658,3 +1658,53 @@
     - recheck on mutant `NATIVE_ASSIGN_RHS_TO_CONST0@3` with unbounded xrun
       run control (`run` instead of `run 1000ns`) timed out in xrun as well,
       confirming a liveness mutant class rather than a circt semantic bug.
+
+## 2026-02-28 (ASSIGN_RHS_XOR_LHS + function-result site quality guard)
+
+- realizations:
+  - `ASSIGN_RHS_XOR_LHS` was integrated but one apply-site test targeted a
+    continuous `assign` statement, which is intentionally excluded by assign-RHS
+    site collection (procedural assignments only).
+  - A higher-value quality gap surfaced during seeded campaigns: both
+    `ASSIGN_RHS_TO_LHS` and `ASSIGN_RHS_XOR_LHS` could target function
+    result-variable assignments (`f = ...` inside `function f`), yielding
+    equivalent or low-signal mutants.
+
+- changes made:
+  - Completed `ASSIGN_RHS_XOR_LHS` integration:
+    - planner op catalog / op-family mapping / assign-RHS op filter
+    - CIRCT-only mode allowlists (`connect`, `balanced/all`, `invert`, `inv`)
+    - native-op validator allowlist in mutation example runner.
+  - Fixed/added tests:
+    - updated procedural apply-site test:
+      - `test/Tools/native-create-mutated-assign-rhs-xor-lhs-site-index.test`
+    - new no-applicable coverage for function-result-only designs:
+      - `test/Tools/circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-function-result.test`
+    - updated out-of-range site index in existing TO_LHS apply test:
+      - `test/Tools/native-create-mutated-assign-rhs-to-lhs-site-index.test`
+  - Added function-result guard in planner:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+      - detect enclosing function header and parsed function result name
+      - skip assign-RHS `TO_LHS`/`XOR_LHS` sites when `lhs == function_name`.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit:
+    - `native-create-mutated-assign-rhs-xor-lhs-site-index`
+    - `native-mutation-plan-assign-rhs-xor-lhs-force`
+    - `circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-xor-lhs`
+    - `circt-mut-generate-circt-only-connect-mode-assign-rhs-const-ops`
+    - `circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-function-result`
+    - result: all supported tests passed.
+  - assign-RHS regression slice:
+    - `build_test/bin/llvm-lit -sv $(ls test/Tools/*assign-rhs*.test test/Tools/*assign-rhs*.sv)`
+    - result: `24 passed`, `7 unsupported`, `0 failed`.
+  - seeded xrun-vs-circt parity campaign on deterministic `cov_intro_seeded`
+    harness (fixed seed, operator-restricted `ASSIGN_RHS_XOR_LHS`):
+    - baseline: `RESULT sig=cba1f835 cov=100.00` (xrun == circt)
+    - generated mutants: `12` (`@1/@2/@3` sites; function-result site removed)
+    - result: `ok=12 mismatch=0 fail=0`
+    - observed two distinct semantic outcome buckets across sites:
+      - `RESULT sig=cba1f835 cov=100.00`
+      - `RESULT sig=0d4a9567 cov=100.00`

@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, input logic a,b,c, output logic y,z,w);\n  assign y = a;\n  always_ff @(posedge clk) begin\n    z <= b;\n    w = c;\n  end\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --count 1 --seed 0 --modes connect --native-ops ASSIGN_RHS_XOR_LHS --out %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+//
+// OUT: NATIVE_ASSIGN_RHS_XOR_LHS

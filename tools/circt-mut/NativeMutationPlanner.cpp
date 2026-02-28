@@ -34,7 +34,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
-    "ASSIGN_RHS_TO_LHS", "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE",
+    "ASSIGN_RHS_TO_LHS", "ASSIGN_RHS_XOR_LHS", "ASSIGN_RHS_INVERT",
+    "ASSIGN_RHS_PLUS_ONE",
     "ASSIGN_RHS_MINUS_ONE", "ASSIGN_RHS_NEGATE", "ASSIGN_RHS_SHL_ONE",
     "ASSIGN_RHS_SHR_ONE",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
@@ -1433,6 +1434,110 @@ findNearestProceduralHeadBefore(StringRef text, ArrayRef<uint8_t> codeMask,
   return false;
 }
 
+static bool findNearestEnclosingFunctionHeaderBefore(
+    StringRef text, ArrayRef<uint8_t> codeMask, size_t anchor,
+    size_t &functionHeadPos) {
+  functionHeadPos = StringRef::npos;
+  if (anchor == StringRef::npos || anchor == 0)
+    return false;
+
+  for (size_t off = anchor; off > 0; --off) {
+    size_t i = off - 1;
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (matchKeywordTokenAt(text, codeMask, i, "endfunction"))
+      return false;
+    if (matchKeywordTokenAt(text, codeMask, i, "function")) {
+      functionHeadPos = i;
+      return true;
+    }
+    if (matchKeywordTokenAt(text, codeMask, i, "endmodule"))
+      break;
+  }
+  return false;
+}
+
+static bool parseFunctionResultNameFromHeader(StringRef text,
+                                              ArrayRef<uint8_t> codeMask,
+                                              size_t functionHeadPos,
+                                              size_t anchor,
+                                              StringRef &functionName) {
+  functionName = StringRef();
+  if (functionHeadPos == StringRef::npos || functionHeadPos >= text.size() ||
+      !matchKeywordTokenAt(text, codeMask, functionHeadPos, "function"))
+    return false;
+
+  size_t limit = std::min(anchor, text.size());
+  size_t i = functionHeadPos + StringRef("function").size();
+  StringRef lastIdentifier;
+
+  while (i < limit) {
+    i = skipCodeWhitespace(text, codeMask, i, limit);
+    if (i >= limit)
+      break;
+    if (!isCodeAt(codeMask, i)) {
+      ++i;
+      continue;
+    }
+
+    char ch = text[i];
+    if (ch == '(' || ch == ';')
+      break;
+
+    if (i + 1 < limit && isCodeRange(codeMask, i, 2) &&
+        text.substr(i).starts_with("::")) {
+      i += 2;
+      continue;
+    }
+    if (ch == '#') {
+      size_t next = skipCodeWhitespace(text, codeMask, i + 1, limit);
+      if (next < limit && isCodeAt(codeMask, next) && text[next] == '(') {
+        i = skipBalancedGroup(text, codeMask, next, limit, '(', ')');
+        continue;
+      }
+      i = next;
+      continue;
+    }
+    if (ch == '[') {
+      i = skipBalancedGroup(text, codeMask, i, limit, '[', ']');
+      continue;
+    }
+
+    size_t start = i;
+    if (parseIdentifierToken(text, codeMask, i, limit)) {
+      lastIdentifier = text.slice(start, i);
+      continue;
+    }
+
+    ++i;
+  }
+
+  if (lastIdentifier.empty())
+    return false;
+  functionName = lastIdentifier;
+  return true;
+}
+
+static bool isFunctionResultAssignment(StringRef text, ArrayRef<uint8_t> codeMask,
+                                       size_t stmtStart,
+                                       StringRef lhsIdentifier) {
+  lhsIdentifier = lhsIdentifier.trim();
+  if (lhsIdentifier.empty())
+    return false;
+
+  size_t functionHeadPos = StringRef::npos;
+  if (!findNearestEnclosingFunctionHeaderBefore(text, codeMask, stmtStart,
+                                                functionHeadPos))
+    return false;
+
+  StringRef functionName;
+  if (!parseFunctionResultNameFromHeader(text, codeMask, functionHeadPos,
+                                         stmtStart, functionName))
+    return false;
+
+  return lhsIdentifier == functionName;
+}
+
 static bool shouldSkipTimingAssignmentMutation(StringRef text,
                                                ArrayRef<uint8_t> codeMask,
                                                size_t stmtStart,
@@ -1722,10 +1827,10 @@ static bool findSimpleAssignmentRhsSpan(StringRef text, ArrayRef<uint8_t> codeMa
 
 static bool isAssignRhsMutationOp(StringRef op) {
   return op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-         op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_INVERT" ||
-         op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
-         op == "ASSIGN_RHS_NEGATE" || op == "ASSIGN_RHS_SHL_ONE" ||
-         op == "ASSIGN_RHS_SHR_ONE";
+         op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_XOR_LHS" ||
+         op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
+         op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE" ||
+         op == "ASSIGN_RHS_SHL_ONE" || op == "ASSIGN_RHS_SHR_ONE";
 }
 
 static bool findEventControlBoundsForEdgeSite(
@@ -1763,7 +1868,7 @@ static bool isSimpleIdentifierExpr(StringRef expr) {
 
 static StringRef getAssignRhsMutationFamily(StringRef op) {
   if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-      op == "ASSIGN_RHS_TO_LHS")
+      op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_XOR_LHS")
     return "connect";
   if (op == "ASSIGN_RHS_INVERT")
     return "logic";
@@ -1797,6 +1902,13 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
     if (!isSimpleIdentifierExpr(lhs))
       return false;
     replacement = lhs.str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_XOR_LHS") {
+    StringRef lhs = lhsExpr.trim();
+    if (!isSimpleIdentifierExpr(lhs))
+      return false;
+    replacement = (Twine("(") + rhsForBinaryOp + " ^ " + lhs + ")").str();
     return true;
   }
   if (op == "ASSIGN_RHS_INVERT") {
@@ -1883,8 +1995,10 @@ static void collectAssignRhsSites(StringRef text, StringRef op,
     size_t stmtStart = findStatementStart(text, codeMask, i);
     StringRef head;
     size_t headPos = StringRef::npos;
-    if (findNearestProceduralHeadBefore(text, codeMask, stmtStart, head, headPos) &&
-        head == "initial" && op == "ASSIGN_RHS_TO_LHS")
+    if (findNearestProceduralHeadBefore(text, codeMask, stmtStart, head,
+                                        headPos) &&
+        head == "initial" &&
+        (op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_XOR_LHS"))
       continue;
 
     size_t rhsStart = StringRef::npos;
@@ -1901,8 +2015,11 @@ static void collectAssignRhsSites(StringRef text, StringRef op,
         parseIdentifierEndingAt(text, codeMask, lhsTokenEnd, lhsIdentifier) &&
         eventControlSignals.contains(lhsIdentifier))
       continue;
-    if (op == "ASSIGN_RHS_TO_LHS") {
+    if (op == "ASSIGN_RHS_TO_LHS" || op == "ASSIGN_RHS_XOR_LHS") {
       if (!isSimpleIdentifierExpr(lhsExpr))
+        continue;
+      if (!lhsIdentifier.empty() &&
+          isFunctionResultAssignment(text, codeMask, stmtStart, lhsIdentifier))
         continue;
     }
 
