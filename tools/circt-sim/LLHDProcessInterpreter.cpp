@@ -109,6 +109,59 @@ static Type unwrapSignalType(Type type) {
   return type;
 }
 
+// Covergroups with implicit sampling events are lowered to dedicated LLHD
+// processes that call coverage runtime sample functions when an edge fires.
+// These samplers must run after Active/NBA updates in the same time slot.
+static bool isImplicitCoverageSamplerProcess(llhd::ProcessOp processOp) {
+  bool hasSampleCall = false;
+  bool hasDisallowedSideEffect = false;
+
+  processOp.walk([&](Operation *op) {
+    if (hasDisallowedSideEffect)
+      return;
+
+    // A process that drives signals is not a pure implicit sampler process.
+    if (isa<llhd::DriveOp>(op)) {
+      hasDisallowedSideEffect = true;
+      return;
+    }
+
+    auto isCoverageRuntimeName = [](StringRef name) {
+      return name.starts_with("__moore_covergroup_") ||
+             name.starts_with("__moore_coverpoint_") ||
+             name.starts_with("__moore_cross_");
+    };
+    auto isCoverageSampleName = [](StringRef name) {
+      return name == "__moore_coverpoint_sample" ||
+             name == "__moore_cross_sample" ||
+             name == "__moore_cross_sample_masked";
+    };
+
+    if (auto call = dyn_cast<LLVM::CallOp>(op)) {
+      auto callee = call.getCallee();
+      if (!callee) {
+        hasDisallowedSideEffect = true;
+        return;
+      }
+      if (isCoverageSampleName(*callee))
+        hasSampleCall = true;
+      else if (!isCoverageRuntimeName(*callee))
+        hasDisallowedSideEffect = true;
+      return;
+    }
+
+    if (auto call = dyn_cast<func::CallOp>(op)) {
+      StringRef callee = call.getCallee();
+      if (isCoverageSampleName(callee))
+        hasSampleCall = true;
+      else if (!isCoverageRuntimeName(callee))
+        hasDisallowedSideEffect = true;
+    }
+  });
+
+  return hasSampleCall && !hasDisallowedSideEffect;
+}
+
 /// TLS callback: translate an interpreter virtual address to a host pointer.
 void *LLHDProcessInterpreter::normalizeVirtualPtr(void *ctx, uint64_t addr) {
   auto *interp = static_cast<LLHDProcessInterpreter *>(ctx);
@@ -3212,8 +3265,11 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       } else {
         processNameToId[procName] = procId;
       }
-      if (auto *process = scheduler.getProcess(procId))
+      if (auto *process = scheduler.getProcess(procId)) {
         process->setCallback([this, procId]() { executeProcess(procId); });
+        if (isImplicitCoverageSamplerProcess(processOp))
+          process->setPreferredRegion(SchedulingRegion::Observed);
+      }
 
       state.currentBlock = &processOp.getBody().front();
       state.currentOp = state.currentBlock->begin();
@@ -4585,8 +4641,11 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
   } else {
     processNameToId[name] = procId;
   }
-  if (auto *process = scheduler.getProcess(procId))
+  if (auto *process = scheduler.getProcess(procId)) {
     process->setCallback([this, procId]() { executeProcess(procId); });
+    if (isImplicitCoverageSamplerProcess(processOp))
+      process->setPreferredRegion(SchedulingRegion::Observed);
+  }
 
   // Store the state
   state.currentBlock = &processOp.getBody().front();
