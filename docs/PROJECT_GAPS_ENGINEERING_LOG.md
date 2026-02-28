@@ -1,5 +1,40 @@
 # Project Gaps Engineering Log
 
+## 2026-02-28
+
+### circt-sim: `@(posedge vif.clk)` in automatic task never wakes (#8)
+- Repro:
+  - `test/Tools/circt-sim/task-automatic-interface-posedge-wakeup.sv`
+  - Simulation stalled until `maxTime reached` instead of printing `PASS`.
+- Root cause:
+  - Wait-event sensitivity could resolve to pointer-carrier signals
+    (`!llvm.ptr`) rather than real clock/data signals.
+  - Pointer-carrier signals do not edge-toggle, so waits never woke.
+- Fix:
+  - Treat pointer-carrier signals as non-observable in wait-event resolution.
+  - Fall back to tracing runtime field/memory-backed signal IDs.
+  - Applied in both `moore.wait_event` and `__moore_wait_event` handler paths.
+- Tests:
+  - Added `test/Tools/circt-sim/task-automatic-interface-posedge-wakeup.sv`.
+  - Verified with focused `llvm-lit` run.
+
+### ImportVerilog: `$bits(hierarchical parameterized port)` returned 0 in default mode (#9)
+- Repro:
+  - `test/Tools/circt-sim/bits-hierarchical-parameterized-port.sv`
+  - Without `--allow-hierarchical-const`, observed `bits_hier=0`.
+- Root cause:
+  - `$bits` lowering in `Expressions.cpp` only handled dynamic arrays/queues.
+  - For all other types, it returned constant `0`, assuming slang had already
+    constant-folded static cases.
+- Fix:
+  - Added static-type fallback: compute bit size from Moore packed/unpacked
+    types (and ref nested types) when available.
+  - Keep dynamic-array/queue runtime path unchanged.
+- Tests:
+  - Added `test/Tools/circt-sim/bits-hierarchical-parameterized-port.sv`.
+  - Verified both default mode and `--allow-hierarchical-const` mode print
+    `bits_hier=3` and `PASS`.
+
 ## 2026-02-27
 
 ### ImportVerilog: unconnected inout instance port

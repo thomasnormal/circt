@@ -11824,6 +11824,20 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                                                   bitsPerElem);
                     }
                   }
+                  // Fallback for static types when slang does not constant-fold
+                  // (for example hierarchical references in strict mode).
+                  auto staticBitSize = [&](Type ty) -> std::optional<unsigned> {
+                    if (auto refTy = dyn_cast<moore::RefType>(ty))
+                      ty = refTy.getNestedType();
+                    if (auto packedTy = dyn_cast<moore::PackedType>(ty))
+                      return packedTy.getBitSize();
+                    if (auto unpackedTy = dyn_cast<moore::UnpackedType>(ty))
+                      return unpackedTy.getBitSize();
+                    return std::nullopt;
+                  };
+                  if (auto bits = staticBitSize(value.getType()))
+                    return moore::ConstantOp::create(builder, loc, intTy,
+                                                     static_cast<int64_t>(*bits));
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
                 })
           .Case("$dimensions",
