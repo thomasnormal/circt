@@ -9168,3 +9168,26 @@
   - `llvm-lit -sv test/Runtime/uvm/uvm_timeout_plusarg_test.sv test/Tools/circt-sim/uvm-cmdline-get-arg-values.sv`
   - `llvm-lit -sv test/Tools/circt-sim/array-get-oob-sentinel-index.sv`
   - `llvm-lit -sv test/Tools/circt-sim/array-get-oob-sentinel-index.sv test/Tools/circt-sim/array-get-index-order.sv test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir test/Runtime/uvm/uvm_timeout_plusarg_test.sv test/Tools/circt-sim/uvm-cmdline-get-arg-values.sv`
+
+## 2026-02-28 - MooreToCore dynamic bit-select OOB assignment no-op
+
+- realization:
+  - dynamic bit-select assignment on packed vectors could alias an in-range bit
+    when index was out of bounds (e.g. `logic [7:0] v; int i=8; v[i]=1;`).
+  - root cause was index narrowing/clamping in MooreToCore extract-ref assignment
+    lowering; OOB indices were converted into in-range shift positions.
+
+- implemented:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+    - added explicit in-bounds predicate (`idx <= max`) for extract-ref assignment
+      lowering helpers.
+    - gated value/unknown updates with that predicate so OOB becomes no-op.
+    - switched static extract-ref index constants used by assignment lowering to
+      64-bit constants to preserve out-of-range values for bounds checks.
+
+- tests added:
+  - `test/Tools/circt-sim/dyn-bit-select-oob-noop.sv`
+
+- validation:
+  - `llvm-lit -sv test/Tools/circt-sim/dyn-bit-select-oob-noop.sv`
+  - `llvm-lit -sv test/Tools/circt-sim/array-get-oob-sentinel-index.sv test/Conversion/MooreToCore/extract-ref-local-assign.mlir test/Conversion/MooreToCore/dyn-extract-ref-local-assign.mlir test/Conversion/MooreToCore/fourstate-bit-extract.mlir`

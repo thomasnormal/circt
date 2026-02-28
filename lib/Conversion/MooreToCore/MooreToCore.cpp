@@ -14105,6 +14105,36 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       return bitSize;
     };
 
+    auto computeExtractInBoundsCond = [&](Value idx, int64_t baseWidth,
+                                          int64_t sliceWidth) -> Value {
+      if (!idx || baseWidth <= 0 || sliceWidth <= 0 || sliceWidth > baseWidth)
+        return Value();
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+      auto idxType = dyn_cast<IntegerType>(idx.getType());
+      if (!idxType)
+        return Value();
+
+      int64_t maxIdx = baseWidth - sliceWidth;
+      unsigned minWidth =
+          llvm::Log2_64_Ceil(static_cast<uint64_t>(maxIdx) + 1);
+      if (minWidth == 0)
+        minWidth = 1;
+
+      Value cmpIdx = idx;
+      if (idxType.getWidth() < minWidth) {
+        cmpIdx = arith::ExtUIOp::create(rewriter, loc,
+                                        rewriter.getIntegerType(minWidth),
+                                        cmpIdx);
+      }
+
+      auto cmpIdxType = cast<IntegerType>(cmpIdx.getType());
+      Value maxConst = hw::ConstantOp::create(
+          rewriter, loc, cmpIdxType, static_cast<uint64_t>(maxIdx));
+      return comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ule,
+                                  cmpIdx, maxConst, false);
+    };
+
     auto emitFourStateExtractAssign = [&](Value baseRef, Value idx,
                                           Type resultType) -> LogicalResult {
       auto resultRefType = dyn_cast<llhd::RefType>(resultType);
@@ -14176,8 +14206,13 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       driveUnknown =
           adjustIntegerWidth(rewriter, driveUnknown, sliceWidth, loc);
 
-      Value shiftAmount =
-          adjustIntegerWidth(rewriter, idx, baseWidth, loc);
+      Value inBoundsCond =
+          computeExtractInBoundsCond(idx, baseWidth, sliceWidth);
+      if (!inBoundsCond)
+        return failure();
+      if (isFourStateStructType(idx.getType()))
+        idx = extractFourStateValue(rewriter, loc, idx);
+      Value shiftAmount = adjustIntegerWidth(rewriter, idx, baseWidth, loc);
       APInt baseMask = APInt::getLowBitsSet(baseWidth, sliceWidth);
       Value maskConst = hw::ConstantOp::create(rewriter, loc, baseMask);
       Value shiftedMask = maskConst;
@@ -14216,6 +14251,11 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
           comb::OrOp::create(rewriter, loc, baseValueCleared, driveValueMasked);
       Value newUnknown =
           comb::OrOp::create(rewriter, loc, baseUnknownCleared, driveUnknownMasked);
+
+      newValue =
+          comb::MuxOp::create(rewriter, loc, inBoundsCond, newValue, baseValue);
+      newUnknown = comb::MuxOp::create(rewriter, loc, inBoundsCond, newUnknown,
+                                       baseUnknown);
 
       Value newStruct =
           createFourStateStruct(rewriter, loc, newValue, newUnknown);
@@ -14268,10 +14308,12 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         if (sliceWidth <= 0 || sliceWidth > baseWidth)
           return failure();
 
+        Value inBoundsCond =
+            computeExtractInBoundsCond(idx, baseWidth, sliceWidth);
+        if (!inBoundsCond)
+          return failure();
         if (isFourStateStructType(idx.getType()))
           idx = extractFourStateValue(rewriter, loc, idx);
-        idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth),
-                                 loc);
 
         Value baseValue = extractFourStateValue(rewriter, loc, loaded);
         Value baseUnknown = extractFourStateUnknown(rewriter, loc, loaded);
@@ -14329,6 +14371,10 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                                             driveValueMasked);
         Value newUnknown = comb::OrOp::create(rewriter, loc, baseUnknownCleared,
                                               driveUnknownMasked);
+        newValue =
+            comb::MuxOp::create(rewriter, loc, inBoundsCond, newValue, baseValue);
+        newUnknown = comb::MuxOp::create(rewriter, loc, inBoundsCond, newUnknown,
+                                         baseUnknown);
 
         Value newStruct =
             createFourStateStruct(rewriter, loc, newValue, newUnknown);
@@ -14345,10 +14391,12 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         if (sliceWidth <= 0 || sliceWidth > baseWidth)
           return failure();
 
+        Value inBoundsCond =
+            computeExtractInBoundsCond(idx, baseWidth, sliceWidth);
+        if (!inBoundsCond)
+          return failure();
         if (isFourStateStructType(idx.getType()))
           idx = extractFourStateValue(rewriter, loc, idx);
-        idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth),
-                                 loc);
 
         Value baseValue = loaded;
         Value driveValue = srcValue;
@@ -14382,6 +14430,8 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
             comb::AndOp::create(rewriter, loc, driveValueShifted, shiftedMask);
         Value newValue = comb::OrOp::create(rewriter, loc, baseValueCleared,
                                             driveValueMasked);
+        newValue = comb::MuxOp::create(rewriter, loc, inBoundsCond, newValue,
+                                       baseValue);
 
         LLVM::StoreOp::create(rewriter, loc, newValue, baseRef);
         rewriter.eraseOp(op);
@@ -14415,9 +14465,11 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       if (sliceWidth <= 0 || sliceWidth > baseWidth)
         return failure();
 
+      Value inBoundsCond = computeExtractInBoundsCond(idx, baseWidth, sliceWidth);
+      if (!inBoundsCond)
+        return failure();
       if (isFourStateStructType(idx.getType()))
         idx = extractFourStateValue(rewriter, loc, idx);
-      idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(baseWidth), loc);
 
       Value baseStructValue = llhd::ProbeOp::create(rewriter, loc, baseRef);
       auto baseIntType = rewriter.getIntegerType(baseWidth);
@@ -14453,6 +14505,8 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
           comb::AndOp::create(rewriter, loc, driveShifted, shiftedMask);
       Value newInt =
           comb::OrOp::create(rewriter, loc, baseCleared, driveMasked);
+      newInt =
+          comb::MuxOp::create(rewriter, loc, inBoundsCond, newInt, baseInt);
       Value newStruct =
           rewriter.createOrFold<hw::BitcastOp>(loc, baseStructType, newInt);
 
@@ -14472,12 +14526,9 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       auto baseRefType = baseRef ? dyn_cast<llhd::RefType>(baseRef.getType())
                                  : nullptr;
       if (baseRefType && isFourStateStructType(baseRefType.getNestedType())) {
-        auto structType = cast<hw::StructType>(baseRefType.getNestedType());
-        auto valueType = cast<IntegerType>(structType.getElements()[0].type);
-        int64_t width = valueType.getWidth();
-        Value idx = hw::ConstantOp::create(
-            rewriter, loc, rewriter.getIntegerType(llvm::Log2_64_Ceil(width)),
-            extractRef.getLowBit());
+        Value idx = hw::ConstantOp::create(rewriter, loc,
+                                           rewriter.getIntegerType(64),
+                                           extractRef.getLowBit());
         auto resultType =
             this->getTypeConverter()->convertType(extractRef.getResult().getType());
         if (failed(emitFourStateExtractAssign(baseRef, idx, resultType)))
@@ -14489,10 +14540,9 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
         auto packedWidth = getPackedRefLogicalWidth(extractRef.getInput());
         if (!packedWidth)
           return failure();
-        Value idx = hw::ConstantOp::create(
-            rewriter, loc,
-            rewriter.getIntegerType(llvm::Log2_64_Ceil(*packedWidth)),
-            extractRef.getLowBit());
+        Value idx = hw::ConstantOp::create(rewriter, loc,
+                                           rewriter.getIntegerType(64),
+                                           extractRef.getLowBit());
         auto resultType =
             this->getTypeConverter()->convertType(extractRef.getResult().getType());
         if (auto resultRefType = dyn_cast<llhd::RefType>(resultType)) {
@@ -14539,16 +14589,9 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       auto baseRefType = baseRef ? dyn_cast<llhd::RefType>(baseRef.getType())
                                  : nullptr;
       if (baseRefType && isFourStateStructType(baseRefType.getNestedType())) {
-        auto structType = cast<hw::StructType>(baseRefType.getNestedType());
-        auto valueType = cast<IntegerType>(structType.getElements()[0].type);
-        int64_t width = valueType.getWidth();
-
         Value idx = getConvertedValue(dynExtractRef.getLowBit());
         if (!idx)
           return failure();
-        if (isFourStateStructType(idx.getType()))
-          idx = extractFourStateValue(rewriter, loc, idx);
-        idx = adjustIntegerWidth(rewriter, idx, llvm::Log2_64_Ceil(width), loc);
 
         auto resultType =
             this->getTypeConverter()->convertType(dynExtractRef.getResult().getType());
