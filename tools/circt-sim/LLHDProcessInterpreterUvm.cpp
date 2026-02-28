@@ -123,6 +123,51 @@ uint64_t LLHDProcessInterpreter::canonicalizeUvmObjectAddress(ProcessId procId,
   return addr;
 }
 
+uint64_t LLHDProcessInterpreter::resolveQueueStructAddress(ProcessId procId,
+                                                           uint64_t rawAddr) {
+  if (rawAddr == 0)
+    return 0;
+
+  auto isValidQueueStructAddress = [&](uint64_t addr) -> bool {
+    if (addr == 0)
+      return false;
+
+    uint64_t offset = 0;
+    if (auto *block = findMemoryBlockByAddress(addr, procId, &offset))
+      return offset + 16 <= block->size;
+    if (auto *block = findBlockByAddress(addr, offset))
+      return offset + 16 <= block->size;
+
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    return findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+           nativeOffset + 16 <= nativeSize;
+  };
+
+  auto tryResolve = [&](uint64_t addr) -> uint64_t {
+    if (isValidQueueStructAddress(addr))
+      return addr;
+
+    const uint64_t maskedCandidates[] = {
+        addr & ~uint64_t(1), addr & ~uint64_t(3), addr & ~uint64_t(7)};
+    for (uint64_t masked : maskedCandidates) {
+      if (isValidQueueStructAddress(masked))
+        return masked;
+    }
+    return 0;
+  };
+
+  uint64_t resolved = tryResolve(rawAddr);
+  if (resolved != 0)
+    return resolved;
+
+  uint64_t canonical = canonicalizeUvmObjectAddress(procId, rawAddr);
+  if (uint64_t canonicalResolved = tryResolve(canonical))
+    return canonicalResolved;
+
+  return rawAddr;
+}
+
 uint64_t LLHDProcessInterpreter::readUvmPhaseImpAddress(ProcessId procId,
                                                         uint64_t phaseAddr) {
   if (phaseAddr == 0)

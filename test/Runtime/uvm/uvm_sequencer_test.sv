@@ -7,7 +7,9 @@
 // - lock / unlock for sequencer arbitration
 // - sequencer-driver communication
 //
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 2>&1 | FileCheck %s --check-prefix=SIM
 
 `timescale 1ns/1ps
 
@@ -440,10 +442,11 @@ package sequencer_test_pkg;
       super.report_phase(phase);
       `uvm_info("TEST", $sformatf("Total items processed by driver: %0d",
                                   env.agent.drv.items_processed), UVM_NONE)
-      if (env.agent.drv.items_processed >= 10)
+      // This test runs four 2-item sequences (basic, lock, grab, basic).
+      if (env.agent.drv.items_processed >= 8)
         `uvm_info("TEST", "TEST PASSED", UVM_NONE)
       else
-        `uvm_error("TEST", $sformatf("TEST FAILED - expected at least 10 items, got %0d",
+        `uvm_error("TEST", $sformatf("TEST FAILED - expected at least 8 items, got %0d",
                                      env.agent.drv.items_processed))
     endfunction
 
@@ -464,3 +467,12 @@ module tb_top;
   end
 
 endmodule
+
+// SIM: [RNTST] Running test sequencer_features_test...
+// SIM: [TEST] --- Test 2: Lock/unlock ---
+// SIM: [TEST] --- Test 3: Grab/ungrab ---
+// SIM: [TEST] === Sequencer Features Test Completed ===
+// SIM: [TEST] Total items processed by driver: 8
+// SIM: [TEST] TEST PASSED
+// SIM-NOT: UVM_ERROR
+// SIM-NOT: UVM_FATAL

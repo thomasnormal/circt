@@ -32603,23 +32603,28 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_ptr, element_size)
     if (calleeName == "__moore_queue_push_back") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
 
         if (queueAddr != 0 && elemSize > 0) {
           uint64_t queueOffset = 0;
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
-          if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->size) {
+          auto *queueBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
-            // Read from the correct offset within the block
-            for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
-            for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
+            // Treat uninitialized queue storage as empty.
+            if (queueBlock->initialized) {
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                queueLen |= static_cast<int64_t>(
+                                queueBlock->bytes()[queueOffset + 8 + i])
+                            << (i * 8);
+            }
 
             // Sanity check queue length
             if (queueLen < 0 || queueLen > 100000) {
@@ -32670,12 +32675,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // Re-find the queue block after mallocBlocks mutation
             uint64_t queueOffset2 = 0;
             auto *queueBlock2 = findMemoryBlockByAddress(queueAddr, procId, &queueOffset2);
-            if (queueBlock2 && queueBlock2->initialized &&
-                queueOffset2 + 16 <= queueBlock2->size) {
+            if (queueBlock2 && queueOffset2 + 16 <= queueBlock2->size) {
               for (int i = 0; i < 8; ++i)
                 queueBlock2->bytes()[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
               for (int i = 0; i < 8; ++i)
                 queueBlock2->bytes()[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+              queueBlock2->initialized = true;
             }
 
             LLVM_DEBUG(llvm::dbgs() << "  __moore_queue_push_back: queueAddr=0x"
@@ -32701,7 +32706,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr) -> i64
     if (calleeName == "__moore_queue_size") {
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int64_t queueLen = 0;
 
@@ -32733,7 +32738,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr)
     if (calleeName == "__moore_queue_clear") {
       if (callOp.getNumOperands() >= 1) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
 
         if (queueAddr != 0) {
@@ -32755,22 +32760,27 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_size) -> element_value
     if (calleeName == "__moore_queue_pop_back") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t result = 0;
 
         if (queueAddr != 0 && elemSize > 0) {
           uint64_t queueOffset = 0;
-          auto *queueBlock = findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
-          if (queueBlock && queueBlock->initialized &&
-              queueOffset + 16 <= queueBlock->size) {
+          auto *queueBlock =
+              findMemoryBlockByAddress(queueAddr, procId, &queueOffset);
+          if (queueBlock && queueOffset + 16 <= queueBlock->size) {
             uint64_t dataPtr = 0;
             int64_t queueLen = 0;
-            for (int i = 0; i < 8; ++i)
-              dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i]) << (i * 8);
-            for (int i = 0; i < 8; ++i)
-              queueLen |= static_cast<int64_t>(queueBlock->bytes()[queueOffset + 8 + i]) << (i * 8);
+            if (queueBlock->initialized) {
+              for (int i = 0; i < 8; ++i)
+                dataPtr |= static_cast<uint64_t>(queueBlock->bytes()[queueOffset + i])
+                           << (i * 8);
+              for (int i = 0; i < 8; ++i)
+                queueLen |= static_cast<int64_t>(
+                                queueBlock->bytes()[queueOffset + 8 + i])
+                            << (i * 8);
+            }
 
             if (queueLen > 0 && queueLen <= 100000 && dataPtr != 0) {
               // Read the last element
@@ -32805,7 +32815,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_size) -> element_value
     if (calleeName == "__moore_queue_pop_front") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(1)).getUInt64());
         uint64_t result = 0;
@@ -32863,7 +32873,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, element_ptr, element_size)
     if (calleeName == "__moore_queue_push_front") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t elemAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
         int64_t elemSize = static_cast<int64_t>(getValue(procId, callOp.getOperand(2)).getUInt64());
@@ -32927,13 +32937,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             // any pointer invalidation issues.
             uint64_t queueOffset2 = 0;
             auto *queueBlock2 = findMemoryBlockByAddress(queueAddr, procId, &queueOffset2);
-            if (queueBlock2 && queueBlock2->initialized &&
-                queueOffset2 + 16 <= queueBlock2->size) {
+            if (queueBlock2 && queueOffset2 + 16 <= queueBlock2->size) {
               // Update queue struct (at the correct offset)
               for (int i = 0; i < 8; ++i)
                 queueBlock2->bytes()[queueOffset2 + i] = static_cast<uint8_t>((newDataAddr >> (i * 8)) & 0xFF);
               for (int i = 0; i < 8; ++i)
                 queueBlock2->bytes()[queueOffset2 + 8 + i] = static_cast<uint8_t>((newLen >> (i * 8)) & 0xFF);
+              queueBlock2->initialized = true;
             }
 
             LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_queue_push_front("
@@ -37068,7 +37078,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, index: i32, element_size: i64) -> void
     if (calleeName == "__moore_queue_delete_index") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int32_t index = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
@@ -37147,7 +37157,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr, index: i32, element_ptr, element_size: i64) -> void
     if (calleeName == "__moore_queue_insert") {
       if (callOp.getNumOperands() >= 4) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         int32_t index = static_cast<int32_t>(
             getValue(procId, callOp.getOperand(1)).getUInt64());
@@ -37723,7 +37733,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr: ptr, result_ptr: ptr, elem_size: i64) -> void
     if (calleeName == "__moore_queue_pop_back_ptr") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t resultAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
@@ -37802,7 +37812,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (queue_ptr: ptr, result_ptr: ptr, elem_size: i64) -> void
     if (calleeName == "__moore_queue_pop_front_ptr") {
       if (callOp.getNumOperands() >= 3) {
-        uint64_t queueAddr = canonicalizeUvmObjectAddress(
+        uint64_t queueAddr = resolveQueueStructAddress(
             procId, getValue(procId, callOp.getOperand(0)).getUInt64());
         uint64_t resultAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();

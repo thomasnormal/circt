@@ -3464,6 +3464,12 @@ private:
   /// This is a structural normalization (no dynamic function calls).
   uint64_t canonicalizeUvmObjectAddress(ProcessId procId, uint64_t addr);
 
+  /// Resolve queue struct pointers used by __moore_queue_* helpers.
+  /// Queue pointers are frequently interior addresses (class fields), so this
+  /// keeps those raw addresses when valid and only falls back to canonicalized
+  /// or tag-cleared variants when needed.
+  uint64_t resolveQueueStructAddress(ProcessId procId, uint64_t rawAddr);
+
   /// Normalize pointer arguments crossing interpreted -> native func.call.
   /// This resolves interpreter virtual addresses to host pointers and clears
   /// low-bit object tags for UVM-style object-method calls.

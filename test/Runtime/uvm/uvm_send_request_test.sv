@@ -6,7 +6,9 @@
 // called m_sequencer.send_request() but m_sequencer was declared as
 // uvm_sequencer_base which didn't have the send_request method.
 //
-// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm %s
+// RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 2>&1 | FileCheck %s --check-prefix=SIM
 
 `timescale 1ns/1ps
 
@@ -194,3 +196,10 @@ module tb_top;
   end
 
 endmodule
+
+// SIM: [RNTST] Running test send_request_test...
+// SIM: [TEST] Test 1: PASSED
+// SIM: [TEST] Test 2: PASSED
+// SIM: [TEST] All send_request tests PASSED
+// SIM-NOT: UVM_ERROR
+// SIM-NOT: UVM_FATAL
