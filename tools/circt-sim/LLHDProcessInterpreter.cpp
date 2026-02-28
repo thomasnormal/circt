@@ -28918,6 +28918,17 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
   LLVM_DEBUG(llvm::dbgs() << "  Interpreting moore.wait_event\n");
 
   auto &state = processStates[procId];
+  auto isPointerCarrierSignal = [&](SignalId sigId) {
+    if (sigId == 0)
+      return false;
+    auto tyIt = signalIdToType.find(sigId);
+    if (tyIt == signalIdToType.end())
+      return false;
+    Type ty = tyIt->second;
+    if (auto refTy = dyn_cast<llhd::RefType>(ty))
+      ty = refTy.getNestedType();
+    return isa<LLVM::LLVMPointerType>(ty);
+  };
   auto addDetectEdgeToWaitList = [&](SensitivityList &list, SignalId sigId,
                                      moore::Edge edge) {
     switch (edge) {
@@ -28973,7 +28984,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
     if (!hasDirectResolvedWaitList)
       return;
     SignalId sigId = resolveSignalId(detectOp.getInput());
-    if (sigId == 0) {
+    if (sigId == 0 || isPointerCarrierSignal(sigId)) {
       hasDirectResolvedWaitList = false;
       return;
     }
@@ -29099,7 +29110,7 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 
       // Check if this value is a signal reference.
       SignalId sigId = resolveSignalId(value);
-      if (sigId != 0)
+      if (sigId != 0 && !isPointerCarrierSignal(sigId))
         return sigId;
 
       // Try to trace through the defining operation
@@ -31975,6 +31986,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           }
         };
         EdgeType waitEdge = edgeKindToSensitivity(edgeKind);
+        auto isPointerCarrierSignal = [&](SignalId sigId) {
+          if (sigId == 0)
+            return false;
+          auto tyIt = signalIdToType.find(sigId);
+          if (tyIt == signalIdToType.end())
+            return false;
+          Type ty = tyIt->second;
+          if (auto refTy = dyn_cast<llhd::RefType>(ty))
+            ty = refTy.getNestedType();
+          return isa<LLVM::LLVMPointerType>(ty);
+        };
 
         auto resolveSignalFromValue = [&](Value seed) -> SignalId {
           llvm::SmallVector<Value, 8> stack;
@@ -31986,8 +32008,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (!value || !seen.insert(value).second)
               continue;
 
-            if (SignalId sigId = resolveSignalId(value); sigId != 0)
-              return sigId;
+            if (SignalId sigId = resolveSignalId(value); sigId != 0) {
+              if (!isPointerCarrierSignal(sigId))
+                return sigId;
+            }
 
             Operation *defOp = value.getDefiningOp();
             if (!defOp)

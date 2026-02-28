@@ -1,5 +1,33 @@
 # Project Gaps Engineering Log
 
+## 2026-02-28
+
+### circt-sim: wake automatic-task `@(posedge vif.clk)` on interface-backed clocks
+- Repro:
+  - Automatic task captures module-scope interface and waits on `@(posedge vif.clk)`.
+  - Simulation advanced to `--max-time` without reaching code after the wait.
+- Root cause:
+  - `interpretMooreWaitEvent` could resolve detect-event sensitivity to a
+    pointer-carrier signal (`!llvm.ptr` path) instead of the actual field/clock
+    signal. That signal does not edge-toggle, so the waiting task never woke.
+- Fix:
+  - In wait-event signal resolution paths, treat pointer-carrier signals as
+    non-observable for edge waits, and continue to runtime field/memory
+    resolution.
+  - Applied both in:
+    - `interpretMooreWaitEvent` (`moore.wait_event`)
+    - `__moore_wait_event` call handler path.
+- Tests:
+  - Added `test/Tools/circt-sim/task-automatic-interface-posedge-wakeup.sv`.
+  - Built `circt-sim` in standalone worktree build and validated:
+    - new regression: PASS
+    - existing runtime regressions still PASS:
+      - `uvm-constraint-mode-sequence-item-runtime.sv`
+      - `uvm-run-phase-driver-blocking-cleanup.sv`
+      - `uvm-run-phase-forever-cleanup.sv`
+      - `uvm-factory-type-override-by-type-runtime.sv`
+  - Re-ran the original minimal reproducer: now prints `PASS` (no max-time exit).
+
 ## 2026-02-27
 
 ### ImportVerilog: unconnected inout instance port
