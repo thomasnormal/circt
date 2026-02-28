@@ -9648,3 +9648,21 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/config_db_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequence_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/config_db_test.sv`
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/static-property-fixes.sv`
+
+## 2026-02-28 - ImportVerilog associative-array semantic-depth upgrade
+
+- realization:
+  - `test/Conversion/ImportVerilog/assoc_arrays.sv` had broad syntax/lowering
+    coverage but no end-to-end runtime assertion for key method semantics.
+
+- implemented:
+  - added semantic `RUN` lines (`--ir-hw` + `circt-sim`) and a runtime top
+    module `AssocArraySemanticTop` covering:
+    - `first/next/last/prev` ordering behavior,
+    - `exists`, `delete(key)`, and `delete()` behavior,
+    - wildcard associative array read/modify/write,
+    - string-key associative array write/read.
+  - added `SIM_PASS`/`SIM_FAIL` check patterns.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/assoc_arrays.sv`

@@ -1,6 +1,9 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
+// RUN: circt-verilog --ir-hw %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top AssocArraySemanticTop 2>&1 | FileCheck %s --check-prefix=SIM
 // REQUIRES: slang
+// REQUIRES: circt-sim
 
 // Internal issue in Slang v3 about jump depending on uninitialised value.
 // UNSUPPORTED: valgrind
@@ -436,3 +439,74 @@ module AssocArrayDefaultZeroTest;
         $display("%d", aa_int[42]);
     end
 endmodule
+
+module AssocArraySemanticTop;
+    int aa[int];
+    int key;
+    int val;
+    int wild[*];
+    int cfg[string];
+
+    initial begin
+        aa[30] = 300;
+        aa[10] = 100;
+        aa[20] = 200;
+
+        if (!aa.first(key) || key != 10) begin
+            $display("SIM_FAIL first/ordering mismatch");
+            $finish;
+        end
+
+        if (!aa.next(key) || key != 20) begin
+            $display("SIM_FAIL next mismatch");
+            $finish;
+        end
+
+        if (!aa.last(key) || key != 30) begin
+            $display("SIM_FAIL last mismatch");
+            $finish;
+        end
+
+        if (!aa.prev(key) || key != 20) begin
+            $display("SIM_FAIL prev mismatch");
+            $finish;
+        end
+
+        if (!aa.exists(10) || aa.exists(99)) begin
+            $display("SIM_FAIL exists mismatch");
+            $finish;
+        end
+
+        aa.delete(20);
+        if (aa.exists(20)) begin
+            $display("SIM_FAIL delete(key) mismatch");
+            $finish;
+        end
+
+        aa.delete();
+        if (aa.first(key)) begin
+            $display("SIM_FAIL delete(all) mismatch");
+            $finish;
+        end
+
+        wild[1] = 100;
+        wild[1] = wild[1] + 1;
+        if (wild[1] != 101) begin
+            $display("SIM_FAIL wildcard assoc mismatch");
+            $finish;
+        end
+
+        cfg["width"] = 32;
+        val = cfg["width"];
+        if (val != 32) begin
+            $display("SIM_FAIL string-key assoc mismatch");
+            $finish;
+        end
+
+        $display("SIM_PASS associative array semantics");
+        $finish;
+    end
+endmodule
+
+// SIM: SIM_PASS associative array semantics
+// SIM-NOT: SIM_FAIL
