@@ -395,7 +395,7 @@ Lenient policy also affects `circt-bmc` arguments here, which is correct but aga
 Adding `--drop-unsupported-sva` in lenient mode is a real semantic compromise that can hide assertion coverage holes if not tracked. The missing behavior is robust accountability for dropped properties during result interpretation. The fix is to require per-case drop accounting in outputs and optionally fail when dropped-SVA count exceeds configured thresholds.
 
 ### 131. `lib/Runtime/MooreRuntime.cpp:2481`
-This TODO is a genuine runtime capability gap: `__moore_wait_condition` is a placeholder and does not integrate with an actual simulation scheduler to suspend/resume processes. What is missing is simulation-aware blocking semantics tied to signal/event re-evaluation. The fix is to wire this call into the process scheduler/event queue infrastructure and add temporal regression tests proving conditions block and wake correctly.
+Status update (2026-02-28): this gap is closed. `__moore_wait_condition` now has scheduler-assisted poll-callback support in runtime, `circt-sim` wires callback install/clear in simulation run lifecycle, and regression coverage includes wait-condition poll callback lifecycle tracing plus wait-condition/UVM execution checks.
 
 ### 132. `lib/Runtime/MooreRuntime.cpp:12227`
 Array-element signal lookup currently strips indices and returns the base signal handle with a TODO for index calculation, so element-precise access is not implemented. What is missing is mapping from parsed index vectors to actual element offsets/handles for packed/unpacked arrays. The fix is to implement index resolution against registered signal metadata and add tests for multidimensional and out-of-range cases.
@@ -1727,7 +1727,7 @@ Circuit-attribute merging is incomplete beyond current annotation handling (e.g.
 Current inferred-reset port insertion logic is described as brittle and error-prone. What is missing is a robust strategy for inferred-reset port management across modules/instantiations. The fix is to simplify by always adding inferred-reset port with optional reuse optimization.
 
 ### 575. `test/Tools/circt-sim/syscall-ungetc.sv:2`
-This TODO captures a concrete syscall semantics bug: `$ungetc` returns wrong character, so pushback behavior is incorrect. What is missing is correct file pushback state handling. The fix is to repair pushback logic and retain this regression test.
+Status update (2026-02-28): this gap is closed and stale in this workspace. `$ungetc` pushback semantics are correct (`A` is re-read after pushback), and the regression now also checks `$ungetc` return value (`65`) in addition to replayed character behavior.
 
 ### 576. `lib/Dialect/Calyx/Export/CalyxEmitter.cpp:974`
 `convertToDouble` here is regular float emission code and not an unresolved TODO/FIXME marker. This is a scanner false positive. The fix is to ignore such generic conversion identifiers in debt scans.
@@ -2987,7 +2987,7 @@ Same as entry 992: leaving unimplemented slots null with runtime warning is desc
 Placement walk currently performs filter-and-optional-sort because backing data structures are not order-optimized. What is missing is indexed/sorted storage for efficient bounded traversal. The fix is data-structure redesign for ordered queries.
 
 ### 995. `test/Tools/circt-sim/syscall-ungetc.sv:2`
-This test captures a concrete syscall bug: `$ungetc` pushback semantics are incorrect (`B` observed instead of pushed-back `A`). What is missing is correct file stream pushback behavior in circt-sim runtime. The fix is runtime fix plus regression asserting repeated read returns pushed character.
+Status update (2026-02-28): this gap is closed and stale in this workspace. Current runtime behavior correctly implements `$ungetc` pushback semantics, and the regression verifies both pushback replay and return code.
 
 ### 996. `lib/Dialect/Sim/Transforms/ProceduralizeSim.cpp:106`
 Proceduralization rejects format strings passed via block arguments. What is missing is support for argument-provided format fragments in triggered/print lowering. The fix is to model block-argument format sources or pre-materialize literals/fragments before this pass.

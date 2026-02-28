@@ -2,7 +2,7 @@
 // Regression: $ungetc must push back the last read character.
 // Test $ungetc — push character back to file stream
 module top;
-  integer fd, c;
+  integer fd, c, r;
 
   initial begin
     fd = $fopen("ungetc_test.dat", "w");
@@ -15,7 +15,9 @@ module top;
     $display("first=%0d", c);  // 'A' = 65
 
     // Push 'A' back
-    $ungetc(c, fd);
+    r = $ungetc(c, fd);
+    // CHECK: ungetc_ret=65
+    $display("ungetc_ret=%0d", r);
 
     // Read again — should get 'A' again
     c = $fgetc(fd);

@@ -1427,3 +1427,21 @@
   - Focused wait-condition + UVM checks:
     - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/wait-condition-*.mlir test/Tools/circt-sim/fork-execute-phase-monitor-intercept-single-shot.mlir test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv -j 8`
     - result: 14/14 passed.
+
+### Scoped gaps cleanup: retire stale wait_condition + ungetc entries
+- Repro:
+  - Manual writeup still marked these as active gaps:
+    - 131 (`__moore_wait_condition` placeholder/lifecycle gap),
+    - 575 and 995 (`$ungetc` semantics bug).
+  - In-tree behavior now differs:
+    - wait_condition callback lifecycle regression is green,
+    - `syscall-ungetc.sv` is green.
+- Fix:
+  - Updated writeup entries in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`:
+    - 131 -> closed status with runtime + `circt-sim` lifecycle wiring context.
+    - 575/995 -> closed/stale status for `$ungetc`.
+  - Strengthened `syscall-ungetc` regression to also check return value:
+    - `ungetc_ret=65`.
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/syscall-ungetc.sv`
+  - result: 1/1 passed.
