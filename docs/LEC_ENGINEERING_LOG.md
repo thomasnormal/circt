@@ -29,3 +29,41 @@
     - total wall ~99.26s
     - `Run SMT-LIB via z3` ~0.007s
     - dominant passes include `FlattenModules`, `Canonicalizer`, `Mem2RegPass`.
+
+## 2026-02-28 - Connectivity LEC bytecode frontend path + fallback
+
+- realization:
+  - For real `connectivity::ast_clkmgr.csv:AST_CLK_ES_IN`, text MLIR parse
+    was still a large fixed cost in each `circt-lec` invocation.
+  - A/B replay (`circt-lec` direct, same case):
+    - text `.mlir`: total ~98.29s, parse ~13.46s
+    - bytecode `.mlirbc`: total ~87.16s, parse ~6.31s
+  - In end-to-end runner replay with bytecode enabled:
+    - total `circt-lec` ~82.81s, parse ~3.12s, `PASS ... EQ` (Z3 path).
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-opt-bytecode-default.test`
+    to require default `circt-opt --emit-bytecode` and `.mlirbc` input to
+    `circt-lec`.
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-opt-bytecode-auto-fallback.test`
+    to require auto fallback when `--emit-bytecode` is unsupported.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - new env knob `LEC_OPT_EMIT_BYTECODE_MODE` (`auto|on|off`, default `auto`)
+    - default path emits `connectivity.core.mlirbc` from `circt-opt`
+    - `auto` fallback: on `--emit-bytecode` unknown-option failure, retry
+      `circt-opt` without `--emit-bytecode`
+    - per-case mirror log for fallback diagnostics:
+      `circt-opt.emit-bytecode.log`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    26/26 pass.
+  - real OpenTitan replay:
+    `connectivity::ast_clkmgr.csv:AST_CLK_ES_IN` -> `PASS ... EQ` with
+    `.mlirbc` shared core input.

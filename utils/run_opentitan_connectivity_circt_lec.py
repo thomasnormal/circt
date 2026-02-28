@@ -869,6 +869,17 @@ def is_temporal_approx_retryable_failure(log_text: str) -> bool:
     )
 
 
+def is_opt_emit_bytecode_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return (
+        "--emit-bytecode" in low
+        and (
+            "unknown command line argument" in low
+            or "unknown argument" in low
+        )
+    )
+
+
 def normalize_drop_reason(line: str) -> str:
     line = line.replace("\t", " ").strip()
     line = re.sub(r"^[^:\n]+:\d+(?::\d+)?:\s*", "", line)
@@ -1395,6 +1406,16 @@ def main() -> int:
                 f"{verify_each_mode} (expected auto|on|off)"
             )
         )
+    opt_emit_bytecode_mode = os.environ.get(
+        "LEC_OPT_EMIT_BYTECODE_MODE", "auto"
+    ).strip().lower()
+    if opt_emit_bytecode_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_OPT_EMIT_BYTECODE_MODE: "
+                f"{opt_emit_bytecode_mode} (expected auto|on|off)"
+            )
+        )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -1670,6 +1691,7 @@ def main() -> int:
                 shared_opt_log = shared_dir / "circt-opt.log"
                 shared_moore_mlir = shared_dir / "connectivity.moore.mlir"
                 shared_core_mlir = shared_dir / "connectivity.core.mlir"
+                shared_core_mlirbc = shared_dir / "connectivity.core.mlirbc"
                 shared_checker_sv = checks_dir / f"__circt_connectivity_batch_{batch_index}.sv"
                 shared_missing_timescale_log = (
                     shared_dir / "circt-verilog.missing-timescale.log"
@@ -1679,6 +1701,9 @@ def main() -> int:
                 )
                 shared_resource_guard_log = (
                     shared_dir / "circt-verilog.resource-guard-rss.log"
+                )
+                shared_opt_emit_bytecode_log = (
+                    shared_dir / "circt-opt.emit-bytecode.log"
                 )
 
                 with shared_checker_sv.open("w", encoding="utf-8") as handle:
@@ -1691,6 +1716,10 @@ def main() -> int:
                 batch_timescale_override = verilog_timescale_override
                 batch_allow_multi_driver = verilog_allow_multi_always_comb_drivers
                 batch_verilog_max_rss_mb: int | None = None
+                batch_opt_emit_bytecode = opt_emit_bytecode_mode != "off"
+                shared_core_input = (
+                    shared_core_mlirbc if batch_opt_emit_bytecode else shared_core_mlir
+                )
 
                 def build_shared_verilog_cmd(
                     timescale_override: str | None,
@@ -1727,22 +1756,33 @@ def main() -> int:
                     batch_allow_multi_driver,
                     batch_verilog_max_rss_mb,
                 )
-                shared_opt_cmd = [
-                    circt_opt,
-                    str(shared_moore_mlir),
-                    "--moore-lower-concatref",
-                    "--convert-moore-to-core",
-                    "--mlir-disable-threading",
-                    "-o",
-                    str(shared_core_mlir),
-                ]
-                shared_opt_cmd += circt_opt_args
+                def build_shared_opt_cmd(emit_bytecode: bool) -> list[str]:
+                    output_path = shared_core_mlirbc if emit_bytecode else shared_core_mlir
+                    cmd = [
+                        circt_opt,
+                        str(shared_moore_mlir),
+                        "--moore-lower-concatref",
+                        "--convert-moore-to-core",
+                        "--mlir-disable-threading",
+                    ]
+                    if emit_bytecode:
+                        cmd.append("--emit-bytecode")
+                    cmd += ["-o", str(output_path)]
+                    cmd += circt_opt_args
+                    return cmd
+
+                shared_opt_cmd = build_shared_opt_cmd(batch_opt_emit_bytecode)
 
                 def mirror_shared_frontend_logs(case_dir: Path) -> None:
                     if shared_verilog_log.exists():
                         shutil.copy2(shared_verilog_log, case_dir / "circt-verilog.log")
                     if shared_opt_log.exists():
                         shutil.copy2(shared_opt_log, case_dir / "circt-opt.log")
+                    if shared_opt_emit_bytecode_log.exists():
+                        shutil.copy2(
+                            shared_opt_emit_bytecode_log,
+                            case_dir / "circt-opt.emit-bytecode.log",
+                        )
                     if shared_missing_timescale_log.exists():
                         shutil.copy2(
                             shared_missing_timescale_log,
@@ -1871,7 +1911,47 @@ def main() -> int:
                             append_drop_reasons(case, shared_reasons)
                     strip_vpi_attributes_for_opt(shared_moore_mlir)
                     stage = "opt"
-                    run_and_log(shared_opt_cmd, shared_opt_log, timeout_secs)
+                    attempted_opt_emit_bytecode_retry = False
+                    while True:
+                        try:
+                            run_and_log(shared_opt_cmd, shared_opt_log, timeout_secs)
+                            shared_core_input = (
+                                shared_core_mlirbc
+                                if batch_opt_emit_bytecode
+                                else shared_core_mlir
+                            )
+                            break
+                        except subprocess.CalledProcessError:
+                            shared_opt_log_text = (
+                                shared_opt_log.read_text(encoding="utf-8")
+                                if shared_opt_log.is_file()
+                                else ""
+                            )
+                            if (
+                                opt_emit_bytecode_mode == "auto"
+                                and batch_opt_emit_bytecode
+                                and not attempted_opt_emit_bytecode_retry
+                                and is_opt_emit_bytecode_retryable_failure(
+                                    shared_opt_log_text
+                                )
+                            ):
+                                shutil.copy2(
+                                    shared_opt_log, shared_opt_emit_bytecode_log
+                                )
+                                batch_opt_emit_bytecode = False
+                                attempted_opt_emit_bytecode_retry = True
+                                print(
+                                    "opentitan connectivity lec: retrying circt-opt "
+                                    "without --emit-bytecode for "
+                                    f"batch={batch_index}",
+                                    file=sys.stderr,
+                                    flush=True,
+                                )
+                                shared_opt_cmd = build_shared_opt_cmd(
+                                    batch_opt_emit_bytecode
+                                )
+                                continue
+                            raise
                     frontend_ok = True
                 except subprocess.TimeoutExpired:
                     if len(batch_cases) > 1:
@@ -1943,7 +2023,7 @@ def main() -> int:
                     def build_lec_cmd(enable_temporal_approx: bool) -> list[str]:
                         cmd = [
                             circt_lec,
-                            str(shared_core_mlir),
+                            str(shared_core_input),
                             f"-c1={case.ref_module}",
                             f"-c2={case.impl_module}",
                         ]
