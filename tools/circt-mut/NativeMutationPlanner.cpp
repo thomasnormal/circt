@@ -1211,7 +1211,9 @@ static void collectIncDecSites(StringRef text, StringRef token,
 
 static void collectCompoundAssignSites(StringRef text, StringRef token,
                                        ArrayRef<uint8_t> codeMask,
-                                       SmallVectorImpl<SiteInfo> &sites) {
+                                       SmallVectorImpl<SiteInfo> &sites,
+                                       bool skipRhsZeroEquivalent = false,
+                                       bool skipRhsOneEquivalent = false) {
   assert((token == "+=" || token == "-=" || token == "*=" || token == "/=" ||
           token == "%=" || token == "<<=" || token == ">>=" || token == ">>>=" ||
           token == "&=" || token == "|=") &&
@@ -1253,6 +1255,12 @@ static void collectCompoundAssignSites(StringRef text, StringRef token,
 
     size_t stmtStart = findStatementStart(text, codeMask, i);
     if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
+      continue;
+    if (skipRhsZeroEquivalent &&
+        rhsLiteralEquals(text, codeMask, i + token.size() - 1, 0))
+      continue;
+    if (skipRhsOneEquivalent &&
+        rhsLiteralEquals(text, codeMask, i + token.size() - 1, 1))
       continue;
 
     sites.push_back({i});
@@ -3377,19 +3385,25 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "PLUS_EQ_TO_MINUS_EQ") {
-    collectCompoundAssignSites(designText, "+=", codeMask, sites);
+    collectCompoundAssignSites(designText, "+=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "MINUS_EQ_TO_PLUS_EQ") {
-    collectCompoundAssignSites(designText, "-=", codeMask, sites);
+    collectCompoundAssignSites(designText, "-=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "MUL_EQ_TO_DIV_EQ") {
-    collectCompoundAssignSites(designText, "*=", codeMask, sites);
+    collectCompoundAssignSites(designText, "*=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/false,
+                               /*skipRhsOneEquivalent=*/true);
     return;
   }
   if (op == "DIV_EQ_TO_MUL_EQ") {
-    collectCompoundAssignSites(designText, "/=", codeMask, sites);
+    collectCompoundAssignSites(designText, "/=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/false,
+                               /*skipRhsOneEquivalent=*/true);
     return;
   }
   if (op == "MOD_EQ_TO_DIV_EQ") {
@@ -3401,19 +3415,23 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "SHL_EQ_TO_SHR_EQ") {
-    collectCompoundAssignSites(designText, "<<=", codeMask, sites);
+    collectCompoundAssignSites(designText, "<<=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "SHR_EQ_TO_SHL_EQ") {
-    collectCompoundAssignSites(designText, ">>=", codeMask, sites);
+    collectCompoundAssignSites(designText, ">>=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "SHR_EQ_TO_ASHR_EQ") {
-    collectCompoundAssignSites(designText, ">>=", codeMask, sites);
+    collectCompoundAssignSites(designText, ">>=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "ASHR_EQ_TO_SHR_EQ") {
-    collectCompoundAssignSites(designText, ">>>=", codeMask, sites);
+    collectCompoundAssignSites(designText, ">>>=", codeMask, sites,
+                               /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "BAND_EQ_TO_BOR_EQ") {

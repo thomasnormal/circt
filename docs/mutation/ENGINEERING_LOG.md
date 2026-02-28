@@ -1941,6 +1941,11 @@
 - changes made:
   - Updated `tools/circt-mut/NativeMutationPlanner.cpp` site collectors to prune
     neutral-element equivalent sites for the transforms above.
+  - Extended pruning to compound assignment transforms:
+    - `PLUS_EQ_TO_MINUS_EQ` / `MINUS_EQ_TO_PLUS_EQ` skip RHS `0`
+    - `MUL_EQ_TO_DIV_EQ` / `DIV_EQ_TO_MUL_EQ` skip RHS `1`
+    - `SHL_EQ_TO_SHR_EQ`, `SHR_EQ_TO_SHL_EQ`,
+      `SHR_EQ_TO_ASHR_EQ`, `ASHR_EQ_TO_SHR_EQ` skip RHS `0`
   - Added reusable literal parsing helpers used by arithmetic collectors:
     - non-negative Verilog literal value parsing (supports sized/base literals)
     - RHS literal extraction for binary operators
@@ -1951,6 +1956,8 @@
   - `test/Tools/native-mutation-plan-add-to-sub-skip-rhs-zero.test`
   - `test/Tools/native-mutation-plan-sub-to-add-skip-rhs-zero.test`
   - `test/Tools/native-mutation-plan-mul-div-skip-rhs-one.test`
+  - `test/Tools/native-mutation-plan-plus-eq-skip-rhs-zero.test`
+  - `test/Tools/native-mutation-plan-mul-div-shift-eq-skip-neutrals.test`
 
 - validation:
   - build:
@@ -1962,3 +1969,5 @@
       - result: `ok=24 mismatch=0 fail=0`
     - workspace: `/tmp/cov_intro_seeded_neutral_filter_recheck_1772305316`
       - result: `ok=12 mismatch=0`
+    - workspace: `/tmp/cov_intro_seeded_compound_neutral_recheck_1772305463`
+      - result: `ok=16 mismatch=0`

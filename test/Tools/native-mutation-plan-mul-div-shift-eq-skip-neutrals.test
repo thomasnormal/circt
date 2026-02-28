@@ -1,0 +1,46 @@
+// REQUIRES: native_tools
+//
+// Skip equivalent compound rewrites on neutral RHS:
+// - *=1 and /=1 for MUL_EQ_TO_DIV_EQ / DIV_EQ_TO_MUL_EQ
+// - <<=/>>=/>>>=0 for shift assignment rewrites
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic clk, input logic [7:0] b, output logic [7:0] m0, m1, m2, d0, d1, d2, s0, s1, s2, a0, a1, a2);
+// RUN:   always_ff @(posedge clk) begin
+// RUN:     m0 *= 1;
+// RUN:     m1 *= 2;
+// RUN:     m2 *= b;
+// RUN:     d0 /= 1;
+// RUN:     d1 /= 2;
+// RUN:     d2 /= b;
+// RUN:     s0 <<= 0;
+// RUN:     s1 <<= 1;
+// RUN:     s2 <<= b;
+// RUN:     a0 >>>= 0;
+// RUN:     a1 >>>= 1;
+// RUN:     a2 >>>= b;
+// RUN:   end
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops MUL_EQ_TO_DIV_EQ --out %t/mul_eq.txt
+// RUN: FileCheck %s --check-prefix=MULEQ < %t/mul_eq.txt
+// RUN: not grep -q '@3' %t/mul_eq.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops DIV_EQ_TO_MUL_EQ --out %t/div_eq.txt
+// RUN: FileCheck %s --check-prefix=DIVEQ < %t/div_eq.txt
+// RUN: not grep -q '@3' %t/div_eq.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops SHL_EQ_TO_SHR_EQ --out %t/shl_eq.txt
+// RUN: FileCheck %s --check-prefix=SHLEQ < %t/shl_eq.txt
+// RUN: not grep -q '@3' %t/shl_eq.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops ASHR_EQ_TO_SHR_EQ --out %t/ashr_eq.txt
+// RUN: FileCheck %s --check-prefix=ASHREQ < %t/ashr_eq.txt
+// RUN: not grep -q '@3' %t/ashr_eq.txt
+
+// MULEQ: 1 NATIVE_MUL_EQ_TO_DIV_EQ@1
+// MULEQ: 2 NATIVE_MUL_EQ_TO_DIV_EQ@2
+// DIVEQ: 1 NATIVE_DIV_EQ_TO_MUL_EQ@1
+// DIVEQ: 2 NATIVE_DIV_EQ_TO_MUL_EQ@2
+// SHLEQ: 1 NATIVE_SHL_EQ_TO_SHR_EQ@1
+// SHLEQ: 2 NATIVE_SHL_EQ_TO_SHR_EQ@2
+// ASHREQ: 1 NATIVE_ASHR_EQ_TO_SHR_EQ@1
+// ASHREQ: 2 NATIVE_ASHR_EQ_TO_SHR_EQ@2
+

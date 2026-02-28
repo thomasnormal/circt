@@ -1,0 +1,27 @@
+// REQUIRES: native_tools
+//
+// Skip equivalent plus/minus compound assignment rewrites on neutral zero.
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic clk, input logic [7:0] a, b, output logic [7:0] y0, y1, y2, y3, y4, y5);
+// RUN:   always_ff @(posedge clk) begin
+// RUN:     y0 += 0;
+// RUN:     y1 += 1;
+// RUN:     y2 += b;
+// RUN:     y3 -= 0;
+// RUN:     y4 -= 1;
+// RUN:     y5 -= b;
+// RUN:   end
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops PLUS_EQ_TO_MINUS_EQ --out %t/plus.txt
+// RUN: FileCheck %s --check-prefix=PLUS < %t/plus.txt
+// RUN: not grep -q '@3' %t/plus.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops MINUS_EQ_TO_PLUS_EQ --out %t/minus.txt
+// RUN: FileCheck %s --check-prefix=MINUS < %t/minus.txt
+// RUN: not grep -q '@3' %t/minus.txt
+
+// PLUS: 1 NATIVE_PLUS_EQ_TO_MINUS_EQ@1
+// PLUS: 2 NATIVE_PLUS_EQ_TO_MINUS_EQ@2
+// MINUS: 1 NATIVE_MINUS_EQ_TO_PLUS_EQ@1
+// MINUS: 2 NATIVE_MINUS_EQ_TO_PLUS_EQ@2
