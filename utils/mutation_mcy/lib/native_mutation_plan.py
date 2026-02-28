@@ -17,6 +17,12 @@ NATIVE_OPS_ALL = [
     "AND_TO_OR",
     "OR_TO_AND",
     "XOR_TO_OR",
+    "XOR_TO_XNOR",
+    "XNOR_TO_XOR",
+    "REDAND_TO_REDOR",
+    "REDOR_TO_REDAND",
+    "REDXOR_TO_REDXNOR",
+    "REDXNOR_TO_REDXOR",
     "IF_COND_NEGATE",
     "IF_ELSE_SWAP_ARMS",
     "UNARY_NOT_DROP",
@@ -39,6 +45,12 @@ OP_PATTERNS = {
     "AND_TO_OR": r"&&",
     "OR_TO_AND": r"\|\|",
     "XOR_TO_OR": r"\^",
+    "XOR_TO_XNOR": r"\^",
+    "XNOR_TO_XOR": r"\^~|~\^",
+    "REDAND_TO_REDOR": r"&",
+    "REDOR_TO_REDAND": r"\|",
+    "REDXOR_TO_REDXNOR": r"\^",
+    "REDXNOR_TO_REDXOR": r"\^~|~\^",
     "UNARY_NOT_DROP": r"!\s*(?=[A-Za-z_(])",
     "CONST0_TO_1": r"1'b0|1'd0",
     "CONST1_TO_0": r"1'b1|1'd1",
@@ -721,6 +733,122 @@ def count_relational_comparator_token(text: str, token: str, mask: list[bool]) -
     return count
 
 
+def is_unary_operator_context(ch: str) -> bool:
+    return ch in ("(", "[", "{", ":", ";", ",", "?", "=", "+", "-", "*", "/", "%", "&", "|", "^", "!", "~", "<", ">")
+
+
+def count_unary_reduction_token(text: str, token: str, mask: list[bool]) -> int:
+    if token not in ("&", "|", "^"):
+        return 0
+    count = 0
+    n = len(text)
+    for i in range(n):
+        if not is_code_at(mask, i):
+            continue
+        if text[i] != token:
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+        nxt = text[i + 1] if i + 1 < n and is_code_at(mask, i + 1) else ""
+        if token != "^" and (prev == token or nxt == token):
+            continue
+        if prev == "=" or nxt == "=":
+            continue
+        if token == "^" and (prev == "~" or nxt == "~"):
+            continue
+        if prev == "~":
+            continue
+        prev_sig = find_prev_code_nonspace(text, mask, i)
+        if prev_sig >= 0 and not is_unary_operator_context(text[prev_sig]):
+            continue
+        next_sig = find_next_code_nonspace(text, mask, i + 1)
+        if next_sig < 0:
+            continue
+        if not is_operand_start_char(text[next_sig]):
+            continue
+        count += 1
+    return count
+
+
+def count_unary_reduction_xnor_token(text: str, mask: list[bool]) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(mask, i, i + 2):
+            i += 1
+            continue
+        if not (text.startswith("^~", i) or text.startswith("~^", i)):
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(text, mask, i)
+        if prev_sig >= 0 and not is_unary_operator_context(text[prev_sig]):
+            i += 1
+            continue
+        next_sig = find_next_code_nonspace(text, mask, i + 2)
+        if next_sig < 0 or not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        count += 1
+        i += 1
+    return count
+
+
+def count_binary_xor_token(text: str, mask: list[bool]) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        if text[i] != "^":
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+        nxt = text[i + 1] if i + 1 < n and is_code_at(mask, i + 1) else ""
+        if prev == "=" or nxt == "=":
+            i += 1
+            continue
+        if prev == "~" or nxt == "~":
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(text, mask, i)
+        next_sig = find_next_code_nonspace(text, mask, i + 1)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        count += 1
+        i += 1
+    return count
+
+
+def count_binary_xnor_token(text: str, mask: list[bool]) -> int:
+    count = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_span(mask, i, i + 2):
+            i += 1
+            continue
+        if not (text.startswith("^~", i) or text.startswith("~^", i)):
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(text, mask, i)
+        next_sig = find_next_code_nonspace(text, mask, i + 2)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(text[next_sig]):
+            i += 1
+            continue
+        count += 1
+        i += 1
+    return count
+
+
 def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> int:
     if op == "IF_COND_NEGATE":
         return count_if_cond_negate_sites(design_text, mask)
@@ -736,17 +864,30 @@ def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> 
         return count_relational_comparator_token(design_text, "<=", mask)
     if op == "GE_TO_GT":
         return count_relational_comparator_token(design_text, ">=", mask)
+    if op == "XOR_TO_XNOR":
+        return count_binary_xor_token(design_text, mask)
+    if op == "XNOR_TO_XOR":
+        return count_binary_xnor_token(design_text, mask)
+    if op == "REDAND_TO_REDOR":
+        return count_unary_reduction_token(design_text, "&", mask)
+    if op == "REDOR_TO_REDAND":
+        return count_unary_reduction_token(design_text, "|", mask)
+    if op == "REDXOR_TO_REDXNOR":
+        return count_unary_reduction_token(design_text, "^", mask)
+    if op == "REDXNOR_TO_REDXOR":
+        return count_unary_reduction_xnor_token(design_text, mask)
     pattern = OP_PATTERNS[op]
     if op in (
         "EQ_TO_NEQ",
         "NEQ_TO_EQ",
         "AND_TO_OR",
         "OR_TO_AND",
-        "XOR_TO_OR",
         "INC_TO_DEC",
         "DEC_TO_INC",
     ):
         return count_literal_token(design_text, pattern.replace("\\", ""), mask)
+    if op == "XOR_TO_OR":
+        return count_binary_xor_token(design_text, mask)
     return sum(1 for m in re.finditer(pattern, design_text) if is_code_span(mask, m.start(), m.end()))
 
 

@@ -1,0 +1,10 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [3:0] a,b,c,d,e,f, output logic y0,y1,y2,y3,y4);\n  assign y0 = &a;\n  assign y1 = |b;\n  assign y2 = ^c;\n  assign y3 = ~^d;\n  assign y4 = e ^ f;\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 220 --seed 31 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_REDAND_TO_REDOR' %t/mutations.txt
+// RUN: grep -q 'NATIVE_REDOR_TO_REDAND' %t/mutations.txt
+// RUN: grep -q 'NATIVE_REDXOR_TO_REDXNOR' %t/mutations.txt
+// RUN: grep -q 'NATIVE_REDXNOR_TO_REDXOR' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 220

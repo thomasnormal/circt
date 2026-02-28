@@ -1176,6 +1176,36 @@
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-open-range-eventually-salways-property.sv test/Conversion/ImportVerilog/sva-open-range-nexttime-property.sv test/Conversion/ImportVerilog/sva-open-range-nexttime-sequence.sv test/Conversion/ImportVerilog/sva-open-range-unary-repeat.sv`
   - result: 4/4 passed.
 
+### circt-mut: reduction-operator mutations + CIRCT-only `--top` scoping in native generate
+- Realizations / surprises:
+  - `circt-mut generate --top <module>` in CIRCT-only mode accepted the flag but did not scope native mutation planning to that module.
+  - This caused DUT+TB files to mutate testbench clock/event scaffolding, producing non-actionable mutants (timeouts/races) in parity workflows.
+  - xrun-vs-circt mismatch reproduced for `NATIVE_NEGEDGE_TO_POSEDGE@1` was a race from mutating TB stimulus edge sensitivity (same-tick active region ordering), not a stable DUT semantic bug.
+- Implemented:
+  - New native mutation fault class support for unary reductions:
+    - `REDAND_TO_REDOR`, `REDOR_TO_REDAND`, `REDXOR_TO_REDXNOR`, `REDXNOR_TO_REDXOR`
+  - Added CIRCT-only mode wiring for those ops in `circt-mut`.
+  - Added site-aware planning + mutation application support in:
+    - `utils/mutation_mcy/lib/native_mutation_plan.py`
+    - `utils/mutation_mcy/templates/native_create_mutated.py`
+  - Native CIRCT-only `generate` now treats `--top` as default module scope (when `--select` is not provided), and mode expansion drops zero-site operators for scoped module text.
+- Regression tests added:
+  - `test/Tools/circt-mut-generate-circt-only-top-default-scope.test`
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-reduction-ops.test`
+  - `test/Tools/native-mutation-plan-reduction-site-aware.test`
+  - `test/Tools/native-create-mutated-redand-to-redor-site-index.test`
+  - `test/Tools/native-create-mutated-redxor-to-redxnor-site-index.test`
+  - `test/Tools/native-create-mutated-redxnor-to-redxor-site-index.test`
+- Validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - `build_test/bin/llvm-lit -j 1 -sv $(rg --files test/Tools | rg 'circt-mut-generate-circt-only.*\\.test$|native-mutation-plan.*\\.test$|native-create-mutated-.*\\.test$' | tr '\n' ' ')`
+  - result: 118/118 passed in this slice.
+- Seeded parity runs:
+  - Non-scoped run (mutating DUT+TB): `58 match / 1 diff / 1 timeout`
+    - diff op family: `NEGEDGE_TO_POSEDGE` (TB scheduling race)
+  - Scoped run (`--top sram`, DUT-only mutation): `60 match / 0 diff / 0 timeout`
+  - Reproducibility on scoped run: two reruns both `60/0/0/0/0`.
+
 ### ImportVerilog: de-XFAIL `basic.sv` by updating stale LTL/disable-iff checks
 - Repro:
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/basic.sv`

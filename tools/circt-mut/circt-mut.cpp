@@ -14814,12 +14814,12 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   }
   if (modeName == "control") {
     appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
-               "NBA_TO_BA", "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
-               "MUX_SWAP_ARMS", "IF_COND_NEGATE", "IF_ELSE_SWAP_ARMS",
-               "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP"});
+               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
+               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
+               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
+               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
     return;
   }
   if (modeName == "stuck") {
@@ -14830,43 +14830,46 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
-               "NBA_TO_BA", "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
-               "MUX_SWAP_ARMS", "IF_COND_NEGATE", "IF_ELSE_SWAP_ARMS",
-               "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
-               "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "INC_TO_DEC", "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL",
-               "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ",
-               "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ"});
+               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
+               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
+               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
+               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+               "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
+               "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
+               "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
+               "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
+               "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ"});
     appendAll({"SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "connect") {
     appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
-               "NBA_TO_BA", "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
-               "MUX_SWAP_ARMS", "IF_COND_NEGATE", "IF_ELSE_SWAP_ARMS"});
+               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
+               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
+               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
+               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "IF_ELSE_SWAP_ARMS"});
     return;
   }
   if (modeName == "balanced" || modeName == "all") {
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
-               "NBA_TO_BA", "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
-               "MUX_SWAP_ARMS", "IF_COND_NEGATE", "IF_ELSE_SWAP_ARMS",
-               "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP", "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB",
-               "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL",
-               "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC", "DEC_TO_INC",
-               "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR",
-               "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ",
-               "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
-               "UNSIGNED_TO_SIGNED"});
+               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
+               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
+               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
+               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+               "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB", "SUB_TO_ADD",
+               "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV",
+               "UNARY_MINUS_DROP", "INC_TO_DEC", "DEC_TO_INC", "SHL_TO_SHR",
+               "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ",
+               "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ",
+               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
     return;
   }
 
@@ -14875,17 +14878,18 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
-               "NBA_TO_BA", "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
-               "MUX_SWAP_ARMS", "IF_COND_NEGATE", "IF_ELSE_SWAP_ARMS",
-               "UNARY_NOT_DROP",
-               "UNARY_BNOT_DROP", "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD",
-               "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP",
-               "INC_TO_DEC", "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL",
-               "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ",
-               "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ",
-               "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
+               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
+               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
+               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
+               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+               "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
+               "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
+               "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
+               "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
+               "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
+               "UNSIGNED_TO_SIGNED"});
     return;
   }
   if (modeName == "const0") {
@@ -14898,10 +14902,12 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
   }
   if (modeName == "cnot0" || modeName == "cnot1") {
     appendAll({"AND_TO_OR", "OR_TO_AND", "LAND_TO_BAND", "LOR_TO_BOR",
-               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "BAND_TO_BOR",
-               "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR", "BA_TO_NBA",
-               "NBA_TO_BA", "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
-               "MUX_SWAP_ARMS", "IF_COND_NEGATE", "IF_ELSE_SWAP_ARMS"});
+               "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
+               "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
+               "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
+               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "IF_ELSE_SWAP_ARMS"});
     return;
   }
 }
@@ -15344,6 +15350,14 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
     if (seenSelects.insert(select).second)
       finalSelects.push_back(select.str());
   }
+  // In CIRCT-only mode, honor --top as a default module scope when no explicit
+  // --select filtering is provided. This avoids mutating unrelated testbench
+  // scaffolding for combined DUT+TB source files.
+  if (!opts.top.empty() && finalSelects.empty()) {
+    std::string topSelect = (Twine("t:") + opts.top).str();
+    if (seenSelects.insert(topSelect).second)
+      finalSelects.push_back(std::move(topSelect));
+  }
 
   std::string filteredDesignTextStorage;
   std::string selectError;
@@ -15356,6 +15370,7 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
   StringRef mutationDesignText = designText;
   if (!filteredDesignTextStorage.empty())
     mutationDesignText = filteredDesignTextStorage;
+  bool hasScopedMutationText = !finalSelects.empty();
 
   SmallVector<std::string, 16> orderedOps;
   std::string nativePlanError;
@@ -15660,6 +15675,18 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
       for (const std::string &op : orderedOps)
         if (selectedOps.contains(op))
           filteredOps.push_back(op);
+    }
+
+    // For scoped mutation text (--top/--select), drop operators with no sites
+    // in the selected module subset to avoid generating unrelated testbench
+    // mutations.
+    if (hasScopedMutationText) {
+      SmallVector<std::string, 16> applicableFilteredOps;
+      applicableFilteredOps.reserve(filteredOps.size());
+      for (const std::string &op : filteredOps)
+        if (circt::mut::hasNativeMutationPatternForOp(mutationDesignText, op))
+          applicableFilteredOps.push_back(op);
+      filteredOps.swap(applicableFilteredOps);
     }
 
     if (filteredOps.empty()) {

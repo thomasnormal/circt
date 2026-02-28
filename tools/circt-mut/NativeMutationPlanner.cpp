@@ -27,8 +27,10 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "LE_TO_LT",         "GE_TO_GT",       "LT_TO_GT",        "GT_TO_LT",
     "LE_TO_GE",         "GE_TO_LE",       "AND_TO_OR",       "OR_TO_AND",
     "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "XOR_TO_XNOR",
-    "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
-    "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",
+    "XNOR_TO_XOR",      "REDAND_TO_REDOR", "REDOR_TO_REDAND",
+    "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
+    "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
+    "NBA_TO_BA",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "IF_COND_NEGATE",   "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",
@@ -275,6 +277,7 @@ static size_t findNextCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
                                    size_t pos);
 static bool isOperandEndChar(char c);
 static bool isOperandStartChar(char c);
+static bool isUnaryOperatorContext(char c);
 
 static void collectLiteralTokenSites(StringRef text, StringRef token,
                                      ArrayRef<uint8_t> codeMask,
@@ -500,14 +503,6 @@ static void collectUnaryMinusDropSites(StringRef text, ArrayRef<uint8_t> codeMas
     }
     return StringRef::npos;
   };
-  auto isUnaryContext = [](char prev) {
-    return prev == '(' || prev == '[' || prev == '{' || prev == ':' ||
-           prev == ';' || prev == ',' || prev == '?' || prev == '=' ||
-           prev == '+' || prev == '-' || prev == '*' || prev == '/' ||
-           prev == '%' || prev == '&' || prev == '|' || prev == '^' ||
-           prev == '!' || prev == '~' || prev == '<' || prev == '>';
-  };
-
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (!isCodeAt(codeMask, i))
       continue;
@@ -523,7 +518,8 @@ static void collectUnaryMinusDropSites(StringRef text, ArrayRef<uint8_t> codeMas
       continue;
 
     size_t prevSig = findPrevSig(i);
-    if (prevSig != StringRef::npos && !isUnaryContext(text[prevSig]))
+    if (prevSig != StringRef::npos &&
+        !isUnaryOperatorContext(text[prevSig]))
       continue;
 
     size_t nextSig = findNextSig(i + 1);
@@ -574,6 +570,14 @@ static bool isOperandEndChar(char c) {
 static bool isOperandStartChar(char c) {
   return isAlnum(c) || c == '_' || c == '(' || c == '[' || c == '{' ||
          c == '\'' || c == '~' || c == '!' || c == '$';
+}
+
+static bool isUnaryOperatorContext(char prev) {
+  return prev == '(' || prev == '[' || prev == '{' || prev == ':' ||
+         prev == ';' || prev == ',' || prev == '?' || prev == '=' ||
+         prev == '+' || prev == '-' || prev == '*' || prev == '/' ||
+         prev == '%' || prev == '&' || prev == '|' || prev == '^' ||
+         prev == '!' || prev == '~' || prev == '<' || prev == '>';
 }
 
 static void collectBinaryShiftSites(StringRef text, StringRef token,
@@ -705,6 +709,65 @@ static void collectBinaryBitwiseSites(StringRef text, char needle,
     char nextSigChar = text[nextSig];
     if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
       continue;
+    sites.push_back({i});
+  }
+}
+
+static void collectUnaryReductionSites(StringRef text, char needle,
+                                       ArrayRef<uint8_t> codeMask,
+                                       SmallVectorImpl<SiteInfo> &sites) {
+  assert((needle == '&' || needle == '|' || needle == '^') &&
+         "expected unary reduction token");
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (text[i] != needle)
+      continue;
+
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (needle != '^' && (prev == needle || next == needle))
+      continue;
+    if (prev == '=' || next == '=')
+      continue;
+    if (needle == '^' && (prev == '~' || next == '~'))
+      continue;
+    if (prev == '~')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    if (prevSig != StringRef::npos && !isUnaryOperatorContext(text[prevSig]))
+      continue;
+
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (nextSig == StringRef::npos)
+      continue;
+    if (!isOperandStartChar(text[nextSig]))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
+static void collectUnaryReductionXnorSites(StringRef text,
+                                           ArrayRef<uint8_t> codeMask,
+                                           SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!isCodeRange(codeMask, i, 2))
+      continue;
+    if (!text.substr(i).starts_with("^~") && !text.substr(i).starts_with("~^"))
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    if (prevSig != StringRef::npos && !isUnaryOperatorContext(text[prevSig]))
+      continue;
+
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 2);
+    if (nextSig == StringRef::npos)
+      continue;
+    if (!isOperandStartChar(text[nextSig]))
+      continue;
+
     sites.push_back({i});
   }
 }
@@ -1634,6 +1697,22 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryXnorSites(designText, codeMask, sites);
     return;
   }
+  if (op == "REDAND_TO_REDOR") {
+    collectUnaryReductionSites(designText, '&', codeMask, sites);
+    return;
+  }
+  if (op == "REDOR_TO_REDAND") {
+    collectUnaryReductionSites(designText, '|', codeMask, sites);
+    return;
+  }
+  if (op == "REDXOR_TO_REDXNOR") {
+    collectUnaryReductionSites(designText, '^', codeMask, sites);
+    return;
+  }
+  if (op == "REDXNOR_TO_REDXOR") {
+    collectUnaryReductionXnorSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "BAND_TO_BOR") {
     collectBinaryBitwiseSites(designText, '&', codeMask, sites);
     return;
@@ -1785,9 +1864,11 @@ static std::string getOpFamily(StringRef op) {
     return "xcompare";
   if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "LAND_TO_BAND" ||
       op == "LOR_TO_BOR" || op == "XOR_TO_OR" || op == "XOR_TO_XNOR" ||
-      op == "XNOR_TO_XOR" || op == "BAND_TO_BOR" || op == "BOR_TO_BAND" ||
-      op == "BAND_TO_LAND" || op == "BOR_TO_LOR" || op == "UNARY_NOT_DROP" ||
-      op == "UNARY_BNOT_DROP")
+      op == "XNOR_TO_XOR" || op == "REDAND_TO_REDOR" ||
+      op == "REDOR_TO_REDAND" || op == "REDXOR_TO_REDXNOR" ||
+      op == "REDXNOR_TO_REDXOR" || op == "BAND_TO_BOR" ||
+      op == "BOR_TO_BAND" || op == "BAND_TO_LAND" || op == "BOR_TO_LOR" ||
+      op == "UNARY_NOT_DROP" || op == "UNARY_BNOT_DROP")
     return "logic";
   if (op == "BA_TO_NBA" || op == "NBA_TO_BA" ||
       op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE")
@@ -2429,6 +2510,12 @@ bool computeOrderedNativeMutationOps(StringRef designText,
 
   error = "circt-mut generate: native mutation operator set must not be empty";
   return false;
+}
+
+bool hasNativeMutationPatternForOp(StringRef designText, StringRef op) {
+  SmallVector<uint8_t, 0> codeMask;
+  buildCodeMask(designText, codeMask);
+  return hasNativeMutationPattern(designText, codeMask, op);
 }
 
 void emitNativeMutationPlan(ArrayRef<std::string> orderedOps,

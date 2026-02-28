@@ -1,0 +1,11 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module sram(input logic clk,input logic we,input logic [3:0] addr,input logic [7:0] wdata,output logic [7:0] rdata);\n  logic [7:0] mem [0:15];\n  always_ff @(posedge clk) begin\n    if (we) mem[addr] <= wdata;\n    rdata <= mem[addr];\n  end\nendmodule\n\nmodule tb;\n  logic clk = 0;\n  always #5 clk = ~clk;\n  logic we = 0;\n  logic [3:0] addr = 0;\n  logic [7:0] wdata = 0;\n  logic [7:0] rdata;\n  sram dut(.clk,.we,.addr,.wdata,.rdata);\n  initial begin\n    repeat (20) begin\n      @(negedge clk);\n      we = $random;\n      addr = $random;\n      wdata = $random;\n    end\n    @(posedge clk);\n    #1;\n    $finish;\n  end\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/top.txt --count 80 --seed 9 --modes all --top sram > %t/top.log
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/notop.txt --count 80 --seed 9 --modes all > /dev/null
+// RUN: not grep -q 'NATIVE_NEGEDGE_TO_POSEDGE' %t/top.txt
+// RUN: not grep -q 'NATIVE_UNARY_BNOT_DROP' %t/top.txt
+// RUN: grep -q 'NATIVE_NEGEDGE_TO_POSEDGE' %t/notop.txt
+// RUN: grep -q 'NATIVE_UNARY_BNOT_DROP' %t/notop.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/top.log
+//
+// LOG: Generated mutations: 80
