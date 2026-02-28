@@ -22528,56 +22528,26 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                              configDbEntries.size());
         }
 
-        // Look up in configDbEntries with wildcard matching
-        // (same logic as the call_indirect config_db handler)
-        auto it = configDbEntries.find(key);
-        if (it == configDbEntries.end()) {
-          // Wildcard match: look for entries where field name matches
-          for (auto &[k, v] : configDbEntries) {
-            size_t dotPos = k.rfind('.');
-            if (dotPos != std::string::npos &&
-                k.substr(dotPos + 1) == fieldName) {
-              it = configDbEntries.find(k);
-              break;
-            }
-          }
-        }
-        // Fuzzy match: try _x suffix → _0 suffix
-        if (it == configDbEntries.end() && fieldName.size() > 2 &&
-            fieldName.back() == 'x' && fieldName[fieldName.size() - 2] == '_') {
-          std::string baseName = fieldName.substr(0, fieldName.size() - 1);
-          for (auto &[k, v] : configDbEntries) {
-            size_t dotPos = k.rfind('.');
-            if (dotPos != std::string::npos) {
-              std::string storedField = k.substr(dotPos + 1);
-              if (storedField.size() > baseName.size() &&
-                  storedField.substr(0, baseName.size()) == baseName &&
-                  std::isdigit(storedField[baseName.size()])) {
-                it = configDbEntries.find(k);
-                break;
-              }
-            }
-          }
-        }
-
-        if (it != configDbEntries.end()) {
+        const std::vector<uint8_t> *matchedValue = nullptr;
+        std::string matchedKey;
+        if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
           if (traceI3CConfigHandles &&
               fieldName.find("i3c_") != std::string::npos) {
             uint64_t ptrPayload = 0;
             unsigned copyBytes =
-                std::min<unsigned>(8, static_cast<unsigned>(it->second.size()));
+                std::min<unsigned>(8, static_cast<unsigned>(matchedValue->size()));
             for (unsigned i = 0; i < copyBytes; ++i)
-              ptrPayload |= static_cast<uint64_t>(it->second[i]) << (i * 8);
+              ptrPayload |= static_cast<uint64_t>((*matchedValue)[i]) << (i * 8);
             InterpretedValue outRefVal = getValue(procId, callOp.getOperand(3));
             uint64_t outRefAddr = outRefVal.isX() ? 0 : outRefVal.getUInt64();
-            maybeTraceI3CConfigHandleGet(callee, it->first, ptrPayload,
+            maybeTraceI3CConfigHandleGet(callee, matchedKey, ptrPayload,
                                          outRefAddr, fieldName);
           }
           if (traceConfigDbEnabled) {
-            maybeTraceConfigDbFuncCallGetHit(it->first, it->second.size());
+            maybeTraceConfigDbFuncCallGetHit(matchedKey, matchedValue->size());
           }
           Value outputRef = callOp.getOperand(3);
-          const std::vector<uint8_t> &valueData = it->second;
+          const std::vector<uint8_t> &valueData = *matchedValue;
           Type innerType = refType.getNestedType();
           unsigned innerBits = getTypeWidth(innerType);
           unsigned innerBytes = (innerBits + 7) / 8;
@@ -22669,7 +22639,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           valueData[i] = static_cast<uint8_t>(
               valBits.extractBits(8, i * 8).getZExtValue());
       }
-      configDbEntries[key] = std::move(valueData);
+      storeConfigDbEntry(instName, fieldName, std::move(valueData));
       if (traceConfigDbEnabled) {
         maybeTraceConfigDbFuncCallSet(callee, key, valueBytes,
                                       configDbEntries.size());
@@ -23966,7 +23936,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                 valBits.extractBits(8, i * 8).getZExtValue());
         }
 
-        configDbEntries[key] = std::move(valueData);
+        storeConfigDbEntry(instName, fieldName, std::move(valueData));
         LLVM_DEBUG(llvm::dbgs()
                    << "  config_db::set(\"" << key << "\", "
                    << valueBits << " bits)\n");
@@ -23981,23 +23951,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
         std::string key = instName + "." + fieldName;
 
-        auto it = configDbEntries.find(key);
-        if (it == configDbEntries.end()) {
-          // Try wildcard match: look for entries where field name matches
-          for (auto &[k, v] : configDbEntries) {
-            size_t dotPos = k.rfind('.');
-            if (dotPos != std::string::npos &&
-                k.substr(dotPos + 1) == fieldName) {
-              it = configDbEntries.find(k);
-              break;
-            }
-          }
-        }
-
-        if (it != configDbEntries.end()) {
+        const std::vector<uint8_t> *matchedValue = nullptr;
+        std::string matchedKey;
+        if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
           // Found: write value to output ref (arg4)
           Value outputRef = callOp.getOperand(4);
-          const std::vector<uint8_t> &valueData = it->second;
+          const std::vector<uint8_t> &valueData = *matchedValue;
           InterpretedValue refVal = getValue(procId, outputRef);
           Type refType = outputRef.getType();
 
@@ -24063,7 +24022,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           setValue(procId, callOp.getResult(0),
                   InterpretedValue(llvm::APInt(1, 1)));
           LLVM_DEBUG(llvm::dbgs()
-                     << "  config_db::get(\"" << key << "\") -> found ("
+                     << "  config_db::get(\"" << key << "\") -> found key \""
+                     << matchedKey << "\" ("
                      << valueData.size() << " bytes)\n");
         } else {
           setValue(procId, callOp.getResult(0),
@@ -24081,17 +24041,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
         std::string key = instName + "." + fieldName;
 
-        bool found = configDbEntries.count(key) > 0;
-        if (!found) {
-          for (auto &[k, v] : configDbEntries) {
-            size_t dotPos = k.rfind('.');
-            if (dotPos != std::string::npos &&
-                k.substr(dotPos + 1) == fieldName) {
-              found = true;
-              break;
-            }
-          }
-        }
+        const std::vector<uint8_t> *matchedValue = nullptr;
+        std::string matchedKey;
+        bool found = lookupConfigDbEntry(instName, fieldName, matchedValue,
+                                         &matchedKey);
 
         setValue(procId, callOp.getResult(0),
                 InterpretedValue(llvm::APInt(1, found ? 1 : 0)));
@@ -30226,6 +30179,24 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   constexpr uint64_t kVirtualHi = 0x20000000ULL;
 
   uint64_t addr = reinterpret_cast<uint64_t>(ptr);
+  auto tryResolveAssocSlot = [&](const uint8_t *base, size_t size,
+                                 uint64_t slotOffset,
+                                 const char *slotClass) -> void * {
+    if (!base || slotOffset + sizeof(uint64_t) > size)
+      return nullptr;
+    uint64_t pointee = 0;
+    std::memcpy(&pointee, base + slotOffset, sizeof(pointee));
+    if (!validAssocArrayAddresses.contains(pointee))
+      return nullptr;
+    if (tracePtr) {
+      llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: class="
+                   << slotClass << " ptr=" << ptr
+                   << " -> assoc=" << reinterpret_cast<void *>(pointee)
+                   << "\n";
+    }
+    return reinterpret_cast<void *>(pointee);
+  };
+
   if (validAssocArrayAddresses.contains(addr)) {
     if (tracePtr) {
       llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
@@ -30240,7 +30211,26 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
     block = findMemoryBlockByAddress(addr, activeProcessId, &offset);
   if (!block)
     block = findMemoryBlockByAddress(addr, static_cast<ProcessId>(-1), &offset);
+
+  if (block && block->initialized && offset < block->size) {
+    if (void *resolvedAssoc =
+            tryResolveAssocSlot(block->bytes(), block->size, offset,
+                                "assoc-slot-memory"))
+      return resolvedAssoc;
+  }
+
   if (!block || !block->initialized || offset >= block->size) {
+    uint64_t nativeOffset = 0;
+    size_t nativeSize = 0;
+    if (findNativeMemoryBlockByAddress(addr, &nativeOffset, &nativeSize) &&
+        nativeOffset <= addr) {
+      uint64_t nativeBase = addr - nativeOffset;
+      if (void *resolvedAssoc = tryResolveAssocSlot(
+              reinterpret_cast<const uint8_t *>(nativeBase), nativeSize,
+              nativeOffset, "assoc-slot-native"))
+        return resolvedAssoc;
+    }
+
     if (addr >= kVirtualLo && addr < kVirtualHi) {
       // Unmapped pointer in the interpreter virtual range: report null so the
       // runtime doesn't treat it as a host pointer.
@@ -30252,9 +30242,10 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
     }
     if (tracePtr) {
       llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
-                   << "class=host-direct ptr=" << ptr << "\n";
+                   << "class=assoc-unresolved-host ptr=" << ptr
+                   << " (returning null)\n";
     }
-    return const_cast<void *>(ptr);
+    return nullptr;
   }
 
   // Some native call sites pass the virtual address of a pointer slot.
@@ -30280,12 +30271,22 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   }
 
   void *mapped = static_cast<void *>(block->bytes() + offset);
+  uint64_t mappedAddr = reinterpret_cast<uint64_t>(mapped);
+  if (validAssocArrayAddresses.contains(mappedAddr)) {
+    if (tracePtr && addr >= kVirtualLo && addr < kVirtualHi) {
+      llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
+                   << "class=virtual-direct-assoc ptr=" << ptr
+                   << " -> host=" << mapped << "\n";
+    }
+    return mapped;
+  }
+
   if (tracePtr && addr >= kVirtualLo && addr < kVirtualHi) {
     llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
-                 << "class=virtual-direct ptr=" << ptr << " -> host=" << mapped
-                 << "\n";
+                 << "class=virtual-direct-nonassoc ptr=" << ptr
+                 << " -> host=" << mapped << " (returning null)\n";
   }
-  return mapped;
+  return nullptr;
 }
 
 bool LLHDProcessInterpreter::findNativeMemoryBlockByAddress(
@@ -33241,6 +33242,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           const char *env = std::getenv("CIRCT_SIM_TRACE_ASSOC_STR");
           return env && env[0] != '\0' && env[0] != '0';
         }();
+        static const bool traceAssocInt = []() {
+          const char *env = std::getenv("CIRCT_SIM_TRACE_ASSOC_INT");
+          return env && env[0] != '\0' && env[0] != '0';
+        }();
         InterpretedValue arrayVal = getValue(procId, callOp.getOperand(0));
         InterpretedValue keyVal = getValue(procId, callOp.getOperand(1));
         InterpretedValue valueSizeVal = getValue(procId, callOp.getOperand(2));
@@ -33398,9 +33403,16 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             });
           } else {
             // Integer key - keyBuffer already contains the value
+            int64_t intKey = 0;
+            std::memcpy(&intKey, keyBuffer, std::min<size_t>(8, maxCopy));
+            if (traceAssocInt)
+              llvm::errs() << "[ASSOC-INT] get_ref array=0x"
+                           << llvm::format_hex(arrayAddr, 16)
+                           << " key_addr=0x" << llvm::format_hex(keyAddr, 16)
+                           << " key=" << intKey
+                           << " value_size=" << valueSize
+                           << " max_copy=" << maxCopy << "\n";
             LLVM_DEBUG({
-              int64_t intKey = 0;
-              std::memcpy(&intKey, keyBuffer, std::min<size_t>(8, maxCopy));
               llvm::dbgs() << "  llvm.call: __moore_assoc_get_ref int key: " << intKey << "\n";
             });
           }
@@ -33419,6 +33431,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         });
         void *resultPtr = __moore_assoc_get_ref(arrayPtr, keyPtr, effectiveSize);
         uint64_t resultVal = reinterpret_cast<uint64_t>(resultPtr);
+        if (traceAssocInt && arrayPtr &&
+            static_cast<AssocArrayHeader *>(arrayPtr)->type ==
+                AssocArrayType_IntKey)
+          llvm::errs() << "[ASSOC-INT] get_ref result=0x"
+                       << llvm::format_hex(resultVal, 16)
+                       << " effective_size=" << effectiveSize << "\n";
         if (traceAssocStr && arrayPtr &&
             static_cast<AssocArrayHeader *>(arrayPtr)->type ==
                 AssocArrayType_StringKey)

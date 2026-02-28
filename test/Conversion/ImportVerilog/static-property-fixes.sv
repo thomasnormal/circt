@@ -1,6 +1,9 @@
 // RUN: circt-translate --import-verilog %s | FileCheck %s
 // RUN: circt-verilog --ir-moore %s
+// RUN: circt-verilog --ir-hw %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top static_property_semantic_top 2>&1 | FileCheck %s --check-prefix=SIM
 // REQUIRES: slang
+// REQUIRES: circt-sim
 
 // Internal issue in Slang v3 about jump depending on uninitialised value.
 // UNSUPPORTED: valgrind
@@ -130,12 +133,12 @@ endmodule
 // CHECK:   moore.class.propertydecl @data : !moore.l32
 // CHECK: }
 // The second specialization gets a different name
-// CHECK-LABEL: moore.class.classdecl @ParamClass_0 {
+// CHECK-LABEL: moore.class.classdecl @ParamClass_{{[0-9]+}} {
 // CHECK:   moore.class.propertydecl @data : !moore.l16
 // CHECK: }
 // Each specialization gets its own global variable
 // CHECK: moore.global_variable @"ParamClass::m_instance" : !moore.class<@ParamClass>
-// CHECK: moore.global_variable @"ParamClass_0::m_instance" : !moore.class<@ParamClass_0>
+// CHECK: moore.global_variable @"ParamClass_{{[0-9]+}}::m_instance" : !moore.class<@ParamClass_{{[0-9]+}}>
 
 class ParamClass #(int WIDTH = 32);
     logic [WIDTH-1:0] data;
@@ -150,12 +153,12 @@ endclass
 
 // CHECK-LABEL: moore.module @testParamClassStatic() {
 // CHECK:   %obj32 = moore.variable : <class<@ParamClass>>
-// CHECK:   %obj16 = moore.variable : <class<@ParamClass_0>>
+// CHECK:   %obj16 = moore.variable : <class<@ParamClass_{{[0-9]+}}>>
 // CHECK:   moore.procedure initial {
 // Access to ParamClass#(32) static (default)
 // CHECK:     moore.get_global_variable @"ParamClass::m_instance" : <class<@ParamClass>>
 // Access to ParamClass#(16) static - different global!
-// CHECK:     moore.get_global_variable @"ParamClass_0::m_instance" : <class<@ParamClass_0>>
+// CHECK:     moore.get_global_variable @"ParamClass_{{[0-9]+}}::m_instance" : <class<@ParamClass_{{[0-9]+}}>>
 // CHECK:   }
 // CHECK:   moore.output
 // CHECK: }
@@ -316,3 +319,38 @@ module testParamStaticViaInstance;
         obj16.counter = 2;
     end
 endmodule
+
+module static_property_semantic_top;
+    StaticViaInstance obj;
+    int via_instance;
+    int via_class;
+    time t;
+
+    initial begin
+        StaticViaInstance::static_prop = 11;
+        via_instance = obj.static_prop;
+        via_class = StaticViaInstance::static_prop;
+        if (via_instance !== 11 || via_class !== 11) begin
+            $display("SIM_FAIL read static via instance/class mismatch");
+            $finish;
+        end
+
+        obj.static_prop = 42;
+        if (StaticViaInstance::static_prop !== 42) begin
+            $display("SIM_FAIL write static via instance mismatch");
+            $finish;
+        end
+
+        t = timeReturnFunc();
+        if (t !== 0) begin
+            $display("SIM_FAIL time return mismatch: %0t", t);
+            $finish;
+        end
+
+        $display("SIM_PASS static property semantics");
+        $finish;
+    end
+endmodule
+
+// SIM: SIM_PASS static property semantics
+// SIM-NOT: SIM_FAIL

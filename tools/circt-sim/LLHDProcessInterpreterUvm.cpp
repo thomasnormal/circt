@@ -16,6 +16,7 @@
 #include "llvm/Support/Format.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -1273,6 +1274,102 @@ static unsigned writeConfigDbBytesUvm(MemoryBlock *blk, uint64_t off,
   return n;
 }
 
+static bool globMatchConfigDbPattern(llvm::StringRef pattern,
+                                     llvm::StringRef text) {
+  // Preserve UVM legacy behavior where empty pattern matches any string.
+  if (pattern.empty())
+    return true;
+
+  // Reuse Moore runtime regex/glob matching used by uvm_is_match.
+  MooreString expr{const_cast<char *>(pattern.data()),
+                   static_cast<int64_t>(pattern.size())};
+  MooreString candidate{const_cast<char *>(text.data()),
+                        static_cast<int64_t>(text.size())};
+  int32_t execRet = 0;
+  int32_t ok =
+      uvm_re_compexecfree(&expr, &candidate, /*deglob=*/1, &execRet);
+  return ok != 0 && execRet >= 0;
+}
+
+static bool splitConfigDbKey(llvm::StringRef key, llvm::StringRef &instPattern,
+                             llvm::StringRef &fieldName) {
+  size_t dotPos = key.rfind('.');
+  if (dotPos == llvm::StringRef::npos)
+    return false;
+  instPattern = key.take_front(dotPos);
+  fieldName = key.drop_front(dotPos + 1);
+  return true;
+}
+
+void LLHDProcessInterpreter::storeConfigDbEntry(llvm::StringRef instName,
+                                                llvm::StringRef fieldName,
+                                                std::vector<uint8_t> valueData) {
+  std::string key = (instName + "." + fieldName).str();
+  configDbEntries[key] = std::move(valueData);
+  configDbEntryOrder[key] = nextConfigDbEntryOrder++;
+}
+
+bool LLHDProcessInterpreter::lookupConfigDbEntry(
+    llvm::StringRef instName, llvm::StringRef fieldName,
+    const std::vector<uint8_t> *&valueData, std::string *matchedKey) const {
+  valueData = nullptr;
+  uint64_t bestOrder = 0;
+  std::string bestKey;
+
+  auto getOrder = [&](const std::string &key) -> uint64_t {
+    auto orderIt = configDbEntryOrder.find(key);
+    return orderIt == configDbEntryOrder.end() ? 0 : orderIt->second;
+  };
+
+  auto maybeSelect = [&](const std::string &candidateKey,
+                         const std::vector<uint8_t> &candidateValue) {
+    llvm::StringRef pattern;
+    llvm::StringRef storedField;
+    if (!splitConfigDbKey(candidateKey, pattern, storedField))
+      return;
+    if (storedField != fieldName)
+      return;
+    if (!globMatchConfigDbPattern(pattern, instName))
+      return;
+
+    uint64_t order = getOrder(candidateKey);
+    if (!valueData || order >= bestOrder) {
+      valueData = &candidateValue;
+      bestOrder = order;
+      bestKey = candidateKey;
+    }
+  };
+
+  for (const auto &entry : configDbEntries)
+    maybeSelect(entry.first, entry.second);
+
+  // Legacy fallback: for names ending in "_x", allow matching "_0", "_1", ...
+  if (!valueData && fieldName.size() > 2 && fieldName.back() == 'x' &&
+      fieldName[fieldName.size() - 2] == '_') {
+    llvm::StringRef baseName = fieldName.drop_back();
+    for (const auto &entry : configDbEntries) {
+      llvm::StringRef pattern;
+      llvm::StringRef storedField;
+      if (!splitConfigDbKey(entry.first, pattern, storedField))
+        continue;
+      if (!globMatchConfigDbPattern(pattern, instName))
+        continue;
+      if (storedField.size() <= baseName.size())
+        continue;
+      if (storedField.take_front(baseName.size()) != baseName)
+        continue;
+      if (!std::isdigit(
+              static_cast<unsigned char>(storedField[baseName.size()])))
+        continue;
+      maybeSelect(entry.first, entry.second);
+    }
+  }
+
+  if (valueData && matchedKey)
+    *matchedKey = bestKey;
+  return valueData != nullptr;
+}
+
 bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
     ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,
     llvm::StringRef calleeName,
@@ -1313,14 +1410,13 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       std::vector<uint8_t> valueData =
           serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
                                          &truncatedValue);
-      unsigned valueBytes = static_cast<unsigned>(valueData.size());
       if (traceConfigDbEnabled) {
         llvm::errs() << "[CFG-CI-XFALLBACK-SET] callee=" << calleeName
                      << " key=\"" << key << "\" s1=\"" << str1
                      << "\" s2=\"" << str2 << "\" s3=\"" << str3
                      << "\" entries_before=" << configDbEntries.size() << "\n";
       }
-      configDbEntries[key] = std::move(valueData);
+      storeConfigDbEntry(instName, fieldName, std::move(valueData));
       if (traceConfigDbEnabled) {
         llvm::errs() << "[CFG-CI-XFALLBACK-SET] stored key=\"" << key
                      << "\" entries_after=" << configDbEntries.size() << "\n";
@@ -1355,44 +1451,15 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
                      << "\" entries=" << configDbEntries.size() << "\n";
       }
 
-      auto it = configDbEntries.find(key);
-      // Wildcard match: look for entries where field name matches
-      if (it == configDbEntries.end()) {
-        for (auto &[k, v] : configDbEntries) {
-          size_t dotPos = k.rfind('.');
-          if (dotPos != std::string::npos &&
-              k.substr(dotPos + 1) == fieldName) {
-            it = configDbEntries.find(k);
-            break;
-          }
-        }
-      }
-      // Fuzzy match: "bfm_x" matches "bfm_0"
-      if (it == configDbEntries.end() && fieldName.size() > 2 &&
-          fieldName.back() == 'x' &&
-          fieldName[fieldName.size() - 2] == '_') {
-        std::string baseName = fieldName.substr(0, fieldName.size() - 1);
-        for (auto &[k, v] : configDbEntries) {
-          size_t dotPos = k.rfind('.');
-          if (dotPos != std::string::npos) {
-            std::string storedField = k.substr(dotPos + 1);
-            if (storedField.size() > baseName.size() &&
-                storedField.substr(0, baseName.size()) == baseName &&
-                std::isdigit(storedField[baseName.size()])) {
-              it = configDbEntries.find(k);
-              break;
-            }
-          }
-        }
-      }
-
-      if (it != configDbEntries.end()) {
+      const std::vector<uint8_t> *matchedValue = nullptr;
+      std::string matchedKey;
+      if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
         if (traceConfigDbEnabled) {
-          llvm::errs() << "[CFG-CI-XFALLBACK-GET] hit key=\"" << it->first
-                       << "\" bytes=" << it->second.size() << "\n";
+          llvm::errs() << "[CFG-CI-XFALLBACK-GET] hit key=\"" << matchedKey
+                       << "\" bytes=" << matchedValue->size() << "\n";
         }
         Value outputRef = callIndirectOp.getArgOperands()[4];
-        const std::vector<uint8_t> &valueData = it->second;
+        const std::vector<uint8_t> &valueData = *matchedValue;
         Type refType = outputRef.getType();
 
         if (auto refT = dyn_cast<llhd::RefType>(refType)) {

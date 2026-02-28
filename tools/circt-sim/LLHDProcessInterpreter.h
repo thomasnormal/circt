@@ -1907,6 +1907,10 @@ private:
   /// Used to disable native by-type fast paths that bypass override lookup.
   static bool isUvmFactoryOverrideSetter(llvm::StringRef calleeName);
 
+  /// Return true when the callee is a UVM analysis write entrypoint that
+  /// should route through the native analysis connection map.
+  static bool isNativeAnalysisWriteCallee(llvm::StringRef calleeName);
+
   //===--------------------------------------------------------------------===//
   // Sim Dialect Operation Handlers
   //===--------------------------------------------------------------------===//
@@ -2563,6 +2567,16 @@ private:
                                     InterpretedValue packedValue);
   std::string readMooreStringStruct(ProcessId procId, mlir::Value operand);
 
+  /// Record/update a config_db entry and its insertion order.
+  void storeConfigDbEntry(llvm::StringRef instName, llvm::StringRef fieldName,
+                          std::vector<uint8_t> valueData);
+
+  /// Resolve the best matching config_db entry for (inst, field).
+  /// Returns true on hit and outputs the matched payload/key.
+  bool lookupConfigDbEntry(llvm::StringRef instName, llvm::StringRef fieldName,
+                           const std::vector<uint8_t> *&valueData,
+                           std::string *matchedKey = nullptr) const;
+
   /// Intercept config_db implementation methods invoked via call_indirect.
   bool tryInterceptConfigDbCallIndirect(
       ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,
@@ -2579,6 +2593,12 @@ private:
 
   /// Get the interpreted value for an SSA value.
   InterpretedValue getValue(ProcessId procId, mlir::Value value);
+
+  /// Detect ImportVerilog's out-of-bounds array-index sentinel pattern.
+  /// When true, the index must be treated as OOB even if the truncated value
+  /// aliases an in-range element (for example, 4'hf for a 16-element array).
+  bool isImportedArrayIndexOutOfBoundsSentinel(ProcessId procId,
+                                               mlir::Value indexValue);
 
   /// Set the interpreted value for an SSA value.
   void setValue(ProcessId procId, mlir::Value value, InterpretedValue val);
@@ -2665,13 +2685,6 @@ private:
   /// When true, evaluateContinuousValue reads sampled signal values for
   /// clocked property evaluation (IEEE 1800 sampled-value semantics).
   bool sampleClockedPropertyFromPreUpdateValues = false;
-
-  /// Set of (procId, waitOp) pairs that have already been through the
-  /// empty-sensitivity "always @(*)" fallback delta-resume path at least once.
-  /// Used to prevent infinite delta cycles for processes that have no
-  /// detectable LLHD signal dependencies (e.g., string-type always blocks).
-  llvm::DenseSet<std::pair<ProcessId, mlir::Operation *>>
-      emptySensitivityFallbackExecuted;
 
   /// Next instance ID to allocate for a hw.instance.
   InstanceId nextInstanceId = 1;
@@ -3816,6 +3829,8 @@ private:
   /// UVM config_db storage. Maps "{inst_name}.{field_name}" keys to
   /// opaque value bytes. Used by config_db_implementation_t interceptors.
   std::map<std::string, std::vector<uint8_t>> configDbEntries;
+  std::map<std::string, uint64_t> configDbEntryOrder;
+  uint64_t nextConfigDbEntryOrder = 1;
 
   /// Per-object rand_mode state. Key is "classPtr:propertyName", value is
   /// mode (1=enabled, 0=disabled). Default is enabled (1).
@@ -4360,9 +4375,12 @@ private:
   uint32_t maxAotDepth = 0;
 
   /// Bitmap indicating which FuncId entries are natively compiled functions
-  /// (true) vs trampoline entries (false). Used for stats counting only —
-  /// the dispatch gate uses aotDepth, not this vector.
+  /// (true) vs non-native entries (false).
   std::vector<bool> compiledFuncIsNative;
+
+  /// Bitmap indicating which FuncId names have an interpreter trampoline in
+  /// the descriptor (name appears in trampoline_names).
+  std::vector<bool> compiledFuncHasTrampoline;
 
   /// Deny list: skip native dispatch for these FuncIds (set via
   /// CIRCT_AOT_DENY_FID=123,456,789). Allows bisecting which compiled function

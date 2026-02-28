@@ -9608,3 +9608,43 @@
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_port_connect_semantic_test.sv test/Runtime/uvm/uvm_tlm_port_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequence_test.sv`
   - also rechecked prior semantic-conversion tests:
     - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/event-trigger-fork.sv test/Conversion/ImportVerilog/task-event-control-capture.sv test/Conversion/MooreToCore/nested-control-flow-bug.sv`
+
+## 2026-02-28 - UVM config_db wildcard precedence + ImportVerilog static-property semantic depth
+
+- realization:
+  - `test/Runtime/uvm/config_db_test.sv` failed at
+    `More specific wildcard wins (env.agent*)` even though `uvm_is_match`
+    itself passed all wildcard checks.
+  - tracing showed `circt-sim` was not using UVM `uvm_resource_pool` semantics
+    for this path; it was using config_db interception fallbacks and selecting
+    the first field-name match (`*.multi_wild`) instead of the best wildcard
+    match / latest set.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.h`
+    - added shared config_db metadata for insertion order tracking.
+    - added helper APIs to store and resolve config_db entries.
+  - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - added shared config_db matcher that:
+      - matches by `inst_name` pattern + `field_name`,
+      - uses Moore runtime `uvm_re_compexecfree` semantics,
+      - picks latest-set entry (`set_priority_name` equivalent behavior),
+      - preserves `_x -> _<digit>` fallback behavior.
+    - wired call_indirect config_db fallback set/get to these helpers.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - wired func.call config_db get/set wrappers to shared helpers.
+    - wired config_db implementation set/get/exists interceptors to shared
+      helpers.
+  - `test/Conversion/ImportVerilog/static-property-fixes.sv`
+    - upgraded from syntax-only to semantic by adding `circt-sim` RUN lines and
+      a runtime top module (`static_property_semantic_top`) that checks:
+      - static property read/write via instance/class are coherent,
+      - `timeReturnFunc()` returns expected value.
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - `build_test/bin/circt-verilog --ir-hw --uvm-path=lib/Runtime/uvm-core/src test/Runtime/uvm/config_db_test.sv -o /tmp/config_db_test_fixed.mlir`
+  - `build_test/bin/circt-sim /tmp/config_db_test_fixed.mlir --top config_db_test_top`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/config_db_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequence_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/config_db_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/static-property-fixes.sv`
