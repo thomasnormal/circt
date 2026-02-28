@@ -155,6 +155,31 @@ moore.module @extract_ref_fourstate_slice(out out : !moore.l4) {
   moore.output %slice : !moore.l4
 }
 
+// Dynamic out-of-bounds extract-ref must not alias in-range bits for 2-state.
+// CHECK-LABEL: hw.module @dyn_extract_ref_twostate_oob
+// CHECK: comb.icmp ugt
+// CHECK: scf.if
+// CHECK: llhd.sig {{%.+}} : i1
+moore.module @dyn_extract_ref_twostate_oob(in %idx : !moore.i4, out out : !moore.i1) {
+  %sig = moore.variable : !moore.ref<i8>
+  %bit_ref = moore.dyn_extract_ref %sig from %idx : !moore.ref<i8>, !moore.i4 -> !moore.ref<i1>
+  %bit = moore.read %bit_ref : !moore.ref<i1>
+  moore.output %bit : !moore.i1
+}
+
+// Dynamic out-of-bounds extract-ref must return all-unknown for 4-state reads.
+// CHECK-LABEL: hw.module @dyn_extract_ref_fourstate_oob
+// CHECK: comb.icmp ugt
+// CHECK: scf.if
+// CHECK: hw.struct_create (%{{.+}}, %{{.+}}) : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig {{%.+}} : !hw.struct<value: i1, unknown: i1>
+moore.module @dyn_extract_ref_fourstate_oob(in %idx : !moore.i4, out out : !moore.l1) {
+  %sig = moore.variable : !moore.ref<l8>
+  %bit_ref = moore.dyn_extract_ref %sig from %idx : !moore.ref<l8>, !moore.i4 -> !moore.ref<l1>
+  %bit = moore.read %bit_ref : !moore.ref<l1>
+  moore.output %bit : !moore.l1
+}
+
 // Test assigning to static extract ref from 4-state signal
 // CHECK-LABEL: hw.module @assign_extract_ref_fourstate
 moore.module @assign_extract_ref_fourstate() {

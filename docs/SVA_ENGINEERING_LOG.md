@@ -9346,3 +9346,37 @@
 - validation:
   - `utils/ninja-with-lock.sh -C build_test circt-opt`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
+
+## 2026-02-28 - MooreToCore dynamic DynExtractRef OOB fallback semantics
+
+- realization:
+  - dynamic packed `DynExtractRef` still narrowed indices before extraction and
+    could alias OOB indices to in-range bits (sentinel `-1` path) in packed
+    struct/int ref lowering.
+  - this matched open gap entry 1299.
+
+- TDD:
+  - extended `test/Conversion/MooreToCore/fourstate-bit-extract.mlir` with:
+    - `dyn_extract_ref_twostate_oob`
+    - `dyn_extract_ref_fourstate_oob`
+  - baseline failure before fix: output used sentinel/truncated index extracts
+    (`comb.icmp eq`, `comb.mux` to `-1`, direct `llhd.sig.extract`) without
+    explicit OOB fallback refs.
+
+- implemented:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+    - in `DynExtractRefOpConversion`, added shared packed-index handling:
+      index unknown detection, logical-width-aware OOB condition building, and
+      fallback ref materialization.
+    - for packed struct/int `llhd.ref` dynamic extract-ref lowering, emit
+      `scf.if` that yields:
+      - OOB/unknown index: fallback `llhd.sig` (`X` for four-state, `0` for
+        two-state),
+      - in-bounds index: actual extracted ref/value path.
+    - removed stale dynamic OOB TODO at `DynExtractRefOpConversion`.
+  - marked gap entry 1299 closed in `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/MooreToCore`

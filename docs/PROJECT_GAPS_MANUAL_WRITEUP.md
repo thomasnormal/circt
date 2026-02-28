@@ -3898,8 +3898,8 @@ Status update (2026-02-28): this entry is stale and closed. Four-state extract l
 ### [x] 1298. `lib/Conversion/MooreToCore/MooreToCore.cpp:8108`
 Status update (2026-02-28): this entry is closed in this workspace for static `ExtractRef` lowering. Full/partial out-of-bounds static extract-ref reads now lower to explicit fallback references (`X` for four-state, `0` for two-state) instead of aliasing truncated in-range bits; covered by `test/Conversion/MooreToCore/fourstate-bit-extract.mlir` OOB cases.
 
-### [ ] 1299. `lib/Conversion/MooreToCore/MooreToCore.cpp:8878`
-`DynExtractRef` lowering has the same unresolved out-of-bounds handling gap as entry 1298.
+### [x] 1299. `lib/Conversion/MooreToCore/MooreToCore.cpp:8878`
+Status update (2026-02-28): this entry is closed in this workspace for packed `DynExtractRef` lowering. Dynamic packed extract-ref now performs explicit OOB detection (plus unknown-index invalidation) and yields fallback refs (`X` for four-state, `0` for two-state) instead of aliasing truncated in-range bits. Regression coverage added in `test/Conversion/MooreToCore/fourstate-bit-extract.mlir`.
 
 ### [ ] 1300. `lib/Conversion/MooreToCore/MooreToCore.cpp:11233`
 CaseX/CaseZ equality lowering is still constant-centric until four-valued core integers are available for non-constant X/Z mask extraction. What is missing is full non-constant four-state casex/casez semantics.
