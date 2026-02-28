@@ -47,6 +47,7 @@ if [[ "$INCLUDE_UVM_TAGS" == "1" ]]; then
   TAG_REGEX_EFFECTIVE="($TAG_REGEX_EFFECTIVE)|$UVM_TAG_REGEX"
 fi
 LEC_SMOKE_ONLY="${LEC_SMOKE_ONLY:-0}"
+LEC_TIMEOUT_FRONTIER_PROBE="${LEC_TIMEOUT_FRONTIER_PROBE:-1}"
 # LEC_FAIL_ON_INEQ removed - circt-lec no longer has --fail-on-inequivalent flag
 FORCE_LEC="${FORCE_LEC:-0}"
 FORCE_LEC_TEST_FILTER="${FORCE_LEC_TEST_FILTER:-}"
@@ -856,6 +857,21 @@ top_module=${top_module}
     continue
   fi
 
+  lec_shared_args=()
+  if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
+    lec_shared_args+=("--assume-known-inputs")
+  fi
+  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
+    lec_shared_args+=("--accept-xprop-only")
+  fi
+  if [[ -n "$CIRCT_LEC_ARGS" ]]; then
+    read -r -a extra_lec_args <<<"$CIRCT_LEC_ARGS"
+    lec_shared_args+=("${extra_lec_args[@]}")
+  fi
+  # Self-comparison always uses the same top module; passing a single MLIR
+  # input avoids expensive duplicate parse/merge on large designs.
+  lec_shared_args+=("-c1=$top_module" "-c2=$top_module" "$opt_mlir")
+
   lec_args=()
   if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
     lec_args+=("--emit-mlir")
@@ -864,19 +880,7 @@ top_module=${top_module}
     # Note: --fail-on-inequivalent was removed from circt-lec
     # Result checking is done via output parsing below
   fi
-  if [[ "$LEC_ASSUME_KNOWN_INPUTS" == "1" ]]; then
-    lec_args+=("--assume-known-inputs")
-  fi
-  if [[ "$LEC_ACCEPT_XPROP_ONLY" == "1" ]]; then
-    lec_args+=("--accept-xprop-only")
-  fi
-  if [[ -n "$CIRCT_LEC_ARGS" ]]; then
-    read -r -a extra_lec_args <<<"$CIRCT_LEC_ARGS"
-    lec_args+=("${extra_lec_args[@]}")
-  fi
-  # Self-comparison always uses the same top module; passing a single MLIR
-  # input avoids expensive duplicate parse/merge on large designs.
-  lec_args+=("-c1=$top_module" "-c2=$top_module" "$opt_mlir")
+  lec_args+=("${lec_shared_args[@]}")
 
   lec_out=""
   if lec_out="$(run_limited "$CIRCT_LEC" "${lec_args[@]}" 2> "$lec_log")"; then
@@ -940,6 +944,28 @@ top_module=${top_module}
       lec_timeout_class="preprocess"
     else
       lec_timeout_class="solver_budget"
+      if [[ "$LEC_TIMEOUT_FRONTIER_PROBE" == "1" ]]; then
+        probe_log="$tmpdir/${base}.circt-lec.timeout-frontier.log"
+        probe_out=""
+        probe_status=0
+        if probe_out="$(run_limited "$CIRCT_LEC" --emit-mlir "${lec_shared_args[@]}" 2> "$probe_log")"; then
+          probe_status=0
+        else
+          probe_status=$?
+        fi
+        if [[ "$probe_status" -eq 124 || "$probe_status" -eq 137 ]]; then
+          lec_timeout_class="preprocess"
+        fi
+        {
+          printf "\n# timeout_frontier_probe exit=%s\n" "$probe_status"
+          if [[ -n "$probe_out" ]]; then
+            printf "%s\n" "$probe_out"
+          fi
+          if [[ -s "$probe_log" ]]; then
+            cat "$probe_log"
+          fi
+        } >> "$lec_log"
+      fi
     fi
   fi
   if [[ -n "$lec_timeout_class" ]]; then
