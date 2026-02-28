@@ -2,6 +2,7 @@
 // RUN: printf "module top(input logic clk, input logic a,b,c, output logic y,z,w);\n  assign y = a;\n  always_ff @(posedge clk) begin\n    z <= b;\n    w = c;\n  end\nendmodule\n" > %t/design.sv
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 64 --seed 31 --modes arith > %t/log.txt
 // RUN: grep -q 'NATIVE_ASSIGN_RHS_PLUS_ONE' %t/mutations.txt
+// RUN: grep -q 'NATIVE_ASSIGN_RHS_MINUS_ONE' %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
 // LOG: Generated mutations: 64

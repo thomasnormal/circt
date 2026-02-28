@@ -34,7 +34,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
-    "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE",
+    "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE", "ASSIGN_RHS_MINUS_ONE",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -2734,7 +2734,8 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-      op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE") {
+      op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
+      op == "ASSIGN_RHS_MINUS_ONE") {
     collectAssignRhsIdentifierSites(designText, codeMask, sites);
     return;
   }
@@ -3036,7 +3037,7 @@ static std::string getOpFamily(StringRef op) {
       op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
       op == "MOD_TO_DIV" || op == "DIV_TO_MOD" ||
       op == "UNARY_MINUS_DROP" || op == "INC_TO_DEC" || op == "DEC_TO_INC" ||
-      op == "ASSIGN_RHS_PLUS_ONE" ||
+      op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
       op == "PLUS_EQ_TO_MINUS_EQ" || op == "MINUS_EQ_TO_PLUS_EQ" ||
       op == "MUL_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MUL_EQ" ||
       op == "MOD_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MOD_EQ")
@@ -4062,7 +4063,8 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   if (op == "NBA_TO_BA")
     return replaceTokenAt(mutatedText, pos, 2, "=");
   if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-      op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE") {
+      op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
+      op == "ASSIGN_RHS_MINUS_ONE") {
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
     if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, pos, rhsStart,
@@ -4076,6 +4078,9 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     else if (op == "ASSIGN_RHS_PLUS_ONE")
       replacement =
           (Twine("(") + text.slice(rhsStart, rhsEnd + 1) + " + 1'b1)").str();
+    else if (op == "ASSIGN_RHS_MINUS_ONE")
+      replacement =
+          (Twine("(") + text.slice(rhsStart, rhsEnd + 1) + " - 1'b1)").str();
     else
       replacement = (Twine("~(") + text.slice(rhsStart, rhsEnd + 1) + ")").str();
     return replaceSpan(mutatedText, rhsStart, rhsEnd + 1, replacement);
