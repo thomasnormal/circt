@@ -6001,8 +6001,8 @@ Expected-error text for unsupported Verilog type `f32` is negative-test oracle c
 ### [ ] 1999. `test/Conversion/ExportVerilog/sv-dialect.mlir:1961`
 `CHECK` expectation for `_ERROR_my_message_xxx_yyy` is fixture output text, not unresolved implementation.
 
-### [ ] 2000. `test/Conversion/MooreToCore/errors.mlir:7`
-`@unsupportedConversion` is negative-test function naming; the actionable gap is asserted by its expected-error line, not this declaration itself.
+### [x] 2000. `test/Conversion/MooreToCore/errors.mlir:7`
+Status update (2026-02-28): this entry is stale. `@unsupportedConversion` is negative-test fixture naming, not unresolved MooreToCore implementation debt.
 
 ### [x] 2001. `test/Conversion/MooreToCore/interface-timing-after-inlining.sv:8`
 Status update (2026-02-28): this item is stale. The test now serves as a regression that asserts `moore.wait_event`/`moore.detect_event` are lowered away after inlining; there is no active `FIXME`/`XFAIL` debt remaining for this case.
@@ -6016,11 +6016,11 @@ Status update (2026-02-28): this entry is stale. `always_comb` coverage exists i
 ### [x] 2004. `test/Conversion/MooreToCore/basic.mlir:629`
 Status update (2026-02-28): same as entry 2003. `always_latch` lowering is covered in dedicated regressions, so this should no longer be tracked as an open TODO gap.
 
-### [ ] 2005. `test/Conversion/FSMToSV/test_errors.mlir:4`
-Expected-error text (`op is unsupported`) is negative-test oracle content validating diagnostics, not unresolved implementation debt at this line.
+### [x] 2005. `test/Conversion/FSMToSV/test_errors.mlir:4`
+Status update (2026-02-28): this entry is stale. The matched text is negative-test diagnostic oracle content, not unresolved product debt.
 
-### [ ] 2006. `test/Conversion/FSMToCore/errors.mlir:4`
-Same class as entry 2005: expected-error fixture content for unsupported-op diagnostics, non-actionable as a direct gap marker.
+### [x] 2006. `test/Conversion/FSMToCore/errors.mlir:4`
+Status update (2026-02-28): same closure as entry 2005.
 
 ### [ ] 2007. `test/Conversion/ImportAIGER/basic-binary.mlir:3`
 This TODO is a test-maintenance note (regenerate binary AIG input from MLIR once exporter is upstreamed). It points to workflow/tooling follow-up, not immediate product debt on this line.
@@ -6040,23 +6040,23 @@ This comment references a previously fixed unsupported-expression bug and docume
 ### [ ] 2012. `test/Conversion/ImportVerilog/assoc_arrays.sv:345`
 Same as entry 2011: historical-fix regression note, non-actionable gap text.
 
-### [ ] 2013. `test/Conversion/ImportVerilog/constraint-solve.sv:5`
-`UNSUPPORTED: valgrind` test metadata; environment exclusion, not product-feature debt.
+### [x] 2013. `test/Conversion/ImportVerilog/constraint-solve.sv:5`
+Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not unresolved ImportVerilog debt.
 
-### [ ] 2014. `test/Conversion/ImportVerilog/constraint-method-call.sv:5`
-Same valgrind metadata pattern as entry 2013.
+### [x] 2014. `test/Conversion/ImportVerilog/constraint-method-call.sv:5`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2015. `test/Conversion/ImportVerilog/constraint-implication.sv:5`
-Same valgrind exclusion marker class; non-actionable for gap closure.
+### [x] 2015. `test/Conversion/ImportVerilog/constraint-implication.sv:5`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2016. `test/Conversion/ImportVerilog/queues.sv:6`
-Valgrind exclusion metadata in test harness, not unresolved queue-import implementation debt.
+### [x] 2016. `test/Conversion/ImportVerilog/queues.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2017. `test/Conversion/ImportVerilog/types.sv:6`
-Same valgrind exclusion marker class as nearby entries.
+### [x] 2017. `test/Conversion/ImportVerilog/types.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2018. `test/Conversion/ImportVerilog/basic.sv:6`
-Again test metadata (`UNSUPPORTED: valgrind`), not a product capability gap marker.
+### [x] 2018. `test/Conversion/ImportVerilog/basic.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
 ### [ ] 2019. `test/Conversion/ImportVerilog/basic.sv:773`
 `CHECK: moore.constant hXXXXXXXX` is expected unknown-bit output in a regression oracle, not unresolved implementation debt.
@@ -6064,32 +6064,32 @@ Again test metadata (`UNSUPPORTED: valgrind`), not a product capability gap mark
 ### [x] 2020. `test/Conversion/ImportVerilog/hierarchical-names.sv:6`
 Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not a feature gap.
 
-### [ ] 2021. `test/Conversion/ImportVerilog/errors.sv:5`
-Same valgrind exclusion marker pattern; this line is test-runner configuration text.
+### [x] 2021. `test/Conversion/ImportVerilog/errors.sv:5`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2022. `test/Conversion/ImportVerilog/inherited-virtual-methods.sv:6`
-`UNSUPPORTED: valgrind` metadata again, not direct feature debt.
+### [x] 2022. `test/Conversion/ImportVerilog/inherited-virtual-methods.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2023. `test/Conversion/ImportVerilog/classes.sv:6`
-Same metadata class as entry 2022.
+### [x] 2023. `test/Conversion/ImportVerilog/classes.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
 ### [ ] 2024. `test/Conversion/ImportVerilog/four-state-constants.sv:45`
 `assign all_x = 4'bxxxx;` is intentional four-state constant test stimulus, not TODO/unsupported debt text.
 
-### [ ] 2025. `test/Conversion/ImportVerilog/class-e2e.sv:5`
-Valgrind exclusion metadata only.
+### [x] 2025. `test/Conversion/ImportVerilog/class-e2e.sv:5`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2026. `test/Conversion/ImportVerilog/builtins.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2026. `test/Conversion/ImportVerilog/builtins.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2027. `test/Conversion/ImportVerilog/queue-max-min.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2027. `test/Conversion/ImportVerilog/queue-max-min.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2028. `test/Conversion/ImportVerilog/queue-delete-index.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2028. `test/Conversion/ImportVerilog/queue-delete-index.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2029. `test/Conversion/ImportVerilog/pre-post-randomize.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2029. `test/Conversion/ImportVerilog/pre-post-randomize.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
 ### [ ] 2030. `test/Conversion/ImportVerilog/continuous-assign-delay-one-step-supported.sv:11`
 `DIAG-NOT: unsupported ... OneStepDelay` is a negative assertion proving support/absence of a diagnostic; it is oracle text, not unresolved implementation debt.
@@ -6103,23 +6103,23 @@ Status update (2026-02-28): same closure as entry 2008. This is valgrind metadat
 ### [ ] 2033. `test/Conversion/ImportVerilog/delay-one-step-supported.sv:8`
 Same class as entry 2032: a negative diagnostic check confirming `OneStepDelay` support, not a TODO marker.
 
-### [ ] 2034. `test/Conversion/ImportVerilog/randomize.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2034. `test/Conversion/ImportVerilog/randomize.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2035. `test/Conversion/ImportVerilog/runtime-randomization.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2035. `test/Conversion/ImportVerilog/runtime-randomization.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2036. `test/Conversion/ImportVerilog/randomize-inline-control.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2036. `test/Conversion/ImportVerilog/randomize-inline-control.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
-### [ ] 2037. `test/Conversion/ImportVerilog/time-type-handling.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2037. `test/Conversion/ImportVerilog/time-type-handling.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
 ### [ ] 2038. `test/Conversion/ImportVerilog/cross-select-intersect-open-range-wide-supported.sv:3`
 `CrossSelectIntersectOpenRangeUnsupported` here is a module identifier in test source, not an unresolved-gap marker by itself.
 
-### [ ] 2039. `test/Conversion/ImportVerilog/uvm_classes.sv:6`
-Valgrind exclusion metadata only.
+### [x] 2039. `test/Conversion/ImportVerilog/uvm_classes.sv:6`
+Status update (2026-02-28): same closure as entry 2008.
 
 ### [ ] 2040. `test/Conversion/ImportVerilog/system-calls-complete.sv:5`
 This comment documents test intent (“verify no `unsupported system` diagnostics”), which is oracle commentary rather than implementation debt.

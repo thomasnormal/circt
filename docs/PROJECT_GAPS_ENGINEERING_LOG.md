@@ -1608,6 +1608,10 @@
     - sim false positives: entries 648, 649, 651
     - ImportVerilog valgrind metadata: entries 2008, 2009, 2010, 2020, 2031
     - UVM identifier false positives: entries 594, 595, 596
+  - Expanded ImportVerilog stale-closure pass for additional valgrind metadata
+    entries: 2013-2018, 2021-2023, 2025-2029, 2034-2037, 2039.
+  - Closed MooreToCore/FSM negative-test fixture false positives:
+    entries 2000, 2005, 2006.
 - Realization:
   - The writeup had multiple entries already diagnosed as non-actionable but
     left unchecked, which obscured truly unresolved gaps.
