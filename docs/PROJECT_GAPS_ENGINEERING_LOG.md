@@ -278,6 +278,40 @@
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
 
+### ImportVerilog/MooreToCore: fix package-qualified class inheritance symbol loss + extern virtual crash chain
+- Repro:
+  - `llvm-lit -sv test/Conversion/ImportVerilog/extern-virtual-method.sv`
+  - `llvm-lit -sv test/Conversion/ImportVerilog/extern-implicit-virtual-override.sv`
+  - Both crashed in `circt-verilog` (first in `CreateVTablesPass`, then in
+    MooreToCore class-struct resolution) due invalid class base symbol refs.
+- Root cause:
+  - For package-qualified class inheritance (e.g. `class D extends p::B;`),
+    `ClassType::getBaseClass()` could surface as `ErrorType` in this lowering
+    path, and base-attr construction fell back to an empty symbol ref.
+  - This produced IR like `extends @<<INVALID EMPTY SYMBOL>>`, which then
+    triggered downstream null dereferences / invalid lookups during vtable and
+    class type lowering.
+  - Implicit virtual overrides for extern prototypes without explicit
+    `virtual` were then missed in vtable emission when relying only on
+    slang-side `isVirtual()` in this degraded base-resolution case.
+- Fix:
+  - In `Structure.cpp`:
+    - canonicalized base-class conversion path in `convertClassDeclaration`.
+    - added robust fallback extraction of textual `extends` target from source
+      when base class resolves as non-`ClassType` (notably `ErrorType`).
+    - dropped invalid empty base symbol refs instead of propagating them.
+    - added derived virtuality fallback (`isVirtualViaBaseDecl`) so extern
+      overrides inherit virtual behavior from already-lowered base class method
+      declarations.
+  - In `CreateVTables.cpp`:
+    - added null checks when resolving dependency class symbols to avoid
+      dereferencing unresolved entries.
+- Tests:
+  - `llvm-lit -sv test/Conversion/ImportVerilog/extern-virtual-method.sv test/Conversion/ImportVerilog/extern-implicit-virtual-override.sv`
+    - result: `2/2` pass.
+  - `llvm-lit -sv test/Conversion/ImportVerilog`
+    - failures reduced from `49` to `47`.
+
 ### UVM: fix callback macro test for current `uvm-core` macro semantics
 - Repro:
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_callback_test.sv`

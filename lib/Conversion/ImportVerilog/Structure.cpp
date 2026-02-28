@@ -26,6 +26,7 @@
 #include "slang/ast/symbols/VariableSymbols.h"
 #include "slang/ast/types/NetType.h"
 #include "slang/syntax/AllSyntax.h"
+#include "slang/text/SourceManager.h"
 #include "llvm/ADT/ScopeExit.h"
 
 using namespace circt;
@@ -413,6 +414,10 @@ static LogicalResult noteVariableAssignmentKind(
         bool currentSpecial = isSpecialProcedureKind(currentDriver.kind);
         if (prevSpecial || currentSpecial) {
           if (!continuousAssignPathsOverlap(currentDriver.path, prevDriver.path))
+            continue;
+          if (context.options.allowMultiAlwaysCombDrivers.value_or(false) &&
+              prevDriver.kind == moore::ProcedureKind::AlwaysComb &&
+              currentDriver.kind == moore::ProcedureKind::AlwaysComb)
             continue;
           auto diagKind = currentSpecial ? currentDriver.kind : prevDriver.kind;
           mlir::emitError(assignLoc)
@@ -6591,6 +6596,66 @@ Context::finalizeFunctionBodyCaptures(FunctionLowering &lowering) {
 
 namespace {
 
+/// Parse a best-effort textual base-class name from the class declaration
+/// source when slang reports an unresolved / ErrorType base.
+static mlir::StringAttr
+extractBaseClassNameFromSource(Context &context,
+                               const slang::ast::ClassType &cls) {
+  auto loc = cls.location;
+  if (!loc || !loc.buffer().valid())
+    return {};
+  llvm::StringRef text = context.sourceManager.getSourceText(loc.buffer());
+  if (text.empty() || loc.offset() >= text.size())
+    return {};
+
+  size_t start = loc.offset();
+  size_t end = text.find(';', start);
+  if (end == StringRef::npos)
+    return {};
+  auto decl = text.slice(start, end);
+
+  auto isWordBoundary = [](char c) {
+    return !std::isalnum(static_cast<unsigned char>(c)) && c != '_' && c != '$';
+  };
+
+  size_t extendsPos = StringRef::npos;
+  for (size_t i = 0; i + 7 <= decl.size(); ++i) {
+    if (decl.substr(i, 7) != "extends")
+      continue;
+    bool leftOk = i == 0 || isWordBoundary(decl[i - 1]);
+    bool rightOk = i + 7 == decl.size() || isWordBoundary(decl[i + 7]);
+    if (leftOk && rightOk) {
+      extendsPos = i;
+      break;
+    }
+  }
+  if (extendsPos == StringRef::npos)
+    return {};
+
+  size_t i = extendsPos + 7;
+  while (i < decl.size() && std::isspace(static_cast<unsigned char>(decl[i])))
+    ++i;
+  if (i >= decl.size())
+    return {};
+
+  size_t nameStart = i;
+  while (i < decl.size()) {
+    char c = decl[i];
+    bool ident = std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+                 c == '$' || c == ':';
+    if (!ident)
+      break;
+    ++i;
+  }
+  if (i == nameStart)
+    return {};
+
+  StringRef baseName = decl.slice(nameStart, i);
+  if (baseName.empty())
+    return {};
+  return mlir::StringAttr::get(context.getContext(), baseName);
+}
+
 /// Helper function to construct the classes fully qualified base class name
 /// and the name of all implemented interface classes
 std::pair<mlir::SymbolRefAttr, mlir::ArrayAttr>
@@ -6609,14 +6674,23 @@ buildBaseAndImplementsAttrs(Context &context,
       if (it != context.classes.end() && it->second && it->second->op) {
         base = mlir::SymbolRefAttr::get(it->second->op.getSymNameAttr());
       } else {
-        // Fallback to computing the name if the class isn't in the map yet.
-        base = mlir::SymbolRefAttr::get(fullyQualifiedClassName(context, *b));
+        // Fallback to computing the canonical class name if the class isn't
+        // in the map yet.
+        auto fq = fullyQualifiedClassName(context, *baseClass);
+        if (!fq.empty())
+          base = mlir::SymbolRefAttr::get(fq);
       }
     } else {
-      // Not a ClassType, fall back to name-based lookup
-      base = mlir::SymbolRefAttr::get(fullyQualifiedClassName(context, *b));
+      // Not a ClassType (often ErrorType for unresolved base types). Fall
+      // back to extracting the textual extends target from source.
+      if (auto parsed = extractBaseClassNameFromSource(context, cls))
+        base = mlir::SymbolRefAttr::get(parsed);
     }
   }
+
+  // Drop invalid empty symbol refs; callers treat a null attr as "no base".
+  if (base && base.getRootReference().empty())
+    base = {};
 
   // Implemented interfaces (if any)
   SmallVector<mlir::Attribute> impls;
@@ -7058,7 +7132,9 @@ struct ClassDeclVisitor {
     // In SystemVerilog, overriding methods are implicitly virtual even without
     // the 'virtual' keyword.
     const mlir::UnitAttr isVirtual =
-        fn.isVirtual() ? UnitAttr::get(context.getContext()) : nullptr;
+        (fn.isVirtual() || isVirtualViaBaseDecl(fn.name))
+            ? UnitAttr::get(context.getContext())
+            : nullptr;
 
     auto loc = convertLocation(fn.location);
     // Pure virtual functions regulate inheritance rules during parsing.
@@ -7158,7 +7234,7 @@ struct ClassDeclVisitor {
     // Check if the PROTOTYPE is virtual. Use fn.isVirtual() which checks not
     // only the explicit Virtual flag but also whether this method overrides a
     // virtual method from a base class (implicit virtuality in SystemVerilog).
-    bool protoIsVirtual = fn.isVirtual();
+    bool protoIsVirtual = fn.isVirtual() || isVirtualViaBaseDecl(fn.name);
 
     LLVM_DEBUG(llvm::dbgs() << "      Found implementation, visiting"
                             << (protoIsVirtual ? " (virtual)" : "") << "\n");
@@ -7332,6 +7408,25 @@ struct ClassDeclVisitor {
   }
 
 private:
+  bool isVirtualViaBaseDecl(StringRef methodName) {
+    auto baseAttr = classLowering.op.getBaseAttr();
+    SmallPtrSet<Operation *, 8> visited;
+    while (baseAttr) {
+      auto *baseOp = context.symbolTable.lookup(baseAttr.getRootReference());
+      auto baseDecl = llvm::dyn_cast_or_null<moore::ClassDeclOp>(baseOp);
+      if (!baseDecl || !visited.insert(baseDecl.getOperation()).second)
+        break;
+
+      for (auto baseMethod :
+           baseDecl.getBody().getOps<moore::ClassMethodDeclOp>())
+        if (baseMethod.getSymName() == methodName)
+          return true;
+
+      baseAttr = baseDecl.getBaseAttr();
+    }
+    return false;
+  }
+
   Location convertLocation(const slang::SourceLocation &sloc) {
     return context.convertLocation(sloc);
   }
@@ -7439,9 +7534,10 @@ Context::convertClassDeclaration(const slang::ast::ClassType &classdecl) {
   auto timeScaleGuard = llvm::make_scope_exit([&] { timeScale = prevTimeScale; });
 
   // Ensure base classes are elaborated before child classes.
-  if (classdecl.getBaseClass()) {
+  if (const auto *maybeBaseClass = classdecl.getBaseClass()) {
+    const auto &canonicalBase = maybeBaseClass->getCanonicalType();
     if (const auto *baseClassDecl =
-            classdecl.getBaseClass()->as_if<slang::ast::ClassType>()) {
+            canonicalBase.as_if<slang::ast::ClassType>()) {
       if (failed(convertClassDeclaration(*baseClassDecl)))
         return failure();
     }
