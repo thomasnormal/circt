@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  int i;\n  initial begin\n    for (i = 0; i < 3; i++) begin end\n    for (i = 0; i < 5; i++) begin end\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_FOR_COND_NEGATE@1\n' > %t/neg.txt
+// RUN: printf '1 NATIVE_FOR_COND_TRUE@2\n' > %t/true.txt
+// RUN: printf '1 NATIVE_FOR_COND_FALSE@1\n' > %t/false.txt
+// RUN: circt-mut apply -i %t/neg.txt -o %t/neg.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/true.txt -o %t/true.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/false.txt -o %t/false.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=NEG < %t/neg.sv
+// RUN: FileCheck %s --check-prefix=TRUE < %t/true.sv
+// RUN: FileCheck %s --check-prefix=FALSE < %t/false.sv
+//
+// NEG: for (i = 0; !(i < 3); i++) begin end
+// TRUE: for (i = 0; 1'b1; i++) begin end
+// FALSE: for (i = 0; 1'b0; i++) begin end

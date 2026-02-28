@@ -2329,3 +2329,46 @@
   - seeded xrun-vs-circt parity with watchdog-enabled while benchmark:
     - workspace: `/tmp/while_seeded_whilecond_parity_watchdog_1772308805`
     - result: `ok=18 mismatch=0 fail=0`.
+
+## 2026-02-28 (for-condition mutation class)
+
+- realizations:
+  - `for (init; cond; step)` condition faults are high-value loop-control bugs
+    and should be treated separately from `while` because condition extraction
+    requires semicolon-aware parsing inside the `for` header.
+  - Forced-constant conditions can produce infinite or bypassed loops, so
+    watchdog-based parity benches are required for deterministic comparison.
+
+- changes made:
+  - Added native mutation operators:
+    - `FOR_COND_NEGATE`
+    - `FOR_COND_TRUE`
+    - `FOR_COND_FALSE`
+  - Implemented in `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - token-aware `for (...)` site collection,
+    - semicolon-aware extraction of the middle `cond` field in loop headers,
+    - apply rewrites:
+      - negate: `for (...; cond; ...)` -> `for (...; !(cond); ...)`
+      - force true/false: `for (...; 1'b1; ...)` / `for (...; 1'b0; ...)`.
+  - Added mode integration to CIRCT-only control-bearing profiles in
+    `tools/circt-mut/circt-mut.cpp`.
+  - Synced native-op validator allowlist in
+    `utils/run_mutation_mcy_examples.sh`.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-for-cond-force.test`
+  - `test/Tools/native-create-mutated-for-cond-site-index.test`
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-for-cond-ops.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-for-cond-force.test test/Tools/native-create-mutated-for-cond-site-index.test test/Tools/circt-mut-generate-circt-only-control-mode-for-cond-ops.test`
+    - result: `3 passed`.
+  - safe-op validator regression:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+    - result: `1 passed`.
+  - seeded xrun-vs-circt parity with watchdog-enabled for benchmark:
+    - workspace: `/tmp/for_seeded_forcond_parity_watchdog_1772309035`
+    - result: `ok=18 mismatch=0 fail=0`.

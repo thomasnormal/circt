@@ -49,6 +49,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
     "WAIT_COND_NEGATE", "WAIT_COND_TRUE",    "WAIT_COND_FALSE",
     "WHILE_COND_NEGATE", "WHILE_COND_TRUE",  "WHILE_COND_FALSE",
+    "FOR_COND_NEGATE",   "FOR_COND_TRUE",    "FOR_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0",
@@ -70,7 +71,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "REPEAT_COUNT_PLUS_ONE", "REPEAT_COUNT_MINUS_ONE",
     "DELAY_PLUS_ONE", "DELAY_MINUS_ONE",
     "WAIT_COND_NEGATE", "WAIT_COND_TRUE", "WAIT_COND_FALSE",
-    "WHILE_COND_NEGATE", "WHILE_COND_TRUE", "WHILE_COND_FALSE"};
+    "WHILE_COND_NEGATE", "WHILE_COND_TRUE", "WHILE_COND_FALSE",
+    "FOR_COND_NEGATE", "FOR_COND_TRUE", "FOR_COND_FALSE"};
 
 namespace {
 
@@ -3183,6 +3185,111 @@ collectWhileConditionSites(StringRef text, ArrayRef<uint8_t> codeMask,
   }
 }
 
+static bool findForLoopConditionSpan(StringRef text, ArrayRef<uint8_t> codeMask,
+                                     size_t openPos, size_t &condBegin,
+                                     size_t &condEnd) {
+  if (openPos == StringRef::npos || openPos >= text.size() ||
+      !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+    return false;
+
+  size_t closePos = findMatchingParen(text, codeMask, openPos);
+  if (closePos == StringRef::npos || closePos <= openPos + 1)
+    return false;
+
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  size_t firstSemi = StringRef::npos;
+  size_t secondSemi = StringRef::npos;
+  for (size_t i = openPos + 1; i < closePos; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 &&
+        ch == ';') {
+      if (firstSemi == StringRef::npos)
+        firstSemi = i;
+      else {
+        secondSemi = i;
+        break;
+      }
+    }
+  }
+
+  if (firstSemi == StringRef::npos || secondSemi == StringRef::npos ||
+      firstSemi + 1 >= secondSemi)
+    return false;
+
+  size_t begin = findNextCodeNonSpace(text, codeMask, firstSemi + 1);
+  if (begin == StringRef::npos || begin >= secondSemi)
+    return false;
+
+  size_t end = secondSemi;
+  while (end > begin &&
+         (!isCodeAt(codeMask, end - 1) ||
+          std::isspace(static_cast<unsigned char>(text[end - 1]))))
+    --end;
+
+  if (end <= begin)
+    return false;
+
+  condBegin = begin;
+  condEnd = end;
+  return true;
+}
+
+static void collectForConditionSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                     SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 2 < e; ++i) {
+    if (!matchKeywordTokenAt(text, codeMask, i, "for"))
+      continue;
+
+    size_t openPos = i + strlen("for");
+    while (openPos < e &&
+           (!isCodeAt(codeMask, openPos) ||
+            std::isspace(static_cast<unsigned char>(text[openPos]))))
+      ++openPos;
+    if (openPos >= e || !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+      continue;
+
+    size_t condBegin = StringRef::npos;
+    size_t condEnd = StringRef::npos;
+    if (!findForLoopConditionSpan(text, codeMask, openPos, condBegin, condEnd))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectIfElseSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask,
                                       SmallVectorImpl<SiteInfo> &sites) {
   for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
@@ -3699,6 +3806,11 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectWhileConditionSites(designText, codeMask, sites);
     return;
   }
+  if (op == "FOR_COND_NEGATE" || op == "FOR_COND_TRUE" ||
+      op == "FOR_COND_FALSE") {
+    collectForConditionSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "IF_ELSE_SWAP_ARMS") {
     collectIfElseSwapArmSites(designText, codeMask, sites);
     return;
@@ -3951,6 +4063,8 @@ static std::string getOpFamily(StringRef op) {
       op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
       op == "WAIT_COND_FALSE" || op == "WHILE_COND_NEGATE" ||
       op == "WHILE_COND_TRUE" || op == "WHILE_COND_FALSE" ||
+      op == "FOR_COND_NEGATE" || op == "FOR_COND_TRUE" ||
+      op == "FOR_COND_FALSE" ||
       op == "CASE_TO_CASEZ" || op == "CASEZ_TO_CASE" ||
       op == "CASE_TO_CASEX" || op == "CASEX_TO_CASE" ||
       op == "CASEZ_TO_CASEX" || op == "CASEX_TO_CASEZ" ||
@@ -4798,6 +4912,34 @@ findWhileConditionBoundsAtSite(StringRef text, ArrayRef<uint8_t> codeMask,
   return true;
 }
 
+static bool findForConditionBoundsAtSite(StringRef text,
+                                         ArrayRef<uint8_t> codeMask,
+                                         size_t forPos, size_t &condOpen,
+                                         size_t &condClose) {
+  if (forPos == StringRef::npos || forPos + strlen("for") > text.size() ||
+      !matchKeywordTokenAt(text, codeMask, forPos, "for"))
+    return false;
+
+  size_t openPos = forPos + strlen("for");
+  while (openPos < text.size() &&
+         (!isCodeAt(codeMask, openPos) ||
+          std::isspace(static_cast<unsigned char>(text[openPos]))))
+    ++openPos;
+  if (openPos >= text.size() || !isCodeAt(codeMask, openPos) ||
+      text[openPos] != '(')
+    return false;
+
+  size_t begin = StringRef::npos;
+  size_t end = StringRef::npos;
+  if (!findForLoopConditionSpan(text, codeMask, openPos, begin, end))
+    return false;
+
+  // Mirror other condition-bound helpers: [condOpen+1, condClose) is condition.
+  condOpen = begin - 1;
+  condClose = end;
+  return true;
+}
+
 static size_t findTernaryEndDelimiter(StringRef text, ArrayRef<uint8_t> codeMask,
                                       size_t colonPos) {
   if (colonPos == StringRef::npos || colonPos >= text.size())
@@ -5175,7 +5317,9 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
       op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
       op == "WAIT_COND_FALSE" || op == "WHILE_COND_NEGATE" ||
-      op == "WHILE_COND_TRUE" || op == "WHILE_COND_FALSE") {
+      op == "WHILE_COND_TRUE" || op == "WHILE_COND_FALSE" ||
+      op == "FOR_COND_NEGATE" || op == "FOR_COND_TRUE" ||
+      op == "FOR_COND_FALSE") {
     size_t condOpen = StringRef::npos;
     size_t condClose = StringRef::npos;
     if (op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
@@ -5188,6 +5332,11 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
       if (!findWhileConditionBoundsAtSite(text, codeMask, pos, condOpen,
                                           condClose))
         return false;
+    } else if (op == "FOR_COND_NEGATE" || op == "FOR_COND_TRUE" ||
+               op == "FOR_COND_FALSE") {
+      if (!findForConditionBoundsAtSite(text, codeMask, pos, condOpen,
+                                        condClose))
+        return false;
     } else {
       if (!findIfConditionBoundsAtSite(text, codeMask, pos, condOpen,
                                        condClose))
@@ -5195,10 +5344,12 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     }
 
     if (op == "IF_COND_TRUE" || op == "RESET_COND_TRUE" ||
-        op == "WAIT_COND_TRUE" || op == "WHILE_COND_TRUE")
+        op == "WAIT_COND_TRUE" || op == "WHILE_COND_TRUE" ||
+        op == "FOR_COND_TRUE")
       return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b1");
     if (op == "IF_COND_FALSE" || op == "RESET_COND_FALSE" ||
-        op == "WAIT_COND_FALSE" || op == "WHILE_COND_FALSE")
+        op == "WAIT_COND_FALSE" || op == "WHILE_COND_FALSE" ||
+        op == "FOR_COND_FALSE")
       return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b0");
 
     StringRef condExpr = text.slice(condOpen + 1, condClose);
