@@ -9725,3 +9725,30 @@
 - validation:
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_tlm_fifo_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
+
+## 2026-02-28 - UVM factory test suite semantic conversion (multi-scenario)
+
+- realization:
+  - `test/Runtime/uvm/uvm_factory_test.sv` was parse-only, so multiple factory behaviors could fail silently.
+  - After semantic conversion, one scenario (`test_replace_param`) failed in runtime due unresolved by-name override target registration.
+
+- implemented:
+  - `test/Runtime/uvm/uvm_factory_test.sv`
+    - added semantic RUN coverage (`--ir-hw` + `circt-sim`) for seven high-value factory scenarios:
+      - `test_type_id_create`
+      - `test_factory_overrides`
+      - `test_set_type_override_by_type`
+      - `test_set_inst_override_by_type`
+      - `test_override_priority`
+      - `test_seq_item_override`
+      - `test_replace_param`
+    - added explicit pass markers per scenario for FileCheck.
+    - switched top-level from hardcoded `run_test("test_type_id_create")` to `run_test()` to allow lit-driven `+UVM_TESTNAME` selection.
+    - fixed UVM-phase legality issue by moving component creation for `test_type_id_create` into `build_phase` (instead of creating components during `run_phase`).
+    - added package helper for error/fatal-free pass signaling and helper for explicit factory registration.
+    - fixed `test_replace_param` by explicitly ensuring by-name override wrapper types are registered before invoking `set_type_override_by_name`.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv`
+  - regression bundle:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv test/Runtime/uvm/uvm_factory_override_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_component_suspend_resume_test.sv test/Runtime/uvm/uvm_send_request_test.sv`

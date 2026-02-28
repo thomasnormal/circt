@@ -7,6 +7,22 @@
 // 4. get_type() and get_type_name()
 //===----------------------------------------------------------------------===//
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_type_id_create 2>&1 | FileCheck %s --check-prefix=SIM-TYPE-ID-CREATE
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_factory_overrides 2>&1 | FileCheck %s --check-prefix=SIM-FACTORY-OVERRIDES
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_set_type_override_by_type 2>&1 | FileCheck %s --check-prefix=SIM-TYPE-OVERRIDE-BY-TYPE
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_set_inst_override_by_type 2>&1 | FileCheck %s --check-prefix=SIM-INST-OVERRIDE-BY-TYPE
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_override_priority 2>&1 | FileCheck %s --check-prefix=SIM-OVERRIDE-PRIORITY
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_seq_item_override 2>&1 | FileCheck %s --check-prefix=SIM-SEQ-ITEM-OVERRIDE
+// RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_TESTNAME=test_replace_param 2>&1 | FileCheck %s --check-prefix=SIM-REPLACE-PARAM
+
+// SIM-TYPE-ID-CREATE: UVM_FACTORY_TYPE_ID_CREATE_PASS
+// SIM-FACTORY-OVERRIDES: UVM_FACTORY_OVERRIDES_PASS
+// SIM-TYPE-OVERRIDE-BY-TYPE: UVM_FACTORY_SET_TYPE_OVERRIDE_BY_TYPE_PASS
+// SIM-INST-OVERRIDE-BY-TYPE: UVM_FACTORY_SET_INST_OVERRIDE_BY_TYPE_PASS
+// SIM-OVERRIDE-PRIORITY: UVM_FACTORY_OVERRIDE_PRIORITY_PASS
+// SIM-SEQ-ITEM-OVERRIDE: UVM_FACTORY_SEQ_ITEM_OVERRIDE_PASS
+// SIM-REPLACE-PARAM: UVM_FACTORY_REPLACE_PARAM_PASS
 
 `timescale 1ns/1ps
 
@@ -14,6 +30,20 @@
 
 package uvm_factory_test_pkg;
   import uvm_pkg::*;
+
+  function bit no_uvm_failures();
+    uvm_report_server rs;
+    rs = uvm_report_server::get_server();
+    return rs.get_severity_count(UVM_ERROR) == 0 &&
+           rs.get_severity_count(UVM_FATAL) == 0;
+  endfunction
+
+  function void ensure_factory_registered(uvm_object_wrapper wrapper);
+    uvm_factory f;
+    f = uvm_factory::get();
+    if (!f.is_type_registered(wrapper))
+      f.register(wrapper);
+  endfunction
 
   //==========================================================================
   // SECTION 1: Basic Factory Registration with Macros
@@ -152,13 +182,19 @@ package uvm_factory_test_pkg;
   class test_type_id_create extends uvm_test;
     `uvm_component_utils(test_type_id_create)
 
+    base_component comp;
+
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    virtual function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      comp = base_component::type_id::create("comp", this);
+    endfunction
+
     virtual task run_phase(uvm_phase phase);
       base_object obj1, obj2;
-      base_component comp;
       test_seq_item item;
 
       phase.raise_objection(this, "Testing type_id::create()");
@@ -191,7 +227,6 @@ package uvm_factory_test_pkg;
 
       // Test 1.3: Component creation via type_id::create()
       `uvm_info("TEST", "Testing component creation via type_id::create()", UVM_NONE)
-      comp = base_component::type_id::create("comp", this);
       if (comp == null)
         `uvm_error("TEST", "Failed to create component via type_id::create()")
       else begin
@@ -222,6 +257,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_type_id_create completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_TYPE_ID_CREATE_PASS");
     endfunction
   endclass
 
@@ -269,6 +306,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_factory_overrides completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_OVERRIDES_PASS");
     endfunction
   endclass
 
@@ -335,6 +374,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_set_type_override_by_type completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_SET_TYPE_OVERRIDE_BY_TYPE_PASS");
     endfunction
   endclass
 
@@ -402,6 +443,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_set_inst_override_by_type completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_SET_INST_OVERRIDE_BY_TYPE_PASS");
     endfunction
   endclass
 
@@ -664,6 +707,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_override_priority completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_OVERRIDE_PRIORITY_PASS");
     endfunction
   endclass
 
@@ -747,6 +792,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_seq_item_override completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_SEQ_ITEM_OVERRIDE_PASS");
     endfunction
   endclass
 
@@ -765,6 +812,11 @@ package uvm_factory_test_pkg;
       base_object obj;
 
       phase.raise_objection(this, "Testing replace parameter");
+
+      // Name-based overrides require the target wrappers to be registered.
+      ensure_factory_registered(base_object::get_type());
+      ensure_factory_registered(extended_object::get_type());
+      ensure_factory_registered(alt_extended_object::get_type());
 
       // First override with replace=1 (default)
       `uvm_info("TEST", "Setting first override: base_object -> extended_object", UVM_NONE)
@@ -807,6 +859,8 @@ package uvm_factory_test_pkg;
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
       `uvm_info("TEST", "test_replace_param completed", UVM_NONE)
+      if (no_uvm_failures())
+        $display("UVM_FACTORY_REPLACE_PARAM_PASS");
     endfunction
   endclass
 
@@ -821,9 +875,7 @@ module tb_top;
 
   initial begin
     `uvm_info("TB", "UVM Factory Test Starting", UVM_NONE)
-    // Run the type_id::create test by default
-    // Other tests can be selected via +UVM_TESTNAME
-    run_test("test_type_id_create");
+    run_test();
   end
 
 endmodule
