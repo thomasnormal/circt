@@ -2,7 +2,7 @@
 // RUN: printf 'module top(input logic a, input logic b, output logic y);\n  assign y = (a == b) && (a != b);\nendmodule\n' > %t/design.sv
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 6 --seed 3 --modes arith > %t/log.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
-// RUN: grep -E -q 'NATIVE_(EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|ADD_TO_SUB|SUB_TO_ADD)' %t/mutations.txt
+// RUN: grep -E -q 'NATIVE_(EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|ADD_TO_SUB|SUB_TO_ADD|EQ_TO_CASEEQ|NEQ_TO_CASENEQ|ASSIGN_RHS_PLUS_ONE|ASSIGN_RHS_MINUS_ONE|ASSIGN_RHS_NEGATE|ASSIGN_RHS_SHL_ONE|ASSIGN_RHS_SHR_ONE)' %t/mutations.txt
 // RUN: not grep -q 'NATIVE_AND_TO_OR' %t/mutations.txt
 // RUN: not grep -q 'NATIVE_CONST0_TO_1' %t/mutations.txt
 //

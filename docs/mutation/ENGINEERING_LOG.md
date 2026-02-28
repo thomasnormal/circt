@@ -1439,12 +1439,19 @@
   - Added regression:
     - `test/Tools/native-create-mutated-assign-rhs-plus-one-expression-site-index.test`
     - verifies `c ^ d` is mutated as `((c ^ d) + 1'b1)` (not precedence-broken).
+  - Updated planner-mode expectation tests to account for the larger
+    assignment-RHS candidate set in arithmetic/weighted runs:
+    - `test/Tools/circt-mut-generate-circt-only-modes-basic.test`
+    - `test/Tools/circt-mut-generate-circt-only-weighted-fault-class-diversity.test`
 
 - validation:
   - `utils/ninja-with-lock.sh -C build_test circt-mut`
   - focused assign-RHS lit slice:
     - filter: `native-create-mutated-assign-rhs|native-mutation-plan-assign-rhs|circt-mut-generate-circt-only-arith-mode-assign-rhs-plus-one-op|circt-mut-generate-circt-only-connect-mode-assign-rhs-const-ops`
     - result: `19 passed`.
+  - focused mode/weighted sanity slice after expectation updates:
+    - filter: `circt-mut-generate-circt-only-(modes-basic|mode-counts-basic|mode-weights-basic|profiles-basic|weighted-policy|weighted-context-priority|weighted-fault-class-diversity|matrix-circt-only-default|select-basic|select-nomatch)`
+    - result: `9 passed`.
   - seeded parity campaign on deterministic `cov_intro_seeded` with updated
     expression-capable assignment-RHS matching:
     - `/tmp/cov_intro_seeded_allmode_exprrhs_1772296907`
