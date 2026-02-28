@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  logic a;\n  initial begin\n    #5 a = 1'b1;\n    #1 a = 1'b0;\n  end\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops DELAY_PLUS_ONE --out %t/plus.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops DELAY_MINUS_ONE --out %t/minus.txt
+// RUN: FileCheck %s --check-prefix=PLUS < %t/plus.txt
+// RUN: FileCheck %s --check-prefix=MINUS < %t/minus.txt
+//
+// PLUS: NATIVE_DELAY_PLUS_ONE@1
+// PLUS: NATIVE_DELAY_PLUS_ONE@2
+//
+// MINUS: NATIVE_DELAY_MINUS_ONE@1
+// MINUS: NATIVE_DELAY_MINUS_ONE@2

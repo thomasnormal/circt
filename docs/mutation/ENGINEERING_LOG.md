@@ -2198,3 +2198,50 @@
     - stable-binary rerun (snapshot copies of CIRCT tools in workspace):
       - workspace: `/tmp/cov_intro_seeded_repeat_count_delta_recheck_stable_1772307799`
       - result: `ok=20 mismatch=0 fail=0`.
+
+## 2026-02-28 (delay off-by-one mutation class)
+
+- realizations:
+  - Delay literals (`#N`) are a realistic timing-control bug surface not covered
+    by existing operator swaps or repeat-count edits.
+  - Treating delay count drift as first-class mutations increases control/timing
+    fault diversity while keeping generated mutants syntactically valid.
+
+- changes made:
+  - Added native mutation operators:
+    - `DELAY_PLUS_ONE`
+    - `DELAY_MINUS_ONE`
+  - Implemented in `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - token-aware delay-literal site collection for `#<literal>`,
+    - skips `#(` parameterization and `##` cycle-delay syntax,
+    - keeps skip-zero policy for minus operator.
+  - Planner plumbing:
+    - operator catalog, site dispatch, family classification (`control`), and
+      apply dispatch via existing literal delta rewrite.
+  - CIRCT-only mode integration in `tools/circt-mut/circt-mut.cpp`:
+    - added delay delta operators to control-bearing mode sets.
+  - Validator sync:
+    - `utils/run_mutation_mcy_examples.sh` native-op token allowlist now accepts
+      `DELAY_PLUS_ONE` / `DELAY_MINUS_ONE`.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-delay-plus-minus-force.test`
+  - `test/Tools/native-create-mutated-delay-plus-minus-site-index.test`
+  - `test/Tools/native-mutation-plan-delay-minus-skip-zero.test`
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-delay-delta-ops.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-delay-plus-minus-force.test test/Tools/native-create-mutated-delay-plus-minus-site-index.test test/Tools/native-mutation-plan-delay-minus-skip-zero.test test/Tools/circt-mut-generate-circt-only-control-mode-delay-delta-ops.test`
+    - result: `4 passed`.
+  - validator regression:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+    - result: `1 passed`.
+  - seeded xrun-vs-circt parity:
+    - workspace: `/tmp/cov_intro_seeded_delay_delta_stable_1772308071`
+    - result: `ok=20 mismatch=0 fail=0`.
+  - targeted edge-polarity parity recheck (regression guard while extending ops):
+    - workspace: `/tmp/cov_intro_seeded_edge_polarity_recheck_stable_1772307888`
+    - result: `ok=24 mismatch=0 fail=0`.
