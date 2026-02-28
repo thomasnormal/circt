@@ -106,6 +106,13 @@ static void maybeTraceFilteredCall(ProcessId procId, llvm::StringRef callKind,
   llvm::errs() << " callee=" << calleeName << "\n";
 }
 
+static bool isNativeAnalysisWriteCalleeCI(llvm::StringRef calleeName) {
+  if (!calleeName.contains("::write") || calleeName.contains("write_m_"))
+    return false;
+  return calleeName.contains("analysis_port") ||
+         calleeName.contains("uvm_tlm_if_base");
+}
+
 static uint64_t sequencerProcKey(ProcessId procId) {
   return 0xF1F1000000000000ULL | static_cast<uint64_t>(procId);
 }
@@ -790,14 +797,20 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (resolvedName.contains("uvm_port_base") &&
             resolvedName.contains("::connect") &&
             !resolvedName.contains("connect_phase") && args.size() >= 2) {
-          uint64_t selfAddr2 = args[0].isX() ? 0 : args[0].getUInt64();
-          uint64_t providerAddr2 = args[1].isX() ? 0 : args[1].getUInt64();
+          uint64_t rawSelfAddr2 = args[0].isX() ? 0 : args[0].getUInt64();
+          uint64_t rawProviderAddr2 = args[1].isX() ? 0 : args[1].getUInt64();
+          uint64_t selfAddr2 =
+              canonicalizeUvmObjectAddress(procId, rawSelfAddr2);
+          uint64_t providerAddr2 =
+              canonicalizeUvmObjectAddress(procId, rawProviderAddr2);
           if (selfAddr2 != 0 && providerAddr2 != 0) {
             auto &conns = analysisPortConnections[selfAddr2];
             if (std::find(conns.begin(), conns.end(), providerAddr2) ==
                 conns.end()) {
               conns.push_back(providerAddr2);
               invalidateUvmSequencerQueueCache(selfAddr2);
+              if (analysisPortTerminalCache.erase(selfAddr2))
+                ++analysisPortTerminalCacheInvalidations;
             }
           }
           // [SEQ-CONN] X-fallback connect diagnostic removed
@@ -805,14 +818,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break;
         }
 
-        // Intercept analysis_port::write in X-fallback path.
+        // Intercept analysis write entrypoints in X-fallback path.
         // The UVM write() body iterates m_imp_list via get_if(i), but
         // m_if is empty because we skip resolve_bindings. Use our native
         // analysisPortConnections map to dispatch to terminal imps.
-        if (resolvedName.contains("analysis_port") &&
-            resolvedName.contains("::write") &&
-            !resolvedName.contains("write_m_") && args.size() >= 2) {
-          uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
+        if (isNativeAnalysisWriteCalleeCI(resolvedName) && args.size() >= 2) {
+          uint64_t rawPortAddr = args[0].isX() ? 0 : args[0].getUInt64();
+          uint64_t portAddr = canonicalizeUvmObjectAddress(procId, rawPortAddr);
           if (traceAnalysisEnabled)
             llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] " << resolvedName
                          << " portAddr=0x" << llvm::format_hex(portAddr, 0)
@@ -822,11 +834,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           llvm::SmallVector<uint64_t, 4> terminals;
           llvm::SmallVector<uint64_t, 8> worklist;
           llvm::DenseSet<uint64_t> visited;
-          auto seedIt = analysisPortConnections.find(portAddr);
-          if (seedIt != analysisPortConnections.end()) {
-            for (uint64_t a : seedIt->second)
-              worklist.push_back(a);
-          }
+          seedAnalysisPortConnectionWorklist(procId, portAddr, worklist);
           while (!worklist.empty()) {
             uint64_t addr = worklist.pop_back_val();
             if (!visited.insert(addr).second)
@@ -892,6 +900,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                      callIndirectOp);
               --cState2.callDepth;
             }
+            resolved = true;
+            break;
+          }
+          if (resolvedName.contains("uvm_tlm_if_base")) {
+            if (traceAnalysisEnabled)
+              llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] NO terminals for "
+                           << "tlm_if_base self=0x"
+                           << llvm::format_hex(portAddr, 0) << " (no-op)\n";
             resolved = true;
             break;
           }
@@ -1631,11 +1647,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
         }
 
-        // Intercept analysis_port::write in non-X static fallback path.
-        if (resolvedName.contains("analysis_port") &&
-            resolvedName.contains("::write") &&
-            !resolvedName.contains("write_m_") && sArgs.size() >= 2) {
-          uint64_t portAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
+        // Intercept analysis write entrypoints in non-X static fallback path.
+        if (isNativeAnalysisWriteCalleeCI(resolvedName) && sArgs.size() >= 2) {
+          uint64_t rawPortAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
+          uint64_t portAddr3 =
+              canonicalizeUvmObjectAddress(procId, rawPortAddr3);
           if (traceAnalysisEnabled)
             llvm::errs() << "[ANALYSIS-WRITE-STATIC] " << resolvedName
                          << " portAddr=0x" << llvm::format_hex(portAddr3, 0)
@@ -1644,11 +1660,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           llvm::SmallVector<uint64_t, 4> terminals3;
           llvm::SmallVector<uint64_t, 8> worklist3;
           llvm::DenseSet<uint64_t> visited3;
-          auto seedIt3 = analysisPortConnections.find(portAddr3);
-          if (seedIt3 != analysisPortConnections.end()) {
-            for (uint64_t a : seedIt3->second)
-              worklist3.push_back(a);
-          }
+          seedAnalysisPortConnectionWorklist(procId, portAddr3, worklist3);
           while (!worklist3.empty()) {
             uint64_t addr = worklist3.pop_back_val();
             if (!visited3.insert(addr).second)
@@ -1708,6 +1720,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               (void)interpretFuncBody(procId, iwf, iArgs, iRes, callIndirectOp);
               --cs3.callDepth;
             }
+            staticResolved = true;
+            break;
+          }
+          if (resolvedName.contains("uvm_tlm_if_base")) {
+            if (traceAnalysisEnabled)
+              llvm::errs() << "[ANALYSIS-WRITE-STATIC] NO terminals for "
+                           << "tlm_if_base self=0x"
+                           << llvm::format_hex(portAddr3, 0) << " (no-op)\n";
             staticResolved = true;
             break;
           }
@@ -4344,7 +4364,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // rejects connections when the phase hopper's state tracking marks
     // end_of_elaboration as DONE before connect_phase callbacks finish.
     // The native connection map is used by get_next_item, item_done,
-    // analysis_port::write, and other TLM operations.
+    // analysis write entrypoints, and other TLM operations.
     auto isNativeConnectCallee = [&](llvm::StringRef name) {
       if (!name.contains("::connect"))
         return false;
@@ -4355,13 +4375,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     };
     if (isNativeConnectCallee(calleeName) &&
         !calleeName.contains("connect_phase") && args.size() >= 2) {
-      uint64_t selfAddr = args[0].isX() ? 0 : args[0].getUInt64();
-      uint64_t providerAddr = args[1].isX() ? 0 : args[1].getUInt64();
+      uint64_t rawSelfAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      uint64_t rawProviderAddr = args[1].isX() ? 0 : args[1].getUInt64();
+      uint64_t selfAddr = canonicalizeUvmObjectAddress(procId, rawSelfAddr);
+      uint64_t providerAddr =
+          canonicalizeUvmObjectAddress(procId, rawProviderAddr);
       if (selfAddr != 0 && providerAddr != 0) {
         auto &conns = analysisPortConnections[selfAddr];
         if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
           conns.push_back(providerAddr);
           invalidateUvmSequencerQueueCache(selfAddr);
+          if (analysisPortTerminalCache.erase(selfAddr))
+            ++analysisPortTerminalCacheInvalidations;
         }
       }
       if (traceAnalysisEnabled)
@@ -4386,14 +4411,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return success();
     }
 
-    // Intercept analysis_port::write to broadcast to connected ports.
+    // Intercept analysis write entrypoints to broadcast to connected ports.
     // When the native port_base connect() is rejected due to "Late Connection",
     // the UVM write() loop finds 0 subscribers. We use our native connection
     // map to resolve the correct imp write function via vtable dispatch.
     // Supports multi-hop chains: port → port/export → imp.
-    if (calleeName.contains("analysis_port") && calleeName.contains("::write") &&
-        !calleeName.contains("write_m_") && args.size() >= 2) {
-      uint64_t portAddr = args[0].isX() ? 0 : args[0].getUInt64();
+    if (isNativeAnalysisWriteCalleeCI(calleeName) && args.size() >= 2) {
+      uint64_t rawPortAddr = args[0].isX() ? 0 : args[0].getUInt64();
+      uint64_t portAddr = canonicalizeUvmObjectAddress(procId, rawPortAddr);
       if (traceAnalysisEnabled)
         llvm::errs() << "[ANALYSIS-WRITE] " << calleeName
                      << " portAddr=0x" << llvm::format_hex(portAddr, 0)
@@ -4404,11 +4429,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       llvm::SmallVector<uint64_t, 4> terminals;
       llvm::SmallVector<uint64_t, 8> worklist;
       llvm::DenseSet<uint64_t> visited;
-      auto seedIt = analysisPortConnections.find(portAddr);
-      if (seedIt != analysisPortConnections.end()) {
-        for (uint64_t a : seedIt->second)
-          worklist.push_back(a);
-      }
+      seedAnalysisPortConnectionWorklist(procId, portAddr, worklist);
       while (!worklist.empty()) {
         uint64_t addr = worklist.pop_back_val();
         if (!visited.insert(addr).second)
@@ -4498,6 +4519,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                  callIndirectOp);
           --cState.callDepth;
         }
+        return success();
+      }
+      if (calleeName.contains("uvm_tlm_if_base")) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[ANALYSIS-WRITE] NO terminals for tlm_if_base "
+                       << "self=0x" << llvm::format_hex(portAddr, 0)
+                       << " (no-op)\n";
         return success();
       }
       // If no native connections, fall through to normal execution
