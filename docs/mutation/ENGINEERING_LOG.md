@@ -1373,3 +1373,42 @@
   - Harness correction note:
     - invalid `xrun -R` usage in one aborted rerun produced `xrun_fail` rows;
       rerun without `-R` restored valid parity measurements.
+
+## 2026-02-28 (ASSIGN_RHS_SHL_ONE / ASSIGN_RHS_SHR_ONE)
+
+- realizations:
+  - Assignment-RHS arithmetic mutations still under-covered a common scaling bug
+    class: incorrect single-bit shifts in RHS update expressions.
+  - This class is realistic for datapath/control arithmetic and distinct from
+    global operator swaps because it scopes to assignment RHS sites.
+
+- changes made:
+  - Added native assignment-RHS mutation operators:
+    - `ASSIGN_RHS_SHL_ONE` (`rhs` -> `(rhs << 1'b1)`)
+    - `ASSIGN_RHS_SHR_ONE` (`rhs` -> `(rhs >> 1'b1)`)
+  - Wired through planner/apply and fault-family classification:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - included in assignment-RHS op detection and `arithmetic` family mapping.
+  - Included both ops in CIRCT-only mode allowlists where arithmetic
+    assignment RHS mutations are selected:
+    - `tools/circt-mut/circt-mut.cpp` (`arith`, `invert`, `balanced`, `all`)
+  - Updated native-op token validation:
+    - `utils/run_mutation_mcy_examples.sh`
+  - Added TDD tests:
+    - `test/Tools/native-create-mutated-assign-rhs-shl-one-site-index.test`
+    - `test/Tools/native-create-mutated-assign-rhs-shr-one-site-index.test`
+    - `test/Tools/native-mutation-plan-assign-rhs-shl-one-force.test`
+    - `test/Tools/native-mutation-plan-assign-rhs-shr-one-force.test`
+  - Extended arith-mode generation coverage test:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-assign-rhs-plus-one-op.test`
+      now checks both shift ops.
+
+- validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - Focused lit slice:
+    - 9 tests passed across assign-rhs negate/shift apply+plan and weighted mode
+      coverage checks.
+  - Seeded parity campaign (`xrun` vs `circt`) restricted to new ops:
+    - `/tmp/cov_intro_seeded_assign_rhs_shift_parity_1772296371`
+    - result: `ok=12 mismatch=0 fail=0` (`shl_mutants=6`, `shr_mutants=6`).

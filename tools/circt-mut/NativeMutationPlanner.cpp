@@ -35,7 +35,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
     "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE", "ASSIGN_RHS_MINUS_ONE",
-    "ASSIGN_RHS_NEGATE",
+    "ASSIGN_RHS_NEGATE", "ASSIGN_RHS_SHL_ONE", "ASSIGN_RHS_SHR_ONE",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -1715,7 +1715,8 @@ static bool findSimpleAssignmentRhsIdentifierSpan(StringRef text,
 static bool isAssignRhsMutationOp(StringRef op) {
   return op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
          op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
-         op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE";
+         op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE" ||
+         op == "ASSIGN_RHS_SHL_ONE" || op == "ASSIGN_RHS_SHR_ONE";
 }
 
 static StringRef getAssignRhsMutationFamily(StringRef op) {
@@ -1724,7 +1725,8 @@ static StringRef getAssignRhsMutationFamily(StringRef op) {
   if (op == "ASSIGN_RHS_INVERT")
     return "logic";
   if (op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
-      op == "ASSIGN_RHS_NEGATE")
+      op == "ASSIGN_RHS_NEGATE" || op == "ASSIGN_RHS_SHL_ONE" ||
+      op == "ASSIGN_RHS_SHR_ONE")
     return "arithmetic";
   return "";
 }
@@ -1753,6 +1755,14 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
   }
   if (op == "ASSIGN_RHS_NEGATE") {
     replacement = (Twine("-(") + rhsExpr + ")").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_SHL_ONE") {
+    replacement = (Twine("(") + rhsExpr + " << 1'b1)").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_SHR_ONE") {
+    replacement = (Twine("(") + rhsExpr + " >> 1'b1)").str();
     return true;
   }
   return false;

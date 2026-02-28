@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, input logic [3:0] a,b,c, output logic [3:0] y,z,w);\n  assign y = a;\n  always_ff @(posedge clk) begin\n    z <= b;\n    w = c;\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_ASSIGN_RHS_SHR_ONE@3\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUT < %t/mutant.sv
+//
+// MUT: assign y = a;
+// MUT: z <= b;
+// MUT: w = (c >> 1'b1);
