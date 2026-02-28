@@ -1,5 +1,95 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (compound-assign realism + array-index sentinel parity bug)
+
+- realizations:
+  - Compound-assignment confusion for `*=`/`/=` is a realistic arithmetic fault
+    class and fits naturally with existing `+=`/`-=` mutations.
+  - A real xrun-vs-circt mismatch surfaced under mutation:
+    `NATIVE_LT_TO_LE@3` changed `i < 16` to `i <= 16`, and CIRCT interpreted an
+    imported sentinel index as a valid in-range access.
+  - Root cause was not randomness: deterministic seeded parity reproduced it
+    consistently (`79/80` before fix, one stable mismatch).
+
+- changes made:
+  - Added native operators:
+    - `MUL_EQ_TO_DIV_EQ`
+    - `DIV_EQ_TO_MUL_EQ`
+  - Integrated new operators in planner + mutator + mode mappings:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - `tools/circt-mut/circt-mut.cpp`
+    - `utils/mutation_mcy/templates/native_create_mutated.py`
+    - `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions for new ops:
+    - `test/Tools/native-create-mutated-mul-eq-to-div-eq-site-index.test`
+    - `test/Tools/native-create-mutated-div-eq-to-mul-eq-site-index.test`
+    - updated `circt-mut-generate-circt-only-arith-mode-compound-assign-ops.test`
+  - Fixed circt-sim array OOB sentinel behavior:
+    - added `isImportedArrayIndexOutOfBoundsSentinel(...)` in
+      `LLHDProcessInterpreter`,
+    - applied it to `hw.array_get`, `hw.array_inject`, and `llhd.sig.array_get`
+      probe/drive paths.
+  - Added circt-sim regression test:
+    - `test/Tools/circt-sim/array-get-oob-sentinel-index.sv`
+
+- validation:
+  - Focused lit slices for compound-assign and sentinel regression pass.
+  - Minimal reproducer before/after:
+    - before: `COUNT=2` for out-of-bounds loop (`i <= 16`)
+    - after: `COUNT=1` (matches xrun semantics)
+  - Previously failing mutant now matches:
+    - `NATIVE_LT_TO_LE@3` summary parity restored.
+  - Full seeded parity rerun (`count=80`, `seed=31`) now:
+    - `matches=80`, `fails=0`.
+
+## 2026-02-28 (modulo/division confusion mutation class)
+
+- realizations:
+  - `%` vs `/` confusion is a realistic arithmetic bug class in datapath RTL
+    and complements existing `MUL`/`DIV` confusion operators.
+  - xrun-vs-circt parity must avoid harness artifacts:
+    - `get_coverage()` in xrun requires `-coverage ...` enabled.
+    - stimulus driven on the same `posedge` as DUT flops can introduce race
+      order differences that look like simulator bugs.
+    - uninitialized memories can create X-vs-value noise unrelated to mutation
+      semantics.
+
+- changes made:
+  - Added native operators:
+    - `MOD_TO_DIV`
+    - `DIV_TO_MOD`
+  - Integrated new operators into CIRCT-only planning:
+    - native op catalog (`kNativeMutationOpsAll`)
+    - site collection (`collectBinaryMulDivSites` extended to `%`)
+    - op-site dispatch (`collectSitesForOp`)
+    - arithmetic fault-family classification (`getOpFamily`)
+  - Added CIRCT-only mode mapping coverage in `circt-mut generate`:
+    - `arith`
+    - `invert` / `inv`
+    - `balanced` / `all`
+  - Added native mutator rewrite support:
+    - `utils/mutation_mcy/templates/native_create_mutated.py`
+      - `% -> /` for `MOD_TO_DIV`
+      - `/ -> %` for `DIV_TO_MOD`
+  - Updated public native-op CLI validation list:
+    - `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-mod-ops.test`
+    - `test/Tools/native-create-mutated-mod-to-div-site-index.test`
+    - `test/Tools/native-create-mutated-div-to-mod-site-index.test`
+
+- validation:
+  - TDD step: new tests fail before implementation; pass after implementation.
+  - Focused lit slices:
+    - `circt-mut-generate-circt-only-arith-mode-(div|mod)-ops`
+    - `native-create-mutated-(div-to-mul|mul-to-div|mod-to-div|div-to-mod)-site-index`
+    - broader touched slice with related arith/native tests (`12 passed`)
+  - Seeded parity campaign using generated mutants (`count=24`, `seed=20260228`)
+    on a race-free deterministic `cov_intro_seeded`-style bench:
+    - includes new ops `NATIVE_MOD_TO_DIV@1`, `NATIVE_DIV_TO_MOD@1`
+    - `xrun` (with coverage enabled) vs `circt-sim` summary comparison:
+      `ok=24 mismatch=0 fail=0`
+
 ## 2026-02-28 (if-condition polarity mutation class)
 
 - realizations:
@@ -621,3 +711,163 @@
     - semantic matches: all mutants after rerunning transient tool errors.
     - transient non-matches were infra only (`circt-sim` temporary
       `Permission denied` while binaries changed), not semantic divergence.
+
+## 2026-02-28 (remove duplicated native planner implementation)
+
+- realizations:
+  - Native mutation planning logic existed in two places:
+    C++ (`circt-mut` / `NativeMutationPlanner`) and Python
+    (`utils/mutation_mcy/lib/native_mutation_plan.py`).
+  - Keeping both planners in sync is brittle and caused duplicate maintenance
+    work for each new mutation operator and site contract update.
+  - The apply path remains Python (`native_create_mutated.py`), which is fine as
+    long as planning has a single source of truth.
+
+- changes made:
+  - Added `circt-mut generate` option support for operator allowlisting:
+    - `--native-op OP` (repeatable)
+    - `--native-ops CSV`
+  - Implemented allowlist filtering in CIRCT-only generation with deterministic
+    ordering compatibility (applicable ops first, non-applicable requested ops
+    preserved afterward).
+  - Routed `--native-op(s)` runs to CIRCT-only planning even when
+    `CIRCT_MUT_ALLOW_THIRD_PARTY=1`.
+  - Wired allowlist into generation cache key material (`native_ops=`).
+  - Removed Python planner implementation file:
+    - deleted `utils/mutation_mcy/lib/native_mutation_plan.py`
+  - Removed shell fallback planner duplication:
+    - `utils/mutation_mcy/lib/native_mutation_plan.sh` now delegates directly to
+      `circt-mut generate --native-ops ...` with
+      `CIRCT_MUT_ALLOW_THIRD_PARTY=0`.
+  - Updated MCY module docs:
+    - `utils/mutation_mcy/README.md`
+  - Updated planner regression tests to use `circt-mut generate` directly:
+    - `test/Tools/native-mutation-plan-*.test`
+  - Added invalid-allowlist regression:
+    - `test/Tools/circt-mut-generate-circt-only-native-ops-invalid.test`
+  - Updated native-backend runner stub test to accept `generate` in addition to
+    `cover`:
+    - `test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+
+- validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - Regression slice:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/tools/circt/test/Tools --filter='native-mutation-plan-|circt-mut-generate-circt-only-native-ops-invalid|run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass'` (`10 passed`)
+  - Additional generate-option slice:
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/tools/circt/test/Tools --filter='circt-mut-generate-circt-only-(native-ops-invalid|unsupported-options|modes-basic|mode-counts-basic|mode-weights-basic|profiles-basic)'` (`6 passed`)
+  - Native MCY backend slice (fake `--circt-mut` harnesses):
+    - `python3 llvm/llvm/utils/lit/lit.py -sv build_test/tools/circt/test/Tools --filter='run-mutation-mcy-examples-native-(mutation-ops|mutation-op-filter|mutation-plan-safe-ops|mutation-seed-order|noop-fallback|backend-no-yosys|real-wrapper)'` (`14 passed`)
+
+## 2026-02-28 (parity campaign follow-up: BA->NBA root cause fixed)
+
+- realizations:
+  - Control-mode campaigns with seeded `cov_intro` surfaced deterministic
+    xrun/circt mismatches for `NATIVE_BA_TO_NBA` sites.
+  - The divergences were not RNG-related; they traced to lowering semantics.
+  - A second mismatch class remained for `NATIVE_NEGEDGE_TO_POSEDGE`, but that
+    class is race-prone (same-edge blocking drives), so cross-simulator output
+    depends on scheduler ordering.
+
+- changes made:
+  - Added red parity reproducer test:
+    - `test/Tools/circt-sim/mixed-ba-nba-shadow-global-visibility.sv`
+  - Fixed mixed BA/NBA shadow rewrite bug in:
+    - `lib/Dialect/Moore/Transforms/SimplifyProcedures.cpp`
+    - Skip shadowing when a global has any nonblocking assignment users.
+  - Added pass regression for mixed BA/NBA shadow behavior:
+    - `test/Dialect/Moore/simplify-procedures.mlir` (`@MixedBANBA`).
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-opt circt-verilog`
+  - `build_test/bin/llvm-lit -sv test/Dialect/Moore/simplify-procedures.mlir test/Tools/circt-sim/mixed-ba-nba-shadow-global-visibility.sv`
+  - Reran all 80 mutants with updated circt and compared to stored xrun
+    summaries:
+    - `matches=78`, `fails=2`
+    - both residual failures are duplicate `NATIVE_NEGEDGE_TO_POSEDGE@2`.
+
+- next mutation-planner implication:
+  - Treat edge-polarity swaps on synchronization waits as race-sensitive in
+    parity mode (or classify as unstable) to avoid false bug attribution.
+
+## 2026-02-28 (edge-polarity planning/apply alignment + race-aware filtering)
+
+- realizations:
+  - `POSEDGE_TO_NEGEDGE` / `NEGEDGE_TO_POSEDGE` previously matched raw keyword
+    tokens, so planner could mutate procedural waits in `initial` blocks.
+  - This produced parity noise from race-prone same-edge scheduling, not design
+    logic defects.
+  - Planner/apply drift was present: planner could classify edge sites as
+    inapplicable while Python apply still rewrote a fallback site for unsuffixed
+    ops.
+
+- changes made:
+  - Native planner edge-site collection is now context-aware:
+    - only `always* @(...)` sensitivity edge keywords are eligible.
+  - Added race-aware target-edge filter:
+    - skip edge swaps that would move an `always*` sensitivity edge onto a
+      non-`always` event-control edge of the same signal.
+  - Synced Python mutation apply logic with planner:
+    - edge-site selection uses the same `always*` sensitivity filter.
+    - added same target-edge non-`always` conflict filter, so unsuffixed edge
+      ops become no-op fallback when planner found no safe site.
+  - Files:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - `utils/mutation_mcy/templates/native_create_mutated.py`
+  - Added TDD regressions:
+    - `test/Tools/native-mutation-plan-edge-polarity-always-sensitivity-only.test`
+    - `test/Tools/native-mutation-plan-edge-polarity-avoid-target-wait-race.test`
+    - `test/Tools/native-create-mutated-negedge-to-posedge-skip-procedural-wait.test`
+
+- validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - Focused lit slices (edge planner/apply + reset-edge + control-mode edge
+    generation):
+    - `12 passed`
+  - Seeded parity reruns on `cov_intro_seeded`-style design (`count=40`,
+    `seed=41`, mode=`control`):
+    - before alignment: `matches=39`, `fails=1` (`NATIVE_POSEDGE_TO_NEGEDGE@1`)
+    - after planner/apply alignment: `matches=40`, `fails=0`
+  - Verified unsuffixed race-pruned edge mutants now produce explicit
+    no-op fallback marker in mutated source:
+    - `// native_mutation_noop_fallback NATIVE_POSEDGE_TO_NEGEDGE`
+
+## 2026-02-28 (native apply migration: remove Python mutator dependency)
+
+- realizations:
+  - Native mutation planning was C++, but apply remained in
+    `native_create_mutated.py`, creating a split implementation surface.
+  - Keeping planner/apply in one codepath is higher-value than maintaining a
+    Python template copy in MCY worker glue.
+
+- changes made:
+  - Added native C++ apply API in planner implementation:
+    - `tools/circt-mut/NativeMutationPlanner.h`
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - new exported entry: `applyNativeMutationLabel(...)`
+  - Added `circt-mut apply` subcommand (`-i/-o/-d`) in:
+    - `tools/circt-mut/circt-mut.cpp`
+  - Migrated native create-mutated lit tests from Python invocation to
+    `circt-mut apply`:
+    - all `test/Tools/native-create-mutated-*.test`
+    - added `test/Tools/circt-mut-apply-basic.test`
+  - Updated MCY worker native backend to use a generated shell wrapper that
+    calls `circt-mut apply` (no Python template copy):
+    - `utils/mutation_mcy/lib/worker.sh`
+  - Removed Python mutator template:
+    - deleted `utils/mutation_mcy/templates/native_create_mutated.py`
+  - Updated runner/module docs:
+    - `utils/mutation_mcy/README.md`
+    - `utils/run_mutation_mcy_examples.sh`
+  - Tightened native real harness args validation to report shell-quoting
+    errors before smoke-mode gating:
+    - `utils/run_mutation_mcy_examples.sh`
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - `build_test/bin/llvm-lit -sv test/Tools/circt-mut-apply-basic.test`
+  - `build_test/bin/llvm-lit -sv test/Tools --filter='native-create-mutated'`
+    (`76 passed`)
+  - `build_test/bin/llvm-lit -sv test/Tools --filter='(circt-mut-apply-basic|native-create-mutated|run-mutation-mcy-examples-native)'`
+    (`111 passed`)

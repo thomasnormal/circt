@@ -1,7 +1,7 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf "module top;\n  typedef logic [3:0] nib_t;\n  nib_t q = 4'h0;\n  logic y;\n  always_comb begin\n    y = 1'b0;\n  end\nendmodule\n" > %t/design.sv
 // RUN: printf '1 NATIVE_BA_TO_NBA@1\n' > %t/mutation.txt
-// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
 // RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
 //
 // MUTANT: nib_t q = 4'h0;

@@ -54,6 +54,10 @@ void emitNativeMutationPlan(llvm::ArrayRef<std::string> orderedOps,
                             uint64_t seed, const NativeMutationPlannerConfig &config,
                             llvm::raw_ostream &out);
 
+bool applyNativeMutationLabel(llvm::StringRef designText, llvm::StringRef label,
+                              std::string &mutatedText, bool &changed,
+                              std::string &error);
+
 } // namespace circt::mut
 
 #endif // CIRCT_TOOLS_CIRCT_MUT_NATIVEMUTATIONPLANNER_H

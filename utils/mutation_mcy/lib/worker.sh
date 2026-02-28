@@ -341,7 +341,7 @@ EOS
       fi
     else
       mutations_file="${helper_dir}/native.mutations.txt"
-      native_create_mutated="${helper_dir}/native_create_mutated.py"
+      native_create_mutated="${helper_dir}/native_create_mutated.sh"
       native_noop_fallback_marker="${helper_dir}/native_noop_fallback.labels"
       rm -f "$native_noop_fallback_marker"
       if ! generate_native_mutation_plan \
@@ -350,11 +350,14 @@ EOS
         echo "Failed to generate native mutation plan for ${example_id}" >&2
         return 2
       fi
-      if [[ ! -f "$NATIVE_CREATE_MUTATED_TEMPLATE" ]]; then
-        echo "Missing native mutation template: $NATIVE_CREATE_MUTATED_TEMPLATE" >&2
-        return 2
-      fi
-      cp "$NATIVE_CREATE_MUTATED_TEMPLATE" "$native_create_mutated"
+      cat > "$native_create_mutated" <<EOS
+#!/usr/bin/env bash
+set -euo pipefail
+if command -v circt-mut >/dev/null 2>&1; then
+  exec circt-mut apply "\$@"
+fi
+exec "$CIRCT_MUT_RESOLVED" apply "\$@"
+EOS
       chmod +x "$native_create_mutated"
       cmd+=(
         --mutations-file "$mutations_file"

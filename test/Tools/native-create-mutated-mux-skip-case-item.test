@@ -1,7 +1,7 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf "module top(input logic [1:0] sel, input logic a,b, output logic y);\n  always_comb begin\n    casez (sel)\n      2'b0?: y = a;\n      default: y = b;\n    endcase\n  end\nendmodule\n" > %t/design.sv
 // RUN: printf '1 NATIVE_MUX_SWAP_ARMS@1\n' > %t/mutation.txt
-// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
 // RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
 //
 // MUTANT: 2'b0?: y = a;

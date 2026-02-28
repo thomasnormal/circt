@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <ctime>
 #include <cstdio>
@@ -74,6 +75,7 @@ static void printHelp(raw_ostream &os) {
   os << "  cover     Run mutation coverage flow (run_mutation_cover.sh)\n";
   os << "  matrix    Run mutation lane matrix flow (run_mutation_matrix.sh)\n";
   os << "  generate  Generate mutation lists (native path; script fallback)\n\n";
+  os << "  apply     Apply one native mutation to a design file\n\n";
   os << "Environment:\n";
   os << "  CIRCT_MUT_SCRIPTS_DIR  Override script directory location\n";
   os << "  CIRCT_MUT_ALLOW_THIRD_PARTY\n";
@@ -86,6 +88,7 @@ static void printHelp(raw_ostream &os) {
   os << "  circt-mut cover --help\n";
   os << "  circt-mut matrix --lanes-tsv lanes.tsv --out-dir out\n";
   os << "  circt-mut generate --design design.v --out mutations.txt\n";
+  os << "  circt-mut apply -i mutation.txt -o mutant.sv -d design.sv\n";
 }
 
 static void printGenerateHelp(raw_ostream &os) {
@@ -110,12 +113,30 @@ static void printGenerateHelp(raw_ostream &os) {
   os << "  --profiles CSV            Comma-separated named mutation profiles\n";
   os << "  --cfg KEY=VALUE           Mutate config entry (repeatable)\n";
   os << "  --cfgs CSV                Comma-separated KEY=VALUE config entries\n";
+  os << "  --native-op OP            Restrict CIRCT-only planning to native OP (repeatable)\n";
+  os << "  --native-ops CSV          Comma-separated native OP allowlist (CIRCT-only)\n";
   os << "  --select EXPR             Additional mutate select expression (repeatable)\n";
   os << "  --selects CSV             Comma-separated mutate select expressions\n";
   os << "  --cache-dir DIR           Optional cache directory for generated mutation lists\n";
   os << "  -h, --help                Show help\n\n";
   os << "Output format:\n";
   os << "  Each line in --out is \"<id> <mutation-spec>\" (MCY-compatible).\n";
+}
+
+static void printApplyHelp(raw_ostream &os) {
+  os << "usage: circt-mut apply [options]\n\n";
+  os << "Required:\n";
+  os << "  -i, --input FILE         Input mutation file (first line used)\n";
+  os << "  -o, --output FILE        Output mutated design file\n";
+  os << "  -d, --design FILE        Input design file\n\n";
+  os << "Behavior:\n";
+  os << "  Reads first line from --input, interprets mutation label as\n";
+  os << "  \"<id> NATIVE_<OP>[@<site>]\", applies one mutation, and writes --output.\n";
+  os << "  If no site is applicable, appends:\n";
+  os << "    // native_mutation_noop_fallback <label>\n";
+  os << "  to the output (compatible with existing native flow behavior).\n\n";
+  os << "Options:\n";
+  os << "  -h, --help               Show help\n";
 }
 
 static void printInitHelp(raw_ostream &os) {
@@ -14554,6 +14575,7 @@ struct GenerateOptions {
   SmallVector<std::string, 8> modeWeightList;
   SmallVector<std::string, 8> profileList;
   SmallVector<std::string, 8> cfgList;
+  SmallVector<std::string, 8> nativeOpList;
   SmallVector<std::string, 8> selectList;
 };
 
@@ -14711,6 +14733,22 @@ static GenerateParseResult parseGenerateArgs(ArrayRef<StringRef> args) {
       splitCSV(*v, result.opts.cfgList);
       continue;
     }
+    if (arg == "--native-op") {
+      auto v = requireValue(arg);
+      if (!v)
+        return result;
+      StringRef entry = v->trim();
+      if (!entry.empty())
+        result.opts.nativeOpList.push_back(entry.str());
+      continue;
+    }
+    if (arg == "--native-ops") {
+      auto v = requireValue(arg);
+      if (!v)
+        return result;
+      splitCSV(*v, result.opts.nativeOpList);
+      continue;
+    }
     if (arg == "--select") {
       auto v = requireValue(arg);
       if (!v)
@@ -14805,8 +14843,10 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
     appendAll({"EQ_TO_NEQ", "NEQ_TO_EQ", "LT_TO_LE", "GT_TO_GE", "LE_TO_LT",
                "GE_TO_GT", "LT_TO_GT", "GT_TO_LT", "LE_TO_GE", "GE_TO_LE",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
-               "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
-               "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
+               "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD", "UNARY_MINUS_DROP", "INC_TO_DEC",
+               "DEC_TO_INC", "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
+               "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ", "SHL_TO_SHR",
+               "SHR_TO_SHL", "SHR_TO_ASHR",
                "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
                "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
                "UNSIGNED_TO_SIGNED"});
@@ -14817,8 +14857,10 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
                "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
@@ -14835,14 +14877,18 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
                "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
-               "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
-               "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
+               "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD", "UNARY_MINUS_DROP", "INC_TO_DEC",
+               "DEC_TO_INC", "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
+               "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ", "SHL_TO_SHR",
+               "SHR_TO_SHL", "SHR_TO_ASHR",
                "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
                "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ"});
     appendAll({"SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
@@ -14853,8 +14899,10 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
                "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
     return;
@@ -14866,14 +14914,18 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
                "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB", "SUB_TO_ADD",
-               "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV",
-               "UNARY_MINUS_DROP", "INC_TO_DEC", "DEC_TO_INC", "SHL_TO_SHR",
+               "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD",
+               "UNARY_MINUS_DROP", "INC_TO_DEC", "DEC_TO_INC",
+               "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
+               "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ", "SHL_TO_SHR",
                "SHR_TO_SHL", "SHR_TO_ASHR", "ASHR_TO_SHR", "CASEEQ_TO_EQ",
                "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ",
                "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"});
@@ -14888,14 +14940,18 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
                "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
-               "DIV_TO_MUL", "MUL_TO_DIV", "UNARY_MINUS_DROP", "INC_TO_DEC",
-               "DEC_TO_INC", "SHL_TO_SHR", "SHR_TO_SHL", "SHR_TO_ASHR",
+               "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD", "UNARY_MINUS_DROP", "INC_TO_DEC",
+               "DEC_TO_INC", "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
+               "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ", "SHL_TO_SHR",
+               "SHR_TO_SHL", "SHR_TO_ASHR",
                "ASHR_TO_SHR", "CASEEQ_TO_EQ", "CASENEQ_TO_NEQ",
                "EQ_TO_CASEEQ", "NEQ_TO_CASENEQ", "SIGNED_TO_UNSIGNED",
                "UNSIGNED_TO_SIGNED"});
@@ -14914,12 +14970,69 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "XOR_TO_OR", "XOR_TO_XNOR", "XNOR_TO_XOR", "REDAND_TO_REDOR",
                "REDOR_TO_REDAND", "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR",
                "BAND_TO_BOR", "BOR_TO_BAND", "BAND_TO_LAND", "BOR_TO_LOR",
+               "BAND_EQ_TO_BOR_EQ", "BOR_EQ_TO_BAND_EQ",
                "BA_TO_NBA", "NBA_TO_BA", "POSEDGE_TO_NEGEDGE",
-               "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
+               "NEGEDGE_TO_POSEDGE", "RESET_POSEDGE_TO_NEGEDGE",
+               "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS", "IF_COND_NEGATE",
                "RESET_COND_NEGATE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
     return;
   }
+}
+
+static bool filterOrderedOpsByRequestedNativeOps(
+    StringRef designText, ArrayRef<std::string> requestedRaw,
+    SmallVectorImpl<std::string> &orderedOps, std::string &error) {
+  SmallVector<std::string, 16> requested;
+  StringSet<> seenRequested;
+  for (const std::string &entry : requestedRaw) {
+    StringRef op = StringRef(entry).trim();
+    if (op.empty())
+      continue;
+    if (seenRequested.insert(op).second)
+      requested.push_back(op.str());
+  }
+  if (requested.empty())
+    return true;
+
+  StringSet<> knownOps;
+  for (const std::string &op : orderedOps)
+    knownOps.insert(op);
+  for (const std::string &op : requested) {
+    if (!knownOps.contains(op)) {
+      error = (Twine("circt-mut generate: unsupported --native-op value: ") +
+               op)
+                  .str();
+      return false;
+    }
+  }
+
+  StringSet<> requestedSet;
+  StringSet<> applicableRequestedSet;
+  for (const std::string &op : requested) {
+    requestedSet.insert(op);
+    if (circt::mut::hasNativeMutationPatternForOp(designText, op))
+      applicableRequestedSet.insert(op);
+  }
+
+  SmallVector<std::string, 16> filtered;
+  for (const std::string &op : orderedOps) {
+    if (!requestedSet.contains(op))
+      continue;
+    if (applicableRequestedSet.contains(op))
+      filtered.push_back(op);
+  }
+  for (const std::string &op : requested)
+    if (!applicableRequestedSet.contains(op))
+      filtered.push_back(op);
+
+  if (filtered.empty()) {
+    error = "circt-mut generate: native mutation operator set must not be "
+            "empty";
+    return false;
+  }
+  orderedOps.assign(filtered.begin(), filtered.end());
+  return true;
 }
 
 static bool isIndexInRotatedExtraPrefix(uint64_t index, uint64_t start,
@@ -15540,6 +15653,12 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
     errs() << nativePlanError << "\n";
     return 1;
   }
+  if (!filterOrderedOpsByRequestedNativeOps(mutationDesignText,
+                                            opts.nativeOpList, orderedOps,
+                                            nativePlanError)) {
+    errs() << nativePlanError << "\n";
+    return 1;
+  }
 
   SmallVector<std::string, 8> profileModes;
   SmallVector<std::string, 8> profileCfgs;
@@ -15752,6 +15871,7 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
     cachePayloadOS << "modes=" << joinWithTrailingNewline(opts.modeList);
     cachePayloadOS << "mode_counts=" << joinWithTrailingNewline(opts.modeCountList);
     cachePayloadOS << "mode_weights=" << joinWithTrailingNewline(opts.modeWeightList);
+    cachePayloadOS << "native_ops=" << joinWithTrailingNewline(opts.nativeOpList);
     cachePayloadOS << "selects=" << joinWithTrailingNewline(finalSelects);
     cachePayloadOS << "ops=" << joinWithTrailingNewline(orderedOps);
     cachePayloadOS << "planner_policy="
@@ -15940,7 +16060,7 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
 }
 
 static int runNativeGenerate(const GenerateOptions &opts) {
-  if (!allowThirdPartyTools())
+  if (!allowThirdPartyTools() || !opts.nativeOpList.empty())
     return runCirctOnlyGenerate(opts);
 
   auto start = std::chrono::steady_clock::now();
@@ -16591,6 +16711,153 @@ static int runNativeGenerate(const GenerateOptions &opts) {
   return 0;
 }
 
+struct ApplyOptions {
+  std::string inputFile;
+  std::string outputFile;
+  std::string designFile;
+};
+
+struct ApplyParseResult {
+  bool ok = false;
+  bool showHelp = false;
+  std::string error;
+  ApplyOptions opts;
+};
+
+static ApplyParseResult parseApplyArgs(ArrayRef<StringRef> args) {
+  ApplyParseResult result;
+  auto &opts = result.opts;
+
+  auto consumeValue = [&](size_t &i, StringRef arg, StringRef flag,
+                          std::string &out) -> bool {
+    size_t eqPos = arg.find('=');
+    if (eqPos != StringRef::npos) {
+      out = arg.substr(eqPos + 1).str();
+      if (out.empty()) {
+        result.error = (Twine("circt-mut apply: missing value for ") + flag).str();
+        return false;
+      }
+      return true;
+    }
+    if (i + 1 >= args.size()) {
+      result.error = (Twine("circt-mut apply: missing value for ") + flag).str();
+      return false;
+    }
+    out = args[++i].str();
+    if (out.empty()) {
+      result.error = (Twine("circt-mut apply: missing value for ") + flag).str();
+      return false;
+    }
+    return true;
+  };
+
+  for (size_t i = 0; i < args.size(); ++i) {
+    StringRef arg = args[i];
+    if (arg == "-h" || arg == "--help") {
+      result.showHelp = true;
+      continue;
+    }
+    if (arg == "-i" || arg == "--input" || arg.starts_with("--input=") ||
+        arg.starts_with("-i=")) {
+      if (!consumeValue(i, arg, "--input", opts.inputFile))
+        return result;
+      continue;
+    }
+    if (arg == "-o" || arg == "--output" || arg.starts_with("--output=") ||
+        arg.starts_with("-o=")) {
+      if (!consumeValue(i, arg, "--output", opts.outputFile))
+        return result;
+      continue;
+    }
+    if (arg == "-d" || arg == "--design" || arg.starts_with("--design=") ||
+        arg.starts_with("-d=")) {
+      if (!consumeValue(i, arg, "--design", opts.designFile))
+        return result;
+      continue;
+    }
+    result.error = (Twine("circt-mut apply: unknown option: ") + arg).str();
+    return result;
+  }
+
+  if (!result.showHelp) {
+    if (opts.inputFile.empty()) {
+      result.error = "circt-mut apply: missing required --input.";
+      return result;
+    }
+    if (opts.outputFile.empty()) {
+      result.error = "circt-mut apply: missing required --output.";
+      return result;
+    }
+    if (opts.designFile.empty()) {
+      result.error = "circt-mut apply: missing required --design.";
+      return result;
+    }
+  }
+
+  result.ok = true;
+  return result;
+}
+
+static int runNativeApply(const ApplyOptions &opts) {
+  auto inputOrErr = MemoryBuffer::getFile(opts.inputFile);
+  if (!inputOrErr) {
+    errs() << "circt-mut apply: failed to read --input: " << opts.inputFile
+           << "\n";
+    return 1;
+  }
+  auto designOrErr = MemoryBuffer::getFile(opts.designFile);
+  if (!designOrErr) {
+    errs() << "circt-mut apply: failed to read --design: " << opts.designFile
+           << "\n";
+    return 1;
+  }
+
+  StringRef rawInput = inputOrErr.get()->getBuffer().trim();
+  StringRef label;
+  size_t splitPos = StringRef::npos;
+  for (size_t i = 0, e = rawInput.size(); i < e; ++i) {
+    if (std::isspace(static_cast<unsigned char>(rawInput[i]))) {
+      splitPos = i;
+      break;
+    }
+  }
+  if (splitPos != StringRef::npos)
+    label = rawInput.drop_front(splitPos).ltrim();
+
+  std::string mutatedText;
+  bool changed = false;
+  std::string error;
+  if (!circt::mut::applyNativeMutationLabel(designOrErr.get()->getBuffer(), label,
+                                            mutatedText, changed, error)) {
+    errs() << error << "\n";
+    return 1;
+  }
+
+  SmallString<256> parent(opts.outputFile);
+  sys::path::remove_filename(parent);
+  if (!parent.empty()) {
+    std::error_code mkdirEC = sys::fs::create_directories(parent);
+    if (mkdirEC) {
+      errs() << "circt-mut apply: failed to create output directory: " << parent
+             << ": " << mkdirEC.message() << "\n";
+      return 1;
+    }
+  }
+
+  std::error_code outEC;
+  raw_fd_ostream out(opts.outputFile, outEC, sys::fs::OF_Text);
+  if (outEC) {
+    errs() << "circt-mut apply: failed to write --output: " << opts.outputFile
+           << ": " << outEC.message() << "\n";
+    return 1;
+  }
+  out << mutatedText;
+  out.close();
+
+  (void)changed;
+  return 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -16693,6 +16960,23 @@ int main(int argc, char **argv) {
       return dispatchToScript(*scriptPath, forwardedArgs);
     }
     return runNativeGenerate(parseResult.opts);
+  }
+
+  if (firstArg == "apply") {
+    SmallVector<StringRef, 16> forwardedArgs;
+    for (int i = 2; i < argc; ++i)
+      forwardedArgs.push_back(argv[i]);
+
+    ApplyParseResult parseResult = parseApplyArgs(forwardedArgs);
+    if (!parseResult.ok) {
+      errs() << parseResult.error << "\n";
+      return 1;
+    }
+    if (parseResult.showHelp) {
+      printApplyHelp(outs());
+      return 0;
+    }
+    return runNativeApply(parseResult.opts);
   }
 
   if (firstArg == "cover") {

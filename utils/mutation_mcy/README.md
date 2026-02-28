@@ -10,8 +10,10 @@ Profiles:
 - `native-real`: native mutation backend + real harness mode (strict, no smoke/yosys).
 
 ## Native Components
-- `lib/native_mutation_plan.py`: generates deterministic native mutation label plans.
-- `templates/native_create_mutated.py`: native mutation rewrite engine template copied per example run.
+- `lib/native_mutation_plan.sh`: delegates native mutation planning to
+  `circt-mut generate` (C++ planner implementation).
+- native mutation apply now uses `circt-mut apply` directly via a tiny shell
+  wrapper generated per example run.
 
 These modules are intended to reduce inline bash complexity while preserving
 existing runner behavior.

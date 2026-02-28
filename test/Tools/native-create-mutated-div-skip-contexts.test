@@ -1,7 +1,7 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf 'module top(input logic [7:0] a,b, output logic [7:0] y);\n  // comment with slash / should be ignored\n  initial y /= a;\n  assign y = a / b;\nendmodule\n' > %t/design.sv
 // RUN: printf '1 NATIVE_DIV_TO_MUL@1\n' > %t/mutation.txt
-// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
 // RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
 //
 // MUTANT: initial y /= a;

@@ -11,11 +11,14 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <cstdint>
+#include <cstring>
+#include <cstdlib>
 #include <limits>
 
 using namespace llvm;
@@ -31,12 +34,17 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "REDXOR_TO_REDXNOR", "REDXNOR_TO_REDXOR", "BAND_TO_BOR",
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",
-    "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
+    "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
+    "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "IF_COND_NEGATE",   "RESET_COND_NEGATE", "IF_COND_TRUE",   "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
-    "MUL_TO_DIV",       "INC_TO_DEC",     "DEC_TO_INC",  "SHL_TO_SHR",
+    "MUL_TO_DIV",       "MOD_TO_DIV",     "DIV_TO_MOD",  "INC_TO_DEC",
+    "DEC_TO_INC",       "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
+    "MUL_EQ_TO_DIV_EQ", "DIV_EQ_TO_MUL_EQ",    "BAND_EQ_TO_BOR_EQ",
+    "BOR_EQ_TO_BAND_EQ",
+    "SHL_TO_SHR",
     "SHR_TO_SHL",       "SHR_TO_ASHR",    "ASHR_TO_SHR", "CASEEQ_TO_EQ",
     "CASENEQ_TO_NEQ",
     "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
@@ -275,9 +283,16 @@ static size_t findPrevCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
                                    size_t pos);
 static size_t findNextCodeNonSpace(StringRef text, ArrayRef<uint8_t> codeMask,
                                    size_t pos);
+static size_t findStatementStart(StringRef text, ArrayRef<uint8_t> codeMask,
+                                 size_t pos);
+static size_t findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t openPos);
 static bool isOperandEndChar(char c);
 static bool isOperandStartChar(char c);
 static bool isUnaryOperatorContext(char c);
+static bool statementLooksLikeTypedDeclaration(StringRef text,
+                                               ArrayRef<uint8_t> codeMask,
+                                               size_t stmtStart, size_t pos);
 
 static void collectLiteralTokenSites(StringRef text, StringRef token,
                                      ArrayRef<uint8_t> codeMask,
@@ -448,9 +463,65 @@ static void collectUnaryNotDropSites(StringRef text,
 static void collectUnaryBitwiseNotDropSites(StringRef text,
                                             ArrayRef<uint8_t> codeMask,
                                             SmallVectorImpl<SiteInfo> &sites) {
+  auto isIdentifierBody = [](char c) {
+    return isAlnum(c) || c == '_' || c == '$';
+  };
   auto isUnaryOperandStart = [](char c) {
     return isAlnum(c) || c == '_' || c == '(' || c == '[' || c == '{' ||
            c == '\'' || c == '~' || c == '!' || c == '$';
+  };
+  auto parseForwardIdentifier = [&](size_t pos, size_t &start,
+                                    size_t &end) -> bool {
+    if (pos >= text.size() || !isCodeAt(codeMask, pos))
+      return false;
+    char c = text[pos];
+    if (!(isAlpha(c) || c == '_'))
+      return false;
+    start = pos;
+    end = pos + 1;
+    while (end < text.size() && isCodeAt(codeMask, end) &&
+           isIdentifierBody(text[end]))
+      ++end;
+    return true;
+  };
+  auto parseBackwardIdentifier = [&](size_t pos, size_t &start,
+                                     size_t &end) -> bool {
+    if (pos == StringRef::npos || pos >= text.size() || !isCodeAt(codeMask, pos))
+      return false;
+    if (!isIdentifierBody(text[pos]))
+      return false;
+    end = pos + 1;
+    start = pos;
+    while (start > 0) {
+      size_t prev = start - 1;
+      if (!isCodeAt(codeMask, prev) || !isIdentifierBody(text[prev]))
+        break;
+      start = prev;
+    }
+    return true;
+  };
+  auto isSelfToggleAssignment = [&](size_t tildePos, size_t rhsStart) -> bool {
+    size_t eqPos = findPrevCodeNonSpace(text, codeMask, tildePos);
+    if (eqPos == StringRef::npos || text[eqPos] != '=')
+      return false;
+    size_t beforeEq = findPrevCodeNonSpace(text, codeMask, eqPos);
+    if (beforeEq == StringRef::npos)
+      return false;
+    if (text[beforeEq] == '<' || text[beforeEq] == '>' || text[beforeEq] == '=' ||
+        text[beforeEq] == '!')
+      return false;
+
+    size_t lhsStart = 0, lhsEnd = 0, rhsIdentStart = 0, rhsIdentEnd = 0;
+    if (!parseBackwardIdentifier(beforeEq, lhsStart, lhsEnd) ||
+        !parseForwardIdentifier(rhsStart, rhsIdentStart, rhsIdentEnd))
+      return false;
+
+    size_t rhsNext = findNextCodeNonSpace(text, codeMask, rhsIdentEnd);
+    if (rhsNext != StringRef::npos &&
+        (text[rhsNext] == '[' || text[rhsNext] == '.'))
+      return false;
+
+    return text.slice(lhsStart, lhsEnd) == text.slice(rhsIdentStart, rhsIdentEnd);
   };
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (!isCodeAt(codeMask, i))
@@ -472,7 +543,7 @@ static void collectUnaryBitwiseNotDropSites(StringRef text,
     if (j >= e || !isCodeAt(codeMask, j))
       continue;
     char next = text[j];
-    if (isUnaryOperandStart(next))
+    if (isUnaryOperandStart(next) && !isSelfToggleAssignment(i, j))
       sites.push_back({i});
   }
 }
@@ -820,7 +891,8 @@ static void collectBinaryArithmeticSites(StringRef text, char needle,
 static void collectBinaryMulDivSites(StringRef text, char needle,
                                      ArrayRef<uint8_t> codeMask,
                                      SmallVectorImpl<SiteInfo> &sites) {
-  assert((needle == '*' || needle == '/') && "expected * or / token");
+  assert((needle == '*' || needle == '/' || needle == '%') &&
+         "expected * or / or % token");
   int bracketDepth = 0;
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (!isCodeAt(codeMask, i))
@@ -848,9 +920,12 @@ static void collectBinaryMulDivSites(StringRef text, char needle,
         continue;
       if (prev == '(' && next == ')')
         continue;
-    } else {
+    } else if (needle == '/') {
       if (prev == '/' || next == '/')
         continue;
+      if (next == '=')
+        continue;
+    } else {
       if (next == '=')
         continue;
     }
@@ -862,6 +937,100 @@ static void collectBinaryMulDivSites(StringRef text, char needle,
     char prevSigChar = text[prevSig];
     char nextSigChar = text[nextSig];
     if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
+static bool isIdentifierChar(char c) {
+  return isAlnum(c) || c == '_' || c == '$';
+}
+
+static bool isWithinForHeader(StringRef text, ArrayRef<uint8_t> codeMask,
+                              size_t pos) {
+  int depth = 0;
+  for (size_t i = pos; i > 0; --i) {
+    size_t idx = i - 1;
+    if (!isCodeAt(codeMask, idx))
+      continue;
+    char ch = text[idx];
+    if (ch == ')') {
+      ++depth;
+      continue;
+    }
+    if (ch == '(') {
+      if (depth == 0) {
+        size_t kwEnd = findPrevCodeNonSpace(text, codeMask, idx);
+        if (kwEnd != StringRef::npos) {
+          size_t kwStart = kwEnd;
+          while (kwStart > 0 && isCodeAt(codeMask, kwStart - 1) &&
+                 isIdentifierChar(text[kwStart - 1]))
+            --kwStart;
+          if (text.slice(kwStart, kwEnd + 1).equals_insensitive("for"))
+            return true;
+        }
+      } else {
+        --depth;
+      }
+      continue;
+    }
+    if (depth == 0 && (ch == '{' || ch == '}'))
+      return false;
+  }
+  return false;
+}
+
+static void collectIncDecSites(StringRef text, StringRef token,
+                               ArrayRef<uint8_t> codeMask,
+                               SmallVectorImpl<SiteInfo> &sites) {
+  assert((token == "++" || token == "--") && "expected ++ or -- token");
+  for (size_t i = 0, e = text.size(); i + token.size() <= e; ++i) {
+    if (!isCodeRange(codeMask, i, token.size()))
+      continue;
+    if (!text.substr(i).starts_with(token))
+      continue;
+    if (isWithinForHeader(text, codeMask, i))
+      continue;
+    sites.push_back({i});
+  }
+}
+
+static void collectCompoundAssignSites(StringRef text, StringRef token,
+                                       ArrayRef<uint8_t> codeMask,
+                                       SmallVectorImpl<SiteInfo> &sites) {
+  assert((token == "+=" || token == "-=" || token == "*=" || token == "/=" ||
+          token == "&=" || token == "|=") &&
+         "expected +=, -=, *=, /=, &=, or |= compound assignment token");
+  for (size_t i = 0, e = text.size(); i + token.size() <= e; ++i) {
+    if (!isCodeRange(codeMask, i, token.size()))
+      continue;
+    if (!text.substr(i).starts_with(token))
+      continue;
+
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    if (token == "+=" && prev == '+')
+      continue;
+    if (token == "-=" && prev == '-')
+      continue;
+    if (token == "*=" && prev == '*')
+      continue;
+    if (token == "/=" && prev == '/')
+      continue;
+    if (token == "&=" && prev == '&')
+      continue;
+    if (token == "|=" && prev == '|')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + token.size());
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    if (!isOperandEndChar(text[prevSig]) || !isOperandStartChar(text[nextSig]))
+      continue;
+
+    size_t stmtStart = findStatementStart(text, codeMask, i);
+    if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
       continue;
 
     sites.push_back({i});
@@ -1459,6 +1628,227 @@ static bool conditionContainsResetIdentifier(StringRef text,
   return false;
 }
 
+static bool parseIdentifierAtOrAfter(StringRef text, ArrayRef<uint8_t> codeMask,
+                                     size_t startPos, size_t limitPos,
+                                     StringRef &identifier) {
+  identifier = StringRef();
+  if (startPos == StringRef::npos || limitPos == StringRef::npos ||
+      startPos >= text.size() || startPos >= limitPos)
+    return false;
+
+  size_t i = startPos;
+  while (i < limitPos) {
+    if (!isCodeAt(codeMask, i)) {
+      ++i;
+      continue;
+    }
+    if (std::isspace(static_cast<unsigned char>(text[i]))) {
+      ++i;
+      continue;
+    }
+    break;
+  }
+  if (i >= limitPos || i >= text.size() || !isCodeAt(codeMask, i))
+    return false;
+
+  if (text[i] == '\\') {
+    size_t begin = i + 1;
+    ++i;
+    while (i < limitPos && isCodeAt(codeMask, i) &&
+           !std::isspace(static_cast<unsigned char>(text[i])))
+      ++i;
+    if (i <= begin)
+      return false;
+    identifier = text.slice(begin, i);
+    return true;
+  }
+
+  if (!(isAlpha(text[i]) || text[i] == '_'))
+    return false;
+  size_t begin = i++;
+  while (i < limitPos && isCodeAt(codeMask, i) &&
+         (isAlnum(text[i]) || text[i] == '_' || text[i] == '$'))
+    ++i;
+  identifier = text.slice(begin, i);
+  return !identifier.empty();
+}
+
+static bool parseIdentifierEndingAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                    size_t endPos, StringRef &identifier) {
+  identifier = StringRef();
+  if (endPos == StringRef::npos || endPos >= text.size() ||
+      !isCodeAt(codeMask, endPos))
+    return false;
+  if (!isIdentifierBodyChar(text[endPos]))
+    return false;
+
+  size_t begin = endPos;
+  while (begin > 0 && isCodeAt(codeMask, begin - 1) &&
+         isIdentifierBodyChar(text[begin - 1]))
+    --begin;
+  if (!(isAlpha(text[begin]) || text[begin] == '_'))
+    return false;
+  identifier = text.slice(begin, endPos + 1);
+  return !identifier.empty();
+}
+
+static bool isAlwaysSensitivityKeyword(StringRef identifier) {
+  return identifier == "always" || identifier == "always_ff" ||
+         identifier == "always_comb" || identifier == "always_latch";
+}
+
+static bool findEventControlBoundsForEdgeSite(
+    StringRef text, ArrayRef<uint8_t> codeMask, size_t edgeKeywordPos,
+    size_t edgeKeywordLen, size_t &openParenPos, size_t &closeParenPos) {
+  openParenPos = StringRef::npos;
+  closeParenPos = StringRef::npos;
+  if (edgeKeywordPos == StringRef::npos || edgeKeywordPos >= text.size())
+    return false;
+
+  int depth = 0;
+  for (size_t i = edgeKeywordPos; i > 0;) {
+    --i;
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == ')') {
+      ++depth;
+      continue;
+    }
+    if (ch == '(') {
+      if (depth == 0) {
+        openParenPos = i;
+        break;
+      }
+      --depth;
+      continue;
+    }
+    if (depth == 0 && ch == ';')
+      break;
+  }
+  if (openParenPos == StringRef::npos)
+    return false;
+
+  closeParenPos = findMatchingParen(text, codeMask, openParenPos);
+  if (closeParenPos == StringRef::npos)
+    return false;
+  if (edgeKeywordPos + edgeKeywordLen > closeParenPos)
+    return false;
+  return true;
+}
+
+static bool findAlwaysSensitivityEventBoundsForEdgeSite(
+    StringRef text, ArrayRef<uint8_t> codeMask, size_t edgeKeywordPos,
+    size_t edgeKeywordLen, size_t &openParenPos, size_t &closeParenPos) {
+  if (!findEventControlBoundsForEdgeSite(text, codeMask, edgeKeywordPos,
+                                         edgeKeywordLen, openParenPos,
+                                         closeParenPos))
+    return false;
+
+  size_t atPos = findPrevCodeNonSpace(text, codeMask, openParenPos);
+  if (atPos == StringRef::npos || text[atPos] != '@')
+    return false;
+
+  size_t procKeywordEnd = findPrevCodeNonSpace(text, codeMask, atPos);
+  if (procKeywordEnd == StringRef::npos)
+    return false;
+  StringRef procKeyword;
+  if (!parseIdentifierEndingAt(text, codeMask, procKeywordEnd, procKeyword))
+    return false;
+  if (!isAlwaysSensitivityKeyword(procKeyword))
+    return false;
+  return true;
+}
+
+static bool hasNonAlwaysEventControlEdgeOnSignal(StringRef text,
+                                                 ArrayRef<uint8_t> codeMask,
+                                                 StringRef edgeKeyword,
+                                                 StringRef signalIdentifier) {
+  if (edgeKeyword.empty() || signalIdentifier.empty())
+    return false;
+
+  SmallVector<SiteInfo, 8> edgeSites;
+  collectKeywordTokenSites(text, edgeKeyword, codeMask, edgeSites);
+  for (const SiteInfo &edgeSite : edgeSites) {
+    size_t openParenPos = StringRef::npos;
+    size_t closeParenPos = StringRef::npos;
+    if (!findEventControlBoundsForEdgeSite(text, codeMask, edgeSite.pos,
+                                           edgeKeyword.size(), openParenPos,
+                                           closeParenPos))
+      continue;
+
+    size_t alwaysOpenParenPos = StringRef::npos;
+    size_t alwaysCloseParenPos = StringRef::npos;
+    if (findAlwaysSensitivityEventBoundsForEdgeSite(
+            text, codeMask, edgeSite.pos, edgeKeyword.size(),
+            alwaysOpenParenPos, alwaysCloseParenPos))
+      continue;
+
+    StringRef edgeSignal;
+    if (!parseIdentifierAtOrAfter(text, codeMask,
+                                  edgeSite.pos + edgeKeyword.size(),
+                                  closeParenPos, edgeSignal))
+      continue;
+    if (edgeSignal == signalIdentifier)
+      return true;
+  }
+
+  return false;
+}
+
+static void collectAlwaysSensitivityEdgeKeywordSites(
+    StringRef text, StringRef keyword, StringRef targetKeyword,
+    ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+  if (keyword.empty())
+    return;
+  SmallVector<SiteInfo, 8> keywordSites;
+  collectKeywordTokenSites(text, keyword, codeMask, keywordSites);
+  for (const SiteInfo &site : keywordSites) {
+    size_t openParenPos = StringRef::npos;
+    size_t closeParenPos = StringRef::npos;
+    if (!findAlwaysSensitivityEventBoundsForEdgeSite(
+            text, codeMask, site.pos, keyword.size(), openParenPos,
+            closeParenPos))
+      continue;
+
+    // Avoid race-prone edge swaps that collapse a sequential process edge onto
+    // a non-always wait edge on the same signal. These mutants are frequently
+    // dominated by testbench scheduling artifacts rather than design behavior.
+    if (!targetKeyword.empty()) {
+      StringRef edgeSignal;
+      if (parseIdentifierAtOrAfter(text, codeMask, site.pos + keyword.size(),
+                                   closeParenPos, edgeSignal) &&
+          hasNonAlwaysEventControlEdgeOnSignal(text, codeMask, targetKeyword,
+                                               edgeSignal))
+        continue;
+    }
+    sites.push_back(site);
+  }
+}
+
+static void collectResetEdgeKeywordSites(StringRef text, StringRef keyword,
+                                         ArrayRef<uint8_t> codeMask,
+                                         SmallVectorImpl<SiteInfo> &sites) {
+  SmallVector<SiteInfo, 8> keywordSites;
+  collectKeywordTokenSites(text, keyword, codeMask, keywordSites);
+  for (const SiteInfo &site : keywordSites) {
+    size_t openParenPos = StringRef::npos;
+    size_t closeParenPos = StringRef::npos;
+    if (!findAlwaysSensitivityEventBoundsForEdgeSite(
+            text, codeMask, site.pos, keyword.size(), openParenPos,
+            closeParenPos))
+      continue;
+    StringRef identifier;
+    size_t keywordEnd = site.pos + keyword.size();
+    if (!parseIdentifierAtOrAfter(text, codeMask, keywordEnd, closeParenPos,
+                                  identifier))
+      continue;
+    if (!isResetLikeIdentifier(identifier))
+      continue;
+    sites.push_back(site);
+  }
+}
+
 static size_t findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
                                 size_t openPos) {
   if (openPos == StringRef::npos || openPos >= text.size() ||
@@ -1801,11 +2191,21 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "POSEDGE_TO_NEGEDGE") {
-    collectKeywordTokenSites(designText, "posedge", codeMask, sites);
+    collectAlwaysSensitivityEdgeKeywordSites(designText, "posedge", "negedge",
+                                             codeMask, sites);
     return;
   }
   if (op == "NEGEDGE_TO_POSEDGE") {
-    collectKeywordTokenSites(designText, "negedge", codeMask, sites);
+    collectAlwaysSensitivityEdgeKeywordSites(designText, "negedge", "posedge",
+                                             codeMask, sites);
+    return;
+  }
+  if (op == "RESET_POSEDGE_TO_NEGEDGE") {
+    collectResetEdgeKeywordSites(designText, "posedge", codeMask, sites);
+    return;
+  }
+  if (op == "RESET_NEGEDGE_TO_POSEDGE") {
+    collectResetEdgeKeywordSites(designText, "negedge", codeMask, sites);
     return;
   }
   if (op == "MUX_SWAP_ARMS") {
@@ -1888,12 +2288,44 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryMulDivSites(designText, '*', codeMask, sites);
     return;
   }
+  if (op == "MOD_TO_DIV") {
+    collectBinaryMulDivSites(designText, '%', codeMask, sites);
+    return;
+  }
+  if (op == "DIV_TO_MOD") {
+    collectBinaryMulDivSites(designText, '/', codeMask, sites);
+    return;
+  }
   if (op == "INC_TO_DEC") {
-    collectLiteralTokenSites(designText, "++", codeMask, sites);
+    collectIncDecSites(designText, "++", codeMask, sites);
     return;
   }
   if (op == "DEC_TO_INC") {
-    collectLiteralTokenSites(designText, "--", codeMask, sites);
+    collectIncDecSites(designText, "--", codeMask, sites);
+    return;
+  }
+  if (op == "PLUS_EQ_TO_MINUS_EQ") {
+    collectCompoundAssignSites(designText, "+=", codeMask, sites);
+    return;
+  }
+  if (op == "MINUS_EQ_TO_PLUS_EQ") {
+    collectCompoundAssignSites(designText, "-=", codeMask, sites);
+    return;
+  }
+  if (op == "MUL_EQ_TO_DIV_EQ") {
+    collectCompoundAssignSites(designText, "*=", codeMask, sites);
+    return;
+  }
+  if (op == "DIV_EQ_TO_MUL_EQ") {
+    collectCompoundAssignSites(designText, "/=", codeMask, sites);
+    return;
+  }
+  if (op == "BAND_EQ_TO_BOR_EQ") {
+    collectCompoundAssignSites(designText, "&=", codeMask, sites);
+    return;
+  }
+  if (op == "BOR_EQ_TO_BAND_EQ") {
+    collectCompoundAssignSites(designText, "|=", codeMask, sites);
     return;
   }
   if (op == "SHL_TO_SHR") {
@@ -1943,10 +2375,12 @@ static std::string getOpFamily(StringRef op) {
       op == "REDOR_TO_REDAND" || op == "REDXOR_TO_REDXNOR" ||
       op == "REDXNOR_TO_REDXOR" || op == "BAND_TO_BOR" ||
       op == "BOR_TO_BAND" || op == "BAND_TO_LAND" || op == "BOR_TO_LOR" ||
-      op == "UNARY_NOT_DROP" || op == "UNARY_BNOT_DROP")
+      op == "UNARY_NOT_DROP" || op == "UNARY_BNOT_DROP" ||
+      op == "BAND_EQ_TO_BOR_EQ" || op == "BOR_EQ_TO_BAND_EQ")
     return "logic";
   if (op == "BA_TO_NBA" || op == "NBA_TO_BA" ||
-      op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE")
+      op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE" ||
+      op == "RESET_POSEDGE_TO_NEGEDGE" || op == "RESET_NEGEDGE_TO_POSEDGE")
     return "timing";
   if (op == "MUX_SWAP_ARMS")
     return "mux";
@@ -1958,7 +2392,10 @@ static std::string getOpFamily(StringRef op) {
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
       op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
-      op == "UNARY_MINUS_DROP" || op == "INC_TO_DEC" || op == "DEC_TO_INC")
+      op == "MOD_TO_DIV" || op == "DIV_TO_MOD" ||
+      op == "UNARY_MINUS_DROP" || op == "INC_TO_DEC" || op == "DEC_TO_INC" ||
+      op == "PLUS_EQ_TO_MINUS_EQ" || op == "MINUS_EQ_TO_PLUS_EQ" ||
+      op == "MUL_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MUL_EQ")
     return "arithmetic";
   if (op == "SHL_TO_SHR" || op == "SHR_TO_SHL" || op == "SHR_TO_ASHR" ||
       op == "ASHR_TO_SHR")
@@ -2606,6 +3043,436 @@ void emitNativeMutationPlan(ArrayRef<std::string> orderedOps,
     return;
   }
   emitLegacyNativeMutationPlan(orderedOps, designText, count, seed, out);
+}
+
+static bool replaceSpan(std::string &text, size_t begin, size_t end,
+                        StringRef replacement) {
+  if (begin == StringRef::npos || end == StringRef::npos || begin > end ||
+      end > text.size())
+    return false;
+  text = text.substr(0, begin) + replacement.str() + text.substr(end);
+  return true;
+}
+
+static bool replaceTokenAt(std::string &text, size_t pos, size_t tokenLen,
+                           StringRef replacement) {
+  return replaceSpan(text, pos, pos + tokenLen, replacement);
+}
+
+static void parseMutationLabel(StringRef label, std::string &op,
+                               uint64_t &siteIndex) {
+  StringRef opRef = label;
+  if (opRef.starts_with("NATIVE_"))
+    opRef = opRef.drop_front(strlen("NATIVE_"));
+
+  siteIndex = 1;
+  size_t atPos = opRef.rfind('@');
+  if (atPos != StringRef::npos) {
+    StringRef suffix = opRef.drop_front(atPos + 1);
+    uint64_t parsed = 0;
+    if (!suffix.empty() && !suffix.getAsInteger(10, parsed) && parsed > 0) {
+      opRef = opRef.take_front(atPos);
+      siteIndex = parsed;
+    }
+  }
+  op = opRef.str();
+}
+
+static bool findIfConditionBoundsAtSite(StringRef text, ArrayRef<uint8_t> codeMask,
+                                        size_t ifPos, size_t &condOpen,
+                                        size_t &condClose) {
+  if (ifPos == StringRef::npos || ifPos + 2 > text.size() ||
+      !matchKeywordTokenAt(text, codeMask, ifPos, "if"))
+    return false;
+
+  size_t openPos = ifPos + 2;
+  while (openPos < text.size() &&
+         (!isCodeAt(codeMask, openPos) ||
+          std::isspace(static_cast<unsigned char>(text[openPos]))))
+    ++openPos;
+  if (openPos >= text.size() || !isCodeAt(codeMask, openPos) ||
+      text[openPos] != '(')
+    return false;
+
+  size_t closePos = findMatchingParen(text, codeMask, openPos);
+  if (closePos == StringRef::npos)
+    return false;
+
+  condOpen = openPos;
+  condClose = closePos;
+  return true;
+}
+
+static size_t findTernaryEndDelimiter(StringRef text, ArrayRef<uint8_t> codeMask,
+                                      size_t colonPos) {
+  if (colonPos == StringRef::npos || colonPos >= text.size())
+    return StringRef::npos;
+
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  int nestedTernary = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  for (size_t i = colonPos + 1, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 &&
+          nestedTernary == 0)
+        return i;
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 &&
+          nestedTernary == 0)
+        return i;
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 &&
+          nestedTernary == 0)
+        return i;
+      decDepth(braceDepth);
+      continue;
+    }
+
+    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0) {
+      if (ch == '?') {
+        ++nestedTernary;
+        continue;
+      }
+      if (ch == ':') {
+        if (nestedTernary == 0)
+          return i;
+        --nestedTernary;
+        continue;
+      }
+      if (nestedTernary == 0 && (ch == ';' || ch == ','))
+        return i;
+    }
+  }
+  return text.size();
+}
+
+static bool applyMuxSwapArmsAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                               size_t questionPos, std::string &mutatedText) {
+  size_t colonPos = findMatchingTernaryColon(text, codeMask, questionPos);
+  if (colonPos == StringRef::npos)
+    return false;
+  size_t endDelim = findTernaryEndDelimiter(text, codeMask, colonPos);
+  if (endDelim == StringRef::npos)
+    return false;
+
+  size_t trueStart = findNextCodeNonSpace(text, codeMask, questionPos + 1);
+  size_t trueEnd = findPrevCodeNonSpace(text, codeMask, colonPos);
+  size_t falseStart = findNextCodeNonSpace(text, codeMask, colonPos + 1);
+  size_t falseEnd = findPrevCodeNonSpace(text, codeMask, endDelim);
+  if (trueStart == StringRef::npos || trueEnd == StringRef::npos ||
+      falseStart == StringRef::npos || falseEnd == StringRef::npos ||
+      trueStart > trueEnd || falseStart > falseEnd)
+    return false;
+
+  StringRef lhs = text.slice(questionPos + 1, trueStart);
+  StringRef trueExpr = text.slice(trueStart, trueEnd + 1);
+  StringRef trueToColonWS = text.slice(trueEnd + 1, colonPos);
+  StringRef colonToFalseWS = text.slice(colonPos + 1, falseStart);
+  StringRef falseExpr = text.slice(falseStart, falseEnd + 1);
+  StringRef falseSuffixWS = text.slice(falseEnd + 1, endDelim);
+
+  std::string swapped;
+  swapped.reserve(text.size() + 8);
+  swapped += text.slice(0, questionPos + 1).str();
+  swapped += lhs.str();
+  swapped += falseExpr.str();
+  swapped += trueToColonWS.str();
+  swapped.push_back(':');
+  swapped += colonToFalseWS.str();
+  swapped += trueExpr.str();
+  swapped += falseSuffixWS.str();
+  swapped += text.drop_front(endDelim).str();
+
+  mutatedText = std::move(swapped);
+  return true;
+}
+
+static bool applyIfElseSwapAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                              size_t ifPos, std::string &mutatedText) {
+  size_t condOpen = StringRef::npos;
+  size_t condClose = StringRef::npos;
+  if (!findIfConditionBoundsAtSite(text, codeMask, ifPos, condOpen, condClose))
+    return false;
+
+  size_t thenStart = skipCodeWhitespace(text, codeMask, condClose + 1, text.size());
+  if (thenStart == StringRef::npos || thenStart >= text.size())
+    return false;
+  size_t thenEnd = findIfElseBranchEnd(text, codeMask, thenStart);
+  if (thenEnd == StringRef::npos)
+    return false;
+
+  size_t elsePos = skipCodeWhitespace(text, codeMask, thenEnd, text.size());
+  if (elsePos == StringRef::npos || elsePos >= text.size() ||
+      !matchKeywordTokenAt(text, codeMask, elsePos, "else"))
+    return false;
+
+  size_t elseStart = skipCodeWhitespace(text, codeMask, elsePos + 4, text.size());
+  if (elseStart == StringRef::npos || elseStart >= text.size())
+    return false;
+  size_t elseEnd = findIfElseBranchEnd(text, codeMask, elseStart);
+  if (elseEnd == StringRef::npos)
+    return false;
+
+  StringRef thenArm = text.slice(thenStart, thenEnd);
+  StringRef betweenArms = text.slice(thenEnd, elsePos);
+  StringRef elseHeader = text.slice(elsePos, elseStart);
+  StringRef elseArm = text.slice(elseStart, elseEnd);
+
+  std::string swapped;
+  swapped.reserve(text.size() + 8);
+  swapped += text.slice(0, thenStart).str();
+  swapped += elseArm.str();
+  swapped += betweenArms.str();
+  swapped += elseHeader.str();
+  swapped += thenArm.str();
+  swapped += text.drop_front(elseEnd).str();
+
+  mutatedText = std::move(swapped);
+  return true;
+}
+
+static bool applyConstFlipAt(StringRef text, bool zeroToOne, size_t pos,
+                             std::string &mutatedText) {
+  auto apply = [&](StringRef needle, StringRef replacement) {
+    if (pos + needle.size() > text.size() || !text.substr(pos).starts_with(needle))
+      return false;
+    return replaceTokenAt(mutatedText, pos, needle.size(), replacement);
+  };
+
+  if (zeroToOne) {
+    return apply("1'b0", "1'b1") || apply("1'd0", "1'd1") ||
+           apply("1'h0", "1'h1") || apply("'0", "'1");
+  }
+  return apply("1'b1", "1'b0") || apply("1'd1", "1'd0") ||
+         apply("1'h1", "1'h0") || apply("'1", "'0");
+}
+
+static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask,
+                                      StringRef op, size_t pos,
+                                      std::string &mutatedText) {
+  if (op == "EQ_TO_NEQ")
+    return replaceTokenAt(mutatedText, pos, 2, "!=");
+  if (op == "NEQ_TO_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "==");
+  if (op == "CASEEQ_TO_EQ")
+    return replaceTokenAt(mutatedText, pos, 3, "==");
+  if (op == "CASENEQ_TO_NEQ")
+    return replaceTokenAt(mutatedText, pos, 3, "!=");
+  if (op == "EQ_TO_CASEEQ")
+    return replaceTokenAt(mutatedText, pos, 2, "===");
+  if (op == "NEQ_TO_CASENEQ")
+    return replaceTokenAt(mutatedText, pos, 2, "!==");
+  if (op == "SIGNED_TO_UNSIGNED")
+    return replaceTokenAt(mutatedText, pos, strlen("$signed"), "$unsigned");
+  if (op == "UNSIGNED_TO_SIGNED")
+    return replaceTokenAt(mutatedText, pos, strlen("$unsigned"), "$signed");
+  if (op == "LT_TO_LE")
+    return replaceTokenAt(mutatedText, pos, 1, "<=");
+  if (op == "GT_TO_GE")
+    return replaceTokenAt(mutatedText, pos, 1, ">=");
+  if (op == "LE_TO_LT")
+    return replaceTokenAt(mutatedText, pos, 2, "<");
+  if (op == "GE_TO_GT")
+    return replaceTokenAt(mutatedText, pos, 2, ">");
+  if (op == "LT_TO_GT")
+    return replaceTokenAt(mutatedText, pos, 1, ">");
+  if (op == "GT_TO_LT")
+    return replaceTokenAt(mutatedText, pos, 1, "<");
+  if (op == "LE_TO_GE")
+    return replaceTokenAt(mutatedText, pos, 2, ">=");
+  if (op == "GE_TO_LE")
+    return replaceTokenAt(mutatedText, pos, 2, "<=");
+  if (op == "AND_TO_OR")
+    return replaceTokenAt(mutatedText, pos, 2, "||");
+  if (op == "OR_TO_AND")
+    return replaceTokenAt(mutatedText, pos, 2, "&&");
+  if (op == "LAND_TO_BAND")
+    return replaceTokenAt(mutatedText, pos, 2, "&");
+  if (op == "LOR_TO_BOR")
+    return replaceTokenAt(mutatedText, pos, 2, "|");
+  if (op == "XOR_TO_OR")
+    return replaceTokenAt(mutatedText, pos, 1, "|");
+  if (op == "XOR_TO_XNOR")
+    return replaceTokenAt(mutatedText, pos, 1, "^~");
+  if (op == "XNOR_TO_XOR")
+    return replaceTokenAt(mutatedText, pos, 2, "^");
+  if (op == "REDAND_TO_REDOR")
+    return replaceTokenAt(mutatedText, pos, 1, "|");
+  if (op == "REDOR_TO_REDAND")
+    return replaceTokenAt(mutatedText, pos, 1, "&");
+  if (op == "REDXOR_TO_REDXNOR")
+    return replaceTokenAt(mutatedText, pos, 1, "^~");
+  if (op == "REDXNOR_TO_REDXOR")
+    return replaceTokenAt(mutatedText, pos, 2, "^");
+  if (op == "BAND_TO_BOR")
+    return replaceTokenAt(mutatedText, pos, 1, "|");
+  if (op == "BOR_TO_BAND")
+    return replaceTokenAt(mutatedText, pos, 1, "&");
+  if (op == "BAND_TO_LAND")
+    return replaceTokenAt(mutatedText, pos, 1, "&&");
+  if (op == "BOR_TO_LOR")
+    return replaceTokenAt(mutatedText, pos, 1, "||");
+  if (op == "BA_TO_NBA")
+    return replaceTokenAt(mutatedText, pos, 1, "<=");
+  if (op == "NBA_TO_BA")
+    return replaceTokenAt(mutatedText, pos, 2, "=");
+  if (op == "POSEDGE_TO_NEGEDGE")
+    return replaceTokenAt(mutatedText, pos, strlen("posedge"), "negedge");
+  if (op == "NEGEDGE_TO_POSEDGE")
+    return replaceTokenAt(mutatedText, pos, strlen("negedge"), "posedge");
+  if (op == "RESET_POSEDGE_TO_NEGEDGE")
+    return replaceTokenAt(mutatedText, pos, strlen("posedge"), "negedge");
+  if (op == "RESET_NEGEDGE_TO_POSEDGE")
+    return replaceTokenAt(mutatedText, pos, strlen("negedge"), "posedge");
+  if (op == "MUX_SWAP_ARMS")
+    return applyMuxSwapArmsAt(text, codeMask, pos, mutatedText);
+  if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
+      op == "IF_COND_TRUE" || op == "IF_COND_FALSE") {
+    size_t condOpen = StringRef::npos;
+    size_t condClose = StringRef::npos;
+    if (!findIfConditionBoundsAtSite(text, codeMask, pos, condOpen, condClose))
+      return false;
+
+    if (op == "IF_COND_TRUE")
+      return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b1");
+    if (op == "IF_COND_FALSE")
+      return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b0");
+
+    StringRef condExpr = text.slice(condOpen + 1, condClose);
+    std::string replacement = (Twine("!(") + condExpr + ")").str();
+    return replaceSpan(mutatedText, condOpen + 1, condClose, replacement);
+  }
+  if (op == "IF_ELSE_SWAP_ARMS")
+    return applyIfElseSwapAt(text, codeMask, pos, mutatedText);
+  if (op == "UNARY_NOT_DROP") {
+    size_t end = pos + 1;
+    while (end < text.size() &&
+           std::isspace(static_cast<unsigned char>(text[end])))
+      ++end;
+    return replaceSpan(mutatedText, pos, end, "");
+  }
+  if (op == "UNARY_BNOT_DROP" || op == "UNARY_MINUS_DROP") {
+    size_t end = pos + 1;
+    while (end < text.size() && isCodeAt(codeMask, end) &&
+           std::isspace(static_cast<unsigned char>(text[end])))
+      ++end;
+    return replaceSpan(mutatedText, pos, end, "");
+  }
+  if (op == "CONST0_TO_1")
+    return applyConstFlipAt(text, /*zeroToOne=*/true, pos, mutatedText);
+  if (op == "CONST1_TO_0")
+    return applyConstFlipAt(text, /*zeroToOne=*/false, pos, mutatedText);
+  if (op == "ADD_TO_SUB")
+    return replaceTokenAt(mutatedText, pos, 1, "-");
+  if (op == "SUB_TO_ADD")
+    return replaceTokenAt(mutatedText, pos, 1, "+");
+  if (op == "MUL_TO_ADD")
+    return replaceTokenAt(mutatedText, pos, 1, "+");
+  if (op == "ADD_TO_MUL")
+    return replaceTokenAt(mutatedText, pos, 1, "*");
+  if (op == "DIV_TO_MUL")
+    return replaceTokenAt(mutatedText, pos, 1, "*");
+  if (op == "MUL_TO_DIV")
+    return replaceTokenAt(mutatedText, pos, 1, "/");
+  if (op == "MOD_TO_DIV")
+    return replaceTokenAt(mutatedText, pos, 1, "/");
+  if (op == "DIV_TO_MOD")
+    return replaceTokenAt(mutatedText, pos, 1, "%");
+  if (op == "INC_TO_DEC")
+    return replaceTokenAt(mutatedText, pos, 2, "--");
+  if (op == "DEC_TO_INC")
+    return replaceTokenAt(mutatedText, pos, 2, "++");
+  if (op == "PLUS_EQ_TO_MINUS_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "-=");
+  if (op == "MINUS_EQ_TO_PLUS_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "+=");
+  if (op == "MUL_EQ_TO_DIV_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "/=");
+  if (op == "DIV_EQ_TO_MUL_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "*=");
+  if (op == "BAND_EQ_TO_BOR_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "|=");
+  if (op == "BOR_EQ_TO_BAND_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "&=");
+  if (op == "SHL_TO_SHR")
+    return replaceTokenAt(mutatedText, pos, 2, ">>");
+  if (op == "SHR_TO_SHL")
+    return replaceTokenAt(mutatedText, pos, 2, "<<");
+  if (op == "SHR_TO_ASHR")
+    return replaceTokenAt(mutatedText, pos, 2, ">>>");
+  if (op == "ASHR_TO_SHR")
+    return replaceTokenAt(mutatedText, pos, 3, ">>");
+  return false;
+}
+
+bool applyNativeMutationLabel(StringRef designText, StringRef label,
+                              std::string &mutatedText, bool &changed,
+                              std::string &error) {
+  error.clear();
+  changed = false;
+  mutatedText = designText.str();
+
+  std::string op;
+  uint64_t siteIndex = 1;
+  parseMutationLabel(label, op, siteIndex);
+  if (!op.empty()) {
+    SmallVector<uint8_t, 0> codeMask;
+    buildCodeMask(designText, codeMask);
+    SmallVector<SiteInfo, 16> sites;
+    collectSitesForOp(designText, op, codeMask, sites);
+    if (siteIndex > 0 && siteIndex <= sites.size())
+      changed = applyNativeMutationAtSite(designText, codeMask, op,
+                                          sites[siteIndex - 1].pos,
+                                          mutatedText);
+  }
+
+  if (!changed) {
+    if (mutatedText.empty() || mutatedText.back() != '\n')
+      mutatedText.push_back('\n');
+    mutatedText += (Twine("// native_mutation_noop_fallback ") + label + "\n").str();
+
+    const char *markerPath = std::getenv("CIRCT_MUT_NATIVE_NOOP_FALLBACK_MARKER");
+    if (markerPath && *markerPath) {
+      std::error_code ec;
+      raw_fd_ostream marker(markerPath, ec, sys::fs::OF_Append | sys::fs::OF_Text);
+      if (ec) {
+        error = (Twine("circt-mut apply: failed to append noop fallback marker: ") +
+                 markerPath + ": " + ec.message())
+                    .str();
+        return false;
+      }
+      marker << label << "\n";
+    }
+  }
+
+  return true;
 }
 
 } // namespace circt::mut
