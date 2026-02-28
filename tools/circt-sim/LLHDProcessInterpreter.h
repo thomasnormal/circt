@@ -2577,6 +2577,12 @@ private:
                            const std::vector<uint8_t> *&valueData,
                            std::string *matchedKey = nullptr) const;
 
+  /// Resolve wrapper-level config_db inst_name against a context object.
+  /// Mirrors UVM behavior where non-null context prefixes relative inst_names.
+  std::string normalizeConfigDbInstName(ProcessId procId,
+                                        InterpretedValue contextValue,
+                                        llvm::StringRef instName);
+
   /// Intercept config_db implementation methods invoked via call_indirect.
   bool tryInterceptConfigDbCallIndirect(
       ProcessId procId, mlir::func::CallIndirectOp callIndirectOp,

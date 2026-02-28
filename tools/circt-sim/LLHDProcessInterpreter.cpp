@@ -22718,9 +22718,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           return readMooreStringStruct(procId, callOp.getOperand(argIdx));
         };
 
-        // Build config_db key from self context + inst_name + field_name
-        InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-        std::string instName = readStr(1);
+        // Build config_db key from context + inst_name + field_name.
+        // Wrapper calls pass raw inst_name; when context is non-null UVM
+        // resolves it relative to context.get_full_name().
+        InterpretedValue contextVal = getValue(procId, callOp.getOperand(0));
+        std::string rawInstName = readStr(1);
+        std::string instName =
+            normalizeConfigDbInstName(procId, contextVal, rawInstName);
         std::string fieldName = readStr(2);
         std::string key = instName + "." + fieldName;
         if (traceConfigDbEnabled) {
@@ -22823,7 +22827,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         return readMooreStringStruct(procId, callOp.getOperand(argIdx));
       };
 
-      std::string instName = readStr(1);
+      InterpretedValue contextVal = getValue(procId, callOp.getOperand(0));
+      std::string rawInstName = readStr(1);
+      std::string instName =
+          normalizeConfigDbInstName(procId, contextVal, rawInstName);
       std::string fieldName = readStr(2);
       std::string key = instName + "." + fieldName;
 
@@ -24065,11 +24072,20 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto readStringFromStructVal = [&](Value operand) -> std::string {
       return readMooreStringStruct(procId, operand);
     };
+    auto resolveContextInstName = [&](Value contextOperand,
+                                      llvm::StringRef rawInstName) {
+      if (!isa<LLVM::LLVMPointerType>(contextOperand.getType()))
+        return rawInstName.str();
+      InterpretedValue contextValue = getValue(procId, contextOperand);
+      return normalizeConfigDbInstName(procId, contextValue, rawInstName);
+    };
 
     if (calleeName.contains("::set")) {
       // Signature: (self, cntxt, inst_name, field_name, value, accessor, pool, cntxt_ptr)
       if (callOp.getNumOperands() >= 5) {
-        std::string instName = readStringFromStructVal(callOp.getOperand(2));
+        std::string rawInstName = readStringFromStructVal(callOp.getOperand(2));
+        std::string instName =
+            resolveContextInstName(callOp.getOperand(1), rawInstName);
         std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
         std::string key = instName + "." + fieldName;
 
@@ -24096,7 +24112,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     if (calleeName.contains("::get")) {
       // Signature: (self, cntxt, inst_name, field_name, output_ref) -> i1
       if (callOp.getNumOperands() >= 5 && callOp.getNumResults() >= 1) {
-        std::string instName = readStringFromStructVal(callOp.getOperand(2));
+        std::string rawInstName = readStringFromStructVal(callOp.getOperand(2));
+        std::string instName =
+            resolveContextInstName(callOp.getOperand(1), rawInstName);
         std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
         std::string key = instName + "." + fieldName;
 
@@ -24186,7 +24204,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     if (calleeName.contains("::exists")) {
       if (callOp.getNumOperands() >= 5 && callOp.getNumResults() >= 1) {
-        std::string instName = readStringFromStructVal(callOp.getOperand(2));
+        std::string rawInstName = readStringFromStructVal(callOp.getOperand(2));
+        std::string instName =
+            resolveContextInstName(callOp.getOperand(1), rawInstName);
         std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
         std::string key = instName + "." + fieldName;
 

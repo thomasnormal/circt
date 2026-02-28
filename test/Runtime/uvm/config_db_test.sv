@@ -9,6 +9,15 @@
 //   - Hierarchical path matching
 //
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top config_db_test_top --max-time=1000000000 +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM
+//
+// SIM: Running test config_db_test
+// SIM: Agent1 resolves config_db entry during build
+// SIM: Agent2 resolves config_db entry during build
+// SIM: ALL TESTS PASSED
+// SIM-NOT: UVM_ERROR
+// SIM: [circt-sim] Simulation completed
 
 `timescale 1ns/1ps
 
@@ -59,6 +68,9 @@ package config_db_test_pkg;
     `uvm_component_utils(test_agent)
 
     agent_config cfg;
+    bit got_cfg_from_db;
+    bit got_cfg_direct;
+    bit got_cfg_fallback;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
@@ -66,12 +78,31 @@ package config_db_test_pkg;
 
     virtual function void build_phase(uvm_phase phase);
       super.build_phase(phase);
+      got_cfg_from_db = 0;
+      got_cfg_direct = 0;
+      got_cfg_fallback = 0;
       // Try to get config from database
       if (!uvm_config_db#(agent_config)::get(this, "", "config", cfg)) begin
-        `uvm_info("AGENT", "No config found, using defaults", UVM_MEDIUM)
-        cfg = agent_config::type_id::create("cfg");
+        string full_name_for_lookup;
+        full_name_for_lookup = get_full_name();
+        if (full_name_for_lookup.len() > 0 && full_name_for_lookup.substr(0, 0) == ".")
+          full_name_for_lookup = full_name_for_lookup.substr(1, full_name_for_lookup.len() - 1);
+        // Fallback to absolute full-name lookup.
+        if (!uvm_config_db#(agent_config)::get(get_parent(), get_name(), "config", cfg) &&
+            !uvm_config_db#(agent_config)::get(null, full_name_for_lookup, "config", cfg) &&
+            !uvm_config_db#(agent_config)::get(null, get_full_name(), "config", cfg)) begin
+          `uvm_info("AGENT", "No config found, using defaults", UVM_MEDIUM)
+          cfg = agent_config::type_id::create("cfg");
+        end else begin
+          got_cfg_from_db = 1;
+          got_cfg_fallback = 1;
+          `uvm_info("AGENT", $sformatf("Got config via full_name fallback: is_active=%0b, timeout=%0d",
+                                       cfg.is_active, cfg.timeout_cycles), UVM_MEDIUM)
+        end
       end
       else begin
+        got_cfg_from_db = 1;
+        got_cfg_direct = 1;
         `uvm_info("AGENT", $sformatf("Got config: is_active=%0b, timeout=%0d",
                                      cfg.is_active, cfg.timeout_cycles), UVM_MEDIUM)
       end
@@ -340,6 +371,25 @@ package config_db_test_pkg;
     //========================================================================
     virtual function void report_phase(uvm_phase phase);
       super.report_phase(phase);
+      begin
+        agent_config direct_cfg;
+        check_result(uvm_config_db#(agent_config)::get(this, "env.agent1", "config", direct_cfg) &&
+              direct_cfg.is_active == 1 && direct_cfg.timeout_cycles == 2000,
+              "Direct config_db get from test context finds env.agent1");
+        check_result(uvm_config_db#(agent_config)::get(this, "env.agent2", "config", direct_cfg) &&
+              direct_cfg.is_active == 0 && direct_cfg.timeout_cycles == 1500,
+              "Direct config_db get from test context finds env.agent2");
+      end
+      check_result(env.agent1 != null && env.agent1.got_cfg_from_db && env.agent1.cfg != null &&
+            env.agent1.got_cfg_direct && !env.agent1.got_cfg_fallback &&
+            env.agent1.cfg.is_active == 1 &&
+            env.agent1.cfg.timeout_cycles == 2000,
+            "Agent1 resolves config_db entry during build");
+      check_result(env.agent2 != null && env.agent2.got_cfg_from_db && env.agent2.cfg != null &&
+            env.agent2.got_cfg_direct && !env.agent2.got_cfg_fallback &&
+            env.agent2.cfg.is_active == 0 &&
+            env.agent2.cfg.timeout_cycles == 1500,
+            "Agent2 resolves config_db entry during build");
       `uvm_info("RESULTS", $sformatf("Tests passed: %0d, Tests failed: %0d",
                                      test_pass_count, test_fail_count), UVM_NONE)
       if (test_fail_count == 0)

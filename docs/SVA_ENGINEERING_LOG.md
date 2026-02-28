@@ -9824,3 +9824,60 @@
 - validation:
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_coverage_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_coverage_test.sv test/Runtime/uvm/uvm_ral_test.sv test/Runtime/uvm/uvm_factory_test.sv`
+
+## 2026-02-28 - UVM config_db direct-context semantics (wrapper + implementation normalization)
+
+- realization:
+  - `test/Runtime/uvm/config_db_test.sv` semanticized checks exposed a real mismatch:
+    - agent-local `uvm_config_db::get(this, "", "config", ...)` did not resolve scoped entries,
+      while direct test-context lookups did.
+    - both agents were falling back to wildcard `*agent*` config (`timeout=500`) instead of
+      scoped `env.agent1/2` configs (`2000/1500`).
+  - root cause was in `circt-sim` interception paths, not `uvm-core`:
+    - wrapper-level `get_*/set_*` interception treated `inst_name` as already absolute and
+      ignored context-object scope expansion.
+    - call-indirect fallback path also accepted leading-dot absolute forms (e.g.
+      `.uvm_test_top.env`) without canonicalization.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.h`
+    - added `normalizeConfigDbInstName(...)` helper declaration.
+  - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - implemented `normalizeConfigDbInstName(...)`:
+      - resolves context-relative `inst_name` using context full-name/object-name fields,
+      - canonicalizes leading-dot absolute names,
+      - preserves null-context behavior.
+    - canonicalized leading-dot `inst_name` handling in call-indirect config_db fallback
+      (`tryInterceptConfigDbCallIndirect`) for both set/get paths.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - updated wrapper `get_*` and `set_*` config_db interception to use
+      context-aware normalized `inst_name`.
+    - updated `config_db_*implementation*::{set,get,exists}` call interception to normalize
+      `inst_name` against context operand when pointer-typed.
+  - `test/Runtime/uvm/config_db_test.sv`
+    - strengthened semantics to require direct build-phase lookup success:
+      - added `got_cfg_direct` / `got_cfg_fallback` tracking.
+      - report checks now require direct path (no fallback) and exact per-agent values
+        (`agent1=2000 active=1`, `agent2=1500 active=0`).
+
+- validation:
+  - failing-before-fix (semantic red):
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/config_db_test.sv`
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - passing-after-fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/config_db_test.sv`
+      (observed pass in a clean rerun after rebuild)
+    - direct semantic run check:
+      - `build_test/bin/circt-verilog --ir-hw --uvm-path=test/Runtime/uvm/../../../lib/Runtime/uvm-core test/Runtime/uvm/config_db_test.sv -o /tmp/config_db_test.verify.mlir`
+      - `build_test/bin/circt-sim /tmp/config_db_test.verify.mlir --top config_db_test_top --max-time=1000000000 +UVM_VERBOSITY=UVM_NONE`
+      - observed markers: `Running test config_db_test`, both agent build checks pass, `ALL TESTS PASSED`.
+  - neighbor sanity:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_simple_test.sv`
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_tlm_port_test.sv`
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_component_suspend_resume_test.sv`
+
+- note:
+  - this workspace currently shows intermittent unrelated front-end/runtime instability
+    in some UVM lit runs (sporadic malformed MLIR tokenization / parser failures in generated
+    `%t.mlir`), separate from the config_db semantic fix above.

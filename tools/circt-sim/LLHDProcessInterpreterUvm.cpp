@@ -1380,6 +1380,61 @@ static bool splitConfigDbKey(llvm::StringRef key, llvm::StringRef &instPattern,
   return true;
 }
 
+std::string LLHDProcessInterpreter::normalizeConfigDbInstName(
+    ProcessId procId, InterpretedValue contextValue, llvm::StringRef instName) {
+  std::string resolvedInstName = instName.str();
+  while (!resolvedInstName.empty() && resolvedInstName.front() == '.')
+    resolvedInstName.erase(resolvedInstName.begin());
+
+  if (contextValue.isX())
+    return resolvedInstName;
+  uint64_t contextAddr = contextValue.getUInt64();
+  if (contextAddr == 0)
+    return resolvedInstName;
+
+  auto readU64At = [&](uint64_t addr, uint64_t &value) -> bool {
+    uint64_t offset = 0;
+    MemoryBlock *block = findBlockByAddress(addr, offset);
+    if (!block)
+      block = findMemoryBlockByAddress(addr, procId, &offset);
+    if (!block || !block->initialized || offset + 8 > block->size)
+      return false;
+    value = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      value |= static_cast<uint64_t>(block->bytes()[offset + i]) << (i * 8);
+    return true;
+  };
+
+  auto readStringStructAt = [&](uint64_t addr) -> std::string {
+    uint64_t ptr = 0;
+    uint64_t len = 0;
+    if (!readU64At(addr, ptr) || !readU64At(addr + 8, len) || ptr == 0 ||
+        len == 0)
+      return {};
+    llvm::APInt packed(128, 0);
+    packed |= llvm::APInt(128, ptr);
+    packed |= llvm::APInt(128, len) << 64;
+    return readMooreStringStruct(procId, InterpretedValue(packed));
+  };
+
+  // Offsets match the packed layout assumptions used in m_set_full_name
+  // interception (uvm_object.m_inst_name and uvm_component.full_name).
+  constexpr uint64_t kObjectInstNameOff = 12;
+  constexpr uint64_t kComponentFullNameOff = 127;
+
+  std::string contextFullName = readStringStructAt(contextAddr + kComponentFullNameOff);
+  if (contextFullName.empty())
+    contextFullName = readStringStructAt(contextAddr + kObjectInstNameOff);
+  while (!contextFullName.empty() && contextFullName.front() == '.')
+    contextFullName.erase(contextFullName.begin());
+
+  if (resolvedInstName.empty())
+    return contextFullName;
+  if (contextFullName.empty())
+    return resolvedInstName;
+  return contextFullName + "." + resolvedInstName;
+}
+
 void LLHDProcessInterpreter::storeConfigDbEntry(llvm::StringRef instName,
                                                 llvm::StringRef fieldName,
                                                 std::vector<uint8_t> valueData) {
@@ -1465,6 +1520,11 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       return "";
     return readMooreStringStruct(procId, args[argIdx]);
   };
+  auto canonicalizeInstName = [](std::string name) {
+    while (!name.empty() && name.front() == '.')
+      name.erase(name.begin());
+    return name;
+  };
 
   // --- SET ---
   if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
@@ -1475,10 +1535,10 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       std::string str2 = readStr(2);
       std::string str3 = readStr(3);
 
-      std::string instName = str2;
+      std::string instName = canonicalizeInstName(str2);
       std::string fieldName = str3;
       if (fieldName.empty()) {
-        instName = str1;
+        instName = canonicalizeInstName(str1);
         fieldName = str2;
       }
       std::string key = instName + "." + fieldName;
@@ -1516,10 +1576,10 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       std::string str2 = readStr(2);
       std::string str3 = readStr(3);
 
-      std::string instName = str2;
+      std::string instName = canonicalizeInstName(str2);
       std::string fieldName = str3;
       if (fieldName.empty()) {
-        instName = str1;
+        instName = canonicalizeInstName(str1);
         fieldName = str2;
       }
       std::string key = instName + "." + fieldName;
