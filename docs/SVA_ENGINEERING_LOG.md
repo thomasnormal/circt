@@ -9216,3 +9216,26 @@
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=bit-select-const-oob-read-x.sv`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter='(bit-select-const-oob-read-x.sv|dyn-bit-select-oob-noop.sv|array-get-oob-sentinel-index.sv|uninitialized-logic-memory-reads-x.sv)'`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm --filter=uvm_timeout_plusarg_test.sv`
+
+## 2026-02-28 - circt-sim local unpacked array drives on memory-backed refs
+
+- realization:
+  - `llhd.sig.array_get` drive handling for memory-backed refs looked up only
+    global/malloc blocks via `findBlockByAddress`, missing process-local
+    alloca-backed blocks.
+  - result: drives to local unpacked arrays in initial blocks were dropped and
+    subsequent loads observed stale zeros.
+
+- TDD:
+  - used `test/Tools/circt-sim/local-unpacked-array-drive-memory-backed.sv`
+    as reproducer; baseline failure printed `M0=0 M1=0` instead of `M0=1 M1=2`.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - in the `llhd.sig.array_get` memory-backed drive path, first probe
+      `findMemoryBlockByAddress(baseAddr, procId, &baseOffset)` and only
+      fall back to `findBlockByAddress` when needed.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=local-unpacked-array-drive-memory-backed.sv`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/ImportVerilog build_test/tools/circt/test/Conversion/MooreToCore build_test/tools/circt/test/Tools/circt-sim build_test/tools/circt/test/Runtime/uvm --max-failures=5`

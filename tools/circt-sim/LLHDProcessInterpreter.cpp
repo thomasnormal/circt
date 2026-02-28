@@ -18494,15 +18494,19 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             // Get the value to drive
             InterpretedValue driveVal = getValue(procId, driveOp.getValue());
 
-            // Try to find the memory block - could be from pointer value
+            // Try to find the memory block - could be process-local alloca,
+            // global, or malloc-backed memory.
             InterpretedValue ptrVal = getValue(procId, input);
             if (!ptrVal.isX()) {
               uint64_t baseAddr = ptrVal.getUInt64();
               MemoryBlock *block = nullptr;
               uint64_t baseOffset = 0;
 
-              // Check global and malloc blocks via O(log n) range index
-              block = findBlockByAddress(baseAddr, baseOffset);
+              // Check process/module/global blocks first, then the global/malloc
+              // O(log n) range index.
+              block = findMemoryBlockByAddress(baseAddr, procId, &baseOffset);
+              if (!block)
+                block = findBlockByAddress(baseAddr, baseOffset);
 
               if (block) {
                 // Calculate byte offset for the element
