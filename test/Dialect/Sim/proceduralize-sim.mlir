@@ -13,6 +13,18 @@ hw.module @basic_print1(in %clk : !seq.clock) {
   sim.print %test on %clk if %true
 }
 
+// CHECK-LABEL: @print_blockarg_fstring
+// CHECK-NEXT:  %[[TRG:.*]] = seq.from_clock %clk
+// CHECK-NEXT:  hw.triggered posedge %[[TRG]](%fmt) : !sim.fstring {
+// CHECK-NEXT:  ^bb0(%[[ARG:.*]]: !sim.fstring):
+// CHECK:         sim.proc.print %[[ARG]]
+// CHECK-NEXT:   }
+
+hw.module @print_blockarg_fstring(in %clk : !seq.clock, in %fmt : !sim.fstring) {
+  %true = hw.constant true
+  sim.print %fmt on %clk if %true
+}
+
 // CHECK-LABEL: @basic_print2
 // CHECK-NEXT:  %[[TRG:.*]] = seq.from_clock %clk
 // CHECK-NEXT:  hw.triggered posedge %[[TRG]](%cond) : i1 {

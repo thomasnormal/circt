@@ -61,7 +61,7 @@ LogicalResult ProceduralizeSimPass::proceduralizePrintOps(
   // List of uniqued values to become arguments of the TriggeredOp.
   SmallSetVector<Value, 4> arguments;
   // Map printf ops -> flattened list of fragments
-  SmallDenseMap<PrintFormattedOp, SmallVector<Operation *>, 4> fragmentMap;
+  SmallDenseMap<PrintFormattedOp, SmallVector<Value>, 4> fragmentMap;
   SmallVector<Location> locs;
   SmallDenseSet<Value, 1> alwaysEnabledConditions;
 
@@ -100,13 +100,15 @@ LogicalResult ProceduralizeSimPass::proceduralizePrintOps(
     assert(fragmentList.empty() && "printf operation visited twice.");
 
     for (auto &fragment : flatString) {
+      fragmentList.push_back(fragment);
+
       auto *fmtOp = fragment.getDefiningOp();
       if (!fmtOp) {
-        printOp.emitError("Proceduralization of format strings passed as block "
-                          "argument is unsupported.");
-        return failure();
+        // Block arguments need to become TriggeredOp arguments so the
+        // procedural print can directly consume them.
+        arguments.insert(fragment);
+        continue;
       }
-      fragmentList.push_back(fmtOp);
       // For non-literal fragments, the value to be formatted has to become an
       // argument.
       if (!llvm::isa<FormatLiteralOp>(fmtOp)) {
@@ -166,10 +168,17 @@ LogicalResult ProceduralizeSimPass::proceduralizePrintOps(
     auto fragments = fragmentMap[printOp];
     SmallVector<Value> clonedOperands;
     builder.setInsertionPointToStart(trigOp.getBodyBlock());
-    for (auto *fragment : fragments) {
-      auto &fmtCloned = cloneMap[fragment];
+    for (auto fragment : fragments) {
+      auto *fragmentOp = fragment.getDefiningOp();
+      if (!fragmentOp) {
+        auto mapped = argumentMapper.lookupOrDefault(fragment);
+        assert(mapped && "expected block-argument fragment to be mapped");
+        clonedOperands.push_back(mapped);
+        continue;
+      }
+      auto &fmtCloned = cloneMap[fragmentOp];
       if (!fmtCloned)
-        fmtCloned = builder.clone(*fragment, argumentMapper);
+        fmtCloned = builder.clone(*fragmentOp, argumentMapper);
       clonedOperands.push_back(fmtCloned->getResult(0));
     }
     // Concatenate fragments to a single value if necessary.
@@ -202,7 +211,8 @@ LogicalResult ProceduralizeSimPass::proceduralizePrintOps(
     // the TriggeredOp.
     builder.setInsertionPoint(condBlock->getTerminator());
     PrintFormattedProcOp::create(builder, printOp.getLoc(), procPrintInput);
-    cleanupList.push_back(printOp.getInput().getDefiningOp());
+    if (auto *inputOp = printOp.getInput().getDefiningOp())
+      cleanupList.push_back(inputOp);
     printOp.erase();
   }
   return success();
@@ -226,6 +236,8 @@ void ProceduralizeSimPass::cleanup() {
     }
 
     auto *opToErase = cleanupList.pop_back_val();
+    if (!opToErase)
+      continue;
     if (erasedOps.contains(opToErase))
       continue;
 
@@ -233,7 +245,8 @@ void ProceduralizeSimPass::cleanup() {
       // Remove a dead op. If it is a concat remove its operands, too.
       if (auto concat = dyn_cast<FormatStringConcatOp>(opToErase))
         for (auto operand : concat.getInputs())
-          cleanupNextList.push_back(operand.getDefiningOp());
+          if (auto *defOp = operand.getDefiningOp())
+            cleanupNextList.push_back(defOp);
       opToErase->erase();
       erasedOps.insert(opToErase);
       noChange = false;

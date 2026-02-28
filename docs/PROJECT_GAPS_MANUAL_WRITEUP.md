@@ -2989,8 +2989,8 @@ Placement walk currently performs filter-and-optional-sort because backing data 
 ### [x] 995. `test/Tools/circt-sim/syscall-ungetc.sv:2`
 Status update (2026-02-28): this gap is closed and stale in this workspace. Current runtime behavior correctly implements `$ungetc` pushback semantics, and the regression verifies both pushback replay and return code.
 
-### [ ] 996. `lib/Dialect/Sim/Transforms/ProceduralizeSim.cpp:106`
-Proceduralization rejects format strings passed via block arguments. What is missing is support for argument-provided format fragments in triggered/print lowering. The fix is to model block-argument format sources or pre-materialize literals/fragments before this pass.
+### [x] 996. `lib/Dialect/Sim/Transforms/ProceduralizeSim.cpp:106`
+Status update (2026-02-28): this gap is closed in this workspace. `--sim-proceduralize` now accepts format-string block arguments by threading them as `hw.triggered` region arguments and using mapped values directly during procedural print emission. Regression coverage was added in `test/Dialect/Sim/proceduralize-sim.mlir` (`@print_blockarg_fstring`).
 
 ### [x] 997. `lib/Dialect/Sim/Transforms/LowerDPIFunc.cpp:80`
 Status update (2026-02-28): this duplicate of entry 347 is closed for scalar floating-point support. `LowerDPIFunc` now allows integer and float port types, validated by `test/Dialect/Sim/lower-dpi-float.mlir`.

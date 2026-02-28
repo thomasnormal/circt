@@ -1730,3 +1730,37 @@
 - Realization:
   - Duplicate scanner hits on common API names materially inflated remaining-gap
     counts for Sim and obscured actionable work.
+
+### Sim proceduralize: support block-argument format strings
+- Repro/verification (TDD):
+  - Reproduced the open gap with a minimal module:
+    - `hw.module @m(in %clk: !seq.clock, in %fmt: !sim.fstring) { ... sim.print %fmt ... }`
+    - `build_test/bin/circt-opt --sim-proceduralize /tmp/proc-blockarg.mlir`
+  - Initial result: failed with
+    `Proceduralization of format strings passed as block argument is unsupported.`
+  - Added positive regression coverage in
+    `test/Dialect/Sim/proceduralize-sim.mlir` as
+    `@print_blockarg_fstring`.
+- Root cause:
+  - `ProceduralizeSim` assumed every format fragment had a defining op and
+    hard-failed when a fragment value came from a block argument.
+  - Cleanup logic also implicitly assumed all tracked formatting DAG nodes were
+    operation-defined values.
+- Fix:
+  - In `lib/Dialect/Sim/Transforms/ProceduralizeSim.cpp`:
+    - store collected fragments as `Value` instead of `Operation *`,
+    - accept block-argument fragments by adding them to TriggeredOp arguments,
+    - map block-argument fragments directly via `IRMapping` instead of cloning,
+    - guard cleanup bookkeeping against null defining ops.
+- Validation:
+  - Rebuilt `circt-opt`:
+    - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - Focused tests:
+    - `build_test/bin/llvm-lit -a -v test/Dialect/Sim/proceduralize-sim.mlir test/Dialect/Sim/proceduralize-sim-errors.mlir`
+  - Broader Sim suite:
+    - `build_test/bin/llvm-lit -j 8 test/Dialect/Sim`
+  - Result: all passing.
+- Realization:
+  - Block-argument format strings are a natural IR composition case, and
+    supporting them required treating fragments as SSA values first, not just
+    op nodes.
