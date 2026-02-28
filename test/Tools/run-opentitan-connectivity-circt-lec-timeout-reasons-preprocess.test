@@ -9,7 +9,7 @@
 // RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nout = pathlib.Path(args[args.index(\"-o\") + 1])\nout.write_text(pathlib.Path(args[0]).read_text())\n' > %t/bin/circt-opt
 // RUN: printf '#!/usr/bin/env python3\nimport time\nprint(\"timeout-main\")\ntime.sleep(2)\n' > %t/bin/circt-lec
 // RUN: chmod +x %t/run_opentitan_connectivity_circt_lec.py %t/bin/fusesoc %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
-// RUN: not env CIRCT_TIMEOUT_SECS=1 Z3_BIN=/bin/true CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_TIMEOUT_REASON_CASES_OUT=%t/timeout-reasons.tsv python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --workdir %t/work --fusesoc-bin %t/bin/fusesoc --results-file %t/results.tsv
+// RUN: not env CIRCT_TIMEOUT_SECS=1 LEC_CANONICALIZER_TIMEOUT_RETRY_MODE=off Z3_BIN=/bin/true CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec LEC_TIMEOUT_REASON_CASES_OUT=%t/timeout-reasons.tsv python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --workdir %t/work --fusesoc-bin %t/bin/fusesoc --results-file %t/results.tsv
 // RUN: FileCheck %s --check-prefix=RESULT < %t/results.tsv
 // RUN: FileCheck %s --check-prefix=REASON < %t/timeout-reasons.tsv
 //

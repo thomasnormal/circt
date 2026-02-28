@@ -1437,7 +1437,7 @@ def main() -> int:
         "LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES",
     )
     canonicalizer_timeout_retry_timeout_secs = parse_nonnegative_int(
-        os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS", "0"),
+        os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS", "180"),
         "LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS",
     )
     if canonicalizer_timeout_retry_mode != "off":

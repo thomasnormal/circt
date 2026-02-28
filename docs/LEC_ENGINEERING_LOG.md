@@ -99,8 +99,8 @@
       - `LEC_CANONICALIZER_TIMEOUT_RETRY_MODE` (`auto|on|off`)
       - `LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_ITERATIONS` (default `0`)
       - `LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES` (default `40000`)
-      - `LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS` (default `0`, optional
-        larger timeout only for retry attempt)
+      - `LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS` (default `180`, applied
+        only to the retry attempt when canonicalizer timeout retry is active)
     - safer default retry profile now uses rewrites-only budget unless user
       opts in to iteration override.
     - timeout retry diagnostic now reports timeout transition, e.g.
