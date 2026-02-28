@@ -4428,7 +4428,16 @@ int64_t signalReadCallback(MooreSignalHandle handle, void *userData) {
 
   SignalId sigId = static_cast<SignalId>(handle);
   const SignalValue &value = scheduler->getSignalValue(sigId);
-  return static_cast<int64_t>(value.getValue());
+  if (scheduler->getSignalEncoding(sigId) == SignalEncoding::FourStateStruct) {
+    const APInt &bits = value.getAPInt();
+    unsigned width = bits.getBitWidth();
+    if (width >= 2) {
+      unsigned valueWidth = width / 2;
+      APInt valueBits = bits.extractBits(valueWidth, valueWidth);
+      return static_cast<int64_t>(valueBits.zextOrTrunc(64).getZExtValue());
+    }
+  }
+  return static_cast<int64_t>(value.getAPInt().zextOrTrunc(64).getZExtValue());
 }
 
 /// Callback for writing (depositing) a signal value.
@@ -4441,7 +4450,14 @@ int32_t signalWriteCallback(MooreSignalHandle handle, int64_t value,
   SignalId sigId = static_cast<SignalId>(handle);
   // Get the signal's width from the current value
   const SignalValue &currentVal = scheduler->getSignalValue(sigId);
-  SignalValue newVal(static_cast<uint64_t>(value), currentVal.getWidth());
+  unsigned sigWidth = currentVal.getWidth();
+  APInt writeBits(sigWidth, 0);
+  unsigned insertOffset = 0;
+  if (scheduler->getSignalEncoding(sigId) == SignalEncoding::FourStateStruct)
+    insertOffset = sigWidth / 2;
+  safeInsertBits(writeBits, APInt(64, static_cast<uint64_t>(value)),
+                 insertOffset);
+  SignalValue newVal(writeBits);
   scheduler->updateSignal(sigId, newVal);
   return 1;
 }

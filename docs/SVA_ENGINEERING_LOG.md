@@ -9239,3 +9239,27 @@
 - validation:
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=local-unpacked-array-drive-memory-backed.sv`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/ImportVerilog build_test/tools/circt/test/Conversion/MooreToCore build_test/tools/circt/test/Tools/circt-sim build_test/tools/circt/test/Runtime/uvm --max-failures=5`
+
+## 2026-02-28 - circt-sim UVM HDL deposit/read four-state value-half mapping
+
+- realization:
+  - UVM DPI bridge callbacks were reading and writing raw packed storage for
+    `SignalEncoding::FourStateStruct` instead of the value half of `{value,
+    unknown}`.
+  - effect: `uvm_hdl_deposit` followed by `uvm_hdl_read` on a 4-state signal
+    returned `XX` in the DUT signal while readback reflected written bits.
+
+- TDD:
+  - added `test/Tools/circt-sim/syscall-uvm-hdl-deposit-read-fourstate.sv`.
+  - baseline failure before fix: `DEP=1 RD=1 SIG=XX RB=aa`.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - in `signalReadCallback`, decode `FourStateStruct` by extracting and
+      returning the upper value-half bits.
+    - in `signalWriteCallback`, write deposit bits into the value-half and
+      keep unknown-half cleared for deposit semantics.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=syscall-uvm-hdl-deposit-read-fourstate.sv`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/ImportVerilog build_test/tools/circt/test/Conversion/MooreToCore build_test/tools/circt/test/Tools/circt-sim build_test/tools/circt/test/Runtime/uvm --max-failures=10`
