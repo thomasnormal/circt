@@ -581,6 +581,136 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
       return skip;
     };
+    auto tryResolveAnalysisWriteTarget =
+        [&](ModuleOp lookupModule, uint64_t selfAddr, llvm::StringRef traceTag)
+        -> std::optional<std::pair<func::FuncOp, std::string>> {
+      uint64_t vtableOff = 0;
+      MemoryBlock *objBlock =
+          findMemoryBlockByAddress(selfAddr, procId, &vtableOff);
+      if (!objBlock)
+        objBlock = findBlockByAddress(selfAddr, vtableOff);
+      uint64_t vtableAddr = 0;
+      bool haveVtableAddr = false;
+
+      // Runtime object layout: [i32 class_id][ptr vtable_ptr][...].
+      if (objBlock && vtableOff + 4 + 8 <= objBlock->size) {
+        for (unsigned i = 0; i < 8; ++i)
+          vtableAddr |=
+              static_cast<uint64_t>(objBlock->bytes()[vtableOff + 4 + i])
+              << (i * 8);
+        haveVtableAddr = true;
+      }
+
+      if (!haveVtableAddr) {
+        uint64_t nativeOff = 0;
+        size_t nativeSize = 0;
+        if (findNativeMemoryBlockByAddress(selfAddr, &nativeOff, &nativeSize) &&
+            nativeOff + 4 + 8 <= nativeSize) {
+          auto *raw = reinterpret_cast<const uint8_t *>(selfAddr + 4);
+          for (unsigned i = 0; i < 8; ++i)
+            vtableAddr |= static_cast<uint64_t>(raw[i]) << (i * 8);
+          haveVtableAddr = true;
+        }
+      }
+
+      if (!haveVtableAddr) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[" << traceTag << "] write-target lookup failed: "
+                       << "object/self not found self=0x"
+                       << llvm::format_hex(selfAddr, 0)
+                       << " vtableOff=" << vtableOff << "\n";
+        return std::nullopt;
+      }
+
+      auto globalIt = addressToGlobal.find(vtableAddr);
+      if (globalIt == addressToGlobal.end()) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[" << traceTag << "] write-target lookup failed: "
+                       << "vtable not in addressToGlobal addr=0x"
+                       << llvm::format_hex(vtableAddr, 0) << "\n";
+        return std::nullopt;
+      }
+      auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
+      if (vtableBlockIt == globalMemoryBlocks.end()) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[" << traceTag << "] write-target lookup failed: "
+                       << "missing globalMemoryBlock for "
+                       << globalIt->second << "\n";
+        return std::nullopt;
+      }
+
+      auto &vtableBlock = vtableBlockIt->second;
+      constexpr unsigned writeSlot = 11;
+      unsigned slotOffset = writeSlot * 8;
+      if (slotOffset + 8 > vtableBlock.size) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[" << traceTag << "] write-target lookup failed: "
+                       << "slot11 OOB size=" << vtableBlock.size << "\n";
+        return std::nullopt;
+      }
+
+      uint64_t writeFuncAddr = 0;
+      for (unsigned i = 0; i < 8; ++i)
+        writeFuncAddr |=
+            static_cast<uint64_t>(vtableBlock[slotOffset + i]) << (i * 8);
+      auto funcIt = addressToFunction.find(writeFuncAddr);
+      if (funcIt == addressToFunction.end()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  call_indirect: " << traceTag
+                   << " write func at vtable slot 11 (addr 0x"
+                   << llvm::format_hex(writeFuncAddr, 16)
+                   << ") not found\n");
+        return std::nullopt;
+      }
+
+      auto writeFunc = lookupModule.lookupSymbol<func::FuncOp>(funcIt->second);
+      if (!writeFunc) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[" << traceTag << "] write-target lookup failed: "
+                       << "symbol missing for " << funcIt->second << "\n";
+        return std::nullopt;
+      }
+      return std::make_optional(
+          std::make_pair(writeFunc, funcIt->second));
+    };
+    auto dispatchAnalysisWriteTarget =
+        [&](func::FuncOp targetFunc, llvm::StringRef targetName,
+            llvm::StringRef traceTag, uint64_t selfAddr,
+            const InterpretedValue &txArg) {
+      if (traceAnalysisEnabled)
+        llvm::errs() << "[" << traceTag << "] dispatching to " << targetName
+                     << "\n";
+      SmallVector<InterpretedValue, 2> impArgs;
+      impArgs.push_back(InterpretedValue(llvm::APInt(64, selfAddr)));
+      impArgs.push_back(txArg);
+      SmallVector<InterpretedValue, 2> impResults;
+      auto &callState = processStates[procId];
+      ++callState.callDepth;
+      (void)interpretFuncBody(procId, targetFunc, impArgs, impResults,
+                              callIndirectOp);
+      --callState.callDepth;
+    };
+    auto tryDispatchAnalysisWriteSelfFallback =
+        [&](ModuleOp lookupModule, llvm::StringRef traceTag,
+            llvm::StringRef baseWriteName, uint64_t selfAddr,
+            const InterpretedValue &txArg) -> bool {
+      if (selfAddr == 0)
+        return false;
+      auto writeTarget =
+          tryResolveAnalysisWriteTarget(lookupModule, selfAddr, traceTag);
+      if (!writeTarget)
+        return false;
+      if (writeTarget->second == baseWriteName) {
+        if (traceAnalysisEnabled)
+          llvm::errs() << "[" << traceTag
+                       << "] self fallback resolved base body "
+                       << baseWriteName << ", keeping no-op\n";
+        return false;
+      }
+      dispatchAnalysisWriteTarget(writeTarget->first, writeTarget->second,
+                                  traceTag, selfAddr, txArg);
+      return true;
+    };
 
     if (funcPtrVal.isX()) {
       LLVM_DEBUG(llvm::dbgs() << "  func.call_indirect: callee is X "
@@ -853,57 +983,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] " << terminals.size()
                            << " terminal(s) found\n";
             for (uint64_t impAddr : terminals) {
-              // Read vtable pointer at byte offset 4 from the imp object.
-              uint64_t vtableOff2 = 0;
-              MemoryBlock *impBlock = findBlockByAddress(impAddr, vtableOff2);
-              if (!impBlock || vtableOff2 + 4 + 8 > impBlock->size)
+              auto writeTarget = tryResolveAnalysisWriteTarget(
+                  moduleOp, impAddr, "ANALYSIS-WRITE-XFALLBACK");
+              if (!writeTarget)
                 continue;
-              uint64_t vtableAddr2 = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                vtableAddr2 |= static_cast<uint64_t>(
-                                   impBlock->bytes()[vtableOff2 + 4 + i])
-                               << (i * 8);
-              auto globalIt2 = addressToGlobal.find(vtableAddr2);
-              if (globalIt2 == addressToGlobal.end())
-                continue;
-              // Read write function pointer from vtable slot 11.
-              auto vtableBlockIt = globalMemoryBlocks.find(globalIt2->second);
-              if (vtableBlockIt == globalMemoryBlocks.end())
-                continue;
-              auto &vtableBlock2 = vtableBlockIt->second;
-              unsigned writeSlot = 11;
-              unsigned slotOff = writeSlot * 8;
-              if (slotOff + 8 > vtableBlock2.size)
-                continue;
-              uint64_t writeFuncAddr = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                writeFuncAddr |=
-                    static_cast<uint64_t>(vtableBlock2[slotOff + i])
-                    << (i * 8);
-              auto funcIt2 = addressToFunction.find(writeFuncAddr);
-              if (funcIt2 == addressToFunction.end())
-                continue;
-              auto impWriteFunc = moduleOp.lookupSymbol<func::FuncOp>(
-                  funcIt2->second);
-              if (!impWriteFunc)
-                continue;
-              if (traceAnalysisEnabled)
-                llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] dispatching to "
-                             << funcIt2->second << "\n";
-              SmallVector<InterpretedValue, 2> impArgs;
-              impArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
-              impArgs.push_back(args[1]); // transaction object
-              SmallVector<InterpretedValue, 2> impResults;
-              auto &cState2 = processStates[procId];
-              ++cState2.callDepth;
-              (void)interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
-                                     callIndirectOp);
-              --cState2.callDepth;
+              dispatchAnalysisWriteTarget(
+                  writeTarget->first, writeTarget->second,
+                  "ANALYSIS-WRITE-XFALLBACK", impAddr, args[1]);
             }
             resolved = true;
             break;
           }
           if (resolvedName.contains("uvm_tlm_if_base")) {
+            if (tryDispatchAnalysisWriteSelfFallback(
+                    moduleOp, "ANALYSIS-WRITE-XFALLBACK", resolvedName,
+                    portAddr, args[1])) {
+              resolved = true;
+              break;
+            }
             if (traceAnalysisEnabled)
               llvm::errs() << "[ANALYSIS-WRITE-XFALLBACK] NO terminals for "
                            << "tlm_if_base self=0x"
@@ -1679,51 +1776,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               llvm::errs() << "[ANALYSIS-WRITE-STATIC] " << terminals3.size()
                            << " terminal(s) found\n";
             for (uint64_t impAddr : terminals3) {
-              uint64_t vtableOff3 = 0;
-              MemoryBlock *impBlock3 = findBlockByAddress(impAddr, vtableOff3);
-              if (!impBlock3 || vtableOff3 + 4 + 8 > impBlock3->size)
+              auto writeTarget = tryResolveAnalysisWriteTarget(
+                  modOp, impAddr, "ANALYSIS-WRITE-STATIC");
+              if (!writeTarget)
                 continue;
-              uint64_t vtableAddr3 = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                vtableAddr3 |= static_cast<uint64_t>(
-                                   impBlock3->bytes()[vtableOff3 + 4 + i])
-                               << (i * 8);
-              auto gIt = addressToGlobal.find(vtableAddr3);
-              if (gIt == addressToGlobal.end())
-                continue;
-              auto vbIt = globalMemoryBlocks.find(gIt->second);
-              if (vbIt == globalMemoryBlocks.end())
-                continue;
-              auto &vb = vbIt->second;
-              unsigned writeSlot3 = 11;
-              unsigned slotOff3 = writeSlot3 * 8;
-              if (slotOff3 + 8 > vb.size)
-                continue;
-              uint64_t wfa = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                wfa |= static_cast<uint64_t>(vb[slotOff3 + i]) << (i * 8);
-              auto fi = addressToFunction.find(wfa);
-              if (fi == addressToFunction.end())
-                continue;
-              auto iwf = modOp.lookupSymbol<func::FuncOp>(fi->second);
-              if (!iwf)
-                continue;
-              if (traceAnalysisEnabled)
-                llvm::errs() << "[ANALYSIS-WRITE-STATIC] dispatching to "
-                             << fi->second << "\n";
-              SmallVector<InterpretedValue, 2> iArgs;
-              iArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
-              iArgs.push_back(sArgs[1]);
-              SmallVector<InterpretedValue, 2> iRes;
-              auto &cs3 = processStates[procId];
-              ++cs3.callDepth;
-              (void)interpretFuncBody(procId, iwf, iArgs, iRes, callIndirectOp);
-              --cs3.callDepth;
+              dispatchAnalysisWriteTarget(
+                  writeTarget->first, writeTarget->second,
+                  "ANALYSIS-WRITE-STATIC", impAddr, sArgs[1]);
             }
             staticResolved = true;
             break;
           }
           if (resolvedName.contains("uvm_tlm_if_base")) {
+            if (tryDispatchAnalysisWriteSelfFallback(
+                    modOp, "ANALYSIS-WRITE-STATIC", resolvedName, portAddr3,
+                    sArgs[1])) {
+              staticResolved = true;
+              break;
+            }
             if (traceAnalysisEnabled)
               llvm::errs() << "[ANALYSIS-WRITE-STATIC] NO terminals for "
                            << "tlm_if_base self=0x"
@@ -4452,76 +4522,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           llvm::errs() << "[ANALYSIS-WRITE] " << terminals.size()
                        << " terminal(s) found\n";
         for (uint64_t impAddr : terminals) {
-          // Resolve the imp's write function via vtable dispatch.
-          // Object layout: [i32 class_id][ptr vtable_ptr][...fields...]
-          // Read vtable pointer at byte offset 4 from the imp object.
-          uint64_t vtableOff = 0;
-          MemoryBlock *impBlock = findBlockByAddress(impAddr, vtableOff);
-          if (!impBlock || vtableOff + 4 + 8 > impBlock->size) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  call_indirect: imp object at 0x"
-                       << llvm::format_hex(impAddr, 16)
-                       << " not found in memory\n");
+          auto writeTarget = tryResolveAnalysisWriteTarget(
+              moduleOp, impAddr, "ANALYSIS-WRITE");
+          if (!writeTarget)
             continue;
-          }
-          uint64_t vtableAddr = 0;
-          for (unsigned i = 0; i < 8; ++i)
-            vtableAddr |= static_cast<uint64_t>(
-                              impBlock->bytes()[vtableOff + 4 + i])
-                          << (i * 8);
-          auto globalIt = addressToGlobal.find(vtableAddr);
-          if (globalIt == addressToGlobal.end()) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  call_indirect: vtable at 0x"
-                       << llvm::format_hex(vtableAddr, 16)
-                       << " not found in addressToGlobal\n");
-            continue;
-          }
-          // Read the write function pointer from vtable slot 11.
-          auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
-          if (vtableBlockIt == globalMemoryBlocks.end())
-            continue;
-          auto &vtableBlock = vtableBlockIt->second;
-          unsigned writeSlot = 11;
-          unsigned slotOffset = writeSlot * 8;
-          if (slotOffset + 8 > vtableBlock.size)
-            continue;
-          uint64_t writeFuncAddr = 0;
-          for (unsigned i = 0; i < 8; ++i)
-            writeFuncAddr |=
-                static_cast<uint64_t>(vtableBlock[slotOffset + i])
-                << (i * 8);
-          auto funcIt2 = addressToFunction.find(writeFuncAddr);
-          if (funcIt2 == addressToFunction.end()) {
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  call_indirect: write func at vtable slot 11 (addr 0x"
-                       << llvm::format_hex(writeFuncAddr, 16)
-                       << ") not found\n");
-            continue;
-          }
-          auto impWriteFunc = moduleOp.lookupSymbol<func::FuncOp>(funcIt2->second);
-          if (!impWriteFunc) {
-            if (traceAnalysisEnabled)
-              llvm::errs() << "[ANALYSIS-WRITE] function '"
-                           << funcIt2->second << "' not found in module\n";
-            continue;
-          }
-          if (traceAnalysisEnabled)
-            llvm::errs() << "[ANALYSIS-WRITE] dispatching to "
-                         << funcIt2->second << "\n";
-          SmallVector<InterpretedValue, 2> impArgs;
-          impArgs.push_back(InterpretedValue(llvm::APInt(64, impAddr)));
-          impArgs.push_back(args[1]); // transaction object
-          SmallVector<InterpretedValue, 2> impResults;
-          auto &cState = processStates[procId];
-          ++cState.callDepth;
-          (void)interpretFuncBody(procId, impWriteFunc, impArgs, impResults,
-                                 callIndirectOp);
-          --cState.callDepth;
+          dispatchAnalysisWriteTarget(writeTarget->first, writeTarget->second,
+                                      "ANALYSIS-WRITE", impAddr, args[1]);
         }
         return success();
       }
       if (calleeName.contains("uvm_tlm_if_base")) {
+        if (tryDispatchAnalysisWriteSelfFallback(
+                moduleOp, "ANALYSIS-WRITE", calleeName, portAddr, args[1]))
+          return success();
         if (traceAnalysisEnabled)
           llvm::errs() << "[ANALYSIS-WRITE] NO terminals for tlm_if_base "
                        << "self=0x" << llvm::format_hex(portAddr, 0)
