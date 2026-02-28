@@ -1,0 +1,16 @@
+// REQUIRES: native_tools
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic clk, input logic d, input logic [1:0] idx,
+// RUN:            output logic [3:0] arr, output logic scalar);
+// RUN:   always_ff @(posedge clk) begin
+// RUN:     arr[idx] <= d;
+// RUN:     scalar <= d;
+// RUN:   end
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops ASSIGN_RHS_TO_LHS --out %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+
+// OUT: 1 NATIVE_ASSIGN_RHS_TO_LHS
+// OUT: 2 NATIVE_ASSIGN_RHS_TO_LHS@1

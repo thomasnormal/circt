@@ -1,5 +1,49 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (ASSIGN_RHS_TO_LHS realism guards + parity hardening)
+
+- realizations:
+  - `ASSIGN_RHS_TO_LHS` was still planner-eligible on non-identifier LHS sites
+    (for example indexed writes), which inevitably degrades to apply-time noop.
+  - It was also mutating `initial`-block setup assignments, producing low-value
+    liveness mutants (for example `clk = clk`) that mostly exercise harness
+    termination rather than design fault sensitivity.
+  - A single reusable identifier-expression predicate is better than repeated
+    ad-hoc checks for RHS/LHS forms.
+
+- changes made:
+  - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - added shared helper `isSimpleIdentifierExpr`.
+    - reused helper in assignment-RHS replacement construction.
+    - made `collectAssignRhsSites` op-aware and added guards for
+      `ASSIGN_RHS_TO_LHS`:
+      - only collect when LHS is a simple identifier expression.
+      - skip sites inside `initial` procedural heads.
+  - Added TDD regressions:
+    - `test/Tools/native-mutation-plan-assign-rhs-to-lhs-skip-nonident-lhs.test`
+      (indexed LHS is excluded; scalar LHS remains).
+    - `test/Tools/circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-to-lhs.test`
+      (all candidates inapplicable -> explicit planner error).
+    - `test/Tools/native-mutation-plan-assign-rhs-to-lhs-skip-initial.test`
+      (`initial` assignment excluded; sequential assignment retained).
+
+- validation:
+  - rebuilt:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - manual site-filter checks:
+    - mixed indexed+scalar LHS emits only scalar-site labels.
+    - initial+always_ff design emits only always_ff site labels.
+    - indexed-only design fails generation with
+      `no applicable native mutation sites`.
+  - seeded parity campaign focused on `ASSIGN_RHS_TO_LHS` after guards:
+    - `/tmp/cov_assign_tolhs_parity_postfix_1772299849`
+    - initial summary had 3 `fail` rows from transient
+      `Permission denied` while launching `circt-sim`; targeted reruns of
+      IDs `1..3` all matched xrun (`ok`).
+  - broader all-mode seeded smoke parity after the change:
+    - `/tmp/cov_allmode_post_assign_filter_1772299903`
+    - result: `ok=20 mismatch=0 fail=0`.
+
 ## 2026-02-28 (remove legacy zero-site fallback emission; enforce real applicability)
 
 - realizations:

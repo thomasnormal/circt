@@ -1728,6 +1728,29 @@ static bool isAssignRhsMutationOp(StringRef op) {
          op == "ASSIGN_RHS_SHR_ONE";
 }
 
+static bool isSimpleIdentifierExpr(StringRef expr) {
+  expr = expr.trim();
+  if (expr.empty())
+    return false;
+
+  if (expr.front() == '\\') {
+    if (expr.size() == 1)
+      return false;
+    for (char ch : expr.drop_front())
+      if (std::isspace(static_cast<unsigned char>(ch)))
+        return false;
+    return true;
+  }
+
+  char first = expr.front();
+  if (!(isAlpha(first) || first == '_' || first == '$'))
+    return false;
+  for (char ch : expr.drop_front())
+    if (!isIdentifierChar(ch))
+      return false;
+  return true;
+}
+
 static StringRef getAssignRhsMutationFamily(StringRef op) {
   if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
       op == "ASSIGN_RHS_TO_LHS")
@@ -1745,19 +1768,8 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
                                               StringRef rhsExpr,
                                               std::string &replacement) {
   StringRef rhs = rhsExpr.trim();
-  auto isSimpleIdentifier = [](StringRef expr) -> bool {
-    if (expr.empty())
-      return false;
-    char first = expr.front();
-    if (!(isAlpha(first) || first == '_' || first == '$'))
-      return false;
-    for (char ch : expr.drop_front())
-      if (!isIdentifierChar(ch))
-        return false;
-    return true;
-  };
   std::string rhsForBinaryOp;
-  if (isSimpleIdentifier(rhs))
+  if (isSimpleIdentifierExpr(rhs))
     rhsForBinaryOp = rhs.str();
   else
     rhsForBinaryOp = (Twine("(") + rhs + ")").str();
@@ -1772,7 +1784,7 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
   }
   if (op == "ASSIGN_RHS_TO_LHS") {
     StringRef lhs = lhsExpr.trim();
-    if (!isSimpleIdentifier(lhs))
+    if (!isSimpleIdentifierExpr(lhs))
       return false;
     replacement = lhs.str();
     return true;
@@ -1804,7 +1816,8 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
   return false;
 }
 
-static void collectAssignRhsSites(StringRef text, ArrayRef<uint8_t> codeMask,
+static void collectAssignRhsSites(StringRef text, StringRef op,
+                                  ArrayRef<uint8_t> codeMask,
                                   SmallVectorImpl<SiteInfo> &sites) {
   int parenDepth = 0;
   int bracketDepth = 0;
@@ -1854,10 +1867,28 @@ static void collectAssignRhsSites(StringRef text, ArrayRef<uint8_t> codeMask,
     if (parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
       continue;
 
+    size_t stmtStart = findStatementStart(text, codeMask, i);
+    if (op == "ASSIGN_RHS_TO_LHS") {
+      StringRef head;
+      size_t headPos = StringRef::npos;
+      if (findNearestProceduralHeadBefore(text, codeMask, stmtStart, head,
+                                          headPos) &&
+          head == "initial")
+        continue;
+    }
+
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
-    if (!findSimpleAssignmentRhsSpan(text, codeMask, i, rhsStart, rhsEnd))
+    size_t lhsStart = StringRef::npos;
+    size_t lhsEnd = StringRef::npos;
+    if (!findSimpleAssignmentRhsSpan(text, codeMask, i, rhsStart, rhsEnd,
+                                     &lhsStart, &lhsEnd))
       continue;
+    if (op == "ASSIGN_RHS_TO_LHS") {
+      StringRef lhsExpr = text.slice(lhsStart, lhsEnd + 1);
+      if (!isSimpleIdentifierExpr(lhsExpr))
+        continue;
+    }
 
     sites.push_back({i});
   }
@@ -2826,7 +2857,7 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (isAssignRhsMutationOp(op)) {
-    collectAssignRhsSites(designText, codeMask, sites);
+    collectAssignRhsSites(designText, op, codeMask, sites);
     return;
   }
   if (op == "POSEDGE_TO_NEGEDGE") {
