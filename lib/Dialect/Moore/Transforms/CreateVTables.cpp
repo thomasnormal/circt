@@ -63,6 +63,8 @@ void CreateVTablesPass::collectClassDependencies(ModuleOp mod,
                                                  SymbolRefAttr dependencyName) {
   auto dependencyDecl =
       symTab.lookupNearestSymbolFrom<ClassDeclOp>(mod, dependencyName);
+  if (!dependencyDecl)
+    return;
 
   auto &clsMap = classToMethodMap[clsDecl];
   for (auto methodDecl : dependencyDecl.getBody().getOps<ClassMethodDeclOp>()) {
@@ -119,6 +121,8 @@ void CreateVTablesPass::emitVTablePerDependencyClass(
 
   auto dependencyDecl =
       symTab.lookupNearestSymbolFrom<ClassDeclOp>(mod, dependencyName);
+  if (!dependencyDecl)
+    return;
 
   auto clsMethodMap = classToMethodMap[clsDecl];
   auto depMethodMap = classToMethodMap[dependencyDecl];
