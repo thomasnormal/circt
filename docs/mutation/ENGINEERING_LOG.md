@@ -1507,3 +1507,11 @@
       - `ok=12 mismatch=0 fail=0`
     - `/tmp/cov_seeded_rhsconst_assign_rhs_tolhs_parity_1772297785`
       - `ok=12 mismatch=0 fail=0`
+  - liveness sanity note (all-mode, timeout-bounded harness):
+    - `/tmp/cov_intro_seeded_allmode_post_tolhs_timeout_1772297965`
+    - some assignment-RHS mutants reported `circt_timeout` under bounded
+      comparison because the mutation can kill clock progress and prevent
+      `$finish`.
+    - recheck on mutant `NATIVE_ASSIGN_RHS_TO_CONST0@3` with unbounded xrun
+      run control (`run` instead of `run 1000ns`) timed out in xrun as well,
+      confirming a liveness mutant class rather than a circt semantic bug.
