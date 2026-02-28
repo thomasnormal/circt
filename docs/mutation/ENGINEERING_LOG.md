@@ -1,5 +1,59 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (remove legacy zero-site fallback emission; enforce real applicability)
+
+- realizations:
+  - Legacy native planning could emit operators with zero concrete sites by
+    forcing `siteCount >= 1`, which produced generated labels that only worked
+    via apply-time `native_mutation_noop_fallback`.
+  - This was the root cause behind generated reset-edge mutations on designs
+    without reset sensitivities.
+  - Long-term maintainability is better with strict planner applicability and
+    explicit generation errors, rather than fallback/noop mutation artifacts.
+
+- root cause:
+  - `emitLegacyNativeMutationPlan` used:
+    - `siteCounts[op] = max(1, countNativeMutationSitesForOp(...))`
+  - This fabricated synthetic single-site operators even when no site existed.
+  - Weighted planning avoided most of this, but its `db.empty()` path still
+    delegated to legacy behavior.
+
+- changes made:
+  - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - `emitLegacyNativeMutationPlan` now filters to operators with
+      `siteCount > 0` and returns an error if none are applicable.
+    - `emitWeightedNativeMutationPlan` now returns the same explicit error when
+      no candidate DB entries exist (instead of delegating to legacy fallback).
+    - planner API changed from `void` to `bool` with `error` out-param.
+  - `tools/circt-mut/NativeMutationPlanner.h`
+    - updated `emitNativeMutationPlan` signature accordingly.
+  - `tools/circt-mut/circt-mut.cpp`
+    - handles planner failure and reports the planner error.
+  - Added TDD regressions:
+    - `test/Tools/circt-mut-generate-circt-only-native-ops-no-applicable-sites.test`
+      (requested operator set has zero sites -> hard error).
+    - `test/Tools/circt-mut-generate-circt-only-native-ops-mixed-applicable-sites.test`
+      (mixed set -> emits only applicable ops; does not emit no-site op labels).
+
+- validation:
+  - rebuilt `circt-mut`:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - lit (focused):
+    - `llvm-lit -sv` on new tests + reset-edge neighbors
+      (new tests passed; some neighboring tests were `UNSUPPORTED` in this
+      local config due lit requirements).
+  - manual applicability checks:
+    - `--native-ops RESET_NEGEDGE_TO_POSEDGE` on posedge-only design:
+      now fails with
+      `circt-mut generate: no applicable native mutation sites for selected operators`.
+    - mixed `POSEDGE_TO_NEGEDGE,RESET_NEGEDGE_TO_POSEDGE`:
+      output contains only `POSEDGE_TO_NEGEDGE`.
+  - parity rechecks (xrun vs circt):
+    - edge-ops campaign on seeded reset-aware mini bench:
+      `/tmp/cov_edge_parity_postfix_1772298895` -> `ok=32 mismatch=0 fail=0`.
+    - all-mode smoke sample:
+      `/tmp/cov_allmode_parity_postfix_small_1772299177` -> `ok=12 mismatch=0 fail=0`.
+
 ## 2026-02-28 (case wildcard expansion + BA/NBA context guards + parity hardening)
 
 - realizations:

@@ -1,0 +1,13 @@
+// REQUIRES: native_tools
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic clk, input logic d, output logic q);
+// RUN:   always_ff @(posedge clk) q <= d;
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 4 --seed 0 --native-ops POSEDGE_TO_NEGEDGE,RESET_NEGEDGE_TO_POSEDGE > %t/log.txt
+// RUN: grep -q 'NATIVE_POSEDGE_TO_NEGEDGE' %t/mutations.txt
+// RUN: not grep -q 'RESET_NEGEDGE_TO_POSEDGE' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+
+// LOG: Generated mutations: 4

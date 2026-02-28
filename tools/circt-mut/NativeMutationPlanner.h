@@ -49,10 +49,11 @@ bool computeOrderedNativeMutationOps(llvm::StringRef designText,
 bool hasNativeMutationPatternForOp(llvm::StringRef designText,
                                    llvm::StringRef op);
 
-void emitNativeMutationPlan(llvm::ArrayRef<std::string> orderedOps,
+bool emitNativeMutationPlan(llvm::ArrayRef<std::string> orderedOps,
                             llvm::StringRef designText, uint64_t count,
-                            uint64_t seed, const NativeMutationPlannerConfig &config,
-                            llvm::raw_ostream &out);
+                            uint64_t seed,
+                            const NativeMutationPlannerConfig &config,
+                            llvm::raw_ostream &out, std::string &error);
 
 bool applyNativeMutationLabel(llvm::StringRef designText, llvm::StringRef label,
                               std::string &mutatedText, bool &changed,

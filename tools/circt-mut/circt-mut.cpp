@@ -16047,9 +16047,13 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
 
     std::string modePlanText;
     raw_string_ostream modePlanStream(modePlanText);
-    circt::mut::emitNativeMutationPlan(filteredOps, mutationDesignText, listCount,
-                                       opts.seed + i, plannerConfig,
-                                       modePlanStream);
+    std::string planError;
+    if (!circt::mut::emitNativeMutationPlan(
+            filteredOps, mutationDesignText, listCount, opts.seed + i,
+            plannerConfig, modePlanStream, planError)) {
+      errs() << planError << "\n";
+      return 1;
+    }
     modePlanStream.flush();
 
     SmallVector<StringRef, 64> lines;

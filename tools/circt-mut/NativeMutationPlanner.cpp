@@ -3364,23 +3364,36 @@ static int pickQueueCandidate(ArrayRef<Candidate> db, QueueKind kind,
   return picked;
 }
 
-static void emitLegacyNativeMutationPlan(ArrayRef<std::string> orderedOps,
+static bool emitLegacyNativeMutationPlan(ArrayRef<std::string> orderedOps,
                                          StringRef designText, uint64_t count,
-                                         uint64_t seed, raw_ostream &out) {
+                                         uint64_t seed, raw_ostream &out,
+                                         std::string &error) {
+  error.clear();
   SmallVector<uint8_t, 0> codeMask;
   buildCodeMask(designText, codeMask);
-  uint64_t opCount = orderedOps.size();
-  uint64_t seedOffset = seed % opCount;
+  SmallVector<std::string, 16> eligibleOps;
   StringMap<uint64_t> siteCounts;
-  for (const std::string &op : orderedOps)
-    siteCounts[op] =
-        std::max<uint64_t>(1, countNativeMutationSitesForOp(designText, codeMask, op));
+  for (const std::string &op : orderedOps) {
+    uint64_t siteCount = countNativeMutationSitesForOp(designText, codeMask, op);
+    if (siteCount == 0)
+      continue;
+    eligibleOps.push_back(op);
+    siteCounts[op] = siteCount;
+  }
+
+  if (eligibleOps.empty()) {
+    error = "circt-mut generate: no applicable native mutation sites for selected operators";
+    return false;
+  }
+
+  uint64_t opCount = eligibleOps.size();
+  uint64_t seedOffset = seed % opCount;
 
   for (uint64_t mid = 1; mid <= count; ++mid) {
     uint64_t rank = seedOffset + mid - 1;
     uint64_t opIdx = rank % opCount;
     uint64_t cycle = rank / opCount;
-    const std::string &op = orderedOps[opIdx];
+    const std::string &op = eligibleOps[opIdx];
     uint64_t siteCount = siteCounts.lookup(op);
     uint64_t siteIndex = ((seed + cycle) % siteCount) + 1;
 
@@ -3389,13 +3402,14 @@ static void emitLegacyNativeMutationPlan(ArrayRef<std::string> orderedOps,
       out << "@" << siteIndex;
     out << "\n";
   }
+  return true;
 }
 
-static void emitWeightedNativeMutationPlan(ArrayRef<std::string> orderedOps,
-                                           StringRef designText,
-                                           uint64_t count, uint64_t seed,
-                                           const NativeMutationPlannerConfig &config,
-                                           raw_ostream &out) {
+static bool emitWeightedNativeMutationPlan(
+    ArrayRef<std::string> orderedOps, StringRef designText, uint64_t count,
+    uint64_t seed, const NativeMutationPlannerConfig &config, raw_ostream &out,
+    std::string &error) {
+  error.clear();
   SmallVector<uint8_t, 0> codeMask;
   buildCodeMask(designText, codeMask);
   SmallVector<size_t, 64> lineStarts;
@@ -3443,8 +3457,8 @@ static void emitWeightedNativeMutationPlan(ArrayRef<std::string> orderedOps,
   }
 
   if (db.empty()) {
-    emitLegacyNativeMutationPlan(orderedOps, designText, count, seed, out);
-    return;
+    error = "circt-mut generate: no applicable native mutation sites for selected operators";
+    return false;
   }
 
   CoverageDB coverdb;
@@ -3575,6 +3589,7 @@ static void emitWeightedNativeMutationPlan(ArrayRef<std::string> orderedOps,
       out << "@" << picked.siteIndex;
     out << "\n";
   }
+  return true;
 }
 
 } // namespace
@@ -3767,17 +3782,17 @@ bool hasNativeMutationPatternForOp(StringRef designText, StringRef op) {
   return hasNativeMutationPattern(designText, codeMask, op);
 }
 
-void emitNativeMutationPlan(ArrayRef<std::string> orderedOps,
+bool emitNativeMutationPlan(ArrayRef<std::string> orderedOps,
                             StringRef designText, uint64_t count,
                             uint64_t seed,
                             const NativeMutationPlannerConfig &config,
-                            raw_ostream &out) {
+                            raw_ostream &out, std::string &error) {
   if (config.policy == NativeMutationPlannerConfig::Policy::Weighted) {
-    emitWeightedNativeMutationPlan(orderedOps, designText, count, seed, config,
-                                   out);
-    return;
+    return emitWeightedNativeMutationPlan(orderedOps, designText, count, seed,
+                                          config, out, error);
   }
-  emitLegacyNativeMutationPlan(orderedOps, designText, count, seed, out);
+  return emitLegacyNativeMutationPlan(orderedOps, designText, count, seed, out,
+                                      error);
 }
 
 static bool replaceSpan(std::string &text, size_t begin, size_t end,
