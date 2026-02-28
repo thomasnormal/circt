@@ -1801,3 +1801,23 @@
 - Realization:
   - Small readability fixes in vendored UVM core are worthwhile when they remove
     explicit debt markers and keep behavior stable under existing runtime tests.
+
+### UVM port-base: deduplicate end-of-elaboration phase-state checks
+- Repro/context:
+  - Open entries 295/296 flagged duplicated `TBD tidy` logic in
+    `uvm_port_base::connect` and `uvm_port_base::debug_connected_to`.
+- Root cause:
+  - Both call paths open-coded the same
+    `end_of_elaboration_ph.get_state() == EXECUTING || DONE` condition, causing
+    drift risk and noisier maintenance.
+- Fix:
+  - In `lib/Runtime/uvm-core/src/base/uvm_port_base.svh`:
+    - added local helper `m_is_end_of_elaboration_complete()`,
+    - replaced both duplicated condition blocks with helper calls,
+    - removed the associated `TBD tidy` duplication sites.
+- Validation:
+  - `build_test/bin/llvm-lit -a -v test/Runtime/uvm/uvm_tlm_port_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv`
+  - Result: all passing.
+- Realization:
+  - The smallest UVM maintainability fixes often come from consolidating
+    duplicated phase predicates in the core library while preserving behavior.
