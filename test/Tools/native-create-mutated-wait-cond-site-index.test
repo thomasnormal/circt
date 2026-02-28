@@ -1,0 +1,15 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  logic a, b;\n  initial begin\n    wait (a && b);\n    wait (a || b);\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_WAIT_COND_NEGATE@1\n' > %t/neg.txt
+// RUN: printf '1 NATIVE_WAIT_COND_TRUE@2\n' > %t/true.txt
+// RUN: printf '1 NATIVE_WAIT_COND_FALSE@1\n' > %t/false.txt
+// RUN: circt-mut apply -i %t/neg.txt -o %t/neg.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/true.txt -o %t/true.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/false.txt -o %t/false.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=NEG < %t/neg.sv
+// RUN: FileCheck %s --check-prefix=TRUE < %t/true.sv
+// RUN: FileCheck %s --check-prefix=FALSE < %t/false.sv
+//
+// NEG: wait (!(a && b));
+// TRUE: wait (1'b1);
+// FALSE: wait (1'b0);

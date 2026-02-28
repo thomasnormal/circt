@@ -47,6 +47,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "CASEZ_TO_CASEX", "CASEX_TO_CASEZ",
     "IF_COND_NEGATE",   "RESET_COND_NEGATE", "RESET_COND_TRUE",
     "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
+    "WAIT_COND_NEGATE", "WAIT_COND_TRUE",    "WAIT_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0",
@@ -66,7 +67,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED",
     "REPEAT_COUNT_PLUS_ONE", "REPEAT_COUNT_MINUS_ONE",
-    "DELAY_PLUS_ONE", "DELAY_MINUS_ONE"};
+    "DELAY_PLUS_ONE", "DELAY_MINUS_ONE",
+    "WAIT_COND_NEGATE", "WAIT_COND_TRUE", "WAIT_COND_FALSE"};
 
 namespace {
 
@@ -3136,6 +3138,27 @@ static void collectResetConditionNegateSites(
   collectIfConditionSites(text, codeMask, sites, /*requireResetIdentifier=*/true);
 }
 
+static void collectWaitConditionSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                      SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i + 3 < e; ++i) {
+    if (!matchKeywordTokenAt(text, codeMask, i, "wait"))
+      continue;
+
+    size_t openPos = i + strlen("wait");
+    while (openPos < e &&
+           (!isCodeAt(codeMask, openPos) ||
+            std::isspace(static_cast<unsigned char>(text[openPos]))))
+      ++openPos;
+    if (openPos >= e || !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+      continue;
+
+    if (findMatchingParen(text, codeMask, openPos) == StringRef::npos)
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectIfElseSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask,
                                       SmallVectorImpl<SiteInfo> &sites) {
   for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
@@ -3642,6 +3665,11 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectIfConditionNegateSites(designText, codeMask, sites);
     return;
   }
+  if (op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
+      op == "WAIT_COND_FALSE") {
+    collectWaitConditionSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "IF_ELSE_SWAP_ARMS") {
     collectIfElseSwapArmSites(designText, codeMask, sites);
     return;
@@ -3891,6 +3919,8 @@ static std::string getOpFamily(StringRef op) {
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
       op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
+      op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
+      op == "WAIT_COND_FALSE" ||
       op == "CASE_TO_CASEZ" || op == "CASEZ_TO_CASE" ||
       op == "CASE_TO_CASEX" || op == "CASEX_TO_CASE" ||
       op == "CASEZ_TO_CASEX" || op == "CASEX_TO_CASEZ" ||
@@ -4685,6 +4715,32 @@ static bool findIfConditionBoundsAtSite(StringRef text, ArrayRef<uint8_t> codeMa
   return true;
 }
 
+static bool
+findWaitConditionBoundsAtSite(StringRef text, ArrayRef<uint8_t> codeMask,
+                              size_t waitPos, size_t &condOpen,
+                              size_t &condClose) {
+  if (waitPos == StringRef::npos || waitPos + strlen("wait") > text.size() ||
+      !matchKeywordTokenAt(text, codeMask, waitPos, "wait"))
+    return false;
+
+  size_t openPos = waitPos + strlen("wait");
+  while (openPos < text.size() &&
+         (!isCodeAt(codeMask, openPos) ||
+          std::isspace(static_cast<unsigned char>(text[openPos]))))
+    ++openPos;
+  if (openPos >= text.size() || !isCodeAt(codeMask, openPos) ||
+      text[openPos] != '(')
+    return false;
+
+  size_t closePos = findMatchingParen(text, codeMask, openPos);
+  if (closePos == StringRef::npos)
+    return false;
+
+  condOpen = openPos;
+  condClose = closePos;
+  return true;
+}
+
 static size_t findTernaryEndDelimiter(StringRef text, ArrayRef<uint8_t> codeMask,
                                       size_t colonPos) {
   if (colonPos == StringRef::npos || colonPos >= text.size())
@@ -5059,15 +5115,27 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
                               mutatedText);
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
       op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
-      op == "IF_COND_TRUE" || op == "IF_COND_FALSE") {
+      op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
+      op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
+      op == "WAIT_COND_FALSE") {
     size_t condOpen = StringRef::npos;
     size_t condClose = StringRef::npos;
-    if (!findIfConditionBoundsAtSite(text, codeMask, pos, condOpen, condClose))
-      return false;
+    if (op == "WAIT_COND_NEGATE" || op == "WAIT_COND_TRUE" ||
+        op == "WAIT_COND_FALSE") {
+      if (!findWaitConditionBoundsAtSite(text, codeMask, pos, condOpen,
+                                         condClose))
+        return false;
+    } else {
+      if (!findIfConditionBoundsAtSite(text, codeMask, pos, condOpen,
+                                       condClose))
+        return false;
+    }
 
-    if (op == "IF_COND_TRUE" || op == "RESET_COND_TRUE")
+    if (op == "IF_COND_TRUE" || op == "RESET_COND_TRUE" ||
+        op == "WAIT_COND_TRUE")
       return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b1");
-    if (op == "IF_COND_FALSE" || op == "RESET_COND_FALSE")
+    if (op == "IF_COND_FALSE" || op == "RESET_COND_FALSE" ||
+        op == "WAIT_COND_FALSE")
       return replaceSpan(mutatedText, condOpen + 1, condClose, "1'b0");
 
     StringRef condExpr = text.slice(condOpen + 1, condClose);

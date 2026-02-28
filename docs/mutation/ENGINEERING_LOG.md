@@ -2245,3 +2245,44 @@
   - targeted edge-polarity parity recheck (regression guard while extending ops):
     - workspace: `/tmp/cov_intro_seeded_edge_polarity_recheck_stable_1772307888`
     - result: `ok=24 mismatch=0 fail=0`.
+
+## 2026-02-28 (wait-condition mutation class)
+
+- realizations:
+  - `wait (cond)` is a high-value control synchronization surface where realistic
+    bugs include condition inversion and accidental constant forcing.
+  - `WAIT_COND_FALSE` can create intentional deadlock mutants; campaign benches
+    need watchdog termination to classify those deterministically.
+
+- changes made:
+  - Added native mutation operators:
+    - `WAIT_COND_NEGATE`
+    - `WAIT_COND_TRUE`
+    - `WAIT_COND_FALSE`
+  - Implemented in `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - token-aware `wait (...)` site discovery,
+    - condition-bound extraction at `wait` site,
+    - apply-time rewrites aligned with existing `if` condition mutations:
+      - negate: `wait (expr)` -> `wait (!(expr))`
+      - force true/false: `wait (1'b1)` / `wait (1'b0)`.
+  - Integrated into CIRCT-only mode op sets in `tools/circt-mut/circt-mut.cpp`
+    for control-bearing profiles.
+  - Synced native-op validator in `utils/run_mutation_mcy_examples.sh`.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-wait-cond-force.test`
+  - `test/Tools/native-create-mutated-wait-cond-site-index.test`
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-wait-cond-ops.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused wait-ops lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-wait-cond-force.test test/Tools/native-create-mutated-wait-cond-site-index.test test/Tools/circt-mut-generate-circt-only-control-mode-wait-cond-ops.test`
+    - result: `3 passed`.
+  - consolidated touched-slice lit:
+    - repeat + delay + wait + safe-op validator set
+    - result: `12 passed`.
+  - seeded xrun-vs-circt parity with watchdog-enabled wait benchmark:
+    - workspace: `/tmp/wait_seeded_waitcond_parity_watchdog_1772308559`
+    - result: `ok=18 mismatch=0 fail=0`.
