@@ -1024,8 +1024,8 @@ Header guard sanitization still allows leading digits, which can produce invalid
 ### [ ] 340. `include/circt/Dialect/RTG/IR/RTGInterfaces.td:42`
 Interface verification is acknowledged as incomplete because this TableGen interface path lacks a dedicated `verify` hook. What is missing is reliable invariant checking for `SetType` compatibility in interface users. The fix is to implement equivalent verification in concrete op verifiers or add supporting infrastructure so interface-level constraints are enforced centrally.
 
-### [ ] 341. `lib/Runtime/uvm-core/src/base/uvm_globals.svh:238`
-Severity-string parsing duplicates behavior that should be unified with `uvm_enum_wrapper#(uvm_severity)`, indicating small but real API duplication debt. What is missing is a single conversion implementation for severity enums. The fix is to merge onto shared enum-wrapper utilities and remove divergent conversion tables.
+### [x] 341. `lib/Runtime/uvm-core/src/base/uvm_globals.svh:238`
+Status update (2026-02-28): this gap is closed in this workspace. `uvm_string_to_severity` now delegates to `uvm_enum_wrapper#(uvm_severity)::from_name`, removing the duplicate severity-name conversion table and centralizing enum string parsing. Regression coverage was added in `test/Runtime/uvm/uvm_string_to_severity_test.sv`.
 
 ### [ ] 342. `lib/Dialect/Handshake/HandshakeUtils.cpp:276`
 `NoneType` mapping carries a transitional note pending handshake switch to `i0`, so type-bridge semantics are still in migration state. What is missing is finalized zero-width type convention alignment between handshake and ESI wrapping. The fix is to complete the handshake `i0` migration and remove transitional conversion branches.

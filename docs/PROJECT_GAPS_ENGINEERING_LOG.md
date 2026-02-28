@@ -1905,3 +1905,29 @@
     when non-procedural call lowering is legal; single-result alone is not
     sufficient because output-argument-only DPI signatures can also have one
     result.
+
+### UVM globals: unify severity string parsing via enum wrapper
+- Repro/verification (test-first):
+  - Added `test/Runtime/uvm/uvm_string_to_severity_test.sv` to cover:
+    - successful parsing of `UVM_INFO`, `UVM_WARNING`, `UVM_ERROR`, `UVM_FATAL`,
+    - rejection of invalid severity strings.
+  - Baseline run:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_string_to_severity_test.sv`
+    - Result: passing (captures expected behavior contract).
+- Root cause:
+  - `uvm_string_to_severity` maintained a manual `case` table duplicating enum
+    name mapping logic already provided by `uvm_enum_wrapper#(T)::from_name`.
+  - Duplication risked behavioral drift if enum/value handling changed.
+- Fix:
+  - In `lib/Runtime/uvm-core/src/base/uvm_globals.svh`:
+    - replaced manual case mapping with
+      `uvm_enum_wrapper#(uvm_severity)::from_name(sev_str, sev)`,
+    - removed the local TODO marker.
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_string_to_severity_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_reporting_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv`
+  - Result: all passing.
+- Realization:
+  - Small UVM core utility cleanups are safest when paired with direct,
+    behavior-contract tests; this keeps refactors low-risk while reducing API
+    drift across helper paths.
