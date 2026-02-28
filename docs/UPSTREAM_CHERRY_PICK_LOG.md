@@ -108,6 +108,7 @@ git log --oneline --no-merges origin/main..upstream/main
 | `4e63160e3` | `f21dbe7c3` | [circt-reduce] Use per-port matching for FIRRTL port pruners (#9755) |
 | `092be06f3` | `6542026a9` | [FIRRTL] Improve error messages for domain symbol verification (#9776) |
 | `dffde85f9` | `6e3d168f6` | [ESI][Runtime] Don't crash on unsupported type (#9768) |
+| `dc0cfd659` | `f348cf978` | [ESI][Runtime] Fix paths in Trace and XRT backends (#9740) |
 | `2bb16b0e1` | `5f7d374a7` | [FIRRTL] Support merging layers in LinkCircuits (#9677) |
 | `0a9d22958` | `6434ee4c1` | [HW][circt-reduce] Add HW name sanitization (#9730) |
 
@@ -141,6 +142,9 @@ Local follow-up commits kept in stack:
   - `build_stage/test/Dialect/HW/Reduction/hw-sv-namehint-remover.mlir`
 - Runtime python sanity:
   - `python3 -m py_compile lib/Dialect/ESI/runtime/python/esiaccel/codegen.py`
+- ESI runtime integration test status:
+  - `check-circt_integration-dialect-esi-runtime` could not run in this
+    environment due lit configuration + missing `psutil` timeout support.
 
 ### Engineering Notes
 
