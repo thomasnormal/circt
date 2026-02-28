@@ -1,6 +1,7 @@
 // RUN: circt-compile %s --emit-snapshot -o %t.csnap 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: circt-sim %t.csnap 2>&1 | FileCheck %s --check-prefix=SNAP-ON
 // RUN: env CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=0 circt-sim %t.csnap 2>&1 | FileCheck %s --check-prefix=SNAP-OFF
+// RUN: env CIRCT_AOT_STATS=1 circt-sim %t.csnap 2>&1 | FileCheck %s --check-prefix=SNAP-STATS
 
 // COMPILE: [circt-compile] Functions: 1 total, 0 external, 0 rejected, 1 compilable
 // COMPILE: [circt-compile] Native module init functions: 1
@@ -15,6 +16,10 @@
 // SNAP-OFF-NOT: [circt-sim] Snapshot auto-enabled native module init
 // SNAP-OFF-NOT: [circt-sim] Native module init: top
 // SNAP-OFF: out=123
+//
+// SNAP-STATS: [circt-sim] Loading snapshot from
+// SNAP-STATS: [circt-sim] snapshot_restore_ms:              [[MS:[1-9][0-9]*]]
+// SNAP-STATS: out=123
 
 llvm.mlir.global internal @g_counter(0 : i32) : i32
 

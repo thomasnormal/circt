@@ -521,6 +521,9 @@ static int fixLoopPartialDriveAccumulation(Operation *moduleOp) {
 static std::atomic<bool> interruptRequested(false);
 static std::atomic<bool> simulationStarted(false);
 static std::atomic<bool> wallClockTimeoutTriggered(false);
+// Snapshot restore timing captured during snapshot bundle detection/redirect
+// in main() and surfaced in AOT stats after the run completes.
+static std::atomic<uint64_t> snapshotRestoreDurationNs(0);
 static void signalHandler(int) { interruptRequested.store(true); }
 
 /// Verilog plusargs (+key, +key=value) extracted from the command line.
@@ -3917,10 +3920,13 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
                                           loadCompiledDoneTime - initDoneTime)
                                           .count())
                                 : 0;
-    // Snapshot restore timing is reserved for .csnap state restoration paths.
-    // Until restore is wired into AOT execution, expose an explicit zero metric
-    // so telemetry schemas stay stable across releases.
     uint64_t snapshotRestoreWallMs = 0;
+    uint64_t snapshotRestoreNs =
+        snapshotRestoreDurationNs.load(std::memory_order_relaxed);
+    if (snapshotRestoreNs > 0) {
+      snapshotRestoreWallMs =
+          std::max<uint64_t>(1, (snapshotRestoreNs + 999999) / 1000000);
+    }
     uint64_t directCallsNative = interp.getNativeFuncCallCount();
     uint64_t directCallsInterpreted = interp.getInterpretedFuncCallCount();
     uint64_t indirectCallsNative = interp.getNativeEntryCallCount();
@@ -4408,12 +4414,14 @@ int main(int argc, char **argv) {
   // Snapshot directory detection: if the input is a directory or ends in
   // .csnap, treat it as a snapshot bundle (design.mlirbc + native.so +
   // meta.json) produced by circt-compile --emit-snapshot.
+  snapshotRestoreDurationNs.store(0, std::memory_order_relaxed);
   bool isSnapshot = false;
   bool snapshotAutoEnabledNativeModuleInit = false;
   if (inputFilename != "-") {
     bool isDir = false;
     llvm::sys::fs::is_directory(inputFilename, isDir);
     if (isDir || inputNameRef.ends_with(".csnap")) {
+      auto snapshotRestoreStart = std::chrono::steady_clock::now();
       // Validate the snapshot directory.
       llvm::SmallString<256> metaPath(inputFilename);
       llvm::sys::path::append(metaPath, "meta.json");
@@ -4475,6 +4483,13 @@ int main(int argc, char **argv) {
       if (verbosity >= 1)
         llvm::errs() << "[circt-sim] Loading snapshot from " << snapDir
                      << "\n";
+      uint64_t snapshotNs = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - snapshotRestoreStart)
+              .count());
+      if (snapshotNs == 0)
+        snapshotNs = 1;
+      snapshotRestoreDurationNs.store(snapshotNs, std::memory_order_relaxed);
     }
   }
 
