@@ -243,3 +243,48 @@
     - result: `3/3 PASS`.
     - observed canonicalizer-timeout retry messages: 1 total for the 3-case
       run (instead of re-triggering on each case).
+
+## 2026-02-28 - Connectivity LEC LLHD abstraction parity (default accept + retry path)
+
+- realization:
+  - real OpenTitan connectivity `ALERT_` rules (for example
+    `clkmgr_cg_en.csv:CLKMGR_IO_DIV4_PERI_ALERT_3_CG_EN`) were returning
+    `LEC_RESULT=UNKNOWN` with `LEC_DIAG=LLHD_ABSTRACTION`, producing hard FAIL
+    rows despite being inconclusive abstraction diagnostics.
+  - root cause was parity drift between wrappers:
+    - `run_opentitan_circt_lec.py` already defaulted
+      `--accept-llhd-abstraction`.
+    - `run_opentitan_connectivity_circt_lec.py` did not.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_ACCEPT_LLHD_ABSTRACTION` (default `1`) and automatic
+      `--accept-llhd-abstraction` injection for connectivity LEC.
+    - added optional LLHD abstraction retry mode
+      `LEC_LLHD_ABSTRACTION_ASSUME_KNOWN_INPUTS_RETRY_MODE` (`auto|on|off`,
+      default `auto`):
+      - when LLHD abstraction still reports UNKNOWN and accept is disabled,
+        retry once with `--assume-known-inputs`,
+      - learned per-run propagation across later cases.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-llhd-default-accept.test`
+    to require default `--accept-llhd-abstraction` behavior.
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-llhd-auto-retry.test`
+    (with `LEC_ACCEPT_LLHD_ABSTRACTION=0`) to require LLHD UNKNOWN retry via
+    `--assume-known-inputs`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    32/32 pass.
+  - real OpenTitan Z3 replay:
+    - filter:
+      `CLKMGR_IO_DIV4_PERI_ALERT_3_CG_EN|CLKMGR_USB_PERI_ALERT_9_CG_EN`
+      with `CIRCT_TIMEOUT_SECS=60`.
+    - before fix: both rules ended `FAIL ... LLHD_ABSTRACTION`.
+    - after fix: both rules `PASS ... LLHD_ABSTRACTION` with
+      `LEC_RESULT=EQ` in case logs.

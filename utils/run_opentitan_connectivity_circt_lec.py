@@ -810,6 +810,10 @@ def parse_lec_diag(text: str) -> str | None:
     return match.group(1)
 
 
+def is_llhd_abstraction_unknown(result: str | None, diag: str | None) -> bool:
+    return result == "UNKNOWN" and diag == "LLHD_ABSTRACTION"
+
+
 def has_command_option(args: list[str], option: str) -> bool:
     return any(arg == option or arg.startswith(f"{option}=") for arg in args)
 
@@ -1336,6 +1340,22 @@ def main() -> int:
     lec_diagnose_xprop = os.environ.get("LEC_DIAGNOSE_XPROP", "0") == "1"
     lec_dump_unknown_sources = os.environ.get("LEC_DUMP_UNKNOWN_SOURCES", "0") == "1"
     lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
+    # OpenTitan connectivity parity accepts known LLHD abstraction diagnostics
+    # by default; set LEC_ACCEPT_LLHD_ABSTRACTION=0 to disable.
+    lec_accept_llhd_abstraction = (
+        os.environ.get("LEC_ACCEPT_LLHD_ABSTRACTION", "1") == "1"
+    )
+    llhd_abstraction_assume_known_inputs_retry_mode = os.environ.get(
+        "LEC_LLHD_ABSTRACTION_ASSUME_KNOWN_INPUTS_RETRY_MODE", "auto"
+    ).strip().lower()
+    if llhd_abstraction_assume_known_inputs_retry_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_LLHD_ABSTRACTION_ASSUME_KNOWN_INPUTS_RETRY_MODE: "
+                f"{llhd_abstraction_assume_known_inputs_retry_mode} "
+                "(expected auto|on|off)"
+            )
+        )
     verilog_timescale_fallback_mode = os.environ.get(
         "LEC_VERILOG_TIMESCALE_FALLBACK_MODE", "auto"
     ).strip().lower()
@@ -1476,6 +1496,11 @@ def main() -> int:
         circt_lec_args.append("--diagnose-xprop")
     if lec_dump_unknown_sources and "--dump-unknown-sources" not in circt_lec_args:
         circt_lec_args.append("--dump-unknown-sources")
+    if (
+        lec_accept_llhd_abstraction
+        and "--accept-llhd-abstraction" not in circt_lec_args
+    ):
+        circt_lec_args.append("--accept-llhd-abstraction")
 
     if lec_run_smtlib and not lec_smoke_only:
         if not z3_bin:
@@ -1691,6 +1716,9 @@ def main() -> int:
         has_explicit_canonicalizer_max_num_rewrites = has_command_option(
             circt_lec_args, "--lec-canonicalizer-max-num-rewrites"
         )
+        has_assume_known_inputs = has_command_option(
+            circt_lec_args, "--assume-known-inputs"
+        )
         has_explicit_canonicalizer_budget = (
             has_explicit_canonicalizer_max_iterations
             or has_explicit_canonicalizer_max_num_rewrites
@@ -1726,6 +1754,8 @@ def main() -> int:
         # proved necessary, start later cases with the bounded budget enabled
         # to avoid repeated timeout-first retries.
         learned_canonicalizer_timeout_budget = False
+        # Learned per-run LEC retry state for LLHD abstraction UNKNOWN outcomes.
+        learned_assume_known_inputs = has_assume_known_inputs
 
         case_batches: list[list[ConnectivityLECCase]] = []
         by_csv: dict[str, list[ConnectivityLECCase]] = {}
@@ -2140,9 +2170,11 @@ def main() -> int:
                     lec_enable_temporal_approx = (
                         temporal_approx_mode == "on" and not has_explicit_temporal_approx
                     )
+                    lec_enable_assume_known_inputs = learned_assume_known_inputs
                     lec_enable_canonicalizer_timeout_budget = (
                         learned_canonicalizer_timeout_budget
                     )
+                    attempted_llhd_abstraction_retry = False
                     attempted_canonicalizer_timeout_retry = False
                     can_retry_canonicalizer_timeout = (
                         canonicalizer_timeout_retry_mode == "on"
@@ -2151,9 +2183,17 @@ def main() -> int:
                             and not has_explicit_canonicalizer_budget
                         )
                     )
+                    can_retry_llhd_abstraction = (
+                        llhd_abstraction_assume_known_inputs_retry_mode == "on"
+                        or (
+                            llhd_abstraction_assume_known_inputs_retry_mode == "auto"
+                            and not has_assume_known_inputs
+                        )
+                    )
 
                     def build_lec_cmd(
                         enable_temporal_approx: bool,
+                        enable_assume_known_inputs: bool,
                         enable_canonicalizer_timeout_budget: bool,
                     ) -> list[str]:
                         cmd = [
@@ -2170,6 +2210,8 @@ def main() -> int:
                         cmd += circt_lec_args
                         if enable_temporal_approx and not has_explicit_temporal_approx:
                             cmd.append("--approx-temporal")
+                        if enable_assume_known_inputs and not has_assume_known_inputs:
+                            cmd.append("--assume-known-inputs")
                         if (
                             enable_canonicalizer_timeout_budget
                             and not has_explicit_canonicalizer_max_iterations
@@ -2198,6 +2240,7 @@ def main() -> int:
                         while True:
                             lec_cmd = build_lec_cmd(
                                 lec_enable_temporal_approx,
+                                lec_enable_assume_known_inputs,
                                 lec_enable_canonicalizer_timeout_budget,
                             )
                             lec_timeout_secs = timeout_secs
@@ -2210,6 +2253,37 @@ def main() -> int:
                                 combined = run_and_log(
                                     lec_cmd, lec_log, lec_timeout_secs, out_path=lec_out
                                 )
+                                run_result = parse_lec_result(combined)
+                                run_diag = parse_lec_diag(combined)
+                                if (
+                                    not lec_smoke_only
+                                    and can_retry_llhd_abstraction
+                                    and not lec_enable_assume_known_inputs
+                                    and not attempted_llhd_abstraction_retry
+                                    and is_llhd_abstraction_unknown(
+                                        run_result, run_diag
+                                    )
+                                ):
+                                    abstraction_retry_log = (
+                                        case_dir / "circt-lec.llhd-abstraction.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, abstraction_retry_log)
+                                    else:
+                                        abstraction_retry_log.write_text(
+                                            combined, encoding="utf-8"
+                                        )
+                                    lec_enable_assume_known_inputs = True
+                                    learned_assume_known_inputs = True
+                                    attempted_llhd_abstraction_retry = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec with "
+                                        "--assume-known-inputs for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
                                 break
                             except subprocess.TimeoutExpired:
                                 if (
@@ -2249,6 +2323,42 @@ def main() -> int:
                                     lec_log_text = lec_log.read_text(encoding="utf-8")
                                 else:
                                     lec_log_text = ""
+                                lec_retry_combined = lec_log_text
+                                if lec_out.is_file():
+                                    lec_retry_combined += "\n" + lec_out.read_text(
+                                        encoding="utf-8"
+                                    )
+                                retry_result = parse_lec_result(lec_retry_combined)
+                                retry_diag = parse_lec_diag(lec_retry_combined)
+                                if (
+                                    not lec_smoke_only
+                                    and can_retry_llhd_abstraction
+                                    and not lec_enable_assume_known_inputs
+                                    and not attempted_llhd_abstraction_retry
+                                    and is_llhd_abstraction_unknown(
+                                        retry_result, retry_diag
+                                    )
+                                ):
+                                    abstraction_retry_log = (
+                                        case_dir / "circt-lec.llhd-abstraction.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, abstraction_retry_log)
+                                    else:
+                                        abstraction_retry_log.write_text(
+                                            lec_retry_combined, encoding="utf-8"
+                                        )
+                                    lec_enable_assume_known_inputs = True
+                                    learned_assume_known_inputs = True
+                                    attempted_llhd_abstraction_retry = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec with "
+                                        "--assume-known-inputs for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
                                 if (
                                     temporal_approx_mode == "auto"
                                     and not has_explicit_temporal_approx
