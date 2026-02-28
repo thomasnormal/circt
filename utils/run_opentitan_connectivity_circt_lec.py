@@ -1486,6 +1486,17 @@ def main() -> int:
         os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES", "40000"),
         "LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES",
     )
+    canonicalizer_timeout_retry_rewrite_ladder = parse_nonnegative_int_list(
+        os.environ.get(
+            "LEC_CANONICALIZER_TIMEOUT_RETRY_REWRITE_LADDER",
+            "20000,10000,5000,2000,1000,500",
+        ),
+        "LEC_CANONICALIZER_TIMEOUT_RETRY_REWRITE_LADDER",
+    )
+    canonicalizer_timeout_retry_rewrite_ladder = sorted(
+        {value for value in canonicalizer_timeout_retry_rewrite_ladder if value > 0},
+        reverse=True,
+    )
     canonicalizer_timeout_retry_timeout_secs = parse_nonnegative_int(
         os.environ.get("LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS", "180"),
         "LEC_CANONICALIZER_TIMEOUT_RETRY_TIMEOUT_SECS",
@@ -1809,6 +1820,15 @@ def main() -> int:
         learned_canonicalizer_timeout_budget = (
             auto_preenable_canonicalizer_timeout_budget
         )
+        learned_canonicalizer_timeout_rewrite_budget: int | None = None
+        if (
+            learned_canonicalizer_timeout_budget
+            and not has_explicit_canonicalizer_max_num_rewrites
+            and canonicalizer_timeout_retry_max_num_rewrites > 0
+        ):
+            learned_canonicalizer_timeout_rewrite_budget = (
+                canonicalizer_timeout_retry_max_num_rewrites
+            )
         if auto_preenable_canonicalizer_timeout_budget:
             print(
                 "opentitan connectivity lec: pre-enabling bounded canonicalizer "
@@ -2260,6 +2280,9 @@ def main() -> int:
                     lec_enable_canonicalizer_timeout_budget = (
                         learned_canonicalizer_timeout_budget
                     )
+                    lec_canonicalizer_timeout_rewrite_budget = (
+                        learned_canonicalizer_timeout_rewrite_budget
+                    )
                     attempted_disable_threading_retry = False
                     attempted_llhd_abstraction_retry = False
                     attempted_canonicalizer_timeout_retry = False
@@ -2290,6 +2313,7 @@ def main() -> int:
                         enable_disable_threading: bool,
                         enable_assume_known_inputs: bool,
                         enable_canonicalizer_timeout_budget: bool,
+                        canonicalizer_timeout_rewrite_budget: int | None,
                     ) -> list[str]:
                         cmd = [
                             circt_lec,
@@ -2324,15 +2348,32 @@ def main() -> int:
                         if (
                             enable_canonicalizer_timeout_budget
                             and not has_explicit_canonicalizer_max_num_rewrites
-                            and canonicalizer_timeout_retry_max_num_rewrites > 0
                         ):
-                            cmd.append(
-                                "--lec-canonicalizer-max-num-rewrites="
-                                f"{canonicalizer_timeout_retry_max_num_rewrites}"
-                            )
+                            rewrite_budget = canonicalizer_timeout_retry_max_num_rewrites
+                            if canonicalizer_timeout_rewrite_budget is not None:
+                                rewrite_budget = canonicalizer_timeout_rewrite_budget
+                            if rewrite_budget > 0:
+                                cmd.append(
+                                    "--lec-canonicalizer-max-num-rewrites="
+                                    f"{rewrite_budget}"
+                                )
                         if verify_each_mode in {"auto", "off"} and not has_explicit_verify_each:
                             cmd.append("--verify-each=false")
                         return cmd
+
+                    def next_lower_canonicalizer_rewrite_budget(
+                        current_budget: int | None,
+                    ) -> int | None:
+                        if current_budget is None or current_budget <= 0:
+                            current = canonicalizer_timeout_retry_max_num_rewrites
+                        else:
+                            current = current_budget
+                        if current <= 0:
+                            return None
+                        for candidate in canonicalizer_timeout_retry_rewrite_ladder:
+                            if candidate < current:
+                                return candidate
+                        return None
 
                     lec_cmd: list[str] = []
                     try:
@@ -2343,6 +2384,7 @@ def main() -> int:
                                 lec_enable_disable_threading,
                                 lec_enable_assume_known_inputs,
                                 lec_enable_canonicalizer_timeout_budget,
+                                lec_canonicalizer_timeout_rewrite_budget,
                             )
                             lec_timeout_secs = timeout_secs
                             if (
@@ -2402,6 +2444,21 @@ def main() -> int:
                                         timeout_retry_log.write_text("", encoding="utf-8")
                                     lec_enable_canonicalizer_timeout_budget = True
                                     learned_canonicalizer_timeout_budget = True
+                                    if (
+                                        lec_canonicalizer_timeout_rewrite_budget is None
+                                        and not has_explicit_canonicalizer_max_num_rewrites
+                                        and canonicalizer_timeout_retry_max_num_rewrites
+                                        > 0
+                                    ):
+                                        lec_canonicalizer_timeout_rewrite_budget = (
+                                            canonicalizer_timeout_retry_max_num_rewrites
+                                        )
+                                    if (
+                                        lec_canonicalizer_timeout_rewrite_budget is not None
+                                    ):
+                                        learned_canonicalizer_timeout_rewrite_budget = (
+                                            lec_canonicalizer_timeout_rewrite_budget
+                                        )
                                     attempted_canonicalizer_timeout_retry = True
                                     timeout_transition = f"{lec_timeout_secs}s"
                                     if canonicalizer_timeout_retry_timeout_secs > 0:
@@ -2418,6 +2475,72 @@ def main() -> int:
                                         flush=True,
                                     )
                                     continue
+                                if (
+                                    not lec_smoke_only
+                                    and can_retry_canonicalizer_timeout
+                                    and lec_enable_canonicalizer_timeout_budget
+                                    and not has_explicit_canonicalizer_max_num_rewrites
+                                ):
+                                    current_rewrite_budget = (
+                                        lec_canonicalizer_timeout_rewrite_budget
+                                    )
+                                    if (
+                                        current_rewrite_budget is None
+                                        and canonicalizer_timeout_retry_max_num_rewrites
+                                        > 0
+                                    ):
+                                        current_rewrite_budget = (
+                                            canonicalizer_timeout_retry_max_num_rewrites
+                                        )
+                                    next_rewrite_budget = (
+                                        next_lower_canonicalizer_rewrite_budget(
+                                            current_rewrite_budget
+                                        )
+                                    )
+                                    if next_rewrite_budget is not None:
+                                        timeout_retry_log = (
+                                            case_dir
+                                            / "circt-lec.canonicalizer-timeout-rewrite.log"
+                                        )
+                                        if lec_log.is_file():
+                                            shutil.copy2(lec_log, timeout_retry_log)
+                                        else:
+                                            timeout_retry_log.write_text(
+                                                "", encoding="utf-8"
+                                            )
+                                        lec_canonicalizer_timeout_rewrite_budget = (
+                                            next_rewrite_budget
+                                        )
+                                        if (
+                                            learned_canonicalizer_timeout_rewrite_budget
+                                            is None
+                                            or next_rewrite_budget
+                                            < learned_canonicalizer_timeout_rewrite_budget
+                                        ):
+                                            learned_canonicalizer_timeout_rewrite_budget = (
+                                                next_rewrite_budget
+                                            )
+                                        timeout_transition = f"{lec_timeout_secs}s"
+                                        if (
+                                            canonicalizer_timeout_retry_timeout_secs > 0
+                                        ):
+                                            timeout_transition += (
+                                                "->"
+                                                f"{canonicalizer_timeout_retry_timeout_secs}s"
+                                            )
+                                        print(
+                                            "opentitan connectivity lec: retrying "
+                                            "circt-lec with tighter canonicalizer "
+                                            "rewrite budget for "
+                                            f"{case.case_id} "
+                                            "(max-num-rewrites="
+                                            f"{current_rewrite_budget}->"
+                                            f"{next_rewrite_budget}, "
+                                            f"timeout={timeout_transition})",
+                                            file=sys.stderr,
+                                            flush=True,
+                                        )
+                                        continue
                                 raise
                             except subprocess.CalledProcessError as exc:
                                 if lec_log.is_file():

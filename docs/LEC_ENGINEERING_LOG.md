@@ -494,3 +494,48 @@
       - run2 `rc=0`, `88.632s`, `LEC_RESULT=EQ`, `LEC_DIAG=LLHD_ABSTRACTION`
       - run3 `rc=0`, `88.477s`, `LEC_RESULT=EQ`, `LEC_DIAG=LLHD_ABSTRACTION`
     - no segfault/stack-dump markers observed.
+
+## 2026-02-28 - Canonicalizer rewrite-ladder retry on strict timeout frontiers
+
+- realization:
+  - mixed OpenTitan shard (`32-way shard index 2`) reproduces a real strict-timeout
+    frontier on
+    `connectivity::alert_handler_esc.csv:ALERT_HANDLER_LC_CTRL_ESC0_RST`
+    at `CIRCT_TIMEOUT_SECS=90` (Z3 path).
+  - direct `circt-lec --mlir-timing` on the shared core for that case shows wall
+    time dominated by lowering/canonicalization, not solver:
+    - `--run-smtlib`: total `137.38s`, `Run SMT-LIB via z3` `0.0074s`
+    - `--emit-mlir`: total `175.84s`
+    - top wall contributors: `Canonicalizer`, `FlattenModules`, and
+      `'hw.module' Pipeline`.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - new env knob:
+      `LEC_CANONICALIZER_TIMEOUT_RETRY_REWRITE_LADDER`
+      (default: `20000,10000,5000,2000,1000,500`).
+    - when a case times out while canonicalizer timeout budget is already
+      enabled (including auto-preenable mode), runner now retries with the
+      next tighter `--lec-canonicalizer-max-num-rewrites` value from the
+      ladder, instead of failing immediately.
+    - learned tighter rewrite budget now propagates to later cases, avoiding
+      repeated timeout-first attempts.
+    - per-case timeout retry evidence is mirrored to
+      `circt-lec.canonicalizer-timeout-rewrite.log`.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder.test`.
+  - test enforces:
+    - auto-preenabled first attempt times out at high rewrite budget,
+    - retry uses tighter rewrite budget and passes,
+    - learned tightened rewrite budget is reused by the second case,
+    - total `circt-lec` calls are reduced (`3` calls for `2` cases).
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-*.test`:
+    `4/4` pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `37/37` pass.
