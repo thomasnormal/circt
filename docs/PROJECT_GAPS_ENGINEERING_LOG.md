@@ -1598,3 +1598,15 @@
 - Fix:
   - Updated `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` to mark the above entries as
     closed (`[x]`) with dated stale-status notes.
+
+### Project gaps: close additional scan false-positives (Sim + ImportVerilog)
+- Repro/verification:
+  - Reviewed still-open entries that already described non-actionable scan
+    matches (false positives / valgrind metadata).
+- Fix:
+  - Marked as closed (`[x]`) with dated stale notes:
+    - sim false positives: entries 648, 649, 651
+    - ImportVerilog valgrind metadata: entries 2008, 2009, 2010, 2020, 2031
+- Realization:
+  - The writeup had multiple entries already diagnosed as non-actionable but
+    left unchecked, which obscured truly unresolved gaps.

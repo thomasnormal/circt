@@ -1945,17 +1945,17 @@ Header guard sanitization still does not correct invalid leading-digit cases. Wh
 ### [x] 647. `tools/circt-sim/LLHDProcessInterpreter.cpp:26757`
 Fixed for the dynamic-selection case: `evaluateFormatString` now handles `comb.mux` over `!sim.fstring` (matching existing `arith.select` support), which removed a real `<unsupported format>` runtime path. Covered by `test/Tools/circt-sim/fmt-mux-dynamic.mlir`. Broader `sim.fmt.*` fallback coverage remains tracked by other open entries.
 
-### [ ] 648. `tools/circt-sim/LLHDProcessInterpreter.cpp:27568`
-`maybeTraceJoinAnyImmediate` itself is normal tracing logic and not a debt marker. This appears to be a scanner false positive from nearby “unsupported” text in the file. The fix is marker-context scanning rather than broad substring hits.
+### [x] 648. `tools/circt-sim/LLHDProcessInterpreter.cpp:27568`
+Status update (2026-02-28): this entry is stale. `maybeTraceJoinAnyImmediate` is regular tracing logic and not an implementation gap; this was a scan false positive from nearby text.
 
-### [ ] 649. `tools/circt-sim/LLHDProcessInterpreter.cpp:40655`
-The comment about zero-initializing return slots for unsupported/failed paths describes a defensive correctness measure, not unresolved implementation debt. It is non-actionable as a gap item. The fix is scanner filtering of explanatory comments.
+### [x] 649. `tools/circt-sim/LLHDProcessInterpreter.cpp:40655`
+Status update (2026-02-28): this entry is stale. The referenced comment is defensive behavior documentation (zero-init for failed paths), not unresolved product debt.
 
 ### [ ] 650. `tools/circt-sim/LLHDProcessInterpreter.cpp:40717`
 This region contains warning plumbing for unsupported trampoline native ABI fallback, reflecting an explicit capability boundary in native trampoline dispatch. What is missing is broader trampoline ABI support beyond current scalar limits. The fix is to extend ABI marshaling support (or richer fallback path) and keep diagnostics for residual unsupported signatures.
 
-### [ ] 651. `tools/circt-sim/LLHDProcessInterpreter.cpp:40718`
-This entry sits in the trampoline-native mapping initialization path and is not itself an unresolved marker. It appears in the scan due nearby unsupported-ABI warning text. The actionable gap is unsupported trampoline ABI coverage, not this resize call.
+### [x] 651. `tools/circt-sim/LLHDProcessInterpreter.cpp:40718`
+Status update (2026-02-28): this entry is stale. The cited line is trampoline map initialization plumbing; the real open item is broader unsupported ABI coverage (tracked by entries 650/652/653), not this line.
 
 ### [ ] 652. `tools/circt-sim/LLHDProcessInterpreter.cpp:40720`
 This corresponds to the warning path for unsupported trampoline native fallback ABI. What is missing is broader native trampoline ABI marshalling beyond current scalar constraints. The fix is to extend argument/result type support or add richer fallback dispatch.
@@ -6025,14 +6025,14 @@ Same class as entry 2005: expected-error fixture content for unsupported-op diag
 ### [ ] 2007. `test/Conversion/ImportAIGER/basic-binary.mlir:3`
 This TODO is a test-maintenance note (regenerate binary AIG input from MLIR once exporter is upstreamed). It points to workflow/tooling follow-up, not immediate product debt on this line.
 
-### [ ] 2008. `test/Conversion/ImportVerilog/global-variable-init.sv:6`
-`UNSUPPORTED: valgrind` is test-runner metadata for environment/tool constraints, not a direct ImportVerilog feature gap.
+### [x] 2008. `test/Conversion/ImportVerilog/global-variable-init.sv:6`
+Status update (2026-02-28): this entry is stale. `UNSUPPORTED: valgrind` is environment metadata and not actionable ImportVerilog feature debt.
 
-### [ ] 2009. `test/Conversion/ImportVerilog/procedures.sv:6`
-Same as entry 2008: valgrind exclusion metadata, non-actionable as implementation debt.
+### [x] 2009. `test/Conversion/ImportVerilog/procedures.sv:6`
+Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata, not a product-gap marker.
 
-### [ ] 2010. `test/Conversion/ImportVerilog/assoc_arrays.sv:6`
-Another valgrind exclusion marker in test metadata; this does not indicate unsupported ImportVerilog semantics.
+### [x] 2010. `test/Conversion/ImportVerilog/assoc_arrays.sv:6`
+Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not unresolved ImportVerilog semantics.
 
 ### [ ] 2011. `test/Conversion/ImportVerilog/assoc_arrays.sv:32`
 This comment references a previously fixed unsupported-expression bug and documents regression intent. It is explanatory test commentary, not current unresolved debt.
@@ -6061,8 +6061,8 @@ Again test metadata (`UNSUPPORTED: valgrind`), not a product capability gap mark
 ### [ ] 2019. `test/Conversion/ImportVerilog/basic.sv:773`
 `CHECK: moore.constant hXXXXXXXX` is expected unknown-bit output in a regression oracle, not unresolved implementation debt.
 
-### [ ] 2020. `test/Conversion/ImportVerilog/hierarchical-names.sv:6`
-Valgrind exclusion metadata; non-actionable for ImportVerilog feature tracking.
+### [x] 2020. `test/Conversion/ImportVerilog/hierarchical-names.sv:6`
+Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not a feature gap.
 
 ### [ ] 2021. `test/Conversion/ImportVerilog/errors.sv:5`
 Same valgrind exclusion marker pattern; this line is test-runner configuration text.
@@ -6094,8 +6094,8 @@ Valgrind exclusion metadata only.
 ### [ ] 2030. `test/Conversion/ImportVerilog/continuous-assign-delay-one-step-supported.sv:11`
 `DIAG-NOT: unsupported ... OneStepDelay` is a negative assertion proving support/absence of a diagnostic; it is oracle text, not unresolved implementation debt.
 
-### [ ] 2031. `test/Conversion/ImportVerilog/static-property-fixes.sv:6`
-`UNSUPPORTED: valgrind` is test-runner metadata for environment/tool constraints, not direct ImportVerilog feature debt.
+### [x] 2031. `test/Conversion/ImportVerilog/static-property-fixes.sv:6`
+Status update (2026-02-28): same closure as entry 2008. This is valgrind metadata and not active ImportVerilog debt.
 
 ### [ ] 2032. `test/Conversion/ImportVerilog/delay-cycle-supported.sv:17`
 `DIAG-NOT: unsupported delay control: CycleDelay` is a regression assertion proving support (absence of a diagnostic), not unresolved implementation debt.
