@@ -887,10 +887,12 @@ Same underlying gap as entry 292: this path still depends on direct RAUW during 
 Again this is the same conversion-framework workaround pattern, indicating repeated technical debt in the portref lowering pass. What is missing is a unified, safe replacement strategy instead of duplicated direct RAUW sites. The fix is to refactor these replacement points behind one helper and switch to native `DialectConversion` support when available.
 
 ### [x] 295. `lib/Runtime/uvm-core/src/base/uvm_port_base.svh:528`
-Status update (2026-02-28): this gap is closed in this workspace. Late-connection phase-state gating now routes through a shared helper (`m_is_end_of_elaboration_complete`) instead of open-coded duplicated checks.
+Status update (2026-02-28): this gap is closed in this workspace. Late-connection phase-state gating now routes through a shared helper (`m_is_end_of_elaboration_complete`) instead of open-coded duplicated checks.  
+Additional semantic closure (2026-02-28): port bookkeeping now uses stable fallback keys when `get_full_name()` degrades to non-stable dynamic placeholders at runtime, which unblocked `resolve_bindings()`/TLM connection semantics under `circt-sim`.
 
 ### [x] 296. `lib/Runtime/uvm-core/src/base/uvm_port_base.svh:638`
-Status update (2026-02-28): same closure as entry 295. `debug_connected_to` now reuses the same shared phase-state helper.
+Status update (2026-02-28): same closure as entry 295. `debug_connected_to` now reuses the same shared phase-state helper.  
+Additional semantic closure (2026-02-28): validated with semantic runtime coverage (`uvm_port_connect_semantic_test.sv`, `uvm_tlm_port_test.sv`) so connect/resolve behavior is now exercised beyond parse/lowering checks.
 
 ### [ ] 297. `include/circt/Dialect/HW/HWOps.h:42`
 This TODO is an architectural gap: module helper functions are free functions instead of being surfaced through a `hw::ModuleLike` interface. What is missing is a uniform interface abstraction that makes module-like operations interchangeable across passes. The fix is to move these helpers into interface methods, migrate call sites, and keep compatibility shims only during transition.

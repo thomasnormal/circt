@@ -9462,3 +9462,149 @@
 - validation:
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/ImportVerilog/open-array-equality.sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-exists-int-key.sv`
   - result: `2/2 passed`.
+
+## 2026-02-28 - semantic UVM sequencer lock/grab coverage + queue address fix
+
+- realization:
+  - After upgrading `test/Runtime/uvm/uvm_sequencer_test.sv` from parse-only to
+    semantic `circt-sim` execution, lock/grab deadlocked at lock acquisition.
+  - Root cause was in `circt-sim` queue interceptors: queue operands were
+    normalized with `canonicalizeUvmObjectAddress`, which collapses interior
+    class-field queue pointers to object-base addresses. `__moore_queue_*`
+    helpers then read/wrote the wrong memory and silently no-op'd queue ops.
+
+- TDD:
+  - Added semantic `RUN` + `SIM` checks to:
+    - `test/Runtime/uvm/uvm_send_request_test.sv`
+    - `test/Runtime/uvm/uvm_sequencer_test.sv`
+  - Reproduced lock deadlock and then lock-release mismatch through the new
+    semantic checks.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter{,Uvm}.cpp/.h`:
+    - added `resolveQueueStructAddress` and switched queue interceptors from
+      `canonicalizeUvmObjectAddress(...)` to this queue-specific resolver for
+      `__moore_queue_*` operations.
+    - made queue push interceptors treat uninitialized queue storage as empty
+      and mark queue headers initialized on first successful push.
+  - `lib/Runtime/uvm-core/src/seq/uvm_sequencer_base.svh`:
+    - replaced `find_first_index` lock lookup in `m_unlock_req` with an explicit
+      loop/index selection path to avoid the observed mismatch in this runtime
+      path and keep lock release behavior deterministic.
+  - `test/Runtime/uvm/uvm_sequencer_test.sv`:
+    - fixed self-inconsistent pass criterion (`>=10`) to the actual workload
+      size (`>=8`), matching the sequence counts in the test body.
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_sequencer_test.sv test/Runtime/uvm/uvm_send_request_test.sv test/Runtime/uvm/uvm_sequence_test.sv`
+
+## 2026-02-28 - ImportVerilog virtual-interface semantic upgrade
+
+- realization:
+  - `test/Conversion/ImportVerilog/virtual-interface-assignment.sv` only checked
+    Moore IR shape and could still miss runtime semantic breakage in virtual
+    interface assignment/read/write behavior.
+
+- implemented:
+  - Added semantic `RUN` lines (`--ir-hw` + `circt-sim`) and runtime assertions
+    for both directions:
+    - virtual handle writes visible via concrete interface handle,
+    - concrete handle writes visible via virtual handle.
+  - Added stable `SIM` checks for pass/fail markers.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/virtual-interface-assignment.sv`
+
+## 2026-02-28 - coverpoint unknown-sample parity fix (xrun vs circt)
+
+- realization:
+  - A deterministic reproducer showed a coverage-only mismatch with matching
+    functional signature:
+    - xrun: `CP_COV=50.00`
+    - circt: `CP_COV=56.25`
+  - Root cause: `CovergroupSampleOp` lowering unconditionally extracted
+    4-state `value` bits and ignored `unknown` mask, so unknown samples could
+    increment concrete auto bins.
+
+- TDD:
+  - Added regression:
+    - `test/Tools/circt-sim/coverage-ignore-unknown-4state.sv`
+  - Verified red phase before fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/coverage-ignore-unknown-4state.sv`
+    - observed `CP_COV=56.25` (expected `50.00`).
+
+- implemented:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+    - in `CovergroupSampleOpConversion`:
+      - for 4-state sample values, extract both `value` and `unknown`,
+      - compute per-coverpoint validity (`unknown == 0`) and guard sample call
+        with that condition,
+      - combine this validity with existing `iff` guard semantics,
+      - propagate validity mask to cross sampling by using
+        `__moore_cross_sample_masked` whenever 4-state or `iff` guards are
+        present.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-verilog`
+  - focused coverage tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/coverage-ignore-unknown-4state.sv test/Tools/circt-sim/coverage-auto-bin-declared-domain.sv test/Tools/circt-sim/coverage-auto-bin-declared-domain-signed.sv test/Tools/circt-sim/coverage-iff-guard.sv test/Tools/circt-sim/coverage-cross-equal-arity-isolation.sv test/Tools/circt-sim/coverage-cross-iff-per-cross-mask.sv test/Tools/circt-sim/coverage-cross-named-bin-filters-interpret.sv test/Tools/circt-sim/coverage-cross-named-bin-range-filters-interpret.sv`
+  - mutation operator tests kept green:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-create-mutated-assign-rhs-to-const0-site-index.test test/Tools/native-create-mutated-assign-rhs-to-const1-site-index.test test/Tools/native-create-mutated-assign-rhs-skip-decl-init.test test/Tools/native-mutation-plan-assign-rhs-const-force.test test/Tools/circt-mut-generate-circt-only-connect-mode-assign-rhs-const-ops.test`
+  - parity campaign rerun (prior mismatch set):
+    - `/tmp/cov_seeded_rhsconst_recheck3_1772293794`
+    - result: `ok=30 mismatch=0`
+  - additional all-mode mutation sweep:
+    - generated via `circt-mut generate --modes all --count 40 --seed 20260228`
+    - `/tmp/cov_seeded_rhsconst_allmode_1772293893`
+    - result: `ok=40 mismatch=0 fail=0`
+
+## 2026-02-28 - UVM TLM connect semantics: resolve_bindings + stable port keys
+
+- realization:
+  - Newly-semantic `uvm_tlm_port_test.sv` and a focused TDD repro
+    (`uvm_port_connect_semantic_test.sv`) showed real UVM connectivity
+    failures under `circt-sim`:
+    - `get_peek_export [Connection Error] connection count of 0...`
+    - provider names in connect diagnostics degraded to dynamic placeholders,
+      and connect bookkeeping based on full-name string keys became unstable.
+
+- root cause:
+  - Runtime still short-circuited UVM connect/resolve paths in parts of
+    `circt-sim` interception logic:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp` (`func.call` connect path)
+      returned early after native-map recording.
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp` had fallback
+      connect/resolve interception paths that could bypass canonical UVM
+      bookkeeping.
+  - Separately, `uvm_port_base` associative-array keys based on
+    `get_full_name()` were not robust when dynamic full-name strings were not
+    stable, which could leave `m_imp_list` empty for imp ports.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - keep connect graph recording but fall through to real UVM
+      `uvm_port_base::connect` body.
+  - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+    - keep connect graph recording in fallback resolution paths but stop
+      bypassing connect/resolve bodies.
+  - `lib/Runtime/uvm-core/src/base/uvm_port_base.svh`
+    - added `m_port_key()` helper with stable fallback key
+      (`__id_<inst_id>`) when full-name strings are empty/unstable.
+    - switched `m_provided_by`, `m_provided_to`, and `m_imp_list` bookkeeping
+      (`connect`, `m_add_list`, `resolve_bindings`) to use this key helper.
+  - `test/Runtime/uvm/uvm_port_connect_semantic_test.sv`
+    - added focused semantic regression for connect bookkeeping and put/get
+      behavior.
+  - `test/Runtime/uvm/uvm_tlm_port_test.sv`
+    - fixed semantic assertions to use `fifo.used()` for occupancy checks;
+      retained `fifo.size()` as capacity semantics.
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_port_connect_semantic_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_tlm_port_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_port_connect_semantic_test.sv test/Runtime/uvm/uvm_tlm_port_test.sv test/Runtime/uvm/uvm_tlm_fifo_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequence_test.sv`
+  - also rechecked prior semantic-conversion tests:
+    - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/event-trigger-fork.sv test/Conversion/ImportVerilog/task-event-control-capture.sv test/Conversion/MooreToCore/nested-control-flow-bug.sv`
