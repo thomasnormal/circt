@@ -760,8 +760,8 @@ Clone-operation code is copied from upstream; this is maintainability debt and a
 ### [ ] 252. `lib/Dialect/SystemC/SystemCOps.cpp:1123`
 ReturnOp implementation is also copy-pasted, repeating the same drift issue. What is missing is shared return-op validation/building infrastructure for function-like dialects. The fix is helper extraction and replacement of local copies.
 
-### [ ] 253. `lib/Runtime/uvm-core/src/base/uvm_resource_base.svh:554`
-`record_xxx_access` in this comment is part of an API name and not a TODO/unsupported marker. This is a scanner false positive caused by `xxx` token matching. The fix is to ignore identifier fragments like `xxx` when they are inside established API names/comments with no debt semantics.
+### [x] 253. `lib/Runtime/uvm-core/src/base/uvm_resource_base.svh:554`
+Status update (2026-02-28): this entry is closed as stale scanner noise. `record_xxx_access` at this line is an API-family placeholder in explanatory text, not unresolved implementation work.
 
 ### [ ] 254. `lib/Bindings/Tcl/circt_tcl.cpp:67`
 This TODO is a real user-facing feature gap: Tcl `load FIR` is explicitly unimplemented. What is missing is FIR file ingestion through the Tcl binding path. The fix is to implement FIR loader plumbing (or remove/guard the command with clear capability docs) and add Tcl integration tests.

@@ -1948,3 +1948,14 @@
   - This was metadata debt, not implementation debt; narrowing these stale
     trackers reduces noise so remaining prioritized ImportVerilog items are
     better aligned with actual unsupported semantics.
+
+### UVM tracker cleanup: close stale scanner false-positive entry 253
+- Repro/verification:
+  - Reviewed `lib/Runtime/uvm-core/src/base/uvm_resource_base.svh:554`; the
+    `record_xxx_access` phrase is explanatory API-family text and not a TODO.
+- Fix:
+  - Marked entry 253 closed (`[x]`) in
+    `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` as stale scanner noise.
+- Realization:
+  - A subset of remaining UVM entries are audit-tool artifacts rather than
+    runtime gaps; pruning these keeps effort focused on semantic/runtime debt.
