@@ -1606,6 +1606,24 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     return strLen >= 0 && strLen <= 4096;
   };
 
+  auto readUvmRootSingletonAddr = [&](uint64_t &rootAddr) -> bool {
+    rootAddr = 0;
+    if (!rootModule)
+      return false;
+    auto *addressofOp =
+        rootModule.lookupSymbol("uvm_pkg::uvm_pkg::uvm_root::m_inst");
+    if (!addressofOp)
+      return false;
+    auto globalIt =
+        globalMemoryBlocks.find("uvm_pkg::uvm_pkg::uvm_root::m_inst");
+    if (globalIt == globalMemoryBlocks.end() || !globalIt->second.initialized ||
+        globalIt->second.size < 8)
+      return false;
+    for (unsigned i = 0; i < 8; ++i)
+      rootAddr |= static_cast<uint64_t>(globalIt->second[i]) << (i * 8);
+    return rootAddr != 0;
+  };
+
   auto getComponentChildrenAssocAddr = [&](uint64_t selfAddr,
                                            uint64_t &assocAddr) -> bool {
     assocAddr = 0;
@@ -1898,6 +1916,45 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     uint64_t phaseAddr = phaseVal.isX() ? 0 : phaseVal.getUInt64();
     return handleUvmWaitForSelfAndSiblingsToDrop(procId, phaseAddr,
                                                  callOp.getOperation());
+  }
+
+  auto readRootSingletonForFuncCall = [&](uint64_t &rootAddr) -> bool {
+    rootAddr = 0;
+    if (!rootModule)
+      return false;
+    auto *addressofOp =
+        rootModule.lookupSymbol("uvm_pkg::uvm_pkg::uvm_root::m_inst");
+    if (!addressofOp)
+      return false;
+    auto globalIt =
+        globalMemoryBlocks.find("uvm_pkg::uvm_pkg::uvm_root::m_inst");
+    if (globalIt == globalMemoryBlocks.end() || !globalIt->second.initialized ||
+        globalIt->second.size < 8)
+      return false;
+    for (unsigned i = 0; i < 8; ++i)
+      rootAddr |= static_cast<uint64_t>(globalIt->second[i]) << (i * 8);
+    return rootAddr != 0;
+  };
+
+  bool isRootWrapperGetter = (calleeName == "m_uvm_get_root" ||
+                              calleeName == "uvm_pkg::uvm_get_report_object" ||
+                              calleeName.ends_with("::m_uvm_get_root") ||
+                              calleeName.ends_with("::uvm_get_report_object"));
+  if (isRootWrapperGetter && callOp.getNumResults() >= 1 &&
+      callOp.getNumOperands() == 0) {
+    uint64_t rootAddr = 0;
+    if (readRootSingletonForFuncCall(rootAddr)) {
+      Value result = callOp.getResult(0);
+      unsigned width = std::max(1u, getTypeWidth(result.getType()));
+      setValue(procId, result, InterpretedValue(llvm::APInt(width, rootAddr)));
+      for (unsigned i = 1, e = callOp.getNumResults(); i < e; ++i) {
+        Value extra = callOp.getResult(i);
+        unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
+        setValue(procId, extra, InterpretedValue(llvm::APInt::getZero(extraWidth)));
+      }
+      recordFastPathHit("func.call.root_wrapper_getter");
+      return true;
+    }
   }
 
   // Pattern-based printer interception: catches subclass-qualified names

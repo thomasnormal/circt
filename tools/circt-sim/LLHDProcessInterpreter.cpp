@@ -1530,6 +1530,16 @@ void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
     auto stateIt = processStates.find(waiter.procId);
     if (stateIt == processStates.end())
       continue;
+    auto &waiterState = stateIt->second;
+
+    // Drop any stale wait_condition timed polls for this process. Objection
+    // wakeup resumes immediately, so far-future watchdog polls must not keep
+    // the scheduler queue non-empty.
+    constexpr uint64_t kWaitConditionPollEventTagSalt = 0x5754434F4E44504FULL;
+    uint64_t waitConditionPollEventTag =
+        static_cast<uint64_t>(waiter.procId) ^ kWaitConditionPollEventTagSalt;
+    scheduler.getEventScheduler().cancelEventsByTag(waitConditionPollEventTag);
+    ++waiterState.waitConditionPollToken;
 
     // If this waiter belongs to execute_phase monitor interception, resume via
     // the poll path so drop-grace logic runs before the phase is completed.
@@ -1551,10 +1561,10 @@ void LLHDProcessInterpreter::wakeObjectionZeroWaitersIfReady(int64_t handle) {
     executePhaseMonitorPollToken.erase(waiter.procId);
     executePhaseYieldCounts.erase(waiter.procId);
     executePhaseSawPositiveObjection.erase(waiter.procId);
-    auto &state = stateIt->second;
-    state.waiting = false;
+    executePhaseZeroDeadlineFs.erase(waiter.procId);
+    waiterState.waiting = false;
     if (waiter.retryOp)
-      state.currentOp = mlir::Block::iterator(waiter.retryOp);
+      waiterState.currentOp = mlir::Block::iterator(waiter.retryOp);
     scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
   }
 }
@@ -12394,6 +12404,14 @@ void LLHDProcessInterpreter::applyInterfaceTriStateRules(SignalId triggerSigId) 
 
 void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
   maybeTraceProcessFinalize(procId, killed);
+  // Process-specific wait_condition watchdog polls are tagged by proc id.
+  // Cancel them eagerly so halted processes cannot keep stale future events in
+  // the scheduler queue.
+  constexpr uint64_t kWaitConditionPollEventTagSalt = 0x5754434F4E44504FULL;
+  uint64_t waitConditionPollEventTag =
+      static_cast<uint64_t>(procId) ^ kWaitConditionPollEventTagSalt;
+  scheduler.getEventScheduler().cancelEventsByTag(waitConditionPollEventTag);
+
   auto dropDequeuedForProc = [&]() {
     auto procQueueIt = lastDequeuedItemByProc.find(procId);
     if (procQueueIt == lastDequeuedItemByProc.end())
@@ -12458,9 +12476,11 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       memoryEventWaiters.erase(procId);
       executePhaseYieldCounts.erase(procId);
       executePhaseSawPositiveObjection.erase(procId);
+      executePhaseZeroDeadlineFs.erase(procId);
       executePhaseMonitorPollPhase.erase(procId);
       executePhaseMonitorPollToken.erase(procId);
       executePhaseBlockingPhaseMap.erase(procId);
+      phaseWaitYieldCountByProc.erase(procId);
       currentExecutingPhaseAddr.erase(procId);
       joinNoneDisableForkResumeFork.erase(procId);
       joinNoneDisableForkResumeToken.erase(procId);
@@ -12484,9 +12504,11 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     memoryEventWaiters.erase(procId);
     executePhaseYieldCounts.erase(procId);
     executePhaseSawPositiveObjection.erase(procId);
+    executePhaseZeroDeadlineFs.erase(procId);
     executePhaseMonitorPollPhase.erase(procId);
     executePhaseMonitorPollToken.erase(procId);
     executePhaseBlockingPhaseMap.erase(procId);
+    phaseWaitYieldCountByProc.erase(procId);
     currentExecutingPhaseAddr.erase(procId);
     joinNoneDisableForkResumeFork.erase(procId);
     joinNoneDisableForkResumeToken.erase(procId);
@@ -20353,6 +20375,22 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   SimTime now = scheduler.getCurrentTime();
   maybeTraceFilteredCall(procId, "func.call", calleeName, now.realTime,
                          now.deltaStep);
+  static bool traceUvmPhaseState = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_UVM_PHASE_STATE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  if (traceUvmPhaseState &&
+      calleeName == "uvm_pkg::uvm_phase::set_state" &&
+      callOp.getNumOperands() >= 2) {
+    InterpretedValue phaseVal = getValue(procId, callOp.getOperand(0));
+    InterpretedValue stateVal = getValue(procId, callOp.getOperand(1));
+    uint64_t phaseAddr = phaseVal.isX() ? 0 : phaseVal.getUInt64();
+    uint64_t stateBits = stateVal.isX() ? 0 : stateVal.getUInt64();
+    llvm::errs() << "[PHASE-STATE] proc=" << procId
+                 << " callee=" << calleeName
+                 << " phase=0x" << llvm::format_hex(phaseAddr, 16)
+                 << " state=0x" << llvm::format_hex(stateBits, 10) << "\n";
+  }
   const bool traceResolveTypeName =
       std::getenv("CIRCT_SIM_TRACE_UVM_FACTORY_RESOLVE") != nullptr;
   const bool disableFactoryFastPath =
@@ -22505,6 +22543,64 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   };
   maybeTracePhaseArgs(calleeName);
 
+  if (calleeName == "uvm_pkg::uvm_phase::add")
+    recordUvmPhaseAddSequence(procId, args);
+
+  auto maybeRemapPhaseArg0ToActiveGraph = [&](llvm::StringRef name) {
+    if (args.empty() || args[0].isX())
+      return;
+    if (name != "uvm_pkg::uvm_phase::wait_for_state" &&
+        name != "uvm_pkg::uvm_phase::get_predecessors" &&
+        name != "uvm_pkg::uvm_phase::get_sync_relationships")
+      return;
+    static bool tracePhaseRemap = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    uint64_t oldPhase = args[0].getUInt64();
+    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
+    if (name == "uvm_pkg::uvm_phase::wait_for_state" && newPhase != 0 &&
+        args.size() >= 3 && !args[1].isX() && !args[2].isX()) {
+      auto currentPhaseIt = currentExecutingPhaseAddr.find(procId);
+      uint64_t currentPhase =
+          currentPhaseIt != currentExecutingPhaseAddr.end()
+              ? currentPhaseIt->second
+              : 0;
+      constexpr uint64_t kUvmPhaseReadyToEnd = 32;
+      constexpr uint64_t kUvmWaitGte = 5;
+      uint64_t waitState = args[1].getUInt64();
+      uint64_t waitCmp = args[2].getUInt64();
+      if (currentPhase != 0 && newPhase == currentPhase &&
+          waitCmp == kUvmWaitGte && waitState >= kUvmPhaseReadyToEnd &&
+          activePhaseRootAddr != 0 && activePhaseRootAddr != newPhase) {
+        if (tracePhaseRemap) {
+          llvm::errs()
+              << "[PHASE-REMAP] proc=" << procId
+              << " fn=" << name
+              << " self-phase-deadlock-avoid old="
+              << llvm::format_hex(newPhase, 16) << " new="
+              << llvm::format_hex(activePhaseRootAddr, 16)
+              << " waitMask=0x"
+              << llvm::format_hex_no_prefix(waitState, 0)
+              << " waitCmp=" << waitCmp << "\n";
+        }
+        newPhase = activePhaseRootAddr;
+      }
+    }
+    if (tracePhaseRemap) {
+      llvm::errs() << "[PHASE-REMAP] proc=" << procId << " fn=" << name
+                   << " old=" << llvm::format_hex(oldPhase, 16)
+                   << " new=" << llvm::format_hex(newPhase, 16) << "\n";
+    }
+    if (newPhase == 0 || newPhase == oldPhase)
+      return;
+    unsigned width = args[0].getWidth();
+    if (width == 0)
+      width = 64;
+    args[0] = InterpretedValue(llvm::APInt(width, newPhase));
+  };
+  maybeRemapPhaseArg0ToActiveGraph(calleeName);
+
   if (traceI3CConfigHandles && !args.empty() && !args.front().isX() &&
       calleeName.contains("i3c_") && calleeName.contains("_bfm::") &&
       (calleeName.contains("detectEdge_scl") ||
@@ -23122,7 +23218,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
     if (phaseAddr == 0)
       phaseAddr = phaseVal.getUInt64();
-
     // Check if we already have an objection handle for this phase
     auto it = phaseObjectionHandles.find(phaseAddr);
     if (it != phaseObjectionHandles.end()) {
@@ -23291,6 +23386,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     // wait_for calls on multiple objections over time, and state must not
     // leak across handles.
     if (calleeName.contains("wait_for")) {
+      const bool traceUvmObjection =
+          std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
       // Get the objection handle from the synthetic self pointer.
       InterpretedValue selfVal = args[0];
       MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
@@ -23298,6 +23395,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         handle = syntheticToHandle(selfVal.getUInt64());
 
       if (handle == MOORE_OBJECTION_INVALID_HANDLE) {
+        if (traceUvmObjection) {
+          uint64_t rawSelf = selfVal.isX() ? 0 : selfVal.getUInt64();
+          llvm::errs() << "[UVM-OBJ] proc=" << procId
+                       << " callee=" << calleeName
+                       << " wait_for invalid self=0x"
+                       << llvm::format_hex(rawSelf, 16) << "\n";
+        }
         objectionWaitForStateByProc.erase(procId);
         return success();
       }
@@ -23305,6 +23409,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       // Check current objection count.
       int64_t count = 0;
       count = __moore_objection_get_count(handle);
+      if (traceUvmObjection) {
+        llvm::errs() << "[UVM-OBJ] proc=" << procId
+                     << " callee=" << calleeName
+                     << " wait_for handle=" << handle
+                     << " count=" << count << "\n";
+      }
 
       auto &wfs = objectionWaitForStateByProc[procId];
       if (wfs.handle != handle)
@@ -23364,19 +23474,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
       }
 
-      // Save the iterator to this call op so we can re-execute it.
-      // executeStep() already advanced currentOp past this call, so we
-      // need to go back by one to point at this LLVM::CallOp.
-      auto callIt = mlir::Block::iterator(callOp.getOperation());
+      // Save the call op so wakeup can force re-execution through call-stack
+      // resume. Rewinding only process-level currentOp is insufficient when
+      // wait_for runs inside nested function frames.
+      Operation *retryOp = callOp.getOperation();
 
       scheduler.getEventScheduler().schedule(
           targetTime, SchedulingRegion::Active,
-          Event([this, procId, callIt]() {
+          Event([this, procId, retryOp]() {
             auto &st = processStates[procId];
             st.waiting = false;
-            // Rewind currentOp to re-execute the wait_for call so the
-            // interceptor can re-check the objection count.
-            st.currentOp = callIt;
+            st.sequencerGetRetryCallOp = retryOp;
             scheduler.scheduleProcess(procId, SchedulingRegion::Active);
           }));
 
@@ -23803,8 +23911,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     ++depthMap[arg0Val];
   }
 
+  const bool forceInterpretedForPhaseSetCanonicalization =
+      calleeName == "uvm_pkg::uvm_phase::get_predecessors" ||
+      calleeName == "uvm_pkg::uvm_phase::get_sync_relationships";
+
   // === Native dispatch (Phase F1) ===
-  if (!nativeFuncPtrs.empty()) {
+  if (!forceInterpretedForPhaseSetCanonicalization && !nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
       if (functionHasDirectCoverageRuntimeCall(funcOp)) {
@@ -24103,6 +24215,18 @@ func_call_interpreted_fallback:
     setValue(procId, result, retVal);
   }
 
+  maybeCanonicalizeUvmPhasePredecessorSet(procId, calleeName, args);
+  if (calleeName == "get_common_domain" && !returnValues.empty()) {
+    const InterpretedValue &ret = returnValues.front();
+    if (!ret.isX()) {
+      uint64_t rootAddr = normalizeUvmObjectKey(procId, ret.getUInt64());
+      if (rootAddr == 0)
+        rootAddr = ret.getUInt64();
+      if (rootAddr != 0)
+        activePhaseRootAddr = rootAddr;
+    }
+  }
+
   if (tracePhasePtrs && shouldTracePhaseCall(calleeName) &&
       !returnValues.empty()) {
     const auto &rv = returnValues.front();
@@ -24154,6 +24278,61 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   for (Value operand : callOp.getOperands())
     args.push_back(getValue(procId, operand));
 
+  if (callOp.getCallee() == "uvm_pkg::uvm_phase::add")
+    recordUvmPhaseAddSequence(procId, args);
+  if (!args.empty() && !args[0].isX() &&
+      (callOp.getCallee() == "uvm_pkg::uvm_phase::wait_for_state" ||
+       callOp.getCallee() == "uvm_pkg::uvm_phase::get_predecessors" ||
+       callOp.getCallee() == "uvm_pkg::uvm_phase::get_sync_relationships")) {
+    static bool tracePhaseRemap = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    uint64_t oldPhase = args[0].getUInt64();
+    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
+    if (callOp.getCallee() == "uvm_pkg::uvm_phase::wait_for_state" &&
+        newPhase != 0 && args.size() >= 3 && !args[1].isX() &&
+        !args[2].isX()) {
+      auto currentPhaseIt = currentExecutingPhaseAddr.find(procId);
+      uint64_t currentPhase =
+          currentPhaseIt != currentExecutingPhaseAddr.end()
+              ? currentPhaseIt->second
+              : 0;
+      constexpr uint64_t kUvmPhaseReadyToEnd = 32;
+      constexpr uint64_t kUvmWaitGte = 5;
+      uint64_t waitState = args[1].getUInt64();
+      uint64_t waitCmp = args[2].getUInt64();
+      if (currentPhase != 0 && newPhase == currentPhase &&
+          waitCmp == kUvmWaitGte && waitState >= kUvmPhaseReadyToEnd &&
+          activePhaseRootAddr != 0 && activePhaseRootAddr != newPhase) {
+        if (tracePhaseRemap) {
+          llvm::errs()
+              << "[PHASE-REMAP] proc=" << procId
+              << " fn=" << callOp.getCallee()
+              << " self-phase-deadlock-avoid old="
+              << llvm::format_hex(newPhase, 16) << " new="
+              << llvm::format_hex(activePhaseRootAddr, 16)
+              << " waitMask=0x"
+              << llvm::format_hex_no_prefix(waitState, 0)
+              << " waitCmp=" << waitCmp << "\n";
+        }
+        newPhase = activePhaseRootAddr;
+      }
+    }
+    if (tracePhaseRemap) {
+      llvm::errs() << "[PHASE-REMAP] proc=" << procId
+                   << " fn=" << callOp.getCallee()
+                   << " old=" << llvm::format_hex(oldPhase, 16)
+                   << " new=" << llvm::format_hex(newPhase, 16) << "\n";
+    }
+    if (newPhase != 0 && newPhase != oldPhase) {
+      unsigned width = args[0].getWidth();
+      if (width == 0)
+        width = 64;
+      args[0] = InterpretedValue(llvm::APInt(width, newPhase));
+    }
+  }
+
   // Call depth check.
   auto &state = processStates[procId];
   constexpr size_t maxCallDepth = 200;
@@ -24202,6 +24381,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   }
   auto fidIt = funcOpToFid.find(funcKey);
   bool forcedInterpreter = false;
+  if (nfp &&
+      (funcOp.getName() == "uvm_pkg::uvm_phase::get_predecessors" ||
+       funcOp.getName() == "uvm_pkg::uvm_phase::get_sync_relationships")) {
+    nfp = nullptr;
+    forcedInterpreter = true;
+  }
   if (nfp) {
     if (functionHasDirectCoverageRuntimeCall(funcOp)) {
       nfp = nullptr;
@@ -24464,6 +24649,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   // Map return values to call results.
   for (auto [result, retVal] : llvm::zip(callOp.getResults(), returnValues))
     setValue(procId, result, retVal);
+
+  maybeCanonicalizeUvmPhasePredecessorSet(procId, callOp.getCallee(), args);
+  if (callOp.getCallee() == "get_common_domain" && !returnValues.empty()) {
+    const InterpretedValue &ret = returnValues.front();
+    if (!ret.isX()) {
+      uint64_t rootAddr = normalizeUvmObjectKey(procId, ret.getUInt64());
+      if (rootAddr == 0)
+        rootAddr = ret.getUInt64();
+      if (rootAddr != 0)
+        activePhaseRootAddr = rootAddr;
+    }
+  }
 
   return success();
 }
@@ -24818,12 +25015,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
         auto isPhaseOrderBlockedWaiter = [&](ProcessId waiterProc,
                                              ProcessExecutionState &st) {
           if (st.halted || !st.waiting)
-            return false;
-          // If a waiter has progressed into deeper suspension machinery, do not
-          // clobber its waiting state with stale phase-order wakeups.
-          if (!st.callStack.empty() || st.waitConditionRestartBlock ||
-              st.sequencerGetRetryCallOp ||
-              objectionWaitHandleByProc.count(waiterProc))
             return false;
           return true;
         };
@@ -27428,6 +27619,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
     executePhaseMonitorPollToken.erase(procId);
     executePhaseYieldCounts.erase(procId);
     executePhaseSawPositiveObjection.erase(procId);
+    executePhaseZeroDeadlineFs.erase(procId);
     return;
   }
   auto tokenIt = executePhaseMonitorPollToken.find(procId);
@@ -27442,9 +27634,11 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
     executePhaseMonitorPollToken.erase(procId);
     executePhaseYieldCounts.erase(procId);
     executePhaseSawPositiveObjection.erase(procId);
+    executePhaseZeroDeadlineFs.erase(procId);
     return;
   }
 
+  SimTime currentTime = scheduler.getCurrentTime();
   auto objIt = phaseObjectionHandles.find(phaseAddr);
   MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
   if (objIt != phaseObjectionHandles.end())
@@ -27462,6 +27656,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
 
   auto &yieldCount = executePhaseYieldCounts[procId];
   auto &sawPositiveObjection = executePhaseSawPositiveObjection[procId];
+  auto &zeroDeadlineFs = executePhaseZeroDeadlineFs[procId];
 
   if (traceExecutePhasePoll) {
     llvm::errs() << "[EXEC-POLL] proc=" << procId << " phase=0x"
@@ -27476,29 +27671,52 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   if (count > 0) {
     sawPositiveObjection = true;
     yieldCount = 0;
+    zeroDeadlineFs = 0;
     scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
     return;
   }
 
   // Keep polling while the master child is alive. Before any objection raise,
-  // use a long startup grace to avoid premature completion races. After at
-  // least one positive objection count has been observed, switch to a short
-  // drop grace and then complete even if monitor threads keep running.
+  // use a long startup grace to avoid premature completion races. Once
+  // objections have been observed and dropped, do a short zero-settle phase
+  // and then honor configured objection drain time directly in simulation
+  // time. This avoids long fixed poll budgets that can overrun short tests.
   constexpr int kObjectionStartupGrace = 5000;
-  constexpr int kObjectionDropGrace = 3300;
+  constexpr int kObjectionZeroSettlePolls = 3;
   constexpr int kNoChildTailGrace = 10;
-  int graceLimit = sawPositiveObjection ? kObjectionDropGrace
-                                        : kObjectionStartupGrace;
-  bool shouldKeepPolling =
-      masterChildAlive ? (yieldCount < graceLimit) : (yieldCount < kNoChildTailGrace);
+  bool shouldKeepPolling = false;
+  if (sawPositiveObjection) {
+    if (yieldCount < kObjectionZeroSettlePolls) {
+      ++yieldCount;
+      shouldKeepPolling = true;
+    } else {
+      if (zeroDeadlineFs == 0 && handle != MOORE_OBJECTION_INVALID_HANDLE) {
+        int64_t drainTime = __moore_objection_get_drain_time(handle);
+        uint64_t delayFs = drainTime > 0 ? static_cast<uint64_t>(drainTime) : 0;
+        if (delayFs > UINT64_MAX - currentTime.realTime)
+          zeroDeadlineFs = UINT64_MAX;
+        else
+          zeroDeadlineFs = currentTime.realTime + delayFs;
+      }
+      shouldKeepPolling = currentTime.realTime < zeroDeadlineFs;
+    }
+  } else {
+    bool withinGrace =
+        masterChildAlive ? (yieldCount < kObjectionStartupGrace)
+                         : (yieldCount < kNoChildTailGrace);
+    if (withinGrace) {
+      ++yieldCount;
+      shouldKeepPolling = true;
+    }
+  }
   if (shouldKeepPolling) {
-    ++yieldCount;
     scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
     return;
   }
 
   yieldCount = 0;
   executePhaseSawPositiveObjection.erase(procId);
+  executePhaseZeroDeadlineFs.erase(procId);
   executePhaseMonitorPollPhase.erase(procId);
   executePhaseMonitorPollToken.erase(procId);
 
@@ -27747,6 +27965,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       int64_t count = 0;
       if (handle != MOORE_OBJECTION_INVALID_HANDLE)
         count = __moore_objection_get_count(handle);
+      SimTime currentTime = scheduler.getCurrentTime();
 
       // Check if the master_phase_process child is still alive.
       // If it is, keep polling even if objection count is 0 (the child
@@ -27759,31 +27978,49 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
 
       auto &yieldCount = executePhaseYieldCounts[procId];
       auto &sawPositiveObjection = executePhaseSawPositiveObjection[procId];
+      auto &zeroDeadlineFs = executePhaseZeroDeadlineFs[procId];
 
       // Keep polling while the master child is alive. Before the first
       // observed objection raise, use a longer startup grace to avoid
-      // premature completion races. After objections have gone positive once,
-      // use a short drop grace and then complete.
+      // premature completion races. Once objections have been observed and
+      // dropped, settle briefly then honor configured drain time directly in
+      // simulation time.
       constexpr int kObjectionStartupGrace = 5000;
-      constexpr int kObjectionDropGrace = 3300;
+      constexpr int kObjectionZeroSettlePolls = 3;
       constexpr int kNoChildTailGrace = 10;
 
       bool shouldKeepPolling = false;
       if (count > 0) {
         sawPositiveObjection = true;
         yieldCount = 0;
+        zeroDeadlineFs = 0;
         shouldKeepPolling = true;
+      } else if (sawPositiveObjection) {
+        if (yieldCount < kObjectionZeroSettlePolls) {
+          ++yieldCount;
+          shouldKeepPolling = true;
+        } else {
+          if (zeroDeadlineFs == 0 && handle != MOORE_OBJECTION_INVALID_HANDLE) {
+            int64_t drainTime = __moore_objection_get_drain_time(handle);
+            uint64_t delayFs =
+                drainTime > 0 ? static_cast<uint64_t>(drainTime) : 0;
+            if (delayFs > UINT64_MAX - currentTime.realTime)
+              zeroDeadlineFs = UINT64_MAX;
+            else
+              zeroDeadlineFs = currentTime.realTime + delayFs;
+          }
+          shouldKeepPolling = currentTime.realTime < zeroDeadlineFs;
+        }
       } else {
-        int graceLimit = sawPositiveObjection ? kObjectionDropGrace
-                                              : kObjectionStartupGrace;
-        shouldKeepPolling = masterChildAlive
-                                ? (yieldCount < graceLimit)
-                                : (yieldCount < kNoChildTailGrace);
+        bool withinGrace =
+            masterChildAlive ? (yieldCount < kObjectionStartupGrace)
+                             : (yieldCount < kNoChildTailGrace);
+        if (withinGrace) {
+          ++yieldCount;
+          shouldKeepPolling = true;
+        }
       }
       if (shouldKeepPolling) {
-        if (count <= 0)
-          ++yieldCount;
-
         auto &state = processStates[procId];
         state.waiting = true;
 
@@ -27825,6 +28062,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       // these tasks would run indefinitely and block subsequent phases.
       yieldCount = 0;
       executePhaseSawPositiveObjection.erase(procId);
+      executePhaseZeroDeadlineFs.erase(procId);
       auto childIt2 = masterPhaseProcessChild.find(phaseAddr);
       if (childIt2 != masterPhaseProcessChild.end()) {
         ProcessId masterChildId = childIt2->second;
@@ -30651,6 +30889,22 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_coverpoint_init("
                                << cg << ", " << cpIdx << ", \""
                                << name << "\")\n");
+      return success();
+    }
+
+    if (calleeName == "__moore_coverpoint_init_with_width") {
+      uint64_t cgAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+      void *cg = reinterpret_cast<void *>(cgAddr);
+      int32_t cpIdx = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(1)).getUInt64());
+      const char *name = readCStringFromPtr(callOp.getOperand(2));
+      int32_t declaredWidth = static_cast<int32_t>(
+          getValue(procId, callOp.getOperand(3)).getUInt64());
+      __moore_coverpoint_init_with_width(cg, cpIdx, name, declaredWidth);
+      LLVM_DEBUG(llvm::dbgs()
+                 << "  llvm.call: __moore_coverpoint_init_with_width("
+                 << cg << ", " << cpIdx << ", \"" << name << "\", "
+                 << declaredWidth << ")\n");
       return success();
     }
 
@@ -34186,11 +34440,11 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                 findMemoryBlockByAddress(classAddr, procId, &objOff);
             if (block && block->initialized) {
               constexpr size_t kLargeClassHeaderPreserveThreshold = 64;
-              // UVM sequence/control fields (e.g. sequence state mutex/state,
-              // process bookkeeping, sequencer references) can live beyond the
-              // first 128 bytes in larger class layouts. Keep a larger header
-              // window intact to avoid corrupting those non-rand control
-              // fields when randomize() lowering misses explicit restores.
+              // Preserve a small fixed prefix (vtable / core header state) and
+              // selectively preserve pointer-like control words in a larger
+              // window. This avoids clobbering UVM bookkeeping pointers while
+              // still letting unconstrained rand payload fields change.
+              constexpr size_t kAlwaysPreserveHeaderBytes = 64;
               constexpr size_t kLargeClassHeaderPreserveBytes = 256;
               size_t fillStart = static_cast<size_t>(objOff);
               size_t fillEnd = std::min(
@@ -34223,12 +34477,43 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               }
 
               // UVM-heavy objects keep control state (including handle identity)
-              // near the beginning of class storage. Preserve a prefix for
-              // larger classes so randomize_basic cannot corrupt sequencer,
+              // near the beginning of class storage. Restore a fixed prefix and
+              // pointer-like words so randomize_basic cannot corrupt sequencer,
               // phase, or factory bookkeeping when lowering misses restores.
               if (!preservedHeader.empty()) {
-                std::memcpy(block->bytes() + preservedHeaderOffset,
-                            preservedHeader.data(), preservedHeader.size());
+                size_t alwaysPreserve =
+                    std::min(kAlwaysPreserveHeaderBytes,
+                             preservedHeader.size());
+                if (alwaysPreserve > 0)
+                  std::memcpy(block->bytes() + preservedHeaderOffset,
+                              preservedHeader.data(), alwaysPreserve);
+
+                auto pointsIntoKnownAllocation = [&](uint64_t addr) {
+                  if (addr == 0)
+                    return false;
+                  uint64_t localOff = 0;
+                  if (findMemoryBlockByAddress(addr, procId, &localOff))
+                    return true;
+                  if (findBlockByAddress(addr, localOff))
+                    return true;
+                  uint64_t nativeOff = 0;
+                  size_t nativeSize = 0;
+                  if (findNativeMemoryBlockByAddress(addr, &nativeOff,
+                                                     &nativeSize))
+                    return true;
+                  return false;
+                };
+
+                for (size_t i = alwaysPreserve;
+                     i + sizeof(uint64_t) <= preservedHeader.size();
+                     i += sizeof(uint64_t)) {
+                  uint64_t word = 0;
+                  std::memcpy(&word, preservedHeader.data() + i, sizeof(word));
+                  if (!pointsIntoKnownAllocation(word))
+                    continue;
+                  std::memcpy(block->bytes() + preservedHeaderOffset + i,
+                              preservedHeader.data() + i, sizeof(word));
+                }
               }
             }
           }
