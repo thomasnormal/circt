@@ -15027,43 +15027,14 @@ llvm_dispatch:
   // through active phase-hopper execution.
   if (isa<LLVM::UnreachableOp>(op)) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.unreachable reached - halting process\n");
-    // When unwinding through phase-hopper execution (or a run_test completion
-    // path), llvm.unreachable can follow an absorbed sim.terminate.
-    // Treat it as a void return so control can unwind to the caller.
+    // When unwinding through phase execution, llvm.unreachable can follow an
+    // absorbed sim.terminate. Treat it as a void return so control can unwind
+    // to the caller.
     {
       auto &ps = processStates[procId];
-      bool inRunTestContext = ps.callDepth > 0 && isInUvmRunTestContext(procId);
-      if (inRunTestContext) {
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  llvm.unreachable absorbed in run_test context"
-                   << " (callDepth=" << ps.callDepth << ")\n");
-        return success();
-      }
       auto phaseIt = currentExecutingPhaseAddr.find(procId);
       if (phaseIt != currentExecutingPhaseAddr.end()) {
-        bool inPhaseStackContext =
-            StringRef(ps.currentFuncName).contains("uvm_pkg::uvm_phase::") ||
-            StringRef(ps.currentFuncName).contains("uvm_pkg::uvm_phase_hopper::");
-        if (!inPhaseStackContext) {
-          for (auto &frame : ps.callStack) {
-            if (!frame.isLLVM() && frame.funcOp &&
-                (frame.funcOp.getSymName().contains("uvm_pkg::uvm_phase::") ||
-                 frame.funcOp.getSymName().contains(
-                     "uvm_pkg::uvm_phase_hopper::"))) {
-              inPhaseStackContext = true;
-              break;
-            }
-            if (frame.isLLVM() && frame.llvmFuncOp &&
-                (frame.llvmFuncOp.getSymName().contains(
-                     "uvm_pkg::uvm_phase::") ||
-                 frame.llvmFuncOp.getSymName().contains(
-                     "uvm_pkg::uvm_phase_hopper::"))) {
-              inPhaseStackContext = true;
-              break;
-            }
-          }
-        }
-        if (ps.callDepth > 0 && inPhaseStackContext) {
+        if (ps.callDepth > 0 && isInUvmPhaseStackContext(procId)) {
           LLVM_DEBUG(llvm::dbgs()
                      << "  llvm.unreachable absorbed during phase execution"
                      << " (callDepth=" << ps.callDepth << ")\n");
@@ -20350,6 +20321,32 @@ LLHDProcessInterpreter::checkUvmRunTestEntry(ProcessId procId,
 
   maybeTraceUvmRunTestReentryError(procId, calleeName, uvmRunTestEntryCount);
   return failure();
+}
+
+bool LLHDProcessInterpreter::isInUvmPhaseStackContext(ProcessId procId) {
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end())
+    return false;
+
+  auto isPhaseFrame = [](llvm::StringRef name) {
+    return name.contains("uvm_pkg::uvm_phase::") ||
+           name.contains("uvm_pkg::uvm_phase_hopper::");
+  };
+
+  auto &state = stateIt->second;
+  if (isPhaseFrame(state.currentFuncName))
+    return true;
+
+  for (auto &frame : state.callStack) {
+    if (!frame.isLLVM() && frame.funcOp &&
+        isPhaseFrame(frame.funcOp.getName()))
+      return true;
+    if (frame.isLLVM() && frame.llvmFuncOp &&
+        isPhaseFrame(frame.llvmFuncOp.getName()))
+      return true;
+  }
+
+  return false;
 }
 
 bool LLHDProcessInterpreter::isInUvmRunTestContext(ProcessId procId) {
@@ -27676,10 +27673,13 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
                           << (verbose ? "verbose" : "quiet") << ")\n");
   if (traceTerminatePath) {
     bool inRunTestContext = state.callDepth > 0 && isInUvmRunTestContext(procId);
+    bool inPhaseStackContext =
+        state.callDepth > 0 && isInUvmPhaseStackContext(procId);
     llvm::errs() << "[TERM-PATH] sim.terminate proc=" << procId
                  << " success=" << (success ? 1 : 0)
                  << " callDepth=" << state.callDepth
                  << " inRunTest=" << (inRunTestContext ? 1 : 0)
+                 << " inPhaseStack=" << (inPhaseStackContext ? 1 : 0)
                  << " currentFunc=" << state.currentFuncName << "\n";
   }
 
@@ -27691,7 +27691,8 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   // the UVM phase machinery needs to run through to completion.
   {
     auto phaseIt = currentExecutingPhaseAddr.find(procId);
-    if (phaseIt != currentExecutingPhaseAddr.end() && state.callDepth > 0) {
+    if (phaseIt != currentExecutingPhaseAddr.end() && state.callDepth > 0 &&
+        isInUvmPhaseStackContext(procId)) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  sim.terminate absorbed during phase execution"
                  << " (callDepth=" << state.callDepth << ")\n");
@@ -27700,19 +27701,6 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       // later from the main run_test $finish path.
       return mlir::success();
     }
-  }
-
-  // UVM run_test can call $finish on completion. Preserve behavioral parity
-  // with simulators that let run_test return to its caller in this path:
-  // absorb successful terminate while still inside run_test call frames.
-  if (success && state.callDepth > 0 && isInUvmRunTestContext(procId)) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  sim.terminate(success) absorbed in run_test context"
-               << " (callDepth=" << state.callDepth << ")\n");
-    if (traceTerminatePath)
-      llvm::errs() << "[TERM-PATH] absorb run_test terminate proc=" << procId
-                   << "\n";
-    return mlir::success();
   }
 
   // Check if this process has active forked children that haven't completed,
@@ -27738,16 +27726,15 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       if (terminateCallback) {
         terminateCallback(success, verbose);
       }
-    } else if (!inGlobalInit && success && !finishGracePeriodActive) {
-      // Start a wall-clock grace period for successful $finish with active
-      // children. This gives UVM cleanup phases time to run (extract, check,
-      // report, final) but prevents infinite hangs from the phase hopper loop.
-      // Uses wall-clock time because UVM phase execution happens at sim time 0.
-      finishGracePeriodActive = true;
-      finishGracePeriodStart = std::chrono::steady_clock::now();
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Started $finish grace period ("
-                 << kFinishGracePeriodSecs << "s wall-clock)\n");
+    } else if (!inGlobalInit && success) {
+      // For successful $finish outside a phase callback, match simulator
+      // behavior by terminating globally even if worker descendants remain.
+      // This avoids falling through to event exhaustion with stranded waiters.
+      terminationRequested = true;
+      if (terminateCallback)
+        terminateCallback(success, verbose);
+      finalizeProcess(procId, /*killed=*/false);
+      return mlir::success();
     }
 
     // Suspend the process instead of terminating - it will be resumed when
