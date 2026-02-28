@@ -43444,6 +43444,7 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
 
   // Call the interpreter.
   auto &callState = processStates[procId];
+  bool waitingBeforeTrampoline = callState.waiting;
   if (callState.callDepth >= 200) {
     llvm::errs() << "[circt-sim] WARNING: trampoline call depth exceeded 200"
                  << " for " << (funcName ? funcName : "<null>")
@@ -43465,7 +43466,7 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   if (failed(interpResult))
     return;
   auto &postCallState = processStates[procId];
-  if (postCallState.waiting)
+  if (postCallState.waiting && !waitingBeforeTrampoline)
     return;
 
   // Convert results back to uint64_t (handle structs consuming multiple slots).
@@ -43540,31 +43541,6 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     if (kind == CIRCT_PROC_CALLBACK) {
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
       auto compiledCallback = [this, fptr, ctxPtr, procId]() {
-        auto stateIt = processStates.find(procId);
-        if (stateIt == processStates.end())
-          return;
-        ProcessExecutionState &state = stateIt->second;
-
-        ProcessId savedActiveProcessId = activeProcessId;
-        ProcessExecutionState *savedActiveProcessState = activeProcessState;
-        activeProcessId = procId;
-        activeProcessState = &state;
-        auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
-          activeProcessId = savedActiveProcessId;
-          activeProcessState = savedActiveProcessState;
-        });
-
-        void *prevTls = __circt_sim_get_tls_ctx();
-        __circt_sim_set_tls_ctx(static_cast<void *>(this));
-        __circt_sim_set_tls_normalize(
-            LLHDProcessInterpreter::normalizeVirtualPtr);
-        auto restoreTlsContext = llvm::make_scope_exit(
-            [&]() { __circt_sim_set_tls_ctx(prevTls); });
-
-        ++aotDepth;
-        maxAotDepth = std::max(maxAotDepth, aotDepth);
-        auto restoreAotDepth = llvm::make_scope_exit([&]() { --aotDepth; });
-
         ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr);
         // Re-arm if the process is a minnow (time-based callback).
@@ -43573,6 +43549,31 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
         if (scheduler.isMinnowProcess(procId))
           scheduler.rearmMinnow(procId);
       };
+      auto compiledCallbackWithProcessContext =
+          [this, procId, callback = compiledCallback]() mutable {
+            auto stateIt = processStates.find(procId);
+            if (stateIt == processStates.end())
+              return;
+            ProcessExecutionState &state = stateIt->second;
+
+            ProcessId savedActiveProcessId = activeProcessId;
+            ProcessExecutionState *savedActiveProcessState = activeProcessState;
+            activeProcessId = procId;
+            activeProcessState = &state;
+            auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
+              activeProcessId = savedActiveProcessId;
+              activeProcessState = savedActiveProcessState;
+            });
+
+            void *prevTls = __circt_sim_get_tls_ctx();
+            __circt_sim_set_tls_ctx(static_cast<void *>(this));
+            __circt_sim_set_tls_normalize(
+                LLHDProcessInterpreter::normalizeVirtualPtr);
+            auto restoreTlsContext = llvm::make_scope_exit(
+                [&]() { __circt_sim_set_tls_ctx(prevTls); });
+
+            callback();
+          };
 
       bool installImmediately = false;
       bool deferredDueToPotentiallyUnsafeCalls = false;
@@ -43600,7 +43601,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
 
       if (installImmediately) {
         if (auto *process = scheduler.getProcess(procId))
-          process->setCallback(std::move(compiledCallback));
+          process->setCallback(std::move(compiledCallbackWithProcessContext));
         else if (traceProcessWiring)
           llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
                        << " missing scheduler process handle for immediate "
@@ -43619,31 +43620,6 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       // bypasses that, so we re-arm explicitly here.
       auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
       pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
-        auto stateIt = processStates.find(procId);
-        if (stateIt == processStates.end())
-          return;
-        ProcessExecutionState &state = stateIt->second;
-
-        ProcessId savedActiveProcessId = activeProcessId;
-        ProcessExecutionState *savedActiveProcessState = activeProcessState;
-        activeProcessId = procId;
-        activeProcessState = &state;
-        auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
-          activeProcessId = savedActiveProcessId;
-          activeProcessState = savedActiveProcessState;
-        });
-
-        void *prevTls = __circt_sim_get_tls_ctx();
-        __circt_sim_set_tls_ctx(static_cast<void *>(this));
-        __circt_sim_set_tls_normalize(
-            LLHDProcessInterpreter::normalizeVirtualPtr);
-        auto restoreTlsContext = llvm::make_scope_exit(
-            [&]() { __circt_sim_set_tls_ctx(prevTls); });
-
-        ++aotDepth;
-        maxAotDepth = std::max(maxAotDepth, aotDepth);
-        auto restoreAotDepth = llvm::make_scope_exit([&]() { --aotDepth; });
-
         ++compiledCallbackInvocations;
         fptr(*ctxPtr, nullptr);
         scheduler.rearmMinnow(procId);
