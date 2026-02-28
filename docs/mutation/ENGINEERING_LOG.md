@@ -467,3 +467,87 @@
     - `NATIVE_NEGEDGE_TO_POSEDGE@1`: match
     - `NATIVE_IF_COND_NEGATE@1`: match
   - seeded mini-campaign (`10` balanced mutants): `ok=10 mismatch=0 fail=0`.
+
+## 2026-02-28 (xrun/circt mismatch root cause: uninitialized 4-state arrays)
+
+- realizations:
+  - The deterministic xrun/circt delta on seeded mutants was not RNG-related:
+    it came from uninitialized `logic` memory semantics.
+  - In `--ir-llhd` output, uninitialized `moore.variable : <uarray<... x lN>>`
+    was lowered to a zeroed `llhd.sig` initializer instead of all-`X`.
+  - This made `==/!=`-based control mutations diverge whenever reads touched
+    uninitialized memory (xrun saw `X`, CIRCT saw `0`).
+  - One batch-sweep mismatch set was a false positive caused by transient
+    `Permission denied` while binaries were being updated concurrently; direct
+    per-mutant rechecks matched.
+
+- changes made:
+  - Added regression test:
+    - `test/Tools/circt-sim/uninitialized-logic-memory-reads-x.sv`
+  - Implemented Moore-to-core fix for uninitialized fixed arrays of 4-state
+    elements:
+    - added `createAllXArrayOfFourStateValue(...)`
+    - added compact integer-pattern replication helper
+      `repeatIntegerPattern(...)`
+    - wired `VariableOpConversion` fallback init path to use all-`X` for
+      fixed-size arrays with 4-state leaf elements before generic zero init.
+
+- validation:
+  - TDD:
+    - new lit test fails before fix (observed `RES r=0 ... hit_neq=1`),
+      passes after fix (`RES r=x ... hit_neq=0`).
+  - focused stability checks:
+    - `class-null-compare.sv`, `readmemh-basic.sv`,
+      `syscall-random-unseeded-process-stability.sv` all pass.
+  - minimized repro:
+    - xrun: `RES r=x hit_eq=0 hit_neq=0 hit_not_eq=0`
+    - circt (post-fix): same.
+  - seeded mutant parity rechecks:
+    - previously divergent `NATIVE_EQ_TO_NEQ@1` and
+      `NATIVE_IF_COND_NEGATE@3` now match xrun exactly.
+    - previously flagged status mismatches (`51/52/55/56`) rechecked as
+      xrun/circt matches (earlier failures were transient execution races).
+
+## 2026-02-28 (inc/dec fault class + seeded parity triage)
+
+- realizations:
+  - Increment/decrement operator faults (`++`/`--`) are realistic counter/state
+    bugs and were missing from the native operator set.
+  - Some planner tests were brittle because they implicitly depended on full
+    operator catalog length and default ordering instead of constraining
+    operator scope in-test.
+  - One xrun-vs-circt mutant mismatch on `cov_intro_seeded` was due to an
+    intentional race introduced by `NBA_TO_BA` in clock-edge stimulus
+    (`we <=` -> `we =`), not a circt scheduling bug.
+
+- changes made:
+  - Added native operators:
+    - `INC_TO_DEC`
+    - `DEC_TO_INC`
+  - Integrated these operators into:
+    - native planner catalog/site counting/family classification
+    - CIRCT-only mode mappings (`arith`, `inv`/`invert`, `balanced/all`)
+    - native mutator rewrite dispatch (`native_create_mutated.py`)
+    - Python native-plan fallback operator set and site counting
+  - Added regression tests:
+    - `circt-mut-generate-circt-only-arith-mode-incdec-ops`
+    - `native-create-mutated-inc-to-dec-site-index`
+    - `native-create-mutated-dec-to-inc-site-index`
+  - Stabilized planner tests by explicitly constraining ops where needed:
+    - `native-mutation-plan-site-aware-cycle`
+    - `native-mutation-plan-le-assignment-order`
+    - `circt-mut-generate-circt-only-weighted-context-priority`
+    - adjusted `circt-mut-generate-circt-only-inv-mode-unary-bnot-op` count
+      for expanded operator catalog.
+
+- validation:
+  - focused lit slice for touched tests: pass
+  - broader CIRCT-only mutation suite slice (`generate/native-plan/create-mutated`):
+    `76 passed`
+  - seeded `cov_intro_seeded` parity sweep (`40` mutants):
+    - overall: `39 match / 1 diff`
+    - diff: `NATIVE_NBA_TO_BA@3` with race-sensitive clock-edge blocking write
+      in stimulus (`xrun rdata=252`, `circt rdata=56`)
+    - excluding race-prone BA/NBA swaps: `38 match / 0 diff`
+  - seeded `incdec_seeded` arith sweep (`20` mutants, includes inc/dec ops):
+    `20 match / 0 diff`.

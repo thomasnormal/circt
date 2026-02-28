@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(output logic [7:0] a, output logic [7:0] b);\n  always_comb begin\n    a++;\n    b++;\n  end\nendmodule\n' > %t/design.sv
+// RUN: printf '1 NATIVE_INC_TO_DEC@2\n' > %t/mutation.txt
+// RUN: python3 %S/../../utils/mutation_mcy/templates/native_create_mutated.py -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: a++;
+// MUTANT: b--;
