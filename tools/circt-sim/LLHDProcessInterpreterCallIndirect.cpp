@@ -552,7 +552,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                      << "\n";
       ++traceNativeCallCount;
     };
-    auto shouldSkipMayYieldNative = [&](uint32_t fid) {
+    auto shouldSkipMayYieldEntry = [&](uint32_t fid, bool isNativeEntry) {
       if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
         return false;
       if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
@@ -561,15 +561,21 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
       static bool traceNativeCalls =
           std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
-      // Default safety: native func.call_indirect cannot suspend today.
-      // Keep MAY_YIELD FuncIds on interpreter dispatch unless explicitly
-      // opted in for experiments.
-      if (!allowNativeMayYield) {
-        if (traceNativeCalls) {
+      // Default safety: neither native nor trampoline call_indirect entry
+      // dispatch can suspend/resume interpreter state. Keep MAY_YIELD FuncIds
+      // on interpreter dispatch unless native opt-in is explicitly requested.
+      if (!isNativeEntry) {
+        if (traceNativeCalls)
           llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid="
                        << fid << " active_proc=" << activeProcessId
-                       << " mode=default\n";
-        }
+                       << " mode=trampoline-default\n";
+        return true;
+      }
+      if (!allowNativeMayYield) {
+        if (traceNativeCalls)
+          llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid="
+                       << fid << " active_proc=" << activeProcessId
+                       << " mode=native-default\n";
         return true;
       }
       // Legacy opt-in mode: only allow within an active process context.
@@ -1052,7 +1058,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               goto ci_xfallback_interpreted;
             // Skip native dispatch for yield-capable functions outside process
             // context.
-            if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
+            if (shouldSkipMayYieldEntry(fid, isNativeEntry)) {
               ++entryTableSkippedYieldCount;
               goto ci_xfallback_interpreted;
             }
@@ -1842,9 +1848,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             // call non-native entries through generated trampolines.
             if (!isNativeEntry && !hasTrampolineEntry)
               goto ci_static_interpreted;
-            // Skip native dispatch for yield-capable functions outside process
-            // context.
-            if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
+            // Keep MAY_YIELD entries on interpreted dispatch.
+            if (shouldSkipMayYieldEntry(fid, isNativeEntry)) {
               ++entryTableSkippedYieldCount;
               goto ci_static_interpreted;
             }
@@ -2428,9 +2433,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           // call non-native entries through generated trampolines.
           if (!isNativeEntry && !hasTrampolineEntry)
             goto ci_cache_interpreted;
-          // Skip native dispatch for yield-capable functions outside process
-          // context.
-          if (isNativeEntry && shouldSkipMayYieldNative(entry.cachedFid)) {
+          // Keep MAY_YIELD entries on interpreted dispatch.
+          if (shouldSkipMayYieldEntry(entry.cachedFid, isNativeEntry)) {
             ++entryTableSkippedYieldCount;
             goto ci_cache_interpreted;
           }
@@ -5164,7 +5168,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           goto ci_main_interpreted;
         // Skip native dispatch for yield-capable functions outside process
         // context.
-        if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
+        if (shouldSkipMayYieldEntry(fid, isNativeEntry)) {
           ++entryTableSkippedYieldCount;
           goto ci_main_interpreted;
         }
