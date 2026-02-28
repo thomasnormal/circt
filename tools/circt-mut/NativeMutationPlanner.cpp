@@ -28,12 +28,12 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "LE_TO_GE",         "GE_TO_LE",       "AND_TO_OR",       "OR_TO_AND",
     "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "XOR_TO_XNOR",
     "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
-    "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",       "UNARY_NOT_DROP",
-    "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
-    "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
-    "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
-    "SHR_TO_ASHR",      "ASHR_TO_SHR",    "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
-    "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
+    "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",       "MUX_SWAP_ARMS",
+    "UNARY_NOT_DROP",   "UNARY_BNOT_DROP", "UNARY_MINUS_DROP",
+    "CONST0_TO_1",      "CONST1_TO_0",    "ADD_TO_SUB",      "SUB_TO_ADD",
+    "MUL_TO_ADD",       "ADD_TO_MUL",     "DIV_TO_MUL",      "MUL_TO_DIV",
+    "SHL_TO_SHR",       "SHR_TO_SHL",     "SHR_TO_ASHR",     "ASHR_TO_SHR",
+    "CASEEQ_TO_EQ",     "CASENEQ_TO_NEQ", "EQ_TO_CASEEQ",    "NEQ_TO_CASENEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
@@ -870,17 +870,66 @@ static bool statementHasPlainAssignBefore(StringRef text,
   return false;
 }
 
-static bool statementHasAssignmentDisqualifier(StringRef text,
-                                               ArrayRef<uint8_t> codeMask,
-                                               size_t stmtStart, size_t pos) {
-  static constexpr const char *kDisqualifiers[] = {
-      "assign",   "parameter", "localparam", "typedef", "input",
-      "output",   "inout",     "wire",       "logic",   "reg",
-      "bit",      "byte",      "shortint",   "int",     "longint",
-      "integer",  "time",      "realtime",   "real",    "string",
-      "enum",     "struct",    "union",      "genvar",  "module",
-      "interface","package",   "class",      "function","task"};
+static bool statementHasAssignmentBefore(StringRef text,
+                                         ArrayRef<uint8_t> codeMask,
+                                         size_t stmtStart, size_t pos) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
 
+  for (size_t i = stmtStart; i < pos; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(')
+      ++parenDepth;
+    else if (ch == ')')
+      decDepth(parenDepth);
+    else if (ch == '[')
+      ++bracketDepth;
+    else if (ch == ']')
+      decDepth(bracketDepth);
+    else if (ch == '{')
+      ++braceDepth;
+    else if (ch == '}')
+      decDepth(braceDepth);
+
+    if (parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+      continue;
+
+    if (ch == '=') {
+      char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+      char next = (i + 1 < text.size() && isCodeAt(codeMask, i + 1))
+                      ? text[i + 1]
+                      : '\0';
+      if (prev == '=' || prev == '!' || prev == '<' || prev == '>' || next == '=' ||
+          next == '>')
+        continue;
+      return true;
+    }
+
+    if (!isCodeRange(codeMask, i, 2) || !text.substr(i).starts_with("<="))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next = (i + 2 < text.size() && isCodeAt(codeMask, i + 2))
+                    ? text[i + 2]
+                    : '\0';
+    if (prev == '<' || prev == '=' || prev == '!' || prev == '>' || next == '=' ||
+        next == '>')
+      continue;
+    return true;
+  }
+  return false;
+}
+
+static bool statementHasDisqualifierToken(StringRef text,
+                                          ArrayRef<uint8_t> codeMask,
+                                          size_t stmtStart, size_t pos,
+                                          ArrayRef<const char *> disqualifiers) {
   size_t i = stmtStart;
   while (i < pos) {
     if (!isCodeAt(codeMask, i) || !(isAlpha(text[i]) || text[i] == '_')) {
@@ -893,11 +942,144 @@ static bool statementHasAssignmentDisqualifier(StringRef text,
            (isAlnum(text[i]) || text[i] == '_' || text[i] == '$'))
       ++i;
     StringRef token = text.slice(start, i);
-    for (const char *kw : kDisqualifiers)
+    for (const char *kw : disqualifiers)
       if (token.equals_insensitive(kw))
         return true;
   }
   return false;
+}
+
+static bool statementHasAssignmentDisqualifier(StringRef text,
+                                               ArrayRef<uint8_t> codeMask,
+                                               size_t stmtStart, size_t pos) {
+  static constexpr const char *kDisqualifiers[] = {
+      "assign",   "parameter", "localparam", "typedef", "input",
+      "output",   "inout",     "wire",       "logic",   "reg",
+      "bit",      "byte",      "shortint",   "int",     "longint",
+      "integer",  "time",      "realtime",   "real",    "string",
+      "enum",     "struct",    "union",      "genvar",  "module",
+      "interface","package",   "class",      "function","task"};
+  return statementHasDisqualifierToken(text, codeMask, stmtStart, pos,
+                                       kDisqualifiers);
+}
+
+static bool statementHasDeclarativeDisqualifier(StringRef text,
+                                                ArrayRef<uint8_t> codeMask,
+                                                size_t stmtStart, size_t pos) {
+  static constexpr const char *kDisqualifiers[] = {
+      "parameter", "localparam", "typedef",  "input",   "output", "inout",
+      "wire",      "logic",      "reg",      "bit",     "byte",   "shortint",
+      "int",       "longint",    "integer",  "time",    "realtime",
+      "real",      "string",     "enum",     "struct",  "union",  "genvar",
+      "module",    "interface",  "package",  "class",   "function",
+      "task"};
+  return statementHasDisqualifierToken(text, codeMask, stmtStart, pos,
+                                       kDisqualifiers);
+}
+
+static size_t skipCodeWhitespace(StringRef text, ArrayRef<uint8_t> codeMask,
+                                 size_t i, size_t limit) {
+  while (i < limit) {
+    if (!isCodeAt(codeMask, i)) {
+      ++i;
+      continue;
+    }
+    if (std::isspace(static_cast<unsigned char>(text[i]))) {
+      ++i;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+static bool parseIdentifierToken(StringRef text, ArrayRef<uint8_t> codeMask,
+                                 size_t &i, size_t limit) {
+  if (i >= limit || !isCodeAt(codeMask, i))
+    return false;
+  char ch = text[i];
+  if (!(isAlpha(ch) || ch == '_'))
+    return false;
+  ++i;
+  while (i < limit && isCodeAt(codeMask, i) &&
+         (isAlnum(text[i]) || text[i] == '_' || text[i] == '$'))
+    ++i;
+  return true;
+}
+
+static size_t skipBalancedGroup(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t i, size_t limit, char openCh,
+                                char closeCh) {
+  if (i >= limit || !isCodeAt(codeMask, i) || text[i] != openCh)
+    return i;
+  int depth = 0;
+  while (i < limit) {
+    if (!isCodeAt(codeMask, i)) {
+      ++i;
+      continue;
+    }
+    char ch = text[i];
+    if (ch == openCh) {
+      ++depth;
+    } else if (ch == closeCh) {
+      --depth;
+      if (depth == 0)
+        return i + 1;
+    }
+    ++i;
+  }
+  return limit;
+}
+
+static bool statementLooksLikeTypedDeclaration(StringRef text,
+                                               ArrayRef<uint8_t> codeMask,
+                                               size_t stmtStart, size_t pos) {
+  size_t limit = std::min(pos, text.size());
+  size_t i = skipCodeWhitespace(text, codeMask, stmtStart, limit);
+  size_t firstStart = i;
+  if (!parseIdentifierToken(text, codeMask, i, limit))
+    return false;
+  StringRef firstToken = text.slice(firstStart, i);
+  if (firstToken.equals_insensitive("assign") ||
+      firstToken.equals_insensitive("if") ||
+      firstToken.equals_insensitive("for") ||
+      firstToken.equals_insensitive("while") ||
+      firstToken.equals_insensitive("case") ||
+      firstToken.equals_insensitive("foreach") ||
+      firstToken.equals_insensitive("return") ||
+      firstToken.equals_insensitive("begin") ||
+      firstToken.equals_insensitive("end"))
+    return false;
+
+  while (true) {
+    i = skipCodeWhitespace(text, codeMask, i, limit);
+    if (i + 1 < limit && isCodeRange(codeMask, i, 2) &&
+        text.substr(i).starts_with("::")) {
+      i = skipCodeWhitespace(text, codeMask, i + 2, limit);
+      if (!parseIdentifierToken(text, codeMask, i, limit))
+        return false;
+      continue;
+    }
+    if (i < limit && isCodeAt(codeMask, i) && text[i] == '#') {
+      i = skipCodeWhitespace(text, codeMask, i + 1, limit);
+      i = skipBalancedGroup(text, codeMask, i, limit, '(', ')');
+      continue;
+    }
+    if (i < limit && isCodeAt(codeMask, i) && text[i] == '[') {
+      i = skipBalancedGroup(text, codeMask, i, limit, '[', ']');
+      continue;
+    }
+    break;
+  }
+
+  i = skipCodeWhitespace(text, codeMask, i, limit);
+  size_t secondStart = i;
+  if (!parseIdentifierToken(text, codeMask, i, limit))
+    return false;
+  size_t prevSig = findPrevCodeNonSpace(text, codeMask, secondStart);
+  if (prevSig != StringRef::npos && text[prevSig] == '.')
+    return false;
+  return true;
 }
 
 static void collectProceduralBlockingAssignSites(
@@ -958,6 +1140,8 @@ static void collectProceduralBlockingAssignSites(
 
     size_t stmtStart = findStatementStart(text, codeMask, i);
     if (statementHasAssignmentDisqualifier(text, codeMask, stmtStart, i))
+      continue;
+    if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
       continue;
     if (statementHasPlainAssignBefore(text, codeMask, stmtStart, i))
       continue;
@@ -1025,7 +1209,111 @@ static void collectProceduralNonblockingAssignSites(
     size_t stmtStart = findStatementStart(text, codeMask, i);
     if (statementHasAssignmentDisqualifier(text, codeMask, stmtStart, i))
       continue;
+    if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
+      continue;
     if (statementHasPlainAssignBefore(text, codeMask, stmtStart, i))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
+static size_t findMatchingTernaryColon(StringRef text, ArrayRef<uint8_t> codeMask,
+                                       size_t questionPos) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  int nestedTernary = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  for (size_t i = questionPos + 1, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      if (parenDepth == 0)
+        break;
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      if (bracketDepth == 0)
+        break;
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      if (braceDepth == 0)
+        break;
+      decDepth(braceDepth);
+      continue;
+    }
+
+    if (parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+      continue;
+
+    if (ch == '?') {
+      ++nestedTernary;
+      continue;
+    }
+    if (ch == ':') {
+      if (nestedTernary == 0)
+        return i;
+      --nestedTernary;
+      continue;
+    }
+    if (ch == ';' || ch == ',')
+      break;
+  }
+  return StringRef::npos;
+}
+
+static void collectMuxSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   SmallVectorImpl<SiteInfo> &sites) {
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i) || text[i] != '?')
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    if (!isOperandEndChar(text[prevSig]) || !isOperandStartChar(text[nextSig]))
+      continue;
+
+    size_t stmtStart = findStatementStart(text, codeMask, i);
+    if (statementHasDeclarativeDisqualifier(text, codeMask, stmtStart, i))
+      continue;
+    if (statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
+      continue;
+    if (!statementHasAssignmentBefore(text, codeMask, stmtStart, i))
+      continue;
+
+    size_t colonPos = findMatchingTernaryColon(text, codeMask, i);
+    if (colonPos == StringRef::npos)
+      continue;
+
+    size_t trueStart = findNextCodeNonSpace(text, codeMask, i + 1);
+    size_t trueEnd = findPrevCodeNonSpace(text, codeMask, colonPos);
+    size_t falseStart = findNextCodeNonSpace(text, codeMask, colonPos + 1);
+    if (trueStart == StringRef::npos || trueEnd == StringRef::npos ||
+        falseStart == StringRef::npos || trueStart > trueEnd)
       continue;
 
     sites.push_back({i});
@@ -1152,6 +1440,10 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectProceduralNonblockingAssignSites(designText, codeMask, sites);
     return;
   }
+  if (op == "MUX_SWAP_ARMS") {
+    collectMuxSwapArmSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "UNARY_NOT_DROP") {
     collectUnaryNotDropSites(designText, codeMask, sites);
     return;
@@ -1257,6 +1549,8 @@ static std::string getOpFamily(StringRef op) {
     return "logic";
   if (op == "BA_TO_NBA" || op == "NBA_TO_BA")
     return "timing";
+  if (op == "MUX_SWAP_ARMS")
+    return "mux";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||

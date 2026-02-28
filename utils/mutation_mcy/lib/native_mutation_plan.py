@@ -20,6 +20,7 @@ NATIVE_OPS_ALL = [
     "UNARY_NOT_DROP",
     "CONST0_TO_1",
     "CONST1_TO_0",
+    "MUX_SWAP_ARMS",
 ]
 
 OP_PATTERNS = {
@@ -106,6 +107,332 @@ def is_code_span(mask: list[bool], start: int, end: int) -> bool:
     return all(mask[i] for i in range(start, end))
 
 
+def is_code_at(mask: list[bool], pos: int) -> bool:
+    return 0 <= pos < len(mask) and mask[pos]
+
+
+def find_prev_code_nonspace(text: str, mask: list[bool], pos: int) -> int:
+    i = pos
+    while i > 0:
+        i -= 1
+        if not is_code_at(mask, i):
+            continue
+        if text[i].isspace():
+            continue
+        return i
+    return -1
+
+
+def find_next_code_nonspace(text: str, mask: list[bool], pos: int) -> int:
+    i = pos
+    n = len(text)
+    while i < n:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        if text[i].isspace():
+            i += 1
+            continue
+        return i
+    return -1
+
+
+def is_operand_end_char(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", ")", "]", "}", "'")
+
+
+def is_operand_start_char(ch: str) -> bool:
+    return ch.isalnum() or ch in ("_", "(", "[", "{", "'", "~", "!", "$")
+
+
+def find_statement_start(text: str, mask: list[bool], pos: int) -> int:
+    i = pos
+    while i > 0:
+        i -= 1
+        if not is_code_at(mask, i):
+            continue
+        if text[i] in (";", "\n", "{", "}"):
+            return i + 1
+    return 0
+
+
+def statement_has_assignment_disqualifier(
+    text: str, mask: list[bool], stmt_start: int, pos: int, include_assign: bool = True
+) -> bool:
+    disqualifiers = {
+        "parameter",
+        "localparam",
+        "typedef",
+        "input",
+        "output",
+        "inout",
+        "wire",
+        "logic",
+        "reg",
+        "bit",
+        "byte",
+        "shortint",
+        "int",
+        "longint",
+        "integer",
+        "time",
+        "realtime",
+        "real",
+        "string",
+        "enum",
+        "struct",
+        "union",
+        "genvar",
+        "module",
+        "interface",
+        "package",
+        "class",
+        "function",
+        "task",
+    }
+    if include_assign:
+        disqualifiers.add("assign")
+    i = max(0, stmt_start)
+    end = min(pos, len(text))
+    while i < end:
+        if not is_code_at(mask, i) or not (text[i].isalpha() or text[i] == "_"):
+            i += 1
+            continue
+        start = i
+        i += 1
+        while i < end and is_code_at(mask, i) and (text[i].isalnum() or text[i] in ("_", "$")):
+            i += 1
+        token = text[start:i].lower()
+        if token in disqualifiers:
+            return True
+    return False
+
+
+def statement_has_assignment_before(text: str, mask: list[bool], stmt_start: int, pos: int) -> bool:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    i = max(0, stmt_start)
+    end = min(pos, len(text))
+    while i < end:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+        if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+
+        if ch == "=":
+            prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+            nxt = text[i + 1] if i + 1 < len(text) and is_code_at(mask, i + 1) else ""
+            if prev in ("=", "!", "<", ">") or nxt in ("=", ">"):
+                i += 1
+                continue
+            return True
+
+        if is_code_span(mask, i, i + 2) and text.startswith("<=", i):
+            prev = text[i - 1] if i > 0 and is_code_at(mask, i - 1) else ""
+            nxt = text[i + 2] if i + 2 < len(text) and is_code_at(mask, i + 2) else ""
+            if prev in ("<", "=", "!", ">") or nxt in ("=", ">"):
+                i += 1
+                continue
+            return True
+        i += 1
+    return False
+
+
+def _skip_code_ws(text: str, mask: list[bool], i: int, end: int) -> int:
+    while i < end:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        if text[i].isspace():
+            i += 1
+            continue
+        break
+    return i
+
+
+def _parse_identifier_token(text: str, mask: list[bool], i: int, end: int) -> tuple[int, int]:
+    if i >= end or not is_code_at(mask, i):
+        return (-1, -1)
+    ch = text[i]
+    if not (ch.isalpha() or ch == "_"):
+        return (-1, -1)
+    start = i
+    i += 1
+    while i < end and is_code_at(mask, i) and (text[i].isalnum() or text[i] in ("_", "$")):
+        i += 1
+    return (start, i)
+
+
+def _skip_balanced(text: str, mask: list[bool], i: int, end: int, open_ch: str, close_ch: str) -> int:
+    if i >= end or not is_code_at(mask, i) or text[i] != open_ch:
+        return i
+    depth = 0
+    while i < end:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return end
+
+
+def statement_looks_like_typed_declaration(text: str, mask: list[bool], stmt_start: int, pos: int) -> bool:
+    end = min(pos, len(text))
+    i = _skip_code_ws(text, mask, max(0, stmt_start), end)
+    first_start, first_end = _parse_identifier_token(text, mask, i, end)
+    if first_start < 0:
+        return False
+    first_token = text[first_start:first_end].lower()
+    if first_token in {"assign", "if", "for", "while", "case", "foreach", "return", "begin", "end"}:
+        return False
+    i = first_end
+
+    while True:
+        i = _skip_code_ws(text, mask, i, end)
+        if i + 1 < end and is_code_span(mask, i, i + 2) and text.startswith("::", i):
+            i = _skip_code_ws(text, mask, i + 2, end)
+            _, i = _parse_identifier_token(text, mask, i, end)
+            if i < 0:
+                return False
+            continue
+        if i < end and is_code_at(mask, i) and text[i] == "#":
+            i = _skip_code_ws(text, mask, i + 1, end)
+            i = _skip_balanced(text, mask, i, end, "(", ")")
+            continue
+        if i < end and is_code_at(mask, i) and text[i] == "[":
+            i = _skip_balanced(text, mask, i, end, "[", "]")
+            continue
+        break
+
+    i = _skip_code_ws(text, mask, i, end)
+    second_start, _ = _parse_identifier_token(text, mask, i, end)
+    if second_start < 0:
+        return False
+    prev_sig = find_prev_code_nonspace(text, mask, second_start)
+    if prev_sig >= 0 and text[prev_sig] == ".":
+        return False
+    return True
+
+
+def find_matching_ternary_colon(text: str, mask: list[bool], question_pos: int) -> int:
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    nested_ternary = 0
+    i = question_pos + 1
+    n = len(text)
+    while i < n:
+        if not is_code_at(mask, i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            if paren_depth == 0:
+                return -1
+            paren_depth -= 1
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            if bracket_depth == 0:
+                return -1
+            bracket_depth -= 1
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            if brace_depth == 0:
+                return -1
+            brace_depth -= 1
+            i += 1
+            continue
+        if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+        if ch == "?":
+            nested_ternary += 1
+            i += 1
+            continue
+        if ch == ":":
+            if nested_ternary == 0:
+                return i
+            nested_ternary -= 1
+            i += 1
+            continue
+        if ch in (";", ","):
+            return -1
+        i += 1
+    return -1
+
+
+def count_mux_swap_arms_sites(text: str, mask: list[bool]) -> int:
+    count = 0
+    for i, ch in enumerate(text):
+        if ch != "?" or not is_code_at(mask, i):
+            continue
+        prev_sig = find_prev_code_nonspace(text, mask, i)
+        next_sig = find_next_code_nonspace(text, mask, i + 1)
+        if prev_sig < 0 or next_sig < 0:
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(text[next_sig]):
+            continue
+        stmt_start = find_statement_start(text, mask, i)
+        if statement_has_assignment_disqualifier(text, mask, stmt_start, i, include_assign=False):
+            continue
+        if statement_looks_like_typed_declaration(text, mask, stmt_start, i):
+            continue
+        if not statement_has_assignment_before(text, mask, stmt_start, i):
+            continue
+        if find_matching_ternary_colon(text, mask, i) < 0:
+            continue
+        count += 1
+    return count
+
+
 def count_literal_token(text: str, token: str, mask: list[bool]) -> int:
     if not token:
         return 0
@@ -172,6 +499,8 @@ def count_relational_comparator_token(text: str, token: str, mask: list[bool]) -
 
 
 def count_native_mutation_sites(design_text: str, op: str, mask: list[bool]) -> int:
+    if op == "MUX_SWAP_ARMS":
+        return count_mux_swap_arms_sites(design_text, mask)
     if op == "LE_TO_LT":
         return count_relational_comparator_token(design_text, "<=", mask)
     if op == "GE_TO_GT":

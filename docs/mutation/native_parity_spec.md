@@ -137,9 +137,15 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
     forms (`~&`, `~|`, `~^`) and XNOR token contexts (`^~`).
 - Assignment timing mutations model procedural update-order faults:
   - `BA_TO_NBA` targets procedural blocking assignments (`=`) and rewrites to
-    nonblocking (`<=`) with declaration/comparator/continuous-assignment guards.
+    nonblocking (`<=`) with declaration/comparator/continuous-assignment guards,
+    including typed-declaration exclusion (`my_t v = ...`).
   - `NBA_TO_BA` targets procedural nonblocking assignments (`<=`) and rewrites
-    to blocking (`=`) with matching site-index guards.
+    to blocking (`=`) with matching site-index guards and the same typed-
+    declaration exclusion.
+- Ternary mux-arm mutations model swapped-data control bugs:
+  - `MUX_SWAP_ARMS` targets assignment-context ternary expressions
+    (`cond ? tval : fval`) and rewrites to (`cond ? fval : tval`) with
+    statement-level disqualifier guards to avoid wildcard-case token confusion.
 - Cast mutations (`SIGNED_TO_UNSIGNED`, `UNSIGNED_TO_SIGNED`) target
   `$signed(...)`/`$unsigned(...)` calls with boundary checks and optional
   whitespace before `(`.
