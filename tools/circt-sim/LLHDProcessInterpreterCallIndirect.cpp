@@ -585,15 +585,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (unsafeUvmPredicateArg1 && argVal != 0) {
             bool knownAddr = isKnownPointerAddress(argVal);
             bool badPointerShape = !isPlausibleNativePointerValue(argVal);
-            bool suspiciousHighUnmappedPtr =
-                argVal > 0xFFFFFFFFULL && !knownAddr;
-            // UVM object handles in these predicate paths are expected to be
-            // interpreter-managed virtual addresses. Treat tiny unmapped
-            // values as malformed payloads as well.
-            bool suspiciousLowUnmappedPtr =
-                argVal < 0x01000000ULL && !knownAddr;
-            if (badPointerShape || suspiciousHighUnmappedPtr ||
-                suspiciousLowUnmappedPtr) {
+            // These UVM predicates dereference arg1 directly. If arg1 is
+            // non-zero and we cannot resolve it to tracked interpreter/native
+            // storage, fast-false instead of native dereference.
+            bool unknownUnmappedPtr = !knownAddr;
+            if (badPointerShape || unknownUnmappedPtr) {
               static bool traceNativeCalls =
                   std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
               if (traceNativeCalls) {
@@ -602,6 +598,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                     << " callee=" << calleeNameForNormalization << " arg" << i
                     << "=" << llvm::format_hex(argVal, 16)
                     << " known=" << (knownAddr ? 1 : 0)
+                    << " bad_shape=" << (badPointerShape ? 1 : 0)
                     << " active_proc=" << activeProcessId << "\n";
               }
               forcePredicateFalse = true;
