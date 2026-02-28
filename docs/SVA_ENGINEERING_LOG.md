@@ -8836,3 +8836,335 @@
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-past-event-continue-on-unsupported.sv`
   - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/sva-immediate-sampled-continue-on-unsupported.sv`
   - all passing.
+
+## 2026-02-27 - Re-enabled cross-coverage regression tests
+
+- realization:
+  - two pre-existing disabled cross-coverage tests are now passing in the
+    current runtime and should stay enabled:
+    - `CrossBinsIsolatedPerCrossWithSameArity`
+    - `CrossNamedBinFiltersAreDeepCopied`
+
+- implemented:
+  - removed `DISABLED_` prefixes in `unittests/Runtime/MooreRuntimeTest.cpp`.
+
+- validation:
+  - rebuilt `MooreRuntimeTests`.
+  - ran both newly enabled tests directly; both pass.
+  - reran declared-domain lit coverage tests; both pass:
+    - `test/Tools/circt-sim/coverage-auto-bin-declared-domain.sv`
+    - `test/Tools/circt-sim/coverage-auto-bin-declared-domain-signed.sv`
+  - note: this run observed 6 order-dependent failures
+    (`MooreRuntimeSampleCallbackTest.SampleWithArgMapping` and 5
+    `MooreRuntimeCoverageExclusionTest.*` cases); this was later root-caused and
+    fixed in the next entry.
+
+## 2026-02-27 - Root-cause fix: stale special-bin metadata after covergroup destroy
+
+- realization:
+  - the full `MooreRuntimeTests` order-dependent failures were caused by stale
+    `specialBinData` entries (ignore/illegal bins) that were not erased in
+    `__moore_covergroup_destroy`.
+  - when allocator pointer reuse occurred, new coverpoints could inherit stale
+    ignore/illegal behavior from previously destroyed coverpoints.
+
+- implemented:
+  - added `__moore_special_bins_cleanup_for_coverpoint(MooreCoverpoint *cp)`.
+  - wired covergroup destruction to call this cleanup for each coverpoint.
+
+- validation:
+  - rebuilt and reran full `MooreRuntimeTests`:
+    - `688` passed, `0` failed.
+  - reran fixed-seed SRAM parity sample:
+    - xrun (`-coverage functional`): `SUMMARY addr_cov=68.75 we_cov=100.00`
+    - circt-sim: `SUMMARY addr_cov=68.75 we_cov=100.00`
+    - repeated run is reproducible for both simulators with the same seed.
+
+## 2026-02-27 - Added dedicated regression for special-bin cleanup leak
+
+- realization:
+  - we needed a direct unit test to guard against stale ignore-bin metadata
+    reappearing via allocator pointer reuse.
+
+- implemented:
+  - added
+    `MooreRuntimeIgnoreBinsTest.DestroyedCoverpointDoesNotLeakIgnoreBinsMetadata`
+    in `unittests/Runtime/MooreRuntimeTest.cpp`.
+  - also removed stale wording in cross test comments that still said those
+    tests were disabled.
+
+- validation:
+  - focused regression slice:
+    - new ignore-bin leak test + sample-callback + exclusion + cross tests all pass.
+  - full runtime suite now reports:
+    - `689` passed, `0` failed.
+
+## 2026-02-27 - Similar issue fix: reset now clears coverage objects/state
+
+- realization:
+  - `__moore_runtime_reset_for_new_simulation_run` did not clear registered
+    covergroups, so coverage state survived reset across runs.
+  - this is the same class of state-lifetime bug as stale special-bin metadata.
+
+- TDD:
+  - strengthened `MooreRuntimeResetTest.ResetForNewSimulationRunClearsGlobalState`
+    to create/sample a covergroup before reset and assert:
+    - `__moore_coverage_get_num_covergroups() == 0`
+    - `__moore_coverage_get_total() == 0.0` after reset.
+  - test failed before fix (`num_covergroups=1`, `total=100`).
+
+- implemented:
+  - in `__moore_runtime_reset_for_new_simulation_run`:
+    - clear `globalExclusionFile`
+    - reset `coverageSamplingStopped` to `false`
+    - clear global sample callbacks
+    - destroy all `registeredCovergroups` in a loop
+
+- validation:
+  - reran reset test: pass.
+  - reran focused coverage/callback/cross regression slice: pass.
+  - reran full `MooreRuntimeTests`: `689` passed, `0` failed.
+
+## 2026-02-27 - circt-sim HW-mode regression fix for width-aware coverpoint init
+
+- realization:
+  - `circt-sim` in `--ir-hw` mode failed declared-domain coverage tests with:
+    - `unhandled coverage runtime call in interpreter: __moore_coverpoint_init_with_width`
+  - this was a missing call handler in `LLHDProcessInterpreter`.
+
+- implemented:
+  - added `__moore_coverpoint_init_with_width` handling in
+    `tools/circt-sim/LLHDProcessInterpreter.cpp`, mirroring existing
+    `__moore_coverpoint_init` handling and forwarding declared width.
+
+- validation:
+  - rebuilt `circt-sim`.
+  - reran:
+    - `test/Tools/circt-sim/coverage-auto-bin-declared-domain.sv`
+    - `test/Tools/circt-sim/coverage-auto-bin-declared-domain-signed.sv`
+  - both pass.
+
+## 2026-02-27 - Lowered concat_ref on moore.instance ref inputs
+
+- realization:
+  - OpenTitan connectivity LEC hit a hard blocker where `moore.concat_ref` was
+    still present when used as a `moore.instance` ref input (inout-style port
+    connection), and `MooreToCore` rejects residual `moore.concat_ref`.
+  - existing `--moore-lower-concatref` only handled assign/read/extract_ref
+    uses, not instance operands.
+
+- TDD:
+  - added `test/Dialect/Moore/lower-concatref-instance.mlir`.
+  - initial test failed before the implementation.
+
+- implemented:
+  - extended `lib/Dialect/Moore/Transforms/LowerConcatRef.cpp` with
+    `InstanceConcatRefLowering`:
+    - detects `moore.instance` inputs defined by `moore.concat_ref`.
+    - materializes a temporary ref variable.
+    - emits pre-instance bridge assign (`tmp = concat value`).
+    - rewrites instance input to `tmp`.
+    - emits post-instance writeback (`concat lvalue = tmp value`).
+  - marked `moore.instance` dynamically legal only when none of its inputs are
+    `concat_ref`.
+  - hardened assignment/read concat lowering paths to avoid null/unknown-width
+    crashes encountered while iterating on this fix.
+
+- validation:
+  - `llvm-lit test/Dialect/Moore/lower-concatref*.mlir` passes.
+  - targeted OpenTitan connectivity case advances beyond previous
+    `moore.concat_ref must be lowered before MooreToCore` failure.
+
+## 2026-02-27 - Registered math dialect in circt-lec for core MLIR parse
+
+- realization:
+  - after unblocking connectivity lowering, the next OpenTitan failure was in
+    `circt-lec` parsing `connectivity.core.mlir` due to unregistered
+    `math.ipowi` (`Dialect 'math' not found`).
+
+- TDD:
+  - added `test/Tools/circt-lec/lec-math-dialect-parse.mlir`.
+  - test failed before fix with missing `math` dialect parse error.
+
+- implemented:
+  - updated `tools/circt-lec/circt-lec.cpp` to include
+    `mlir/Dialect/Math/IR/Math.h`.
+  - registered `mlir::math::MathDialect` in the `circt-lec` dialect registry.
+
+- validation:
+  - `llvm-lit test/Tools/circt-lec/lec-math-dialect-parse.mlir` passes.
+  - OpenTitan connectivity flow now reaches LEC execution for the targeted case
+    and no longer fails at parse-time due to missing `math` dialect.
+
+## 2026-02-27 - UVM run_phase forever cleanup investigation (execute_phase waiters)
+
+- realization:
+  - `test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv` still reproduces
+    max-time exit (`DROP_DONE` only; no `REPORT_DONE` / `AFTER_RUN_TEST`).
+  - direct traced run confirms persistent timed wait(condition) pollers:
+    `fork_7..15_branch_0` (`uvm_phase::wait_for_state`) repeatedly polling
+    two phase-state addresses (`0x10032f34`, `0x10033274`) until max-time.
+
+- root-cause findings from this iteration:
+  - execute-phase objection polling reaches zero and completion path runs, but
+    stale `wait_for_state` pollers continue scheduling timed callbacks.
+  - at cleanup time, those pollers can have empty `currentFuncName`, so
+    function-name-only stale waiter filtering is unreliable.
+  - aggressive structural kill attempts (by parent/waitCondition state) can
+    remove required phase-hopper waiters and cause premature simulation exit
+    (~21ns) without entering report/final phases.
+
+- attempted changes and outcome:
+  - tried structural stale-waiter cleanup + owner wakeup; this removed the
+    max-time hang but regressed phase progression (no report phase).
+  - reverted those unsafe cleanup changes and restored baseline behavior.
+
+- validation snapshot:
+  - rebuilt `circt-sim` after each attempt.
+  - reran non-`XFAIL` lit:
+    `build_test/bin/llvm-lit -j 1 -sv --xfail-not='CIRCT :: Tools/circt-sim/uvm-run-phase-forever-cleanup.sv' test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv`
+    => still fails at max-time with only `DROP_DONE`.
+
+- next-step hypothesis:
+  - fix should preserve UVM phase-hopper progression while draining stale
+    timed waiters; killing sibling waiters in bulk is not safe without
+    explicit phase-state/owner-resume semantics.
+
+## 2026-02-28 - VerifToSMT LEC dominance repair for graph-style forward refs/cycles
+
+- realization:
+  - targeted OpenTitan connectivity LEC advanced past temporal lowering, then
+    failed in `convert-verif-to-smt` with intra-block dominance errors in
+    generated `smt.solver` bodies.
+  - naive in-pattern region surgery previously crashed conversion driver; strict
+    topo-sort of source graph blocks also failed on cyclic dependency regions.
+
+- TDD:
+  - kept `test/Conversion/VerifToSMT/lec-graph-forward-ref.mlir` as the crash
+    reproducer.
+  - verified output validity by running `circt-opt --verify-each` on emitted
+    LEC MLIR from a real OpenTitan case.
+
+- implemented:
+  - in `LogicEquivalenceCheckingOpConversion`:
+    - detect forward refs in source blocks and attempt topo-sort when present.
+    - tolerate sort failure on cyclic graph regions (no hard failure in-pattern).
+    - tag generated LEC solvers with `circt.verif.lec_solver`.
+  - in `ConvertVerifToSMTPass`:
+    - added post-conversion `normalizeLECSolverBodyOrder(...)`.
+    - for tagged LEC solvers, try topo-sort solver body.
+    - on failure, rewrite forward uses via fresh `smt.declare_fun` placeholders
+      plus `smt.assert (smt.eq placeholder original)` constraints, then re-sort.
+    - remove the temporary LEC solver tag after normalization.
+
+- validation:
+  - `llvm-lit -sv` passes for:
+    - `test/Conversion/VerifToSMT/lec-graph-forward-ref.mlir`
+    - `test/Conversion/VerifToSMT/lec-float-arg.mlir`
+    - `test/Tools/circt-lec/construct-lec-graph-forward-ref.mlir`
+  - real OpenTitan `circt-lec --emit-mlir --approx-temporal` no longer fails
+    with dominance errors; emitted IR verifies with `circt-opt --verify-each`.
+
+## 2026-02-28 - OpenTitan LEC wrapper runtime budget/parity adjustments
+
+- realization:
+  - OpenTitan connectivity case
+    `connectivity::alert_handler_esc.csv:ALERT_HANDLER_PWRMGR_ESC_CLK`
+    remained flaky under wrapper defaults due infrastructure timeout budget,
+    even after semantic lowering fixes.
+  - measured behavior:
+    - with verifier enabled in `circt-lec`, large case pipelines exceeded the
+      300s per-command wrapper timeout.
+    - with `--verify-each=false`, the same MLIR conversion path completed.
+    - full connectivity case passed when timeout budget was raised to 600s.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_VERIFY_EACH_MODE=auto|on|off` (default `auto`).
+    - auto appends `--verify-each=false` unless user already set
+      `--verify-each` explicitly.
+    - raised default `CIRCT_TIMEOUT_SECS` from `300` to `600` for connectivity.
+  - `utils/run_opentitan_circt_lec.py`:
+    - added the same `LEC_VERIFY_EACH_MODE` handling (default `auto`) with
+      automatic `--verify-each=false` unless explicitly overridden.
+
+- tests added:
+  - `test/Tools/run-opentitan-connectivity-circt-lec-verify-each-auto.test`
+  - `test/Tools/run-opentitan-lec-verify-each-auto.test`
+
+- validation:
+  - `llvm-lit` suites pass for
+    - `run-opentitan-connectivity-circt-lec-*.test` (excluding pre-existing
+      `...top-override-source-prune.test` failure in this worktree),
+    - `run-opentitan-lec-*.test`.
+  - real OpenTitan replay:
+    - with 300s budget: still `CIRCT_LEC_TIMEOUT`.
+    - with 600s budget: case completes `PASS ... EQ`.
+
+## 2026-02-28 - Connectivity LEC resource-guard retry + real Z3 timing frontier
+
+- realization:
+  - OpenTitan connectivity LEC (`ast_clkmgr.csv`) can spend most wall time in
+    `circt-verilog`/`circt-lec` frontend lowering, not in Z3 solving.
+  - without retry, `circt-verilog` RSS guard failures caused expensive
+    split-and-retry churn for large connectivity batches.
+  - direct profiling on real case
+    `connectivity::ast_clkmgr.csv:AST_CLK_ES_IN` with `--run-smtlib` showed:
+    - total wall time ~99s,
+    - `Run SMT-LIB via z3` ~0.007s,
+    - dominant passes: `FlattenModules`, `Canonicalizer`, `Mem2RegPass`.
+
+- TDD:
+  - added regression
+    `test/Tools/run-opentitan-connectivity-circt-lec-resource-guard-auto-relax.test`.
+  - reproduces first-run `resource guard triggered: RSS ... exceeded limit ...`
+    and requires successful retry with `--max-rss-mb=24576`.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD` (`0|1`, default `1`).
+    - added `LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD_MAX_RSS_MB`
+      (default `24576`).
+    - added `LEC_VERILOG_AUTO_RELAX_RESOURCE_GUARD_RSS_LADDER_MB`
+      (comma-separated ladder).
+    - on retryable `circt-verilog` RSS guard failures, retries in-place with
+      next ladder `--max-rss-mb` instead of immediately splitting batches.
+    - preserves user-specified resource-guard policy (CLI/env pin disables
+      auto-relax mutation).
+    - mirrors initial RSS-guard failure log per case as
+      `circt-verilog.resource-guard-rss.log`.
+
+- validation:
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-resource-guard-auto-relax.test`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+    passes (24/24).
+  - real OpenTitan single-rule replay under real Z3:
+    `connectivity::ast_clkmgr.csv:AST_CLK_ES_IN` completes `PASS ... EQ`.
+
+## 2026-02-28 - UVM +UVM_TIMEOUT enforcement and array OOB sentinel handling
+
+- realization:
+  - `+UVM_TIMEOUT=...` could be parsed but still fail to terminate `run_phase` in some
+    `circt-sim` paths because execute-phase monitor interception changed join semantics.
+  - out-of-bounds fixed-array reads could alias in-range elements when ImportVerilog
+    lowered bounds checks through a truncated sentinel index (e.g. `4'hf` for 16 entries).
+
+- implemented:
+  - `lib/Runtime/uvm-core/src/base/uvm_root.svh`:
+    - apply timeout settings from `run_test` as well as phase build path.
+    - make timeout parsing robust for `+UVM_TIMEOUT=<time>,<YES|NO>` splitting.
+    - guard timeout application to run once.
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - add/enable detection of ImportVerilog OOB sentinel-index mux patterns.
+    - treat selected sentinel path as OOB in `hw.array_get` and `llhd.sig.array_get`
+      reads (return X), and as no-op in drives.
+
+- tests added:
+  - `test/Runtime/uvm/uvm_timeout_plusarg_test.sv`
+  - `test/Tools/circt-sim/array-get-oob-sentinel-index.sv`
+
+- validation:
+  - `llvm-lit -sv test/Runtime/uvm/uvm_timeout_plusarg_test.sv test/Tools/circt-sim/uvm-cmdline-get-arg-values.sv`
+  - `llvm-lit -sv test/Tools/circt-sim/array-get-oob-sentinel-index.sv`
+  - `llvm-lit -sv test/Tools/circt-sim/array-get-oob-sentinel-index.sv test/Tools/circt-sim/array-get-index-order.sv test/Tools/circt-sim/llhd-sig-array-get-dynamic.mlir test/Runtime/uvm/uvm_timeout_plusarg_test.sv test/Tools/circt-sim/uvm-cmdline-get-arg-values.sv`

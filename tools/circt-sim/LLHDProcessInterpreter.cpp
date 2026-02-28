@@ -192,6 +192,30 @@ static bool mapHWArrayIndexToLLVMIndex(hw::ArrayType arrayType, uint64_t hwIndex
   return true;
 }
 
+static bool isAllOnesIntegerConstant(Value value) {
+  if (auto hwConst = value.getDefiningOp<hw::ConstantOp>()) {
+    APInt c = hwConst.getValue();
+    return c.getBitWidth() > 0 && c.isAllOnes();
+  }
+  if (auto arithConst = value.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue())) {
+      APInt c = intAttr.getValue();
+      return c.getBitWidth() > 0 && c.isAllOnes();
+    }
+  }
+  return false;
+}
+
+static bool isZeroIntegerConstant(Value value) {
+  if (auto hwConst = value.getDefiningOp<hw::ConstantOp>())
+    return hwConst.getValue().isZero();
+  if (auto arithConst = value.getDefiningOp<arith::ConstantOp>()) {
+    if (auto intAttr = dyn_cast<IntegerAttr>(arithConst.getValue()))
+      return intAttr.getValue().isZero();
+  }
+  return false;
+}
+
 static std::string sanitizeSvaTraceName(llvm::StringRef name) {
   std::string out;
   out.reserve(name.size());
@@ -350,6 +374,13 @@ static bool matchesUnmappedNamePattern(llvm::StringRef name,
   return name == pattern;
 }
 
+static bool shouldDenyUnmappedNativeCallByDefault(llvm::StringRef calleeName) {
+  // Package-qualified UVM helpers often depend on interpreter-side behavior
+  // (interceptors, pointer canonicalization, and scheduler integration). If a
+  // direct func.call has no FuncId mapping, keep these interpreted by default.
+  return calleeName.starts_with("uvm_pkg::");
+}
+
 static bool shouldDenyUnmappedNativeCall(llvm::StringRef calleeName) {
   static bool denyAllUnmappedNative =
       std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL") != nullptr;
@@ -367,7 +398,10 @@ static bool shouldDenyUnmappedNativeCall(llvm::StringRef calleeName) {
     return false;
 
   // Strict mode: deny all unmapped direct native calls.
-  return denyAllUnmappedNative;
+  if (denyAllUnmappedNative)
+    return true;
+
+  return shouldDenyUnmappedNativeCallByDefault(calleeName);
 }
 
 // circt-sim evaluates clocked assertions/assumptions through the LTL runtime
@@ -14708,6 +14742,11 @@ arith_dispatch:
                InterpretedValue::makeX(getTypeWidth(arrayGetOp.getType())));
       return success();
     }
+    if (isImportedArrayIndexOutOfBoundsSentinel(procId, arrayGetOp.getIndex())) {
+      setValue(procId, arrayGetOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(arrayGetOp.getType())));
+      return success();
+    }
 
     auto arrayType = cast<hw::ArrayType>(arrayGetOp.getInput().getType());
     unsigned elementWidth = getTypeWidth(arrayType.getElementType());
@@ -16961,6 +17000,15 @@ LogicalResult LLHDProcessInterpreter::interpretProbe(ProcessId procId,
         LLVM_DEBUG(llvm::dbgs() << "  Probe array element with X index\n");
         return success();
       }
+      if (isImportedArrayIndexOutOfBoundsSentinel(procId,
+                                                  sigArrayGetOp.getIndex())) {
+        unsigned width = getTypeWidth(probeOp.getResult().getType());
+        setValue(procId, probeOp.getResult(), InterpretedValue::makeX(width));
+        LLVM_DEBUG(
+            llvm::dbgs()
+            << "  Probe array element with imported OOB sentinel index\n");
+        return success();
+      }
       uint64_t index = indexVal.getUInt64();
 
       // Get the current value of the parent signal, preferring pending epsilon
@@ -18421,6 +18469,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               LLVM_DEBUG(llvm::dbgs() << "  Warning: X index in array drive\n");
               return success(); // Don't drive with X index
             }
+            if (isImportedArrayIndexOutOfBoundsSentinel(
+                    procId, sigArrayGetOp.getIndex())) {
+              LLVM_DEBUG(
+                  llvm::dbgs()
+                  << "  Warning: imported OOB sentinel index in array drive\n");
+              return success();
+            }
             uint64_t index = indexVal.getUInt64();
 
             // Get array element type and width
@@ -18547,6 +18602,9 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                       getValue(procId, sigArrayGetOp.getIndex());
                   if (idxVal.isX())
                     return success();
+                  if (isImportedArrayIndexOutOfBoundsSentinel(
+                          procId, sigArrayGetOp.getIndex()))
+                    return success();
                   uint64_t idx = idxVal.getUInt64();
                   if (idx >= arrType.getNumElements())
                     return success();
@@ -18670,6 +18728,13 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       if (indexVal.isX()) {
         LLVM_DEBUG(llvm::dbgs() << "  Warning: X index in array drive\n");
         return success(); // Don't drive with X index
+      }
+      if (isImportedArrayIndexOutOfBoundsSentinel(procId,
+                                                  sigArrayGetOp.getIndex())) {
+        LLVM_DEBUG(
+            llvm::dbgs()
+            << "  Warning: imported OOB sentinel index in array drive\n");
+        return success();
       }
       uint64_t index = indexVal.getUInt64();
 
@@ -26257,6 +26322,60 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 // Value Management
 //===----------------------------------------------------------------------===//
 
+bool LLHDProcessInterpreter::isImportedArrayIndexOutOfBoundsSentinel(
+    ProcessId procId, Value indexValue) {
+  auto mux = indexValue.getDefiningOp<comb::MuxOp>();
+  if (!mux)
+    return false;
+
+  Value inRangeIndex;
+  bool sentinelIsTrueValue = false;
+  if (isAllOnesIntegerConstant(mux.getTrueValue())) {
+    inRangeIndex = mux.getFalseValue();
+    sentinelIsTrueValue = true;
+  } else if (isAllOnesIntegerConstant(mux.getFalseValue())) {
+    inRangeIndex = mux.getTrueValue();
+  } else {
+    return false;
+  }
+
+  auto lowExtract = inRangeIndex.getDefiningOp<comb::ExtractOp>();
+  if (!lowExtract)
+    return false;
+  if (lowExtract.getLowBit() != 0)
+    return false;
+  if (lowExtract.getType() != indexValue.getType())
+    return false;
+
+  auto condCmp = mux.getCond().getDefiningOp<comb::ICmpOp>();
+  if (!condCmp)
+    return false;
+  auto pred = condCmp.getPredicate();
+  if (pred != comb::ICmpPredicate::eq && pred != comb::ICmpPredicate::ne)
+    return false;
+
+  auto lhsExtract = condCmp.getLhs().getDefiningOp<comb::ExtractOp>();
+  auto rhsExtract = condCmp.getRhs().getDefiningOp<comb::ExtractOp>();
+  comb::ExtractOp highExtract;
+  if (lhsExtract && isZeroIntegerConstant(condCmp.getRhs()))
+    highExtract = lhsExtract;
+  else if (rhsExtract && isZeroIntegerConstant(condCmp.getLhs()))
+    highExtract = rhsExtract;
+  else
+    return false;
+
+  if (highExtract.getInput() != lowExtract.getInput())
+    return false;
+  if (highExtract.getLowBit() != getTypeWidth(indexValue.getType()))
+    return false;
+
+  InterpretedValue condVal = getValue(procId, mux.getCond());
+  if (condVal.isX())
+    return true;
+  bool condTrue = condVal.getUInt64() != 0;
+  return sentinelIsTrueValue ? condTrue : !condTrue;
+}
+
 InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
                                                    Value value) {
   // Use the cached active process state when available to avoid
@@ -28507,9 +28626,27 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       }
     }
 
+    bool skipMonitorInterceptForTimeout = false;
+    if (phaseAddr != 0) {
+      static bool hasUvmTimeoutPlusarg = []() {
+        const char *env = std::getenv("CIRCT_UVM_ARGS");
+        if (!env)
+          env = std::getenv("UVM_ARGS");
+        return env && llvm::StringRef(env).contains("+UVM_TIMEOUT=");
+      }();
+      if (hasUvmTimeoutPlusarg) {
+        uint64_t impAddr = readUvmPhaseImpAddress(procId, phaseAddr);
+        auto orderIt = functionPhaseImpOrder.find(impAddr);
+        // Function-phase order 4 corresponds to run_phase IMP.
+        skipMonitorInterceptForTimeout =
+            orderIt != functionPhaseImpOrder.end() && orderIt->second == 4;
+      }
+    }
+
     if (!disableExecutePhaseMonitorIntercept &&
         joinType == ForkJoinType::JoinAny && phaseAddr != 0 &&
-        (hadExplicitBlockingMap || isExecutePhaseMonitorForkShape)) {
+        (hadExplicitBlockingMap || isExecutePhaseMonitorForkShape) &&
+        !skipMonitorInterceptForTimeout) {
       maybeTraceForkIntercept(procId, joinTypeToString(joinType),
                               forkOp.getBranches().size(), phaseAddr,
                               hadExplicitBlockingMap,
@@ -41844,7 +41981,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   } else if (std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL")) {
     llvm::errs() << "[circt-sim] Unmapped native func.call policy: deny-all\n";
   } else {
-    llvm::errs() << "[circt-sim] Unmapped native func.call policy: default allow-all\n";
+    llvm::errs() << "[circt-sim] Unmapped native func.call policy: default deny uvm_pkg::* (allow others)\n";
   }
 
   // Parse deny list: CIRCT_AOT_DENY_FID=123,456,789
@@ -41989,7 +42126,14 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     if (!allowNativeUvmReporting &&
         (name.contains("::uvm_report_handler::") ||
          name.contains("::uvm_report_object::") ||
-         name.contains("process_report_message")))
+         name.contains("process_report_message") ||
+         name.contains("::uvm_printer::") ||
+         name.contains("::uvm_table_printer::") ||
+         name.contains("::uvm_tree_printer::") ||
+         name.contains("::uvm_line_printer::") ||
+         name.contains("::uvm_printer_element_proxy::") ||
+         name.contains("::uvm_object::print") ||
+         name.contains("::print_topology")))
       return true;
     // Random-seeding paths build dynamic strings and rely on interpreter-side
     // pointer lifetime behavior.
@@ -42026,6 +42170,10 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
       return true;
     if (!allowNativeUvmPhaseGraph &&
         (name.contains("uvm_phase::") ||
+         name.contains("uvm_phase_hopper::") ||
+         name.contains("uvm_task_phase::m_traverse") ||
+         name.contains("uvm_topdown_phase::m_traverse") ||
+         name.contains("uvm_bottomup_phase::m_traverse") ||
          name.contains("uvm_component::set_domain")))
       return true;
     // Component hierarchy mutators update Moore-assoc-backed name/child maps.
