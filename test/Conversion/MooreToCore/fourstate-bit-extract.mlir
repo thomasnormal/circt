@@ -109,6 +109,32 @@ moore.module @extract_ref_fourstate(out out : !moore.l1) {
   moore.output %bit : !moore.l1
 }
 
+// Test static out-of-bounds bit extraction from 4-state signal.
+// Full OOB extract_ref should not alias an in-range bit.
+// CHECK-LABEL: hw.module @extract_ref_fourstate_oob
+// CHECK: [[VAL1:%.+]] = hw.constant false
+// CHECK: [[UNK1:%.+]] = hw.constant true
+// CHECK: [[OOB1:%.+]] = hw.struct_create ([[VAL1]], [[UNK1]]) : !hw.struct<value: i1, unknown: i1>
+// CHECK: llhd.sig [[OOB1]] : !hw.struct<value: i1, unknown: i1>
+moore.module @extract_ref_fourstate_oob(out out : !moore.l1) {
+  %sig = moore.variable : !moore.ref<l8>
+  %bit_ref = moore.extract_ref %sig from 8 : !moore.ref<l8> -> !moore.ref<l1>
+  %bit = moore.read %bit_ref : !moore.ref<l1>
+  moore.output %bit : !moore.l1
+}
+
+// Test static out-of-bounds bit extraction from 2-state signal.
+// Full OOB extract_ref should read as 0 for two-state types.
+// CHECK-LABEL: hw.module @extract_ref_twostate_oob
+// CHECK: [[ZERO1:%.+]] = hw.constant false
+// CHECK: llhd.sig [[ZERO1]] : i1
+moore.module @extract_ref_twostate_oob(out out : !moore.i1) {
+  %sig = moore.variable : !moore.ref<i8>
+  %bit_ref = moore.extract_ref %sig from 8 : !moore.ref<i8> -> !moore.ref<i1>
+  %bit = moore.read %bit_ref : !moore.ref<i1>
+  moore.output %bit : !moore.i1
+}
+
 // Test static slice extraction from 4-state signal
 // CHECK-LABEL: hw.module @extract_ref_fourstate_slice
 // CHECK-SAME: (out out : !hw.struct<value: i4, unknown: i4>)

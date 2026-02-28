@@ -9315,3 +9315,34 @@
 
 - validation:
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter='(syscall-queue-stochastic.sv|syscall-q-full.sv|syscall-pld-sync-array.sv|syscall-pld-array.sv)'`
+
+## 2026-02-28 - MooreToCore static ExtractRef OOB fallback semantics
+
+- realization:
+  - `ExtractRefOpConversion` truncated static extract indices to
+    `log2(input_width)` and then emitted `llhd.sig.extract/array_get`, which
+    could alias OOB indices to in-range positions (e.g. index `8` on `[7:0]`
+    becoming index `0`).
+  - this was reproducible in conversion IR and matched open gap entry 1298.
+
+- TDD:
+  - added OOB cases to `test/Conversion/MooreToCore/fourstate-bit-extract.mlir`:
+    - `extract_ref_fourstate_oob`
+    - `extract_ref_twostate_oob`
+  - baseline failure before fix: lowered IR still used truncated in-range
+    extracts (`llhd.sig.extract ... from %c0_i3`).
+
+- implemented:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`:
+    - introduced `createOutOfBoundsExtractValue` helper
+      (`X` for four-state domains, `0` for two-state).
+    - in `ExtractRefOpConversion`, added bounds checks for static
+      struct/int/array extract-ref lowering.
+    - on OOB, lower to an explicit fallback `llhd.sig` reference instead of
+      truncated index extraction.
+    - removed stale ExtractRef OOB TODO and closed gap entry 1298 in
+      `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`.
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/MooreToCore/fourstate-bit-extract.mlir`

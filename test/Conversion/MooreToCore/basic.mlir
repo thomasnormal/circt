@@ -436,9 +436,10 @@ moore.module @ExtractOutOfBounds4State(in %in : !moore.l2, out out : !moore.l4) 
 }
 
 // CHECK-LABEL: hw.module @ExtractRefOutOfBounds4State
-// CHECK: llhd.sig.struct_extract %{{.+}}["value"] : <!hw.struct<value: i2, unknown: i2>>
-// CHECK: llhd.sig.struct_extract %{{.+}}["unknown"] : <!hw.struct<value: i2, unknown: i2>>
-// CHECK: hw.struct_create (%{{.+}}, %{{.+}}) : !hw.struct<value: i2, unknown: i2>
+// CHECK: [[VAL0:%.+]] = hw.constant 0 : i2
+// CHECK: [[UNK1:%.+]] = hw.constant -1 : i2
+// CHECK: [[OOB:%.+]] = hw.struct_create ([[VAL0]], [[UNK1]]) : !hw.struct<value: i2, unknown: i2>
+// CHECK: llhd.sig [[OOB]] : !hw.struct<value: i2, unknown: i2>
 moore.module @ExtractRefOutOfBounds4State(in %in : !moore.ref<l2>, out out : !moore.l2) {
   %0 = moore.extract_ref %in from 1 : !moore.ref<l2> -> !moore.ref<l2>
   %1 = moore.read %0 : !moore.ref<l2>

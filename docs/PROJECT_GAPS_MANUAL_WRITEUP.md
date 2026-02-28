@@ -3895,8 +3895,8 @@ Same four-valued-core dependency as entry 1292, now in net initialization/handli
 ### [x] 1297. `lib/Conversion/MooreToCore/MooreToCore.cpp:7819`
 Status update (2026-02-28): this entry is stale and closed. Four-state extract lowering already models out-of-bounds portions via unknown-mask fill, and runtime regression `test/Tools/circt-sim/dyn-bit-select-oob-read-x.sv` confirms dynamic OOB reads produce `X` for `logic` and `0` for `bit`.
 
-### [ ] 1298. `lib/Conversion/MooreToCore/MooreToCore.cpp:8108`
-`ExtractRef` lowering still lacks complete out-of-bounds handling. What is missing is bounds-aware lowering semantics for reference extraction.
+### [x] 1298. `lib/Conversion/MooreToCore/MooreToCore.cpp:8108`
+Status update (2026-02-28): this entry is closed in this workspace for static `ExtractRef` lowering. Full/partial out-of-bounds static extract-ref reads now lower to explicit fallback references (`X` for four-state, `0` for two-state) instead of aliasing truncated in-range bits; covered by `test/Conversion/MooreToCore/fourstate-bit-extract.mlir` OOB cases.
 
 ### [ ] 1299. `lib/Conversion/MooreToCore/MooreToCore.cpp:8878`
 `DynExtractRef` lowering has the same unresolved out-of-bounds handling gap as entry 1298.

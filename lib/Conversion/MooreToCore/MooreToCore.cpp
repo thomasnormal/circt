@@ -3868,6 +3868,31 @@ static Value createZeroValue(Type type, Location loc,
   return rewriter.createOrFold<hw::BitcastOp>(loc, type, constZero);
 }
 
+/// Create the value observed when a packed extract-ref read is fully or
+/// partially out of bounds. Four-state domains yield unknowns, two-state
+/// domains yield zero.
+static Value createOutOfBoundsExtractValue(Type type, Location loc,
+                                           ConversionPatternRewriter &rewriter) {
+  if (isFourStateStructType(type)) {
+    auto structTy = cast<hw::StructType>(type);
+    auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
+    auto unknownTy = dyn_cast<IntegerType>(structTy.getFieldType("unknown"));
+    if (!valueTy || !unknownTy || valueTy.getWidth() != unknownTy.getWidth())
+      return {};
+    auto valueZero =
+        hw::ConstantOp::create(rewriter, loc, IntegerAttr::get(valueTy, 0));
+    auto unknownOnes = hw::ConstantOp::create(
+        rewriter, loc,
+        IntegerAttr::get(unknownTy, APInt::getAllOnes(unknownTy.getWidth())));
+    return createFourStateStruct(rewriter, loc, valueZero, unknownOnes);
+  }
+
+  if (Value allX = createAllXArrayOfFourStateValue(type, loc, rewriter))
+    return allX;
+
+  return createZeroValue(type, loc, rewriter);
+}
+
 struct ClassPropertyRefOpConversion
     : public OpConversionPattern<circt::moore::ClassPropertyRefOp> {
   ClassPropertyRefOpConversion(TypeConverter &tc, MLIRContext *ctx,
@@ -8255,9 +8280,38 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
   LogicalResult
   matchAndRewrite(ExtractRefOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
-    // TODO: properly handle out-of-bounds accesses
     auto loc = op.getLoc();
     Type resultType = typeConverter->convertType(op.getResult().getType());
+    auto resultRefType = dyn_cast<llhd::RefType>(resultType);
+    auto resultNestedType =
+        resultRefType ? resultRefType.getNestedType() : Type{};
+
+    auto getLogicalBitWidth = [&](Type type) -> std::optional<int64_t> {
+      if (isFourStateStructType(type)) {
+        auto structTy = cast<hw::StructType>(type);
+        auto valueTy = dyn_cast<IntegerType>(structTy.getFieldType("value"));
+        if (!valueTy)
+          return std::nullopt;
+        return static_cast<int64_t>(valueTy.getWidth());
+      }
+      if (auto intTy = dyn_cast<IntegerType>(type))
+        return static_cast<int64_t>(intTy.getWidth());
+      return std::nullopt;
+    };
+
+    auto replaceWithOutOfBoundsRef = [&]() -> LogicalResult {
+      if (!resultRefType)
+        return rewriter.notifyMatchFailure(
+            loc, "result type must be llhd.ref for OOB fallback");
+      Value init = createOutOfBoundsExtractValue(resultNestedType, loc, rewriter);
+      if (!init)
+        return rewriter.notifyMatchFailure(loc,
+                                           "failed to build OOB fallback value");
+      auto signal = llhd::SignalOp::create(rewriter, loc, resultType,
+                                           StringAttr{}, init);
+      rewriter.replaceOp(op, signal.getResult());
+      return success();
+    };
 
     // Handle LLVM pointer inputs (for fixed-size arrays containing LLVM types,
     // like string arrays)
@@ -8315,12 +8369,21 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
       if (!packedWidth || *packedWidth == 0)
         return failure();
 
-      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
       if (!resultRefType)
         return rewriter.notifyMatchFailure(
             loc, "result type must be llhd.ref for struct extraction");
 
       unsigned width = *packedWidth;
+      auto resultLogicalWidth = getLogicalBitWidth(resultRefType.getNestedType());
+      if (!resultLogicalWidth)
+        return rewriter.notifyMatchFailure(
+            loc, "result type must be integer/four-state llhd.ref");
+      int64_t low = adaptor.getLowBit();
+      int64_t high = low + *resultLogicalWidth;
+      if (low < 0 || low >= static_cast<int64_t>(width) ||
+          high > static_cast<int64_t>(width))
+        return replaceWithOutOfBoundsRef();
+
       Value lowBit =
           hw::ConstantOp::create(rewriter, op.getLoc(),
                                  rewriter.getIntegerType(llvm::Log2_64_Ceil(width)),
@@ -8380,6 +8443,14 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
       int64_t width = hw::getBitWidth(inputType);
       if (width == -1)
         return failure();
+      auto resultLogicalWidth = getLogicalBitWidth(resultNestedType);
+      if (!resultLogicalWidth)
+        return rewriter.notifyMatchFailure(
+            loc, "result type must be integer/four-state llhd.ref");
+      int64_t low = adaptor.getLowBit();
+      int64_t high = low + *resultLogicalWidth;
+      if (low < 0 || low >= width || high > width)
+        return replaceWithOutOfBoundsRef();
 
       Value lowBit = hw::ConstantOp::create(
           rewriter, op.getLoc(),
@@ -8391,17 +8462,30 @@ struct ExtractRefOpConversion : public OpConversionPattern<ExtractRefOp> {
     }
 
     if (auto arrType = dyn_cast<hw::ArrayType>(inputType)) {
+      // If the result type is not the same as the array's element type, then
+      // it has to be a slice.
+      if (!resultRefType)
+        return rewriter.notifyMatchFailure(
+            op.getLoc(), "result type must be llhd.ref for array extraction");
+
+      int64_t low = adaptor.getLowBit();
+      int64_t arraySize = static_cast<int64_t>(arrType.getNumElements());
+      int64_t sliceLen = 1;
+      if (arrType.getElementType() != resultRefType.getNestedType()) {
+        auto sliceTy = dyn_cast<hw::ArrayType>(resultRefType.getNestedType());
+        if (!sliceTy)
+          return rewriter.notifyMatchFailure(
+              op.getLoc(), "expected array slice result type");
+        sliceLen = static_cast<int64_t>(sliceTy.getNumElements());
+      }
+      int64_t high = low + sliceLen;
+      if (low < 0 || low >= arraySize || high > arraySize)
+        return replaceWithOutOfBoundsRef();
+
       Value lowBit = hw::ConstantOp::create(
           rewriter, op.getLoc(),
           rewriter.getIntegerType(llvm::Log2_64_Ceil(arrType.getNumElements())),
           adaptor.getLowBit());
-
-      // If the result type is not the same as the array's element type, then
-      // it has to be a slice.
-      auto resultRefType = dyn_cast<llhd::RefType>(resultType);
-      if (!resultRefType)
-        return rewriter.notifyMatchFailure(
-            op.getLoc(), "result type must be llhd.ref for array extraction");
       if (arrType.getElementType() != resultRefType.getNestedType()) {
         rewriter.replaceOpWithNewOp<llhd::SigArraySliceOp>(
             op, resultType, adaptor.getInput(), lowBit);
