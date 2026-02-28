@@ -22112,19 +22112,20 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         found = true;
       }
     }
-    // Only fall back when routing is fully unresolved (no queue hint).
-    // Weak hints may reference alias objects; scanning globally in that case
-    // can dequeue another port's transaction.
-    if (!found && allowGlobalFallbackSearch) {
-      for (auto &[qAddr, fifo] : sequencerItemFifo) {
-        if (!fifo.empty()) {
-          seqrQueueAddr = qAddr;
-          itemAddr = fifo.front();
-          fifo.pop_front();
-          found = true;
-          fromFallbackSearch = true;
-          break;
-        }
+    // Allow unresolved fallback dequeue only in strict single-queue setups.
+    // Once multiple queue maps exist, global scans can cross-pop unrelated
+    // sequencer traffic and corrupt type routing.
+    bool allowSingleQueueFallback =
+        allowGlobalFallbackSearch && !isTryNextItem &&
+        sequencerItemFifo.size() == 1;
+    if (!found && allowSingleQueueFallback) {
+      auto it = sequencerItemFifo.begin();
+      if (it != sequencerItemFifo.end() && !it->second.empty()) {
+        seqrQueueAddr = it->first;
+        itemAddr = it->second.front();
+        it->second.pop_front();
+        found = true;
+        fromFallbackSearch = true;
       }
     }
 
