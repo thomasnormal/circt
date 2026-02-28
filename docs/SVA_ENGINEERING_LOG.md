@@ -9299,3 +9299,19 @@
 
 - validation:
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=dyn-bit-select-oob-read-x.sv`
+
+## 2026-02-28 - circt-sim legacy unsupported-syscall test-entry cleanup
+
+- realization:
+  - gap entries 1095/1103/1104/1105 were line-level matches on tests that are
+    intentionally asserting diagnostics for legacy unsupported syscalls.
+  - these are policy/coverage tests, not unresolved implementation debt at the
+    cited lines.
+
+- implemented:
+  - `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`:
+    - marked entries 1095, 1103, 1104, and 1105 as closed (`[x]`) with stale
+      line-level tracker notes.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter='(syscall-queue-stochastic.sv|syscall-q-full.sv|syscall-pld-sync-array.sv|syscall-pld-array.sv)'`

@@ -3286,8 +3286,8 @@ Status update (2026-02-28): same closure as entry 422. Focused regression now pa
 ### [x] 1094. `test/Tools/circt-sim/syscall-fread.sv:2`
 Status update (2026-02-28): same closure as entry 441. Focused regression now passes, so this test is no longer evidence of missing `$fread` support.
 
-### [ ] 1095. `test/Tools/circt-sim/syscall-queue-stochastic.sv:8`
-This is an expected diagnostic test for intentionally unsupported legacy stochastic queue tasks. It is policy/coverage text, not a new actionable gap at this line.
+### [x] 1095. `test/Tools/circt-sim/syscall-queue-stochastic.sv:8`
+Status update (2026-02-28): this line-level entry is stale. It is expected diagnostic coverage for intentionally unsupported legacy stochastic queue tasks, and focused regression still passes.
 
 ### [x] 1096. `test/Tools/circt-sim/syscall-feof.sv:2`
 Status update (2026-02-28): same closure as entry 455. Focused regression now passes and does not reproduce the previously documented integration failure.
@@ -3310,14 +3310,14 @@ Prettification/wire-spilling currently skips procedural regions entirely. What i
 ### [ ] 1102. `lib/Conversion/ExportVerilog/PrepareForEmission.cpp:1210`
 Balanced-tree lowering currently keys off `Commutative`, which is broader than the intended “fully associative” condition. What is missing is a correct trait/eligibility criterion for safe variadic balancing.
 
-### [ ] 1103. `test/Tools/circt-sim/syscall-q-full.sv:8`
-This is an intentional expected-error test for unsupported legacy stochastic queue tasks. It is policy coverage, not a new unresolved gap at this line.
+### [x] 1103. `test/Tools/circt-sim/syscall-q-full.sv:8`
+Status update (2026-02-28): this line-level entry is stale. It is expected-error coverage for intentionally unsupported legacy stochastic queue tasks, and focused regression still passes.
 
-### [ ] 1104. `test/Tools/circt-sim/syscall-pld-sync-array.sv:14`
-Same as entry 1103: expected diagnostic coverage for unsupported legacy PLD array tasks, non-actionable by itself.
+### [x] 1104. `test/Tools/circt-sim/syscall-pld-sync-array.sv:14`
+Status update (2026-02-28): this line-level entry is stale. It is expected diagnostic coverage for unsupported legacy PLD array tasks, and focused regression still passes.
 
-### [ ] 1105. `test/Tools/circt-sim/syscall-pld-array.sv:14`
-Same as entry 1103: expected unsupported-legacy diagnostic test, not standalone debt.
+### [x] 1105. `test/Tools/circt-sim/syscall-pld-array.sv:14`
+Status update (2026-02-28): this line-level entry is stale. It is expected unsupported-legacy diagnostic coverage, and focused regression still passes.
 
 ### [x] 1106. `test/Tools/circt-sim/syscall-monitor.sv:2`
 Status update (2026-02-28): same closure as entry 432. Focused regression now passes and no longer demonstrates one-shot-only monitor behavior.
