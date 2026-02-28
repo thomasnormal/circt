@@ -1,8 +1,6 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
 // REQUIRES: slang
-// XFAIL: *
-// Slang currently rejects open-ended `$` bounds for unary eventually/always.
 
 module SVAOpenRangeUnaryRepeat(input bit a);
   // CHECK-LABEL: moore.module @SVAOpenRangeUnaryRepeat
@@ -27,7 +25,8 @@ module SVAOpenRangeUnaryRepeat(input bit a);
   // CHECK: verif.assert [[SE_DELAY_OPEN]] : !ltl.sequence
   assert property (eventually [2:$] a);
 
-  // CHECK: [[SA_DELAY_OPEN:%.+]] = ltl.delay %[[TRUE]], 2, 0 : i1
+  // CHECK: [[ONE_BOOL:%.+]] = moore.to_builtin_bool %{{.+}} : i1
+  // CHECK: [[SA_DELAY_OPEN:%.+]] = ltl.delay [[ONE_BOOL]], 2, 0 : i1
   // CHECK: [[SA_SHIFTED:%.+]] = ltl.implication [[SA_DELAY_OPEN]], [[CONV_A]] : !ltl.sequence, i1
   // CHECK: [[SA_STRONG_DELAY:%.+]] = ltl.and [[SA_DELAY_OPEN]], [[SA_SHIFTED]] : !ltl.sequence, !ltl.property
   // CHECK: [[SA_NEG:%.+]] = ltl.not [[SA_STRONG_DELAY]] : !ltl.property
@@ -36,7 +35,9 @@ module SVAOpenRangeUnaryRepeat(input bit a);
   // CHECK: verif.assert [[SA_STRONG]] : !ltl.property
   assert property (s_always [2:$] a);
 
-  // CHECK: [[A_NEG:%.+]] = ltl.not [[SA_SHIFTED]] : !ltl.property
+  // CHECK: [[A_DELAY_OPEN:%.+]] = ltl.delay %[[TRUE]], 2, 0 : i1
+  // CHECK: [[A_SHIFTED:%.+]] = ltl.implication [[A_DELAY_OPEN]], [[CONV_A]] : !ltl.sequence, i1
+  // CHECK: [[A_NEG:%.+]] = ltl.not [[A_SHIFTED]] : !ltl.property
   // CHECK: [[A_EVENTUALLY:%.+]] = ltl.eventually [[A_NEG]] {ltl.weak} : !ltl.property
   // CHECK: [[A_WEAK:%.+]] = ltl.not [[A_EVENTUALLY]] : !ltl.property
   // CHECK: verif.assert [[A_WEAK]] : !ltl.property

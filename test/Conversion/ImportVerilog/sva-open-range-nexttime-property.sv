@@ -1,7 +1,5 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
-// XFAIL: *
-// Slang currently rejects open-ended `$` bounds for `nexttime` forms.
 
 module SVAOpenRangeNexttimeProperty(input logic clk, a, b, c, d);
   property p;
@@ -13,8 +11,11 @@ module SVAOpenRangeNexttimeProperty(input logic clk, a, b, c, d);
   // CHECK: %[[T:.*]] = hw.constant true
   // CHECK: %[[D2:.*]] = ltl.delay %[[T]], 2, 0 : i1
   // CHECK: %[[P2:.*]] = ltl.implication %[[D2]], %{{.*}} : !ltl.sequence, !ltl.property
-  // CHECK: %[[E2:.*]] = ltl.eventually %[[P2]] {ltl.weak} : !ltl.property
-  // CHECK: verif.assert %[[E2]] : !ltl.property
+  // CHECK: %[[N2:.*]] = ltl.not %[[P2]] : !ltl.property
+  // CHECK: %[[E2:.*]] = ltl.eventually %[[N2]] {ltl.weak} : !ltl.property
+  // CHECK: %[[W2:.*]] = ltl.not %[[E2]] : !ltl.property
+  // CHECK: %[[NW2:.*]] = ltl.not %[[W2]] : !ltl.property
+  // CHECK: verif.assert %[[NW2]] : !ltl.property
   assert property (nexttime [2:$] p);
 
   // s_nexttime[m:$] is strong and should require eventual satisfaction
