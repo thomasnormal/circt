@@ -5764,22 +5764,28 @@ struct CovergroupSampleOpConversion
       return hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 0);
     };
 
-    // Collect i64 values for cross sampling
+    // Collect i64 values for cross sampling.
     SmallVector<Value> i64Values;
     SmallVector<Value> cpValidMaskValues;
     int32_t numValues = adaptor.getValues().size();
+    bool sawFourStateSampleValue = false;
 
     // Sample each value.
     int32_t cpIndex = 0;
     for (Value val : adaptor.getValues()) {
       // Convert value to i64 for the runtime call.
-      // For 4-state types (hw.struct<value: iN, unknown: iN>), extract the
-      // value field since coverage only cares about the actual value bits.
       Value i64Val;
+      Value cpValidCond =
+          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+      bool needsSampleGuard = false;
       if (isFourStateStructType(val.getType())) {
+        // For 4-state types (hw.struct<value: iN, unknown: iN>), extract both
+        // fields and only sample when all unknown bits are zero.
+        sawFourStateSampleValue = true;
         auto structTy = cast<hw::StructType>(val.getType());
-        Value valueField = hw::StructExtractOp::create(
-            rewriter, loc, val, "value");
+        Value valueField = hw::StructExtractOp::create(rewriter, loc, val, "value");
+        Value unknownField =
+            hw::StructExtractOp::create(rewriter, loc, val, "unknown");
         unsigned width = structTy.getElements()[0].type.getIntOrFloatBitWidth();
         if (width < 64)
           i64Val = arith::ExtUIOp::create(rewriter, loc, i64Ty, valueField);
@@ -5787,6 +5793,14 @@ struct CovergroupSampleOpConversion
           i64Val = arith::TruncIOp::create(rewriter, loc, i64Ty, valueField);
         else
           i64Val = valueField;
+
+        Value unknownZero =
+            hw::ConstantOp::create(rewriter, loc, unknownField.getType(), 0);
+        Value isKnown = comb::ICmpOp::create(
+            rewriter, loc, comb::ICmpPredicate::eq, unknownField, unknownZero);
+        cpValidCond =
+            comb::AndOp::create(rewriter, loc, cpValidCond, isKnown, false);
+        needsSampleGuard = true;
       } else if (val.getType().isInteger(64)) {
         i64Val = val;
       } else if (val.getType().isIntOrIndex()) {
@@ -5805,21 +5819,22 @@ struct CovergroupSampleOpConversion
                                           rewriter.getI64IntegerAttr(0));
       }
 
+      if (cpIndex < static_cast<int32_t>(iffConditions.size())) {
+        Value iffCond = normalizeIffCond(iffConditions[cpIndex]);
+        cpValidCond =
+            comb::AndOp::create(rewriter, loc, cpValidCond, iffCond, false);
+        needsSampleGuard = true;
+      }
+
       i64Values.push_back(i64Val);
-      Value cpValidCond =
-          hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
-      if (cpIndex < static_cast<int32_t>(iffConditions.size()))
-        cpValidCond = normalizeIffCond(iffConditions[cpIndex]);
       cpValidMaskValues.push_back(cpValidCond);
 
       auto idxConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(cpIndex));
 
-      // Check the iff condition for this coverpoint.
-      // IEEE 1800-2017 Section 19.5: coverpoint iff guard - only sample
-      // when the iff condition is true (nonzero).
-      if (cpIndex < static_cast<int32_t>(iffConditions.size())) {
-        Value iffCond = cpValidCond;
+      // IEEE 1800-2017 Section 19.5: coverpoint iff guard and 4-state
+      // unknown handling - sample only when valid.
+      if (needsSampleGuard) {
         // Use cf dialect to implement the conditional. SCF ops are illegal
         // inside llhd.process, so we use basic blocks with branches.
         // Split the current block to create a merge point after the
@@ -5835,12 +5850,12 @@ struct CovergroupSampleOpConversion
         cf::BranchOp::create(rewriter, loc, mergeBlock);
         // Add the conditional branch in the current block.
         rewriter.setInsertionPointToEnd(currentBlock);
-        cf::CondBranchOp::create(rewriter, loc, iffCond, thenBlock,
+        cf::CondBranchOp::create(rewriter, loc, cpValidCond, thenBlock,
                                  mergeBlock);
         // Continue inserting at the merge block.
         rewriter.setInsertionPointToStart(mergeBlock);
       } else {
-        // No iff condition - always sample.
+        // Always-valid sample.
         LLVM::CallOp::create(rewriter, loc, TypeRange{},
                              SymbolRefAttr::get(sampleFn),
                              ValueRange{cgHandle, idxConst, i64Val});
@@ -5866,10 +5881,11 @@ struct CovergroupSampleOpConversion
         LLVM::StoreOp::create(rewriter, loc, i64Values[i], elemPtr);
       }
 
-      // Call __moore_cross_sample (or masked variant when iff guards exist).
+      // Call __moore_cross_sample (or masked variant when validity guards
+      // exist from iff or unknown-state filtering).
       auto numValuesConst = LLVM::ConstantOp::create(
           rewriter, loc, i32Ty, rewriter.getI32IntegerAttr(numValues));
-      if (!iffConditions.empty()) {
+      if (!iffConditions.empty() || sawFourStateSampleValue) {
         auto maskArrayTy = LLVM::LLVMArrayType::get(i8Ty, numValues);
         auto maskAlloca = LLVM::AllocaOp::create(
             rewriter, loc, ptrTy, maskArrayTy,
