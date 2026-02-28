@@ -513,7 +513,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     };
     auto maybeTraceIndirectNative = [&](uint32_t fid, llvm::StringRef callee,
-                                        unsigned numArgs, unsigned numResults,
+                                        bool isNativeEntry, unsigned numArgs,
+                                        unsigned numResults,
                                         const uint64_t (&packed)[8]) {
       static bool traceNativeCalls =
           std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
@@ -529,7 +530,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           compiledFuncFlags &&
           fid < numCompiledAllFuncs &&
           (compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD);
-      llvm::errs() << "[AOT TRACE] call_indirect native fid=" << fid
+      llvm::errs() << "[AOT TRACE] call_indirect dispatch="
+                   << (isNativeEntry ? "native" : "trampoline")
+                   << " fid=" << fid
                    << " callee=" << callee << " args=" << numArgs
                    << " rets=" << numResults
                    << " may_yield=" << (mayYield ? 1 : 0)
@@ -916,16 +919,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
             bool isNativeEntry =
                 (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
+            bool hasTrampolineEntry =
+                (fid < compiledFuncHasTrampoline.size() &&
+                 compiledFuncHasTrampoline[fid]);
             // Deny/trap checks for call_indirect X-fallback path.
-            if (aotDenyFids.count(fid))
+            if (isNativeEntry && aotDenyFids.count(fid))
               goto ci_xfallback_interpreted;
-            if (static_cast<int32_t>(fid) == aotTrapFid) {
+            if (isNativeEntry && static_cast<int32_t>(fid) == aotTrapFid) {
               llvm::errs() << "[AOT TRAP] ci-xfallback fid=" << fid;
               if (fid < aotFuncEntryNamesById.size())
                 llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
               llvm::errs() << "\n";
               __builtin_trap();
             }
+            // Runtime interception policy may mark a FuncId as non-native even
+            // when the compiled module still has a direct entry pointer. Only
+            // call non-native entries through generated trampolines.
+            if (!isNativeEntry && !hasTrampolineEntry)
+              goto ci_xfallback_interpreted;
             // Skip native dispatch for yield-capable functions outside process
             // context.
             if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
@@ -964,7 +975,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             bool normalizePointerArgs = isNativeEntry;
                 fillNativeCallArgs(args, funcOp.getArgumentTypes(), resolvedName,
                                numArgs, a, normalizePointerArgs);
-                maybeTraceIndirectNative(fid, resolvedName, numArgs,
+                maybeTraceIndirectNative(fid, resolvedName, isNativeEntry,
+                                         numArgs,
                                          numResults, a);
 
                 if (eligible) {
@@ -1722,16 +1734,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
             bool isNativeEntry =
                 (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
+            bool hasTrampolineEntry =
+                (fid < compiledFuncHasTrampoline.size() &&
+                 compiledFuncHasTrampoline[fid]);
             // Deny/trap checks for call_indirect static fallback path.
-            if (aotDenyFids.count(fid))
+            if (isNativeEntry && aotDenyFids.count(fid))
               goto ci_static_interpreted;
-            if (static_cast<int32_t>(fid) == aotTrapFid) {
+            if (isNativeEntry && static_cast<int32_t>(fid) == aotTrapFid) {
               llvm::errs() << "[AOT TRAP] ci-static fid=" << fid;
               if (fid < aotFuncEntryNamesById.size())
                 llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
               llvm::errs() << "\n";
               __builtin_trap();
             }
+            // Runtime interception policy may mark a FuncId as non-native even
+            // when the compiled module still has a direct entry pointer. Only
+            // call non-native entries through generated trampolines.
+            if (!isNativeEntry && !hasTrampolineEntry)
+              goto ci_static_interpreted;
             // Skip native dispatch for yield-capable functions outside process
             // context.
             if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
@@ -1770,7 +1790,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             bool normalizePointerArgs = isNativeEntry;
                 fillNativeCallArgs(sArgs, fOp.getArgumentTypes(), resolvedName,
                                numArgs, a, normalizePointerArgs);
-                maybeTraceIndirectNative(fid, resolvedName, numArgs,
+                maybeTraceIndirectNative(fid, resolvedName, isNativeEntry,
+                                         numArgs,
                                          numResults, a);
 
                 if (eligible) {
@@ -2297,17 +2318,26 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           bool isNativeEntry =
               (entry.cachedFid < compiledFuncIsNative.size() &&
                compiledFuncIsNative[entry.cachedFid]);
+          bool hasTrampolineEntry =
+              (entry.cachedFid < compiledFuncHasTrampoline.size() &&
+               compiledFuncHasTrampoline[entry.cachedFid]);
           noteAotFuncIdCall(entry.cachedFid);
           // Deny/trap checks for call_indirect E5 cache path.
-          if (aotDenyFids.count(entry.cachedFid))
+          if (isNativeEntry && aotDenyFids.count(entry.cachedFid))
             goto ci_cache_interpreted;
-          if (static_cast<int32_t>(entry.cachedFid) == aotTrapFid) {
+          if (isNativeEntry &&
+              static_cast<int32_t>(entry.cachedFid) == aotTrapFid) {
             llvm::errs() << "[AOT TRAP] ci-cache fid=" << entry.cachedFid;
             if (entry.cachedFid < aotFuncEntryNamesById.size())
               llvm::errs() << " name=" << aotFuncEntryNamesById[entry.cachedFid];
             llvm::errs() << "\n";
             __builtin_trap();
           }
+          // Runtime interception policy may mark a FuncId as non-native even
+          // when the compiled module still has a direct entry pointer. Only
+          // call non-native entries through generated trampolines.
+          if (!isNativeEntry && !hasTrampolineEntry)
+            goto ci_cache_interpreted;
           // Skip native dispatch for yield-capable functions outside process
           // context.
           if (isNativeEntry && shouldSkipMayYieldNative(entry.cachedFid)) {
@@ -2346,7 +2376,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             fillNativeCallArgs(fastArgs, cachedFuncOp.getArgumentTypes(),
                                cachedFuncOp.getSymName(), numArgs, a,
                                normalizePointerArgs);
-            maybeTraceIndirectNative(entry.cachedFid, cachedFuncOp.getSymName(),
+            maybeTraceIndirectNative(entry.cachedFid,
+                                     cachedFuncOp.getSymName(), isNativeEntry,
                                      numArgs, numResults, a);
 
             if (eligible) {
@@ -5044,8 +5075,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             funcAddr < 0x100000000ULL) {
           uint32_t fid = static_cast<uint32_t>(funcAddr - 0xF0000000ULL);
           if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
-            se.cachedFid = fid;
-            se.cachedEntryPtr = const_cast<void *>(compiledFuncEntries[fid]);
+            bool isNativeEntry =
+                (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
+            bool hasTrampolineEntry =
+                (fid < compiledFuncHasTrampoline.size() &&
+                 compiledFuncHasTrampoline[fid]);
+            if (isNativeEntry || hasTrampolineEntry) {
+              se.cachedFid = fid;
+              se.cachedEntryPtr = const_cast<void *>(compiledFuncEntries[fid]);
+            }
           }
         }
       } else {
@@ -5065,16 +5103,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       } else if (fid < numCompiledAllFuncs && compiledFuncEntries[fid]) {
         bool isNativeEntry =
             (fid < compiledFuncIsNative.size() && compiledFuncIsNative[fid]);
+        bool hasTrampolineEntry =
+            (fid < compiledFuncHasTrampoline.size() &&
+             compiledFuncHasTrampoline[fid]);
         // Deny/trap checks for call_indirect main dispatch path.
-        if (aotDenyFids.count(fid))
+        if (isNativeEntry && aotDenyFids.count(fid))
           goto ci_main_interpreted;
-        if (static_cast<int32_t>(fid) == aotTrapFid) {
+        if (isNativeEntry && static_cast<int32_t>(fid) == aotTrapFid) {
           llvm::errs() << "[AOT TRAP] ci-main fid=" << fid;
           if (fid < aotFuncEntryNamesById.size())
             llvm::errs() << " name=" << aotFuncEntryNamesById[fid];
           llvm::errs() << "\n";
           __builtin_trap();
         }
+        // Runtime interception policy may mark a FuncId as non-native even
+        // when the compiled module still has a direct entry pointer. Only
+        // call non-native entries through generated trampolines.
+        if (!isNativeEntry && !hasTrampolineEntry)
+          goto ci_main_interpreted;
         // Skip native dispatch for yield-capable functions outside process
         // context.
         if (isNativeEntry && shouldSkipMayYieldNative(fid)) {
@@ -5113,7 +5159,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             bool normalizePointerArgs = isNativeEntry;
             fillNativeCallArgs(args, funcOp.getArgumentTypes(), calleeName,
                                numArgs, a, normalizePointerArgs);
-            maybeTraceIndirectNative(fid, calleeName, numArgs, numResults, a);
+            maybeTraceIndirectNative(fid, calleeName, isNativeEntry, numArgs,
+                                     numResults, a);
 
             if (eligible) {
 

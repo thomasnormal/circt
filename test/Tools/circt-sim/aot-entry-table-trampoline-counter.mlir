@@ -1,5 +1,6 @@
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-compile %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=COMPILED
+// RUN: env CIRCT_AOT_INTERCEPT_ALL_UVM=1 CIRCT_AOT_DENY_FID=0 circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=DENY
 
 // Regression: count non-native tagged entry-table hits.
 //
@@ -20,6 +21,12 @@
 // COMPILED: Hot uncompiled FuncIds (top 50):
 // COMPILED: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::uvm_demo::add42
 // COMPILED: indirect_uvm(5) = 47
+//
+// DENY: [circt-sim] AOT deny list: 1 fids
+// DENY: Trampoline calls:                 1
+// DENY: Entry-table native calls:         0
+// DENY: Entry-table trampoline calls:     1
+// DENY: indirect_uvm(5) = 47
 
 func.func @"uvm_pkg::uvm_demo::add42"(%a: i32) -> i32 {
   %c42 = arith.constant 42 : i32
