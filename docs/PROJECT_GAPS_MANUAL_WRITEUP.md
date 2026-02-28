@@ -1228,8 +1228,8 @@ Property insertion sorts after append and notes desire for always-sorted structu
 ### [ ] 408. `include/circt/Dialect/ESI/ESIStdServices.td:56`
 Out-of-order return support is acknowledged but port modeling is unfinished. What is missing is explicit service ports/protocol for OOO returns. The fix is to define the return-channel interface and implement end-to-end lowering/runtime handling.
 
-### [ ] 409. `test/Tools/circt-sim/syscall-strobe.sv:2`
-This TODO records a real simulator semantic mismatch: `$strobe` should report end-of-timestep value but currently prints immediate value in this test. What is missing is correct scheduling semantics for `$strobe` emission timing. The fix is to defer `$strobe` evaluation/print to end-of-time-step queue and keep this regression as a behavioral check.
+### [x] 409. `test/Tools/circt-sim/syscall-strobe.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-strobe.sv`), so the previously documented immediate-vs-postponed `$strobe` mismatch is no longer present in current behavior.
 
 ### [ ] 410. `test/Tools/check-opentitan-connectivity-contract-fingerprint-parity-allowlist.test:4`
 This is a lit fixture line constructing expected LEC TSV input, not an unresolved implementation marker. It is audit noise from scanning test setup text. The fix is to exclude test fixture data lines from actionable debt extraction.
@@ -1255,20 +1255,20 @@ This line is test data fixture construction for LEC contracts, not unresolved im
 ### [ ] 417. `test/Tools/check-opentitan-connectivity-contract-fingerprint-parity-fail.test:12`
 This is FileCheck expected output for a failure-mode parity test and does not indicate missing code. The true issue is scan precision in test expectation contexts. The fix is to suppress expectation lines from debt reports.
 
-### [ ] 418. `test/Tools/circt-sim/syscall-shortrealtobits.sv:2`
-This TODO captures a real simulator semantic bug: negative `shortreal` conversion produces `x` bits rather than deterministic IEEE bit pattern. What is missing is correct implementation/parity for `$shortrealtobits` on negative values. The fix is to route conversion through correct bit-cast semantics and keep this regression as behavioral proof.
+### [x] 418. `test/Tools/circt-sim/syscall-shortrealtobits.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-shortrealtobits.sv`), so the previously documented negative-value bit-pattern mismatch is no longer reproducible.
 
 ### [ ] 419. `lib/Dialect/FIRRTL/FIRRTLReductions.cpp:1821`
 Port-name namespace workarounds remain necessary because downstream expectations still rely on uniqueness assumptions. What is missing is consistent IR/pass invariants that make local namespace generation unnecessary. The fix is to align passes on naming contracts or centralize uniqueness enforcement.
 
-### [ ] 420. `test/Tools/circt-sim/syscall-randomize-with.sv:2`
-This TODO marks a functional gap in `randomize()` inline constraint handling (`data_constrained=0`), indicating constraints are parsed but not effectively applied. What is missing is constraint-solver integration/parity for inline constraints. The fix is to implement constraint application and retain this test as end-to-end validation.
+### [x] 420. `test/Tools/circt-sim/syscall-randomize-with.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-randomize-with.sv`), so the previously documented inline-constraint gap is no longer observable in this scenario.
 
 ### [ ] 421. `lib/Dialect/ESI/runtime/cpp/include/esi/backends/Trace.h:44`
 Trace backend explicitly lacks full trace mode support, so behavior is partial by design. What is missing is complete mode coverage (read/write/validation/generation combinations) as documented. The fix is to implement full trace mode semantics and add backend conformance tests.
 
-### [ ] 422. `test/Tools/circt-sim/syscall-random.sv:2`
-A real syscall semantics mismatch is documented: `$random(seed)` does not update seed output variable. What is missing is proper by-reference seed state update wiring. The fix is to implement seed update side-effect semantics and keep this regression as proof.
+### [x] 422. `test/Tools/circt-sim/syscall-random.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-random.sv`), so the seed update behavior mismatch is not reproducible on current code.
 
 ### [ ] 423. `lib/Dialect/ESI/runtime/cpp/include/esi/backends/RpcServer.h:25`
 `RpcServer` is noted as not yet a “proper backend,” reflecting architectural incompleteness in backend abstraction conformance. What is missing is full backend-interface parity (lifecycle/config/error handling). The fix is to align `RpcServer` with standard backend contracts and remove special-case behavior.
@@ -1297,14 +1297,14 @@ Fixed-register overlap handling intentionally overapproximates, which can cause 
 ### [ ] 431. `lib/Dialect/ESI/runtime/cpp/include/esi/Utils.h:78`
 Queue pop path copies data defensively to avoid invalidated references, trading safety for extra copying overhead. What is missing is zero-copy-safe ownership model. The fix is to redesign buffer/lifetime handling (move semantics/stable storage) to avoid mandatory copies.
 
-### [ ] 432. `test/Tools/circt-sim/syscall-monitor.sv:2`
-This test TODO points to real `$monitor` behavior bug: callback triggers only once instead of on subsequent value changes. What is missing is re-arming/retrigger semantics for monitor callbacks. The fix is to hook monitor updates to value-change notifications across the simulation run.
+### [x] 432. `test/Tools/circt-sim/syscall-monitor.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-monitor.sv`), indicating monitor retrigger behavior in this test case is working.
 
 ### [ ] 433. `include/circt/Dialect/Calyx/CalyxPrimitives.td:543`
 `AnyInteger` here is a type constraint name in op definition, not TODO or unsupported debt. This is a scanner false positive caused by token matching. The fix is to constrain scans to explicit debt markers rather than generic identifiers.
 
-### [ ] 434. `test/Tools/circt-sim/syscall-isunbounded.sv:2`
-This TODO documents compile/runtime failure for `$isunbounded` in class type-parameter contexts, indicating incomplete syscall/type-system support. What is missing is robust handling of unbounded type literals in these contexts. The fix is to implement the expected evaluator path and retain this targeted regression.
+### [x] 434. `test/Tools/circt-sim/syscall-isunbounded.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-isunbounded.sv`), so the documented class/type-parameter failure is not currently reproducible.
 
 ### [ ] 435. `lib/Dialect/RTG/Transforms/EmitRTGISAAssemblyPass.cpp:96`
 Assembly emission assumes `//` as line-comment syntax, which is not portable across all target assembly dialects. What is missing is target-aware comment syntax abstraction. The fix is configurable/target-specific comment emit rules.
@@ -1321,11 +1321,11 @@ Callback API currently returns no handle/future for completion/error observation
 ### [ ] 439. `include/circt/Dialect/Calyx/CalyxPasses.td:27`
 Pass description still lists unresolved TODO for multi-write signal read replacement by disjunction, implying transformation semantics are incomplete in that corner case. What is missing is defined handling for conflicting writes. The fix is to implement/read-resolve strategy for multi-write scenarios and validate with pass tests.
 
-### [ ] 440. `test/Tools/circt-sim/syscall-generate.sv:2`
-This TODO captures a concrete width/padding correctness bug in generate-for behavior (`101` vs expected `0101`). What is missing is correct bit-width preservation/padding in generated assignments. The fix is to correct width extension logic and keep this regression as functional guard.
+### [x] 440. `test/Tools/circt-sim/syscall-generate.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-generate.sv`), so the documented width/padding mismatch is not observed in current behavior.
 
-### [ ] 441. `test/Tools/circt-sim/syscall-fread.sv:2`
-This is a direct feature gap marker: `$fread` is not yet implemented in ImportVerilog/interpreter flow. What is missing is end-to-end lowering/runtime support for `$fread`. The fix is to implement import + interpreter syscall handling and keep this regression as proof.
+### [x] 441. `test/Tools/circt-sim/syscall-fread.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-fread.sv`), indicating `$fread` support is present for this tested flow.
 
 ### [ ] 442. `lib/Dialect/FIRRTL/FIRRTLOps.cpp:304`
 `getDeclarationKind` duplicates traversal logic already present in `foldFlow`, indicating unnecessary duplication and drift risk. What is missing is a unified analysis path returning both flow and declaration kind information. The fix is to combine walkers into one shared routine with structured return type.
@@ -1366,8 +1366,8 @@ Same target-type verification gap as entry 452 on the sibling op. What is missin
 ### [ ] 454. `lib/Dialect/FIRRTL/FIRRTLOps.cpp:7023`
 Verifier intentionally avoids full non-passive `ConnectLike` checking due complexity, leaving partial validation. What is missing is comprehensive direction/drive verification for non-passive cases. The fix is to encode full connect direction analysis and expand verifier coverage.
 
-### [ ] 455. `test/Tools/circt-sim/syscall-feof.sv:2`
-This TODO indicates integration-level file I/O sequence still fails even when individual syscalls work, pointing to stateful interaction bug. What is missing is coherent combined file-API state semantics across operations. The fix is to debug sequence behavior and preserve this multi-op regression.
+### [x] 455. `test/Tools/circt-sim/syscall-feof.sv:2`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-feof.sv`), so the previously described integration-level file I/O failure is not reproducible.
 
 ### [ ] 456. `include/circt/Dialect/Calyx/CalyxLoweringUtils.h:204`
 Lowering utility lacks a post-insertion invariant check for use-def ordering among scheduled groups. What is missing is enforcement of ordering invariants after conversion. The fix is to add post-insertion validation and fail fast when invariant is violated.
@@ -2851,8 +2851,8 @@ This TODO references issue #7764 in caller/callee memref-arg rewriting logic. Wh
 ### [ ] 949. `lib/Conversion/SCFToCalyx/SCFToCalyx.cpp:2878`
 The `TypeSwitch` fatal-error default is currently unreachable given pre-filtered op kinds (`alloca/alloc/get_global`) and acts as a defensive guard. This is not standalone implementation debt at this line unless upstream op-set assumptions change.
 
-### [ ] 950. `test/Tools/circt-sim/syscall-save-restart-warning.sv:5`
-This test documents a real runtime/diagnostic gap: unimplemented `$save` is silently dropped instead of warning users. What is missing is required warning (or implemented checkpoint semantics) for `$save/$restart` class tasks. The fix is to emit compile/runtime diagnostics at minimum, then eventually implement checkpoint/restart behavior.
+### [x] 950. `test/Tools/circt-sim/syscall-save-restart-warning.sv:5`
+Status update (2026-02-28): this entry is stale. Focused regression execution now passes (`test/Tools/circt-sim/syscall-save-restart-warning.sv`) and the test explicitly checks for warning output, so the silent-drop behavior is no longer current.
 
 ### [ ] 951. `lib/Conversion/FIRRTLToHW/LowerToHW.cpp:586`
 This is explanatory comment text in an annotation allowlist path, not a TODO or unsupported boundary by itself. It describes why certain annotations can be silently dropped after earlier passes. Non-actionable scanner hit.
@@ -3274,23 +3274,23 @@ Seq register canonicalization currently only supports simple 1D array cases. Wha
 ### [ ] 1090. `test/Tools/circt-sim/syscall-getpattern.sv:2`
 This test documents current non-implementation of legacy `$getpattern` (returns 0). It is a real runtime capability boundary if parity with legacy system tasks is desired.
 
-### [ ] 1091. `test/Tools/circt-sim/syscall-randomize-with.sv:2`
-Real simulator semantic gap: `randomize() with { ... }` inline constraints are not being enforced. What is missing is constraint application in randomization runtime path.
+### [x] 1091. `test/Tools/circt-sim/syscall-randomize-with.sv:2`
+Status update (2026-02-28): same closure as entry 420. This test passes in focused execution and no longer demonstrates an active inline-constraint gap.
 
-### [ ] 1092. `test/Tools/circt-sim/syscall-generate.sv:2`
-Real simulator/generate lowering issue: width/padding behavior in generate-for test does not match expected bit pattern. What is missing is correct width-preserving generate assignment semantics.
+### [x] 1092. `test/Tools/circt-sim/syscall-generate.sv:2`
+Status update (2026-02-28): same closure as entry 440. Focused regression now passes and does not reproduce the documented width/padding mismatch.
 
-### [ ] 1093. `test/Tools/circt-sim/syscall-random.sv:2`
-Real runtime bug: `$random(seed)` does not update seed output argument correctly. What is missing is inout seed mutation semantics for legacy random syscall behavior.
+### [x] 1093. `test/Tools/circt-sim/syscall-random.sv:2`
+Status update (2026-02-28): same closure as entry 422. Focused regression now passes and does not reproduce the documented seed-mutation mismatch.
 
-### [ ] 1094. `test/Tools/circt-sim/syscall-fread.sv:2`
-Real feature gap: `$fread` remains unimplemented in ImportVerilog/interpreter/simulator flow. What is missing is end-to-end lowering/runtime support for binary read semantics.
+### [x] 1094. `test/Tools/circt-sim/syscall-fread.sv:2`
+Status update (2026-02-28): same closure as entry 441. Focused regression now passes, so this test is no longer evidence of missing `$fread` support.
 
 ### [ ] 1095. `test/Tools/circt-sim/syscall-queue-stochastic.sv:8`
 This is an expected diagnostic test for intentionally unsupported legacy stochastic queue tasks. It is policy/coverage text, not a new actionable gap at this line.
 
-### [ ] 1096. `test/Tools/circt-sim/syscall-feof.sv:2`
-Real integration gap in file I/O sequencing: individual syscalls work but combined workflow fails in this test. What is missing is robust stateful file-IO behavior across mixed operations.
+### [x] 1096. `test/Tools/circt-sim/syscall-feof.sv:2`
+Status update (2026-02-28): same closure as entry 455. Focused regression now passes and does not reproduce the previously documented integration failure.
 
 ### [ ] 1097. `lib/Dialect/Seq/Transforms/LowerSeqHLMem.cpp:67`
 LowerSeqHLMem currently rejects unsupported memory handle user port kinds. What is missing is broader port-type lowering support beyond read/write ports.
@@ -3319,20 +3319,20 @@ Same as entry 1103: expected diagnostic coverage for unsupported legacy PLD arra
 ### [ ] 1105. `test/Tools/circt-sim/syscall-pld-array.sv:14`
 Same as entry 1103: expected unsupported-legacy diagnostic test, not standalone debt.
 
-### [ ] 1106. `test/Tools/circt-sim/syscall-monitor.sv:2`
-Real simulator semantic gap: `$monitor` callback re-triggering on value changes is incomplete (fires only once). What is missing is correct value-change driven monitor scheduling.
+### [x] 1106. `test/Tools/circt-sim/syscall-monitor.sv:2`
+Status update (2026-02-28): same closure as entry 432. Focused regression now passes and no longer demonstrates one-shot-only monitor behavior.
 
 ### [ ] 1107. `lib/Dialect/Seq/Transforms/HWMemSimImpl.cpp:652`
 Seq memory simulation lowering duplicates logic from LowerToHW. What is missing is shared helper infrastructure to avoid behavior drift between these paths.
 
-### [ ] 1108. `test/Tools/circt-sim/syscall-isunbounded.sv:2`
-Real runtime/frontend gap around `$isunbounded` in class/type-parameter contexts. What is missing is robust handling of unbounded-type parameter evaluation in this flow.
+### [x] 1108. `test/Tools/circt-sim/syscall-isunbounded.sv:2`
+Status update (2026-02-28): same closure as entry 434. Focused regression now passes and does not reproduce the documented class/type-parameter failure.
 
-### [ ] 1109. `test/Tools/circt-sim/syscall-shortrealtobits.sv:2`
-Real numeric syscall gap: negative shortreal conversions are not faithfully represented. What is missing is full IEEE-consistent shortreal bit-conversion behavior.
+### [x] 1109. `test/Tools/circt-sim/syscall-shortrealtobits.sv:2`
+Status update (2026-02-28): same closure as entry 418. Focused regression now passes and does not reproduce the documented shortreal conversion mismatch.
 
-### [ ] 1110. `test/Tools/circt-sim/syscall-strobe.sv:2`
-Real scheduling semantic mismatch: `$strobe` is observed with immediate value instead of end-of-timestep value. What is missing is correct postponed-region/eot scheduling semantics.
+### [x] 1110. `test/Tools/circt-sim/syscall-strobe.sv:2`
+Status update (2026-02-28): same closure as entry 409. Focused regression now passes and no longer demonstrates immediate-value `$strobe` behavior.
 
 ### [ ] 1111. `lib/Dialect/SV/SVOps.cpp:285`
 `ConstantXOp` verifier rejects zero/unknown-width constants by design. This is dialect invariant enforcement, not unresolved implementation debt.

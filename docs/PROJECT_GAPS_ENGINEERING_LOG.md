@@ -1576,3 +1576,25 @@
   - `build_test/bin/llvm-lit -a -v test/Conversion/MooreToCore/basic.mlir`
   - `build_test/bin/llvm-lit -j 8 test/Conversion/ImportVerilog test/Conversion/MooreToCore test/Tools/circt-sim test/Runtime/uvm`
   - Result: `1588/1588` passed in prioritized suite.
+
+### Project gaps: close stale circt-sim syscall TODO entries
+- Repro/verification:
+  - Re-ran focused syscall regressions that were still marked as open gaps in
+    `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`:
+    - `syscall-strobe.sv`
+    - `syscall-shortrealtobits.sv`
+    - `syscall-randomize-with.sv`
+    - `syscall-random.sv`
+    - `syscall-monitor.sv`
+    - `syscall-isunbounded.sv`
+    - `syscall-generate.sv`
+    - `syscall-fread.sv`
+    - `syscall-feof.sv`
+    - `syscall-save-restart-warning.sv`
+  - Result: all passed in a focused `llvm-lit` run.
+- Realization:
+  - Several manual-gap entries were stale duplicates from earlier scans and no
+    longer reflected current simulator behavior.
+- Fix:
+  - Updated `docs/PROJECT_GAPS_MANUAL_WRITEUP.md` to mark the above entries as
+    closed (`[x]`) with dated stale-status notes.
