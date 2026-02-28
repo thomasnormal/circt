@@ -276,3 +276,41 @@
       (`20` mutants): `ok=20 mismatch=0 fail=0`
     - seeded parity campaign on `cov_intro_seeded` (`12` mutants):
       `ok=12 mismatch=0 fail=0`
+
+## 2026-02-28 (xcompare bidirectional fault class)
+
+- realizations:
+  - X-sensitivity bugs are often symmetric in practice: using `==`/`!=` where
+    `===`/`!==` was intended (and vice versa) can silently change behavior
+    around unknown values.
+  - Weighted-applicable and context-priority regressions should assert the
+    property they validate, not a single hard-coded operator when multiple
+    same-site candidates are valid.
+
+- changes made:
+  - Added native operators:
+    - `EQ_TO_CASEEQ`
+    - `NEQ_TO_CASENEQ`
+  - Integrated new operators into:
+    - native planner op catalog + comparator site counting
+    - CIRCT-only mode mappings (`arith`, `inv`/`invert`, `balanced/all`)
+    - native mutator rewrite dispatch
+  - Added regression tests:
+    - `native-create-mutated-eq-to-caseeq-site-index`
+    - `native-create-mutated-neq-to-caseneq-site-index`
+    - `circt-mut-generate-circt-only-xcompare-bidir-ops`
+  - Hardened schedule-sensitive tests to allow either applicable eq-site
+    mutation when appropriate:
+    - `circt-mut-generate-circt-only-weighted-applicable-only`
+    - `circt-mut-generate-circt-only-weighted-context-priority`
+
+- validation:
+  - focused new-op lit slice: `3 passed`
+  - broader CIRCT-only mutation suite: `86 passed`
+  - seeded `cov_intro_seeded` parity campaign (`16` mutants):
+    `ok=16 mismatch=0 fail=0`
+  - seeded xcompare-signature parity campaign (`24` arith mutants):
+    `ok=24 mismatch=0 fail=0`
+  - direct-op parity checks:
+    - `NATIVE_EQ_TO_CASEEQ@1`: `circt_sig==xrun_sig`
+    - `NATIVE_NEQ_TO_CASENEQ@1`: `circt_sig==xrun_sig`

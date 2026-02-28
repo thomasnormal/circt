@@ -33,6 +33,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
     "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
     "SHR_TO_ASHR",      "ASHR_TO_SHR",    "CASEEQ_TO_EQ",    "CASENEQ_TO_NEQ",
+    "EQ_TO_CASEEQ",     "NEQ_TO_CASENEQ",
     "SIGNED_TO_UNSIGNED", "UNSIGNED_TO_SIGNED"};
 
 namespace {
@@ -857,6 +858,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectComparatorTokenSites(designText, "!==", codeMask, sites);
     return;
   }
+  if (op == "EQ_TO_CASEEQ") {
+    collectComparatorTokenSites(designText, "==", codeMask, sites);
+    return;
+  }
+  if (op == "NEQ_TO_CASENEQ") {
+    collectComparatorTokenSites(designText, "!=", codeMask, sites);
+    return;
+  }
   if (op == "SIGNED_TO_UNSIGNED") {
     collectCastFunctionSites(designText, "signed", codeMask, sites);
     return;
@@ -1035,7 +1044,8 @@ static std::string getOpFamily(StringRef op) {
       op == "LT_TO_GT" || op == "GT_TO_LT" || op == "LE_TO_GE" ||
       op == "GE_TO_LE")
     return "compare";
-  if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ")
+  if (op == "CASEEQ_TO_EQ" || op == "CASENEQ_TO_NEQ" ||
+      op == "EQ_TO_CASEEQ" || op == "NEQ_TO_CASENEQ")
     return "xcompare";
   if (op == "AND_TO_OR" || op == "OR_TO_AND" || op == "LAND_TO_BAND" ||
       op == "LOR_TO_BOR" || op == "XOR_TO_OR" || op == "XOR_TO_XNOR" ||

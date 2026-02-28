@@ -2,7 +2,7 @@
 // RUN: printf 'module top(input logic a,b, output logic y);\n  assign y = (a == b);\nendmodule\n' > %t/design.sv
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 6 --seed 0 --cfg planner_policy=weighted --cfg pick_cover_prcnt=100 > %t/log.txt
 // RUN: wc -l < %t/mutations.txt | FileCheck %s --check-prefix=COUNT
-// RUN: not grep -v 'NATIVE_EQ_TO_NEQ' %t/mutations.txt
+// RUN: not grep -v -E 'NATIVE_(EQ_TO_NEQ|EQ_TO_CASEEQ)' %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
 // COUNT: 6

@@ -4,5 +4,5 @@
 // RUN: FileCheck %s --check-prefix=MUT < %t/mutations.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
-// MUT: 1 NATIVE_EQ_TO_NEQ@1
+// MUT: 1 NATIVE_{{EQ_TO_NEQ|EQ_TO_CASEEQ}}@1
 // LOG: Generated mutations: 1

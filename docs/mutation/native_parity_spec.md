@@ -116,6 +116,11 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `XOR_TO_XNOR` uses the same binary-XOR site detection as `XOR_TO_OR`.
   - `XNOR_TO_XOR` targets binary XNOR spellings (`^~`, `~^`) and skips
     reduction-XNOR forms.
+- X-sensitivity compare swaps:
+  - `EQ_TO_CASEEQ` and `NEQ_TO_CASENEQ` target only binary `==` / `!=` sites
+    (never `===` / `!==`), preserving deterministic site-index contracts.
+  - `CASEEQ_TO_EQ` and `CASENEQ_TO_NEQ` target only binary `===` / `!==`
+    sites.
 - Constant mutations (`CONST0_TO_1`, `CONST1_TO_0`) cover sized binary/decimal/
   hex 1-bit literals and unsized tick literals (`1'b*`, `1'd*`, `1'h*`, `'0`,
   `'1`).
