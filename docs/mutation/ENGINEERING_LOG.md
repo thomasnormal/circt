@@ -1330,3 +1330,46 @@
     only new ops (`count=12`, `seed=20260228`):
     - `matches=12`, `mismatches=0`
     - artifacts: `/tmp/mut_parity_bitwise_to_xor_1772283986`.
+
+## 2026-02-28 (ASSIGN_RHS_NEGATE + assignment family classification cleanup)
+
+- realizations:
+  - Assignment-RHS mutations were partially misclassified at family level:
+    `ASSIGN_RHS_PLUS_ONE` / `ASSIGN_RHS_MINUS_ONE` were arithmetic but still
+    grouped under `connect`.
+  - This weakens weighted/all-mode allocation semantics and makes mutation
+    reports less representative of actual fault classes.
+  - During parity reruns, one full-batch failure was harness-induced (`xrun -R`
+    with source files), not a simulator mismatch.
+
+- changes made:
+  - Added native operator:
+    - `ASSIGN_RHS_NEGATE` (`rhs` -> `-(rhs)`).
+  - Refactored assignment-RHS family classification:
+    - const replacements (`TO_CONST0/1`) -> `connect`
+    - invert replacement (`INVERT`) -> `logic`
+    - arithmetic replacements (`PLUS_ONE`, `MINUS_ONE`, `NEGATE`) -> `arithmetic`
+  - Integrated new op into CIRCT-only mode allowlists where arithmetic
+    assignment mutations belong:
+    - `arith`, `invert`, `balanced`, `all`.
+  - Updated native-op token validation in:
+    - `utils/run_mutation_mcy_examples.sh`.
+  - Added TDD tests:
+    - `test/Tools/native-create-mutated-assign-rhs-negate-site-index.test`
+    - `test/Tools/native-mutation-plan-assign-rhs-negate-force.test`
+  - Extended existing arith-mode generation coverage check:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-assign-rhs-plus-one-op.test`
+      now also checks `NATIVE_ASSIGN_RHS_NEGATE`.
+
+- validation:
+  - Focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-create-mutated-assign-rhs-negate-site-index.test test/Tools/native-mutation-plan-assign-rhs-negate-force.test test/Tools/circt-mut-generate-circt-only-arith-mode-assign-rhs-plus-one-op.test test/Tools/circt-mut-generate-circt-only-weighted-fault-class-diversity.test test/Tools/circt-mut-generate-circt-only-weighted-context-priority.test`
+    - result: `5 passed`.
+  - Seeded parity campaigns (`xrun` vs `circt`) with negate-enabled binary:
+    - `/tmp/cov_seeded_rhsconst_allmode_negate_1772295675`
+      - `ok=80 mismatch=0 fail=0 negate_mutants=1`
+    - `/tmp/cov_intro_seeded_allmode_negate_1772296033`
+      - `ok=80 mismatch=0 fail=0 negate_mutants=1`
+  - Harness correction note:
+    - invalid `xrun -R` usage in one aborted rerun produced `xrun_fail` rows;
+      rerun without `-R` restored valid parity measurements.

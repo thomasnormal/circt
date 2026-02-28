@@ -35,6 +35,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "BOR_TO_BAND",      "BAND_TO_LAND",   "BOR_TO_LOR",      "BA_TO_NBA",
     "NBA_TO_BA",        "ASSIGN_RHS_TO_CONST0", "ASSIGN_RHS_TO_CONST1",
     "ASSIGN_RHS_INVERT", "ASSIGN_RHS_PLUS_ONE", "ASSIGN_RHS_MINUS_ONE",
+    "ASSIGN_RHS_NEGATE",
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
@@ -1714,7 +1715,18 @@ static bool findSimpleAssignmentRhsIdentifierSpan(StringRef text,
 static bool isAssignRhsMutationOp(StringRef op) {
   return op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
          op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
-         op == "ASSIGN_RHS_MINUS_ONE";
+         op == "ASSIGN_RHS_MINUS_ONE" || op == "ASSIGN_RHS_NEGATE";
+}
+
+static StringRef getAssignRhsMutationFamily(StringRef op) {
+  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1")
+    return "connect";
+  if (op == "ASSIGN_RHS_INVERT")
+    return "logic";
+  if (op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
+      op == "ASSIGN_RHS_NEGATE")
+    return "arithmetic";
+  return "";
 }
 
 static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
@@ -1737,6 +1749,10 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
   }
   if (op == "ASSIGN_RHS_MINUS_ONE") {
     replacement = (Twine("(") + rhsExpr + " - 1'b1)").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_NEGATE") {
+    replacement = (Twine("-(") + rhsExpr + ")").str();
     return true;
   }
   return false;
@@ -3046,8 +3062,8 @@ static std::string getOpFamily(StringRef op) {
       op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE" ||
       op == "RESET_POSEDGE_TO_NEGEDGE" || op == "RESET_NEGEDGE_TO_POSEDGE")
     return "timing";
-  if (isAssignRhsMutationOp(op))
-    return "connect";
+  if (StringRef family = getAssignRhsMutationFamily(op); !family.empty())
+    return family.str();
   if (op == "MUX_SWAP_ARMS" || op == "MUX_FORCE_TRUE" ||
       op == "MUX_FORCE_FALSE")
     return "mux";
@@ -3065,7 +3081,6 @@ static std::string getOpFamily(StringRef op) {
       op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
       op == "MOD_TO_DIV" || op == "DIV_TO_MOD" ||
       op == "UNARY_MINUS_DROP" || op == "INC_TO_DEC" || op == "DEC_TO_INC" ||
-      op == "ASSIGN_RHS_PLUS_ONE" || op == "ASSIGN_RHS_MINUS_ONE" ||
       op == "PLUS_EQ_TO_MINUS_EQ" || op == "MINUS_EQ_TO_PLUS_EQ" ||
       op == "MUL_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MUL_EQ" ||
       op == "MOD_EQ_TO_DIV_EQ" || op == "DIV_EQ_TO_MOD_EQ")
