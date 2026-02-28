@@ -9263,3 +9263,20 @@
 - validation:
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=syscall-uvm-hdl-deposit-read-fourstate.sv`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/ImportVerilog build_test/tools/circt/test/Conversion/MooreToCore build_test/tools/circt/test/Tools/circt-sim build_test/tools/circt/test/Runtime/uvm --max-failures=10`
+
+## 2026-02-28 - UVM timeout plusarg TODO cleanup in uvm_objection
+
+- realization:
+  - gap entry 329 was stale relative to current source state:
+    `+UVM_TIMEOUT` handling is already implemented in
+    `uvm_root::m_do_timeout_settings()` and covered by runtime tests.
+  - the `uvm_objection.svh` site now documents macro/plusarg ownership and is
+    no longer an unresolved plusarg TODO location.
+
+- implemented:
+  - `docs/PROJECT_GAPS_MANUAL_WRITEUP.md`:
+    - marked entry 329 as closed (`[x]`) with status note referencing
+      existing plusarg behavior and coverage.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm --filter=uvm_timeout_plusarg_test.sv`

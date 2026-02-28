@@ -988,8 +988,8 @@ This is implementation-style debt rather than feature debt: helper boilerplate e
 ### [ ] 328. `include/circt/Dialect/RTG/Transforms/RTGPasses.td:208`
 The pass description explicitly leaves test-grouping strategy unfinished (`TODO`), so output partitioning behavior is under-specified. What is missing is completed grouping policy (single file, per-test, property buckets like mode). The fix is to define supported grouping modes as options, implement them, and document deterministic naming/layout.
 
-### [ ] 329. `lib/Runtime/uvm-core/src/base/uvm_objection.svh:1359`
-Default timeout configuration still uses macro-style wiring and notes migration to plusarg, which is a configurability UX gap. What is missing is runtime-configurable timeout control via command-line plusarg integration. The fix is to plumb a plusarg-backed default timeout path and keep legacy macro fallback only for compatibility.
+### [x] 329. `lib/Runtime/uvm-core/src/base/uvm_objection.svh:1359`
+Status update (2026-02-28): this entry was stale. `+UVM_TIMEOUT` runtime override is already implemented in `uvm_root::m_do_timeout_settings()` and covered by `test/Runtime/uvm/uvm_timeout_plusarg_test.sv`; the `uvm_objection.svh` location now documents that path instead of carrying an unresolved plusarg TODO.
 
 ### [ ] 330. `lib/Dialect/ESI/ESIServices.cpp:98`
 Cosim service lowering currently iterates bundle channels manually instead of accepting bundle types directly, indicating an abstraction gap between ESI service ops and SV primitive lowering. What is missing is first-class bundle-typed cosim op support. The fix is to allow bundle inputs at the op level and lower them later into channel primitives with matching runtime semantics.
