@@ -1,0 +1,16 @@
+// REQUIRES: native_tools
+
+// RUN: cat > %t/design.sv <<'SV'
+// RUN: module top(input logic d, output logic q);
+// RUN:   logic clk;
+// RUN:   always #5 clk = ~clk;
+// RUN:   always_ff @(posedge clk) begin
+// RUN:     q <= d;
+// RUN:   end
+// RUN: endmodule
+// RUN: SV
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops ASSIGN_RHS_PLUS_ONE --out %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+
+// OUT: 1 NATIVE_ASSIGN_RHS_PLUS_ONE
+// OUT: 2 NATIVE_ASSIGN_RHS_PLUS_ONE@1

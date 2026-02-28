@@ -1,5 +1,50 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (assign-RHS edge-signal guard + source extraction from Yosys mutate binary)
+
+- realizations:
+  - Extracting `mutate` help text directly from the Yosys binary strings
+    confirmed mode/knob surface (`inv|const0|const1|cnot0|cnot1`,
+    `weight_*`, `pick_cover_prcnt`) and per-port/bit mutation framing.
+  - Assignment-RHS mutations still targeted testbench clock-generator
+    assignments (for example `always #5 clk = ~clk`) when those signals also
+    drove event controls, producing liveness-heavy mutants with low diagnostic
+    value.
+  - `findSimpleAssignmentRhsSpan` LHS spans can include statement prefixes
+    (for example `always #5 clk`), so edge-signal filtering must parse the
+    terminal identifier token, not compare the raw span.
+
+- changes made:
+  - `tools/circt-mut/NativeMutationPlanner.cpp`
+    - added event-control signal collection helper over `posedge/negedge`
+      event controls.
+    - assignment-RHS site collection now excludes sites where the assignment
+      LHS identifier is used as an event-control edge signal.
+    - kept `initial`-block skip specifically for `ASSIGN_RHS_TO_LHS` (not all
+      assignment-RHS ops) to avoid over-pruning valid mutation space.
+    - normalized identifier-check reuse via `isSimpleIdentifierExpr`.
+  - Added TDD regressions:
+    - `test/Tools/native-mutation-plan-assign-rhs-plus-one-skip-edge-signal.test`
+    - `test/Tools/circt-mut-generate-circt-only-native-ops-no-applicable-sites-assign-rhs-edge-signal.test`
+
+- validation:
+  - rebuilt:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - manual checks:
+    - mixed clock/data design with `ASSIGN_RHS_PLUS_ONE`:
+      only data assignment sites emitted.
+    - clock-only edge-driven design with `ASSIGN_RHS_PLUS_ONE`:
+      generation fails with
+      `no applicable native mutation sites for selected operators`.
+  - seeded xrun-vs-circt parity (assign-RHS op set):
+    - `/tmp/cov_assign_rhs_guard_parity_1772300291`
+    - summary: `ok=21 mismatch=0 fail=3`
+    - all 3 fails were transient `Permission denied` relink races for
+      `circt-sim`; targeted reruns (`17..19`) matched (`ok`).
+  - broader all-mode seeded smoke parity after the guard:
+    - `/tmp/cov_allmode_post_assign_edgeguard_1772300357`
+    - result: `ok=20 mismatch=0 fail=0`.
+
 ## 2026-02-28 (ASSIGN_RHS_TO_LHS realism guards + parity hardening)
 
 - realizations:

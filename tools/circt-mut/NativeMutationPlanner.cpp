@@ -1728,6 +1728,16 @@ static bool isAssignRhsMutationOp(StringRef op) {
          op == "ASSIGN_RHS_SHR_ONE";
 }
 
+static bool findEventControlBoundsForEdgeSite(
+    StringRef text, ArrayRef<uint8_t> codeMask, size_t edgeKeywordPos,
+    size_t edgeKeywordLen, size_t &openParenPos, size_t &closeParenPos);
+
+static bool parseIdentifierEndingAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                    size_t endPos, StringRef &identifier);
+
+static void collectEventControlEdgeSignals(
+    StringRef text, ArrayRef<uint8_t> codeMask, StringSet<> &signals);
+
 static bool isSimpleIdentifierExpr(StringRef expr) {
   expr = expr.trim();
   if (expr.empty())
@@ -1819,6 +1829,9 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef lhsExpr,
 static void collectAssignRhsSites(StringRef text, StringRef op,
                                   ArrayRef<uint8_t> codeMask,
                                   SmallVectorImpl<SiteInfo> &sites) {
+  StringSet<> eventControlSignals;
+  collectEventControlEdgeSignals(text, codeMask, eventControlSignals);
+
   int parenDepth = 0;
   int bracketDepth = 0;
   int braceDepth = 0;
@@ -1868,14 +1881,11 @@ static void collectAssignRhsSites(StringRef text, StringRef op,
       continue;
 
     size_t stmtStart = findStatementStart(text, codeMask, i);
-    if (op == "ASSIGN_RHS_TO_LHS") {
-      StringRef head;
-      size_t headPos = StringRef::npos;
-      if (findNearestProceduralHeadBefore(text, codeMask, stmtStart, head,
-                                          headPos) &&
-          head == "initial")
-        continue;
-    }
+    StringRef head;
+    size_t headPos = StringRef::npos;
+    if (findNearestProceduralHeadBefore(text, codeMask, stmtStart, head, headPos) &&
+        head == "initial" && op == "ASSIGN_RHS_TO_LHS")
+      continue;
 
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
@@ -1884,8 +1894,14 @@ static void collectAssignRhsSites(StringRef text, StringRef op,
     if (!findSimpleAssignmentRhsSpan(text, codeMask, i, rhsStart, rhsEnd,
                                      &lhsStart, &lhsEnd))
       continue;
+    StringRef lhsExpr = text.slice(lhsStart, lhsEnd + 1);
+    size_t lhsTokenEnd = findPrevCodeNonSpace(text, codeMask, i);
+    StringRef lhsIdentifier;
+    if (lhsTokenEnd != StringRef::npos &&
+        parseIdentifierEndingAt(text, codeMask, lhsTokenEnd, lhsIdentifier) &&
+        eventControlSignals.contains(lhsIdentifier))
+      continue;
     if (op == "ASSIGN_RHS_TO_LHS") {
-      StringRef lhsExpr = text.slice(lhsStart, lhsEnd + 1);
       if (!isSimpleIdentifierExpr(lhsExpr))
         continue;
     }
@@ -2089,6 +2105,29 @@ static bool parseIdentifierAtOrAfter(StringRef text, ArrayRef<uint8_t> codeMask,
     ++i;
   identifier = text.slice(begin, i);
   return !identifier.empty();
+}
+
+static void collectEventControlEdgeSignals(
+    StringRef text, ArrayRef<uint8_t> codeMask, StringSet<> &signals) {
+  signals.clear();
+  for (StringRef edgeKeyword : {"posedge", "negedge"}) {
+    SmallVector<SiteInfo, 8> edgeSites;
+    collectKeywordTokenSites(text, edgeKeyword, codeMask, edgeSites);
+    for (const SiteInfo &site : edgeSites) {
+      size_t openParenPos = StringRef::npos;
+      size_t closeParenPos = StringRef::npos;
+      if (!findEventControlBoundsForEdgeSite(text, codeMask, site.pos,
+                                             edgeKeyword.size(), openParenPos,
+                                             closeParenPos))
+        continue;
+      StringRef edgeSignal;
+      if (!parseIdentifierAtOrAfter(text, codeMask,
+                                    site.pos + edgeKeyword.size(),
+                                    closeParenPos, edgeSignal))
+        continue;
+      signals.insert(edgeSignal);
+    }
+  }
 }
 
 static bool parseIdentifierEndingAt(StringRef text, ArrayRef<uint8_t> codeMask,
