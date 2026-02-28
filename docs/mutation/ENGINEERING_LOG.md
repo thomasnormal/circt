@@ -1040,3 +1040,37 @@
     - xor-assign campaign after fix: `matches=12`, `mismatches=0`
     - control-mode campaign on `cov_intro_seeded` class example: all compared
       mutants matched (`xrun_rc=0`, `circt_rc=0`, identical summary lines).
+
+## 2026-02-28 (native bitwise compound assign to xor faults)
+
+- realizations:
+  - We had `^=`-to-(`|=`/`&=`) faults but not the reverse class.
+  - Missing reverse direction leaves a realistic bug family uncovered:
+    accidental xor update in masking/merge logic.
+
+- changes made:
+  - Added native mutation ops:
+    - `BAND_EQ_TO_BXOR_EQ` (`&=` -> `^=`)
+    - `BOR_EQ_TO_BXOR_EQ` (`|=` -> `^=`)
+  - Planner/apply integration:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+      - op catalog, site collection, family mapping, apply rewrites.
+    - `tools/circt-mut/circt-mut.cpp`
+      - included new ops in CIRCT-only control/invert/connect/balanced/all mode
+        allowlists.
+
+- TDD coverage added:
+  - `test/Tools/circt-mut-generate-circt-only-control-mode-compound-bitwise-xor-assign-ops.test`
+  - `test/Tools/native-create-mutated-band-eq-to-bxor-eq-site-index.test`
+  - `test/Tools/native-create-mutated-bor-eq-to-bxor-eq-site-index.test`
+
+- validation:
+  - red->green flow:
+    - new tests failed pre-implementation (unsupported op + apply no-op fallback)
+    - passed after implementation.
+  - focused lit slice:
+    - 9 bitwise/compound related tests passed.
+  - deterministic parity campaign (xrun vs circt) on seeded benchmark using
+    only new ops (`count=12`, `seed=20260228`):
+    - `matches=12`, `mismatches=0`
+    - artifacts: `/tmp/mut_parity_bitwise_to_xor_1772283986`.

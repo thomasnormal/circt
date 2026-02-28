@@ -46,6 +46,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "DIV_EQ_TO_MOD_EQ", "SHL_EQ_TO_SHR_EQ",    "SHR_EQ_TO_SHL_EQ",
     "SHR_EQ_TO_ASHR_EQ", "ASHR_EQ_TO_SHR_EQ",  "BAND_EQ_TO_BOR_EQ",
     "BOR_EQ_TO_BAND_EQ", "BXOR_EQ_TO_BOR_EQ",  "BXOR_EQ_TO_BAND_EQ",
+    "BAND_EQ_TO_BXOR_EQ", "BOR_EQ_TO_BXOR_EQ",
     "SHL_TO_SHR",
     "SHR_TO_SHL",       "SHR_TO_ASHR",    "ASHR_TO_SHR", "CASEEQ_TO_EQ",
     "CASENEQ_TO_NEQ",
@@ -2363,6 +2364,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectCompoundAssignSites(designText, "|=", codeMask, sites);
     return;
   }
+  if (op == "BAND_EQ_TO_BXOR_EQ") {
+    collectCompoundAssignSites(designText, "&=", codeMask, sites);
+    return;
+  }
+  if (op == "BOR_EQ_TO_BXOR_EQ") {
+    collectCompoundAssignSites(designText, "|=", codeMask, sites);
+    return;
+  }
   if (op == "BXOR_EQ_TO_BOR_EQ") {
     collectCompoundAssignSites(designText, "^=", codeMask, sites);
     return;
@@ -2420,6 +2429,7 @@ static std::string getOpFamily(StringRef op) {
       op == "BOR_TO_BAND" || op == "BAND_TO_LAND" || op == "BOR_TO_LOR" ||
       op == "UNARY_NOT_DROP" || op == "UNARY_BNOT_DROP" ||
       op == "BAND_EQ_TO_BOR_EQ" || op == "BOR_EQ_TO_BAND_EQ" ||
+      op == "BAND_EQ_TO_BXOR_EQ" || op == "BOR_EQ_TO_BXOR_EQ" ||
       op == "BXOR_EQ_TO_BOR_EQ" || op == "BXOR_EQ_TO_BAND_EQ")
     return "logic";
   if (op == "BA_TO_NBA" || op == "NBA_TO_BA" ||
@@ -3480,6 +3490,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, 2, "|=");
   if (op == "BOR_EQ_TO_BAND_EQ")
     return replaceTokenAt(mutatedText, pos, 2, "&=");
+  if (op == "BAND_EQ_TO_BXOR_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "^=");
+  if (op == "BOR_EQ_TO_BXOR_EQ")
+    return replaceTokenAt(mutatedText, pos, 2, "^=");
   if (op == "BXOR_EQ_TO_BOR_EQ")
     return replaceTokenAt(mutatedText, pos, 2, "|=");
   if (op == "BXOR_EQ_TO_BAND_EQ")
