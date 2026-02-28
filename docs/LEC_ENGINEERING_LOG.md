@@ -420,3 +420,38 @@
     `test/Tools/run-opentitan-connectivity-circt-lec-*.test`
     `test/Tools/formal-runner-common-tool-invoke-permission-error.test`:
     `36/36` pass.
+
+## 2026-02-28 - Segfault-class circt-lec retry via single-threaded MLIR fallback
+
+- realization:
+  - while probing lower canonicalizer rewrite budgets on a real OpenTitan case
+    (`CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN`), `circt-lec` intermittently crashed
+    with a segfault-class failure and stack trace rooted in
+    `LowerLECLLVM.cpp` (`LowerLECLLVMPass::runOnOperation`).
+  - this class of failure should be treated as recoverable infrastructure
+    instability for runner robustness, not a hard per-case terminal error.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - new retry mode knob:
+      `LEC_DISABLE_THREADING_RETRY_MODE` (`auto|on|off`, default `auto`).
+    - detects segfault/abort signatures (return codes `-11/-6/134/139` or
+      stack-dump-style crash text) on `circt-lec` failure.
+    - retries once with `--mlir-disable-threading` (unless explicitly set by
+      user args), and propagates learned retry state to later cases.
+    - mirrors pre-retry log to
+      `circt-lec.disable-threading.log` for case-level diagnostics.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-disable-threading-auto-retry.test`.
+  - test forces a first `circt-lec` segfault-like exit (`139`) and requires:
+    - retry invocation includes `--mlir-disable-threading`,
+    - retry-diagnostic log copy exists and contains segfault marker,
+    - final case result is `PASS ... EQ`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `36/36` pass.

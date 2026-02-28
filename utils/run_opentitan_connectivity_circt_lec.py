@@ -895,6 +895,17 @@ def is_opt_emit_bytecode_retryable_failure(log_text: str) -> bool:
     )
 
 
+def is_disable_threading_retryable_failure(returncode: int, log_text: str) -> bool:
+    if returncode in {-11, -6, 134, 139}:
+        return True
+    low = log_text.lower()
+    return (
+        "segmentation fault" in low
+        or "signal 11" in low
+        or ("stack dump:" in low and "please submit a bug report" in low)
+    )
+
+
 def normalize_drop_reason(line: str) -> str:
     line = line.replace("\t", " ").strip()
     line = re.sub(r"^[^:\n]+:\d+(?::\d+)?:\s*", "", line)
@@ -1447,6 +1458,16 @@ def main() -> int:
                 f"{verify_each_mode} (expected auto|on|off)"
             )
         )
+    disable_threading_retry_mode = os.environ.get(
+        "LEC_DISABLE_THREADING_RETRY_MODE", "auto"
+    ).strip().lower()
+    if disable_threading_retry_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_DISABLE_THREADING_RETRY_MODE: "
+                f"{disable_threading_retry_mode} (expected auto|on|off)"
+            )
+        )
     canonicalizer_timeout_retry_mode = os.environ.get(
         "LEC_CANONICALIZER_TIMEOUT_RETRY_MODE", "auto"
     ).strip().lower()
@@ -1724,6 +1745,9 @@ def main() -> int:
         has_explicit_temporal_approx = has_command_option(
             circt_lec_args, "--approx-temporal"
         )
+        has_explicit_disable_threading = has_command_option(
+            circt_lec_args, "--mlir-disable-threading"
+        )
         has_explicit_canonicalizer_max_iterations = has_command_option(
             circt_lec_args, "--lec-canonicalizer-max-iterations"
         )
@@ -1771,6 +1795,7 @@ def main() -> int:
         # In auto mode for low-timeout Z3 runs, pre-enable the bounded budget
         # from case 1 to avoid deterministic first-case timeout churn on known
         # OpenTitan timeout-frontier rules.
+        learned_disable_threading = False
         auto_preenable_canonicalizer_timeout_budget = (
             canonicalizer_timeout_retry_mode == "auto"
             and lec_run_smtlib
@@ -2230,12 +2255,21 @@ def main() -> int:
                     lec_enable_temporal_approx = (
                         temporal_approx_mode == "on" and not has_explicit_temporal_approx
                     )
+                    lec_enable_disable_threading = learned_disable_threading
                     lec_enable_assume_known_inputs = learned_assume_known_inputs
                     lec_enable_canonicalizer_timeout_budget = (
                         learned_canonicalizer_timeout_budget
                     )
+                    attempted_disable_threading_retry = False
                     attempted_llhd_abstraction_retry = False
                     attempted_canonicalizer_timeout_retry = False
+                    can_retry_disable_threading = (
+                        disable_threading_retry_mode == "on"
+                        or (
+                            disable_threading_retry_mode == "auto"
+                            and not has_explicit_disable_threading
+                        )
+                    )
                     can_retry_canonicalizer_timeout = (
                         canonicalizer_timeout_retry_mode == "on"
                         or (
@@ -2253,6 +2287,7 @@ def main() -> int:
 
                     def build_lec_cmd(
                         enable_temporal_approx: bool,
+                        enable_disable_threading: bool,
                         enable_assume_known_inputs: bool,
                         enable_canonicalizer_timeout_budget: bool,
                     ) -> list[str]:
@@ -2270,6 +2305,11 @@ def main() -> int:
                         cmd += circt_lec_args
                         if enable_temporal_approx and not has_explicit_temporal_approx:
                             cmd.append("--approx-temporal")
+                        if (
+                            enable_disable_threading
+                            and not has_explicit_disable_threading
+                        ):
+                            cmd.append("--mlir-disable-threading")
                         if enable_assume_known_inputs and not has_assume_known_inputs:
                             cmd.append("--assume-known-inputs")
                         if (
@@ -2300,6 +2340,7 @@ def main() -> int:
                         while True:
                             lec_cmd = build_lec_cmd(
                                 lec_enable_temporal_approx,
+                                lec_enable_disable_threading,
                                 lec_enable_assume_known_inputs,
                                 lec_enable_canonicalizer_timeout_budget,
                             )
@@ -2378,7 +2419,7 @@ def main() -> int:
                                     )
                                     continue
                                 raise
-                            except subprocess.CalledProcessError:
+                            except subprocess.CalledProcessError as exc:
                                 if lec_log.is_file():
                                     lec_log_text = lec_log.read_text(encoding="utf-8")
                                 else:
@@ -2388,6 +2429,34 @@ def main() -> int:
                                     lec_retry_combined += "\n" + lec_out.read_text(
                                         encoding="utf-8"
                                     )
+                                if (
+                                    can_retry_disable_threading
+                                    and not lec_enable_disable_threading
+                                    and not attempted_disable_threading_retry
+                                    and is_disable_threading_retryable_failure(
+                                        exc.returncode, lec_retry_combined
+                                    )
+                                ):
+                                    disable_threading_retry_log = (
+                                        case_dir / "circt-lec.disable-threading.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, disable_threading_retry_log)
+                                    else:
+                                        disable_threading_retry_log.write_text(
+                                            lec_retry_combined, encoding="utf-8"
+                                        )
+                                    lec_enable_disable_threading = True
+                                    learned_disable_threading = True
+                                    attempted_disable_threading_retry = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec with "
+                                        "--mlir-disable-threading for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
                                 retry_result = parse_lec_result(lec_retry_combined)
                                 retry_diag = parse_lec_diag(lec_retry_combined)
                                 if (
