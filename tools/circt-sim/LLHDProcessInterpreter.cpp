@@ -1759,6 +1759,68 @@ void LLHDProcessInterpreter::wakeQueueNotEmptyWaitersIfReady(uint64_t queueAddr)
   }
 }
 
+void LLHDProcessInterpreter::enqueueSignalConditionWaiter(
+    ArrayRef<SignalId> signalIds, ProcessId procId) {
+  if (signalIds.empty())
+    return;
+
+  removeSignalConditionWaiter(procId);
+
+  auto &reverse = signalWaitSignalsByProc[procId];
+  llvm::SmallDenseSet<SignalId, 8> seen;
+  for (SignalId signalId : signalIds) {
+    if (signalId == 0 || !seen.insert(signalId).second)
+      continue;
+    signalConditionWaiters[signalId].push_back(procId);
+    reverse.push_back(signalId);
+  }
+
+  if (reverse.empty())
+    signalWaitSignalsByProc.erase(procId);
+}
+
+void LLHDProcessInterpreter::removeSignalConditionWaiter(ProcessId procId) {
+  auto procIt = signalWaitSignalsByProc.find(procId);
+  if (procIt == signalWaitSignalsByProc.end())
+    return;
+
+  for (SignalId signalId : procIt->second) {
+    auto waitIt = signalConditionWaiters.find(signalId);
+    if (waitIt == signalConditionWaiters.end())
+      continue;
+    auto &waiters = waitIt->second;
+    llvm::erase(waiters, procId);
+    if (waiters.empty())
+      signalConditionWaiters.erase(waitIt);
+  }
+
+  signalWaitSignalsByProc.erase(procIt);
+}
+
+void LLHDProcessInterpreter::wakeSignalConditionWaiters(SignalId signalId) {
+  auto waitIt = signalConditionWaiters.find(signalId);
+  if (waitIt == signalConditionWaiters.end())
+    return;
+
+  llvm::SmallVector<ProcessId, 8> waiters(waitIt->second.begin(),
+                                          waitIt->second.end());
+  signalConditionWaiters.erase(waitIt);
+
+  for (ProcessId procId : waiters)
+    removeSignalConditionWaiter(procId);
+
+  for (ProcessId procId : waiters) {
+    auto stateIt = processStates.find(procId);
+    if (stateIt == processStates.end())
+      continue;
+    auto &state = stateIt->second;
+    if (state.halted)
+      continue;
+    state.waiting = false;
+    scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+  }
+}
+
 void LLHDProcessInterpreter::rebuildAddrRangeIndex() {
   addrRangeIndex.clear();
   // Add global variable ranges
@@ -12276,6 +12338,7 @@ void LLHDProcessInterpreter::notifyProcessAwaiters(ProcessId procId) {
 void LLHDProcessInterpreter::forwardPropagateOnSignalChange(
     SignalId signal, const SignalValue &value) {
   constexpr ProcessId kAnyProcess = static_cast<ProcessId>(-1);
+  wakeSignalConditionWaiters(signal);
 
   auto propIt = interfaceFieldPropagation.find(signal);
   if (propIt != interfaceFieldPropagation.end()) {
@@ -12607,6 +12670,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     if (proc->getState() == ProcessState::Terminated) {
       removeObjectionZeroWaiter(procId);
       removeQueueNotEmptyWaiter(procId);
+      removeSignalConditionWaiter(procId);
       removeUvmSequencerGetWaiter(procId);
       memoryEventWaiters.erase(procId);
       explicitlySuspendedProcesses.erase(procId);
@@ -12636,6 +12700,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
     directProcessFastPathKinds.erase(procId);
 
     removeObjectionZeroWaiter(procId);
+    removeSignalConditionWaiter(procId);
     removeUvmSequencerGetWaiter(procId);
     memoryEventWaiters.erase(procId);
     explicitlySuspendedProcesses.erase(procId);
@@ -31533,16 +31598,35 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         calleeName == "uvm_pkg::uvm_report_warning" ||
         calleeName == "uvm_pkg::uvm_report_error" ||
         calleeName == "uvm_pkg::uvm_report_fatal") {
+      // Determine the correct severity label.
+      const char *severity = "UVM_INFO";
+      if (calleeName == "uvm_pkg::uvm_report_warning")
+        severity = "UVM_WARNING";
+      else if (calleeName == "uvm_pkg::uvm_report_error")
+        severity = "UVM_ERROR";
+      else if (calleeName == "uvm_pkg::uvm_report_fatal")
+        severity = "UVM_FATAL";
+
       if (callOp.getNumOperands() >= 7) {
-        // For now, print a placeholder message to indicate we intercepted the call
-        // Full struct field extraction requires tracking aggregate values in the interpreter
-        llvm::outs() << "UVM_INFO <intercepted> @ "
+        // Full struct field extraction requires tracking aggregate values
+        // in the interpreter — print intercepted message with correct severity.
+        llvm::outs() << severity << " <intercepted> @ "
                      << scheduler.getCurrentTime().realTime << " fs: "
                      << "[" << calleeName << " call intercepted - struct args not yet extracted]\n";
 
         LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
                                 << " intercepted (7 args, struct extraction pending)\n");
       }
+
+      // For fatal reports, trigger proper simulation termination via the
+      // runtime handler instead of silently dropping the error.
+      if (calleeName == "uvm_pkg::uvm_report_fatal") {
+        __moore_uvm_report_fatal(
+            "FATAL", 5,
+            "uvm_report_fatal intercepted (struct args pending)", 48,
+            0, "", 0, 0, "", 0);
+      }
+
       return success();
     }
 

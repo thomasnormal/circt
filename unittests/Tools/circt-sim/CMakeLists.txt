@@ -67,6 +67,7 @@ add_circt_unittest(CIRCTSimToolTests
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterUvm.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/LLHDProcessInterpreterWaitCondition.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/AOTProcessCompiler.cpp
+  ${CIRCT_SOURCE_DIR}/tools/circt-sim/CompiledModuleLoader.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/UcontextProcess.cpp
   ${CIRCT_SOURCE_DIR}/tools/circt-sim/UVMFastPaths.cpp
 )

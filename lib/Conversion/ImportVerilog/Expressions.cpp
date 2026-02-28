@@ -7694,7 +7694,8 @@ struct RvalueExprVisitor : public ExprVisitor {
       auto refType = dyn_cast<moore::RefType>(arrayRef.getType());
       if (refType) {
         auto nestedType = refType.getNestedType();
-        if (isa<moore::AssocArrayType>(nestedType)) {
+        if (isa<moore::AssocArrayType, moore::WildcardAssocArrayType>(
+                nestedType)) {
           // Associative array delete(key)
           moore::AssocArrayDeleteKeyOp::create(builder, loc, arrayRef,
                                                keyOrIndex);
@@ -7990,6 +7991,45 @@ struct RvalueExprVisitor : public ExprVisitor {
       // - 0b0100 (4): count X values
       // - 0b1000 (8): count Z values
       int32_t controlBitsMask = 0;
+      auto appendControlBit = [&](const slang::SVInt &svint) -> LogicalResult {
+        // control_bit must be a single 4-state bit ('0, '1, 'x, 'z or
+        // equivalent 1-bit constant expressions).
+        if (svint.getBitWidth() != 1) {
+          mlir::emitError(loc)
+              << "$countbits control_bit must be '0, '1, 'x, or 'z";
+          return failure();
+        }
+
+        auto *raw = svint.getRawPtr();
+        if (!raw) {
+          mlir::emitError(loc)
+              << "$countbits control_bit must be '0, '1, 'x, or 'z";
+          return failure();
+        }
+
+        bool valueBit = (raw[0] & 1) != 0;
+        if (!svint.hasUnknown()) {
+          controlBitsMask |= valueBit ? 2 : 1;
+          return success();
+        }
+
+        unsigned rawWords = svint.getNumWords();
+        unsigned unknownWord = rawWords / 2;
+        if (unknownWord >= rawWords) {
+          mlir::emitError(loc)
+              << "$countbits control_bit must be '0, '1, 'x, or 'z";
+          return failure();
+        }
+
+        bool unknownBit = (raw[unknownWord] & 1) != 0;
+        if (!unknownBit) {
+          controlBitsMask |= valueBit ? 2 : 1;
+          return success();
+        }
+
+        controlBitsMask |= valueBit ? 8 : 4;
+        return success();
+      };
       for (size_t i = 1; i < args.size(); ++i) {
         // Check if the argument is an unbased unsized integer literal ('0, '1,
         // 'x, 'z). These are the only valid control_bit values per IEEE
@@ -8020,23 +8060,8 @@ struct RvalueExprVisitor : public ExprVisitor {
               << "$countbits control_bit arguments must be constants";
           return {};
         }
-        auto intVal = evalResult.integer().as<int32_t>();
-        if (!intVal) {
-          mlir::emitError(loc) << "$countbits control_bit value out of range";
+        if (failed(appendControlBit(evalResult.integer())))
           return {};
-        }
-        switch (*intVal) {
-        case 0:
-          controlBitsMask |= 1;
-          break; // count zeros
-        case 1:
-          controlBitsMask |= 2;
-          break; // count ones
-        default:
-          mlir::emitError(loc)
-              << "$countbits control_bit must be '0, '1, 'x, or 'z";
-          return {};
-        }
       }
 
       auto intAttr = builder.getI32IntegerAttr(controlBitsMask);
@@ -11112,8 +11137,53 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("$signed", [&]() { return value; })
           .Case("$unsigned", [&]() { return value; })
           // Real/integer conversion functions (IEEE 1800-2017 Section 20.5)
-          .Case("$rtoi", [&]() { return value; })
-          .Case("$itor", [&]() { return value; })
+          .Case("$rtoi",
+                [&]() -> FailureOr<Value> {
+                  // $rtoi truncates a real value toward zero to a 32-bit
+                  // signed integer (IEEE 1800-2017 Section 20.5).
+                  auto i32Ty = moore::IntType::getInt(builder.getContext(), 32);
+                  if (isa<moore::RealType>(value.getType()))
+                    return (Value)moore::RealToIntOp::create(builder, loc,
+                                                             i32Ty, value);
+                  // $realtime returns !moore.time, not !moore.real. Convert
+                  // time → four-valued i64 first, then truncate to i32.
+                  if (isa<moore::TimeType>(value.getType())) {
+                    auto asLogic =
+                        moore::TimeToLogicOp::create(builder, loc, value);
+                    return (Value)builder.createOrFold<moore::TruncOp>(
+                        loc, moore::IntType::get(builder.getContext(), 32,
+                                                 moore::Domain::FourValued),
+                        asLogic);
+                  }
+                  // Integer operand — pass through (slang already type-checks).
+                  return value;
+                })
+          .Case("$itor",
+                [&]() -> FailureOr<Value> {
+                  // $itor converts a signed integer to real (IEEE 1800-2017
+                  // Section 20.5). Always uses signed conversion.
+                  auto realTy = moore::RealType::get(builder.getContext(),
+                                                     moore::RealWidth::f64);
+                  // Ensure two-valued input for SIntToRealOp.
+                  if (auto intTy =
+                          dyn_cast<moore::IntType>(value.getType())) {
+                    if (intTy.getDomain() == moore::Domain::FourValued)
+                      value = builder.createOrFold<moore::LogicToIntOp>(loc,
+                                                                        value);
+                  } else {
+                    value = convertToSimpleBitVector(value);
+                    if (!value)
+                      return failure();
+                    if (auto intTy =
+                            dyn_cast<moore::IntType>(value.getType())) {
+                      if (intTy.getDomain() == moore::Domain::FourValued)
+                        value = builder.createOrFold<moore::LogicToIntOp>(loc,
+                                                                          value);
+                    }
+                  }
+                  return (Value)moore::SIntToRealOp::create(builder, loc,
+                                                             realTy, value);
+                })
 
           // Math functions in SystemVerilog.
           .Case("$clog2",
@@ -11478,7 +11548,9 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   // size() is a built-in method on dynamic arrays, associative
                   // arrays, and queues
                   auto type = value.getType();
-                  if (isa<moore::OpenUnpackedArrayType, moore::AssocArrayType,
+                  if (isa<moore::OpenUnpackedArrayType,
+                          moore::AssocArrayType,
+                          moore::WildcardAssocArrayType,
                           moore::QueueType>(type))
                     return moore::ArraySizeOp::create(builder, loc, value);
                   return {};
@@ -11486,7 +11558,8 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
           .Case("num",
                 [&]() -> Value {
                   // num() is an alias for size() on associative arrays
-                  if (isa<moore::AssocArrayType>(value.getType()))
+                  if (isa<moore::AssocArrayType,
+                          moore::WildcardAssocArrayType>(value.getType()))
                     return moore::ArraySizeOp::create(builder, loc, value);
                   return {};
                 })
@@ -11797,6 +11870,7 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   // Use ArraySizeOp for dynamic/queue/assoc array types.
                   if (isa<moore::OpenUnpackedArrayType,
                           moore::AssocArrayType,
+                          moore::WildcardAssocArrayType,
                           moore::QueueType>(value.getType()))
                     return moore::ArraySizeOp::create(builder, loc, value);
                   auto intTy = moore::IntType::getInt(getContext(), 32);
@@ -11835,6 +11909,7 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   if (isa<moore::OpenUnpackedArrayType,
                           moore::AssocArrayType,
+                          moore::WildcardAssocArrayType,
                           moore::QueueType>(value.getType()))
                     return moore::ConstantOp::create(builder, loc, intTy, 1);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
@@ -11845,6 +11920,7 @@ Context::convertSystemCallArity1(const slang::ast::SystemSubroutine &subroutine,
                   auto intTy = moore::IntType::getInt(getContext(), 32);
                   if (isa<moore::OpenUnpackedArrayType,
                           moore::AssocArrayType,
+                          moore::WildcardAssocArrayType,
                           moore::QueueType>(value.getType()))
                     return moore::ConstantOp::create(builder, loc, intTy, 1);
                   return moore::ConstantOp::create(builder, loc, intTy, 0);
@@ -11955,7 +12031,8 @@ Context::convertSystemCallArity2(const slang::ast::SystemSubroutine &subroutine,
                   // exists() checks if a key exists in an associative array.
                   // IEEE 1800-2017 §7.8.1: returns int (1 if found, 0 if not).
                   // Zero-extend from i1 to i32 to avoid sign-extension to -1.
-                  if (isa<moore::AssocArrayType>(value1.getType())) {
+                  if (isa<moore::AssocArrayType,
+                          moore::WildcardAssocArrayType>(value1.getType())) {
                     Value result = moore::AssocArrayExistsOp::create(
                         builder, loc, value1, value2);
                     auto i32Ty =
@@ -12133,7 +12210,8 @@ Context::convertArrayVoidMethodCall(const slang::ast::SystemSubroutine &subrouti
   // Get the underlying type of the array reference
   auto refType = cast<moore::RefType>(arrayRef.getType());
   auto nestedType = refType.getNestedType();
-  bool isAssocArray = isa<moore::AssocArrayType>(nestedType);
+  bool isAssocArray =
+      isa<moore::AssocArrayType, moore::WildcardAssocArrayType>(nestedType);
 
   auto systemCallRes =
       llvm::StringSwitch<std::function<FailureOr<Value>()>>(subroutine.name)

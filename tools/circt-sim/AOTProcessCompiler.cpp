@@ -52,6 +52,14 @@ using namespace mlir;
 using namespace circt;
 using namespace circt::sim;
 
+/// Register runtime symbols with the JIT engine. The MLIR ExecutionEngine
+/// already resolves process-local symbols via dlsym(), so __moore_* and
+/// __circt_sim_* functions linked into the binary are found automatically.
+/// This hook exists as an extension point for any additional symbol overrides.
+static void registerJITRuntimeSymbols(mlir::ExecutionEngine *) {
+  // No-op: runtime symbols are resolved via dlsym() by the ExecutionEngine.
+}
+
 //===----------------------------------------------------------------------===//
 // Type conversions for AOT compilation (same as FullProcessJIT)
 //===----------------------------------------------------------------------===//

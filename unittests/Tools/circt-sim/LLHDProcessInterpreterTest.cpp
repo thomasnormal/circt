@@ -47,7 +47,7 @@ public:
                              ProcessId procId) {
     interpreter.executeProcess(procId);
   }
-  static std::map<ProcessId, ProcessExecutionState> &
+  static ProcessStateStore &
   getProcessStates(LLHDProcessInterpreter &interpreter) {
     return interpreter.processStates;
   }
