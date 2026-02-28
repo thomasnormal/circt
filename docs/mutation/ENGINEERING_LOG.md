@@ -1708,3 +1708,54 @@
     - observed two distinct semantic outcome buckets across sites:
       - `RESULT sig=cba1f835 cov=100.00`
       - `RESULT sig=0d4a9567 cov=100.00`
+
+## 2026-02-28 (circt-sim array-element NBA mismatch from stale pending shadow)
+
+- realizations:
+  - A seeded `balanced` mutation campaign (`24` mutants) exposed deterministic
+    xrun-vs-circt mismatches (`ok=18 mismatch=6`) on mutants involving
+    array-element writes and control-flow changes.
+  - Minimal repro showed `mem[addr] <= wdata` in a clocked process did not
+    appear to update memory under circt-sim (`RESULT rdata=07 mem7=07` vs
+    xrun `RESULT rdata=3a mem7=3a`).
+  - Root cause was not array-index decoding itself; tracing showed writes were
+    scheduled (`[ARRAY-DRV-SCHED]`) but probes/readbacks kept consuming stale
+    `pendingEpsilonDrives` state.
+
+- root cause:
+  - Specialized `interpretDrive` paths for:
+    - `llhd.sig.extract`
+    - `llhd.sig.struct_extract`
+    - `llhd.sig.array_get`
+    set pending epsilon shadows for immediate blocking visibility, but their
+    scheduled NBA commit lambdas did **not** clear that pending shadow.
+  - As a result, later reads (including nonblocking paths) preferentially saw
+    stale pending values instead of committed scheduler state.
+
+- changes made:
+  - Fixed pending-shadow lifecycle in specialized drive commit paths:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - clear `pendingEpsilonDrives[parentSigId]` in scheduled NBA lambdas
+        after `scheduler.updateSignalWithStrength(...)`.
+  - Added regression test:
+    - `test/Tools/circt-sim/array-drive-pending-stale-nba.sv`
+      - reproduces stale-shadow failure and checks
+        `RESULT rdata=3a mem7=3a`.
+
+- validation:
+  - test-first repro:
+    - new regression failed before fix with
+      `RESULT rdata=07 mem7=07`.
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - post-fix tests:
+    - `array-drive-pending-stale-nba.sv`: pass
+    - `llhd-drv-array-pending-epsilon.mlir`: pass
+    - `llhd-drv-struct-pending-epsilon.mlir`: pass
+    - `llhd-drv-sig-extract-pending-epsilon.mlir`: pass
+    - `llhd-drv-ref-blockarg-array-get.mlir`: pass
+    - `mixed-ba-nba-shadow-global-visibility.sv`: pass
+    - `task-nonblocking-assign-in-task-order.sv`: pass
+  - parity rerun on the exact previously-failing seeded batch:
+    - before: `ok=18 mismatch=6`
+    - after fix: `ok=24 mismatch=0 fail=0`

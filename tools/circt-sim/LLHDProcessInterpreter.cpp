@@ -17640,6 +17640,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
               scheduler.updateSignalWithStrength(parentSigId, driverId, newVal,
                                                  DriveStrength::Strong,
                                                  DriveStrength::Strong);
+              pendingEpsilonDrives.erase(parentSigId);
             }));
 
         // Keep a pending shadow for immediate probes and additional bit updates
@@ -18448,6 +18449,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             scheduler.updateSignalWithStrength(parentSigId, driverId, newVal,
                                                DriveStrength::Strong,
                                                DriveStrength::Strong);
+            pendingEpsilonDrives.erase(parentSigId);
           }));
 
       // For zero-delay drives, store in pending drives for immediate reads.
@@ -18886,6 +18888,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
             scheduler.updateSignalWithStrength(parentSigId, driverId, newVal,
                                                DriveStrength::Strong,
                                                DriveStrength::Strong);
+            pendingEpsilonDrives.erase(parentSigId);
           }));
 
       // For zero-delay drives, store in pending drives for immediate reads.
