@@ -109,6 +109,10 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   forms (`>>>=`).
 - `XOR_TO_OR` uses binary-XOR detection only (skips reduction/XNOR/assign
   forms like `^a`, `^~`, `~^`, `^=`).
+- XOR/XNOR confusion mutations:
+  - `XOR_TO_XNOR` uses the same binary-XOR site detection as `XOR_TO_OR`.
+  - `XNOR_TO_XOR` targets binary XNOR spellings (`^~`, `~^`) and skips
+    reduction-XNOR forms.
 - Constant mutations (`CONST0_TO_1`, `CONST1_TO_0`) cover sized binary/decimal/
   hex 1-bit literals and unsized tick literals (`1'b*`, `1'd*`, `1'h*`, `'0`,
   `'1`).

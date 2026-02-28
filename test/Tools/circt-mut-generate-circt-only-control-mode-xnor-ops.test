@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic [3:0] a,b,c,d, output logic [3:0] y0,y1,y2);\n  assign y0 = a ^ b;\n  assign y1 = c ^~ d;\n  assign y2 = a ~^ c;\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 140 --seed 29 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_XOR_TO_XNOR' %t/mutations.txt
+// RUN: grep -q 'NATIVE_XNOR_TO_XOR' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 140
