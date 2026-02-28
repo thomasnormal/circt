@@ -1,5 +1,46 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (compound arithmetic-shift assignment mutation class)
+
+- realizations:
+  - Confusion between logical and arithmetic shift-assignment (`>>=` vs
+    `>>>=`) is a realistic sequential fault class and semantically distinct
+    from expression-level `>>`/`>>>` swaps.
+  - Compound-assignment token matching must explicitly avoid overlap with
+    neighboring longer/shorter tokens (`>>=` vs `>>>=`) to keep deterministic
+    site-index contracts.
+  - For parity campaigns, timeout-guarded safe-op subsets remain important to
+    prevent liveness stalls from unrelated control-loop mutations.
+
+- changes made:
+  - Added native operators:
+    - `SHR_EQ_TO_ASHR_EQ`
+    - `ASHR_EQ_TO_SHR_EQ`
+  - Integrated these operators in:
+    - native op catalog, site collection, family classification, and apply
+      rewrites (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`arith`, `invert`, `inv`, `balanced/all`)
+      in `tools/circt-mut/circt-mut.cpp`
+    - native-op token validation in
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/circt-mut-generate-circt-only-arith-mode-compound-ashr-assign-ops.test`
+    - `test/Tools/native-create-mutated-shr-eq-to-ashr-eq-site-index.test`
+    - `test/Tools/native-create-mutated-ashr-eq-to-shr-eq-site-index.test`
+    - `test/Tools/native-create-mutated-shr-eq-to-ashr-eq-skip-ashr-assign.test`
+
+- validation:
+  - Red-first: new tests fail before implementation, pass after.
+  - Focused lit slice over touched shift/compound/native-op tests:
+    `18 passed`.
+  - Seeded xrun-vs-circt parity campaign on deterministic `cov_intro_seeded`
+    harness with safe-op allowlist including new operators:
+    - `count=24`, `seed=20260228`
+    - result: `match=24`, `mismatch=0`
+    - operators observed include:
+      `NATIVE_SHR_EQ_TO_ASHR_EQ` and `NATIVE_ASHR_EQ_TO_SHR_EQ`
+    - workspace: `/tmp/mut_parity_shift_740018`
+
 ## 2026-02-28 (compound shift-assignment mutation class + seeded parity hardening)
 
 - realizations:
