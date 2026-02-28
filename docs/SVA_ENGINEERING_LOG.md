@@ -9380,3 +9380,50 @@
   - `utils/ninja-with-lock.sh -C build_test circt-opt`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
   - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Conversion/MooreToCore`
+
+## 2026-02-28 - circt-sim class-field assoc-array method pointer-slot resolution
+
+- realization:
+  - class-field associative-array method lowering can pass pointer-slot operands
+    (address of assoc header field) to runtime helpers for `delete`,
+    `delete(key)`, and `copy_into`.
+  - `LLHDProcessInterpreter` interceptors treated these as already-materialized
+    assoc-header pointers and silently skipped operations when the raw address
+    was not in `validAssocArrayAddresses`.
+  - this caused real semantic failures in class-keyed graph rewrites
+    (`delete` no-op + copy/delete ordering bugs), reproducible without UVM.
+
+- TDD:
+  - added new regression `test/Tools/circt-sim/assoc-array-class-field-methods.sv`.
+  - baseline failure before fix:
+    - `start_has_finish=1` (expected `0`),
+    - `mid_has_start_pred=0` (expected `1`).
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - added `resolveAssocArrayAddress` helper in native-call handling to resolve
+      raw assoc operands through:
+      - tracked assoc-header addresses,
+      - interpreter pointer normalization,
+      - memory slot dereference (process/global/native blocks).
+    - applied resolution in assoc interceptors:
+      - `__moore_assoc_exists`, `__moore_assoc_first`,
+        `__moore_assoc_next`, `__moore_assoc_size`,
+        `__moore_assoc_delete`, `__moore_assoc_copy_into`,
+        `__moore_assoc_delete_key`, `__moore_assoc_last`,
+        `__moore_assoc_prev`.
+  - `lib/Runtime/uvm-core/src/base/uvm_task_phase.svh`:
+    - hardened `m_phase_process` tracking for suspend/resume by limiting
+      updates/clears to run phase (`phase.get_name() == "run"`), avoiding
+      clobbering by short-lived non-run task phases once assoc graph operations
+      are correctly executed.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - focused regressions:
+    - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-class-field-methods.sv`
+    - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm/uvm_component_suspend_resume_test.sv`
+  - focused suites:
+    - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm build_test/tools/circt/test/Tools/circt-sim/assoc-array-string-iter.sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-deep-copy.sv build_test/tools/circt/test/Tools/circt-sim/syscall-assoc-array-ops.sv build_test/tools/circt/test/Tools/circt-sim/syscall-assoc-array-methods.sv build_test/tools/circt/test/Tools/circt-sim/assoc-array-class-field-methods.sv`
+    - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim build_test/tools/circt/test/Runtime/uvm --max-failures=10`

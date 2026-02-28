@@ -1775,7 +1775,7 @@ Analysis preservation is conservative; could preserve more analyses when no effe
 Dedup handling of `DistinctAttr` (including path use) remains incomplete and currently skipped (issue 6583). What is missing is correct distinct-attribute semantics during dedup/path transforms. The fix is full `DistinctAttr` support in dedup logic.
 
 ### [x] 591. `lib/Runtime/uvm-core/src/base/uvm_component.svh:2569`
-Status update (2026-02-28): this gap is closed in this workspace. `uvm_component::suspend()` now uses tracked task-phase process handles (wired from `uvm_task_phase::execute`) and drives runtime `process::suspend()` instead of warning-only stub behavior. Interpreter wakeup flow now also respects explicit process suspension until `resume()`.
+Status update (2026-02-28): this gap is closed in this workspace. `uvm_component::suspend()` now uses tracked task-phase process handles (wired from `uvm_task_phase::execute`) and drives runtime `process::suspend()` instead of warning-only stub behavior. Interpreter wakeup flow now also respects explicit process suspension until `resume()`. Follow-up hardening keeps `m_phase_process` tracking run-phase-focused so short-lived non-run task phases do not clobber suspend/resume control under corrected phase-graph associative-array semantics.
 
 ### [x] 592. `lib/Runtime/uvm-core/src/base/uvm_component.svh:2577`
 Status update (2026-02-28): this gap is closed in this workspace. `uvm_component::resume()` now resumes the tracked phase task process and clears explicit suspension state in the interpreter. Regression coverage was added in `test/Runtime/uvm/uvm_component_suspend_resume_test.sv` and passes with targeted process/UVM suites.

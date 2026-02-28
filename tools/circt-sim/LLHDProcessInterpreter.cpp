@@ -19502,9 +19502,9 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
     }
   }
 
-  // Handle case 3: No delay AND no observed signals (always @(*) semantics)
-  // Derive sensitivity from signals that influence outputs or yields, falling
-  // back to probes and then a delta resume when no signals can be found.
+  // Handle case 3: No delay AND no observed signals (always @(*) semantics).
+  // Derive sensitivity from signals that influence outputs or yields. If none
+  // can be derived, suspend indefinitely (LLHD wait with empty trigger set).
   if (!waitOp.getDelay() && waitOp.getObserved().empty()) {
     SensitivityList waitList;
     auto cacheIt = state.waitSensitivityCache.find(waitOp.getOperation());
@@ -19663,19 +19663,11 @@ LogicalResult LLHDProcessInterpreter::interpretWait(ProcessId procId,
                      << "\n";
       }
 
-      // Empty-sensitivity waits must re-arm at every encounter.
-      // One-shot resumption is incorrect for loops that make progress via
-      // delayed self-drives (e.g. llhd.drv after <0ns,1d,0e>).
-      // Keep scheduling next-delta resumptions and rely on global simulation
-      // guards (max delta / step limits) for runaway loops.
-      auto fallbackKey = std::make_pair(procId, waitOp.getOperation());
-      emptySensitivityFallbackExecuted.insert(fallbackKey);
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  Wait with no delay and no signals - scheduling "
-                    "delta-step resumption (always @(*) fallback)\n");
-      scheduler.getEventScheduler().scheduleNextDelta(
-          SchedulingRegion::Active,
-          Event([this, procId]() { resumeProcess(procId); }));
+      // LLHD semantics: wait with neither delay nor observed values has no
+      // wake condition, so the process remains suspended indefinitely.
+      scheduler.suspendProcessForEvents(procId, SensitivityList());
+      LLVM_DEBUG(llvm::dbgs() << "  Wait with no delay/no signals - "
+                                 "suspended indefinitely\n");
       cacheWaitState(state, scheduler, nullptr, hadDelay);
     }
   }
@@ -32978,6 +32970,64 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       return success();
     }
 
+    auto resolveAssocArrayAddress = [&](uint64_t rawAddr) -> uint64_t {
+      auto isTrackedAssoc = [&](uint64_t addr) -> bool {
+        return addr != 0 && validAssocArrayAddresses.contains(addr);
+      };
+
+      auto readPointerSlot = [&](uint64_t slotAddr) -> uint64_t {
+        if (slotAddr == 0)
+          return 0;
+
+        uint64_t pointee = 0;
+        auto readPointee = [&](const uint8_t *src, size_t size, uint64_t offset)
+                               -> bool {
+          if (!src || offset + sizeof(uint64_t) > size)
+            return false;
+          std::memcpy(&pointee, src + offset, sizeof(uint64_t));
+          return true;
+        };
+
+        uint64_t offset = 0;
+        if (auto *block = findMemoryBlockByAddress(slotAddr, procId, &offset)) {
+          if (block->initialized && readPointee(block->bytes(), block->size, offset))
+            return pointee;
+        }
+
+        uint64_t globalOffset = 0;
+        if (auto *globalBlock = findBlockByAddress(slotAddr, globalOffset)) {
+          if (globalBlock->initialized &&
+              readPointee(globalBlock->bytes(), globalBlock->size, globalOffset))
+            return pointee;
+        }
+
+        uint64_t nativeOffset = 0;
+        size_t nativeSize = 0;
+        if (findNativeMemoryBlockByAddress(slotAddr, &nativeOffset, &nativeSize) &&
+            readPointee(reinterpret_cast<const uint8_t *>(slotAddr), nativeSize,
+                        nativeOffset))
+          return pointee;
+
+        return 0;
+      };
+
+      if (isTrackedAssoc(rawAddr))
+        return rawAddr;
+
+      if (void *normalized =
+              normalizeAssocRuntimePointer(reinterpret_cast<void *>(rawAddr))) {
+        uint64_t normalizedAddr = reinterpret_cast<uint64_t>(normalized);
+        if (isTrackedAssoc(normalizedAddr))
+          return normalizedAddr;
+      }
+
+      uint64_t pointeeAddr = readPointerSlot(rawAddr);
+      if (isTrackedAssoc(pointeeAddr))
+        return pointeeAddr;
+
+      return 0;
+    };
+
     // Handle __moore_assoc_get_ref - get reference to element in associative array
     // Signature: (array: ptr, key: ptr, value_size: i32) -> ptr
     // The runtime determines string vs integer keys from the array header.
@@ -33001,6 +33051,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         uint64_t arrayAddr = arrayVal.getUInt64();
         uint64_t keyAddr = keyVal.getUInt64();
         int32_t valueSize = static_cast<int32_t>(valueSizeVal.getUInt64());
+
+        if (uint64_t resolvedArrayAddr = resolveAssocArrayAddress(arrayAddr))
+          arrayAddr = resolvedArrayAddr;
 
         // Check if arrayAddr is null or not a valid associative array address.
         bool isInValidSet = validAssocArrayAddresses.contains(arrayAddr);
@@ -33197,15 +33250,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         }();
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t resolvedArrayAddr = resolveAssocArrayAddress(arrayAddr);
 
         // Validate that the array address is a properly initialized associative array.
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        if (resolvedArrayAddr == 0) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 32));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_exists - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
           return success();
         }
 
+        arrayAddr = resolvedArrayAddr;
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         // Read key bytes from interpreter/global/native memory.
@@ -33308,15 +33363,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyOutAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t resolvedArrayAddr = resolveAssocArrayAddress(arrayAddr);
 
         // Validate that the array address is a properly initialized associative array.
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        if (resolvedArrayAddr == 0) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_first - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
           return success();
         }
 
+        arrayAddr = resolvedArrayAddr;
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         // Find key output memory block
@@ -33374,15 +33431,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyRefAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t resolvedArrayAddr = resolveAssocArrayAddress(arrayAddr);
 
         // Validate that the array address is a properly initialized associative array.
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        if (resolvedArrayAddr == 0) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 1));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_next - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning false\n");
           return success();
         }
 
+        arrayAddr = resolvedArrayAddr;
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         // Find key memory block
@@ -33456,15 +33515,17 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     if (calleeName == "__moore_assoc_size") {
       if (callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
         uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t resolvedArrayAddr = resolveAssocArrayAddress(arrayAddr);
 
         // Validate that the array address is a properly initialized associative array.
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        if (resolvedArrayAddr == 0) {
           setValue(procId, callOp.getResult(), InterpretedValue(0ULL, 64));
           LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_size - uninitialized array at 0x"
                                   << llvm::format_hex(arrayAddr, 16) << ", returning 0\n");
           return success();
         }
 
+        arrayAddr = resolvedArrayAddr;
         void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
 
         int64_t result = __moore_assoc_size(arrayPtr);
@@ -37191,12 +37252,14 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (array: ptr) -> void
     if (calleeName == "__moore_assoc_delete") {
       if (callOp.getNumOperands() >= 1) {
-        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
-        if (arrayAddr != 0 && validAssocArrayAddresses.contains(arrayAddr)) {
+        uint64_t rawArrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t arrayAddr = resolveAssocArrayAddress(rawArrayAddr);
+        if (arrayAddr != 0) {
           void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
           __moore_assoc_delete(arrayPtr);
         }
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_delete(0x"
+                                << llvm::format_hex(rawArrayAddr, 16) << " -> 0x"
                                 << llvm::format_hex(arrayAddr, 16) << ")\n");
       }
       return success();
@@ -37207,19 +37270,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Deep-copies all entries from src into dst (in-place).
     if (calleeName == "__moore_assoc_copy_into") {
       if (callOp.getNumOperands() >= 2) {
-        uint64_t dstAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
-        uint64_t srcAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
-        bool dstValid = dstAddr != 0 &&
-            validAssocArrayAddresses.contains(dstAddr);
-        bool srcValid = srcAddr != 0 &&
-            validAssocArrayAddresses.contains(srcAddr);
-        if (dstValid && srcValid) {
+        uint64_t rawDstAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t rawSrcAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t dstAddr = resolveAssocArrayAddress(rawDstAddr);
+        uint64_t srcAddr = resolveAssocArrayAddress(rawSrcAddr);
+        if (dstAddr != 0 && srcAddr != 0) {
           void *dstPtr = reinterpret_cast<void *>(dstAddr);
           void *srcPtr = reinterpret_cast<void *>(srcAddr);
           __moore_assoc_copy_into(dstPtr, srcPtr);
         }
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_copy_into(dst=0x"
+                                << llvm::format_hex(rawDstAddr, 16) << " -> 0x"
                                 << llvm::format_hex(dstAddr, 16) << ", src=0x"
+                                << llvm::format_hex(rawSrcAddr, 16) << " -> 0x"
                                 << llvm::format_hex(srcAddr, 16) << ")\n");
       }
       return success();
@@ -37229,8 +37292,9 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (array: ptr, key: ptr) -> void
     if (calleeName == "__moore_assoc_delete_key") {
       if (callOp.getNumOperands() >= 2) {
-        uint64_t arrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        uint64_t rawArrayAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyAddr = getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t arrayAddr = resolveAssocArrayAddress(rawArrayAddr);
         if (arrayAddr != 0 && validAssocArrayAddresses.contains(arrayAddr)) {
           void *arrayPtr = reinterpret_cast<void *>(arrayAddr);
           // Read key bytes from interpreter/global/native memory.
@@ -37302,6 +37366,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
           __moore_assoc_delete_key(arrayPtr, keyPtr);
         }
         LLVM_DEBUG(llvm::dbgs() << "  llvm.call: __moore_assoc_delete_key(0x"
+                                << llvm::format_hex(rawArrayAddr, 16) << " -> 0x"
                                 << llvm::format_hex(arrayAddr, 16) << ")\n");
       }
       return success();
@@ -37895,12 +37960,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (array: ptr, key_out: ptr) -> i1
     if (calleeName == "__moore_assoc_last") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        uint64_t arrayAddr =
+        uint64_t rawArrayAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyOutAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t arrayAddr = resolveAssocArrayAddress(rawArrayAddr);
 
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        if (arrayAddr == 0) {
           setValue(procId, callOp.getResult(),
                    InterpretedValue(0ULL, 1));
           return success();
@@ -37951,6 +38017,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                  InterpretedValue(result ? 1ULL : 0ULL, 1));
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_assoc_last(0x"
+                   << llvm::format_hex(rawArrayAddr, 16) << " -> 0x"
                    << llvm::format_hex(arrayAddr, 16) << ") = "
                    << result << "\n");
       }
@@ -37961,12 +38028,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (array: ptr, key_ref: ptr) -> i1
     if (calleeName == "__moore_assoc_prev") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        uint64_t arrayAddr =
+        uint64_t rawArrayAddr =
             getValue(procId, callOp.getOperand(0)).getUInt64();
         uint64_t keyRefAddr =
             getValue(procId, callOp.getOperand(1)).getUInt64();
+        uint64_t arrayAddr = resolveAssocArrayAddress(rawArrayAddr);
 
-        if (arrayAddr == 0 || !validAssocArrayAddresses.contains(arrayAddr)) {
+        if (arrayAddr == 0) {
           setValue(procId, callOp.getResult(),
                    InterpretedValue(0ULL, 1));
           return success();
@@ -38042,6 +38110,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                  InterpretedValue(result ? 1ULL : 0ULL, 1));
         LLVM_DEBUG(llvm::dbgs()
                    << "  llvm.call: __moore_assoc_prev(0x"
+                   << llvm::format_hex(rawArrayAddr, 16) << " -> 0x"
                    << llvm::format_hex(arrayAddr, 16) << ") = "
                    << result << "\n");
       }
@@ -42044,8 +42113,17 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
       std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr;
   bool allowNativeSeqBody = aggressiveNativeUvm ||
       std::getenv("CIRCT_AOT_ALLOW_NATIVE_SEQ_BODY") != nullptr;
-  bool allowNativeUvmAlloc = aggressiveNativeUvm ||
+  bool legacyAllowNativeUvmAlloc =
       std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC") != nullptr;
+  bool allowNativeUvmAllocUnsafe =
+      aggressiveNativeUvm ||
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC_UNSAFE") != nullptr;
+  if (legacyAllowNativeUvmAlloc && !allowNativeUvmAllocUnsafe) {
+    llvm::errs()
+        << "[circt-sim] Ignoring CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC; "
+           "set CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC_UNSAFE=1 to opt in\n";
+  }
+  bool allowNativeUvmAlloc = allowNativeUvmAllocUnsafe;
   bool allowNativeUvmTypeInfo = aggressiveNativeUvm ||
       std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_TYPEINFO") != nullptr;
   bool allowNativeUvmAccessors = aggressiveNativeUvm ||
