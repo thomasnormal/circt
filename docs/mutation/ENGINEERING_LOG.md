@@ -41,6 +41,9 @@
     - result: `ok=30`, `mismatch=0`, `fail=0`
   - Weighted all-mode seeded parity campaign (`count=40`, `seed=20260229`):
     - result: `ok=40`, `mismatch=0`, `fail=0`
+  - Extended weighted all-mode seeded parity campaign (`count=60`,
+    `seed=20260301`) on the same reset-aware harness:
+    - result: `ok=60`, `mismatch=0`, `fail=0`
 
 ## 2026-02-28 (cnot polarity tightening + preprocessor-safe div/mul mutations)
 
