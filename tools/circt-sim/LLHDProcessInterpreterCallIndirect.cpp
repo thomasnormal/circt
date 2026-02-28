@@ -3446,7 +3446,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     bool isUvmGetFullNameCall =
         (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
         calleeName.contains("get_full_name");
+    bool isUvmPortNameGetter =
+        calleeName.contains("uvm_port_base") ||
+        calleeName.contains("uvm_port_component");
     if (!disableUvmNameFastPath &&
+        !isUvmPortNameGetter &&
         (isUvmGetNameCall || isUvmGetFullNameCall) &&
         callIndirectOp.getNumResults() >= 1 &&
         !callIndirectOp.getArgOperands().empty()) {

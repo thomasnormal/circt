@@ -21708,7 +21708,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   bool isUvmGetFullNameCall =
       (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
       calleeName.contains("get_full_name");
-  if (isUvmGetNameCall || isUvmGetFullNameCall) {
+  bool isUvmPortNameGetter =
+      calleeName.contains("uvm_port_base") ||
+      calleeName.contains("uvm_port_component");
+  if ((isUvmGetNameCall || isUvmGetFullNameCall) && !isUvmPortNameGetter) {
     if (callOp.getNumResults() < 1)
       return success();
 
@@ -30686,7 +30689,10 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   bool isUvmGetFullNameCall =
       (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
       calleeName.contains("get_full_name");
-  if (isUvmGetNameCall || isUvmGetFullNameCall) {
+  bool isUvmPortNameGetter =
+      calleeName.contains("uvm_port_base") ||
+      calleeName.contains("uvm_port_component");
+  if ((isUvmGetNameCall || isUvmGetFullNameCall) && !isUvmPortNameGetter) {
     // The return value is frequently ignored in hot startup paths; still
     // bypass body interpretation to avoid recursive string churn.
     if (callOp.getNumResults() < 1)
