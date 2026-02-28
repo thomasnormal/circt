@@ -23407,8 +23407,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     } else {
       dropPhaseObjection(handle, count);
     }
+    int64_t afterCount = __moore_objection_get_count(handle);
+    if (beforeCount > 0 || afterCount > 0)
+      executePhasePhaseSawPositiveObjection[handleKey] = true;
     if (traceUvmObjection) {
-      int64_t afterCount = __moore_objection_get_count(handle);
       llvm::errs() << "[UVM-OBJ] proc=" << procId << " callee=" << calleeName
                    << " " << handleKind << "=0x"
                    << llvm::format_hex(handleKey, 16)
@@ -25007,8 +25009,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     } else {
       dropPhaseObjection(handle, count);
     }
+    int64_t afterCount = __moore_objection_get_count(handle);
+    if (beforeCount > 0 || afterCount > 0)
+      executePhasePhaseSawPositiveObjection[handleKey] = true;
     if (traceUvmObjection) {
-      int64_t afterCount = __moore_objection_get_count(handle);
       llvm::errs() << "[UVM-OBJ] proc=" << procId << " func=" << funcName
                    << " " << handleKind << "=0x"
                    << llvm::format_hex(handleKey, 16)
@@ -25321,6 +25325,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       }
       // Track which phase is currently being executed
       currentExecutingPhaseAddr[procId] = phaseAddr;
+      executePhasePhaseSawPositiveObjection[phaseAddr] = false;
 
       // Ensure we have an objection handle for this phase
       auto objIt = phaseObjectionHandles.find(phaseAddr);
@@ -27888,6 +27893,13 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   auto &yieldCount = executePhaseYieldCounts[procId];
   auto &sawPositiveObjection = executePhaseSawPositiveObjection[procId];
   auto &zeroDeadlineFs = executePhaseZeroDeadlineFs[procId];
+  bool latchedPositiveSeen = false;
+  auto latchedPositive = executePhasePhaseSawPositiveObjection.find(phaseAddr);
+  if (latchedPositive != executePhasePhaseSawPositiveObjection.end() &&
+      latchedPositive->second)
+    latchedPositiveSeen = true;
+  if (!sawPositiveObjection && latchedPositiveSeen)
+    sawPositiveObjection = true;
 
   if (traceExecutePhasePoll) {
     llvm::errs() << "[EXEC-POLL] proc=" << procId << " phase=0x"
@@ -27901,6 +27913,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
 
   if (count > 0) {
     sawPositiveObjection = true;
+    executePhasePhaseSawPositiveObjection[phaseAddr] = true;
     yieldCount = 0;
     zeroDeadlineFs = 0;
     scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
@@ -27961,6 +27974,7 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
     killProcessTree(masterChildId);
     masterPhaseProcessChild.erase(childIt2);
   }
+  executePhasePhaseSawPositiveObjection.erase(phaseAddr);
 
   auto &state = stateIt->second;
   state.waiting = false;
@@ -28210,6 +28224,13 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       auto &yieldCount = executePhaseYieldCounts[procId];
       auto &sawPositiveObjection = executePhaseSawPositiveObjection[procId];
       auto &zeroDeadlineFs = executePhaseZeroDeadlineFs[procId];
+      if (!sawPositiveObjection) {
+        auto latchedPositive =
+            executePhasePhaseSawPositiveObjection.find(phaseAddr);
+        if (latchedPositive != executePhasePhaseSawPositiveObjection.end() &&
+            latchedPositive->second)
+          sawPositiveObjection = true;
+      }
 
       // Keep polling while the master child is alive. Before the first
       // observed objection raise, use a longer startup grace to avoid
@@ -28223,6 +28244,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
       bool shouldKeepPolling = false;
       if (count > 0) {
         sawPositiveObjection = true;
+        executePhasePhaseSawPositiveObjection[phaseAddr] = true;
         yieldCount = 0;
         zeroDeadlineFs = 0;
         shouldKeepPolling = true;
@@ -28300,6 +28322,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
         killProcessTree(masterChildId);
         masterPhaseProcessChild.erase(childIt2);
       }
+      executePhasePhaseSawPositiveObjection.erase(phaseAddr);
       executePhaseMonitorPollPhase.erase(procId);
       executePhaseMonitorPollToken.erase(procId);
       // Skip the fork entirely — continue to next op after the fork
