@@ -165,3 +165,40 @@
       - `CIRCT_TIMEOUT_SECS=120`: `PASS ... EQ`
       - `CIRCT_TIMEOUT_SECS=60`: retry path
         `(timeout=60s->180s)` then `PASS ... EQ`
+
+## 2026-02-28 - Frontend retry propagation across connectivity batches
+
+- realization:
+  - OpenTitan connectivity runs with multiple shared frontend batches were
+    repeatedly rediscovering the same retry knobs (`--max-rss-mb`,
+    `--allow-multi-always-comb-drivers`) per batch.
+  - this duplicated failed `circt-verilog` attempts and increased timeout risk
+    on large rule sets.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-frontend-retry-propagation.test`.
+  - test forces both retry classes (`resource guard triggered` and
+    `always_comb procedure`) and asserts the second batch starts with learned
+    flags (4 total invocations instead of 6).
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - learned per-run frontend state:
+      - `learned_verilog_timescale_override`
+      - `learned_verilog_allow_multi_driver`
+      - `learned_verilog_max_rss_mb`
+    - when a retry succeeds in one batch, later batches inherit those settings
+      immediately.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    29/29 pass.
+  - real OpenTitan Z3 replay:
+    - filter: `ALERT_HANDLER_PWRMGR_ESC_CLK|AST_CLK_ES_IN`
+    - result: `2/2 PASS`.
+    - observed retries: only one
+      `--allow-multi-always-comb-drivers` retry on `batch=0`; no retry on
+      `batch=1` (learned state reused).

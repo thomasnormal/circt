@@ -1716,6 +1716,12 @@ def main() -> int:
             verilog_define_synthesis = not has_preprocessor_define(
                 circt_verilog_args, "SYNTHESIS"
             )
+        # Learned per-run frontend retry state. This carries successful fallback
+        # settings across later batches, preventing repeated expensive
+        # rediscovery of the same retry knobs on OpenTitan rule groups.
+        learned_verilog_timescale_override = verilog_timescale_override
+        learned_verilog_allow_multi_driver = verilog_allow_multi_always_comb_drivers
+        learned_verilog_max_rss_mb: int | None = None
 
         case_batches: list[list[ConnectivityLECCase]] = []
         by_csv: dict[str, list[ConnectivityLECCase]] = {}
@@ -1819,9 +1825,9 @@ def main() -> int:
                         if text and not text.endswith("\n"):
                             handle.write("\n")
 
-                batch_timescale_override = verilog_timescale_override
-                batch_allow_multi_driver = verilog_allow_multi_always_comb_drivers
-                batch_verilog_max_rss_mb: int | None = None
+                batch_timescale_override = learned_verilog_timescale_override
+                batch_allow_multi_driver = learned_verilog_allow_multi_driver
+                batch_verilog_max_rss_mb = learned_verilog_max_rss_mb
                 batch_opt_emit_bytecode = opt_emit_bytecode_mode != "off"
                 shared_core_input = (
                     shared_core_mlirbc if batch_opt_emit_bytecode else shared_core_mlir
@@ -1933,6 +1939,9 @@ def main() -> int:
                             ):
                                 shutil.copy2(shared_verilog_log, shared_missing_timescale_log)
                                 batch_timescale_override = verilog_fallback_timescale
+                                learned_verilog_timescale_override = (
+                                    batch_timescale_override
+                                )
                                 attempted_timescale_retry = True
                                 print(
                                     "opentitan connectivity lec: retrying circt-verilog with "
@@ -1958,6 +1967,7 @@ def main() -> int:
                             ):
                                 shutil.copy2(shared_verilog_log, shared_always_comb_log)
                                 batch_allow_multi_driver = True
+                                learned_verilog_allow_multi_driver = True
                                 attempted_multi_driver_retry = True
                                 print(
                                     "opentitan connectivity lec: retrying circt-verilog with "
@@ -1993,6 +2003,7 @@ def main() -> int:
                                         shared_verilog_log, shared_resource_guard_log
                                     )
                                     batch_verilog_max_rss_mb = next_rss_mb
+                                    learned_verilog_max_rss_mb = next_rss_mb
                                     print(
                                         "opentitan connectivity lec: retrying circt-verilog "
                                         f"with --max-rss-mb={next_rss_mb} for "
