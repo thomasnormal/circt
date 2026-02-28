@@ -673,6 +673,32 @@ static llvm::StringMap<std::string> parseZ3Model(StringRef text) {
   return values;
 }
 
+static LogicalResult failIfNoFlattenSolverHasHierarchy(ModuleOp module) {
+  auto failOnModuleHierarchy = [&](StringRef moduleName) -> LogicalResult {
+    auto hwModule = module.lookupSymbol<hw::HWModuleOp>(moduleName);
+    if (!hwModule)
+      return success();
+    Operation *firstInstanceLike = nullptr;
+    hwModule.walk([&](Operation *op) -> WalkResult {
+      if (isa<hw::InstanceOp, hw::InstanceChoiceOp>(op)) {
+        firstInstanceLike = op;
+        return WalkResult::interrupt();
+      }
+      return WalkResult::advance();
+    });
+    if (!firstInstanceLike)
+      return success();
+    firstInstanceLike->emitError(
+        "solver must not contain any non-SMT operations");
+    return failure();
+  };
+  if (failed(failOnModuleHierarchy(firstModuleName)))
+    return failure();
+  if (failed(failOnModuleHierarchy(secondModuleName)))
+    return failure();
+  return success();
+}
+
 /// This functions initializes the various components of the tool and
 /// orchestrates the work to be done.
 static LogicalResult executeLEC(MLIRContext &context) {
@@ -689,6 +715,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
 
   OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
   if (failed(verifySelectedCircuitsExist(module.get())))
+    return failure();
+  if (!flattenHWModules && outputFormat != OutputMLIR &&
+      failed(failIfNoFlattenSolverHasHierarchy(module.get())))
     return failure();
 
   SmallVector<std::string> lecInputNames;

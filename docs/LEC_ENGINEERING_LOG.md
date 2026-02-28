@@ -631,3 +631,40 @@
     still hit hard external timeout caps before tool-complete output; behavior
     is now regression-guarded in lit while noisy-host wall-time quantification
     remains pending.
+
+## 2026-02-28 - circt-lec no-flatten hierarchy fail-fast for runner fallback
+
+- realization:
+  - `--flatten-hw=false` currently cannot solve hierarchical compared modules;
+    it eventually fails with
+    `solver must not contain any non-SMT operations` at instance-like ops.
+  - on large OpenTitan rules, this failure could take a full timeout slice,
+    delaying the runner's automatic fallback back to flattened mode.
+
+- implemented:
+  - `tools/circt-lec/circt-lec.cpp`:
+    - added an early pre-pipeline check for instance-like hierarchy in selected
+      `-c1/-c2` modules when `--flatten-hw=false` and output mode requires
+      solver lowering (non-`--emit-mlir`).
+    - if hierarchy is present, `circt-lec` now emits
+      `solver must not contain any non-SMT operations` immediately, instead of
+      timing out deep in the lowering pipeline.
+  - added regression:
+    - `test/Tools/circt-lec/lec-no-flatten-instance-fast-fail.mlir`.
+  - created toy repro (for fast local iteration):
+    - `toy_models/no_flatten_non_smt_toy/simple_hier.moore.mlir`
+      (`flatten` => `LEC_RESULT=EQ`, `no-flatten` => immediate non-SMT error).
+
+- validation:
+  - rebuilt `circt-lec` in `build_test`.
+  - `llvm-lit -sv test/Tools/circt-lec/lec-no-flatten-instance-fast-fail.mlir`:
+    pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-no-flatten-*.test`:
+    `2/2` pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `41/41` pass.
+  - real OpenTitan direct check on
+    `.../connectivity.core.mlirbc` +
+    `__circt_conn_rule_0_AST_CLK_ES_IN_{ref,impl}` with
+    `--flatten-hw=false --run-smtlib` now fails in ~3.5s with the expected
+    non-SMT error (previously this could consume full timeout windows).
