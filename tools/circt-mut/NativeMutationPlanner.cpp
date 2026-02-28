@@ -39,7 +39,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
     "IF_COND_NEGATE",   "RESET_COND_NEGATE", "RESET_COND_TRUE",
     "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
-    "IF_ELSE_SWAP_ARMS", "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
+    "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
+    "UNARY_BNOT_DROP",
     "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
     "MUL_TO_DIV",       "MOD_TO_DIV",     "DIV_TO_MOD",  "INC_TO_DEC",
@@ -92,6 +93,20 @@ struct XorShift128 {
 
 struct SiteInfo {
   size_t pos = StringRef::npos;
+};
+
+struct CaseItemSpan {
+  size_t start = StringRef::npos;
+  size_t end = StringRef::npos;
+  bool isDefault = false;
+};
+
+struct CaseSwapSpan {
+  size_t sitePos = StringRef::npos;
+  size_t firstStart = StringRef::npos;
+  size_t firstEnd = StringRef::npos;
+  size_t secondStart = StringRef::npos;
+  size_t secondEnd = StringRef::npos;
 };
 
 struct Candidate {
@@ -2096,6 +2111,254 @@ static void collectIfElseSwapArmSites(StringRef text, ArrayRef<uint8_t> codeMask
   }
 }
 
+static bool matchCaseKeywordTokenAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                    size_t pos, size_t &keywordLen) {
+  keywordLen = 0;
+  if (matchKeywordTokenAt(text, codeMask, pos, "casez")) {
+    keywordLen = 5;
+    return true;
+  }
+  if (matchKeywordTokenAt(text, codeMask, pos, "casex")) {
+    keywordLen = 5;
+    return true;
+  }
+  if (matchKeywordTokenAt(text, codeMask, pos, "case")) {
+    keywordLen = 4;
+    return true;
+  }
+  return false;
+}
+
+static bool parseCaseBlockBoundsAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t casePos, size_t &keywordLen,
+                                   size_t &closeParenPos,
+                                   size_t &endcasePos) {
+  keywordLen = 0;
+  closeParenPos = StringRef::npos;
+  endcasePos = StringRef::npos;
+  if (!matchCaseKeywordTokenAt(text, codeMask, casePos, keywordLen))
+    return false;
+
+  size_t openPos = skipCodeWhitespace(text, codeMask, casePos + keywordLen,
+                                      text.size());
+  if (openPos == StringRef::npos || openPos >= text.size() ||
+      !isCodeAt(codeMask, openPos) || text[openPos] != '(')
+    return false;
+
+  closeParenPos = findMatchingParen(text, codeMask, openPos);
+  if (closeParenPos == StringRef::npos)
+    return false;
+
+  int depth = 1;
+  for (size_t i = closeParenPos + 1, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    if (matchKeywordTokenAt(text, codeMask, i, "endcase")) {
+      --depth;
+      if (depth == 0) {
+        endcasePos = i;
+        return true;
+      }
+      i += strlen("endcase") - 1;
+      continue;
+    }
+    size_t nestedLen = 0;
+    if (matchCaseKeywordTokenAt(text, codeMask, i, nestedLen)) {
+      ++depth;
+      i += nestedLen - 1;
+      continue;
+    }
+  }
+  return false;
+}
+
+static size_t findCaseItemHeaderColon(StringRef text, ArrayRef<uint8_t> codeMask,
+                                      size_t itemStart, size_t endcasePos) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  int ternaryDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  for (size_t i = itemStart; i < endcasePos; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+
+    if (parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+      continue;
+
+    if (ch == '?') {
+      ++ternaryDepth;
+      continue;
+    }
+    if (ch == ':') {
+      if (ternaryDepth > 0) {
+        --ternaryDepth;
+        continue;
+      }
+      char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+      char next =
+          (i + 1 < text.size() && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+      if (prev == ':' || next == ':')
+        continue;
+      return i;
+    }
+    if (ch == ';' || matchKeywordTokenAt(text, codeMask, i, "endcase"))
+      return StringRef::npos;
+  }
+  return StringRef::npos;
+}
+
+static size_t findSimpleCaseItemBodyEnd(StringRef text,
+                                        ArrayRef<uint8_t> codeMask,
+                                        size_t bodyStart, size_t endcasePos) {
+  size_t i = skipCodeWhitespace(text, codeMask, bodyStart, endcasePos);
+  if (i == StringRef::npos || i >= endcasePos)
+    return StringRef::npos;
+
+  if (matchKeywordTokenAt(text, codeMask, i, "begin"))
+    return findMatchingBeginEnd(text, codeMask, i);
+
+  // Keep swaps structurally conservative; skip complex procedural item bodies
+  // without explicit begin/end wrapping.
+  if (matchKeywordTokenAt(text, codeMask, i, "if") ||
+      matchKeywordTokenAt(text, codeMask, i, "case") ||
+      matchKeywordTokenAt(text, codeMask, i, "casez") ||
+      matchKeywordTokenAt(text, codeMask, i, "casex"))
+    return StringRef::npos;
+
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+  for (size_t e = endcasePos; i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+    if (parenDepth == 0 && bracketDepth == 0 && braceDepth == 0 && ch == ';')
+      return i + 1;
+  }
+  return StringRef::npos;
+}
+
+static void collectCaseItemsInBlock(StringRef text, ArrayRef<uint8_t> codeMask,
+                                    size_t closeParenPos, size_t endcasePos,
+                                    SmallVectorImpl<CaseItemSpan> &items) {
+  items.clear();
+  size_t i = skipCodeWhitespace(text, codeMask, closeParenPos + 1, endcasePos);
+  while (i < endcasePos) {
+    i = skipCodeWhitespace(text, codeMask, i, endcasePos);
+    if (i == StringRef::npos || i >= endcasePos)
+      break;
+
+    size_t colonPos = findCaseItemHeaderColon(text, codeMask, i, endcasePos);
+    if (colonPos == StringRef::npos)
+      break;
+
+    bool isDefault = matchKeywordTokenAt(text, codeMask, i, "default");
+    size_t bodyStart = skipCodeWhitespace(text, codeMask, colonPos + 1, endcasePos);
+    size_t bodyEnd = findSimpleCaseItemBodyEnd(text, codeMask, bodyStart,
+                                               endcasePos);
+    if (bodyEnd == StringRef::npos || bodyEnd <= i)
+      break;
+
+    items.push_back({i, bodyEnd, isDefault});
+    i = bodyEnd;
+  }
+}
+
+static void collectCaseItemSwapSpans(StringRef text, ArrayRef<uint8_t> codeMask,
+                                     SmallVectorImpl<CaseSwapSpan> &swaps) {
+  swaps.clear();
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    size_t keywordLen = 0;
+    size_t closeParenPos = StringRef::npos;
+    size_t endcasePos = StringRef::npos;
+    if (!parseCaseBlockBoundsAt(text, codeMask, i, keywordLen, closeParenPos,
+                                endcasePos))
+      continue;
+
+    SmallVector<CaseItemSpan, 8> items;
+    collectCaseItemsInBlock(text, codeMask, closeParenPos, endcasePos, items);
+    for (size_t itemIndex = 1; itemIndex < items.size(); ++itemIndex) {
+      const CaseItemSpan &lhs = items[itemIndex - 1];
+      const CaseItemSpan &rhs = items[itemIndex];
+      if (lhs.isDefault || rhs.isDefault)
+        continue;
+      swaps.push_back(
+          {lhs.start, lhs.start, lhs.end, rhs.start, rhs.end});
+    }
+
+    i = endcasePos + strlen("endcase") - 1;
+  }
+}
+
+static void collectCaseItemSwapArmSites(StringRef text,
+                                        ArrayRef<uint8_t> codeMask,
+                                        SmallVectorImpl<SiteInfo> &sites) {
+  SmallVector<CaseSwapSpan, 8> swaps;
+  collectCaseItemSwapSpans(text, codeMask, swaps);
+  for (const CaseSwapSpan &swap : swaps)
+    sites.push_back({swap.sitePos});
+}
+
 static void collectSitesForOp(StringRef designText, StringRef op,
                               ArrayRef<uint8_t> codeMask,
                               SmallVectorImpl<SiteInfo> &sites) {
@@ -2288,6 +2551,10 @@ static void collectSitesForOp(StringRef designText, StringRef op,
   }
   if (op == "IF_ELSE_SWAP_ARMS") {
     collectIfElseSwapArmSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "CASE_ITEM_SWAP_ARMS") {
+    collectCaseItemSwapArmSites(designText, codeMask, sites);
     return;
   }
   if (op == "UNARY_NOT_DROP") {
@@ -2488,7 +2755,7 @@ static std::string getOpFamily(StringRef op) {
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
       op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
-      op == "IF_ELSE_SWAP_ARMS")
+      op == "IF_ELSE_SWAP_ARMS" || op == "CASE_ITEM_SWAP_ARMS")
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
@@ -3403,6 +3670,38 @@ static bool applyIfElseSwapAt(StringRef text, ArrayRef<uint8_t> codeMask,
   return true;
 }
 
+static bool applyCaseItemSwapAt(StringRef text, ArrayRef<uint8_t> codeMask,
+                                size_t sitePos, std::string &mutatedText) {
+  SmallVector<CaseSwapSpan, 8> swaps;
+  collectCaseItemSwapSpans(text, codeMask, swaps);
+  for (const CaseSwapSpan &swap : swaps) {
+    if (swap.sitePos != sitePos)
+      continue;
+
+    if (swap.firstStart == StringRef::npos || swap.firstEnd == StringRef::npos ||
+        swap.secondStart == StringRef::npos || swap.secondEnd == StringRef::npos ||
+        swap.firstStart >= swap.firstEnd || swap.secondStart >= swap.secondEnd ||
+        swap.firstEnd > swap.secondStart || swap.secondEnd > text.size())
+      return false;
+
+    StringRef firstItem = text.slice(swap.firstStart, swap.firstEnd);
+    StringRef betweenItems = text.slice(swap.firstEnd, swap.secondStart);
+    StringRef secondItem = text.slice(swap.secondStart, swap.secondEnd);
+
+    std::string swapped;
+    swapped.reserve(text.size() + 8);
+    swapped += text.slice(0, swap.firstStart).str();
+    swapped += secondItem.str();
+    swapped += betweenItems.str();
+    swapped += firstItem.str();
+    swapped += text.drop_front(swap.secondEnd).str();
+
+    mutatedText = std::move(swapped);
+    return true;
+  }
+  return false;
+}
+
 static bool applyConstFlipAt(StringRef text, bool zeroToOne, size_t pos,
                              std::string &mutatedText) {
   auto apply = [&](StringRef needle, StringRef replacement) {
@@ -3523,6 +3822,8 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   }
   if (op == "IF_ELSE_SWAP_ARMS")
     return applyIfElseSwapAt(text, codeMask, pos, mutatedText);
+  if (op == "CASE_ITEM_SWAP_ARMS")
+    return applyCaseItemSwapAt(text, codeMask, pos, mutatedText);
   if (op == "UNARY_NOT_DROP") {
     size_t end = pos + 1;
     while (end < text.size() &&

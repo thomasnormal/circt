@@ -14870,6 +14870,7 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "RESET_COND_NEGATE", "RESET_COND_TRUE",
                "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "CASE_ITEM_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP"});
     return;
   }
@@ -14894,6 +14895,7 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "RESET_COND_NEGATE", "RESET_COND_TRUE",
                "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "CASE_ITEM_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
                "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD", "UNARY_MINUS_DROP", "INC_TO_DEC",
@@ -14922,7 +14924,8 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "MUX_FORCE_TRUE", "MUX_FORCE_FALSE", "IF_COND_NEGATE",
                "RESET_COND_NEGATE", "RESET_COND_TRUE",
                "RESET_COND_FALSE",
-               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS"});
+               "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "CASE_ITEM_SWAP_ARMS"});
     return;
   }
   if (modeName == "balanced" || modeName == "all") {
@@ -14942,6 +14945,7 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "RESET_COND_NEGATE", "RESET_COND_TRUE",
                "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "CASE_ITEM_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "CONST0_TO_1", "CONST1_TO_0", "ADD_TO_SUB", "SUB_TO_ADD",
                "MUL_TO_ADD", "ADD_TO_MUL", "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD",
@@ -14975,6 +14979,7 @@ static void circtOnlyNativeOpsForMode(StringRef modeName,
                "RESET_COND_NEGATE", "RESET_COND_TRUE",
                "RESET_COND_FALSE",
                "IF_COND_TRUE", "IF_COND_FALSE", "IF_ELSE_SWAP_ARMS",
+               "CASE_ITEM_SWAP_ARMS",
                "UNARY_NOT_DROP", "UNARY_BNOT_DROP",
                "ADD_TO_SUB", "SUB_TO_ADD", "MUL_TO_ADD", "ADD_TO_MUL",
                "DIV_TO_MUL", "MUL_TO_DIV", "MOD_TO_DIV", "DIV_TO_MOD", "UNARY_MINUS_DROP", "INC_TO_DEC",

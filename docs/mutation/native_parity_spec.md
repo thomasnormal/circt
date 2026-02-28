@@ -164,6 +164,12 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
     to an always-true-arm equivalent (`cond ? tval : tval`).
   - `MUX_FORCE_FALSE` targets assignment-context ternary expressions and
     rewrites to an always-false-arm equivalent (`cond ? fval : fval`).
+- Structured control-arm swap mutations model decode/control wiring mistakes:
+  - `IF_ELSE_SWAP_ARMS` swaps `if/else` branch bodies for `if (...) ... else ...`
+    forms when both arms are structurally valid and unambiguous.
+  - `CASE_ITEM_SWAP_ARMS` swaps adjacent `case` item bodies in a conservative
+    subset (simple item bodies and balanced `begin/end` forms) to preserve
+    structural validity and deterministic site-index contracts.
 - Conditional-polarity mutations model inverted control intent:
   - `IF_COND_NEGATE` targets `if (cond)` headers and rewrites to
     `if (!(cond))` with word-boundary token matching and balanced-parenthesis

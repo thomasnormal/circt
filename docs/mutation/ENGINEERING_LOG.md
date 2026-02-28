@@ -1,5 +1,41 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (case-item arm swap mutation class + seeded parity campaigns)
+
+- realizations:
+  - `if/else` arm swap existed, but `case`-item arm swap did not; that left a
+    common decode/control bug class underrepresented.
+  - `case` rewrites need conservative structural guards to avoid invalid
+    rewrites of nested/procedural item bodies.
+
+- changes made:
+  - Added native operator:
+    - `CASE_ITEM_SWAP_ARMS`
+  - Integrated operator in:
+    - planner op catalog, site collection, family classification, and apply
+      rewrite path (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`control`, `connect`, `invert`, `inv`,
+      `balanced/all`) in `tools/circt-mut/circt-mut.cpp`
+    - native-op validator allowlist in
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/native-create-mutated-case-item-swap-arms-site-index.test`
+    - `test/Tools/native-mutation-plan-case-item-swap-arms.test`
+    - `test/Tools/circt-mut-generate-circt-only-control-mode-case-item-swap-op.test`
+
+- validation:
+  - Focused parity campaign on `cov_intro_seeded_case.sv` with
+    `--native-ops CASE_ITEM_SWAP_ARMS` (`count=24`):
+    - result: `ok=24`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_case_parity_1772289672`
+  - Broader seeded parity campaigns with per-mutant `circt-mut apply` on the
+    same harness:
+    - `--modes control` (`count=24`, `seed=101`):
+      `ok=24`, `mismatch=0`, `fail=0`
+    - `--modes all` (`count=24`, `seed=202`):
+      `ok=24`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_case_parity_broad2_1772290014`
+
 ## 2026-02-28 (reset-condition force mutation class + reset-aware parity campaigns)
 
 - realizations:

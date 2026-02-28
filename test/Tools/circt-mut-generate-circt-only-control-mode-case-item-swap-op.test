@@ -1,0 +1,7 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic [1:0] s, input logic a,b,c, output logic y);\n  always_comb begin\n    case (s)\n      2'b00: y = a;\n      2'b01: y = b;\n      default: y = c;\n    endcase\n  end\nendmodule\n" > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 120 --seed 17 --modes control > %t/log.txt
+// RUN: grep -q 'NATIVE_CASE_ITEM_SWAP_ARMS' %t/mutations.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
+//
+// LOG: Generated mutations: 120
