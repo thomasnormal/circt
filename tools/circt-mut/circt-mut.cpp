@@ -15175,6 +15175,85 @@ collectCirctOnlyModuleSpans(StringRef text,
   return true;
 }
 
+static void skipCirctOnlySpace(StringRef text, size_t &i) {
+  while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+    ++i;
+}
+
+static bool consumeCirctOnlyIdentifierOrEscaped(StringRef text, size_t &i) {
+  if (i >= text.size())
+    return false;
+  if (text[i] == '\\') {
+    ++i;
+    if (i >= text.size())
+      return false;
+    while (i < text.size() &&
+           !std::isspace(static_cast<unsigned char>(text[i])))
+      ++i;
+    return true;
+  }
+  if (!isIdentifierStart(text[i]))
+    return false;
+  ++i;
+  while (i < text.size() && isIdentifierBody(text[i]))
+    ++i;
+  return true;
+}
+
+static bool consumeCirctOnlyBalancedParens(StringRef text, size_t &i) {
+  if (i >= text.size() || text[i] != '(')
+    return false;
+  unsigned depth = 0;
+  for (; i < text.size(); ++i) {
+    char c = text[i];
+    if (c == '(') {
+      ++depth;
+      continue;
+    }
+    if (c != ')')
+      continue;
+    if (depth == 0)
+      return false;
+    --depth;
+    if (depth == 0) {
+      ++i;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool isCirctOnlyModuleInstantiationAt(StringRef moduleText,
+                                             StringRef calleeName,
+                                             size_t tokenPos) {
+  size_t i = tokenPos + calleeName.size();
+  skipCirctOnlySpace(moduleText, i);
+  if (i < moduleText.size() && moduleText[i] == '#') {
+    ++i;
+    skipCirctOnlySpace(moduleText, i);
+    if (!consumeCirctOnlyBalancedParens(moduleText, i))
+      return false;
+    skipCirctOnlySpace(moduleText, i);
+  }
+  if (!consumeCirctOnlyIdentifierOrEscaped(moduleText, i))
+    return false;
+  skipCirctOnlySpace(moduleText, i);
+  return i < moduleText.size() && moduleText[i] == '(';
+}
+
+static bool moduleContainsCirctOnlyInstantiationOf(StringRef moduleText,
+                                                   StringRef calleeName) {
+  size_t pos = 0;
+  while (true) {
+    auto tok = findTokenFrom(moduleText, calleeName, pos);
+    if (!tok)
+      return false;
+    if (isCirctOnlyModuleInstantiationAt(moduleText, calleeName, *tok))
+      return true;
+    pos = *tok + 1;
+  }
+}
+
 static std::string globToRegexPattern(StringRef glob) {
   std::string regex = "^";
   for (char c : glob) {
@@ -15313,6 +15392,72 @@ static bool filterDesignTextForCirctOnlySelect(StringRef designText,
   return true;
 }
 
+static bool filterDesignTextForCirctOnlyTopHierarchy(
+    StringRef designText, StringRef topName, std::string &filteredDesignText,
+    std::string &error) {
+  SmallVector<CirctOnlyModuleSpan, 32> spans;
+  if (!collectCirctOnlyModuleSpans(designText, spans)) {
+    error = "circt-mut generate: failed to parse module spans for --top in "
+            "CIRCT-only mode";
+    return false;
+  }
+  if (spans.empty()) {
+    error = "circt-mut generate: no modules found for --top in CIRCT-only "
+            "mode";
+    return false;
+  }
+
+  StringMap<const CirctOnlyModuleSpan *> spanByName;
+  for (const CirctOnlyModuleSpan &span : spans)
+    if (!spanByName.count(span.name))
+      spanByName[span.name] = &span;
+
+  if (!spanByName.count(topName)) {
+    error = (Twine("circt-mut generate: --top module not found in CIRCT-only "
+                   "mode: ") +
+             topName)
+                .str();
+    return false;
+  }
+
+  StringSet<> closure;
+  SmallVector<std::string, 16> worklist;
+  closure.insert(topName);
+  worklist.push_back(topName.str());
+
+  for (size_t i = 0; i < worklist.size(); ++i) {
+    StringRef current = worklist[i];
+    auto it = spanByName.find(current);
+    if (it == spanByName.end())
+      continue;
+    StringRef moduleText = designText.slice(it->second->begin, it->second->end);
+
+    for (const auto &candidate : spanByName) {
+      StringRef callee = candidate.getKey();
+      if (closure.contains(callee))
+        continue;
+      if (!moduleContainsCirctOnlyInstantiationOf(moduleText, callee))
+        continue;
+      closure.insert(callee);
+      worklist.push_back(callee.str());
+    }
+  }
+
+  filteredDesignText.clear();
+  for (const CirctOnlyModuleSpan &span : spans) {
+    if (!closure.contains(span.name))
+      continue;
+    filteredDesignText.append(designText.slice(span.begin, span.end).str());
+    filteredDesignText.push_back('\n');
+  }
+
+  if (filteredDesignText.empty()) {
+    error = "circt-mut generate: --top did not resolve any modules in CIRCT-only mode";
+    return false;
+  }
+  return true;
+}
+
 static int runCirctOnlyGenerate(const GenerateOptions &opts) {
   auto start = std::chrono::steady_clock::now();
   auto elapsedNs = [&]() -> uint64_t {
@@ -15361,9 +15506,15 @@ static int runCirctOnlyGenerate(const GenerateOptions &opts) {
 
   std::string filteredDesignTextStorage;
   std::string selectError;
-  if (!filterDesignTextForCirctOnlySelect(designText, finalSelects,
-                                          filteredDesignTextStorage,
-                                          selectError)) {
+  bool useTopHierarchyScope = !opts.top.empty() && opts.selectList.empty();
+  bool filterOK = false;
+  if (useTopHierarchyScope)
+    filterOK = filterDesignTextForCirctOnlyTopHierarchy(
+        designText, opts.top, filteredDesignTextStorage, selectError);
+  else
+    filterOK = filterDesignTextForCirctOnlySelect(
+        designText, finalSelects, filteredDesignTextStorage, selectError);
+  if (!filterOK) {
     errs() << selectError << "\n";
     return 1;
   }
