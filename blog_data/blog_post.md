@@ -57,9 +57,9 @@ Here's how the features landed, week by week:
 
 **Week 5 (Feb 3–9): Formal Verification + Mutation**
 - BMC with k-induction and JIT compilation
-- Unified formal regression harness (`run_formal_all.sh`)
+- Unified formal regression harness
 - Mutation testing framework (`circt-mut`)
-- MCY integration for mutation coverage
+- Native mutation campaign flow and quality reporting
 - 800+ formal verification tests
 
 **Weeks 6–7 (Feb 10–20): Cocotb, VPI, and Hardening**
@@ -210,14 +210,15 @@ This is a level of UVM support that doesn't exist in any other open-source simul
 ### Formal Verification
 
 ```bash
-# Run bounded model checking on sv-tests suite
-utils/run_sv_tests_circt_bmc.sh ~/sv-tests
+# Lower a testbench/design pair
+circt-verilog counter.sv counter_tb.sv -o counter.mlir
 
-# Run logic equivalence checking
-utils/run_sv_tests_circt_lec.sh ~/sv-tests
+# Run bounded model checking
+circt-bmc counter.mlir --bound 20 --module counter_tb
 
-# Full formal regression with quality gates
-utils/run_formal_all.sh --strict-gate --fail-on-diff
+# Run logic equivalence checking between original and mutated designs
+circt-verilog counter_mutated.sv counter_tb.sv -o counter_mutated.mlir
+circt-lec counter.mlir --first-module counter --second-module counter_mutated
 ```
 
 The fork includes a complete formal verification harness with:
@@ -230,28 +231,47 @@ The fork includes a complete formal verification harness with:
 ### Mutation Testing
 
 ```bash
-# Run mutation coverage on MCY examples
-utils/run_mutation_mcy_examples.sh \
-  --examples-root ~/mcy/examples \
-  --out-dir ./mut-results \
-  --jobs 4
+# 1) Generate mutants from a known tricky testcase with a fixed seed
+circt-mut generate \
+  --design cov_intro_seeded.sv \
+  --out mutations.txt \
+  --count 200 \
+  --seed 13 \
+  --modes all
+
+# 2) Run campaign lanes and classify mutants
+circt-mut run --project-dir mut-campaign --mode all
+
+# 3) Aggregate mutation results and quality metrics
+circt-mut report --project-dir mut-campaign --mode all --out mut-report.tsv
+
+# 4) Inspect representative cases with waveform + coverage output
+circt-verilog cov_intro_seeded.sv --ir-llhd --single-unit --top cov_intro_seeded -o cov_intro_seeded.mlir
+circt-sim cov_intro_seeded.mlir --top cov_intro_seeded --vcd cov_intro_seeded.vcd
 ```
 
-The mutation framework generates design mutations (via yosys or native operators), runs differential formal verification, and classifies mutations as killed or surviving — measuring test quality rather than just code coverage.
+The mutation workflow evolved from one-shot coverage runs into a tight differential-debug loop:
+- improve the native mutation operator set (more realistic and semantically distinct faults)
+- re-mutate previously tricky files to stress known weak areas
+- compare waveform traces and coverage outcomes between CIRCT and reference simulators
+- minimize any mismatch to a small reproducer, add a regression test first, then fix the bug
+
+That loop made mutation testing useful for both **test quality measurement** and **simulator correctness debugging**.
 
 ### Unified Regression
 
 All of these capabilities are tied together by a **unified regression orchestrator** that manages 40 test lanes across 6 suites:
 
 ```bash
-# Run smoke regression (bounded subsets of everything)
-utils/run_regression_unified.sh --profile smoke --out-dir ./results
+# Run a bounded mutation campaign (smoke-style)
+circt-mut run --project-dir mut-campaign --mode cover
 
-# Run full regression
-utils/run_regression_unified.sh --profile full --jobs 4 --out-dir ./results
+# Run full campaign and emit summarized report
+circt-mut run --project-dir mut-campaign --mode all
+circt-mut report --project-dir mut-campaign --mode all --out ./results/campaign.tsv
 ```
 
-The orchestrator handles lane selection, retry logic, parity checking (circt vs. Xcelium), and result aggregation.
+The orchestrator handles lane selection, retry logic, parity checking against reference simulators, and result aggregation.
 
 ---
 
