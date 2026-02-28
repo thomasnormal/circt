@@ -955,8 +955,8 @@ Fallback debug-info construction for instances does not track port assignments, 
 ### [x] 317. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:553`
 Status update (2026-02-28): this gap is closed in this workspace. `uvm_phase::m_aa2string` was refactored to use a straightforward separator-first pattern (removing the `TBD tidy` marker) for clearer and deterministic predecessor/successor edge-string formatting. Focused UVM phase/runtime regressions pass.
 
-### [ ] 318. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:762`
-The add-schedule API lacks validation that referenced phase nodes belong to the current schedule/domain, which can allow invalid graph edits before later failure. What is missing is early structural error checking for schedule membership. The fix is to add explicit membership checks for all relationship parameters and emit immediate fatal diagnostics on mismatch.
+### [x] 318. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:762`
+Status update (2026-02-28): this gap is closed in this workspace. `uvm_phase::add` now validates that all relationship parameters (`with_phase`, `before_phase`, `after_phase`, `start_with_phase`, `end_with_phase`) resolve within the current schedule graph before mutation. Cross-schedule misuse now emits immediate `PH_BAD_ADD` diagnostics, with regression coverage in `test/Runtime/uvm/uvm_phase_add_scope_validation_test.sv`.
 
 ### [ ] 319. `lib/Runtime/uvm-core/src/base/uvm_phase.svh:1218`
 State-change callback payload fields are manually poked with a comment noting no official setter path, which indicates API design debt around phase-state transitions. What is missing is a sanctioned constructor/setter interface for `m_state_chg` updates. The fix is to introduce a formal update helper/API and route all state transitions through it.

@@ -1847,3 +1847,31 @@
 - Realization:
   - In this runtime, fatal diagnostics may not imply nonzero process exit, so
     negative tests for UVM fatal behavior should assert output content.
+
+### UVM phase add: validate relation-node membership within schedule graph
+- Repro/verification (TDD):
+  - Added `test/Runtime/uvm/uvm_phase_add_scope_validation_test.sv` to exercise
+    invalid cross-schedule `with_phase` usage:
+    - create `sched_a` and `sched_b`, then call
+      `sched_a.add(uvm_build_phase::get(), .with_phase(sched_b));`
+    - expect `PH_BAD_ADD` with a clear "cannot find with_phase ... within node"
+      diagnostic.
+  - Before the fix, the test failed as expected because the invalid call was
+    silently accepted (`NO_FATAL` observed).
+- Root cause:
+  - `uvm_phase::add` only canonicalized/validated relation parameters when they
+    were `UVM_PHASE_IMP` objects. Non-IMP handles (including foreign schedule
+    nodes) bypassed membership checks and could mutate the wrong graph.
+- Fix:
+  - In `lib/Runtime/uvm-core/src/base/uvm_phase.svh` (`uvm_phase::add`):
+    - validate all non-null relation parameters via `find(...)` regardless of
+      phase type,
+    - emit existing `PH_BAD_ADD` fatal diagnostics when unresolved,
+    - remove the stale TODO about missing schedule-membership checks.
+- Validation:
+  - `build_test/bin/llvm-lit -a -v test/Runtime/uvm/uvm_phase_add_scope_validation_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv`
+  - `build_test/bin/llvm-lit -a -v test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_tlm_port_test.sv`
+  - Result: all passing.
+- Realization:
+  - Treating only `UVM_PHASE_IMP` as needing canonicalization left a real gap:
+    API misuse with non-IMP handles could cross-link unrelated phase graphs.
