@@ -692,8 +692,13 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     };
     auto shouldForceInterpretedFragileUvmCallee =
         [](llvm::StringRef calleeName) -> bool {
+      // Keep known fragile UVM mutators/walkers interpreted even when
+      // native-eligible; native dispatch has shown startup crashes in real
+      // UVM topologies for these paths.
       return calleeName.contains(
-          "uvm_pkg::uvm_phase::set_max_ready_to_end_iterations");
+                 "uvm_pkg::uvm_phase::set_max_ready_to_end_iterations") ||
+             calleeName.contains(
+                 "uvm_pkg::uvm_component_proxy::get_immediate_children");
     };
     auto tryResolveAnalysisWriteTarget =
         [&](ModuleOp lookupModule, uint64_t selfAddr, llvm::StringRef traceTag)
