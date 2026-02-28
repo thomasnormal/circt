@@ -25,7 +25,7 @@
 // AOTSTATS-DAG: [circt-sim] entry_calls_native:               0
 // AOTSTATS-DAG: [circt-sim] entry_calls_trampoline:           0
 // AOTSTATS-DAG: [circt-sim] parse_ms:                         {{[0-9]+}}
-// AOTSTATS-DAG: [circt-sim] so_load_ms:                       {{[0-9]+}}
+// AOTSTATS-DAG: [circt-sim] so_load_ms:                       {{[1-9][0-9]*}}
 // AOTSTATS-DAG: [circt-sim] init_ms:                          {{[0-9]+}}
 // AOTSTATS-DAG: [circt-sim] snapshot_restore_ms:              0
 // AOTSTATS-DAG: [circt-sim] arena_globals:                    0

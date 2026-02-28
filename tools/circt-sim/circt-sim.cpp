@@ -3901,25 +3901,29 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
       globalPatchCount = loader->getNumGlobalPatches();
       globalPatchBytes = loader->getGlobalPatchBytes();
     }
-    uint64_t parseWallMs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(parseDoneTime -
-                                                               startTime)
-            .count());
-    uint64_t passesWallMs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(passesDoneTime -
-                                                               parseDoneTime)
-            .count());
-    uint64_t initWallMs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(initDoneTime -
-                                                               passesDoneTime)
-            .count());
-    uint64_t soLoadWallMs = hadCompiledLoad
-                                ? static_cast<uint64_t>(
-                                      std::chrono::duration_cast<
-                                          std::chrono::milliseconds>(
-                                          loadCompiledDoneTime - initDoneTime)
-                                          .count())
-                                : 0;
+    auto durationMsFloor = [](auto begin, auto end) -> uint64_t {
+      return static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(end - begin)
+              .count());
+    };
+    auto durationMsCeil = [](auto begin, auto end) -> uint64_t {
+      uint64_t ns = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin)
+              .count());
+      if (ns == 0)
+        return 0;
+      return (ns + 999999) / 1000000;
+    };
+    uint64_t parseWallMs = durationMsFloor(startTime, parseDoneTime);
+    uint64_t passesWallMs = durationMsFloor(parseDoneTime, passesDoneTime);
+    uint64_t initWallMs = durationMsFloor(passesDoneTime, initDoneTime);
+    uint64_t soLoadWallMs = 0;
+    if (hadCompiledLoad) {
+      // Keep this visible on short runs: compiled load happened, so avoid
+      // truncating a sub-ms duration down to zero.
+      soLoadWallMs =
+          std::max<uint64_t>(1, durationMsCeil(initDoneTime, loadCompiledDoneTime));
+    }
     uint64_t snapshotRestoreWallMs = 0;
     uint64_t snapshotRestoreNs =
         snapshotRestoreDurationNs.load(std::memory_order_relaxed);
