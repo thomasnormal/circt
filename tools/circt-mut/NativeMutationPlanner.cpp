@@ -1711,6 +1711,37 @@ static bool findSimpleAssignmentRhsIdentifierSpan(StringRef text,
   return parsePos == parseLimit;
 }
 
+static bool isAssignRhsMutationOp(StringRef op) {
+  return op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
+         op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
+         op == "ASSIGN_RHS_MINUS_ONE";
+}
+
+static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
+                                              std::string &replacement) {
+  if (op == "ASSIGN_RHS_TO_CONST0") {
+    replacement = "1'b0";
+    return true;
+  }
+  if (op == "ASSIGN_RHS_TO_CONST1") {
+    replacement = "1'b1";
+    return true;
+  }
+  if (op == "ASSIGN_RHS_INVERT") {
+    replacement = (Twine("~(") + rhsExpr + ")").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_PLUS_ONE") {
+    replacement = (Twine("(") + rhsExpr + " + 1'b1)").str();
+    return true;
+  }
+  if (op == "ASSIGN_RHS_MINUS_ONE") {
+    replacement = (Twine("(") + rhsExpr + " - 1'b1)").str();
+    return true;
+  }
+  return false;
+}
+
 static void collectAssignRhsIdentifierSites(
     StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
   int parenDepth = 0;
@@ -2733,9 +2764,7 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectProceduralNonblockingAssignSites(designText, codeMask, sites);
     return;
   }
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-      op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
-      op == "ASSIGN_RHS_MINUS_ONE") {
+  if (isAssignRhsMutationOp(op)) {
     collectAssignRhsIdentifierSites(designText, codeMask, sites);
     return;
   }
@@ -3017,8 +3046,7 @@ static std::string getOpFamily(StringRef op) {
       op == "POSEDGE_TO_NEGEDGE" || op == "NEGEDGE_TO_POSEDGE" ||
       op == "RESET_POSEDGE_TO_NEGEDGE" || op == "RESET_NEGEDGE_TO_POSEDGE")
     return "timing";
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-      op == "ASSIGN_RHS_INVERT")
+  if (isAssignRhsMutationOp(op))
     return "connect";
   if (op == "MUX_SWAP_ARMS" || op == "MUX_FORCE_TRUE" ||
       op == "MUX_FORCE_FALSE")
@@ -4062,27 +4090,16 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, 1, "<=");
   if (op == "NBA_TO_BA")
     return replaceTokenAt(mutatedText, pos, 2, "=");
-  if (op == "ASSIGN_RHS_TO_CONST0" || op == "ASSIGN_RHS_TO_CONST1" ||
-      op == "ASSIGN_RHS_INVERT" || op == "ASSIGN_RHS_PLUS_ONE" ||
-      op == "ASSIGN_RHS_MINUS_ONE") {
+  if (isAssignRhsMutationOp(op)) {
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
     if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, pos, rhsStart,
                                                rhsEnd))
       return false;
     std::string replacement;
-    if (op == "ASSIGN_RHS_TO_CONST0")
-      replacement = "1'b0";
-    else if (op == "ASSIGN_RHS_TO_CONST1")
-      replacement = "1'b1";
-    else if (op == "ASSIGN_RHS_PLUS_ONE")
-      replacement =
-          (Twine("(") + text.slice(rhsStart, rhsEnd + 1) + " + 1'b1)").str();
-    else if (op == "ASSIGN_RHS_MINUS_ONE")
-      replacement =
-          (Twine("(") + text.slice(rhsStart, rhsEnd + 1) + " - 1'b1)").str();
-    else
-      replacement = (Twine("~(") + text.slice(rhsStart, rhsEnd + 1) + ")").str();
+    if (!buildAssignRhsMutationReplacement(op, text.slice(rhsStart, rhsEnd + 1),
+                                           replacement))
+      return false;
     return replaceSpan(mutatedText, rhsStart, rhsEnd + 1, replacement);
   }
   if (op == "POSEDGE_TO_NEGEDGE")
