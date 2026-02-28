@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(output logic [3:0] y);\n  assign y = 0;\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_CONST0_TO_1@1\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUTANT < %t/mutant.sv
+//
+// MUTANT: output logic [3:0] y
+// MUTANT: assign y = 1;

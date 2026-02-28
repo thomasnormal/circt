@@ -1,0 +1,19 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(output logic [7:0] y0, output logic [7:0] y1, output logic [7:0] y2, output logic [7:0] y3);\n  assign y0 = 8'h00;\n  assign y1 = 8'd1;\n  assign y2 = 0;\n  assign y3 = 1;\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_CONST0_TO_1@1\n' > %t/m0.txt
+// RUN: printf '1 NATIVE_CONST0_TO_1@2\n' > %t/m1.txt
+// RUN: printf '1 NATIVE_CONST1_TO_0@1\n' > %t/m2.txt
+// RUN: printf '1 NATIVE_CONST1_TO_0@2\n' > %t/m3.txt
+// RUN: circt-mut apply -i %t/m0.txt -o %t/o0.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/m1.txt -o %t/o1.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/m2.txt -o %t/o2.sv -d %t/design.sv
+// RUN: circt-mut apply -i %t/m3.txt -o %t/o3.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=M0 < %t/o0.sv
+// RUN: FileCheck %s --check-prefix=M1 < %t/o1.sv
+// RUN: FileCheck %s --check-prefix=M2 < %t/o2.sv
+// RUN: FileCheck %s --check-prefix=M3 < %t/o3.sv
+//
+// M0: assign y0 = 8'h01;
+// M1: assign y2 = 1;
+// M2: assign y1 = 8'd0;
+// M3: assign y3 = 0;

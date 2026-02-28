@@ -709,9 +709,13 @@ static bool isUnaryOperatorContext(char prev) {
          prev == '!' || prev == '~' || prev == '<' || prev == '>';
 }
 
+static bool rhsLiteralEquals(StringRef text, ArrayRef<uint8_t> codeMask,
+                             size_t opPos, uint64_t target);
+
 static void collectBinaryShiftSites(StringRef text, StringRef token,
                                     ArrayRef<uint8_t> codeMask,
-                                    SmallVectorImpl<SiteInfo> &sites) {
+                                    SmallVectorImpl<SiteInfo> &sites,
+                                    bool skipRhsZeroEquivalent = false) {
   assert((token == "<<" || token == ">>") && "expected << or >> token");
   char marker = token[0];
   for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
@@ -735,6 +739,9 @@ static void collectBinaryShiftSites(StringRef text, StringRef token,
     char nextSigChar = text[nextSig];
     if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
       continue;
+    if (skipRhsZeroEquivalent &&
+        rhsLiteralEquals(text, codeMask, i + token.size() - 1, 0))
+      continue;
 
     sites.push_back({i});
   }
@@ -742,7 +749,8 @@ static void collectBinaryShiftSites(StringRef text, StringRef token,
 
 static void collectBinaryArithmeticRightShiftSites(
     StringRef text, ArrayRef<uint8_t> codeMask,
-    SmallVectorImpl<SiteInfo> &sites) {
+    SmallVectorImpl<SiteInfo> &sites,
+    bool skipRhsZeroEquivalent = false) {
   for (size_t i = 0, e = text.size(); i + 2 < e; ++i) {
     if (!isCodeRange(codeMask, i, 3))
       continue;
@@ -763,6 +771,8 @@ static void collectBinaryArithmeticRightShiftSites(
     char prevSigChar = text[prevSig];
     char nextSigChar = text[nextSig];
     if (!isOperandEndChar(prevSigChar) || !isOperandStartChar(nextSigChar))
+      continue;
+    if (skipRhsZeroEquivalent && rhsLiteralEquals(text, codeMask, i + 2, 0))
       continue;
 
     sites.push_back({i});
@@ -991,6 +1001,141 @@ static bool parseSimpleNonNegativeLiteralValue(StringRef expr, uint64_t &value) 
   return parseDigits(e.drop_front(idx), base, value);
 }
 
+static bool isSimpleLiteralTokenChar(char c) {
+  return isAlnum(c) || c == '_' || c == '\'';
+}
+
+static bool isIdentifierLikeChar(char c) {
+  return isAlnum(c) || c == '_' || c == '$';
+}
+
+static bool parseSimpleNonNegativeLiteralAt(StringRef text,
+                                            ArrayRef<uint8_t> codeMask,
+                                            size_t pos, size_t &end,
+                                            uint64_t &value) {
+  if (pos >= text.size() || !isCodeAt(codeMask, pos))
+    return false;
+  char first = text[pos];
+  if (!(std::isdigit(static_cast<unsigned char>(first)) || first == '\''))
+    return false;
+
+  if (pos > 0 && isCodeAt(codeMask, pos - 1)) {
+    char prev = text[pos - 1];
+    if (isIdentifierLikeChar(prev) || prev == '\'')
+      return false;
+  }
+
+  size_t i = pos;
+  while (i < text.size() && isCodeAt(codeMask, i) &&
+         isSimpleLiteralTokenChar(text[i]))
+    ++i;
+  if (i == pos)
+    return false;
+
+  if (i < text.size() && isCodeAt(codeMask, i)) {
+    char next = text[i];
+    if (isIdentifierLikeChar(next) || next == '\'' || next == '.')
+      return false;
+  }
+
+  StringRef token = text.slice(pos, i);
+  if (!parseSimpleNonNegativeLiteralValue(token, value))
+    return false;
+  end = i;
+  return true;
+}
+
+static void collectSimpleLiteralValueSites(StringRef text,
+                                           ArrayRef<uint8_t> codeMask,
+                                           uint64_t target,
+                                           SmallVectorImpl<SiteInfo> &sites) {
+  int bracketDepth = 0;
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (isCodeAt(codeMask, i)) {
+      char ch = text[i];
+      if (ch == '[') {
+        ++bracketDepth;
+        continue;
+      }
+      if (ch == ']') {
+        if (bracketDepth > 0)
+          --bracketDepth;
+        continue;
+      }
+      // Avoid declaration/bit-slice constants that often produce structurally
+      // invalid or low-signal mutants (for example packed ranges [W-1:0]).
+      if (bracketDepth > 0)
+        continue;
+    }
+
+    size_t end = i;
+    uint64_t value = 0;
+    if (!parseSimpleNonNegativeLiteralAt(text, codeMask, i, end, value))
+      continue;
+    if (value == target) {
+      size_t stmtStart = findStatementStart(text, codeMask, i);
+      if (!statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
+        sites.push_back({i});
+    }
+    if (end > i)
+      i = end - 1;
+  }
+}
+
+static bool buildFlippedSimpleLiteral(StringRef token, bool zeroToOne,
+                                      std::string &replacement) {
+  uint64_t value = 0;
+  if (!parseSimpleNonNegativeLiteralValue(token, value))
+    return false;
+  uint64_t expected = zeroToOne ? 0 : 1;
+  if (value != expected)
+    return false;
+
+  if (token == "'0" || token == "'1") {
+    replacement = zeroToOne ? "'1" : "'0";
+    return true;
+  }
+
+  size_t apost = token.find('\'');
+  if (apost == StringRef::npos) {
+    replacement = zeroToOne ? "1" : "0";
+    return true;
+  }
+  if (apost + 1 >= token.size())
+    return false;
+
+  size_t baseIdx = apost + 1;
+  if (token[baseIdx] == 's' || token[baseIdx] == 'S') {
+    ++baseIdx;
+    if (baseIdx >= token.size())
+      return false;
+  }
+  ++baseIdx;
+  if (baseIdx > token.size())
+    return false;
+
+  StringRef prefix = token.slice(0, baseIdx);
+  StringRef digits = token.drop_front(baseIdx);
+  if (digits.empty())
+    return false;
+
+  std::string flippedDigits = digits.str();
+  int lastDigitIndex = -1;
+  for (size_t i = 0; i < flippedDigits.size(); ++i) {
+    if (flippedDigits[i] == '_')
+      continue;
+    flippedDigits[i] = '0';
+    lastDigitIndex = static_cast<int>(i);
+  }
+  if (lastDigitIndex < 0)
+    return false;
+  if (zeroToOne)
+    flippedDigits[static_cast<size_t>(lastDigitIndex)] = '1';
+
+  replacement = (prefix + flippedDigits).str();
+  return true;
+}
+
 static bool findMatchingParen(StringRef text, ArrayRef<uint8_t> codeMask,
                               size_t openPos, size_t &closePos) {
   if (openPos >= text.size() || text[openPos] != '(')
@@ -1157,7 +1302,7 @@ static void collectBinaryMulDivSites(StringRef text, char needle,
 }
 
 static bool isIdentifierChar(char c) {
-  return isAlnum(c) || c == '_' || c == '$';
+  return isIdentifierLikeChar(c);
 }
 
 static bool isWithinForHeader(StringRef text, ArrayRef<uint8_t> codeMask,
@@ -1216,8 +1361,8 @@ static void collectCompoundAssignSites(StringRef text, StringRef token,
                                        bool skipRhsOneEquivalent = false) {
   assert((token == "+=" || token == "-=" || token == "*=" || token == "/=" ||
           token == "%=" || token == "<<=" || token == ">>=" || token == ">>>=" ||
-          token == "&=" || token == "|=") &&
-         "expected +=, -=, *=, /=, %=, <<=, >>=, >>>=, &=, or |= compound assignment token");
+          token == "&=" || token == "|=" || token == "^=") &&
+         "expected +=, -=, *=, /=, %=, <<=, >>=, >>>=, &=, |=, or ^= compound assignment token");
   for (size_t i = 0, e = text.size(); i + token.size() <= e; ++i) {
     if (!isCodeRange(codeMask, i, token.size()))
       continue;
@@ -3321,23 +3466,11 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "CONST0_TO_1") {
-    collectLiteralTokenSites(designText, "1'b0", codeMask, sites);
-    collectLiteralTokenSites(designText, "1'd0", codeMask, sites);
-    collectLiteralTokenSites(designText, "1'h0", codeMask, sites);
-    collectLiteralTokenSites(designText, "'0", codeMask, sites);
-    llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
-      return a.pos < b.pos;
-    });
+    collectSimpleLiteralValueSites(designText, codeMask, /*target=*/0, sites);
     return;
   }
   if (op == "CONST1_TO_0") {
-    collectLiteralTokenSites(designText, "1'b1", codeMask, sites);
-    collectLiteralTokenSites(designText, "1'd1", codeMask, sites);
-    collectLiteralTokenSites(designText, "1'h1", codeMask, sites);
-    collectLiteralTokenSites(designText, "'1", codeMask, sites);
-    llvm::sort(sites, [](const SiteInfo &a, const SiteInfo &b) {
-      return a.pos < b.pos;
-    });
+    collectSimpleLiteralValueSites(designText, codeMask, /*target=*/1, sites);
     return;
   }
   if (op == "ADD_TO_SUB") {
@@ -3459,19 +3592,23 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (op == "SHL_TO_SHR") {
-    collectBinaryShiftSites(designText, "<<", codeMask, sites);
+    collectBinaryShiftSites(designText, "<<", codeMask, sites,
+                            /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "SHR_TO_SHL") {
-    collectBinaryShiftSites(designText, ">>", codeMask, sites);
+    collectBinaryShiftSites(designText, ">>", codeMask, sites,
+                            /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "SHR_TO_ASHR") {
-    collectBinaryShiftSites(designText, ">>", codeMask, sites);
+    collectBinaryShiftSites(designText, ">>", codeMask, sites,
+                            /*skipRhsZeroEquivalent=*/true);
     return;
   }
   if (op == "ASHR_TO_SHR") {
-    collectBinaryArithmeticRightShiftSites(designText, codeMask, sites);
+    collectBinaryArithmeticRightShiftSites(
+        designText, codeMask, sites, /*skipRhsZeroEquivalent=*/true);
     return;
   }
 }
@@ -4488,19 +4625,19 @@ static bool applyCaseItemSwapAt(StringRef text, ArrayRef<uint8_t> codeMask,
 }
 
 static bool applyConstFlipAt(StringRef text, bool zeroToOne, size_t pos,
+                             ArrayRef<uint8_t> codeMask,
                              std::string &mutatedText) {
-  auto apply = [&](StringRef needle, StringRef replacement) {
-    if (pos + needle.size() > text.size() || !text.substr(pos).starts_with(needle))
-      return false;
-    return replaceTokenAt(mutatedText, pos, needle.size(), replacement);
-  };
+  size_t end = pos;
+  uint64_t value = 0;
+  if (!parseSimpleNonNegativeLiteralAt(text, codeMask, pos, end, value))
+    return false;
+  if ((zeroToOne && value != 0) || (!zeroToOne && value != 1))
+    return false;
 
-  if (zeroToOne) {
-    return apply("1'b0", "1'b1") || apply("1'd0", "1'd1") ||
-           apply("1'h0", "1'h1") || apply("'0", "'1");
-  }
-  return apply("1'b1", "1'b0") || apply("1'd1", "1'd0") ||
-         apply("1'h1", "1'h0") || apply("'1", "'0");
+  std::string replacement;
+  if (!buildFlippedSimpleLiteral(text.slice(pos, end), zeroToOne, replacement))
+    return false;
+  return replaceSpan(mutatedText, pos, end, replacement);
 }
 
 static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask,
@@ -4651,9 +4788,11 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceSpan(mutatedText, pos, end, "");
   }
   if (op == "CONST0_TO_1")
-    return applyConstFlipAt(text, /*zeroToOne=*/true, pos, mutatedText);
+    return applyConstFlipAt(text, /*zeroToOne=*/true, pos, codeMask,
+                            mutatedText);
   if (op == "CONST1_TO_0")
-    return applyConstFlipAt(text, /*zeroToOne=*/false, pos, mutatedText);
+    return applyConstFlipAt(text, /*zeroToOne=*/false, pos, codeMask,
+                            mutatedText);
   if (op == "ADD_TO_SUB")
     return replaceTokenAt(mutatedText, pos, 1, "-");
   if (op == "SUB_TO_ADD")

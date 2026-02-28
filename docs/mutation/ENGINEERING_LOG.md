@@ -1971,3 +1971,52 @@
       - result: `ok=12 mismatch=0`
     - workspace: `/tmp/cov_intro_seeded_compound_neutral_recheck_1772305463`
       - result: `ok=16 mismatch=0`
+
+## 2026-02-28 (const-literal mutation generalization + range-site safety)
+
+- realizations:
+  - `CONST0_TO_1` / `CONST1_TO_0` only recognized a narrow set of one-bit
+    tokens (`1'b0/1`-style and `'0/'1`), missing common literals like `8'd0`,
+    `8'h01`, and plain `0/1`.
+  - Generalizing literal detection immediately exposed a real quality bug:
+    declaration/range bounds (`[3:0]`, `[31:0]`) were being mutated, creating
+    structurally poor mutants (for example width changes) and parity noise.
+  - The initial seeded parity batch after generalization showed:
+    - workspace: `/tmp/cov_intro_seeded_const_general_1772306119`
+    - result: `ok=17 mismatch=1 fail=2`
+    - root cause: range-site mutations (`[3:0] -> [3:1]`, `[31:0] -> [31:1]`)
+      leading to front-end type failures and divergent OOB/X behavior.
+
+- changes made:
+  - Updated `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - added generalized simple-literal scanning for non-negative Verilog
+      numeric literals (including sized/base forms and plain decimal forms).
+    - replaced const-site collection for `CONST0_TO_1` / `CONST1_TO_0` with
+      value-based site discovery.
+    - generalized const apply rewrite to flip the full literal token while
+      preserving prefix/base formatting.
+    - tightened const-site eligibility:
+      - skip bracketed contexts (`[...]`) to avoid declaration/range/slice
+        structural mutations,
+      - keep typed-declaration guard.
+  - Fixed compound-assignment token assertion drift:
+    - `collectCompoundAssignSites` now accepts `^=` in its token assert set.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-const-general-literals.test`
+  - `test/Tools/native-create-mutated-const-general-literal-format.test`
+  - `test/Tools/native-create-mutated-const-skip-range-sites.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-const-general-literals.test test/Tools/native-create-mutated-const-general-literal-format.test test/Tools/native-create-mutated-const-skip-range-sites.test test/Tools/native-create-mutated-const-hex-site-index.test test/Tools/native-create-mutated-const-unsized.test test/Tools/circt-mut-generate-circt-only-const-unsized-sites.test`
+    - result: `6 passed`.
+  - seeded parity rechecks (xrun vs circt):
+    - const-focused:
+      - workspace: `/tmp/cov_intro_seeded_const_general_recheck_1772306238`
+      - result: `ok=20 mismatch=0 fail=0`
+    - broader balanced sweep:
+      - workspace: `/tmp/cov_intro_seeded_balanced_recheck_1772306285`
+      - result: `ok=12 mismatch=0 fail=0`

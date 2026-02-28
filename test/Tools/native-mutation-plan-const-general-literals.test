@@ -1,0 +1,12 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top;\n  logic [7:0] a;\n  logic y;\n  always_comb begin\n    y = (a == 8'd0) || (a == 0);\n    if ((a == 8'h01) || (a == 1)) y = y;\n  end\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops CONST0_TO_1 --out %t/const0.txt
+// RUN: circt-mut generate --design %t/design.sv --count 2 --seed 0 --native-ops CONST1_TO_0 --out %t/const1.txt
+// RUN: FileCheck %s --check-prefix=CONST0 < %t/const0.txt
+// RUN: FileCheck %s --check-prefix=CONST1 < %t/const1.txt
+//
+// CONST0: NATIVE_CONST0_TO_1@1
+// CONST0: NATIVE_CONST0_TO_1@2
+//
+// CONST1: NATIVE_CONST1_TO_0@1
+// CONST1: NATIVE_CONST1_TO_0@2
