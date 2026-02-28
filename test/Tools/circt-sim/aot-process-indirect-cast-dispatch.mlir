@@ -4,8 +4,8 @@
 // Ensure callback process eligibility accepts safe
 // builtin.unrealized_conversion_cast patterns used by func.call_indirect.
 //
-// COMPILE: [circt-compile] Compiled 1 process bodies
-// COMPILE: [circt-compile] Processes: 3 total, 1 callback-eligible, 2 rejected
+// COMPILE: [circt-compile] Compiled 2 process bodies
+// COMPILE: [circt-compile] Processes: 3 total, 2 callback-eligible, 1 rejected
 // RUNTIME-NOT: FATAL: trampoline dispatch
 // RUNTIME: a=1
 

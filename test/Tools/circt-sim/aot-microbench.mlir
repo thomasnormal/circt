@@ -17,7 +17,7 @@
 //   circt-compile aot-microbench.mlir -o /tmp/mb.so
 //   time circt-sim aot-microbench.mlir --compiled=/tmp/mb.so
 //
-// COMPILE: [circt-compile] Compiled 1 process bodies
+// COMPILE: [circt-compile] Compiled 2 process bodies
 //
 // SIM: result=49995000
 //

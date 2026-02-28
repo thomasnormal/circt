@@ -85,6 +85,7 @@ using namespace circt;
 // Command-line options
 //===----------------------------------------------------------------------===//
 
+#ifndef CRUN_MODE
 static llvm::cl::opt<std::string> inputFilename(llvm::cl::Positional,
                                                   llvm::cl::desc("<input>"),
                                                   llvm::cl::init("-"));
@@ -96,7 +97,16 @@ static llvm::cl::opt<std::string>
 static llvm::cl::opt<int>
     optLevel("O", llvm::cl::desc("Optimization level (0-3)"),
              llvm::cl::init(1));
+#endif // CRUN_MODE
 
+#ifdef CRUN_MODE
+// In CRUN_MODE these are plain variables (not cl::opts) to avoid flag
+// conflicts with circt-sim's -v and other options compiled into the same binary.
+static bool emitLLVM = false;
+static bool emitObject = false;
+static bool verbose = false;
+static bool emitSnapshot = false;
+#else
 static llvm::cl::opt<bool>
     emitLLVM("emit-llvm", llvm::cl::desc("Emit LLVM IR instead of .so"),
              llvm::cl::init(false));
@@ -113,6 +123,7 @@ static llvm::cl::opt<bool> emitSnapshot(
     llvm::cl::desc("Emit a snapshot directory (design.mlirbc + native.so + "
                    "meta.json) instead of a bare .so"),
     llvm::cl::init(false));
+#endif // CRUN_MODE
 
 //===----------------------------------------------------------------------===//
 // Lowering: func compilability check
@@ -4857,6 +4868,12 @@ static bool isProcessCallbackEligible(
     if (isa<llhd::HaltOp, llhd::IntToTimeOp, llhd::ConstantTimeOp,
             llhd::ProcessOp>(op))
       return WalkResult::advance();
+    if (isa<sim::PrintFormattedProcOp, sim::FormatLiteralOp, sim::FormatHexOp,
+            sim::FormatDecOp, sim::FormatBinOp, sim::FormatOctOp,
+            sim::FormatCharOp, sim::FormatScientificOp, sim::FormatFloatOp,
+            sim::FormatGeneralOp, sim::FormatStringConcatOp,
+            sim::FormatDynStringOp>(op))
+      return WalkResult::advance();
     // Allow safe cast forms that the main lowering pipeline already resolves.
     if (auto castOp = dyn_cast<UnrealizedConversionCastOp>(op)) {
       bool allResultsDead = true;
@@ -5173,6 +5190,34 @@ static unsigned compileProcessBodies(
     // Pre-scan: clone external constants into entry block.
     bool extractionFailed = false;
     std::string extractionFailKind;
+    auto cloneExternalSimFormatValue = [&](Value value,
+                                           const auto &self) -> LogicalResult {
+      if (mapping.contains(value))
+        return success();
+      Operation *def = value.getDefiningOp();
+      if (!def)
+        return failure();
+      if (!isa<sim::FormatLiteralOp, sim::FormatHexOp, sim::FormatDecOp,
+               sim::FormatBinOp, sim::FormatOctOp, sim::FormatCharOp,
+               sim::FormatScientificOp, sim::FormatFloatOp,
+               sim::FormatGeneralOp, sim::FormatStringConcatOp,
+               sim::FormatDynStringOp>(def))
+        return failure();
+      for (Value operand : def->getOperands()) {
+        // External format nodes must be self-contained and not depend on
+        // process-local SSA values.
+        if (procRegion.isAncestor(operand.getParentRegion()))
+          return failure();
+        if (failed(self(operand, self)))
+          return failure();
+      }
+      auto *cloned = builder.clone(*def, mapping);
+      if (cloned->getNumResults() != 1)
+        return failure();
+      mapping.map(value, cloned->getResult(0));
+      return success();
+    };
+
     for (Block *srcBlock : bodyBlocks) {
       for (Operation &op : *srcBlock) {
         // Skip operands of ops that will be replaced entirely (wait/halt).
@@ -5229,6 +5274,18 @@ static unsigned compileProcessBodies(
               mapping.map(operand, valConst.getResult());
             } else {
               failWith("hw.aggregate_constant(non-fourstate)");
+              break;
+            }
+          } else if (isa<sim::FormatLiteralOp, sim::FormatHexOp,
+                         sim::FormatDecOp, sim::FormatBinOp,
+                         sim::FormatOctOp, sim::FormatCharOp,
+                         sim::FormatScientificOp, sim::FormatFloatOp,
+                         sim::FormatGeneralOp, sim::FormatStringConcatOp,
+                         sim::FormatDynStringOp>(operand.getDefiningOp())) {
+            if (failed(
+                    cloneExternalSimFormatValue(operand,
+                                                cloneExternalSimFormatValue))) {
+              failWith("sim.fmt.external");
               break;
             }
           } else {
@@ -7046,6 +7103,14 @@ static LogicalResult debugTranslateBisection(ModuleOp microModule,
   return success();
 }
 
+// Forward declaration — definition follows after compile().
+static LogicalResult compileModuleImpl(MLIRContext &mlirContext, ModuleOp module,
+                                       StringRef outputPath, int optLvl,
+                                       StringRef buildId,
+                                       StringRef contentHash,
+                                       std::chrono::steady_clock::time_point startTime);
+
+#ifndef CRUN_MODE
 static LogicalResult compile(MLIRContext &mlirContext) {
   auto startTime = std::chrono::steady_clock::now();
 
@@ -7085,13 +7150,54 @@ static LogicalResult compile(MLIRContext &mlirContext) {
                  << std::chrono::duration<double>(elapsed).count() << "s\n";
   }
 
+  // Determine output path for compile(). Resolve the inputFilename fallback
+  // here since compileModuleImpl() has no access to cl::opt globals.
+  std::string outPathForCompile = outputFilename.getValue();
+  if (outPathForCompile.empty() && !emitSnapshot) {
+    if (inputFilename == "-") {
+      outPathForCompile = "a.out.so";
+    } else {
+      llvm::SmallString<256> p(inputFilename.getValue());
+      llvm::sys::path::replace_extension(p, ".so");
+      outPathForCompile = std::string(p);
+    }
+  }
+  if (outPathForCompile.empty() && emitSnapshot) {
+    if (inputFilename == "-") {
+      outPathForCompile = "a.out.csnap";
+    } else {
+      llvm::SmallString<256> p(inputFilename.getValue());
+      llvm::sys::path::replace_extension(p, ".csnap");
+      outPathForCompile = std::string(p);
+    }
+  }
+
+  // Compute build ID from content hash.
+  std::string buildId = "circt-sim-abi-v" +
+                        std::to_string(CIRCT_SIM_ABI_VERSION) + "-" +
+                        llvm::sys::getDefaultTargetTriple() + "-" +
+                        contentHash;
+
+  return compileModuleImpl(mlirContext, *module, outPathForCompile,
+                           optLevel, buildId, contentHash, startTime);
+}
+#endif // CRUN_MODE
+
+/// The core compilation pipeline: takes a parsed ModuleOp and compiles it to a
+/// shared object. Extracted from compile() so it can be called in-process from
+/// crun without file I/O.
+static LogicalResult compileModuleImpl(MLIRContext &mlirContext, ModuleOp module,
+                                       StringRef outputPath, int optLvl,
+                                       StringRef buildId,
+                                       StringRef contentHash,
+                                       std::chrono::steady_clock::time_point startTime) {
   // Compile process bodies (Phase A: callback processes).
   llvm::SmallVector<std::string> procNames;
   llvm::SmallVector<uint8_t> procKinds;
   unsigned totalProcesses = 0;
   llvm::StringMap<unsigned> procRejectionReasons;
   unsigned numProcsCompiled =
-      compileProcessBodies(*module, procNames, procKinds,
+      compileProcessBodies(module, procNames, procKinds,
                            &totalProcesses, &procRejectionReasons);
   if (numProcsCompiled > 0) {
     llvm::errs() << "[circt-compile] Compiled " << numProcsCompiled
@@ -7126,7 +7232,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   unsigned totalFuncs = 0, externalFuncs = 0, rejectedFuncs = 0;
   llvm::StringMap<unsigned> funcRejectionReasons;
 
-  module->walk([&](func::FuncOp funcOp) {
+  module.walk([&](func::FuncOp funcOp) {
     ++totalFuncs;
     if (funcOp.isExternal()) {
       ++externalFuncs;
@@ -7180,7 +7286,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   }
 
   NativeModuleInitSynthesisStats nativeModuleInitStats =
-      synthesizeNativeModuleInitFunctions(*module, microModule);
+      synthesizeNativeModuleInitFunctions(module, microModule);
   if (nativeModuleInitStats.emittedModules > 0)
     llvm::errs() << "[circt-compile] Native module init functions: "
                  << nativeModuleInitStats.emittedModules << "\n";
@@ -7207,7 +7313,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // `hw.struct_extract(scf.if(...))` shape before global SCF->CF lowering.
   rewriteNativeModuleInitStructExtractFromSCFIf(microModule);
 
-  cloneReferencedDeclarations(microModule, *module, mapping);
+  cloneReferencedDeclarations(microModule, module, mapping);
 
   // Normalize ref-like func argument ABIs in the micro-module to keep helper
   // call wrappers pointer-typed for LLVM lowering.
@@ -7234,8 +7340,17 @@ static LogicalResult compile(MLIRContext &mlirContext) {
         std::getenv("CIRCT_AOT_INTERCEPT_ALL_UVM") != nullptr;
     bool aggressiveNativeUvm =
         std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr;
-    bool allowNativeUvmAlloc = aggressiveNativeUvm ||
+    bool legacyAllowNativeUvmAlloc =
         std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC") != nullptr;
+    bool allowNativeUvmAllocUnsafe =
+        aggressiveNativeUvm ||
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC_UNSAFE") != nullptr;
+    if (legacyAllowNativeUvmAlloc && !allowNativeUvmAllocUnsafe) {
+      llvm::errs()
+          << "[circt-compile] Ignoring CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC; "
+             "set CIRCT_AOT_ALLOW_NATIVE_UVM_ALLOC_UNSAFE=1 to opt in\n";
+    }
+    bool allowNativeUvmAlloc = allowNativeUvmAllocUnsafe;
     bool allowNativeUvmTypeInfo = aggressiveNativeUvm ||
         std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_TYPEINFO") != nullptr;
     bool allowNativeUvmAccessors = aggressiveNativeUvm ||
@@ -7587,12 +7702,12 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Collect vtable FuncId assignments from the original module.
   // This must happen BEFORE trampoline generation so we can ensure all
   // vtable functions have either compiled bodies or trampolines.
-  auto allFuncEntryNames = collectVtableFuncIds(*module);
-  auto allFuncFlags = collectAllFuncFlags(*module, allFuncEntryNames);
+  auto allFuncEntryNames = collectVtableFuncIds(module);
+  auto allFuncFlags = collectAllFuncFlags(module, allFuncEntryNames);
   llvm::StringSet<> forcedTrampolineNames;
   for (const auto &name : allFuncEntryNames)
     forcedTrampolineNames.insert(name);
-  auto taggedVtableAssignments = collectTaggedVtableAssignments(*module);
+  auto taggedVtableAssignments = collectTaggedVtableAssignments(module);
   llvm::errs() << "[circt-compile] Collected " << allFuncEntryNames.size()
                << " vtable FuncIds\n";
   if (verbose) {
@@ -7621,14 +7736,14 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       // Look up the function type from the original module.
       // Try LLVM::LLVMFuncOp first (already lowered), then func::FuncOp
       // (user functions in the original module are func::FuncOp, not LLVM).
-      auto origFunc = module->lookupSymbol<LLVM::LLVMFuncOp>(name);
+      auto origFunc = module.lookupSymbol<LLVM::LLVMFuncOp>(name);
       if (origFunc) {
         // Clone as external declaration.
         auto declOp = LLVM::LLVMFuncOp::create(
             declBuilder, origFunc.getLoc(), name, origFunc.getFunctionType());
         declOp.setLinkage(LLVM::Linkage::External);
       } else if (auto funcFunc =
-                     module->lookupSymbol<func::FuncOp>(name)) {
+                     module.lookupSymbol<func::FuncOp>(name)) {
         // Convert func::FuncOp's FunctionType to LLVM::LLVMFunctionType.
         auto funcType = funcFunc.getFunctionType();
         SmallVector<Type> argTypes;
@@ -7679,7 +7794,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // Generate trampolines for uncompiled functions referenced by compiled code.
   // This now includes vtable functions that aren't compiled.
   auto trampolineNamesOr =
-      generateTrampolines(microModule, *module, forcedTrampolineNames);
+      generateTrampolines(microModule, module, forcedTrampolineNames);
   if (failed(trampolineNamesOr)) {
     llvm::errs() << "[circt-compile] Failed to generate trampolines\n";
     microModule.erase();
@@ -7768,13 +7883,6 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       llvm::errs() << "[circt-compile] Rewrote " << gepCount
                    << " struct GEPs for packed layout\n";
   }
-
-  // Compute build ID: encode ABI version, target triple, and a content hash of
-  // the input file so that stale cached .so files can be detected at load time.
-  std::string buildId = "circt-sim-abi-v" +
-                        std::to_string(CIRCT_SIM_ABI_VERSION) + "-" +
-                        llvm::sys::getDefaultTargetTriple() + "-" +
-                        contentHash;
 
   // Collect mutable globals for the patch table (including vtable globals).
   // Vtable globals are included so their .so storage gets real addresses that
@@ -7972,7 +8080,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   // Synthesize descriptor and entrypoints into the LLVM IR module.
   synthesizeDescriptor(*llvmModule, funcNames, trampolineNames,
-                       procNames, procKinds, buildId,
+                       procNames, procKinds, buildId.str(),
                        globalPatchNames, globalPatchVars, globalPatchSizes,
                        allFuncEntryNames, allFuncFlags, arenaSize,
                        arenaGlobalNames, arenaGlobalOffsets, arenaGlobalSizes);
@@ -8019,16 +8127,9 @@ static LogicalResult compile(MLIRContext &mlirContext) {
     }
     outPath = std::string(tmpSo);
   } else {
-    outPath = outputFilename;
-    if (outPath.empty()) {
-      if (inputFilename == "-") {
-        outPath = "a.out.so";
-      } else {
-        llvm::SmallString<256> p(inputFilename);
-        llvm::sys::path::replace_extension(p, ".so");
-        outPath = std::string(p);
-      }
-    }
+    outPath = outputPath.str();
+    if (outPath.empty())
+      outPath = "a.out.so";
   }
 
   // Initialize LLVM targets (needed for createHostTargetMachine below).
@@ -8037,7 +8138,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 
   // Create the target machine and set the module's data layout.  This must
   // happen before optimization so the optimizer uses the correct layout.
-  auto *targetMachine = createHostTargetMachine(*llvmModule, optLevel);
+  auto *targetMachine = createHostTargetMachine(*llvmModule, optLvl);
   if (!targetMachine) {
     llvm::errs() << "[circt-compile] Target machine creation failed\n";
     return failure();
@@ -8052,7 +8153,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   }
 
   // Run LLVM optimization passes.
-  runOptimizationPasses(*llvmModule, targetMachine, optLevel);
+  runOptimizationPasses(*llvmModule, targetMachine, optLvl);
 
   if (verbose) {
     auto postStats = collectModuleStats(*llvmModule);
@@ -8140,17 +8241,10 @@ static LogicalResult compile(MLIRContext &mlirContext) {
   // If --emit-snapshot, bundle the .so + MLIR bytecode + metadata into a
   // snapshot directory that circt-sim can load directly.
   if (emitSnapshot) {
-    // Determine snapshot directory path: use -o value or derive from input.
-    std::string snapDir = outputFilename;
-    if (snapDir.empty()) {
-      if (inputFilename == "-") {
-        snapDir = "a.out.csnap";
-      } else {
-        llvm::SmallString<256> p(inputFilename);
-        llvm::sys::path::replace_extension(p, ".csnap");
-        snapDir = std::string(p);
-      }
-    }
+    // Determine snapshot directory path: use outputPath or a default.
+    std::string snapDir = outputPath.str();
+    if (snapDir.empty())
+      snapDir = "a.out.csnap";
     // Ensure the directory ends with .csnap for clarity (but don't force it).
     if (auto ec = llvm::sys::fs::create_directories(snapDir)) {
       llvm::errs() << "[circt-compile] Error creating snapshot dir "
@@ -8184,7 +8278,7 @@ static LogicalResult compile(MLIRContext &mlirContext) {
       }
       mlir::BytecodeWriterConfig bcConfig;
       if (mlir::failed(
-              mlir::writeBytecodeToFile(module->getOperation(), os, bcConfig))) {
+              mlir::writeBytecodeToFile(module.getOperation(), os, bcConfig))) {
         llvm::errs()
             << "[circt-compile] Error writing bytecode to " << bcPath
             << "\n";
@@ -8228,9 +8322,28 @@ static LogicalResult compile(MLIRContext &mlirContext) {
 }
 
 //===----------------------------------------------------------------------===//
+// In-process entry point for crun
+//===----------------------------------------------------------------------===//
+
+#ifdef CRUN_MODE
+/// Compile a ModuleOp directly to a shared object (.so) without file I/O.
+/// This is the in-process entry point used by crun.
+LogicalResult compileModuleToSo(MLIRContext &ctx, ModuleOp module,
+                                StringRef outputPath, int optLvl) {
+  auto startTime = std::chrono::steady_clock::now();
+  std::string buildId = "circt-sim-abi-v" +
+                        std::to_string(CIRCT_SIM_ABI_VERSION) + "-" +
+                        llvm::sys::getDefaultTargetTriple() + "-crun";
+  return compileModuleImpl(ctx, module, outputPath, optLvl, buildId,
+                           /*contentHash=*/"crun", startTime);
+}
+#endif // CRUN_MODE
+
+//===----------------------------------------------------------------------===//
 // Main
 //===----------------------------------------------------------------------===//
 
+#ifndef CRUN_MODE
 int main(int argc, char **argv) {
   llvm::InitLLVM initLLVM(argc, argv);
   llvm::cl::ParseCommandLineOptions(argc, argv,
@@ -8252,3 +8365,4 @@ int main(int argc, char **argv) {
     return 0;
   return 1;
 }
+#endif // CRUN_MODE

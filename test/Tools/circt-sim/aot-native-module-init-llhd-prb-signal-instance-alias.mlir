@@ -2,7 +2,7 @@
 // RUN: circt-sim %s | FileCheck %s --check-prefix=SIM
 // RUN: env CIRCT_AOT_ENABLE_NATIVE_MODULE_INIT=1 circt-sim %s --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=NATIVE
 
-// COMPILE: [circt-compile] Functions: {{.*}}0 rejected, 1 compilable
+// COMPILE: [circt-compile] Functions: {{.*}}0 rejected, 2 compilable
 // COMPILE: [circt-compile] Native module init functions: 1
 // COMPILE: [circt-compile] Native module init modules: 1 emitted / 1 total
 //
