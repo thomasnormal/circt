@@ -4,6 +4,10 @@
 
 // Test config_db set/get with virtual interface.
 // Defines a simple interface, passes it via config_db, retrieves in component.
+// NOTE: Virtual interface config_db parameterization is not yet supported.
+// The Runtime/uvm/config_db_test.sv only tests object/int/string types,
+// not virtual interfaces. This test remains XFAIL until virtual interface
+// type support is added to the config_db implementation.
 
 // CHECK: [TEST] config_db virtual interface: PASS
 // CHECK: [circt-sim] Simulation completed
@@ -31,6 +35,7 @@ module tb_top;
 
     function void build_phase(uvm_phase phase);
       bit ok;
+      super.build_phase(phase);
       ok = uvm_config_db#(virtual simple_if)::get(this, "", "vif", m_vif);
       if (ok && m_vif != null)
         `uvm_info("TEST", "config_db virtual interface: PASS", UVM_LOW)
@@ -48,6 +53,7 @@ module tb_top;
     endfunction
 
     function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
       uvm_config_db#(virtual simple_if)::set(this, "consumer", "vif", sif);
       consumer = vif_consumer::type_id::create("consumer", this);
     endfunction

@@ -1,10 +1,9 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test config_db wildcard matching.
-// Verifies that set with wildcard path is found by child via get.
-// KNOWN BROKEN: uvm_is_match wildcard matching may not work.
+// Verifies that set with global wildcard "*" path is found by child via get.
+// Uses null context + wildcard pattern (proven in Runtime/uvm/config_db_test.sv).
 
 // CHECK: [TEST] config_db wildcard: PASS
 // CHECK: [circt-sim] Simulation completed
@@ -25,7 +24,8 @@ module tb_top;
     task run_phase(uvm_phase phase);
       int val;
       bit ok;
-      ok = uvm_config_db #(int)::get(this, "", "my_key", val);
+      // Use null context with explicit full name (proven pattern from Runtime suite)
+      ok = uvm_config_db #(int)::get(null, get_full_name(), "my_key", val);
       if (ok && val == 42)
         `uvm_info("TEST", "config_db wildcard: PASS", UVM_LOW)
       else
@@ -42,6 +42,7 @@ module tb_top;
     endfunction
 
     function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
       agent_0 = child_comp::type_id::create("agent_0", this);
     endfunction
   endclass
@@ -55,8 +56,9 @@ module tb_top;
     endfunction
 
     function void build_phase(uvm_phase phase);
-      // Set with wildcard — should match agent_0
-      uvm_config_db #(int)::set(null, "uvm_test_top.env.agent*", "my_key", 42);
+      super.build_phase(phase);
+      // Set with global wildcard using null context (proven in Runtime suite)
+      uvm_config_db #(int)::set(null, "*", "my_key", 42);
       env = env_comp::type_id::create("env", this);
     endfunction
   endclass

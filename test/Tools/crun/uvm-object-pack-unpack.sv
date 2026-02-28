@@ -4,6 +4,9 @@
 
 // Test pack() then unpack() preserves field values.
 // Create object with int fields, pack, create new object, unpack, verify fields match.
+// NOTE: Uses `uvm_field_int automation macros which are not fully supported.
+// No Runtime/uvm/ equivalent exists for pack/unpack. See UVM_COVERAGE.md:
+// "Object pack/unpack — Bit ordering issues".
 
 // CHECK: [TEST] pack/unpack int fields: PASS
 // CHECK: [circt-sim] Simulation completed

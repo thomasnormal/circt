@@ -1,10 +1,9 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test analysis_port → uvm_tlm_analysis_fifo connection.
 // Verifies items written to analysis_port appear in analysis_fifo.
-// KNOWN BROKEN: analysis_fifo via analysis_port may not work.
+// Pattern matches Runtime/uvm/uvm_tlm_fifo_test.sv (analysis_fifo_test).
 
 // CHECK: [TEST] analysis fifo: PASS
 // CHECK: [circt-sim] Simulation completed
@@ -23,8 +22,9 @@ module tb_top;
     endfunction
   endclass
 
-  class afifo_test extends uvm_test;
-    `uvm_component_utils(afifo_test)
+  // Separate component holds ports (matches Runtime pattern)
+  class afifo_env extends uvm_component;
+    `uvm_component_utils(afifo_env)
 
     uvm_analysis_port #(afifo_txn) ap;
     uvm_tlm_analysis_fifo #(afifo_txn) afifo;
@@ -34,12 +34,28 @@ module tb_top;
     endfunction
 
     function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
       ap = new("ap", this);
       afifo = new("afifo", this);
     endfunction
 
     function void connect_phase(uvm_phase phase);
+      super.connect_phase(phase);
       ap.connect(afifo.analysis_export);
+    endfunction
+  endclass
+
+  class afifo_test extends uvm_test;
+    `uvm_component_utils(afifo_test)
+    afifo_env env;
+
+    function new(string name, uvm_component parent);
+      super.new(name, parent);
+    endfunction
+
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      env = afifo_env::type_id::create("env", this);
     endfunction
 
     task run_phase(uvm_phase phase);
@@ -50,9 +66,9 @@ module tb_top;
 
       txn = afifo_txn::type_id::create("txn");
       txn.data = 55;
-      ap.write(txn);
+      env.ap.write(txn);
 
-      ok = afifo.try_get(got);
+      ok = env.afifo.try_get(got);
       if (ok && got.data == 55)
         `uvm_info("TEST", "analysis fifo: PASS", UVM_LOW)
       else
