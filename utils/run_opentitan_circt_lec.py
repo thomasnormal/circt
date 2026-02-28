@@ -43,6 +43,10 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
     return value
 
 
+def has_command_option(args: list[str], option: str) -> bool:
+    return any(arg == option or arg.startswith(f"{option}=") for arg in args)
+
+
 def replace_text(src: Path, dst: Path, replacements: list[tuple[str, str]]) -> None:
     data = src.read_text()
     for old, new in replacements:
@@ -387,6 +391,11 @@ def main() -> int:
         help="Optional TSV output path for dropped-syntax case+reason rows.",
     )
     parser.add_argument(
+        "--timeout-reasons-file",
+        default=os.environ.get("LEC_TIMEOUT_REASON_CASES_OUT", ""),
+        help="Optional TSV output path for timeout reason rows.",
+    )
+    parser.add_argument(
         "--resolved-contracts-file",
         default=os.environ.get("LEC_RESOLVED_CONTRACTS_OUT", ""),
         help="Optional TSV output path for resolved per-case contract rows.",
@@ -430,6 +439,7 @@ def main() -> int:
     circt_opt_args = shlex.split(os.environ.get("CIRCT_OPT_ARGS", ""))
     circt_lec = os.environ.get("CIRCT_LEC", "build_test/bin/circt-lec")
     circt_lec_args = shlex.split(os.environ.get("CIRCT_LEC_ARGS", ""))
+    has_explicit_verify_each = has_command_option(circt_lec_args, "--verify-each")
     # OpenTitan S-Box parity is evaluated with x-optimistic equivalence by
     # default to avoid classifying known-input-equivalent implementations as
     # strict XPROP-only failures.
@@ -447,9 +457,23 @@ def main() -> int:
         os.environ.get("LEC_DUMP_UNKNOWN_SOURCES", "0") == "1"
     )
     lec_accept_xprop_only = os.environ.get("LEC_ACCEPT_XPROP_ONLY", "0") == "1"
+    # OpenTitan parity mode accepts known LLHD abstraction diagnostics by
+    # default; set LEC_ACCEPT_LLHD_ABSTRACTION=0 to disable.
+    lec_accept_llhd_abstraction = (
+        os.environ.get("LEC_ACCEPT_LLHD_ABSTRACTION", "1") == "1"
+    )
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
+    lec_timeout_frontier_probe = (
+        os.environ.get("LEC_TIMEOUT_FRONTIER_PROBE", "1") == "1"
+    )
     lec_mode_label = os.environ.get("LEC_MODE_LABEL", "LEC").strip() or "LEC"
+    lec_verify_each_mode = os.environ.get("LEC_VERIFY_EACH_MODE", "auto").strip().lower()
+    if lec_verify_each_mode not in {"auto", "on", "off"}:
+        fail(
+            "invalid LEC_VERIFY_EACH_MODE: "
+            f"{lec_verify_each_mode} (expected auto|on|off)"
+        )
     lec_timeout_secs = parse_nonnegative_int(
         os.environ.get("LEC_TIMEOUT_SECS", "0"),
         "LEC_TIMEOUT_SECS",
@@ -487,6 +511,11 @@ def main() -> int:
         and "--dump-unknown-sources" not in circt_lec_args
     ):
         circt_lec_args.append("--dump-unknown-sources")
+    if (
+        lec_accept_llhd_abstraction
+        and "--accept-llhd-abstraction" not in circt_lec_args
+    ):
+        circt_lec_args.append("--accept-llhd-abstraction")
 
     contract_source = "manifest"
     contract_backend_mode = "smoke"
@@ -546,9 +575,11 @@ def main() -> int:
     xprop_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
+    timeout_reason_rows: list[tuple[str, str, str]] = []
     resolved_contract_rows: list[tuple[str, ...]] = []
     drop_remark_seen_cases: set[str] = set()
     drop_remark_seen_case_reasons: set[tuple[str, str]] = set()
+    timeout_reason_seen: set[tuple[str, str]] = set()
     try:
         print(
             f"Running LEC on {len(impl_list)} AES S-Box implementation(s)...",
@@ -565,6 +596,7 @@ def main() -> int:
                 "1" if lec_x_optimistic else "0",
                 "1" if lec_assume_known_inputs else "0",
                 "1" if lec_accept_xprop_only else "0",
+                "1" if lec_accept_llhd_abstraction else "0",
                 "1" if lec_diagnose_xprop else "0",
                 "1" if lec_dump_unknown_sources else "0",
                 contract_z3_path,
@@ -653,6 +685,8 @@ def main() -> int:
                     lec_cmd.append("--run-smtlib")
                     lec_cmd.append(f"--z3-path={z3_bin}")
             lec_cmd += circt_lec_args
+            if lec_verify_each_mode in {"auto", "off"} and not has_explicit_verify_each:
+                lec_cmd.append("--verify-each=false")
 
             result: str | None = None
             diag: str | None = None
@@ -758,12 +792,41 @@ def main() -> int:
                 )
             except subprocess.TimeoutExpired:
                 failures += 1
+                timeout_reason = "runner_timeout_unknown_stage"
                 if stage == "verilog":
                     diag = "CIRCT_VERILOG_TIMEOUT"
+                    timeout_reason = "frontend_command_timeout"
                 elif stage == "opt":
                     diag = "CIRCT_OPT_TIMEOUT"
+                    timeout_reason = "frontend_command_timeout"
                 elif stage == "lec":
                     diag = "CIRCT_LEC_TIMEOUT"
+                    if lec_smoke_only:
+                        timeout_reason = "frontend_command_timeout"
+                    elif lec_timeout_frontier_probe:
+                        probe_cmd = [
+                            arg
+                            for arg in lec_cmd
+                            if arg != "--run-smtlib"
+                            and not arg.startswith("--z3-path=")
+                        ]
+                        if "--emit-mlir" not in probe_cmd:
+                            probe_cmd.append("--emit-mlir")
+                        try:
+                            run_and_log(
+                                probe_cmd,
+                                impl_dir / "circt-lec.timeout-frontier.log",
+                                out_path=impl_dir / "circt-lec.timeout-frontier.out",
+                                timeout_secs=lec_timeout_secs,
+                            )
+                        except subprocess.TimeoutExpired:
+                            timeout_reason = "frontend_command_timeout"
+                        except subprocess.CalledProcessError:
+                            timeout_reason = "timeout_frontier_probe_error"
+                        else:
+                            timeout_reason = "solver_command_timeout"
+                    else:
+                        timeout_reason = "solver_command_timeout"
                 else:
                     diag = "TIMEOUT"
                 print(f"{impl:24} TIMEOUT ({diag}) (logs in {impl_dir})", flush=True)
@@ -777,6 +840,10 @@ def main() -> int:
                         diag,
                     )
                 )
+                reason_key = (impl, timeout_reason)
+                if reason_key not in timeout_reason_seen:
+                    timeout_reason_seen.add(reason_key)
+                    timeout_reason_rows.append((impl, str(impl_dir), timeout_reason))
             except subprocess.CalledProcessError:
                 extra = ""
                 try:
@@ -915,6 +982,12 @@ def main() -> int:
         drop_reason_path.parent.mkdir(parents=True, exist_ok=True)
         with drop_reason_path.open("w") as handle:
             for row in sorted(drop_remark_reason_rows, key=lambda item: (item[0], item[2])):
+                handle.write("\t".join(row) + "\n")
+    if args.timeout_reasons_file:
+        timeout_path = Path(args.timeout_reasons_file)
+        timeout_path.parent.mkdir(parents=True, exist_ok=True)
+        with timeout_path.open("w") as handle:
+            for row in sorted(timeout_reason_rows, key=lambda item: (item[0], item[2])):
                 handle.write("\t".join(row) + "\n")
     if args.resolved_contracts_file:
         contracts_path = Path(args.resolved_contracts_file)
