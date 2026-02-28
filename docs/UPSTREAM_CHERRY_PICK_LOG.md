@@ -419,3 +419,44 @@ Local follow-up commits kept in stack:
   - `4f8fdaa73` ([PyCDE] Disable cocotb tests by default)
   - `ee4badcde` ([circt-bmc] Add LTLToCore to pipeline)
   - `f13da0b62` ([PyRTG] Add String format function)
+
+## Moore Conversion Chain Follow-up (2026-02-28)
+
+- Starting staging head for this pass: `cc9736546`
+- Current staging head after this pass: `8abb02b25`
+
+### Additional Picks In This Pass
+
+| Local commit | Upstream commit | Subject |
+| --- | --- | --- |
+| `889c53181` | `c93128b00` | [Moore] Add from_builtin_int op (#9606) |
+| `6211852dd` | `b3edcf08f` | [MooreToCore] Add NoOpConversion (#9607) |
+| `678b05cbb` | `9532e4e8c` | [MooreToCore] Support `moore.from_builtin_int` as a `NoOpConversion` (#9658) |
+| `3b55f3dd9` | `a159d2906` | [MooreToCore] Emit error for unsupported module port types (#9575) |
+
+### Local Conflict Resolution/Adaptation
+
+- `b3edcf08f` conflicted with local four-state conversion handling.
+  - Kept local `LogicToIntOpConversion` and `IntToLogicOpConversion`.
+  - Added reusable `NoOpConversion` helper and applied it to `ToBuiltinIntOp`.
+- `9532e4e8c` conflicted in conversion pattern list.
+  - Added `NoOpConversion<FromBuiltinIntOp>` while preserving local
+    `ToBuiltinBoolOpConversion` and four-state-aware conversions.
+- `a159d2906` conflicted around module-attribute propagation in
+  `SVModuleOpConversion`.
+  - Kept existing local attribute-copy block and integrated upstream diagnostic
+    behavior from `getModulePortInfo`.
+- Upstream test payload for `a159d2906` used queue ports as unsupported examples,
+  but this tree now supports queue ports. Added local adaptation commit:
+  - `8abb02b25` `[MooreToCore][Tests] Use open_array for unsupported-port diagnostics`
+  - swaps unsupported test type to `!moore.open_array<i32>` and fixes
+    `expected-error` line targeting.
+
+### Validation Added In This Pass
+
+- Build:
+  - `utils/ninja-with-lock.sh -C build_stage circt-opt`
+- Targeted Moore/MooreToCore checks:
+  - `build_stage/bin/circt-opt --verify-diagnostics --verify-roundtrip test/Dialect/Moore/basic.mlir | /home/thomas-ahle/circt/build_test/bin/FileCheck test/Dialect/Moore/basic.mlir`
+  - `build_stage/bin/circt-opt test/Conversion/MooreToCore/basic.mlir --convert-moore-to-core --verify-diagnostics | /home/thomas-ahle/circt/build_test/bin/FileCheck test/Conversion/MooreToCore/basic.mlir`
+  - `build_stage/bin/circt-opt test/Conversion/MooreToCore/errors.mlir --convert-moore-to-core --split-input-file --verify-diagnostics`
