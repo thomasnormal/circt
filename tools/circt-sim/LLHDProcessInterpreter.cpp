@@ -39133,7 +39133,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             getValue(procId, callOp.getOperand(3)).getUInt64());
 
         MooreQueue result = {nullptr, 0};
-        if (queueAddr != 0 && elemSize > 0 && end >= start) {
+        if (queueAddr != 0 && elemSize > 0) {
           uint64_t qOff = 0;
           auto *qBlock =
               findMemoryBlockByAddress(queueAddr, procId, &qOff);
@@ -39148,20 +39148,71 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               ln |= static_cast<int64_t>(
                         qBlock->bytes()[qOff + 8 + i])
                     << (i * 8);
-            int64_t sliceLen = std::min(end, ln) - start;
-            if (sliceLen > 0 && dp != 0 && dp >= 0x10000000000ULL) {
+            int64_t sliceStart = start;
+            int64_t sliceEnd = end;
+            if (sliceStart < 0)
+              sliceStart = 0;
+            bool validSlice = sliceEnd >= 0 && sliceStart < ln;
+            if (validSlice && sliceEnd >= ln)
+              sliceEnd = ln - 1;
+            if (validSlice && sliceEnd < sliceStart)
+              validSlice = false;
+
+            int64_t sliceLen =
+                validSlice ? (sliceEnd - sliceStart + 1) : 0;
+            if (sliceLen > 0 && dp != 0) {
               result = __moore_dyn_array_new(
                   static_cast<int32_t>(sliceLen * elemSize));
               if (result.data) {
-                std::memcpy(result.data,
-                            static_cast<char *>(
-                                reinterpret_cast<void *>(dp)) +
-                                start * elemSize,
-                            sliceLen * elemSize);
+                size_t requestedBytes = 0;
+                if (!__builtin_mul_overflow(
+                        static_cast<size_t>(sliceLen),
+                        static_cast<size_t>(elemSize), &requestedBytes) &&
+                    requestedBytes > 0) {
+                  uint64_t srcAddr =
+                      dp + static_cast<uint64_t>(sliceStart * elemSize);
+                  size_t copyBytes = 0;
+
+                  uint64_t srcOff = 0;
+                  if (auto *srcBlock =
+                          findMemoryBlockByAddress(srcAddr, procId, &srcOff);
+                      srcBlock && srcBlock->initialized &&
+                      srcOff < srcBlock->size) {
+                    copyBytes = std::min(
+                        requestedBytes,
+                        static_cast<size_t>(srcBlock->size - srcOff));
+                    if (copyBytes > 0)
+                      std::memcpy(result.data, srcBlock->bytes() + srcOff,
+                                  copyBytes);
+                  } else {
+                    uint64_t nativeOffset = 0;
+                    size_t nativeSize = 0;
+                    if (findNativeMemoryBlockByAddress(srcAddr, &nativeOffset,
+                                                       &nativeSize) &&
+                        nativeOffset < nativeSize) {
+                      copyBytes = std::min(
+                          requestedBytes,
+                          static_cast<size_t>(nativeSize - nativeOffset));
+                      if (copyBytes > 0)
+                        std::memcpy(
+                            result.data,
+                            reinterpret_cast<const void *>(srcAddr), copyBytes);
+                    }
+                  }
+                }
                 result.len = sliceLen;
               }
             }
           }
+        }
+
+        if (result.data && result.len > 0 && elemSize > 0) {
+          uint64_t resultBytes = 0;
+          if (!__builtin_mul_overflow(static_cast<uint64_t>(result.len),
+                                      static_cast<uint64_t>(elemSize),
+                                      &resultBytes))
+            nativeMemoryBlocks[reinterpret_cast<uint64_t>(result.data)] =
+                static_cast<size_t>(resultBytes);
         }
 
         auto ptrVal = reinterpret_cast<uint64_t>(result.data);

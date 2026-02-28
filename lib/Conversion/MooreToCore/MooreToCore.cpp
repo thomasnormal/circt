@@ -7094,7 +7094,8 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       return success();
     }
 
-    // Handle queue variables - these need stack allocation with empty init
+    // Handle queue variables - these need stack allocation. Preserve explicit
+    // declaration initializers; otherwise default to empty {nullptr, 0}.
     if (isa<QueueType>(nestedMooreType)) {
       auto *ctx = rewriter.getContext();
       // Get the struct type by converting the nested queue type directly
@@ -7108,26 +7109,34 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       auto alloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
 
-      // Initialize with empty queue {nullptr, 0}
-      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-      auto zeroLen = LLVM::ConstantOp::create(
-          rewriter, loc, rewriter.getI64IntegerAttr(0));
+      Value initVal = adaptor.getInitial();
+      if (initVal) {
+        Value storeVal = convertValueToLLVMType(initVal, loc, rewriter);
+        LLVM::StoreOp::create(rewriter, loc, storeVal, alloca);
+      } else {
+        // Initialize with empty queue {nullptr, 0}
+        auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        auto zeroLen = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(0));
 
-      // Build the struct value
-      Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
-      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, nullPtr,
-                                              ArrayRef<int64_t>{0});
-      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, zeroLen,
-                                              ArrayRef<int64_t>{1});
+        // Build the struct value
+        Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
+        structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal,
+                                                nullPtr, ArrayRef<int64_t>{0});
+        structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal,
+                                                zeroLen, ArrayRef<int64_t>{1});
 
-      // Store to alloca
-      LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+        // Store to alloca
+        LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+      }
 
       rewriter.replaceOp(op, alloca.getResult());
       return success();
     }
 
-    // Handle dynamic array variables - these need stack allocation with empty init
+    // Handle dynamic array variables - these need stack allocation. Preserve
+    // explicit declaration initializers; otherwise default to empty
+    // {nullptr, 0}.
     if (isa<OpenUnpackedArrayType>(nestedMooreType)) {
       auto *ctx = rewriter.getContext();
       // Get the struct type by converting the nested array type directly
@@ -7141,20 +7150,26 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       auto alloca =
           LLVM::AllocaOp::create(rewriter, loc, ptrTy, structTy, one);
 
-      // Initialize with empty array {nullptr, 0}
-      auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
-      auto zeroLen = LLVM::ConstantOp::create(
-          rewriter, loc, rewriter.getI64IntegerAttr(0));
+      Value initVal = adaptor.getInitial();
+      if (initVal) {
+        Value storeVal = convertValueToLLVMType(initVal, loc, rewriter);
+        LLVM::StoreOp::create(rewriter, loc, storeVal, alloca);
+      } else {
+        // Initialize with empty array {nullptr, 0}
+        auto nullPtr = LLVM::ZeroOp::create(rewriter, loc, ptrTy);
+        auto zeroLen = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(0));
 
-      // Build the struct value
-      Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
-      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, nullPtr,
-                                              ArrayRef<int64_t>{0});
-      structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal, zeroLen,
-                                              ArrayRef<int64_t>{1});
+        // Build the struct value
+        Value structVal = LLVM::UndefOp::create(rewriter, loc, structTy);
+        structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal,
+                                                nullPtr, ArrayRef<int64_t>{0});
+        structVal = LLVM::InsertValueOp::create(rewriter, loc, structVal,
+                                                zeroLen, ArrayRef<int64_t>{1});
 
-      // Store to alloca
-      LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+        // Store to alloca
+        LLVM::StoreOp::create(rewriter, loc, structVal, alloca);
+      }
 
       rewriter.replaceOp(op, alloca.getResult());
       return success();
@@ -8012,6 +8027,95 @@ struct ExtractOpConversion : public OpConversionPattern<ExtractOp> {
     Type resultType = typeConverter->convertType(op.getResult().getType());
     Type inputType = adaptor.getInput().getType();
     int32_t low = adaptor.getLowBit();
+
+    // Handle fixed-range extraction from dynamic arrays (open_uarray<T>).
+    // ImportVerilog encodes arr[lo:hi] as moore.extract with lowBit=hi.
+    // Lower via queue_slice and materialize the fixed-size result array.
+    if (isa<OpenUnpackedArrayType>(op.getInput().getType())) {
+      auto loc = op.getLoc();
+      auto *ctx = rewriter.getContext();
+      ModuleOp mod = op->getParentOfType<ModuleOp>();
+      auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto i64Ty = IntegerType::get(ctx, 64);
+      auto queueTy = LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+
+      int64_t sliceLen = 1;
+      Type mooreElemType = op.getResult().getType();
+      if (auto arrayResultTy = dyn_cast<UnpackedArrayType>(op.getResult().getType())) {
+        sliceLen = arrayResultTy.getSize();
+        mooreElemType = arrayResultTy.getElementType();
+      }
+      if (sliceLen <= 0)
+        return failure();
+
+      Type convertedElemType = typeConverter->convertType(mooreElemType);
+      if (!convertedElemType)
+        return failure();
+      Type llvmElemType = convertToLLVMType(convertedElemType);
+      int64_t elemBitWidth = hw::getBitWidth(llvmElemType);
+      if (elemBitWidth < 0)
+        elemBitWidth = 8;
+      int64_t elemByteSize = std::max<int64_t>(1, (elemBitWidth + 7) / 8);
+
+      int64_t start = static_cast<int64_t>(low) - sliceLen + 1;
+      int64_t end = static_cast<int64_t>(low);
+
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+      auto queueAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, queueTy, one);
+      LLVM::StoreOp::create(rewriter, loc, adaptor.getInput(), queueAlloca);
+
+      auto startConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(start));
+      auto endConst = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(end));
+      auto elemSizeConst = LLVM::ConstantOp::create(
+          rewriter, loc,
+          rewriter.getI64IntegerAttr(elemByteSize));
+
+      auto fnTy =
+          LLVM::LLVMFunctionType::get(queueTy, {ptrTy, i64Ty, i64Ty, i64Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter, "__moore_queue_slice", fnTy);
+      auto call = LLVM::CallOp::create(rewriter, loc, TypeRange{queueTy},
+                                       SymbolRefAttr::get(fn),
+                                       ValueRange{queueAlloca, startConst,
+                                                  endConst, elemSizeConst});
+
+      Value sliceDataPtr =
+          LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, call.getResult(),
+                                       ArrayRef<int64_t>{0});
+
+      auto loadSliceElemAt = [&](int64_t idx) -> Value {
+        auto idxConst = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(idx));
+        Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, llvmElemType,
+                                            sliceDataPtr, ValueRange{idxConst});
+        Value loaded =
+            LLVM::LoadOp::create(rewriter, loc, llvmElemType, elemPtr);
+        if (llvmElemType != convertedElemType)
+          loaded = UnrealizedConversionCastOp::create(rewriter, loc,
+                                                      convertedElemType, loaded)
+                       .getResult(0);
+        return loaded;
+      };
+
+      if (auto hwArrayResultTy = dyn_cast<hw::ArrayType>(resultType)) {
+        SmallVector<Value> elems;
+        elems.reserve(sliceLen);
+        for (int64_t i = 0; i < sliceLen; ++i)
+          elems.push_back(loadSliceElemAt(i));
+        // hw.array_create takes elements in high-to-low index order.
+        std::reverse(elems.begin(), elems.end());
+        rewriter.replaceOp(op, hw::ArrayCreateOp::create(rewriter, loc,
+                                                         hwArrayResultTy, elems));
+        return success();
+      }
+
+      rewriter.replaceOp(op, loadSliceElemAt(0));
+      return success();
+    }
 
     if (isa<IntegerType>(inputType)) {
       int32_t inputWidth = inputType.getIntOrFloatBitWidth();
