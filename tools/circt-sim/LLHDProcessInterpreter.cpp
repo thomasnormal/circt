@@ -12673,6 +12673,52 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
 
   dropDequeuedForProc();
   scheduler.terminateProcess(procId);
+
+  if (deferredSuccessTerminatePending &&
+      deferredSuccessTerminateProcId == procId) {
+    static bool traceTerminatePathOnFinalize = []() {
+      const char *env = std::getenv("CIRCT_SIM_TRACE_TERMINATE_PATH");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
+    bool phasesStillRunning = false;
+    unsigned incompleteImpCount = 0;
+    llvm::SmallVector<std::pair<uint64_t, int>, 4> incompleteImpInfo;
+    for (auto &[addr, done] : functionPhaseImpCompleted) {
+      if (!done) {
+        phasesStillRunning = true;
+        ++incompleteImpCount;
+        int order = -1;
+        if (auto orderIt = functionPhaseImpOrder.find(addr);
+            orderIt != functionPhaseImpOrder.end())
+          order = orderIt->second;
+        if (incompleteImpInfo.size() < 4)
+          incompleteImpInfo.push_back({addr, order});
+      }
+    }
+    if (traceTerminatePathOnFinalize) {
+      llvm::errs() << "[TERM-PATH] deferred-finish proc finalize proc="
+                   << procId
+                   << " phasesStillRunning=" << (phasesStillRunning ? 1 : 0)
+                   << " incompleteImpCount=" << incompleteImpCount << "\n";
+      for (auto [impAddr, order] : incompleteImpInfo) {
+        llvm::errs() << "[TERM-PATH] deferred-finish incomplete imp=0x"
+                     << llvm::format_hex(impAddr, 16) << " order=" << order
+                     << "\n";
+      }
+    }
+    if (!phasesStillRunning) {
+      deferredSuccessTerminatePending = false;
+      deferredSuccessTerminateProcId = InvalidProcessId;
+      terminationRequested = true;
+      if (terminateCallback)
+        terminateCallback(/*success=*/true, deferredSuccessTerminateVerbose);
+      deferredSuccessTerminateVerbose = false;
+      if (traceTerminatePathOnFinalize)
+        llvm::errs() << "[TERM-PATH] deferred-finish callback fired proc="
+                     << procId << "\n";
+    }
+  }
+
   notifyProcessAwaiters(procId);
 }
 
@@ -15146,28 +15192,7 @@ llvm_dispatch:
       }
       auto phaseIt = currentExecutingPhaseAddr.find(procId);
       if (phaseIt != currentExecutingPhaseAddr.end()) {
-        bool inPhaseStackContext =
-            StringRef(ps.currentFuncName).contains("uvm_pkg::uvm_phase::") ||
-            StringRef(ps.currentFuncName).contains("uvm_pkg::uvm_phase_hopper::");
-        if (!inPhaseStackContext) {
-          for (auto &frame : ps.callStack) {
-            if (!frame.isLLVM() && frame.funcOp &&
-                (frame.funcOp.getSymName().contains("uvm_pkg::uvm_phase::") ||
-                 frame.funcOp.getSymName().contains(
-                     "uvm_pkg::uvm_phase_hopper::"))) {
-              inPhaseStackContext = true;
-              break;
-            }
-            if (frame.isLLVM() && frame.llvmFuncOp &&
-                (frame.llvmFuncOp.getSymName().contains(
-                     "uvm_pkg::uvm_phase::") ||
-                 frame.llvmFuncOp.getSymName().contains(
-                     "uvm_pkg::uvm_phase_hopper::"))) {
-              inPhaseStackContext = true;
-              break;
-            }
-          }
-        }
+        bool inPhaseStackContext = isInUvmPhaseStackContext(procId);
         if (ps.callDepth > 0 && inPhaseStackContext) {
           LLVM_DEBUG(llvm::dbgs()
                      << "  llvm.unreachable absorbed during phase execution"
@@ -20494,6 +20519,32 @@ bool LLHDProcessInterpreter::isInUvmRunTestContext(ProcessId procId) {
   return false;
 }
 
+bool LLHDProcessInterpreter::isInUvmPhaseStackContext(ProcessId procId) {
+  auto stateIt = processStates.find(procId);
+  if (stateIt == processStates.end())
+    return false;
+  auto &state = stateIt->second;
+
+  auto isPhaseContext = [](llvm::StringRef name) {
+    return name.contains("uvm_pkg::uvm_phase::") ||
+           name.contains("uvm_pkg::uvm_phase_hopper::");
+  };
+
+  if (isPhaseContext(state.currentFuncName))
+    return true;
+
+  for (auto &frame : state.callStack) {
+    if (!frame.isLLVM() && frame.funcOp &&
+        isPhaseContext(frame.funcOp.getSymName()))
+      return true;
+    if (frame.isLLVM() && frame.llvmFuncOp &&
+        isPhaseContext(frame.llvmFuncOp.getSymName()))
+      return true;
+  }
+
+  return false;
+}
+
 bool LLHDProcessInterpreter::isUvmFactoryOverrideSetter(
     llvm::StringRef calleeName) {
   return calleeName.ends_with("::set_type_override_by_type") ||
@@ -25337,6 +25388,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
             }
             impWaitingProcesses.erase(taskWaitIt);
           }
+
+          // If a successful terminate was deferred while task phases were
+          // still active, honor it now that all phase IMPs completed.
+          if (deferredSuccessTerminatePending) {
+            deferredSuccessTerminatePending = false;
+            deferredSuccessTerminateProcId = InvalidProcessId;
+            terminationRequested = true;
+            if (terminateCallback)
+              terminateCallback(/*success=*/true,
+                                deferredSuccessTerminateVerbose);
+            deferredSuccessTerminateVerbose = false;
+          }
         }
       }
     }
@@ -27827,28 +27890,45 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
   // the UVM phase machinery needs to run through to completion.
   {
     auto phaseIt = currentExecutingPhaseAddr.find(procId);
-    if (phaseIt != currentExecutingPhaseAddr.end() && state.callDepth > 0) {
+    bool inPhaseStackContext = isInUvmPhaseStackContext(procId);
+    bool phasesStillRunningForAbsorb = false;
+    if (!functionPhaseImpCompleted.empty()) {
+      for (auto &[addr, done] : functionPhaseImpCompleted) {
+        if (!done) {
+          phasesStillRunningForAbsorb = true;
+          break;
+        }
+      }
+    }
+    if (phaseIt != currentExecutingPhaseAddr.end() && state.callDepth > 0 &&
+        inPhaseStackContext && phasesStillRunningForAbsorb) {
       LLVM_DEBUG(llvm::dbgs()
                  << "  sim.terminate absorbed during phase execution"
                  << " (callDepth=" << state.callDepth << ")\n");
+      if (traceTerminatePath) {
+        llvm::errs() << "[TERM-PATH] absorb phase-exec terminate proc="
+                     << procId << " phase=0x"
+                     << llvm::format_hex(phaseIt->second, 16)
+                     << " callDepth=" << state.callDepth << "\n";
+      }
       // Don't set terminationRequested or waiting — just return success
       // so the phase function can continue. The terminate will fire again
       // later from the main run_test $finish path.
       return mlir::success();
     }
-  }
-
-  // UVM run_test can call $finish on completion. Preserve behavioral parity
-  // with simulators that let run_test return to its caller in this path:
-  // absorb successful terminate while still inside run_test call frames.
-  if (success && state.callDepth > 0 && isInUvmRunTestContext(procId)) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  sim.terminate(success) absorbed in run_test context"
-               << " (callDepth=" << state.callDepth << ")\n");
-    if (traceTerminatePath)
-      llvm::errs() << "[TERM-PATH] absorb run_test terminate proc=" << procId
-                   << "\n";
-    return mlir::success();
+    if (traceTerminatePath && phaseIt != currentExecutingPhaseAddr.end() &&
+        state.callDepth > 0 && inPhaseStackContext &&
+        !phasesStillRunningForAbsorb) {
+      llvm::errs()
+          << "[TERM-PATH] phase context but all phase IMPs complete; "
+             "honoring terminate proc="
+          << procId << "\n";
+    }
+    if (traceTerminatePath && phaseIt != currentExecutingPhaseAddr.end() &&
+        state.callDepth > 0 && !inPhaseStackContext) {
+      llvm::errs() << "[TERM-PATH] phase marker present but stack not phase "
+                   << "context; continuing terminate proc=" << procId << "\n";
+    }
   }
 
   // Check if this process has active forked children that haven't completed,
@@ -27864,10 +27944,25 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       if (!done) { phasesStillRunning = true; break; }
     }
   }
-  if (forkJoinManager.hasActiveChildren(procId) ||
-      hasActiveProcessDescendants(procId) || phasesStillRunning) {
+  bool hasActiveForkChildren = forkJoinManager.hasActiveChildren(procId);
+  bool hasActiveDescendants = hasActiveProcessDescendants(procId);
+  bool schedulerComplete = scheduler.getEventScheduler().isComplete();
+  if (traceTerminatePath) {
+    llvm::errs() << "[TERM-PATH] precheck proc=" << procId
+                 << " activeForkChildren=" << (hasActiveForkChildren ? 1 : 0)
+                 << " activeDesc=" << (hasActiveDescendants ? 1 : 0)
+                 << " phasesRunning=" << (phasesStillRunning ? 1 : 0)
+                 << " topModuleCount=" << topModuleCount
+                 << " schedulerComplete=" << (schedulerComplete ? 1 : 0)
+                 << " inGlobalInit=" << (inGlobalInit ? 1 : 0) << "\n";
+  }
+  if (hasActiveForkChildren || hasActiveDescendants || phasesStillRunning) {
     LLVM_DEBUG(llvm::dbgs()
                << "  Terminate deferred - process has active forked children\n");
+    if (traceTerminatePath) {
+      llvm::errs() << "[TERM-PATH] defer terminate proc=" << procId
+                   << " success=" << (success ? 1 : 0) << "\n";
+    }
 
     if (!inGlobalInit && !success) {
       terminationRequested = true;
@@ -27884,6 +27979,11 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
       LLVM_DEBUG(llvm::dbgs()
                  << "  Started $finish grace period ("
                  << kFinishGracePeriodSecs << "s wall-clock)\n");
+    }
+    if (!inGlobalInit && success) {
+      deferredSuccessTerminatePending = true;
+      deferredSuccessTerminateProcId = procId;
+      deferredSuccessTerminateVerbose = verbose;
     }
 
     // Suspend the process instead of terminating - it will be resumed when
@@ -27924,23 +28024,35 @@ LogicalResult LLHDProcessInterpreter::interpretTerminate(
     return mlir::success();
   }
 
-  if (success && topModuleCount > 1 &&
-      !scheduler.getEventScheduler().isComplete()) {
+  if (success && topModuleCount > 1 && !schedulerComplete) {
     LLVM_DEBUG(llvm::dbgs()
                << "  sim.terminate(success) - dual-top mode, scheduler has "
                << "pending events, setting terminationRequested but keeping "
                << "sim alive\n");
+    if (traceTerminatePath) {
+      llvm::errs() << "[TERM-PATH] dual-top defer proc=" << procId
+                   << " topModuleCount=" << topModuleCount
+                   << " schedulerComplete=" << (schedulerComplete ? 1 : 0)
+                   << "\n";
+    }
     terminationRequested = true;
     finalizeProcess(procId, /*killed=*/false);
     return mlir::success();
   }
 
   // Mark termination requested
+  deferredSuccessTerminatePending = false;
+  deferredSuccessTerminateProcId = InvalidProcessId;
+  deferredSuccessTerminateVerbose = false;
   terminationRequested = true;
 
   // Call the terminate callback if set
   if (terminateCallback) {
     terminateCallback(success, verbose);
+  }
+  if (traceTerminatePath) {
+    llvm::errs() << "[TERM-PATH] finalize terminate proc=" << procId
+                 << " success=" << (success ? 1 : 0) << "\n";
   }
 
   finalizeProcess(procId, /*killed=*/false);

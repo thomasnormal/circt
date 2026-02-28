@@ -1900,6 +1900,9 @@ private:
   /// Returns true when the active function/call stack is within run_test().
   bool isInUvmRunTestContext(ProcessId procId);
 
+  /// Returns true when currently executing inside UVM phase/phase_hopper code.
+  bool isInUvmPhaseStackContext(ProcessId procId);
+
   /// Return true when the callee is a UVM factory override setter.
   /// Used to disable native by-type fast paths that bypass override lookup.
   static bool isUvmFactoryOverrideSetter(llvm::StringRef calleeName);
@@ -3224,6 +3227,16 @@ private:
   /// complete and produce output while still being much shorter than the
   /// 120s external timeout.
   static constexpr int kFinishGracePeriodSecs = 30;
+
+  /// Deferred successful sim.terminate bookkeeping.
+  /// When $finish(success) is deferred due active children, the originating
+  /// process can still end up finalized by scheduler/fork bookkeeping without
+  /// re-executing sim.terminate. In that case, this pending state lets us
+  /// convert the deferred finish into a real simulation stop once phase IMPs
+  /// report completion.
+  bool deferredSuccessTerminatePending = false;
+  ProcessId deferredSuccessTerminateProcId = InvalidProcessId;
+  bool deferredSuccessTerminateVerbose = false;
 
   /// Cache of function lookups to avoid repeated moduleOp.lookupSymbol calls.
   /// Maps function name to a cached result:

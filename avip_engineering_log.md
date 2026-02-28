@@ -11890,3 +11890,41 @@ Based on these findings, the circt-sim compiled process architecture:
 
 ### Realization
 - AVIP fork/join_none liveness requires subtree-kill semantics based on *active descendant reachability*, not only direct non-halted children.
+
+## 2026-02-28 UVM terminate-path root cause: deferred finish never closes under background events
+
+### Experiment-first root cause isolation
+- Built persistent micro-benches in `testbenches/` to isolate UVM terminate behavior:
+  - `uvm_finish_minimal.sv`
+  - `uvm_finish_minimal_bgclk.sv`
+  - `uvm_finish_forever_comp.sv`
+- Trace result with `CIRCT_SIM_TRACE_TERMINATE_PATH=1`:
+  - `sim.terminate(success)` is reached in `uvm_root::run_test` as expected.
+  - terminate is deferred because runtime still reports active fork/descendant/phase-IMP activity.
+  - with a free-running HDL clock, this deferred state can run until `maxTime` without a final stop signal.
+- Added a failing regression test to lock the bug:
+  - `test/Tools/circt-sim/uvm-run-test-background-clock-cleanup.sv`
+
+### Fix
+- Tightened terminate absorption semantics:
+  - phase-context absorb now requires both
+    - actual phase/phase_hopper call-stack context, and
+    - incomplete phase IMPs.
+  - avoids absorbing terminate from stale phase markers outside real phase stack execution.
+- Added deferred-success closeout path:
+  - when successful terminate is deferred, record pending deferred-finish state.
+  - when all phase IMPs complete (`finish_phase` intercept), convert deferred finish into real simulation termination (`terminationRequested` + terminate callback).
+  - preserves cleanup/report execution while preventing `maxTime` tail-spin under unrelated background clocks.
+
+### Validation
+- Focused regressions:
+  - `llvm-lit -sv test/Tools/circt-sim/uvm-run-test-background-clock-cleanup.sv` => PASS
+  - `llvm-lit -sv test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv` => PASS
+  - `llvm-lit -sv test/Tools/circt-sim/uvm-run-phase-driver-blocking-cleanup.sv` => PASS
+  - `llvm-lit -sv test/Tools/circt-sim/uvm-root-wrapper-fast-path.mlir test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv` => PASS
+- AOT safety sweep:
+  - `llvm-lit -j 1 -sv test/Tools/circt-sim/aot*` => `125/125` PASS
+
+### Realization
+- The failing behavior was not a missing `sim.terminate` trigger; it was a deferred-finish closure bug.
+- Under background activity, deferred terminate must have an explicit closure condition, not just “wait for child completion,” or it can silently degrade into `maxTime` exits.
