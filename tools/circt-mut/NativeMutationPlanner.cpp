@@ -28,7 +28,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "LE_TO_GE",         "GE_TO_LE",       "AND_TO_OR",       "OR_TO_AND",
     "LAND_TO_BAND",     "LOR_TO_BOR",     "XOR_TO_OR",       "XOR_TO_XNOR",
     "XNOR_TO_XOR",      "BAND_TO_BOR",    "BOR_TO_BAND",     "BAND_TO_LAND",
-    "BOR_TO_LOR",       "UNARY_NOT_DROP",
+    "BOR_TO_LOR",       "BA_TO_NBA",      "NBA_TO_BA",       "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",  "UNARY_MINUS_DROP", "CONST0_TO_1",   "CONST1_TO_0",
     "ADD_TO_SUB",       "SUB_TO_ADD",     "MUL_TO_ADD",      "ADD_TO_MUL",
     "DIV_TO_MUL",       "MUL_TO_DIV",     "SHL_TO_SHR",      "SHR_TO_SHL",
@@ -838,6 +838,200 @@ static void collectRelationalComparatorSites(StringRef text, StringRef token,
   }
 }
 
+static size_t findStatementStart(StringRef text, ArrayRef<uint8_t> codeMask,
+                                 size_t pos) {
+  size_t i = pos;
+  while (i > 0) {
+    --i;
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == ';' || ch == '\n' || ch == '{' || ch == '}')
+      return i + 1;
+  }
+  return 0;
+}
+
+static bool statementHasPlainAssignBefore(StringRef text,
+                                          ArrayRef<uint8_t> codeMask,
+                                          size_t stmtStart, size_t pos) {
+  for (size_t i = stmtStart; i < pos; ++i) {
+    if (!isCodeAt(codeMask, i) || text[i] != '=')
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next =
+        (i + 1 < text.size() && isCodeAt(codeMask, i + 1)) ? text[i + 1]
+                                                            : '\0';
+    if (prev == '=' || prev == '!' || prev == '<' || prev == '>' || next == '=' ||
+        next == '>')
+      continue;
+    return true;
+  }
+  return false;
+}
+
+static bool statementHasAssignmentDisqualifier(StringRef text,
+                                               ArrayRef<uint8_t> codeMask,
+                                               size_t stmtStart, size_t pos) {
+  static constexpr const char *kDisqualifiers[] = {
+      "assign",   "parameter", "localparam", "typedef", "input",
+      "output",   "inout",     "wire",       "logic",   "reg",
+      "bit",      "byte",      "shortint",   "int",     "longint",
+      "integer",  "time",      "realtime",   "real",    "string",
+      "enum",     "struct",    "union",      "genvar",  "module",
+      "interface","package",   "class",      "function","task"};
+
+  size_t i = stmtStart;
+  while (i < pos) {
+    if (!isCodeAt(codeMask, i) || !(isAlpha(text[i]) || text[i] == '_')) {
+      ++i;
+      continue;
+    }
+    size_t start = i;
+    ++i;
+    while (i < pos && isCodeAt(codeMask, i) &&
+           (isAlnum(text[i]) || text[i] == '_' || text[i] == '$'))
+      ++i;
+    StringRef token = text.slice(start, i);
+    for (const char *kw : kDisqualifiers)
+      if (token.equals_insensitive(kw))
+        return true;
+  }
+  return false;
+}
+
+static void collectProceduralBlockingAssignSites(
+    StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  for (size_t i = 0, e = text.size(); i < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+    if (ch != '=')
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next =
+        (i + 1 < e && isCodeAt(codeMask, i + 1)) ? text[i + 1] : '\0';
+    if (prev == '=' || prev == '!' || prev == '<' || prev == '>' || next == '=' ||
+        next == '>')
+      continue;
+    if (parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 1);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    if (!isOperandEndChar(text[prevSig]) || !isOperandStartChar(text[nextSig]))
+      continue;
+
+    size_t stmtStart = findStatementStart(text, codeMask, i);
+    if (statementHasAssignmentDisqualifier(text, codeMask, stmtStart, i))
+      continue;
+    if (statementHasPlainAssignBefore(text, codeMask, stmtStart, i))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
+static void collectProceduralNonblockingAssignSites(
+    StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+  int parenDepth = 0;
+  int bracketDepth = 0;
+  int braceDepth = 0;
+  auto decDepth = [](int &depth) {
+    if (depth > 0)
+      --depth;
+  };
+
+  for (size_t i = 0, e = text.size(); i + 1 < e; ++i) {
+    if (!isCodeAt(codeMask, i))
+      continue;
+    char ch = text[i];
+    if (ch == '(') {
+      ++parenDepth;
+      continue;
+    }
+    if (ch == ')') {
+      decDepth(parenDepth);
+      continue;
+    }
+    if (ch == '[') {
+      ++bracketDepth;
+      continue;
+    }
+    if (ch == ']') {
+      decDepth(bracketDepth);
+      continue;
+    }
+    if (ch == '{') {
+      ++braceDepth;
+      continue;
+    }
+    if (ch == '}') {
+      decDepth(braceDepth);
+      continue;
+    }
+    if (!isCodeRange(codeMask, i, 2) || !text.substr(i).starts_with("<="))
+      continue;
+    char prev = (i == 0 || !isCodeAt(codeMask, i - 1)) ? '\0' : text[i - 1];
+    char next =
+        (i + 2 < e && isCodeAt(codeMask, i + 2)) ? text[i + 2] : '\0';
+    if (prev == '<' || prev == '=' || prev == '!' || prev == '>' || next == '=' ||
+        next == '>')
+      continue;
+    if (parenDepth > 0 || bracketDepth > 0 || braceDepth > 0)
+      continue;
+
+    size_t prevSig = findPrevCodeNonSpace(text, codeMask, i);
+    size_t nextSig = findNextCodeNonSpace(text, codeMask, i + 2);
+    if (prevSig == StringRef::npos || nextSig == StringRef::npos)
+      continue;
+    if (!isOperandEndChar(text[prevSig]) || !isOperandStartChar(text[nextSig]))
+      continue;
+
+    size_t stmtStart = findStatementStart(text, codeMask, i);
+    if (statementHasAssignmentDisqualifier(text, codeMask, stmtStart, i))
+      continue;
+    if (statementHasPlainAssignBefore(text, codeMask, stmtStart, i))
+      continue;
+
+    sites.push_back({i});
+  }
+}
+
 static void collectSitesForOp(StringRef designText, StringRef op,
                               ArrayRef<uint8_t> codeMask,
                               SmallVectorImpl<SiteInfo> &sites) {
@@ -950,6 +1144,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectBinaryBitwiseSites(designText, '|', codeMask, sites);
     return;
   }
+  if (op == "BA_TO_NBA") {
+    collectProceduralBlockingAssignSites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "NBA_TO_BA") {
+    collectProceduralNonblockingAssignSites(designText, codeMask, sites);
+    return;
+  }
   if (op == "UNARY_NOT_DROP") {
     collectUnaryNotDropSites(designText, codeMask, sites);
     return;
@@ -1053,6 +1255,8 @@ static std::string getOpFamily(StringRef op) {
       op == "BAND_TO_LAND" || op == "BOR_TO_LOR" || op == "UNARY_NOT_DROP" ||
       op == "UNARY_BNOT_DROP")
     return "logic";
+  if (op == "BA_TO_NBA" || op == "NBA_TO_BA")
+    return "timing";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||

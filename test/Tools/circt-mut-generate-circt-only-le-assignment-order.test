@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module top(input logic clk, input logic d, output logic q); always_ff @(posedge clk) q <= d; endmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 1 --seed 0 > %t/log.txt 2>&1
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+//
+// In CIRCT-only native planning, nonblocking assignment '<=' should be treated
+// as an assignment-site mutation candidate, not as a relational comparator.
+// OUT: 1 NATIVE_NBA_TO_BA

@@ -135,6 +135,11 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `UNARY_NOT_DROP` targets logical negation (`!expr`).
   - `UNARY_BNOT_DROP` targets bitwise negation (`~expr`) and excludes reduction
     forms (`~&`, `~|`, `~^`) and XNOR token contexts (`^~`).
+- Assignment timing mutations model procedural update-order faults:
+  - `BA_TO_NBA` targets procedural blocking assignments (`=`) and rewrites to
+    nonblocking (`<=`) with declaration/comparator/continuous-assignment guards.
+  - `NBA_TO_BA` targets procedural nonblocking assignments (`<=`) and rewrites
+    to blocking (`=`) with matching site-index guards.
 - Cast mutations (`SIGNED_TO_UNSIGNED`, `UNSIGNED_TO_SIGNED`) target
   `$signed(...)`/`$unsigned(...)` calls with boundary checks and optional
   whitespace before `(`.

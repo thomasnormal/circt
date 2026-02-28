@@ -227,6 +227,230 @@ def find_relational_comparator_token(token: str, nth: int) -> int:
     return -1
 
 
+def find_statement_start(pos: int) -> int:
+    i = pos
+    while i > 0:
+        i -= 1
+        if not is_code_at(i):
+            continue
+        if text[i] in (";", "\n", "{", "}"):
+            return i + 1
+    return 0
+
+
+def statement_has_plain_assign_before(stmt_start: int, pos: int) -> bool:
+    i = stmt_start
+    n = min(pos, len(text))
+    while i < n:
+        if not is_code_at(i) or text[i] != "=":
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 1] if i + 1 < len(text) and is_code_at(i + 1) else ""
+        if prev in ("=", "!", "<", ">") or nxt in ("=", ">"):
+            i += 1
+            continue
+        return True
+    return False
+
+
+def statement_has_assignment_disqualifier(stmt_start: int, pos: int) -> bool:
+    disqualifiers = {
+        "assign",
+        "parameter",
+        "localparam",
+        "typedef",
+        "input",
+        "output",
+        "inout",
+        "wire",
+        "logic",
+        "reg",
+        "bit",
+        "byte",
+        "shortint",
+        "int",
+        "longint",
+        "integer",
+        "time",
+        "realtime",
+        "real",
+        "string",
+        "enum",
+        "struct",
+        "union",
+        "genvar",
+        "module",
+        "interface",
+        "package",
+        "class",
+        "function",
+        "task",
+    }
+    i = max(0, stmt_start)
+    end = min(pos, len(text))
+    while i < end:
+        if not is_code_at(i) or not (text[i].isalpha() or text[i] == "_"):
+            i += 1
+            continue
+        start = i
+        i += 1
+        while i < end and is_code_at(i) and (
+            text[i].isalnum() or text[i] in ("_", "$")
+        ):
+            i += 1
+        token = text[start:i].lower()
+        if token in disqualifiers:
+            return True
+    return False
+
+
+def find_procedural_blocking_assign_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    seen = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+        if ch != "=":
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 1] if i + 1 < n and is_code_at(i + 1) else ""
+        if prev in ("=", "!", "<", ">") or nxt in ("=", ">"):
+            i += 1
+            continue
+        if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 1)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+            text[next_sig]
+        ):
+            i += 1
+            continue
+        stmt_start = find_statement_start(i)
+        if statement_has_assignment_disqualifier(stmt_start, i):
+            i += 1
+            continue
+        if statement_has_plain_assign_before(stmt_start, i):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
+def find_procedural_nonblocking_assign_token(nth: int) -> int:
+    if nth < 1:
+        return -1
+    paren_depth = 0
+    bracket_depth = 0
+    brace_depth = 0
+    seen = 0
+    i = 0
+    n = len(text)
+    while i + 1 < n:
+        if not is_code_at(i):
+            i += 1
+            continue
+        ch = text[i]
+        if ch == "(":
+            paren_depth += 1
+            i += 1
+            continue
+        if ch == ")":
+            paren_depth = max(paren_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "[":
+            bracket_depth += 1
+            i += 1
+            continue
+        if ch == "]":
+            bracket_depth = max(bracket_depth - 1, 0)
+            i += 1
+            continue
+        if ch == "{":
+            brace_depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            brace_depth = max(brace_depth - 1, 0)
+            i += 1
+            continue
+        if not is_code_span(i, i + 2) or not text.startswith("<=", i):
+            i += 1
+            continue
+        prev = text[i - 1] if i > 0 and is_code_at(i - 1) else ""
+        nxt = text[i + 2] if i + 2 < n and is_code_at(i + 2) else ""
+        if prev in ("<", "=", "!", ">") or nxt in ("=", ">"):
+            i += 1
+            continue
+        if paren_depth > 0 or bracket_depth > 0 or brace_depth > 0:
+            i += 1
+            continue
+        prev_sig = find_prev_code_nonspace(i)
+        next_sig = find_next_code_nonspace(i + 2)
+        if prev_sig < 0 or next_sig < 0:
+            i += 1
+            continue
+        if not is_operand_end_char(text[prev_sig]) or not is_operand_start_char(
+            text[next_sig]
+        ):
+            i += 1
+            continue
+        stmt_start = find_statement_start(i)
+        if statement_has_assignment_disqualifier(stmt_start, i):
+            i += 1
+            continue
+        if statement_has_plain_assign_before(stmt_start, i):
+            i += 1
+            continue
+        seen += 1
+        if seen == nth:
+            return i
+        i += 1
+    return -1
+
+
 def find_standalone_compare_token(token: str, nth: int) -> int:
     if nth < 1:
         return -1
@@ -881,6 +1105,16 @@ elif op == 'BOR_TO_LOR':
     idx = find_binary_bitwise_token('|', site_index)
     if idx >= 0:
         text = text[:idx] + '||' + text[idx + 1:]
+        changed = True
+elif op == 'BA_TO_NBA':
+    idx = find_procedural_blocking_assign_token(site_index)
+    if idx >= 0:
+        text = text[:idx] + '<=' + text[idx + 1:]
+        changed = True
+elif op == 'NBA_TO_BA':
+    idx = find_procedural_nonblocking_assign_token(site_index)
+    if idx >= 0:
+        text = text[:idx] + '=' + text[idx + 2:]
         changed = True
 elif op == 'UNARY_NOT_DROP':
     changed = replace_nth(r'!\s*(?=[A-Za-z_(])', '', site_index)

@@ -1,10 +1,10 @@
 // RUN: rm -rf %t && mkdir -p %t
 // RUN: printf "module top(input logic [3:0] a,b,c,d,e,f,g,h,i,j,k,l, output logic y);\n  logic t;\n  always_comb begin\n    t = (a==b) || (c==d) || (e==f) || (g==h) || (i==j) || (k==l) || ((a<b) && (c>d));\n    y = t ^ 1'b0;\n  end\nendmodule\n" > %t/design.sv
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 4 --seed 0 --cfg planner_policy=weighted --cfg weight_cover=1 --cfg weight_pq_w=0 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=0 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 --cfg pick_cover_prcnt=100 > %t/log.txt
-// RUN: head -n 3 %t/mutations.txt > %t/head3.txt
-// RUN: grep -E 'NATIVE_(EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|LT_TO_GT|GT_TO_LT|LE_TO_GE|GE_TO_LE)' %t/head3.txt
-// RUN: grep -E 'NATIVE_(AND_TO_OR|OR_TO_AND|LAND_TO_BAND|LOR_TO_BOR|XOR_TO_OR|XOR_TO_XNOR|XNOR_TO_XOR|BAND_TO_BOR|BOR_TO_BAND|BAND_TO_LAND|BOR_TO_LOR|UNARY_NOT_DROP|UNARY_BNOT_DROP)' %t/head3.txt
-// RUN: grep -E 'NATIVE_(CONST0_TO_1|CONST1_TO_0)' %t/head3.txt
+// RUN: head -n 4 %t/mutations.txt > %t/head4.txt
+// RUN: grep -E 'NATIVE_(EQ_TO_NEQ|NEQ_TO_EQ|LT_TO_LE|GT_TO_GE|LE_TO_LT|GE_TO_GT|LT_TO_GT|GT_TO_LT|LE_TO_GE|GE_TO_LE)' %t/head4.txt
+// RUN: grep -E 'NATIVE_(AND_TO_OR|OR_TO_AND|LAND_TO_BAND|LOR_TO_BOR|XOR_TO_OR|XOR_TO_XNOR|XNOR_TO_XOR|BAND_TO_BOR|BOR_TO_BAND|BAND_TO_LAND|BOR_TO_LOR|BA_TO_NBA|NBA_TO_BA|UNARY_NOT_DROP|UNARY_BNOT_DROP)' %t/head4.txt
+// RUN: grep -E 'NATIVE_(CONST0_TO_1|CONST1_TO_0)' %t/head4.txt
 // RUN: FileCheck %s --check-prefix=LOG < %t/log.txt
 //
 // LOG: Generated mutations: 4
