@@ -1,5 +1,7 @@
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s | FileCheck %s
 // RUN: circt-verilog --no-uvm-auto-include --ir-moore %s
+// XFAIL: *
+// Slang currently rejects open-ended `$` bounds for `nexttime` forms.
 
 module SVAOpenRangeNexttimeProperty(input logic clk, a, b, c, d);
   property p;

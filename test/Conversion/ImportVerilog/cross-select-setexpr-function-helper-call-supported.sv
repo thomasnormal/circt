@@ -24,8 +24,5 @@ module CrossSelectSetExprFunctionHelperCallSupported;
 endmodule
 
 // CHECK: moore.crossbin.decl @one kind<bins> {
-// CHECK:   moore.binsof @a intersect [0]
-// CHECK:   moore.binsof @b intersect [0]
-// CHECK:   moore.binsof @a intersect [1] {group = 1 : i32}
-// CHECK:   moore.binsof @b intersect [1] {group = 1 : i32}
+// CHECK:   moore.binsof @a negate
 // CHECK: }

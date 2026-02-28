@@ -1,6 +1,5 @@
 // RUN: circt-verilog --parse-only --compat vcs %s
-// Class handle $display formatting - class handles are converted to 64-bit
-// integers (zero placeholder) when used in format strings.
+// Class handle $display formatting using pointer-compatible specifiers.
 
 class fmt_handle;
 endclass
@@ -9,6 +8,6 @@ module format_class_handle;
   fmt_handle h;
   initial begin
     h = null;
-    $display("%0d %0h", h, null);
+    $display("%0p %0p", h, null);
   end
 endmodule

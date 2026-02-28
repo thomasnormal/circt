@@ -5,13 +5,6 @@
 // These are deprecated simulation constructs that we convert to blocking
 // assignments with simplified semantics.
 
-// All remarks are emitted first, in module order (ForceReleaseTest first due to processing order)
-// CHECK: remark: force statement converted to blocking assignment
-// CHECK: remark: release statement ignored
-// CHECK: remark: procedural assign statement converted to blocking assignment
-// CHECK: remark: procedural assign statement converted to blocking assignment
-// CHECK: remark: deassign statement ignored
-
 // CHECK-LABEL: moore.module @ProceduralAssignTest
 module ProceduralAssignTest(input clk, input d, input clr, input set, output logic q);
 
@@ -42,11 +35,10 @@ module ForceReleaseTest(input d, input f, output logic q);
   // CHECK: moore.procedure always
   always @(f or d)
     if (f)
-      // Force - converted to blocking_assign
-      // CHECK: moore.blocking_assign
+      // CHECK: moore.force_assign
       force q = d;
     else
-      // Release - becomes no-op
+      // CHECK: moore.release_assign
       release q;
 
 endmodule

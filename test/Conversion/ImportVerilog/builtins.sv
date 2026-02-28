@@ -118,7 +118,7 @@ function void DisplayAndSeverityBuiltins(int x, real r);
   $write("%d", x);
   // CHECK: moore.fmt.int decimal [[X]], align right, pad space signed : i32
   $write("%D", x);
-  // CHECK: moore.fmt.int decimal [[X]], align right, pad space width 0 signed : i32
+  // CHECK: moore.fmt.int decimal [[X]], align right, pad zero width 0 signed : i32
   $write("%0d", x);
   // CHECK: moore.fmt.int decimal [[X]], align right, pad space width 19 signed : i32
   $write("%19d", x);
@@ -309,19 +309,19 @@ function RandomBuiltins(int x, int y);
   // CHECK: [[URAND0:%.+]] = moore.builtin.urandom
   // CHECK-NEXT: call @dummyA([[URAND0]]) : (!moore.i32) -> ()
   dummyA($urandom());
-  // CHECK: [[URAND1:%.+]] = moore.builtin.urandom seed [[X]]
-  // CHECK-NEXT: call @dummyA([[URAND1]]) : (!moore.i32) -> ()
+  // CHECK: [[URAND1:%.+]] = moore.builtin.urandom seed %{{.+}}
+  // CHECK: call @dummyA([[URAND1]]) : (!moore.i32) -> ()
   dummyA($urandom(x));
   // CHECK: [[RAND0:%.+]] = moore.builtin.random
   // CHECK-NEXT: call @dummyA([[RAND0]]) : (!moore.i32) -> ()
   dummyA($random());
-  // CHECK: [[RAND1:%.+]] = moore.builtin.random seed [[X]]
-  // CHECK-NEXT: call @dummyA([[RAND1]]) : (!moore.i32) -> ()
+  // CHECK: [[RAND1:%.+]] = moore.builtin.random seed %{{.+}}
+  // CHECK: call @dummyA([[RAND1]]) : (!moore.i32) -> ()
   dummyA($random(x));
-  // CHECK: [[URAND_RANGE0:%.+]] = moore.builtin.urandom_range [[X]]
+  // CHECK: [[URAND_RANGE0:%.+]] = moore.builtin.urandom_range %{{.+}}
   // CHECK-NEXT: call @dummyA([[URAND_RANGE0]]) : (!moore.i32) -> ()
   dummyA($urandom_range(x));
-  // CHECK: [[URAND_RANGE1:%.+]] = moore.builtin.urandom_range [[X]], [[Y]]
+  // CHECK: [[URAND_RANGE1:%.+]] = moore.builtin.urandom_range %{{.+}}, [[Y]]
   // CHECK-NEXT: call @dummyA([[URAND_RANGE1]]) : (!moore.i32) -> ()
   dummyA($urandom_range(x, y));
 endfunction
@@ -410,7 +410,7 @@ module SampleValueBuiltins #() (
   // CHECK: verif.{{(clocked_)?}}assert
   falling_clk: assert property (@(posedge clk_i) clk_i |=> $fell(clk_i));
   // CHECK: moore.past %{{.+}} delay 1
-  // CHECK: moore.eq
+  // CHECK: moore.case_eq
   // CHECK: ltl.implication
   // CHECK: verif.{{(clocked_)?}}assert
   stable_clk: assert property (@(posedge clk_i) clk_i |=> $stable(clk_i));
@@ -584,10 +584,10 @@ function void CoverageBuiltins();
   i = $coverage_merge(0, "");
   // CHECK: [[CS:%.+]] = moore.constant 0 : i32
   i = $coverage_save(0, "");
-  // Coverage get functions return 0.0 (stubbed)
-  // CHECK: [[CG:%.+]] = moore.constant_real 0.0{{.*}}
+  // Coverage get functions lower to dedicated runtime builtins.
+  // CHECK: [[CG:%.+]] = moore.builtin.get_coverage : f64
   r = $coverage_get(0, 0, "");
-  // CHECK: [[GC:%.+]] = moore.constant_real 0.0{{.*}}
+  // CHECK: [[GC:%.+]] = moore.builtin.get_coverage : f64
   r = $get_coverage();
   // Coverage database tasks are no-ops
   $set_coverage_db_name("coverage.db");

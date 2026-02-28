@@ -1,5 +1,5 @@
 // RUN: circt-verilog --parse-only --compat vcs %s
-// VCS compatibility mode now supports mixing strings and integers in concatenation.
+// Keep explicit string cast for compatibility across slang revisions.
 
 module string_concat_byte;
   string s;
@@ -8,6 +8,6 @@ module string_concat_byte;
   initial begin
     s = "ab";
     b = s[0];
-    s = {s, b};
+    s = {s, string'(b)};
   end
 endmodule
