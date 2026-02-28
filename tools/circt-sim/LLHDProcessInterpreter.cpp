@@ -3413,9 +3413,9 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
         }
         std::string canonicalName =
             moduleSym + ".process_" + std::to_string(localIndex);
-        processNameToId[canonicalName] = procId;
+        processNameToId[canonicalName].push_back(procId);
       } else {
-        processNameToId[procName] = procId;
+        processNameToId[procName].push_back(procId);
       }
       if (auto *process = scheduler.getProcess(procId)) {
         process->setCallback([this, procId]() { executeProcess(procId); });
@@ -3485,7 +3485,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.currentOp = state.currentBlock->begin();
 
       ProcessId procId = scheduler.registerProcess(combName, []() {});
-      processNameToId[combName] = procId;
+      processNameToId[combName].push_back(procId);
       if (auto *process = scheduler.getProcess(procId)) {
         process->setCallback([this, procId]() { executeProcess(procId); });
         process->setCombinational(true);
@@ -3541,7 +3541,7 @@ LLHDProcessInterpreter::initializeChildInstances(const DiscoveredOps &ops,
       state.inputMap = instanceInputMap;
       state.cacheable = false;
       ProcessId procId = scheduler.registerProcess(initName, []() {});
-      processNameToId[initName] = procId;
+      processNameToId[initName].push_back(procId);
       if (auto *process = scheduler.getProcess(procId))
         process->setCallback([this, procId]() { executeProcess(procId); });
 
@@ -4836,9 +4836,9 @@ ProcessId LLHDProcessInterpreter::registerProcess(llhd::ProcessOp processOp) {
     }
     std::string canonicalName =
         moduleSym + ".process_" + std::to_string(localIndex);
-    processNameToId[canonicalName] = procId;
+    processNameToId[canonicalName].push_back(procId);
   } else {
-    processNameToId[name] = procId;
+    processNameToId[name].push_back(procId);
   }
   if (auto *process = scheduler.getProcess(procId)) {
     process->setCallback([this, procId]() { executeProcess(procId); });
@@ -43565,99 +43565,101 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       continue;
     }
 
-    ProcessId procId = it->second;
     uint8_t kind = mod->proc_kind[i];
     void *entry = const_cast<void *>(mod->proc_entry[i]);
+    for (ProcessId procId : it->second) {
 
-    if (kind == CIRCT_PROC_CALLBACK) {
-      auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-      auto compiledCallback = [this, fptr, ctxPtr, procId]() {
-        ++compiledCallbackInvocations;
-        fptr(*ctxPtr, nullptr);
-        // Re-arm if the process is a minnow (time-based callback).
-        // The AOT compiler currently marks all processes as CALLBACK,
-        // but many are actually time-only (minnow) processes.
-        if (scheduler.isMinnowProcess(procId))
+      if (kind == CIRCT_PROC_CALLBACK) {
+        auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
+        auto compiledCallback = [this, fptr, ctxPtr, procId]() {
+          ++compiledCallbackInvocations;
+          fptr(*ctxPtr, nullptr);
+          // Re-arm if the process is a minnow (time-based callback).
+          // The AOT compiler currently marks all processes as CALLBACK,
+          // but many are actually time-only (minnow) processes.
+          if (scheduler.isMinnowProcess(procId))
+            scheduler.rearmMinnow(procId);
+        };
+        auto compiledCallbackWithProcessContext =
+            [this, procId, callback = compiledCallback]() mutable {
+              auto stateIt = processStates.find(procId);
+              if (stateIt == processStates.end())
+                return;
+              ProcessExecutionState &state = stateIt->second;
+
+              ProcessId savedActiveProcessId = activeProcessId;
+              ProcessExecutionState *savedActiveProcessState =
+                  activeProcessState;
+              activeProcessId = procId;
+              activeProcessState = &state;
+              auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
+                activeProcessId = savedActiveProcessId;
+                activeProcessState = savedActiveProcessState;
+              });
+
+              void *prevTls = __circt_sim_get_tls_ctx();
+              __circt_sim_set_tls_ctx(static_cast<void *>(this));
+              __circt_sim_set_tls_normalize(
+                  LLHDProcessInterpreter::normalizeVirtualPtr);
+              auto restoreTlsContext = llvm::make_scope_exit(
+                  [&]() { __circt_sim_set_tls_ctx(prevTls); });
+
+              callback();
+            };
+
+        bool installImmediately = false;
+        bool deferredDueToPotentiallyUnsafeCalls = false;
+        auto execModelIt = processExecModels.find(procId);
+        if (execModelIt != processExecModels.end() &&
+            execModelIt->second == ExecModel::OneShotCallback) {
+          installImmediately = !hasPotentiallyUnsafeOneShotCall(procId);
+          deferredDueToPotentiallyUnsafeCalls = !installImmediately;
+        }
+
+        if (traceProcessWiring) {
+          llvm::errs() << "[circt-sim] compiled-proc name=" << procName
+                       << " pid=" << procId << " kind=CALLBACK model=";
+          if (execModelIt != processExecModels.end())
+            llvm::errs() << modelToString(execModelIt->second);
+          else
+            llvm::errs() << "<missing>";
+          llvm::errs() << " install=" << (installImmediately ? "immediate"
+                                                              : "deferred")
+                       << " oneshot_calls="
+                       << (deferredDueToPotentiallyUnsafeCalls ? "present"
+                                                               : "none")
+                       << "\n";
+        }
+
+        if (installImmediately) {
+          if (auto *process = scheduler.getProcess(procId))
+            process->setCallback(std::move(compiledCallbackWithProcessContext));
+          else if (traceProcessWiring)
+            llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
+                         << " missing scheduler process handle for immediate "
+                            "install\n";
+        } else {
+          // Default behavior: defer callback installation until the process's
+          // first interpreted llhd.wait executes. This keeps initial wait
+          // scheduling semantics in interpreted mode for wait-based callbacks.
+          pendingCompiledCallbacks[procId] = std::move(compiledCallback);
+        }
+        matched++;
+      } else if (kind == CIRCT_PROC_MINNOW) {
+        // Minnow (CallbackTimeOnly) processes: same deferred installation,
+        // but after the compiled callback fires we must re-arm the timer.
+        // The interpreted path does this in interpretWait(); compiled code
+        // bypasses that, so we re-arm explicitly here.
+        auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
+        pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
+          ++compiledCallbackInvocations;
+          fptr(*ctxPtr, nullptr);
           scheduler.rearmMinnow(procId);
-      };
-      auto compiledCallbackWithProcessContext =
-          [this, procId, callback = compiledCallback]() mutable {
-            auto stateIt = processStates.find(procId);
-            if (stateIt == processStates.end())
-              return;
-            ProcessExecutionState &state = stateIt->second;
-
-            ProcessId savedActiveProcessId = activeProcessId;
-            ProcessExecutionState *savedActiveProcessState = activeProcessState;
-            activeProcessId = procId;
-            activeProcessState = &state;
-            auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
-              activeProcessId = savedActiveProcessId;
-              activeProcessState = savedActiveProcessState;
-            });
-
-            void *prevTls = __circt_sim_get_tls_ctx();
-            __circt_sim_set_tls_ctx(static_cast<void *>(this));
-            __circt_sim_set_tls_normalize(
-                LLHDProcessInterpreter::normalizeVirtualPtr);
-            auto restoreTlsContext = llvm::make_scope_exit(
-                [&]() { __circt_sim_set_tls_ctx(prevTls); });
-
-            callback();
-          };
-
-      bool installImmediately = false;
-      bool deferredDueToPotentiallyUnsafeCalls = false;
-      auto execModelIt = processExecModels.find(procId);
-      if (execModelIt != processExecModels.end() &&
-          execModelIt->second == ExecModel::OneShotCallback) {
-        installImmediately = !hasPotentiallyUnsafeOneShotCall(procId);
-        deferredDueToPotentiallyUnsafeCalls = !installImmediately;
+        };
+        matched++;
       }
-
-      if (traceProcessWiring) {
-        llvm::errs() << "[circt-sim] compiled-proc name=" << procName
-                     << " pid=" << procId << " kind=CALLBACK model=";
-        if (execModelIt != processExecModels.end())
-          llvm::errs() << modelToString(execModelIt->second);
-        else
-          llvm::errs() << "<missing>";
-        llvm::errs() << " install=" << (installImmediately ? "immediate"
-                                                            : "deferred")
-                     << " oneshot_calls="
-                     << (deferredDueToPotentiallyUnsafeCalls ? "present"
-                                                            : "none")
-                     << "\n";
-      }
-
-      if (installImmediately) {
-        if (auto *process = scheduler.getProcess(procId))
-          process->setCallback(std::move(compiledCallbackWithProcessContext));
-        else if (traceProcessWiring)
-          llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
-                       << " missing scheduler process handle for immediate "
-                          "install\n";
-      } else {
-        // Default behavior: defer callback installation until the process's
-        // first interpreted llhd.wait executes. This keeps initial wait
-        // scheduling semantics in interpreted mode for wait-based callbacks.
-        pendingCompiledCallbacks[procId] = std::move(compiledCallback);
-      }
-      matched++;
-    } else if (kind == CIRCT_PROC_MINNOW) {
-      // Minnow (CallbackTimeOnly) processes: same deferred installation,
-      // but after the compiled callback fires we must re-arm the timer.
-      // The interpreted path does this in interpretWait(); compiled code
-      // bypasses that, so we re-arm explicitly here.
-      auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-      pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
-        ++compiledCallbackInvocations;
-        fptr(*ctxPtr, nullptr);
-        scheduler.rearmMinnow(procId);
-      };
-      matched++;
+      // COROUTINE kind: skip for now (stay interpreted)
     }
-    // COROUTINE kind: skip for now (stay interpreted)
   }
   llvm::errs() << "[circt-sim] Compiled process dispatch: " << matched << "/"
                << mod->num_procs << " processes wired\n";

@@ -2989,8 +2989,10 @@ private:
   /// Map from llhd.process ops to process IDs.
   llvm::DenseMap<mlir::Operation *, ProcessId> opToProcessId;
 
-  /// Map from process name string to ProcessId, for compiled process matching.
-  llvm::StringMap<ProcessId> processNameToId;
+  /// Map from process name string to runtime ProcessIds, for compiled process
+  /// matching. Multiple runtime processes can share the same canonical name
+  /// when a child module is instantiated multiple times.
+  llvm::StringMap<llvm::SmallVector<ProcessId, 1>> processNameToId;
 
   /// Operation execution statistics (by op name).
   llvm::StringMap<uint64_t> opStats;
