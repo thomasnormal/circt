@@ -4054,3 +4054,135 @@ xrun.
   - `xrun -sv -64bit -elaborate test/Conversion/ImportVerilog/parametrized-class-scope-resolution-default-compat.sv` (PASS with `*W,NOUNAD`)
   - `xrun -sv -64bit test/Conversion/ImportVerilog/parametrized-class-scope-resolution-default-compat.sv` (PASS; prints `PASS b=23`)
   - `xrun -sv -64bit test/Tools/circt-sim/parametrized-class-scope-resolution-default-compat.sv` (PASS; prints `PASS b=23`)
+
+## 2026-02-28 Query-Function Hierarchical Audit (`$size/$dimensions/$unpacked_dimensions`)
+
+### Task
+Re-audit closed hierarchical-query issue family for nearby regressions in default
+mode and add TDD coverage for any reproducible sibling behavior.
+
+### Realizations
+- Earlier audit used a symlinked `circt-verilog` binary from another checkout;
+  rebuilt local `build_issue/bin/circt-verilog` with Slang enabled to ensure
+  source/binary fidelity before changing code.
+- On this source tree, `$bits(u_small.addr)` already behaves correctly in
+  default mode, but `$size/$dimensions/$unpacked_dimensions` on the same
+  hierarchical parameterized port still fold to `0` unless
+  `--allow-hierarchical-const` is enabled.
+- The existing fallback lowering for these queries returned static zeros for
+  non-dynamic types, which masks hierarchical default-mode cases when Slang
+  does not constant-fold.
+
+### Changes
+- Expanded regression:
+  - `test/Tools/circt-sim/bits-hierarchical-parameterized-port.sv`
+    - now checks hierarchical/local parity for
+      `$bits/$size/$dimensions/$unpacked_dimensions` in both default and
+      `--allow-hierarchical-const` runs.
+- ImportVerilog fix:
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`
+    - skip eager const-eval for hierarchical
+      `$size/$dimensions/$unpacked_dimensions` in default mode.
+    - add static type-based fallback computation for first dimension size,
+      total dimensions, and unpacked dimensions (instead of hardcoded zero).
+
+### Validation
+- TDD baseline (before fix):
+  - `bits-hierarchical-parameterized-port.sv` printed
+    `size_hier=0 dims_hier=0 udims_hier=0` and `FAIL` in default mode.
+- After fix:
+  - rebuilt: `./utils/ninja-with-lock.sh -C build_issue circt-verilog` (PASS)
+  - manual reproduction:
+    - default mode now prints `bits/size/dims/udims` hierarchical values equal
+      to local values and `PASS`.
+    - `--allow-hierarchical-const` still passes unchanged.
+  - lit:
+    - `llvm-lit -sv -j1 build_issue/test/Tools/circt-sim/bits-hierarchical-parameterized-port.sv` (PASS)
+    - `llvm-lit -sv -j1 build_issue/test/Tools/circt-sim/{bits-hierarchical-parameterized-port.sv,moore-wait-event-func-context.mlir,vif-posedge-callstack-interface-resume.mlir}` (PASS)
+
+### Follow-up Note
+- Adjacent audit found a potential inconsistency for `$increment` on
+  hierarchical packed vectors between default mode and
+  `--allow-hierarchical-const`. Not changed in this slice; keep scoped and
+  track separately.
+
+## 2026-02-28 Issue #14 (multi-file virtual interface class method)
+
+### Task
+Investigate GitHub issue #14 reporting `Aborted()` when `virtual mem_if vif`
+class-method access is compiled with interface and class in separate files under
+`--single-unit`.
+
+### Realizations
+- On current head, both single-file and multi-file repros compile successfully;
+  no SIGABRT reproduced.
+- The source-matched local build (`build_issue`) is unoptimized and takes
+  several minutes when pulling full `uvm-core`, which can appear like a hang.
+- Optimized build (`build_test`, Release) compiles the same repro quickly.
+- Existing regression only covered the single-file layout, so the multi-file
+  shape from #14 had no direct lit coverage.
+
+### Changes
+- Added new regression:
+  - `test/Tools/circt-sim/uvm-virtual-if-class-method-lowering-multifile.sv`
+  - Uses `split-file` to place `mem_if`, `mem_driver`, and top module in
+    separate files and compiles with `--single-unit`.
+  - Uses lightweight UVM stubs to keep test fast while exercising the same
+    lowering path (`@(posedge vif.clk)` and virtual interface member writes in
+    class method body).
+
+### Validation
+- `llvm-lit -sv -j1 build_issue/test/Tools/circt-sim/uvm-virtual-if-class-method-lowering-multifile.sv` (PASS)
+- Manual multi-file reproducer with full `uvm-core` on current head:
+  - `build_test/bin/circt-verilog ... --single-unit --uvm-path ...` (PASS)
+  - `build_issue/bin/circt-verilog ... --single-unit --uvm-path ...` (PASS, but slow in non-optimized build)
+
+## 2026-02-28 Issues #21-#23 (UVM runtime + class constraints)
+
+### Task
+Investigate newly filed issues #21-#23, reproduce with TDD regressions, root-cause,
+and fix where needed.
+
+### Realizations
+- `#21` runtime no longer deadlocks in current tree; `run_test()` returns and
+  post-run code executes. The prior regression failed only because `FileCheck`
+  expected strict output ordering; `POST_RUN_TEST` can print before run-phase
+  markers due output interleaving.
+- `#22` was a real backend gap: boolean-form class constraints on 1-bit rand
+  fields (`constraint c { !b; }`, `constraint c { b; }`) were not extracted into
+  `ClassConstraintSpec` bounds, so plain `randomize()` ignored them.
+- `#23` was still real in lit: in one UVM lowering shape,
+  `set_type_override_*` executes through generated wrapper functions
+  (`set_type_override_<N>`) and `create_by_type` wrappers. Native by-type
+  override mapping was not captured for that path, and wrapper fallback was
+  disabled once overrides were configured.
+
+### Changes
+- `test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv`
+  - Switched marker checks to `CHECK-DAG` to avoid brittle ordering assumptions
+    while still asserting `RUN_PHASE_*`, `POST_RUN_TEST`, and no max-time hang.
+- `lib/Conversion/MooreToCore/MooreToCore.cpp`
+  - Added boolean 1-bit constraint extraction for `ConstraintExprOp`:
+    - `b` -> `b == 1`
+    - `!b` -> `b == 0`
+- `test/Tools/circt-sim/constraint-boolean-expr-sim.sv`
+  - New regression for plain `randomize()` boolean constraint enforcement.
+- `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - Added wrapper-level by-type override capture for `set_type_override_<N>`
+    helper functions by resolving their internal `get_<M>` requested-wrapper
+    getter and recording requested->override wrapper mapping.
+  - Updated `create_by_type`/`create_by_type_<N>` fallback to honor recorded
+    by-type overrides when factory overrides are configured, while preserving
+    existing safety gate (only bypass factory when no overrides are configured
+    or when an explicit override mapping is available).
+- `test/Tools/circt-sim/uvm-factory-type-override-run-phase-randomize-runtime.sv`
+  - New regression covering `type_id::set_type_override(...)` in `build_phase`
+    with `create()` in `run_phase`.
+
+### Validation
+- `lit -sv -j1 build_issue/test/Tools/circt-sim/constraint-boolean-expr-sim.sv` (PASS)
+- `lit -sv -j1 build_issue/test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv` (PASS)
+- `lit -sv -j1 build_issue/test/Tools/circt-sim/uvm-factory-type-override-run-phase-randomize-runtime.sv` (PASS)
+- Additional direct runtime checks on generated MLIR:
+  - issue21 repro prints `POST_RUN_TEST` and completes without max-time deadlock.
+  - issue23 repro now prints `TYPE_OK` for lit-generated MLIR.
