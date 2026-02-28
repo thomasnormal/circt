@@ -1756,8 +1756,8 @@ struct ExprVisitor {
 
       // If the constant index is out of bounds, emit a warning and produce a
       // no-op.  For lvalues, create a temporary variable so writes are
-      // silently discarded (matching Xcelium/VCS behavior).  For rvalues,
-      // return a zero constant.
+      // silently discarded (matching Xcelium/VCS behavior). For rvalues,
+      // return X for four-valued types and 0 for two-valued types.
       if (!range.containsPoint(static_cast<int32_t>(lowBit))) {
         mlir::emitWarning(loc) << "constant index " << lowBit
                                << " is out of bounds for range ["
@@ -1768,8 +1768,11 @@ struct ExprVisitor {
               builder.getStringAttr("__oob_discard__"), Value());
           return tmpVar;
         }
-        return moore::ConstantOp::create(builder, loc,
-                                         cast<moore::IntType>(type), 0);
+        auto intType = cast<moore::IntType>(type);
+        if (intType.getDomain() == moore::Domain::FourValued)
+          return moore::ConstantOp::create(
+              builder, loc, intType, FVInt::getAllX(intType.getWidth()));
+        return moore::ConstantOp::create(builder, loc, intType, 0);
       }
 
       if (isLvalue) {

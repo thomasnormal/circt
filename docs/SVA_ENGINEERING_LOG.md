@@ -9191,3 +9191,28 @@
 - validation:
   - `llvm-lit -sv test/Tools/circt-sim/dyn-bit-select-oob-noop.sv`
   - `llvm-lit -sv test/Tools/circt-sim/array-get-oob-sentinel-index.sv test/Conversion/MooreToCore/extract-ref-local-assign.mlir test/Conversion/MooreToCore/dyn-extract-ref-local-assign.mlir test/Conversion/MooreToCore/fourstate-bit-extract.mlir`
+
+## 2026-02-28 - ImportVerilog constant OOB bit-select rvalue returns X
+
+- realization:
+  - constant out-of-bounds bit-select rvalues were lowered to literal zero in
+    `ElementSelectExpression` handling, causing `logic` results to incorrectly
+    become `0` instead of `x`.
+  - reproduced with `logic [7:0] v; logic b; b = v[8];` where CIRCT printed
+    `B_LOGIC=0` while reference simulators return unknown for 4-state logic.
+
+- TDD:
+  - added `test/Tools/circt-sim/bit-select-const-oob-read-x.sv`.
+  - baseline failure before fix: expected `B_LOGIC=x B_BIT=0`, observed
+    `B_LOGIC=0 B_BIT=0`.
+
+- implemented:
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`:
+    - in constant OOB element-select rvalue lowering, return all-`X` for
+      four-valued result types and retain `0` for two-valued result types.
+    - kept existing warning diagnostics and lvalue discard-ref behavior.
+
+- validation:
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter=bit-select-const-oob-read-x.sv`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Tools/circt-sim --filter='(bit-select-const-oob-read-x.sv|dyn-bit-select-oob-noop.sv|array-get-oob-sentinel-index.sv|uninitialized-logic-memory-reads-x.sv)'`
+  - `build_test/bin/llvm-lit -sv build_test/tools/circt/test/Runtime/uvm --filter=uvm_timeout_plusarg_test.sv`
