@@ -1,0 +1,8 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic clk, input logic a,b,c,d, output logic y,z);\n  always_ff @(posedge clk) begin\n    y <= a + b;\n    z = c ^ d;\n  end\nendmodule\n" > %t/design.sv
+// RUN: printf '1 NATIVE_ASSIGN_RHS_PLUS_ONE@2\n' > %t/mutation.txt
+// RUN: circt-mut apply -i %t/mutation.txt -o %t/mutant.sv -d %t/design.sv
+// RUN: FileCheck %s --check-prefix=MUT < %t/mutant.sv
+//
+// MUT: y <= a + b;
+// MUT: z = ((c ^ d) + 1'b1);

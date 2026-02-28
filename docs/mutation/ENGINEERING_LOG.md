@@ -1418,3 +1418,35 @@
       `circt-sim: Permission denied` execution failures).
     - targeted recheck of failed IDs (`17/18/19`) with the same mutants:
       all rechecked `ok` with matching `COV` and `RESULT` vs xrun.
+
+## 2026-02-28 (assignment-RHS expression-site coverage expansion)
+
+- realizations:
+  - Assignment-RHS operators were previously restricted to RHS values that are
+    single identifiers, which misses realistic expression-level bugs
+    (`a+b`, `c^d`, ternary and parenthesized forms).
+  - Extending site eligibility to full RHS expressions increases mutation
+    functional-space coverage without adding new operator tokens.
+
+- changes made:
+  - Relaxed assignment-RHS site matching to accept full RHS spans up to the
+    statement semicolon (while retaining existing declarative/timing guards).
+  - Updated assignment-RHS replacement construction to preserve precedence for
+    binary arithmetic/shift mutations by parenthesizing non-identifier RHS
+    expressions before applying `+1/-1/<<1/>>1`.
+  - Files:
+    - `tools/circt-mut/NativeMutationPlanner.cpp`
+  - Added regression:
+    - `test/Tools/native-create-mutated-assign-rhs-plus-one-expression-site-index.test`
+    - verifies `c ^ d` is mutated as `((c ^ d) + 1'b1)` (not precedence-broken).
+
+- validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused assign-RHS lit slice:
+    - filter: `native-create-mutated-assign-rhs|native-mutation-plan-assign-rhs|circt-mut-generate-circt-only-arith-mode-assign-rhs-plus-one-op|circt-mut-generate-circt-only-connect-mode-assign-rhs-const-ops`
+    - result: `19 passed`.
+  - seeded parity campaign on deterministic `cov_intro_seeded` with updated
+    expression-capable assignment-RHS matching:
+    - `/tmp/cov_intro_seeded_allmode_exprrhs_1772296907`
+    - result: `ok=100 mismatch=0 fail=0`, including assignment-RHS mutants now
+      reaching deeper site indices (`@4`) with xrun/circt agreement.

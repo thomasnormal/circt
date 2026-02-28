@@ -1640,11 +1640,9 @@ static size_t findStatementSemicolon(StringRef text, ArrayRef<uint8_t> codeMask,
   return StringRef::npos;
 }
 
-static bool findSimpleAssignmentRhsIdentifierSpan(StringRef text,
-                                                  ArrayRef<uint8_t> codeMask,
-                                                  size_t assignPos,
-                                                  size_t &rhsStart,
-                                                  size_t &rhsEnd) {
+static bool findSimpleAssignmentRhsSpan(StringRef text, ArrayRef<uint8_t> codeMask,
+                                        size_t assignPos, size_t &rhsStart,
+                                        size_t &rhsEnd) {
   if (assignPos >= text.size() || !isCodeAt(codeMask, assignPos))
     return false;
 
@@ -1704,12 +1702,7 @@ static bool findSimpleAssignmentRhsIdentifierSpan(StringRef text,
   if (rhsEnd == StringRef::npos || rhsStart > rhsEnd)
     return false;
 
-  size_t parsePos = rhsStart;
-  size_t parseLimit = rhsEnd + 1;
-  if (!parseIdentifierToken(text, codeMask, parsePos, parseLimit))
-    return false;
-  parsePos = skipCodeWhitespace(text, codeMask, parsePos, parseLimit);
-  return parsePos == parseLimit;
+  return true;
 }
 
 static bool isAssignRhsMutationOp(StringRef op) {
@@ -1733,6 +1726,24 @@ static StringRef getAssignRhsMutationFamily(StringRef op) {
 
 static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
                                               std::string &replacement) {
+  StringRef rhs = rhsExpr.trim();
+  auto isSimpleIdentifier = [](StringRef expr) -> bool {
+    if (expr.empty())
+      return false;
+    char first = expr.front();
+    if (!(isAlpha(first) || first == '_' || first == '$'))
+      return false;
+    for (char ch : expr.drop_front())
+      if (!isIdentifierChar(ch))
+        return false;
+    return true;
+  };
+  std::string rhsForBinaryOp;
+  if (isSimpleIdentifier(rhs))
+    rhsForBinaryOp = rhs.str();
+  else
+    rhsForBinaryOp = (Twine("(") + rhs + ")").str();
+
   if (op == "ASSIGN_RHS_TO_CONST0") {
     replacement = "1'b0";
     return true;
@@ -1742,34 +1753,34 @@ static bool buildAssignRhsMutationReplacement(StringRef op, StringRef rhsExpr,
     return true;
   }
   if (op == "ASSIGN_RHS_INVERT") {
-    replacement = (Twine("~(") + rhsExpr + ")").str();
+    replacement = (Twine("~(") + rhs + ")").str();
     return true;
   }
   if (op == "ASSIGN_RHS_PLUS_ONE") {
-    replacement = (Twine("(") + rhsExpr + " + 1'b1)").str();
+    replacement = (Twine("(") + rhsForBinaryOp + " + 1'b1)").str();
     return true;
   }
   if (op == "ASSIGN_RHS_MINUS_ONE") {
-    replacement = (Twine("(") + rhsExpr + " - 1'b1)").str();
+    replacement = (Twine("(") + rhsForBinaryOp + " - 1'b1)").str();
     return true;
   }
   if (op == "ASSIGN_RHS_NEGATE") {
-    replacement = (Twine("-(") + rhsExpr + ")").str();
+    replacement = (Twine("-(") + rhs + ")").str();
     return true;
   }
   if (op == "ASSIGN_RHS_SHL_ONE") {
-    replacement = (Twine("(") + rhsExpr + " << 1'b1)").str();
+    replacement = (Twine("(") + rhsForBinaryOp + " << 1'b1)").str();
     return true;
   }
   if (op == "ASSIGN_RHS_SHR_ONE") {
-    replacement = (Twine("(") + rhsExpr + " >> 1'b1)").str();
+    replacement = (Twine("(") + rhsForBinaryOp + " >> 1'b1)").str();
     return true;
   }
   return false;
 }
 
-static void collectAssignRhsIdentifierSites(
-    StringRef text, ArrayRef<uint8_t> codeMask, SmallVectorImpl<SiteInfo> &sites) {
+static void collectAssignRhsSites(StringRef text, ArrayRef<uint8_t> codeMask,
+                                  SmallVectorImpl<SiteInfo> &sites) {
   int parenDepth = 0;
   int bracketDepth = 0;
   int braceDepth = 0;
@@ -1820,8 +1831,7 @@ static void collectAssignRhsIdentifierSites(
 
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
-    if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, i, rhsStart,
-                                               rhsEnd))
+    if (!findSimpleAssignmentRhsSpan(text, codeMask, i, rhsStart, rhsEnd))
       continue;
 
     sites.push_back({i});
@@ -2791,7 +2801,7 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     return;
   }
   if (isAssignRhsMutationOp(op)) {
-    collectAssignRhsIdentifierSites(designText, codeMask, sites);
+    collectAssignRhsSites(designText, codeMask, sites);
     return;
   }
   if (op == "POSEDGE_TO_NEGEDGE") {
@@ -4118,8 +4128,7 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   if (isAssignRhsMutationOp(op)) {
     size_t rhsStart = StringRef::npos;
     size_t rhsEnd = StringRef::npos;
-    if (!findSimpleAssignmentRhsIdentifierSpan(text, codeMask, pos, rhsStart,
-                                               rhsEnd))
+    if (!findSimpleAssignmentRhsSpan(text, codeMask, pos, rhsStart, rhsEnd))
       return false;
     std::string replacement;
     if (!buildAssignRhsMutationReplacement(op, text.slice(rhsStart, rhsEnd + 1),
