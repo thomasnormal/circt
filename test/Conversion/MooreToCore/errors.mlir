@@ -15,17 +15,17 @@ func.func @unsupportedConversion() -> !moore.string {
 
 // -----
 
-// expected-error @below {{port '"queue_port"' has unsupported type '!moore.queue<i32, 10>' that cannot be converted to hardware type}}
-// expected-error @below {{failed to legalize}}
-moore.module @UnsupportedInputPortType(in %queue_port : !moore.queue<i32, 10>) {
+// expected-error@+2 {{unsupported type '!moore.open_array<i32>'}}
+// expected-error@+1 {{failed to legalize}}
+moore.module @UnsupportedInputPortType(in %queue_port : !moore.open_array<i32>) {
   moore.output
 }
 
 // -----
 
-// expected-error @below {{port '"data"' has unsupported type '!moore.queue<i32, 10>' that cannot be converted to hardware type}}
-// expected-error @below {{failed to legalize}}
-moore.module @MixedPortsWithUnsupported(in %valid : !moore.l1, in %data : !moore.queue<i32, 10>, out out : !moore.l1) {
+// expected-error@+2 {{unsupported type '!moore.open_array<i32>'}}
+// expected-error@+1 {{failed to legalize}}
+moore.module @MixedPortsWithUnsupported(in %valid : !moore.l1, in %data : !moore.open_array<i32>, out out : !moore.l1) {
   moore.output %valid : !moore.l1
 }
 
