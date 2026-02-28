@@ -6,8 +6,8 @@
 //
 // We force a vtable target to be non-native by compiling with
 // CIRCT_AOT_INTERCEPT_ALL_UVM=1. The process performs func.call_indirect
-// through a tagged vtable slot; runtime dispatches via the entry table to a
-// trampoline callback into the interpreter.
+// through a tagged vtable slot; runtime records the FuncId hit and resolves
+// to interpreted dispatch for this non-native entry.
 //
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Demoted 1 intercepted functions to trampolines
@@ -15,17 +15,17 @@
 //
 // COMPILED: Loaded 1 compiled functions: 1 native-dispatched, 0 not-native-dispatched, 0 intercepted
 // COMPILED: Entry table: 1 entries for tagged-FuncId dispatch (0 native, 1 non-native)
-// COMPILED: Trampoline calls:                 1
+// COMPILED: Trampoline calls:                 0
 // COMPILED: Entry-table native calls:         0
-// COMPILED: Entry-table trampoline calls:     1
+// COMPILED: Entry-table trampoline calls:     0
 // COMPILED: Hot uncompiled FuncIds (top 50):
 // COMPILED: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::uvm_demo::add42
 // COMPILED: indirect_uvm(5) = 47
 //
 // DENY: [circt-sim] AOT deny list: 1 fids
-// DENY: Trampoline calls:                 1
+// DENY: Trampoline calls:                 0
 // DENY: Entry-table native calls:         0
-// DENY: Entry-table trampoline calls:     1
+// DENY: Entry-table trampoline calls:     0
 // DENY: indirect_uvm(5) = 47
 
 func.func @"uvm_pkg::uvm_demo::add42"(%a: i32) -> i32 {
