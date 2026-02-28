@@ -22,6 +22,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/SymbolTable.h"
 #include "mlir/IR/Threading.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
@@ -202,6 +203,22 @@ public:
 
     bool isClockedCall = !!op.getClock();
     bool hasEnable = !!op.getEnable();
+
+    // An unclocked and ungated DPI call can be lowered to a non-procedural
+    // call only when the callee has a single explicit return value and no
+    // output arguments.
+    if (!isClockedCall && !hasEnable) {
+      auto *callee = SymbolTable::lookupNearestSymbolFrom(op, op.getCalleeAttr());
+      if (auto func = dyn_cast_or_null<sv::FuncOp>(callee))
+        if (func.getNumOutputs() == 1 && func.getExplicitlyReturnedType()) {
+          auto call = sv::FuncCallOp::create(rewriter, op.getLoc(),
+                                             op.getResultTypes(),
+                                             op.getCalleeAttr(),
+                                             adaptor.getInputs());
+          rewriter.replaceOp(op, call.getResults());
+          return success();
+        }
+    }
 
     SmallVector<sv::RegOp> temporaries;
     SmallVector<Value> reads;

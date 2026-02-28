@@ -18,6 +18,17 @@ sim.func.dpi @dpi(out arg0: i1, in %arg1: i1, out arg2: i1)
 // VERILOG-NEXT:   output bit arg2
 // VERILOG-NEXT: );
 
+sim.func.dpi private @dpi_ret(in %arg0: i1, out out: i1 {sv.func.explicitly_returned})
+// CHECK:       sv.func private @dpi_ret(in %arg0 : i1, out out : i1 {sv.func.explicitly_returned})
+// CHECK-NEXT:  sv.macro.decl @__CIRCT_DPI_IMPORT_DPI_RET
+// CHECK-NEXT:  emit.fragment @dpi_ret_dpi_import_fragument {
+// CHECK-NEXT:    sv.ifdef @__CIRCT_DPI_IMPORT_DPI_RET {
+// CHECK-NEXT:    } else {
+// CHECK-NEXT:      sv.func.dpi.import @dpi_ret
+// CHECK-NEXT:      sv.macro.def @__CIRCT_DPI_IMPORT_DPI_RET ""
+// CHECK-NEXT:    }
+// CHECK-NEXT:  }
+
 
 // CHECK-LABEL: hw.module @dpi_call
 // CHECK-SAME: {emit.fragments = [@dpi_dpi_import_fragument]} 
@@ -96,6 +107,18 @@ hw.module @dpi_call(in %clock : !seq.clock, in %enable : i1, in %in: i1,
   // VERILOG-NEXT: assign o7 = [[RESULT_6]]; 
   // VERILOG-NEXT: assign o8 = [[RESULT_7]]; 
   hw.output %0, %1, %2, %3, %4, %5, %6, %7: i1, i1, i1, i1, i1, i1, i1, i1
+}
+
+// CHECK-LABEL: hw.module @dpi_call_unclocked_return_only
+hw.module @dpi_call_unclocked_return_only(in %in: i1, out o: i1) {
+  %0 = sim.func.dpi.call @dpi_ret(%in) : (i1) -> i1
+  // CHECK-NEXT: %[[R:.+]] = sv.func.call @dpi_ret(%in) : (i1) -> i1
+  // CHECK-NEXT: hw.output %[[R]] : i1
+  // VERILOG-LABEL: module dpi_call_unclocked_return_only(
+  // VERILOG: wire [[RET:.*]];
+  // VERILOG: assign [[RET]] = dpi_ret(in);
+  // VERILOG: assign o = [[RET]];
+  hw.output %0 : i1
 }
 
 sim.func.dpi private @increment_counter(in %in_0 : i64, out out_0 : i32)

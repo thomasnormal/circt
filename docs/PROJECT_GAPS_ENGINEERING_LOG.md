@@ -1875,3 +1875,33 @@
 - Realization:
   - Treating only `UVM_PHASE_IMP` as needing canonicalization left a real gap:
     API misuse with non-IMP handles could cross-link unrelated phase graphs.
+
+### SimToSV DPI calls: direct non-procedural lowering for return-only unclocked calls
+- Repro/verification (TDD):
+  - Extended `test/Conversion/SimToSV/dpi.mlir` with a return-only DPI callee:
+    - `sim.func.dpi private @dpi_ret(in %arg0: i1, out out: i1 {sv.func.explicitly_returned})`
+    - new module `@dpi_call_unclocked_return_only` expecting direct
+      `sv.func.call` lowering (no `sv.alwayscomb` wrapper).
+  - Red test before fix:
+    - `build_test/bin/llvm-lit -sv test/Conversion/SimToSV/dpi.mlir`
+    - observed old behavior: `sv.func.call.procedural` inside `sv.alwayscomb`.
+- Root cause:
+  - `DPICallLowering` always created temporary regs + procedural call for all
+    unclocked calls, even when the callee contract (`single explicit return`,
+    `no output args`) supports direct non-procedural expression lowering.
+- Fix:
+  - In `lib/Conversion/SimToSV/SimToSV.cpp`:
+    - added symbol-based callee inspection for unclocked/ungated calls,
+    - if callee is `sv.func` with exactly one output marked
+      `sv.func.explicitly_returned`, emit `sv.func.call` and replace directly,
+    - retain existing `always_comb` + temporary fallback for other cases.
+- Validation:
+  - `utils/ninja-with-lock.sh -C build_test circt-opt`
+  - `build_test/bin/llvm-lit -sv test/Conversion/SimToSV/dpi.mlir`
+  - `build_test/bin/llvm-lit -sv test/Conversion/SimToSV`
+  - Result: all passing.
+- Realization:
+  - The explicit-return marker on `sv.func` is the key correctness guard for
+    when non-procedural call lowering is legal; single-result alone is not
+    sufficient because output-argument-only DPI signatures can also have one
+    result.

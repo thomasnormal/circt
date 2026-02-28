@@ -2686,8 +2686,8 @@ The explicit `is an unsupported operation` diagnostic is the concrete failure pa
 ### [ ] 894. `lib/Dialect/Synth/SynthOps.cpp:298`
 The variadic `AndInverterOp` lowering uses a naive balanced tree and leaves QoR-driven structuring as TODO. What is missing is cost-aware tree construction that can optimize area/critical path. The fix is to use analysis-guided decomposition instead of fixed recursive halving.
 
-### [ ] 895. `lib/Conversion/SimToSV/SimToSV.cpp:240`
-Unclocked call lowering always emits `always_comb` even when a simpler unclocked call op could represent return-only cases. What is missing is this direct lowering path for return-value/no-output-arg calls. The fix is to add the dedicated lowering and keep existing guarded behavior as fallback.
+### [x] 895. `lib/Conversion/SimToSV/SimToSV.cpp:240`
+Status update (2026-02-28): this gap is closed in this workspace. Unclocked, ungated DPI calls now lower directly to `sv.func.call` when the callee has a single explicit return and no output arguments, avoiding unnecessary `always_comb` + temporary-reg wrapping. Fallback lowering remains unchanged for clocked, gated, and output-argument call cases; regression coverage was added in `test/Conversion/SimToSV/dpi.mlir`.
 
 ### [ ] 896. `lib/Dialect/LLHD/IR/LLHDOps.cpp:917`
 `llvm_unreachable("Not implemented")` here is an intentional sentinel in a type-interface model that advertises integer types as non-destructurable (`getSubelementIndexMap` returns empty). This is not actionable debt unless callers start invoking `getTypeAtIndex` for integers. Scanner false positive for current behavior.
