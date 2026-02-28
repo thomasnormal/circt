@@ -1722,6 +1722,10 @@ def main() -> int:
         learned_verilog_timescale_override = verilog_timescale_override
         learned_verilog_allow_multi_driver = verilog_allow_multi_always_comb_drivers
         learned_verilog_max_rss_mb: int | None = None
+        # Learned per-run LEC retry state. Once a canonicalizer-timeout retry
+        # proved necessary, start later cases with the bounded budget enabled
+        # to avoid repeated timeout-first retries.
+        learned_canonicalizer_timeout_budget = False
 
         case_batches: list[list[ConnectivityLECCase]] = []
         by_csv: dict[str, list[ConnectivityLECCase]] = {}
@@ -2136,7 +2140,9 @@ def main() -> int:
                     lec_enable_temporal_approx = (
                         temporal_approx_mode == "on" and not has_explicit_temporal_approx
                     )
-                    lec_enable_canonicalizer_timeout_budget = False
+                    lec_enable_canonicalizer_timeout_budget = (
+                        learned_canonicalizer_timeout_budget
+                    )
                     attempted_canonicalizer_timeout_retry = False
                     can_retry_canonicalizer_timeout = (
                         canonicalizer_timeout_retry_mode == "on"
@@ -2220,6 +2226,7 @@ def main() -> int:
                                     else:
                                         timeout_retry_log.write_text("", encoding="utf-8")
                                     lec_enable_canonicalizer_timeout_budget = True
+                                    learned_canonicalizer_timeout_budget = True
                                     attempted_canonicalizer_timeout_retry = True
                                     timeout_transition = f"{lec_timeout_secs}s"
                                     if canonicalizer_timeout_retry_timeout_secs > 0:

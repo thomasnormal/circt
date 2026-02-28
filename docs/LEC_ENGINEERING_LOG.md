@@ -202,3 +202,44 @@
     - observed retries: only one
       `--allow-multi-always-comb-drivers` retry on `batch=0`; no retry on
       `batch=1` (learned state reused).
+
+## 2026-02-28 - Canonicalizer-timeout budget propagation across cases
+
+- realization:
+  - canonicalizer-timeout handling was still per-case local: even after a first
+    case proved bounded canonicalizer budget was required, later cases started
+    without the budget and could re-hit timeout-first retry churn.
+  - this directly increases wall time and timeout fragility on OpenTitan rule
+    groups with similar LEC complexity.
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-budget-propagation.test`.
+  - test synthesizes two connectivity cases where unbudgeted `circt-lec`
+    always times out.
+  - expected behavior:
+    - first case times out once, then succeeds with canonicalizer budget.
+    - second case starts with learned canonicalizer budget and succeeds without
+      a new timeout-first attempt.
+    - total `circt-lec` invocations = 3 (not 4).
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added per-run learned state:
+      - `learned_canonicalizer_timeout_budget`
+    - case loop now initializes
+      `lec_enable_canonicalizer_timeout_budget` from learned state.
+    - on first timeout-driven canonicalizer retry, learned state is promoted so
+      subsequent cases begin with bounded canonicalizer budget.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    30/30 pass.
+  - real OpenTitan Z3 replay:
+    - filter: `AST_CLK_SNS_IN|AST_CLK_ES_IN|AST_HISPEED_SEL_IN`
+      with `CIRCT_TIMEOUT_SECS=60`.
+    - result: `3/3 PASS`.
+    - observed canonicalizer-timeout retry messages: 1 total for the 3-case
+      run (instead of re-triggering on each case).
