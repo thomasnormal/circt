@@ -1,5 +1,40 @@
 # Mutation Engineering Log
 
+## 2026-02-28 (case/casez keyword mutation class + seeded parity campaign)
+
+- realizations:
+  - Wildcard decode mistakes (`case` vs `casez`) were missing from native
+    control-class mutations.
+  - This fault class is lightweight to model textually and integrates well with
+    existing deterministic site-index contracts.
+
+- changes made:
+  - Added native operators:
+    - `CASE_TO_CASEZ`
+    - `CASEZ_TO_CASE`
+  - Integrated these operators in:
+    - planner op catalog, keyword-site collection, family classification, and
+      apply rewrites (`tools/circt-mut/NativeMutationPlanner.cpp`)
+    - CIRCT-only mode mappings (`control`, `connect`, `invert`, `inv`,
+      `balanced/all`) in `tools/circt-mut/circt-mut.cpp`
+    - native-op validator allowlist in
+      `utils/run_mutation_mcy_examples.sh`
+  - Added TDD regressions:
+    - `test/Tools/native-create-mutated-case-to-casez-site-index.test`
+    - `test/Tools/native-create-mutated-casez-to-case-site-index.test`
+    - `test/Tools/native-mutation-plan-case-keyword-swap.test`
+    - `test/Tools/circt-mut-generate-circt-only-control-mode-case-keyword-ops.test`
+
+- validation:
+  - Focused lit slice over new case-keyword tests and adjacent case/control
+    coverage: `8 passed`.
+  - Seeded xrun-vs-circt parity campaign on a harness containing both `case`
+    and `casez` (`count=20`, `seed=404`,
+    `--native-ops CASE_TO_CASEZ,CASEZ_TO_CASE`):
+    - baseline: xrun/circt `COV=91.67`, `SIG=0165e064`
+    - result: `ok=20`, `mismatch=0`, `fail=0`
+    - workspace: `/tmp/cov_seeded_casekw_parity_1772290530`
+
 ## 2026-02-28 (case-item arm swap mutation class + seeded parity campaigns)
 
 - realizations:

@@ -170,6 +170,9 @@ All weight values must be `>= 0`. For `planner_policy=weighted`, the sum of all
   - `CASE_ITEM_SWAP_ARMS` swaps adjacent `case` item bodies in a conservative
     subset (simple item bodies and balanced `begin/end` forms) to preserve
     structural validity and deterministic site-index contracts.
+- Wildcard-case keyword mutations model decode wildcard confusion:
+  - `CASE_TO_CASEZ` rewrites `case (...)` to `casez (...)`.
+  - `CASEZ_TO_CASE` rewrites `casez (...)` to `case (...)`.
 - Conditional-polarity mutations model inverted control intent:
   - `IF_COND_NEGATE` targets `if (cond)` headers and rewrites to
     `if (!(cond))` with word-boundary token matching and balanced-parenthesis

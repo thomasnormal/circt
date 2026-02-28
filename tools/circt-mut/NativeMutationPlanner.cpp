@@ -37,6 +37,7 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "POSEDGE_TO_NEGEDGE", "NEGEDGE_TO_POSEDGE",
     "RESET_POSEDGE_TO_NEGEDGE", "RESET_NEGEDGE_TO_POSEDGE", "MUX_SWAP_ARMS",
     "MUX_FORCE_TRUE", "MUX_FORCE_FALSE",
+    "CASE_TO_CASEZ", "CASEZ_TO_CASE",
     "IF_COND_NEGATE",   "RESET_COND_NEGATE", "RESET_COND_TRUE",
     "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
@@ -2513,6 +2514,14 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectResetEdgeKeywordSites(designText, "negedge", codeMask, sites);
     return;
   }
+  if (op == "CASE_TO_CASEZ") {
+    collectKeywordTokenSites(designText, "case", codeMask, sites);
+    return;
+  }
+  if (op == "CASEZ_TO_CASE") {
+    collectKeywordTokenSites(designText, "casez", codeMask, sites);
+    return;
+  }
   if (op == "MUX_SWAP_ARMS") {
     collectMuxSwapArmSites(designText, codeMask, sites);
     return;
@@ -2755,6 +2764,7 @@ static std::string getOpFamily(StringRef op) {
   if (op == "IF_COND_NEGATE" || op == "RESET_COND_NEGATE" ||
       op == "RESET_COND_TRUE" || op == "RESET_COND_FALSE" ||
       op == "IF_COND_TRUE" || op == "IF_COND_FALSE" ||
+      op == "CASE_TO_CASEZ" || op == "CASEZ_TO_CASE" ||
       op == "IF_ELSE_SWAP_ARMS" || op == "CASE_ITEM_SWAP_ARMS")
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
@@ -3795,6 +3805,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
     return replaceTokenAt(mutatedText, pos, strlen("posedge"), "negedge");
   if (op == "RESET_NEGEDGE_TO_POSEDGE")
     return replaceTokenAt(mutatedText, pos, strlen("negedge"), "posedge");
+  if (op == "CASE_TO_CASEZ")
+    return replaceTokenAt(mutatedText, pos, strlen("case"), "casez");
+  if (op == "CASEZ_TO_CASE")
+    return replaceTokenAt(mutatedText, pos, strlen("casez"), "case");
   if (op == "MUX_SWAP_ARMS")
     return applyMuxSwapArmsAt(text, codeMask, pos, mutatedText);
   if (op == "MUX_FORCE_TRUE")
