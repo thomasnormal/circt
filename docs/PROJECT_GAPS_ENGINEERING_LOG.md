@@ -1189,8 +1189,12 @@
     - `utils/mutation_mcy/lib/native_mutation_plan.py`
     - `utils/mutation_mcy/templates/native_create_mutated.py`
   - Native CIRCT-only `generate` now treats `--top` as default module scope (when `--select` is not provided), and mode expansion drops zero-site operators for scoped module text.
+  - Native CIRCT-only `--top` scoping is now hierarchy-aware:
+    - starts at `--top` module and includes transitively instantiated child modules
+    - continues to exclude unrelated modules (for example, separate TB harnesses)
 - Regression tests added:
   - `test/Tools/circt-mut-generate-circt-only-top-default-scope.test`
+  - `test/Tools/circt-mut-generate-circt-only-top-hierarchy-scope.test`
   - `test/Tools/circt-mut-generate-circt-only-control-mode-reduction-ops.test`
   - `test/Tools/native-mutation-plan-reduction-site-aware.test`
   - `test/Tools/native-create-mutated-redand-to-redor-site-index.test`
@@ -1205,6 +1209,8 @@
     - diff op family: `NEGEDGE_TO_POSEDGE` (TB scheduling race)
   - Scoped run (`--top sram`, DUT-only mutation): `60 match / 0 diff / 0 timeout`
   - Reproducibility on scoped run: two reruns both `60/0/0/0/0`.
+  - Hierarchical scoped run (`--top top` on a top->mid->leaf DUT): `40/0/0/0/0`,
+    with no TB-style edge/clock mutations emitted.
 
 ### ImportVerilog: de-XFAIL `basic.sv` by updating stale LTL/disable-iff checks
 - Repro:

@@ -1,0 +1,9 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf 'module leaf(input logic a, input logic b, output logic y);\n  assign y = a && b;\nendmodule\n\nmodule mid(input logic a, input logic b, output logic y);\n  leaf u_leaf(.a(a), .b(b), .y(y));\nendmodule\n\nmodule top(input logic a, input logic b, output logic y);\n  mid u_mid(.a(a), .b(b), .y(y));\nendmodule\n\nmodule tb;\n  logic clk = 0;\n  always #5 clk = ~clk;\n  logic a = 0, b = 0, y;\n  top dut(.a(a), .b(b), .y(y));\nendmodule\n' > %t/design.sv
+// RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/top.txt --count 60 --seed 9 --modes control --top top > %t/top.log
+// RUN: grep -q 'NATIVE_AND_TO_OR' %t/top.txt
+// RUN: not grep -q 'NATIVE_NEGEDGE_TO_POSEDGE' %t/top.txt
+// RUN: not grep -q 'NATIVE_UNARY_BNOT_DROP' %t/top.txt
+// RUN: FileCheck %s --check-prefix=LOG < %t/top.log
+//
+// LOG: Generated mutations: 60
