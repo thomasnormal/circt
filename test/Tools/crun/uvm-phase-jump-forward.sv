@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-
 // Test phase.jump() to skip forward to extract_phase.
 // Verifies that extract_phase runs after the jump.
 

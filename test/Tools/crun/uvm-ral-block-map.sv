@@ -23,7 +23,7 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      f = uvm_reg_field::create("f");
+      f = uvm_reg_field::type_id::create("f");
       f.configure(this, 32, 0, "RW", 0, 0, 1, 1, 1);
     endfunction
   endclass

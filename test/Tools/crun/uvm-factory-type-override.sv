@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-
 // Test factory set_type_override_by_type.
 // Verifies that creating base type returns derived instance after override.
 

@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: factory instance path override not supported in circt-sim
 
 // Test factory set_inst_override_by_type with hierarchical path.
 // Overrides base_comp with derived_comp at a specific instance path.

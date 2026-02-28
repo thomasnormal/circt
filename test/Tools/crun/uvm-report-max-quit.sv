@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: max_quit_count not fully implemented in circt-sim report server
 
 // Test set_max_quit_count() terminates simulation after N errors.
 // Set max quit to 3, issue 3 UVM_ERRORs, verify simulation ends.

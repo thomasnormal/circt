@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-
 // Test basic RAL reg.write() then reg.read() at register level.
 // Creates a simple register with fields, adds to block and map.
 // Uses a stub adapter — just verifies the API calls don't crash.
@@ -25,7 +23,7 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      data_f = uvm_reg_field::create("data_f");
+      data_f = uvm_reg_field::type_id::create("data_f");
       data_f.configure(this, 8, 0, "RW", 0, 8'hAA, 1, 1, 1);
     endfunction
   endclass
