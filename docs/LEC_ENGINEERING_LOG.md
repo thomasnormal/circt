@@ -668,3 +668,40 @@
     `__circt_conn_rule_0_AST_CLK_ES_IN_{ref,impl}` with
     `--flatten-hw=false --run-smtlib` now fails in ~3.5s with the expected
     non-SMT error (previously this could consume full timeout windows).
+
+## 2026-02-28 - Auto-preenable canonicalizer budget starts at ladder head
+
+- realization:
+  - low-timeout auto-preenable (`CIRCT_TIMEOUT_SECS<=120`) previously started
+    at `LEC_CANONICALIZER_TIMEOUT_RETRY_MAX_NUM_REWRITES` (default `40000`),
+    which repeatedly burned full timeout windows before converging to useful
+    ladder budgets on OpenTitan timeout-frontier cases.
+  - observed in real shard replay (`32-way shard index 2`, timeout `90s`):
+    repeated retries from `40000 -> 20000 -> 10000` on
+    `CLKMGR_INFRA_CLK_SRAM_CTRL_MAIN_OTP_CLK`, then `10000 -> 5000` on
+    `CLKMGR_POWERUP_CLK_PWRMGR_LC_CLK`.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - new helper `select_auto_preenable_rewrite_budget`.
+    - in low-timeout auto-preenable mode, initial rewrite budget now uses the
+      highest ladder value within the max rewrite cap, instead of always using
+      the raw max cap.
+    - startup log now prints the chosen preenabled rewrite budget.
+
+- TDD:
+  - updated
+    `test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder.test`
+    to enforce ladder-head preenable behavior (`20000`) and subsequent
+    tightening (`1000`).
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-*.test`:
+    `4/4` pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `41/41` pass.
+  - real OpenTitan check on
+    `clkmgr_infra.csv:CLKMGR_INFRA_CLK_SRAM_CTRL_MAIN_OTP_CLK` now logs
+    preenable at `max-num-rewrites=20000` and reaches `PASS` under Z3.

@@ -112,6 +112,26 @@ def parse_nonnegative_int_list(raw: str, name: str) -> list[int]:
     return values
 
 
+def select_auto_preenable_rewrite_budget(
+    max_num_rewrites: int, rewrite_ladder: Sequence[int]
+) -> int | None:
+    """Pick a stable initial rewrite budget for low-timeout auto-preenable.
+
+    Use the highest ladder value within the configured max rewrite cap. This
+    avoids deterministic first-attempt churn at very high rewrite limits while
+    preserving explicit caps when the ladder does not provide an in-range value.
+    """
+
+    if max_num_rewrites <= 0:
+        return None
+    for candidate in rewrite_ladder:
+        if candidate <= 0:
+            continue
+        if candidate <= max_num_rewrites:
+            return candidate
+    return max_num_rewrites
+
+
 def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
     exact: set[str] = set()
     prefixes: list[str] = []
@@ -1871,14 +1891,23 @@ def main() -> int:
             and canonicalizer_timeout_retry_max_num_rewrites > 0
         ):
             learned_canonicalizer_timeout_rewrite_budget = (
-                canonicalizer_timeout_retry_max_num_rewrites
+                select_auto_preenable_rewrite_budget(
+                    canonicalizer_timeout_retry_max_num_rewrites,
+                    canonicalizer_timeout_retry_rewrite_ladder,
+                )
             )
         if auto_preenable_canonicalizer_timeout_budget:
+            preenable_budget_note = ""
+            if learned_canonicalizer_timeout_rewrite_budget is not None:
+                preenable_budget_note = (
+                    f", max-num-rewrites={learned_canonicalizer_timeout_rewrite_budget}"
+                )
             print(
                 "opentitan connectivity lec: pre-enabling bounded canonicalizer "
                 "budget for low-timeout z3 run "
                 f"(timeout={timeout_secs}s<=auto-threshold="
-                f"{canonicalizer_timeout_retry_auto_preenable_timeout_secs}s)",
+                f"{canonicalizer_timeout_retry_auto_preenable_timeout_secs}s"
+                f"{preenable_budget_note})",
                 file=sys.stderr,
                 flush=True,
             )
