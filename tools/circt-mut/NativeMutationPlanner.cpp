@@ -3699,7 +3699,39 @@ static uint64_t getLineForPos(ArrayRef<size_t> lineStarts, size_t pos) {
   return static_cast<uint64_t>(it - lineStarts.begin());
 }
 
+static bool hasKeywordTokenInRange(StringRef text, ArrayRef<uint8_t> codeMask,
+                                   size_t start, size_t endExclusive,
+                                   StringRef keyword) {
+  if (keyword.empty() || start >= endExclusive)
+    return false;
+  size_t len = keyword.size();
+  if (start + len > endExclusive)
+    return false;
+  for (size_t i = start; i + len <= endExclusive; ++i)
+    if (matchKeywordTokenAt(text, codeMask, i, keyword))
+      return true;
+  return false;
+}
+
+static bool hasTokenInRange(StringRef text, ArrayRef<uint8_t> codeMask,
+                            size_t start, size_t endExclusive,
+                            StringRef token) {
+  if (token.empty() || start >= endExclusive)
+    return false;
+  size_t len = token.size();
+  if (start + len > endExclusive)
+    return false;
+  for (size_t i = start; i + len <= endExclusive; ++i) {
+    if (!isCodeRange(codeMask, i, len))
+      continue;
+    if (text.substr(i).starts_with(token))
+      return true;
+  }
+  return false;
+}
+
 static std::string classifyContextForPos(StringRef text,
+                                         ArrayRef<uint8_t> codeMask,
                                          ArrayRef<size_t> lineStarts,
                                          size_t pos) {
   if (pos == StringRef::npos || lineStarts.empty())
@@ -3708,19 +3740,37 @@ static std::string classifyContextForPos(StringRef text,
   if (line == 0 || line > lineStarts.size())
     return "unknown";
   size_t start = lineStarts[line - 1];
-  size_t end = line < lineStarts.size() ? lineStarts[line] - 1 : text.size();
-  if (end < start)
-    end = start;
-  StringRef lineText = text.slice(start, end);
-  std::string lower = lineText.lower();
-  StringRef lowerRef(lower);
-  if (lowerRef.contains("if") || lowerRef.contains("case") ||
-      lowerRef.contains("?"))
+  size_t endExclusive = line < lineStarts.size() ? lineStarts[line] : text.size();
+  if (endExclusive < start)
+    endExclusive = start;
+
+  bool isControl =
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "if") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "else") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "case") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "casez") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "casex") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "for") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "while") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "repeat") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "foreach") ||
+      hasTokenInRange(text, codeMask, start, endExclusive, "?");
+  if (isControl)
     return "control";
-  if (lowerRef.contains("assert") || lowerRef.contains("cover"))
+
+  bool isVerification =
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "assert") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "assume") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "cover") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "expect") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "property") ||
+      hasKeywordTokenInRange(text, codeMask, start, endExclusive, "sequence");
+  if (isVerification)
     return "verification";
-  if (lowerRef.contains("assign") || lowerRef.contains("<=") ||
-      lowerRef.contains("="))
+
+  if (hasKeywordTokenInRange(text, codeMask, start, endExclusive, "assign") ||
+      statementHasPlainAssignBefore(text, codeMask, start, endExclusive) ||
+      hasTokenInRange(text, codeMask, start, endExclusive, "<="))
     return "assignment";
   return "expression";
 }
@@ -3984,7 +4034,7 @@ static bool emitWeightedNativeMutationPlan(
       c.module = module;
       c.srcKey = (Twine("line:") + Twine(line)).str();
       c.family = getOpFamily(op);
-      c.contextKey = classifyContextForPos(designText, lineStarts, pos);
+      c.contextKey = classifyContextForPos(designText, codeMask, lineStarts, pos);
 
       // Primary queues model global candidate families, while module queues add
       // module scoping on top of the same base keys.

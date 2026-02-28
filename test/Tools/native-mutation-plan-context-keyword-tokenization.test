@@ -1,0 +1,6 @@
+// RUN: rm -rf %t && mkdir -p %t
+// RUN: printf "module top(input logic a,b,c,d,sel, output logic y);\n  logic diff_eq;\n  always_comb begin\n    diff_eq = (a == b);\n    if (sel)\n      y = (c == d);\n    else\n      y = 1'b0;\n  end\nendmodule\n" > %t/design.sv
+// RUN: circt-mut generate --design %t/design.sv --out %t/mutations.txt --count 1 --seed 0 --native-ops EQ_TO_NEQ --cfg planner_policy=weighted --cfg weight_cover=1 --cfg weight_pq_w=0 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=0 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 --cfg pick_cover_prcnt=100
+// RUN: FileCheck %s --check-prefix=OUT < %t/mutations.txt
+//
+// OUT: NATIVE_EQ_TO_NEQ@2

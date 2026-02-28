@@ -2020,3 +2020,36 @@
     - broader balanced sweep:
       - workspace: `/tmp/cov_intro_seeded_balanced_recheck_1772306285`
       - result: `ok=12 mismatch=0 fail=0`
+
+## 2026-02-28 (weighted planner context classification: keyword-token aware)
+
+- realizations:
+  - Weighted planner context classification used raw substring checks (`contains("if")`, `contains("case")`), which incorrectly treated identifiers like `diff_eq` as control context.
+  - This inflated control-context scores and could steer weighted selection away
+    from semantically intended control sites.
+
+- changes made:
+  - Updated context classification in
+    `tools/circt-mut/NativeMutationPlanner.cpp` to be token-aware over code
+    ranges:
+    - added keyword-token scanning helpers over line spans using the code mask
+      (`matchKeywordTokenAt`-based),
+    - control/verification context detection now matches real keywords instead
+      of raw substrings,
+    - assignment detection remains heuristic but now uses code-range token checks
+      (`assign`, plain `=`, `<=`) without substring leakage.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-context-keyword-tokenization.test`
+    - regression: verifies weighted cover selection prefers the true `if`-site
+      comparator (`@2`) rather than the `diff_eq` line (`@1`).
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-context-keyword-tokenization.test test/Tools/native-mutation-plan-const-general-literals.test test/Tools/native-create-mutated-const-general-literal-format.test test/Tools/native-create-mutated-const-skip-range-sites.test`
+    - result: `4 passed`.
+  - seeded xrun-vs-circt parity recheck:
+    - workspace: `/tmp/cov_intro_seeded_context_recheck_1772306684`
+    - result: `ok=16 mismatch=0 fail=0`.
