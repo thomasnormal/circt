@@ -874,7 +874,9 @@ top_module=${top_module}
     read -r -a extra_lec_args <<<"$CIRCT_LEC_ARGS"
     lec_args+=("${extra_lec_args[@]}")
   fi
-  lec_args+=("-c1=$top_module" "-c2=$top_module" "$opt_mlir" "$opt_mlir")
+  # Self-comparison always uses the same top module; passing a single MLIR
+  # input avoids expensive duplicate parse/merge on large designs.
+  lec_args+=("-c1=$top_module" "-c2=$top_module" "$opt_mlir")
 
   lec_out=""
   if lec_out="$(run_limited "$CIRCT_LEC" "${lec_args[@]}" 2> "$lec_log")"; then
@@ -933,7 +935,12 @@ top_module=${top_module}
   esac
   lec_timeout_class=""
   if [[ "$result" == "TIMEOUT" ]]; then
-    lec_timeout_class="solver_budget"
+    if [[ "$LEC_SMOKE_ONLY" == "1" ]]; then
+      # Smoke mode does not invoke an SMT solver, so timeout is frontend/pipeline.
+      lec_timeout_class="preprocess"
+    else
+      lec_timeout_class="solver_budget"
+    fi
   fi
   if [[ -n "$lec_timeout_class" ]]; then
     printf "%s\t%s\t%s\tsv-tests\tLEC\t%s\t%s\n" "$result" "$base" "$sv" "$lec_diag" "$lec_timeout_class" >> "$results_tmp"
