@@ -583,3 +583,51 @@
     hit a hard `timeout 360` cap.
   - deterministic lit coverage now guards behavior; clean wall-time quantification
     of this optimization should be repeated on a quieter host.
+
+## 2026-02-28 - No-flatten timeout frontier retry with safe fallback
+
+- realization:
+  - on strict OpenTitan timeout frontiers, flattening can dominate pre-solver
+    runtime (`FlattenModules` + downstream canonicalization in prior timing
+    probes), while `z3` itself may be near-zero.
+  - `--flatten-hw=false` can cut that frontend cost on some cases, but is not
+    universally safe because some designs still fail with
+    `solver must not contain any non-SMT operations`.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - new env knob:
+      `LEC_NO_FLATTEN_TIMEOUT_RETRY_MODE` (`auto|on|off`, default `auto`).
+    - in `auto`, for SMTLIB (non-smoke) runs with no explicit user
+      `--flatten-hw*` setting:
+      - if a case times out, retry once with `--flatten-hw=false`.
+      - propagate learned no-flatten state to later cases after success.
+    - safety fallback:
+      - if a no-flatten retry fails with
+        `solver must not contain any non-SMT operations`, retry once with
+        flattening re-enabled and clear learned no-flatten mode.
+    - new per-case retry artifacts:
+      - `circt-lec.no-flatten-timeout.log`
+      - `circt-lec.no-flatten-failure.log`
+
+- TDD:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-no-flatten-timeout-retry.test`
+    to require timeout-triggered no-flatten retry and learned reuse on the next
+    case.
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-no-flatten-auto-fallback.test`
+    to require non-SMT failure fallback back to flattened mode.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-no-flatten-*.test`:
+    `2/2` pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `41/41` pass.
+  - direct real-case probe (same `ALERT_HANDLER_LC_CTRL_ESC0_RST` shared core,
+    `--run-smtlib` with/without `--flatten-hw=false`) under current host load
+    still hit hard external timeout caps before tool-complete output; behavior
+    is now regression-guarded in lit while noisy-host wall-time quantification
+    remains pending.

@@ -917,6 +917,11 @@ def is_disable_threading_retryable_failure(returncode: int, log_text: str) -> bo
     )
 
 
+def is_no_flatten_retryable_failure(log_text: str) -> bool:
+    low = log_text.lower()
+    return "solver must not contain any non-smt operations" in low
+
+
 def normalize_drop_reason(line: str) -> str:
     line = line.replace("\t", " ").strip()
     line = re.sub(r"^[^:\n]+:\d+(?::\d+)?:\s*", "", line)
@@ -1549,6 +1554,16 @@ def main() -> int:
                 f"{prune_unreachable_symbols_mode} (expected auto|on|off)"
             )
         )
+    no_flatten_timeout_retry_mode = os.environ.get(
+        "LEC_NO_FLATTEN_TIMEOUT_RETRY_MODE", "auto"
+    ).strip().lower()
+    if no_flatten_timeout_retry_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_NO_FLATTEN_TIMEOUT_RETRY_MODE: "
+                f"{no_flatten_timeout_retry_mode} (expected auto|on|off)"
+            )
+        )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -1780,6 +1795,10 @@ def main() -> int:
         has_explicit_disable_threading = has_command_option(
             circt_lec_args, "--mlir-disable-threading"
         )
+        has_explicit_flatten_hw = (
+            has_command_option(circt_lec_args, "--flatten-hw")
+            or has_command_option(circt_lec_args, "--no-flatten-hw")
+        )
         has_explicit_canonicalizer_max_iterations = has_command_option(
             circt_lec_args, "--lec-canonicalizer-max-iterations"
         )
@@ -1869,6 +1888,7 @@ def main() -> int:
             prune_unreachable_symbols_mode in {"auto", "on"}
             and not has_explicit_prune_unreachable_symbols
         )
+        learned_no_flatten = False
 
         case_batches: list[list[ConnectivityLECCase]] = []
         by_csv: dict[str, list[ConnectivityLECCase]] = {}
@@ -2315,10 +2335,13 @@ def main() -> int:
                     lec_enable_prune_unreachable_symbols = (
                         learned_prune_unreachable_symbols
                     )
+                    lec_enable_no_flatten = learned_no_flatten
                     attempted_disable_threading_retry = False
                     attempted_llhd_abstraction_retry = False
                     attempted_canonicalizer_timeout_retry = False
                     attempted_prune_unreachable_symbols_retry = False
+                    attempted_no_flatten_timeout_retry = False
+                    attempted_no_flatten_failure_fallback = False
                     can_retry_disable_threading = (
                         disable_threading_retry_mode == "on"
                         or (
@@ -2344,6 +2367,15 @@ def main() -> int:
                         prune_unreachable_symbols_mode == "auto"
                         and not has_explicit_prune_unreachable_symbols
                     )
+                    can_retry_no_flatten_timeout = (
+                        no_flatten_timeout_retry_mode == "on"
+                        or (
+                            no_flatten_timeout_retry_mode == "auto"
+                            and lec_run_smtlib
+                            and not lec_smoke_only
+                            and not has_explicit_flatten_hw
+                        )
+                    )
 
                     def build_lec_cmd(
                         enable_temporal_approx: bool,
@@ -2352,6 +2384,7 @@ def main() -> int:
                         enable_canonicalizer_timeout_budget: bool,
                         canonicalizer_timeout_rewrite_budget: int | None,
                         enable_prune_unreachable_symbols: bool,
+                        enable_no_flatten: bool,
                     ) -> list[str]:
                         cmd = [
                             circt_lec,
@@ -2379,6 +2412,8 @@ def main() -> int:
                             and not has_explicit_prune_unreachable_symbols
                         ):
                             cmd.append("--prune-unreachable-symbols")
+                        if enable_no_flatten and not has_explicit_flatten_hw:
+                            cmd.append("--flatten-hw=false")
                         if (
                             enable_canonicalizer_timeout_budget
                             and not has_explicit_canonicalizer_max_iterations
@@ -2429,6 +2464,7 @@ def main() -> int:
                                 lec_enable_canonicalizer_timeout_budget,
                                 lec_canonicalizer_timeout_rewrite_budget,
                                 lec_enable_prune_unreachable_symbols,
+                                lec_enable_no_flatten,
                             )
                             lec_timeout_secs = timeout_secs
                             if (
@@ -2442,6 +2478,8 @@ def main() -> int:
                                 )
                                 run_result = parse_lec_result(combined)
                                 run_diag = parse_lec_diag(combined)
+                                if lec_enable_no_flatten:
+                                    learned_no_flatten = True
                                 if (
                                     not lec_smoke_only
                                     and can_retry_llhd_abstraction
@@ -2585,6 +2623,30 @@ def main() -> int:
                                             flush=True,
                                         )
                                         continue
+                                if (
+                                    can_retry_no_flatten_timeout
+                                    and not lec_enable_no_flatten
+                                    and not attempted_no_flatten_timeout_retry
+                                ):
+                                    no_flatten_timeout_log = (
+                                        case_dir / "circt-lec.no-flatten-timeout.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, no_flatten_timeout_log)
+                                    else:
+                                        no_flatten_timeout_log.write_text(
+                                            "", encoding="utf-8"
+                                        )
+                                    lec_enable_no_flatten = True
+                                    attempted_no_flatten_timeout_retry = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec "
+                                        "with --flatten-hw=false for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
                                 raise
                             except subprocess.CalledProcessError as exc:
                                 if lec_log.is_file():
@@ -2620,6 +2682,34 @@ def main() -> int:
                                     print(
                                         "opentitan connectivity lec: retrying circt-lec "
                                         "without --prune-unreachable-symbols for "
+                                        f"{case.case_id}",
+                                        file=sys.stderr,
+                                        flush=True,
+                                    )
+                                    continue
+                                if (
+                                    can_retry_no_flatten_timeout
+                                    and lec_enable_no_flatten
+                                    and not attempted_no_flatten_failure_fallback
+                                    and is_no_flatten_retryable_failure(
+                                        lec_retry_combined
+                                    )
+                                ):
+                                    no_flatten_failure_log = (
+                                        case_dir / "circt-lec.no-flatten-failure.log"
+                                    )
+                                    if lec_log.is_file():
+                                        shutil.copy2(lec_log, no_flatten_failure_log)
+                                    else:
+                                        no_flatten_failure_log.write_text(
+                                            lec_retry_combined, encoding="utf-8"
+                                        )
+                                    lec_enable_no_flatten = False
+                                    learned_no_flatten = False
+                                    attempted_no_flatten_failure_fallback = True
+                                    print(
+                                        "opentitan connectivity lec: retrying circt-lec "
+                                        "with flatten-hw enabled for "
                                         f"{case.case_id}",
                                         file=sys.stderr,
                                         flush=True,
