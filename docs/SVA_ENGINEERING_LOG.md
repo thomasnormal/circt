@@ -9798,3 +9798,29 @@
 - validation:
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv`
   - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_ral_test.sv test/Runtime/uvm/uvm_factory_test.sv`
+
+## 2026-02-28 - UVM coverage test semantic conversion (MAM + collector sampling)
+
+- realization:
+  - `test/Runtime/uvm/uvm_coverage_test.sv` was parse-only and hid multiple semantic mismatches.
+  - semantic bring-up initially failed at lowering because `my_coverage` extended `uvm_coverage`, while this runtime does not provide a concrete `uvm_coverage` base object.
+  - MAM `request_region()` attempts also failed under this runtime path due policy randomization instability (`Unable to randomize policy`), so request-random allocation was not a reliable semantic oracle.
+
+- implemented:
+  - `test/Runtime/uvm/uvm_coverage_test.sv`
+    - upgraded to semantic runtime coverage:
+      - `circt-verilog --ir-hw`
+      - `circt-sim` with `+UVM_TESTNAME=mam_test`
+      - `circt-sim` with `+UVM_TESTNAME=coverage_db_test`
+      - FileCheck pass markers + `UVM_ERROR` exclusions.
+    - changed `my_coverage` to extend `uvm_object` and kept embedded covergroup sampling behavior.
+    - switched top-level to `run_test()` for plusarg-selected scenarios.
+    - strengthened MAM checks with deterministic `reserve_region` allocations, overlap rejection, iterator count checks, and release-all verification.
+    - strengthened collector checks by asserting transaction and sample counts with explicit pass marker:
+      - `UVM_COVERAGE_DB_PASS`
+    - added MAM pass marker:
+      - `UVM_COVERAGE_MAM_PASS`
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_coverage_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_coverage_test.sv test/Runtime/uvm/uvm_ral_test.sv test/Runtime/uvm/uvm_factory_test.sv`

@@ -6224,3 +6224,6 @@ Status update (2026-02-28): this gap is closed in this workspace. The test now h
 
 ### [x] 2073. `test/Runtime/uvm/uvm_ral_test.sv:11`
 Status update (2026-02-28): this gap is closed in this workspace. The test was upgraded from parse-only to semantic runtime coverage (`circt-verilog --ir-hw` + `circt-sim`) with `FileCheck` assertions for `test_reg_field_ops`. Semantic expectations were corrected to reflect UVM RAL behavior (`set()` updates desired value, `predict()` updates mirrored value), so mirrored-value regressions are now validated by execution rather than silently passing parse-only checks.
+
+### [x] 2074. `test/Runtime/uvm/uvm_coverage_test.sv:11`
+Status update (2026-02-28): this gap is closed in this workspace. The test now runs semantically (`circt-verilog --ir-hw` + `circt-sim`) for both `mam_test` and `coverage_db_test`, with explicit pass markers (`UVM_COVERAGE_MAM_PASS`, `UVM_COVERAGE_DB_PASS`) and `UVM_ERROR` exclusion checks. During conversion, two silent semantic mismatches were fixed in test logic: `my_coverage` now derives from `uvm_object` (the runtime does not provide a concrete `uvm_coverage` base object), and MAM allocation checks now use deterministic `reserve_region` flows instead of policy-randomized `request_region`, which is not stable in this runtime path.

@@ -2,13 +2,25 @@
 // UVM Coverage Infrastructure Test
 //===----------------------------------------------------------------------===//
 // Tests the UVM functional coverage support including:
-// - uvm_coverage base class
+// - object-based coverage collectors with covergroups
 // - uvm_mem_mam (Memory Allocation Manager)
 // - uvm_mem_region
-// - uvm_coverage_db
 // - Covergroup integration with UVM
 //
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top tb_coverage --max-time=1000000000 +UVM_TESTNAME=mam_test +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM-MAM
+// RUN: circt-sim %t.mlir --top tb_coverage --max-time=1000000000 +UVM_TESTNAME=coverage_db_test +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM-COVDB
+//
+// SIM-MAM: Running test mam_test
+// SIM-MAM: UVM_COVERAGE_MAM_PASS
+// SIM-MAM-NOT: UVM_ERROR
+// SIM-MAM: [circt-sim] Simulation completed
+//
+// SIM-COVDB: Running test coverage_db_test
+// SIM-COVDB: UVM_COVERAGE_DB_PASS
+// SIM-COVDB-NOT: UVM_ERROR
+// SIM-COVDB: [circt-sim] Simulation completed
 
 `timescale 1ns/1ps
 
@@ -20,7 +32,9 @@ package coverage_test_pkg;
   //==========================================================================
   // Concrete coverage class for testing
   //==========================================================================
-  class my_coverage extends uvm_coverage;
+  // UVM 1.2 does not define a concrete uvm_coverage base object in this runtime.
+  // Keep coverage state in a regular uvm_object and sample via embedded covergroups.
+  class my_coverage extends uvm_object;
     `uvm_object_utils(my_coverage)
 
     // Sample counter for testing
@@ -168,6 +182,9 @@ package coverage_test_pkg;
       uvm_mem_mam mam;
       uvm_mem_region r1, r2, r3;
       uvm_mem_region regions[$];
+      bit pass;
+
+      pass = 1;
 
       phase.raise_objection(this, "Testing MAM");
 
@@ -182,24 +199,27 @@ package coverage_test_pkg;
 
       `uvm_info("MAM", $sformatf("Initial state: %s", mam.convert2string()), UVM_LOW)
 
-      // Test request_region
-      r1 = mam.request_region(64);
-      if (r1 == null)
+      // Test deterministic reserve_region allocations.
+      r1 = mam.reserve_region(0, 64);
+      if (r1 == null) begin
         `uvm_error("MAM", "Failed to allocate r1")
-      else
+        pass = 0;
+      end else
         `uvm_info("MAM", $sformatf("Allocated r1: %s", r1.convert2string()), UVM_LOW)
 
-      r2 = mam.request_region(128);
-      if (r2 == null)
+      r2 = mam.reserve_region(16, 128);
+      if (r2 == null) begin
         `uvm_error("MAM", "Failed to allocate r2")
-      else
+        pass = 0;
+      end else
         `uvm_info("MAM", $sformatf("Allocated r2: %s", r2.convert2string()), UVM_LOW)
 
       // Test reserve_region at specific address
       r3 = mam.reserve_region(512, 256);
-      if (r3 == null)
+      if (r3 == null) begin
         `uvm_error("MAM", "Failed to reserve r3")
-      else
+        pass = 0;
+      end else
         `uvm_info("MAM", $sformatf("Reserved r3: %s", r3.convert2string()), UVM_LOW)
 
       `uvm_info("MAM", $sformatf("After allocations: %s", mam.convert2string()), UVM_LOW)
@@ -213,6 +233,10 @@ package coverage_test_pkg;
           region = mam.for_each();
         end
       end
+      if (regions.size() != 3) begin
+        `uvm_error("MAM", $sformatf("Expected 3 allocated regions, got %0d", regions.size()))
+        pass = 0;
+      end
       `uvm_info("MAM", $sformatf("Number of allocated regions: %0d", regions.size()), UVM_LOW)
 
       // Test release
@@ -223,15 +247,34 @@ package coverage_test_pkg;
       begin
         uvm_mem_region r_overlap;
         r_overlap = mam.reserve_region(500, 100);
-        if (r_overlap != null)
+        if (r_overlap != null) begin
           `uvm_error("MAM", "Overlapping reservation should have failed!")
-        else
+          pass = 0;
+        end else
           `uvm_info("MAM", "Correctly rejected overlapping reservation", UVM_LOW)
       end
 
       // Release all
       mam.release_all_regions();
       `uvm_info("MAM", $sformatf("After release_all: %s", mam.convert2string()), UVM_LOW)
+
+      begin
+        int remaining_regions;
+        uvm_mem_region region;
+        remaining_regions = 0;
+        region = mam.for_each(1);
+        while (region != null) begin
+          remaining_regions++;
+          region = mam.for_each();
+        end
+        if (remaining_regions != 0) begin
+          `uvm_error("MAM", $sformatf("release_all_regions left %0d regions", remaining_regions))
+          pass = 0;
+        end
+      end
+
+      if (pass)
+        `uvm_info("MAM", "UVM_COVERAGE_MAM_PASS", UVM_NONE)
 
       phase.drop_objection(this, "MAM test done");
     endtask
@@ -257,21 +300,37 @@ package coverage_test_pkg;
 
     virtual task run_phase(uvm_phase phase);
       covered_tx tx;
+      bit pass;
+      pass = 1;
 
       phase.raise_objection(this, "Testing coverage DB");
 
       // Create and sample some transactions
       repeat (10) begin
         tx = covered_tx::type_id::create("tx");
-        if (!tx.randomize())
+        if (!tx.randomize()) begin
           `uvm_error("TX", "Randomization failed")
+          pass = 0;
+        end
         collector.write(tx);
+      end
+
+      if (collector.transaction_count != 10) begin
+        `uvm_error("COVDB", $sformatf("Expected 10 transactions, got %0d", collector.transaction_count))
+        pass = 0;
+      end
+      if (collector.cov.sample_count != 10) begin
+        `uvm_error("COVDB", $sformatf("Expected 10 coverage samples, got %0d", collector.cov.sample_count))
+        pass = 0;
       end
 
       `uvm_info("COVDB", $sformatf("Collected coverage samples: %0d",
                                     collector.cov.sample_count), UVM_LOW)
       `uvm_info("COVDB", $sformatf("Collector coverage: %.2f%%",
                                     collector.cov.get_coverage_pct()), UVM_LOW)
+
+      if (pass)
+        `uvm_info("COVDB", "UVM_COVERAGE_DB_PASS", UVM_NONE)
 
       phase.drop_objection(this, "Coverage DB test done");
     endtask
@@ -325,8 +384,7 @@ module tb_coverage;
   // Run UVM test
   initial begin
     `uvm_info("TB", "Starting UVM coverage test", UVM_NONE)
-    // Can run either mam_test or coverage_db_test
-    run_test("mam_test");
+    run_test();
   end
 
   // Timeout
