@@ -503,21 +503,127 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
         };
 
+    auto isPlausibleNativePointerValue = [](uint64_t addr) -> bool {
+      if (addr == 0)
+        return true;
+      constexpr uint64_t kVirtualLo = 0x10000000ULL;
+      constexpr uint64_t kVirtualHi = 0x20000000ULL;
+      constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+      constexpr uint64_t kTaggedHi = 0x100000000ULL;
+      constexpr uint64_t kMaxCanonicalUserPtr = 0x0000FFFFFFFFFFFFULL;
+      if (addr >= kVirtualLo && addr < kVirtualHi)
+        return true;
+      if (addr >= kTaggedLo && addr < kTaggedHi)
+        return true;
+      return addr <= kMaxCanonicalUserPtr;
+    };
+    auto isKnownPointerAddress = [&](uint64_t addr) -> bool {
+      if (addr == 0)
+        return true;
+      uint64_t off = 0;
+      if (findMemoryBlockByAddress(addr, procId, &off))
+        return true;
+      if (findBlockByAddress(addr, off))
+        return true;
+      size_t nativeSize = 0;
+      return findNativeMemoryBlockByAddress(addr, &off, &nativeSize);
+    };
+    auto isFastFalseUnsafeUvmPredicateCallee =
+        [](llvm::StringRef calleeName) -> bool {
+      if (!calleeName.starts_with("uvm_pkg::"))
+        return false;
+      bool isTypedCallbacksPredicate =
+          calleeName.contains("uvm_typed_callbacks_") &&
+          calleeName.ends_with("::m_am_i_a");
+      bool isPoolExistsPredicate =
+          calleeName.contains("uvm_pool") && calleeName.ends_with("::exists");
+      return isTypedCallbacksPredicate || isPoolExistsPredicate;
+    };
     auto fillNativeCallArgs = [&](llvm::ArrayRef<InterpretedValue> callArgs,
                                   mlir::TypeRange argTypes,
                                   llvm::StringRef calleeNameForNormalization,
                                   unsigned numArgs, uint64_t (&packed)[8],
-                                  bool normalizePointerArgs) {
+                                  bool normalizePointerArgs,
+                                  bool &forcePredicateFalse) -> bool {
+      forcePredicateFalse = false;
       for (unsigned i = 0; i < numArgs; ++i) {
         uint64_t argVal = (i < callArgs.size()) ? callArgs[i].getUInt64() : 0;
-        if (normalizePointerArgs && i < argTypes.size() &&
-            isa<mlir::LLVM::LLVMPointerType>(argTypes[i])) {
+        bool hasPointerType =
+            i < argTypes.size() && isa<mlir::LLVM::LLVMPointerType>(argTypes[i]);
+        // Some UVM call_indirect lowers carry `this` as i64 instead of ptr.
+        // Treat arg0 as pointer-like for UVM methods so native pointer guards
+        // still run and can safely demote bad payloads to interpreted fallback.
+        bool isLikelyI64ThisArg =
+            i < argTypes.size() && isa<mlir::IntegerType>(argTypes[i]) &&
+            cast<mlir::IntegerType>(argTypes[i]).getWidth() == 64;
+        bool isUvmMethodThisArg =
+            i == 0 && isLikelyI64ThisArg &&
+            calleeNameForNormalization.contains("uvm_pkg::") &&
+            calleeNameForNormalization.contains("::");
+        if (normalizePointerArgs && (hasPointerType || isUvmMethodThisArg)) {
           argVal = normalizeNativeCallPointerArg(procId,
                                                  calleeNameForNormalization,
                                                  argVal);
+          bool strictUvmThisPointerCheck =
+              i == 0 && calleeNameForNormalization.contains("uvm_pkg::");
+          if (strictUvmThisPointerCheck && argVal != 0 &&
+              !isKnownPointerAddress(argVal)) {
+            static bool traceNativeCalls =
+                std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+            if (traceNativeCalls) {
+              llvm::errs() << "[AOT TRACE] call_indirect skip unknown-pointer"
+                           << " callee=" << calleeNameForNormalization
+                           << " arg" << i << "="
+                           << llvm::format_hex(argVal, 16)
+                           << " active_proc=" << activeProcessId << "\n";
+            }
+            return false;
+          }
+          bool unsafeUvmPredicateArg1 =
+              i == 1 &&
+              isFastFalseUnsafeUvmPredicateCallee(calleeNameForNormalization);
+          if (unsafeUvmPredicateArg1 && argVal != 0) {
+            bool knownAddr = isKnownPointerAddress(argVal);
+            bool badPointerShape = !isPlausibleNativePointerValue(argVal);
+            bool suspiciousHighUnmappedPtr =
+                argVal > 0xFFFFFFFFULL && !knownAddr;
+            // UVM object handles in these predicate paths are expected to be
+            // interpreter-managed virtual addresses. Treat tiny unmapped
+            // values as malformed payloads as well.
+            bool suspiciousLowUnmappedPtr =
+                argVal < 0x01000000ULL && !knownAddr;
+            if (badPointerShape || suspiciousHighUnmappedPtr ||
+                suspiciousLowUnmappedPtr) {
+              static bool traceNativeCalls =
+                  std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+              if (traceNativeCalls) {
+                llvm::errs()
+                    << "[AOT TRACE] call_indirect fast-false unsafe-predicate"
+                    << " callee=" << calleeNameForNormalization << " arg" << i
+                    << "=" << llvm::format_hex(argVal, 16)
+                    << " known=" << (knownAddr ? 1 : 0)
+                    << " active_proc=" << activeProcessId << "\n";
+              }
+              forcePredicateFalse = true;
+              return true;
+            }
+          }
+          if (!isPlausibleNativePointerValue(argVal)) {
+            static bool traceNativeCalls =
+                std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+            if (traceNativeCalls) {
+              llvm::errs() << "[AOT TRACE] call_indirect skip bad-pointer"
+                           << " callee=" << calleeNameForNormalization
+                           << " arg" << i << "="
+                           << llvm::format_hex(argVal, 16)
+                           << " active_proc=" << activeProcessId << "\n";
+            }
+            return false;
+          }
         }
         packed[i] = argVal;
       }
+      return true;
     };
     auto maybeTraceIndirectNative = [&](uint32_t fid, llvm::StringRef callee,
                                         bool isNativeEntry, unsigned numArgs,
@@ -586,6 +692,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                      << " mode=optin-no-proc\n";
       }
       return skip;
+    };
+    auto shouldForceInterpretedFragileUvmCallee =
+        [](llvm::StringRef calleeName) -> bool {
+      return calleeName.contains(
+          "uvm_pkg::uvm_phase::set_max_ready_to_end_iterations");
     };
     auto tryResolveAnalysisWriteTarget =
         [&](ModuleOp lookupModule, uint64_t selfAddr, llvm::StringRef traceTag)
@@ -1081,8 +1192,21 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-                fillNativeCallArgs(args, funcOp.getArgumentTypes(), resolvedName,
-                               numArgs, a, normalizePointerArgs);
+                if (isNativeEntry &&
+                    shouldForceInterpretedFragileUvmCallee(resolvedName))
+                  goto ci_xfallback_interpreted;
+                bool forcePredicateFalse = false;
+                eligible = fillNativeCallArgs(args, funcOp.getArgumentTypes(),
+                                              resolvedName, numArgs, a,
+                                              normalizePointerArgs,
+                                              forcePredicateFalse);
+                if (forcePredicateFalse) {
+                  setCallIndirectResults({});
+                  resolved = true;
+                  break;
+                }
+                if (!eligible)
+                  goto ci_xfallback_interpreted;
                 maybeTraceIndirectNative(fid, resolvedName, isNativeEntry,
                                          numArgs,
                                          numResults, a);
@@ -1862,8 +1986,21 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-                fillNativeCallArgs(sArgs, fOp.getArgumentTypes(), resolvedName,
-                               numArgs, a, normalizePointerArgs);
+                if (isNativeEntry &&
+                    shouldForceInterpretedFragileUvmCallee(resolvedName))
+                  goto ci_static_interpreted;
+                bool forcePredicateFalse = false;
+                eligible = fillNativeCallArgs(sArgs, fOp.getArgumentTypes(),
+                                              resolvedName, numArgs, a,
+                                              normalizePointerArgs,
+                                              forcePredicateFalse);
+                if (forcePredicateFalse) {
+                  setCallIndirectResults({});
+                  staticResolved = true;
+                  break;
+                }
+                if (!eligible)
+                  goto ci_static_interpreted;
                 maybeTraceIndirectNative(fid, resolvedName, isNativeEntry,
                                          numArgs,
                                          numResults, a);
@@ -2446,9 +2583,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-            fillNativeCallArgs(fastArgs, cachedFuncOp.getArgumentTypes(),
-                               cachedFuncOp.getSymName(), numArgs, a,
-                               normalizePointerArgs);
+            if (isNativeEntry &&
+                shouldForceInterpretedFragileUvmCallee(
+                    cachedFuncOp.getSymName()))
+              goto ci_cache_interpreted;
+            bool forcePredicateFalse = false;
+            eligible = fillNativeCallArgs(fastArgs,
+                                          cachedFuncOp.getArgumentTypes(),
+                                          cachedFuncOp.getSymName(), numArgs, a,
+                                          normalizePointerArgs,
+                                          forcePredicateFalse);
+            if (forcePredicateFalse) {
+              setCallIndirectResults({});
+              return success();
+            }
+            if (!eligible)
+              goto ci_cache_interpreted;
             maybeTraceIndirectNative(entry.cachedFid,
                                      cachedFuncOp.getSymName(), isNativeEntry,
                                      numArgs, numResults, a);
@@ -5170,8 +5320,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-            fillNativeCallArgs(args, funcOp.getArgumentTypes(), calleeName,
-                               numArgs, a, normalizePointerArgs);
+            if (isNativeEntry &&
+                shouldForceInterpretedFragileUvmCallee(calleeName))
+              goto ci_main_interpreted;
+            bool forcePredicateFalse = false;
+            eligible = fillNativeCallArgs(args, funcOp.getArgumentTypes(),
+                                          calleeName, numArgs, a,
+                                          normalizePointerArgs,
+                                          forcePredicateFalse);
+            if (forcePredicateFalse) {
+              setCallIndirectResults({});
+              if (indAddedToVisited)
+                decrementRecursionDepthEntry(callState, indFuncKey, indArg0Val);
+              return success();
+            }
+            if (!eligible)
+              goto ci_main_interpreted;
             maybeTraceIndirectNative(fid, calleeName, isNativeEntry, numArgs,
                                      numResults, a);
 
