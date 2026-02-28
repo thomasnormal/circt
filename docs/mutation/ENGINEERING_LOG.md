@@ -2053,3 +2053,51 @@
   - seeded xrun-vs-circt parity recheck:
     - workspace: `/tmp/cov_intro_seeded_context_recheck_1772306684`
     - result: `ok=16 mismatch=0 fail=0`.
+
+## 2026-02-28 (const off-by-one mutation class)
+
+- realizations:
+  - Existing constant fault operators only flipped `0/1` values, leaving a
+    common arithmetic fault class under-covered: off-by-one constant edits.
+  - Off-by-one literal faults are realistic and semantically distinct from
+    stuck-at constant flips and assignment-RHS arithmetic wrappers.
+
+- changes made:
+  - Added native mutation operators:
+    - `CONST_PLUS_ONE`
+    - `CONST_MINUS_ONE`
+  - Planner/apply updates in `tools/circt-mut/NativeMutationPlanner.cpp`:
+    - added operator catalog entries and family mapping,
+    - added site collection using existing simple-literal scanner with
+      declaration/range guards,
+    - `CONST_MINUS_ONE` skips zero literals to avoid generating negative
+      underflow-style constants from `0`,
+    - apply-time rewrite emits parenthesized expression forms:
+      - `token -> (token + 1)`
+      - `token -> (token - 1)`
+  - Mode integration in `tools/circt-mut/circt-mut.cpp`:
+    - added both operators to CIRCT-only `arith`, `invert`, `inv`, and
+      `balanced/all` mode operator sets.
+  - Validation allowlist sync:
+    - `utils/run_mutation_mcy_examples.sh` native-op token validator now accepts
+      `CONST_PLUS_ONE` / `CONST_MINUS_ONE`.
+
+- tests added (TDD):
+  - `test/Tools/native-mutation-plan-const-plus-minus-one-force.test`
+  - `test/Tools/native-create-mutated-const-plus-minus-one-site-index.test`
+  - `test/Tools/native-mutation-plan-const-minus-one-skip-zero.test`
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-mut`
+  - focused lit slices:
+    - `build_test/bin/llvm-lit -sv test/Tools/native-mutation-plan-const-plus-minus-one-force.test test/Tools/native-create-mutated-const-plus-minus-one-site-index.test test/Tools/native-mutation-plan-const-minus-one-skip-zero.test test/Tools/native-mutation-plan-const-general-literals.test test/Tools/native-create-mutated-const-general-literal-format.test test/Tools/native-create-mutated-const-skip-range-sites.test`
+    - result: `6 passed`.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-mutation-mcy-examples-native-mutation-plan-safe-ops-pass.test`
+    - result: `1 passed`.
+  - quick mode smoke:
+    - `--modes arith` generation on literal-only design now emits
+      `NATIVE_CONST_PLUS_ONE` / `NATIVE_CONST_MINUS_ONE`.
+  - seeded xrun-vs-circt parity campaign:
+    - workspace: `/tmp/cov_intro_seeded_const_delta_1772306949`
+    - result: `ok=20 mismatch=0 fail=0`.

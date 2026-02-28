@@ -49,7 +49,8 @@ static constexpr const char *kNativeMutationOpsAll[] = {
     "RESET_COND_FALSE", "IF_COND_TRUE",      "IF_COND_FALSE",
     "IF_ELSE_SWAP_ARMS", "CASE_ITEM_SWAP_ARMS", "UNARY_NOT_DROP",
     "UNARY_BNOT_DROP",
-    "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0", "ADD_TO_SUB",
+    "UNARY_MINUS_DROP", "CONST0_TO_1",    "CONST1_TO_0",
+    "CONST_PLUS_ONE",   "CONST_MINUS_ONE", "ADD_TO_SUB",
     "SUB_TO_ADD",       "MUL_TO_ADD",     "ADD_TO_MUL",  "DIV_TO_MUL",
     "MUL_TO_DIV",       "MOD_TO_DIV",     "DIV_TO_MOD",  "INC_TO_DEC",
     "DEC_TO_INC",       "PLUS_EQ_TO_MINUS_EQ", "MINUS_EQ_TO_PLUS_EQ",
@@ -1045,10 +1046,9 @@ static bool parseSimpleNonNegativeLiteralAt(StringRef text,
   return true;
 }
 
-static void collectSimpleLiteralValueSites(StringRef text,
-                                           ArrayRef<uint8_t> codeMask,
-                                           uint64_t target,
-                                           SmallVectorImpl<SiteInfo> &sites) {
+static void collectSimpleLiteralSitesWithFilter(
+    StringRef text, ArrayRef<uint8_t> codeMask, bool filterByValue,
+    uint64_t targetValue, bool skipZero, SmallVectorImpl<SiteInfo> &sites) {
   int bracketDepth = 0;
   for (size_t i = 0, e = text.size(); i < e; ++i) {
     if (isCodeAt(codeMask, i)) {
@@ -1072,14 +1072,33 @@ static void collectSimpleLiteralValueSites(StringRef text,
     uint64_t value = 0;
     if (!parseSimpleNonNegativeLiteralAt(text, codeMask, i, end, value))
       continue;
-    if (value == target) {
-      size_t stmtStart = findStatementStart(text, codeMask, i);
-      if (!statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
-        sites.push_back({i});
-    }
+    if (skipZero && value == 0)
+      continue;
+    if (filterByValue && value != targetValue)
+      continue;
+    size_t stmtStart = findStatementStart(text, codeMask, i);
+    if (!statementLooksLikeTypedDeclaration(text, codeMask, stmtStart, i))
+      sites.push_back({i});
     if (end > i)
       i = end - 1;
   }
+}
+
+static void collectSimpleLiteralValueSites(StringRef text,
+                                           ArrayRef<uint8_t> codeMask,
+                                           uint64_t target,
+                                           SmallVectorImpl<SiteInfo> &sites) {
+  collectSimpleLiteralSitesWithFilter(text, codeMask, /*filterByValue=*/true,
+                                      target,
+                                      /*skipZero=*/false, sites);
+}
+
+static void collectSimpleLiteralAnySites(StringRef text,
+                                         ArrayRef<uint8_t> codeMask,
+                                         SmallVectorImpl<SiteInfo> &sites,
+                                         bool skipZero = false) {
+  collectSimpleLiteralSitesWithFilter(text, codeMask, /*filterByValue=*/false,
+                                      /*targetValue=*/0, skipZero, sites);
 }
 
 static bool buildFlippedSimpleLiteral(StringRef token, bool zeroToOne,
@@ -3473,6 +3492,15 @@ static void collectSitesForOp(StringRef designText, StringRef op,
     collectSimpleLiteralValueSites(designText, codeMask, /*target=*/1, sites);
     return;
   }
+  if (op == "CONST_PLUS_ONE") {
+    collectSimpleLiteralAnySites(designText, codeMask, sites);
+    return;
+  }
+  if (op == "CONST_MINUS_ONE") {
+    collectSimpleLiteralAnySites(designText, codeMask, sites,
+                                 /*skipZero=*/true);
+    return;
+  }
   if (op == "ADD_TO_SUB") {
     collectBinaryArithmeticSites(designText, '+', codeMask, sites,
                                  /*skipRhsZeroEquivalent=*/true);
@@ -3666,6 +3694,8 @@ static std::string getOpFamily(StringRef op) {
     return "control";
   if (op == "CONST0_TO_1" || op == "CONST1_TO_0")
     return "constant";
+  if (op == "CONST_PLUS_ONE" || op == "CONST_MINUS_ONE")
+    return "arithmetic";
   if (op == "ADD_TO_SUB" || op == "SUB_TO_ADD" || op == "MUL_TO_ADD" ||
       op == "ADD_TO_MUL" || op == "DIV_TO_MUL" || op == "MUL_TO_DIV" ||
       op == "MOD_TO_DIV" || op == "DIV_TO_MOD" ||
@@ -4690,6 +4720,23 @@ static bool applyConstFlipAt(StringRef text, bool zeroToOne, size_t pos,
   return replaceSpan(mutatedText, pos, end, replacement);
 }
 
+static bool applyConstDeltaAt(StringRef text, int delta, size_t pos,
+                              ArrayRef<uint8_t> codeMask,
+                              std::string &mutatedText) {
+  assert((delta == 1 || delta == -1) && "expected +/-1 delta");
+  size_t end = pos;
+  uint64_t value = 0;
+  if (!parseSimpleNonNegativeLiteralAt(text, codeMask, pos, end, value))
+    return false;
+  if (delta < 0 && value == 0)
+    return false;
+
+  StringRef token = text.slice(pos, end);
+  std::string replacement =
+      (Twine("(") + token + (delta > 0 ? " + 1" : " - 1") + ")").str();
+  return replaceSpan(mutatedText, pos, end, replacement);
+}
+
 static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask,
                                       StringRef op, size_t pos,
                                       std::string &mutatedText) {
@@ -4843,6 +4890,10 @@ static bool applyNativeMutationAtSite(StringRef text, ArrayRef<uint8_t> codeMask
   if (op == "CONST1_TO_0")
     return applyConstFlipAt(text, /*zeroToOne=*/false, pos, codeMask,
                             mutatedText);
+  if (op == "CONST_PLUS_ONE")
+    return applyConstDeltaAt(text, /*delta=*/1, pos, codeMask, mutatedText);
+  if (op == "CONST_MINUS_ONE")
+    return applyConstDeltaAt(text, /*delta=*/-1, pos, codeMask, mutatedText);
   if (op == "ADD_TO_SUB")
     return replaceTokenAt(mutatedText, pos, 1, "-");
   if (op == "SUB_TO_ADD")
