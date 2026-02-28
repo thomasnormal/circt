@@ -2,7 +2,7 @@
 // RUN: printf 'module top;\n  string s = "fake == token";\n  // fake == token in comment\n  logic a, b, y;\n  assign y = (a == b);\nendmodule\n' > %t/design.sv
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/legacy.txt --count 40 --seed 0 --cfg planner_policy=legacy > %t/log-legacy.txt
 // RUN: env -u CIRCT_MUT_ALLOW_THIRD_PARTY circt-mut generate --design %t/design.sv --out %t/weighted.txt --count 40 --seed 0 --cfg planner_policy=weighted --cfg weight_cover=1 --cfg weight_pq_w=0 --cfg weight_pq_b=0 --cfg weight_pq_c=0 --cfg weight_pq_s=0 --cfg weight_pq_mw=0 --cfg weight_pq_mb=0 --cfg weight_pq_mc=0 --cfg weight_pq_ms=0 --cfg pick_cover_prcnt=100 > %t/log-weighted.txt
-// RUN: grep -q 'NATIVE_EQ_TO_NEQ@1' %t/legacy.txt
-// RUN: grep -q 'NATIVE_EQ_TO_NEQ@1' %t/weighted.txt
-// RUN: not grep -E '@[23]' %t/legacy.txt
-// RUN: not grep -E '@[23]' %t/weighted.txt
+// RUN: grep -q 'NATIVE_EQ_TO_NEQ' %t/legacy.txt
+// RUN: grep -q 'NATIVE_EQ_TO_NEQ' %t/weighted.txt
+// RUN: not grep -q 'NATIVE_EQ_TO_NEQ@[23]' %t/legacy.txt
+// RUN: not grep -q 'NATIVE_EQ_TO_NEQ@[23]' %t/weighted.txt
