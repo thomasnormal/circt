@@ -1,6 +1,13 @@
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-llhd --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top uvm_phase_wait_for_state_test --max-time=1000000000 2>&1 | FileCheck %s --check-prefix=SIM
 
 //===----------------------------------------------------------------------===//
+
+// SIM: Testing uvm_phase_state enum values...
+// SIM: All uvm_phase_state enum values accessible - PASS
+// SIM: get_state() method accessible - PASS
+// SIM: All uvm_phase wait_for_state tests PASSED
 // UVM Phase wait_for_state Test
 //===----------------------------------------------------------------------===//
 //

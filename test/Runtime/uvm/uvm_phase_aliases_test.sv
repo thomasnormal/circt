@@ -1,6 +1,11 @@
 // RUN: circt-verilog --parse-only --uvm-path=%S/../../../lib/Runtime/uvm-core %s
+// RUN: circt-verilog --ir-llhd --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
+// RUN: circt-sim %t.mlir --top uvm_phase_aliases_test --max-time=1000000000 2>&1 | FileCheck %s --check-prefix=SIM
 
 //===----------------------------------------------------------------------===//
+
+// SIM: Testing UVM phase handle aliases...
+// SIM: All UVM phase handle aliases are accessible - TEST PASSED
 // UVM Phase Handle Aliases Test
 //===----------------------------------------------------------------------===//
 //

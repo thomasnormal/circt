@@ -1282,3 +1282,20 @@
   - `utils/ninja-with-lock.sh -C build_test MooreRuntimeTests`
   - `build_test/tools/circt/unittests/Runtime/MooreRuntimeTests --gtest_filter=MooreRuntimeWaitConditionTest.*:MooreRuntimeResetTest.ResetForNewSimulationRunClearsGlobalState`
   - result: 4/4 passed.
+
+### UVM runtime: promote phase-handle tests from parse-only to execution-backed
+- Repro:
+  - `uvm_phase_wait_for_state_test.sv` and `uvm_phase_aliases_test.sv` were
+    parse-only tests, so regressions in runtime execution path would not be
+    detected.
+- Root cause:
+  - Missing `circt-sim` execution checks for these two phase/lifecycle tests.
+- Fix:
+  - Added LLHD + `circt-sim` RUN lines and `SIM` FileCheck expectations to:
+    - `test/Runtime/uvm/uvm_phase_wait_for_state_test.sv`
+    - `test/Runtime/uvm/uvm_phase_aliases_test.sv`
+  - Kept existing parse-only RUN lines for frontend coverage.
+- Validation:
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_aliases_test.sv`
+  - `build_test/bin/llvm-lit -sv test/Runtime/uvm -j 8`
+  - result: targeted tests pass; full UVM runtime suite 17/17 passed.
