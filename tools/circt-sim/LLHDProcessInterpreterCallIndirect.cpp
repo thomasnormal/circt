@@ -768,11 +768,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
             phaseObjectionHandles[phaseAddr] = handle;
           }
+          int64_t beforeCount = __moore_objection_get_count(handle);
           if (resolvedName.contains("raise_objection")) {
             raisePhaseObjection(handle, count);
           } else {
             dropPhaseObjection(handle, count);
           }
+          int64_t afterCount = __moore_objection_get_count(handle);
+          if (beforeCount > 0 || afterCount > 0)
+            executePhasePhaseSawPositiveObjection[phaseAddr] = true;
           resolved = true;
           break;
         }
@@ -1247,11 +1251,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                 phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
             phaseObjectionHandles[phaseAddr] = handle;
           }
+          int64_t beforeCount = __moore_objection_get_count(handle);
           if (resolvedName.contains("raise_objection")) {
             raisePhaseObjection(handle, cnt);
           } else {
             dropPhaseObjection(handle, cnt);
           }
+          int64_t afterCount = __moore_objection_get_count(handle);
+          if (beforeCount > 0 || afterCount > 0)
+            executePhasePhaseSawPositiveObjection[phaseAddr] = true;
           staticResolved = true;
           break;
         }
@@ -5009,8 +5017,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         } else {
           dropPhaseObjection(handle, count);
         }
+        int64_t afterCount = __moore_objection_get_count(handle);
+        if (beforeCount > 0 || afterCount > 0)
+          executePhasePhaseSawPositiveObjection[phaseAddr] = true;
         if (traceUvmObjection) {
-          int64_t afterCount = __moore_objection_get_count(handle);
           llvm::errs() << "[UVM-OBJ] proc=" << procId
                        << " callee=" << calleeName << " phase=0x"
                        << llvm::format_hex(phaseAddr, 16)

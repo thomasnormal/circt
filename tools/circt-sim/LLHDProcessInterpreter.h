@@ -3854,6 +3854,9 @@ private:
   /// Tracks whether a process has observed a positive objection count for
   /// the currently monitored execute_phase.
   std::map<ProcessId, bool> executePhaseSawPositiveObjection;
+  /// Latches whether a task phase ever observed objections > 0. This closes
+  /// poll races where raise/drop occurs between polling ticks.
+  std::map<uint64_t, bool> executePhasePhaseSawPositiveObjection;
   /// Real-time deadline (fs) after objections drop to zero for execute_phase.
   /// Used to honor configured objection drain time without long fixed polling.
   std::map<ProcessId, uint64_t> executePhaseZeroDeadlineFs;
