@@ -230,6 +230,34 @@ The fork includes a complete formal verification harness with:
 
 ### Mutation Testing
 
+If you haven't used mutation testing before: take a working design, apply a small bug automatically, then run your checks.
+If checks fail, the mutant is **killed** (good). If checks still pass, the mutant **survives** (coverage gap).
+
+Here is a tiny example of a real mutation type:
+
+```systemverilog
+// Before (original)
+module counter(input logic clk, rst_n, en, output logic [3:0] q);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= 4'd0;
+    else if (en) q <= q + 1'b1;
+  end
+endmodule
+```
+
+```systemverilog
+// After (mutated): IF_COND_NEGATE
+module counter(input logic clk, rst_n, en, output logic [3:0] q);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= 4'd0;
+    else if (!en) q <= q + 1'b1; // injected bug
+  end
+endmodule
+```
+
+If your testbench checks that `q` only increments when `en==1`, this mutant gets killed.
+If not, it survives and points to a missing check.
+
 ```bash
 # 1) Generate mutants from a known tricky testcase with a fixed seed
 circt-mut generate \
@@ -249,6 +277,27 @@ circt-mut report --project-dir mut-campaign --mode all --out mut-report.tsv
 circt-verilog cov_intro_seeded.sv --ir-llhd --single-unit --top cov_intro_seeded -o cov_intro_seeded.mlir
 circt-sim cov_intro_seeded.mlir --top cov_intro_seeded --vcd cov_intro_seeded.vcd
 ```
+
+And this is what the aggregated report looks like in practice:
+
+```text
+key                                          value
+report.mode                                   all
+cover.total_mutants                           200
+cover.detected_mutants                        141
+cover.propagated_not_detected_mutants         37
+cover.not_propagated_mutants                  15
+cover.not_activated_mutants                   7
+cover.errors                                  0
+cover.mutation_coverage_percent               79.21
+matrix.lanes_total                            8
+matrix.lanes_pass                             8
+matrix.lanes_fail                             0
+```
+
+In this format:
+- `cover.detected_mutants` are killed mutants.
+- `cover.propagated_not_detected_mutants` are survived mutants that reached observable behavior but escaped checks.
 
 The mutation workflow evolved from one-shot coverage runs into a tight differential-debug loop:
 - improve the native mutation operator set (more realistic and semantically distinct faults)
