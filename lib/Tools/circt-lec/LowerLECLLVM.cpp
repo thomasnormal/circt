@@ -1495,6 +1495,9 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
                                        DenseMap<Value, Value> &allocaSignals) {
   if (castOp.getInputs().size() != 1 || castOp.getResults().size() != 1)
     return false;
+  Operation *domRoot = castOp->getParentOp();
+  if (!domRoot)
+    return false;
   auto refType = dyn_cast<llhd::RefType>(castOp.getResult(0).getType());
   if (!refType)
     return false;
@@ -1688,7 +1691,9 @@ static bool rewriteAllocaBackedLLHDRef(UnrealizedConversionCastOp castOp,
     refCast.erase();
   }
 
-  DominanceInfo domInfo(castOp->getParentOp());
+  // `castOp` may be part of `refCasts` and erased above; use the captured
+  // parent operation to avoid a use-after-free when constructing dominance.
+  DominanceInfo domInfo(domRoot);
   for (LLVM::LoadOp load : loads) {
     OpBuilder loadBuilder(load);
     Value probe = llhd::ProbeOp::create(loadBuilder, load.getLoc(), sig);

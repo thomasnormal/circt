@@ -455,3 +455,42 @@
     passes.
   - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
     `36/36` pass.
+
+## 2026-02-28 - Root-caused LowerLECLLVM segfault to use-after-free
+
+- realization:
+  - intermittent OpenTitan LEC segfaults (seen on
+    `CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN` with low canonicalizer rewrite budgets)
+    pointed at `LowerLECLLVM.cpp` in
+    `LowerLECLLVMPass::runOnOperation`.
+  - root cause is a use-after-free in
+    `rewriteAllocaBackedLLHDRef`:
+    - `castOp` can be erased as part of `refCasts`,
+    - code then dereferenced `castOp->getParentOp()` to build
+      `DominanceInfo`.
+
+- implemented:
+  - `lib/Tools/circt-lec/LowerLECLLVM.cpp`:
+    - capture parent op (`domRoot`) before any cast erasure,
+    - use captured parent to construct `DominanceInfo` after erasure.
+  - added regression coverage:
+    `test/Tools/circt-lec/lower-lec-llvm-ref-alloca-dominance-regression.mlir`
+    (exercises alloca-backed multi-ref cast rewrite path).
+
+- validation:
+  - rebuilt: `utils/ninja-with-lock.sh -C build_test circt-opt circt-lec`
+  - lit:
+    - `llvm-lit -sv test/Tools/circt-lec/lower-lec-llvm-*.mlir`
+      `test/Tools/circt-lec/lec-lower-llvm-*.mlir`: `12/12` pass.
+    - `llvm-lit -sv`
+      `test/Tools/run-opentitan-connectivity-circt-lec-disable-threading-auto-retry.test`:
+      pass.
+  - real OpenTitan stress replay (same prior crash-prone command):
+    - `--lec-canonicalizer-max-num-rewrites=500`, threading enabled,
+      repeated 3x on
+      `connectivity.core.mlirbc` + `CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN`.
+    - results:
+      - run1 `rc=0`, `89.107s`, `LEC_RESULT=EQ`, `LEC_DIAG=LLHD_ABSTRACTION`
+      - run2 `rc=0`, `88.632s`, `LEC_RESULT=EQ`, `LEC_DIAG=LLHD_ABSTRACTION`
+      - run3 `rc=0`, `88.477s`, `LEC_RESULT=EQ`, `LEC_DIAG=LLHD_ABSTRACTION`
+    - no segfault/stack-dump markers observed.
