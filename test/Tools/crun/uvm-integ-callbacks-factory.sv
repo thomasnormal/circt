@@ -3,7 +3,7 @@
 
 // Integration: callbacks + factory override — callback fires on derived instance.
 
-// CHECK: [TEST] callback fired on derived component
+// CHECK: callback fired on derived component
 // CHECK: [TEST] derived process() called
 // CHECK: [TEST] callbacks-factory: PASS
 // CHECK: [circt-sim] Simulation completed

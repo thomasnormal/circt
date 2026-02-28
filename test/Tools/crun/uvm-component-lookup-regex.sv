@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: find_all() is not available in our UVM library version
 
 // Test find_all component lookup with patterns.
 

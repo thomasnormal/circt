@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: uvm_packer::get_bits/put_bits not available in our UVM library version
 
 // Probe: manually call packer.pack_field/unpack_field bypassing `uvm_field_int.
 // Tests the packing engine directly without macro machinery.

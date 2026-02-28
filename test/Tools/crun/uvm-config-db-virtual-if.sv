@@ -4,10 +4,10 @@
 
 // Test config_db set/get with virtual interface.
 // Defines a simple interface, passes it via config_db, retrieves in component.
-// NOTE: Virtual interface config_db parameterization is not yet supported.
-// The Runtime/uvm/config_db_test.sv only tests object/int/string types,
-// not virtual interfaces. This test remains XFAIL until virtual interface
-// type support is added to the config_db implementation.
+// NOTE: Fails at compile time: "unsupported arbitrary symbol reference `sif`"
+// circt-verilog cannot lower module-scope interface instance references inside
+// classes. The Runtime/uvm/config_db_test.sv only tests object/int/string
+// types, not virtual interfaces.
 
 // CHECK: [TEST] config_db virtual interface: PASS
 // CHECK: [circt-sim] Simulation completed

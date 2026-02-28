@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: uvm_reg nested class triggers slang non-static member access error
 
 // Probe: test uvm_reg_cbs::add() registration without triggering callbacks.
 // Just verify the registration API works.

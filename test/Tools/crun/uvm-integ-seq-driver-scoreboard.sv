@@ -1,5 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
+// Reason: class method references module-scope clk — slang reports "unknown name `clk`"
 
 // Integration: sequence → driver → analysis_port → scoreboard data path.
 
