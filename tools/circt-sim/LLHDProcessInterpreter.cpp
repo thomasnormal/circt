@@ -27781,6 +27781,19 @@ std::string LLHDProcessInterpreter::evaluateFormatString(ProcessId procId,
     return evaluateFormatString(procId, selectedValue);
   }
 
+  // Handle comb.mux - conditional selection of format strings
+  if (auto muxOp = dyn_cast<comb::MuxOp>(defOp)) {
+    InterpretedValue condVal = getValue(procId, muxOp.getCond());
+    if (condVal.isX()) {
+      // Return some indication for X condition
+      return "<X>";
+    }
+    bool condition = condVal.getAPInt().getBoolValue();
+    Value selectedValue =
+        condition ? muxOp.getTrueValue() : muxOp.getFalseValue();
+    return evaluateFormatString(procId, selectedValue);
+  }
+
   // Unknown format operation
   return "<unsupported format>";
 }

@@ -1525,3 +1525,29 @@
   - `build_test/bin/llvm-lit test/Conversion/MooreToCore/simplify-procedures-event-control.mlir`
   - `build_test/bin/llvm-lit test/Conversion/ImportVerilog/basic.sv test/Conversion/ImportVerilog/coverage-event-local-assign-new-error.sv test/Conversion/ImportVerilog/coverage-event-local-decl-new-error.sv`
   - `build_test/bin/llvm-lit test/Dialect/Moore/simplify-procedures.mlir`
+
+### Sim: support `comb.mux` in `evaluateFormatString` (TDD)
+- Repro (test first):
+  - Added `test/Tools/circt-sim/fmt-mux-dynamic.mlir`.
+  - Before fix, `circt-sim` printed:
+    - `<unsupported format><unsupported format>`
+    - instead of the expected selected literals from dynamic `comb.mux` over
+      `!sim.fstring`.
+- Root cause:
+  - `LLHDProcessInterpreter::evaluateFormatString` handled
+    `arith::SelectOp` but did not handle `comb::MuxOp`, so dynamic format
+    selection lowered through `comb.mux` always fell to the final
+    `"<unsupported format>"` fallback.
+- Fix:
+  - Updated `tools/circt-sim/LLHDProcessInterpreter.cpp` to evaluate
+    `comb::MuxOp` using condition + true/false recursive selection, matching
+    existing `arith.select` behavior.
+- Validation:
+  - Build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - Tests:
+    - `build_test/bin/llvm-lit test/Tools/circt-sim/fmt-mux-dynamic.mlir -v`
+      - failed before fix with missing `MUX_FALSE/MUX_TRUE` and
+        `<unsupported format>` output.
+    - `build_test/bin/llvm-lit test/Tools/circt-sim/fmt-mux-dynamic.mlir test/Tools/circt-sim/fmt-select.mlir -v`
+      - passed after fix.

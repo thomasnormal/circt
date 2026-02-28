@@ -1942,8 +1942,8 @@ Valgrind exclusion metadata line, not command-file functionality debt. The fix i
 ### [ ] 646. `lib/Target/ExportSystemC/ExportSystemC.cpp:39`
 Header guard sanitization still does not correct invalid leading-digit cases. What is missing is complete C/C++ identifier normalization for guard names. The fix is to prefix/normalize when first character is not valid.
 
-### [ ] 647. `tools/circt-sim/LLHDProcessInterpreter.cpp:26757`
-Formatting evaluation has a fallback `"<unsupported format>"`, indicating some format operations are not fully handled by evaluator logic. What is missing is complete support for all expected `sim.fmt.*` constructs in this path. The fix is to implement the missing format cases and keep explicit fallback diagnostics.
+### [x] 647. `tools/circt-sim/LLHDProcessInterpreter.cpp:26757`
+Fixed for the dynamic-selection case: `evaluateFormatString` now handles `comb.mux` over `!sim.fstring` (matching existing `arith.select` support), which removed a real `<unsupported format>` runtime path. Covered by `test/Tools/circt-sim/fmt-mux-dynamic.mlir`. Broader `sim.fmt.*` fallback coverage remains tracked by other open entries.
 
 ### [ ] 648. `tools/circt-sim/LLHDProcessInterpreter.cpp:27568`
 `maybeTraceJoinAnyImmediate` itself is normal tracing logic and not a debt marker. This appears to be a scanner false positive from nearby “unsupported” text in the file. The fix is marker-context scanning rather than broad substring hits.
