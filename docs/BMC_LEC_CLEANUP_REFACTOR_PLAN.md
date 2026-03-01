@@ -428,6 +428,9 @@ Current workstream status in this branch:
      (`--results-jsonl-file`) from final wrapper-level merged rows
    - OpenTitan FPV LEC runner now emits schema JSONL output lane
      (`--results-jsonl-file`, env `FORMAL_RESULTS_JSONL_OUT`)
+   - OpenTitan FPV LEC schema JSONL rows now include per-case timing and
+     artifact metadata (`frontend_time_ms`, `solver_time_ms`, `log_path`,
+     `artifact_dir`) for timeout-frontier observability
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status

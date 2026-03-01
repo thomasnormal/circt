@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -123,6 +124,10 @@ class CaseStatus:
     status: str
     diag: str
     reason: str
+    frontend_time_ms: int | None = None
+    solver_time_ms: int | None = None
+    log_path: str = ""
+    artifact_dir: str = ""
 
 
 def fail(msg: str) -> None:
@@ -379,6 +384,13 @@ def project_objective_reason(case_reason: str) -> str:
     return f"projected_case_{token}"
 
 
+def elapsed_ms_since(start_ns: int) -> int:
+    elapsed_ns = time.monotonic_ns() - start_ns
+    if elapsed_ns <= 0:
+        return 0
+    return int(elapsed_ns // 1_000_000)
+
+
 def evaluate_case(
     *,
     contract: ContractRow,
@@ -398,14 +410,27 @@ def evaluate_case(
     z3_bin: str,
 ) -> CaseStatus:
     case_dir.mkdir(parents=True, exist_ok=True)
+    artifact_dir = str(case_dir)
     if contract.setup_status == "error":
-        return CaseStatus(status="SKIP", diag="LEC_NOT_RUN", reason="setup_error")
+        return CaseStatus(
+            status="SKIP",
+            diag="LEC_NOT_RUN",
+            reason="setup_error",
+            artifact_dir=artifact_dir,
+        )
     if not contract.files:
-        return CaseStatus(status="SKIP", diag="LEC_NOT_RUN", reason="no_files")
+        return CaseStatus(
+            status="SKIP",
+            diag="LEC_NOT_RUN",
+            reason="no_files",
+            artifact_dir=artifact_dir,
+        )
 
     hw_mlir = case_dir / "input.hw.mlir"
     opt_mlir = case_dir / "input.opt.mlir"
     lec_out = case_dir / "lec.out.txt"
+    frontend_time_ms = 0
+    solver_time_ms: int | None = None
 
     v_cmd = [circt_verilog, *circt_verilog_args, "--ir-hw"]
     for incdir in contract.include_dirs:
@@ -413,6 +438,7 @@ def evaluate_case(
     for define in contract.defines:
         v_cmd.extend(["-D", define])
     v_cmd.extend(contract.files)
+    verilog_start_ns = time.monotonic_ns()
     try:
         run_with_log(
             v_cmd,
@@ -421,16 +447,30 @@ def evaluate_case(
             out_path=hw_mlir,
             log_max_bytes=log_max_bytes,
         )
+        frontend_time_ms += elapsed_ms_since(verilog_start_ns)
     except subprocess.TimeoutExpired:
+        frontend_time_ms += elapsed_ms_since(verilog_start_ns)
         return CaseStatus(
-            status="TIMEOUT", diag="CIRCT_VERILOG_TIMEOUT", reason="circt_verilog_timeout"
+            status="TIMEOUT",
+            diag="CIRCT_VERILOG_TIMEOUT",
+            reason="circt_verilog_timeout",
+            frontend_time_ms=frontend_time_ms,
+            log_path=str(case_dir / "circt-verilog.log"),
+            artifact_dir=artifact_dir,
         )
     except subprocess.CalledProcessError:
+        frontend_time_ms += elapsed_ms_since(verilog_start_ns)
         return CaseStatus(
-            status="ERROR", diag="CIRCT_VERILOG_ERROR", reason="circt_verilog_error"
+            status="ERROR",
+            diag="CIRCT_VERILOG_ERROR",
+            reason="circt_verilog_error",
+            frontend_time_ms=frontend_time_ms,
+            log_path=str(case_dir / "circt-verilog.log"),
+            artifact_dir=artifact_dir,
         )
 
     o_cmd = [circt_opt, *circt_opt_args, str(hw_mlir), "-o", str(opt_mlir)]
+    opt_start_ns = time.monotonic_ns()
     try:
         run_with_log(
             o_cmd,
@@ -438,12 +478,27 @@ def evaluate_case(
             timeout_secs,
             log_max_bytes=log_max_bytes,
         )
+        frontend_time_ms += elapsed_ms_since(opt_start_ns)
     except subprocess.TimeoutExpired:
+        frontend_time_ms += elapsed_ms_since(opt_start_ns)
         return CaseStatus(
-            status="TIMEOUT", diag="CIRCT_OPT_TIMEOUT", reason="circt_opt_timeout"
+            status="TIMEOUT",
+            diag="CIRCT_OPT_TIMEOUT",
+            reason="circt_opt_timeout",
+            frontend_time_ms=frontend_time_ms,
+            log_path=str(case_dir / "circt-opt.log"),
+            artifact_dir=artifact_dir,
         )
     except subprocess.CalledProcessError:
-        return CaseStatus(status="ERROR", diag="CIRCT_OPT_ERROR", reason="circt_opt_error")
+        frontend_time_ms += elapsed_ms_since(opt_start_ns)
+        return CaseStatus(
+            status="ERROR",
+            diag="CIRCT_OPT_ERROR",
+            reason="circt_opt_error",
+            frontend_time_ms=frontend_time_ms,
+            log_path=str(case_dir / "circt-opt.log"),
+            artifact_dir=artifact_dir,
+        )
 
     l_cmd = [circt_lec, *circt_lec_args]
     if lec_run_smtlib:
@@ -454,11 +509,11 @@ def evaluate_case(
         l_cmd.append("--run")
     l_cmd.extend(["--c1", toplevel, "--c2", toplevel, str(opt_mlir)])
 
-    def classify_lec_timeout_reason() -> str:
+    def classify_lec_timeout_reason() -> tuple[str, int]:
         if lec_smoke_only:
-            return "frontend_command_timeout"
+            return "frontend_command_timeout", 0
         if not lec_timeout_frontier_probe:
-            return "solver_command_timeout"
+            return "solver_command_timeout", 0
         probe_cmd: list[str] = []
         skip_next = False
         for arg in l_cmd:
@@ -475,6 +530,7 @@ def evaluate_case(
             probe_cmd.append(arg)
         if "--emit-mlir" not in probe_cmd:
             probe_cmd.append("--emit-mlir")
+        probe_start_ns = time.monotonic_ns()
         try:
             run_with_log(
                 probe_cmd,
@@ -484,11 +540,12 @@ def evaluate_case(
                 log_max_bytes=log_max_bytes,
             )
         except subprocess.TimeoutExpired:
-            return "frontend_command_timeout"
+            return "frontend_command_timeout", elapsed_ms_since(probe_start_ns)
         except subprocess.CalledProcessError:
-            return "timeout_frontier_probe_error"
-        return "solver_command_timeout"
+            return "timeout_frontier_probe_error", elapsed_ms_since(probe_start_ns)
+        return "solver_command_timeout", elapsed_ms_since(probe_start_ns)
 
+    lec_start_ns = time.monotonic_ns()
     try:
         lec_text = run_with_log(
             l_cmd,
@@ -497,31 +554,103 @@ def evaluate_case(
             out_path=lec_out,
             log_max_bytes=log_max_bytes,
         )
+        solver_time_ms = elapsed_ms_since(lec_start_ns)
     except subprocess.TimeoutExpired:
+        solver_time_ms = elapsed_ms_since(lec_start_ns)
+        timeout_reason, probe_frontend_time_ms = classify_lec_timeout_reason()
         return CaseStatus(
             status="TIMEOUT",
             diag="CIRCT_LEC_TIMEOUT",
-            reason=classify_lec_timeout_reason(),
+            reason=timeout_reason,
+            frontend_time_ms=frontend_time_ms + probe_frontend_time_ms,
+            solver_time_ms=solver_time_ms,
+            log_path=str(case_dir / "circt-lec.log"),
+            artifact_dir=artifact_dir,
         )
     except subprocess.CalledProcessError as exc:
+        solver_time_ms = elapsed_ms_since(lec_start_ns)
         lec_text = (exc.output or "") + "\n" + (exc.stderr or "")
         lec_result = parse_lec_result(lec_text)
         if lec_result == "EQ":
-            return CaseStatus(status="PASS", diag="LEC_RESULT_EQ", reason="eq")
+            return CaseStatus(
+                status="PASS",
+                diag="LEC_RESULT_EQ",
+                reason="eq",
+                frontend_time_ms=frontend_time_ms,
+                solver_time_ms=solver_time_ms,
+                log_path=str(case_dir / "circt-lec.log"),
+                artifact_dir=artifact_dir,
+            )
         if lec_result == "NEQ":
-            return CaseStatus(status="FAIL", diag="LEC_RESULT_NEQ", reason="neq")
+            return CaseStatus(
+                status="FAIL",
+                diag="LEC_RESULT_NEQ",
+                reason="neq",
+                frontend_time_ms=frontend_time_ms,
+                solver_time_ms=solver_time_ms,
+                log_path=str(case_dir / "circt-lec.log"),
+                artifact_dir=artifact_dir,
+            )
         if lec_result == "UNKNOWN":
-            return CaseStatus(status="UNKNOWN", diag="LEC_RESULT_UNKNOWN", reason="unknown")
-        return CaseStatus(status="ERROR", diag="CIRCT_LEC_ERROR", reason="circt_lec_error")
+            return CaseStatus(
+                status="UNKNOWN",
+                diag="LEC_RESULT_UNKNOWN",
+                reason="unknown",
+                frontend_time_ms=frontend_time_ms,
+                solver_time_ms=solver_time_ms,
+                log_path=str(case_dir / "circt-lec.log"),
+                artifact_dir=artifact_dir,
+            )
+        return CaseStatus(
+            status="ERROR",
+            diag="CIRCT_LEC_ERROR",
+            reason="circt_lec_error",
+            frontend_time_ms=frontend_time_ms,
+            solver_time_ms=solver_time_ms,
+            log_path=str(case_dir / "circt-lec.log"),
+            artifact_dir=artifact_dir,
+        )
 
     lec_result = parse_lec_result(lec_text)
     if lec_result == "EQ":
-        return CaseStatus(status="PASS", diag="LEC_RESULT_EQ", reason="eq")
+        return CaseStatus(
+            status="PASS",
+            diag="LEC_RESULT_EQ",
+            reason="eq",
+            frontend_time_ms=frontend_time_ms,
+            solver_time_ms=solver_time_ms,
+            log_path=str(case_dir / "circt-lec.log"),
+            artifact_dir=artifact_dir,
+        )
     if lec_result == "NEQ":
-        return CaseStatus(status="FAIL", diag="LEC_RESULT_NEQ", reason="neq")
+        return CaseStatus(
+            status="FAIL",
+            diag="LEC_RESULT_NEQ",
+            reason="neq",
+            frontend_time_ms=frontend_time_ms,
+            solver_time_ms=solver_time_ms,
+            log_path=str(case_dir / "circt-lec.log"),
+            artifact_dir=artifact_dir,
+        )
     if lec_result == "UNKNOWN":
-        return CaseStatus(status="UNKNOWN", diag="LEC_RESULT_UNKNOWN", reason="unknown")
-    return CaseStatus(status="ERROR", diag="CIRCT_LEC_ERROR", reason="missing_lec_result")
+        return CaseStatus(
+            status="UNKNOWN",
+            diag="LEC_RESULT_UNKNOWN",
+            reason="unknown",
+            frontend_time_ms=frontend_time_ms,
+            solver_time_ms=solver_time_ms,
+            log_path=str(case_dir / "circt-lec.log"),
+            artifact_dir=artifact_dir,
+        )
+    return CaseStatus(
+        status="ERROR",
+        diag="CIRCT_LEC_ERROR",
+        reason="missing_lec_result",
+        frontend_time_ms=frontend_time_ms,
+        solver_time_ms=solver_time_ms,
+        log_path=str(case_dir / "circt-lec.log"),
+        artifact_dir=artifact_dir,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -744,6 +873,7 @@ def main() -> int:
     case_rows: list[tuple[str, str, str, str, str, str, str]] = []
     out_assertion_rows: list[tuple[str, str, str, str, str, str, str]] = []
     out_cover_rows: list[tuple[str, str, str, str, str, str, str]] = []
+    case_metrics_by_case_id: dict[str, tuple[int | None, int | None, str, str]] = {}
 
     counts = {
         "total": 0,
@@ -800,6 +930,12 @@ def main() -> int:
                 case_status.reason,
             )
         )
+        case_metrics_by_case_id[case_id] = (
+            case_status.frontend_time_ms,
+            case_status.solver_time_ms,
+            case_status.log_path,
+            case_status.artifact_dir,
+        )
         solver_result = case_status_to_solver_result(case_status.status)
         projected_reason = project_objective_reason(case_status.reason)
         for objective in case_objectives:
@@ -842,6 +978,9 @@ def main() -> int:
         for row in sorted(case_rows, key=lambda item: (item[1], item[0], item[2])):
             status, case_id, case_path, suite, mode, _, _ = row
             reason_code = extract_result_reason_code(row)
+            frontend_time_ms, solver_time_ms, log_path, artifact_dir = (
+                case_metrics_by_case_id.get(case_id, (None, None, "", ""))
+            )
             json_rows.append(
                 _make_formal_result_row(
                     suite=suite,
@@ -851,6 +990,10 @@ def main() -> int:
                     status=status,
                     reason_code=reason_code,
                     solver=solver_label,
+                    solver_time_ms=solver_time_ms,
+                    frontend_time_ms=frontend_time_ms,
+                    log_path=log_path,
+                    artifact_dir=artifact_dir,
                 )
             )
         _write_formal_results_jsonl(results_jsonl_path, json_rows)

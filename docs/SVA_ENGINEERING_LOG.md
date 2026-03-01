@@ -2,6 +2,38 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6/WS0: FPV LEC JSONL timing + artifact metadata):
+  - realization:
+    - FPV LEC JSONL rows were schema-compliant but emitted `null` timing
+      fields and empty artifact pointers, which weakened timeout-frontier
+      observability for real-case triage.
+  - implemented:
+    - `utils/run_opentitan_fpv_circt_lec.py`
+      - added per-case timing capture for:
+        - frontend stages (`circt-verilog` + `circt-opt`)
+        - solver stage (`circt-lec`)
+      - propagated timing and artifact metadata into JSONL rows:
+        - `frontend_time_ms`
+        - `solver_time_ms`
+        - `log_path`
+        - `artifact_dir`
+      - timeout-frontier probe timing now contributes to frontend timing when
+        a timeout classification probe runs.
+    - `test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test`
+      - tightened JSONL contract checks to require integer timing fields and
+        non-empty `log_path`/`artifact_dir` structure.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test`
+      - result: fail (timing/artifact assertions on JSONL row).
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_lec.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-lec-basic.test test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-shared.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-preprocess.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-solver.test`
+      - result: `5/5` pass.
+      - `build_test/bin/llvm-lit -sv $(git ls-files 'test/Tools/run-opentitan-fpv-circt-lec-*.test')`
+      - result: `9/9` pass.
+
 - Iteration update (WS1-T2/WS1-T4: shared LEC diag parser dedup):
   - realization:
     - OpenTitan AES/connectivity LEC runners still duplicated LEC diagnostics
