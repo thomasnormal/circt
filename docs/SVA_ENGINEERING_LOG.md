@@ -2,6 +2,29 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: shared schema row-validator adopted):
+  - realization:
+    - after constant de-dup, row validation logic itself remained duplicated
+      between `validate_formal_results_schema.py` and
+      `build_formal_dashboard_inputs.py`.
+    - this still allowed drift in required-field/type/enum enforcement paths.
+  - implemented:
+    - extended `utils/formal/lib/formal_results_schema.py` with shared helpers:
+      - `expect_string`
+      - `expect_nullable_nonnegative_int`
+      - `validate_schema_v1_row`
+    - refactored:
+      - `utils/formal/validate_formal_results_schema.py`
+      - `utils/formal/build_formal_dashboard_inputs.py`
+      to use shared row validation.
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/formal_results_schema.py utils/formal/validate_formal_results_schema.py utils/formal/build_formal_dashboard_inputs.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-validate-results-schema.test`
+      - result: `3/3` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `16/16` pass.
+
 - Iteration update (WS1/WS6: shared formal schema constants de-dup):
   - realization:
     - schema enums and required-field lists were duplicated across

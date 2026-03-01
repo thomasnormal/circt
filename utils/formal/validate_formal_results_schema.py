@@ -13,86 +13,19 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 FORMAL_LIB = Path(__file__).resolve().parent / "lib"
 if str(FORMAL_LIB) not in sys.path:
     sys.path.insert(0, str(FORMAL_LIB))
 
 from formal_results_schema import (  # noqa: E402
-    ALLOWED_MODES,
-    ALLOWED_STAGES,
-    ALLOWED_STATUS,
-    REQUIRED_FIELDS,
+    validate_schema_v1_row,
 )
 
 
 def fail(path: Path, line_no: int, msg: str) -> NoReturn:
     raise SystemExit(f"{path}:{line_no}: {msg}")
-
-
-def expect_string(path: Path, line_no: int, field: str, value: Any) -> str:
-    if not isinstance(value, str):
-        fail(path, line_no, f"{field} must be a string")
-    return value
-
-
-def expect_nullable_nonnegative_int(
-    path: Path, line_no: int, field: str, value: Any
-) -> None:
-    if value is None:
-        return
-    if not isinstance(value, int) or value < 0:
-        fail(path, line_no, f"{field} must be null or non-negative integer")
-
-
-def validate_row(path: Path, line_no: int, row: dict[str, Any]) -> tuple[str, str, str]:
-    for field in REQUIRED_FIELDS:
-        if field not in row:
-            fail(path, line_no, f"missing required field: {field}")
-    schema_version = row["schema_version"]
-    if schema_version != 1:
-        fail(path, line_no, "schema_version must be 1")
-
-    suite = expect_string(path, line_no, "suite", row["suite"]).strip()
-    mode = expect_string(path, line_no, "mode", row["mode"]).strip().upper()
-    case_id = expect_string(path, line_no, "case_id", row["case_id"]).strip()
-    case_path = expect_string(path, line_no, "case_path", row["case_path"]).strip()
-    status = expect_string(path, line_no, "status", row["status"]).strip().upper()
-    reason_code = (
-        expect_string(path, line_no, "reason_code", row["reason_code"])
-        .strip()
-        .upper()
-    )
-    stage = expect_string(path, line_no, "stage", row["stage"]).strip().lower()
-    _solver = expect_string(path, line_no, "solver", row["solver"]).strip()
-    _log_path = expect_string(path, line_no, "log_path", row["log_path"]).strip()
-    _artifact_dir = (
-        expect_string(path, line_no, "artifact_dir", row["artifact_dir"]).strip()
-    )
-
-    if not suite:
-        fail(path, line_no, "suite must be non-empty")
-    if mode not in ALLOWED_MODES:
-        fail(path, line_no, f"invalid mode: {mode}")
-    if not case_id:
-        fail(path, line_no, "case_id must be non-empty")
-    if not case_path:
-        fail(path, line_no, "case_path must be non-empty")
-    if status not in ALLOWED_STATUS:
-        fail(path, line_no, f"invalid status: {status}")
-    if stage not in ALLOWED_STAGES:
-        fail(path, line_no, f"invalid stage: {stage}")
-    if not reason_code and status not in {"PASS", "UNKNOWN"}:
-        fail(path, line_no, "reason_code must be non-empty for this status")
-
-    expect_nullable_nonnegative_int(
-        path, line_no, "solver_time_ms", row["solver_time_ms"]
-    )
-    expect_nullable_nonnegative_int(
-        path, line_no, "frontend_time_ms", row["frontend_time_ms"]
-    )
-    return status, mode, stage
 
 
 def main() -> int:
@@ -123,7 +56,10 @@ def main() -> int:
             fail(jsonl_path, line_no, f"invalid JSON: {exc}")
         if not isinstance(payload, dict):
             fail(jsonl_path, line_no, "row must be a JSON object")
-        status, mode, stage = validate_row(jsonl_path, line_no, payload)
+        try:
+            status, mode, stage = validate_schema_v1_row(payload)
+        except ValueError as exc:
+            fail(jsonl_path, line_no, str(exc))
         total_rows += 1
         status_counts[status] += 1
         mode_counts[mode] += 1

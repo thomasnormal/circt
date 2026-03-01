@@ -403,6 +403,8 @@ Current workstream status in this branch:
    - shared formal schema constants module landed for required-field + enum
      policy (`formal_results_schema.py`) and adopted by schema validator and
      dashboard aggregator
+   - shared schema v1 row-validation helper now adopted by schema validator and
+     dashboard aggregator (type/enum/required-field checks de-duplicated)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

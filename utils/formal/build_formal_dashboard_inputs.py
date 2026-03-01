@@ -14,38 +14,19 @@ import json
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 FORMAL_LIB = Path(__file__).resolve().parent / "lib"
 if str(FORMAL_LIB) not in sys.path:
     sys.path.insert(0, str(FORMAL_LIB))
 
 from formal_results_schema import (  # noqa: E402
-    ALLOWED_MODES,
-    ALLOWED_STAGES,
-    ALLOWED_STATUS,
-    REQUIRED_FIELDS,
+    validate_schema_v1_row,
 )
 
 
 def fail(path: Path, line_no: int, msg: str) -> NoReturn:
     raise SystemExit(f"{path}:{line_no}: {msg}")
-
-
-def expect_string(path: Path, line_no: int, field: str, value: Any) -> str:
-    if not isinstance(value, str):
-        fail(path, line_no, f"{field} must be a string")
-    return value
-
-
-def expect_nonnegative_int_or_none(
-    path: Path, line_no: int, field: str, value: Any
-) -> int | None:
-    if value is None:
-        return None
-    if not isinstance(value, int) or value < 0:
-        fail(path, line_no, f"{field} must be null or non-negative integer")
-    return value
 
 
 def nearest_rank_percentile(values: list[int], percentile: int) -> int | None:
@@ -185,59 +166,17 @@ def main() -> int:
                 fail(path, line_no, f"invalid JSON: {exc}")
             if not isinstance(payload, dict):
                 fail(path, line_no, "row must be a JSON object")
-            for field in REQUIRED_FIELDS:
-                if field not in payload:
-                    fail(path, line_no, f"missing required field: {field}")
-            schema_version = payload.get("schema_version")
-            if schema_version != 1:
-                fail(path, line_no, "schema_version must be 1")
+            try:
+                status, mode, stage = validate_schema_v1_row(payload)
+            except ValueError as exc:
+                fail(path, line_no, str(exc))
 
-            case_id = expect_string(path, line_no, "case_id", payload.get("case_id", ""))
-            case_path = expect_string(
-                path, line_no, "case_path", payload.get("case_path", "")
-            )
-            suite = expect_string(path, line_no, "suite", payload.get("suite", "")).strip()
-            mode = expect_string(path, line_no, "mode", payload.get("mode", "")).strip().upper()
-            status = (
-                expect_string(path, line_no, "status", payload.get("status", ""))
-                .strip()
-                .upper()
-            )
-            stage = (
-                expect_string(path, line_no, "stage", payload.get("stage", ""))
-                .strip()
-                .lower()
-            )
-            reason_code = (
-                expect_string(path, line_no, "reason_code", payload.get("reason_code", ""))
-                .strip()
-                .upper()
-            )
-            solver_time_ms = expect_nonnegative_int_or_none(
-                path, line_no, "solver_time_ms", payload.get("solver_time_ms")
-            )
-            frontend_time_ms = expect_nonnegative_int_or_none(
-                path, line_no, "frontend_time_ms", payload.get("frontend_time_ms")
-            )
-
-            if not suite:
-                fail(path, line_no, "suite must be non-empty")
-            if not mode:
-                fail(path, line_no, "mode must be non-empty")
-            if mode not in ALLOWED_MODES:
-                fail(path, line_no, f"invalid mode: {mode}")
-            if not status:
-                fail(path, line_no, "status must be non-empty")
-            if status not in ALLOWED_STATUS:
-                fail(path, line_no, f"invalid status: {status}")
-            if stage not in ALLOWED_STAGES:
-                fail(path, line_no, f"invalid stage: {stage}")
-            if not case_id:
-                fail(path, line_no, "case_id must be non-empty")
-            if not case_path:
-                fail(path, line_no, "case_path must be non-empty")
-            if not reason_code and status not in {"PASS", "UNKNOWN"}:
-                fail(path, line_no, "reason_code must be non-empty for this status")
+            case_id = str(payload["case_id"]).strip()
+            case_path = str(payload["case_path"]).strip()
+            suite = str(payload["suite"]).strip()
+            reason_code = str(payload["reason_code"]).strip().upper()
+            solver_time_ms = payload["solver_time_ms"]
+            frontend_time_ms = payload["frontend_time_ms"]
 
             total_rows += 1
             status_counts[status] += 1
