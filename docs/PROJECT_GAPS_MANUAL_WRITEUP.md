@@ -6301,3 +6301,6 @@ With these fixes, sequence-library creation now passes semantically under crun.
 
 ### [x] 2095. `test/Tools/crun/uvm-config-db.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. `uvm_config_db#(string)::get` now passes semantically under crun (`config_db string set/get: PASS`). Root cause was call-indirect config_db fallback payload compatibility in `tools/circt-sim/LLHDProcessInterpreterUvm.cpp` rejecting valid 16-byte Moore string payloads (`{ptr,len}`) when output operands were pointer-typed. Fixed by accepting 16-byte payloads for pointer-typed outputs in that fallback path and retaining strict matching for other payload shapes.
+
+### [x] 2096. `test/Tools/crun/uvm-transaction-timing.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and corrected semantic expectations for transaction IDs: plain `uvm_transaction` objects default to `transaction_id == -1` unless explicitly set. The test now validates timing APIs (`accept_tr`/`begin_tr`/`end_tr`) plus correct `transaction_id` default and `set_transaction_id`/`get_transaction_id` behavior.

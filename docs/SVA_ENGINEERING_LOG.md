@@ -10611,3 +10611,38 @@
       - result: `25 passed`
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-*.sv`
       - result: `147 passed, 21 expectedly failed`.
+
+## 2026-03-01 - UVM transaction timing semantic correction (default transaction_id)
+
+- realization:
+  - `test/Tools/crun/uvm-transaction-timing.sv` failed with
+    `transaction_id unique: FAIL`.
+  - Runtime/library inspection showed this is expected UVM behavior, not a
+    simulator defect: `uvm_transaction::get_transaction_id` defaults to `-1`
+    unless explicitly set (see `lib/Runtime/uvm-core/src/base/uvm_transaction.svh`,
+    comments and implementation around `set_transaction_id/get_transaction_id`).
+  - The test expectation of automatic per-object uniqueness was semantically
+    incorrect for plain `uvm_transaction` objects.
+
+- implemented:
+  - Removed `XFAIL` from `test/Tools/crun/uvm-transaction-timing.sv`.
+  - Replaced incorrect uniqueness assertion with semantically correct checks:
+    - both freshly created transactions default to `-1`
+    - `set_transaction_id` updates only the target object
+    - `get_transaction_id` returns the set value.
+
+- validation:
+  - red (before test correction):
+    - `build_test/bin/crun test/Tools/crun/uvm-transaction-timing.sv --top tb_top -v 0`
+    - observed `UVM_ERROR ... transaction_id unique: FAIL`.
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-transaction-timing.sv`
+      - result: `1 passed`
+    - direct check:
+      - `build_test/bin/crun test/Tools/crun/uvm-transaction-timing.sv --top tb_top -v 0`
+      - observed:
+        - `transaction_id default: PASS`
+        - `transaction_id set/get: PASS`.
+  - regression sweep:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-*.sv`
+      - result: `148 passed, 20 expectedly failed`.
