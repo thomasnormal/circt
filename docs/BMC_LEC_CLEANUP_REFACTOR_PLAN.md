@@ -428,6 +428,9 @@ Current workstream status in this branch:
    - JSONL->TSV migration adapter landed (`formal_results_jsonl_to_tsv.py`)
    - WS0 capture integration now supports per-command schema validation gating
      and surfaces per-run schema validation rc in `execution.tsv`
+   - timeout frontier summary utility landed
+     (`summarize_formal_timeout_frontier.py`) with percentile/reason/cumulative
+     solver-time reporting from schema JSONL
    - schema docs + dashboards still pending
 
 ## 17. Execution Backlog (Ticket-Level)

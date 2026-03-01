@@ -1,0 +1,30 @@
+// RUN: mkdir -p %t
+// RUN: printf '{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"a_pass","case_path":"/tmp/a.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":10,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"b_timeout_solver","case_path":"/tmp/b.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver","solver":"z3","solver_time_ms":100,"frontend_time_ms":5,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"c_timeout_solver","case_path":"/tmp/c.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver","solver":"z3","solver_time_ms":90,"frontend_time_ms":4,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"d_timeout_frontend","case_path":"/tmp/d.sv","status":"TIMEOUT","reason_code":"FRONTEND_TIMEOUT","stage":"frontend","solver":"z3","solver_time_ms":0,"frontend_time_ms":100,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"e_fail","case_path":"/tmp/e.sv","status":"FAIL","reason_code":"NEQ","stage":"solver","solver":"z3","solver_time_ms":30,"frontend_time_ms":2,"log_path":"","artifact_dir":""}\n' > %t/in.jsonl
+// RUN: python3 %S/../../utils/formal/summarize_formal_timeout_frontier.py --jsonl %t/in.jsonl --summary-json %t/default.json --timeout-reasons-tsv %t/default-reasons.tsv --top-solver-cases-tsv %t/default-cases.tsv
+// RUN: FileCheck %s --check-prefix=DEFAULT < %t/default.json
+// RUN: FileCheck %s --check-prefix=REASONS < %t/default-reasons.tsv
+// RUN: FileCheck %s --check-prefix=CASES < %t/default-cases.tsv
+// RUN: python3 %S/../../utils/formal/summarize_formal_timeout_frontier.py --jsonl %t/in.jsonl --summary-json %t/include-front.json --include-nonsolver-timeouts
+// RUN: FileCheck %s --check-prefix=INCLUDE < %t/include-front.json
+//
+// DEFAULT-DAG: "rows": 5
+// DEFAULT-DAG: "timeout_rows": 2
+// DEFAULT-DAG: "solver_time_total_ms": 230
+// DEFAULT-DAG: "solver_time_percentiles_ms": {
+// DEFAULT-DAG: "p50": 30
+// DEFAULT-DAG: "p90": 100
+// DEFAULT-DAG: "p99": 100
+// DEFAULT-DAG: "top_timeout_reasons": [
+// DEFAULT-DAG: "reason_code": "SOLVER_COMMAND_TIMEOUT"
+// DEFAULT-DAG: "count": 2
+//
+// REASONS: reason_code{{[[:space:]]+}}count
+// REASONS: SOLVER_COMMAND_TIMEOUT{{[[:space:]]+}}2
+//
+// CASES: case_id{{[[:space:]]+}}case_path{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}total_solver_time_ms{{[[:space:]]+}}rows{{[[:space:]]+}}timeout_rows
+// CASES: b_timeout_solver{{[[:space:]]+}}/tmp/b.sv{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}100{{[[:space:]]+}}1{{[[:space:]]+}}1
+// CASES: c_timeout_solver{{[[:space:]]+}}/tmp/c.sv{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}90{{[[:space:]]+}}1{{[[:space:]]+}}1
+//
+// INCLUDE-DAG: "timeout_rows": 3
+// INCLUDE-DAG: "reason_code": "FRONTEND_TIMEOUT"
+// INCLUDE-DAG: "reason_code": "SOLVER_COMMAND_TIMEOUT"

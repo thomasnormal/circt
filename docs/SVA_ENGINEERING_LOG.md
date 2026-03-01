@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6/Timeout Frontier: schema JSONL summarizer utility):
+  - realization:
+    - timeout frontier analysis in WS6 required repeatable quantification
+      (P50/P90/P99, reason clusters, cumulative solver-time contributors), but
+      we lacked a dedicated CLI over schema JSONL outputs.
+  - implemented:
+    - added `utils/formal/summarize_formal_timeout_frontier.py`:
+      - computes:
+        - timeout counts/rate
+        - solver/frontend time totals
+        - nearest-rank solver-time percentiles (P50/P90/P99)
+        - top timeout reason clusters
+        - top cumulative solver-time cases
+      - supports both:
+        - solver-stage-only timeout frontier (default)
+        - `--include-nonsolver-timeouts`
+      - optional TSV exports:
+        - `--timeout-reasons-tsv`
+        - `--top-solver-cases-tsv`
+    - tests:
+      - added `test/Tools/formal-timeout-frontier-summary.test`
+        covering default solver-stage frontier and include-nonsolver mode.
+  - validation:
+    - `python3 -m py_compile utils/formal/summarize_formal_timeout_frontier.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-validate-results-schema.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test`
+      - result: `4/4` pass.
+
 - Iteration update (WS2-T1: externalize-registers unsupported clock-shape inventory):
   - realization:
     - we had multiclock diagnostic inventory coverage in lower-to-bmc, but no
