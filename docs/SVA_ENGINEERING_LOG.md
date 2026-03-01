@@ -2,6 +2,36 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0 live mini-baseline with schema gate + timeout frontier):
+  - realization:
+    - first live run with schema validation used
+      `TEST_FILTER='^basic00$'` for sv-tests BMC and selected zero cases,
+      producing empty JSONL and expected schema-gate failures (`no rows found`).
+    - connectivity lane continues to define the timeout frontier under bounded
+      budgets even with narrow rule filtering.
+  - implemented:
+    - reran WS0 mini-baseline with:
+      - AES lane: `--impl-filter aes_sbox_canright$`
+      - connectivity lane: `--rule-filter AST_CLK_ES_IN`,
+        `timeout_secs=45`
+      - sv-tests BMC lane: `TEST_FILTER='^16.2--assume$'`,
+        `BMC_SMOKE_ONLY=1`
+      - capture controls: `--validate-results-schema --max-log-bytes 200000`
+    - artifacts:
+      - `out/ws0-baseline-live-20260301-162812`
+  - validation:
+    - `execution.tsv`:
+      - AES: `returncode=0`, `schema_validation_rc=0` in both runs.
+      - sv-tests BMC: `returncode=0`, `schema_validation_rc=0` in both runs.
+      - connectivity: `returncode=124` in both runs (bounded timeout), schema
+        validation intentionally skipped for non-zero return.
+    - drift summaries:
+      - AES: `NO_DRIFT=1`, `STATUS_DRIFT=0`, `REASON_DRIFT=0`,
+        `STAGE_DRIFT=0`.
+      - sv-tests BMC: `NO_DRIFT=1`, `STATUS_DRIFT=0`, `REASON_DRIFT=0`,
+        `STAGE_DRIFT=0`.
+      - connectivity: `total_cases=0` under timeout-bounded runs.
+
 - Iteration update (WS1: shared log truncation in runner_common + capture dedup):
   - realization:
     - log-size capping logic for formal command logs existed only in

@@ -388,6 +388,9 @@ Current workstream status in this branch:
      `--max-log-bytes` to bound artifact growth
    - baseline capture can now gate command outputs with strict JSONL schema
      validation (`--validate-results-schema`)
+   - latest real WS0 mini-baseline (`out/ws0-baseline-live-20260301-162812`)
+     validates schema for AES LEC + sv-tests BMC lanes across 2 runs with zero
+     status/reason/stage drift
    - first 3-run real mini-baseline completed for AES LEC + sv-tests BMC with zero status/reason/stage drift
    - OpenTitan connectivity LEC lane remains the timeout frontier blocker for full WS0 parity capture
 2. WS1: in progress
