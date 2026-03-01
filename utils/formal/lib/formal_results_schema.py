@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 REQUIRED_FIELDS = (
@@ -40,6 +41,7 @@ ALLOWED_STATUS = {
 }
 
 ALLOWED_STAGES = {"frontend", "lowering", "solver", "result", "postprocess"}
+REASON_CODE_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def expect_string(field: str, value: Any) -> str:
@@ -94,4 +96,6 @@ def validate_schema_v1_row(row: dict[str, Any]) -> tuple[str, str, str]:
         raise ValueError(f"invalid stage: {stage}")
     if not reason_code and status not in {"PASS", "UNKNOWN"}:
         raise ValueError("reason_code must be non-empty for this status")
+    if reason_code and not REASON_CODE_PATTERN.fullmatch(reason_code):
+        raise ValueError("reason_code must match [A-Z][A-Z0-9_]* when non-empty")
     return status, mode, stage

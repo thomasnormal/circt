@@ -508,6 +508,9 @@ Current workstream status in this branch:
      invariants to prevent malformed rows from polluting trend reports
    - dashboard aggregator now enforces full required-field presence for schema
      rows before aggregation
+   - schema row validation now enforces canonical reason-code token format
+     (`[A-Z][A-Z0-9_]*`) when non-empty; validator/dashboard invalid-schema
+     regressions now cover bad reason-code formatting
    - baseline capture now supports optional schema-only dashboard emission via
      `--dashboard-*` outputs, closing WS0 capture -> WS6 dashboard handoff
    - dashboard aggregation now includes expected-returncode frontier lanes

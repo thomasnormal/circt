@@ -12767,3 +12767,37 @@
   - FPV drift allowlist handling is now centralized in one helper.
   - assertion/grouped lanes now match summary lane coverage for bad-regex
     parsing failures.
+
+## 2026-03-01 - WS6 schema reason-code format hardening for drift/dashboard stability
+
+- realization:
+  - schema required-field + enum checks were in place, but malformed non-empty
+    `reason_code` tokens (for example punctuation-containing values) could
+    still pass validation and pollute drift/timeout dashboards.
+
+- implemented:
+  - `utils/formal/lib/formal_results_schema.py`
+    - added canonical non-empty reason-code format gate:
+      - regex: `[A-Z][A-Z0-9_]*`
+    - `validate_schema_v1_row` now rejects non-empty reason codes that do not
+      match this contract.
+  - regression updates:
+    - `test/Tools/formal-validate-results-schema.test`
+      - added failing lane for malformed `reason_code` format.
+    - `test/Tools/formal-dashboard-inputs-invalid-schema.test`
+      - added malformed `reason_code` lane to ensure dashboard ingest rejects
+        invalid schema rows consistently.
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/lib/formal_results_schema.py utils/formal/validate_formal_results_schema.py utils/formal/build_formal_dashboard_inputs.py`
+  - focused lit:
+    - `test/Tools/formal-validate-results-schema.test`
+    - `test/Tools/formal-dashboard-inputs-invalid-schema.test`
+    - `test/Tools/formal-dashboard-inputs.test`
+    - `test/Tools/formal-capture-baseline-schema-validate.test`
+    - all passed.
+
+- follow-up status:
+  - malformed reason-code payloads are now blocked at schema boundaries before
+    baseline drift/dashboard aggregation.
