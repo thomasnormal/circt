@@ -1547,6 +1547,25 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       name.erase(name.begin());
     return name;
   };
+  auto composeInstNameForSet = [&](llvm::StringRef cntxtNameRef,
+                                   llvm::StringRef rawInstNameRef) {
+    std::string cntxtName = canonicalizeInstName(cntxtNameRef.str());
+    std::string instName = canonicalizeInstName(rawInstNameRef.str());
+
+    if (instName.empty())
+      return cntxtName;
+    if (cntxtName.empty())
+      return instName;
+
+    // Mirror UVM's regex path composition in
+    // uvm_config_db_default_implementation_t::set.
+    if (instName.size() > 2 && instName.front() == '/' &&
+        instName.back() == '/') {
+      std::string regexBody = instName.substr(1, instName.size() - 2);
+      return "/" + cntxtName + "\\.(" + regexBody + ")/";
+    }
+    return cntxtName + "." + instName;
+  };
 
   // --- SET ---
   if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
@@ -1557,7 +1576,7 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       std::string str2 = readStr(2);
       std::string str3 = readStr(3);
 
-      std::string instName = canonicalizeInstName(str2);
+      std::string instName = composeInstNameForSet(str1, str2);
       std::string fieldName = str3;
       if (fieldName.empty()) {
         instName = canonicalizeInstName(str1);
@@ -1598,7 +1617,7 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       std::string str2 = readStr(2);
       std::string str3 = readStr(3);
 
-      std::string instName = canonicalizeInstName(str2);
+      std::string instName = normalizeConfigDbInstName(procId, args[1], str2);
       std::string fieldName = str3;
       if (fieldName.empty()) {
         instName = canonicalizeInstName(str1);

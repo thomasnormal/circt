@@ -6256,3 +6256,12 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed stale 
 
 ### [x] 2081. `test/Tools/crun/uvm-factory-create.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Test intent was corrected to UVM lifecycle semantics by moving component creation into `build_phase` (creating components in `run_phase` is illegal and trips `ILLCRT` in compliant UVM). Runtime checks now validate object creation, component creation, and multiple object creates semantically.
+
+### [x] 2082. `test/Tools/crun/uvm-config-db-hierarchical.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Hierarchical config lookup now passes semantically (`ok=1 val=77`). Root cause was config_db call-indirect key composition that stored relative set keys (`mid.dc.deep_val`) while get resolved scoped keys (`uvm_test_top.mid.dc.deep_val`); fixed by normalizing call-indirect set/get scope composition in `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`.
+
+### [x] 2083. `test/Tools/crun/uvm-integ-config-phase-report.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Integration semantics now pass under crun without `XFAIL`: config_db propagation through build/connect/run/report phases is validated with runtime checks (`verbose flag`, run-phase verbose message, and report-phase count checks).
+
+### [x] 2084. `test/Tools/crun/uvm-integ-env-config-factory.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Integration semantics now pass under crun without `XFAIL`: config_db timeout propagation and factory override behavior are both validated end-to-end (`agent got timeout=42`, `agent type is integ_custom_agent`).

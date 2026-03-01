@@ -10253,3 +10253,37 @@
       - result: `5 passed`
     - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv`
       - result: `1 passed`.
+
+## 2026-03-01 - UVM config_db hierarchical scope semantics (call_indirect parity)
+
+- realization:
+  - `test/Tools/crun/uvm-config-db-hierarchical.sv` was failing semantically:
+    - set in parent + get in deep child returned miss (`ok=0 val=0`).
+  - Trace showed key mismatch between set and get paths:
+    - set interceptor stored `mid.dc.deep_val`,
+    - get interceptor looked up `uvm_test_top.mid.dc.deep_val`.
+  - Root cause was in `tryInterceptConfigDbCallIndirect`:
+    - `set` path keyed on raw relative `inst_name` instead of UVM's effective
+      scoped name (`cntxt_name + "." + inst_name`),
+    - this diverged from wrapper-level get normalization and from
+      `uvm_config_db_default_implementation_t::set` semantics.
+
+- implemented:
+  - Updated call-indirect config_db interception in
+    `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`:
+    - added scoped-name composition for `set` using `cntxt_name` + `inst_name`,
+      including regex-style path handling consistent with UVM set semantics.
+    - updated `get` path normalization to use
+      `normalizeConfigDbInstName(procId, context, inst_name)` so get/set share
+      canonical scope composition.
+
+- validation:
+  - direct repro:
+    - `build_test/bin/crun test/Tools/crun/uvm-config-db-hierarchical.sv --top tb_top -v 0`
+    - result: PASS (`hierarchical config_db get: PASS`).
+  - focused config/integration slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv`
+    - result: `10 passed, 2 expectedly failed` (`type-mismatch`, `virtual-if`).
+  - cross-check with factory semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create.sv test/Tools/crun/uvm-factory-override-priority.sv test/Tools/crun/uvm-factory-double-override.sv test/Tools/crun/uvm-factory-override-chain.sv test/Tools/crun/uvm-factory-override-inst-path.sv test/Tools/crun/uvm-config-db-hierarchical.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `9 passed`.
