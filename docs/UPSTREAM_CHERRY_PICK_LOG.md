@@ -157,3 +157,36 @@ by concurrent local edits:
 1. `d3ddbe121` after `ImportVerilogInternals.h` is clean.
 2. `17330f8a9` only if we intentionally reconcile fork/join lowering semantics in `Statements.cpp`.
 3. remaining clean bug-fix candidates in non-dirty subsystems (Arc/HW/FIRRTL) while ImportVerilog core internals remain actively edited locally.
+
+## 2026-03-01 Mining Pass (Main, continued)
+
+- Local base at start of pass: `origin/main` @ `139e0fa1e`
+- Open bug issues on `thomasnormal/circt`: none (only enhancements `#15-#19` open).
+
+### Picked to `main`
+
+| Local commit | Upstream commit | Subject | Notes |
+| --- | --- | --- | --- |
+| `acd7e7cc6` | `6e3d168f6` | [ESI][Runtime] Don't crash on unsupported type (#9768) | Applied cleanly; Python codegen now guards unsupported type emission paths. |
+| `0ab71694f` | `f21dbe7c3` | [circt-reduce] Use per-port matching for FIRRTL port pruners (#9755) | Applied cleanly; narrows pruning decisions to matching ports and avoids incorrect cross-port behavior. |
+| `f8780fe13` | `ee4badcde` | [circt-bmc] Add LTLToCore to pipeline (#9735) | Conflicted in `tools/circt-bmc/*`; rerere auto-reapplied prior local resolution. Net new delta in this tree is the integration test file. |
+
+### Validation
+
+- Rebuilt changed tools in `build_test`:
+  - `utils/ninja-with-lock.sh -C build_test circt-reduce circt-bmc`
+- Ran focused tests:
+  - `llvm-lit -sv test/Dialect/FIRRTL/Reduction/module-port-pruner.mlir`
+  - `llvm-lit -sv test/Dialect/FIRRTL/Reduction/extmodule-port-pruner.mlir`
+  - `llvm-lit -sv test/Dialect/FIRRTL/Reduction/root-extmodule-port-pruner.mlir`
+  - `llvm-lit -sv test/Dialect/FIRRTL/Reduction/module-port-pruner-probe.mlir`
+  - `llvm-lit -sv integration_test/circt-bmc/ltl.mlir`
+- Result: `4 passed`, `1 unsupported` (`integration_test/circt-bmc/ltl.mlir` is gated by `REQUIRES: circt-bmc-jit` in this local test configuration).
+
+### Next Candidates
+
+Given current dirty in-flight work in ImportVerilog/Moore files, prefer non-overlapping commits first:
+
+1. `35e49085c` ([Synth] Add resource usage analysis (#9717))
+2. `6e3d168f6` is now complete in this branch.
+3. Revisit `d3ddbe121` / `17330f8a9` after `ImportVerilogInternals.h` + `Statements.cpp` are clean.
