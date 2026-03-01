@@ -3215,10 +3215,55 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
       os << "\n";
     }
   };
+  auto printSpawnParentRows = [&](llvm::StringRef title,
+                                  const llvm::DenseMap<ProcessId, uint64_t>
+                                      &counts) {
+    llvm::StringMap<uint64_t> parentCounts;
+    for (const auto &entry : counts) {
+      if (entry.second == 0)
+        continue;
+      auto parentIt = forkSpawnParentFunctionName.find(entry.first);
+      if (parentIt == forkSpawnParentFunctionName.end() ||
+          parentIt->second.empty())
+        continue;
+      parentCounts[parentIt->second] += entry.second;
+    }
+
+    os << "[circt-sim] " << title << " (top " << topN << "):\n";
+    if (parentCounts.empty()) {
+      os << "[circt-sim]   (none)\n";
+      return;
+    }
+
+    struct HotParentRow {
+      std::string parent;
+      uint64_t count = 0;
+    };
+    llvm::SmallVector<HotParentRow, 32> rows;
+    rows.reserve(parentCounts.size());
+    for (const auto &entry : parentCounts)
+      rows.push_back(HotParentRow{entry.getKey().str(), entry.getValue()});
+
+    llvm::sort(rows, [](const HotParentRow &lhs, const HotParentRow &rhs) {
+      if (lhs.count != rhs.count)
+        return lhs.count > rhs.count;
+      return lhs.parent < rhs.parent;
+    });
+
+    size_t limit = std::min(topN, rows.size());
+    for (size_t i = 0; i < limit; ++i)
+      os << "[circt-sim]   " << rows[i].count
+         << "x spawn_parent=" << rows[i].parent << "\n";
+  };
   printProcRows("Hot entry MAY_YIELD optin-non-coro skip processes",
                 entryMayYieldSkipOptInNonCoroByProcess);
   printProcRows("Hot func.call MAY_YIELD optin-non-coro skip processes",
                 directMayYieldSkipOptInNonCoroByProcess);
+  printSpawnParentRows("Hot entry MAY_YIELD optin-non-coro skip spawn parents",
+                       entryMayYieldSkipOptInNonCoroByProcess);
+  printSpawnParentRows(
+      "Hot func.call MAY_YIELD optin-non-coro skip spawn parents",
+      directMayYieldSkipOptInNonCoroByProcess);
 
   // Print top N hottest interpreted callees (per-Operation* counts).
   if (!interpretedCallCounts.empty()) {

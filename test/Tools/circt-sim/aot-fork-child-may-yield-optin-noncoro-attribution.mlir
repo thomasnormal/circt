@@ -9,6 +9,8 @@
 // OPTIN: [circt-sim] entry_skipped_yield_optin_non_coro:     1
 // OPTIN: Hot entry MAY_YIELD optin-non-coro skip processes (top 50):
 // OPTIN: [circt-sim]{{[[:space:]]+}}1x pid={{[0-9]+}} fork_1_branch_0 spawn_parent=spawn_fork_call_indirect
+// OPTIN: Hot entry MAY_YIELD optin-non-coro skip spawn parents (top 50):
+// OPTIN: [circt-sim]{{[[:space:]]+}}1x spawn_parent=spawn_fork_call_indirect
 
 func.func private @"uvm_pkg::inner_add_one"(%x: i32) -> i32 {
   %one = hw.constant 1 : i32
