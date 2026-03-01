@@ -438,6 +438,11 @@ Current workstream status in this branch:
      `log_path`, `artifact_dir`) with regression coverage in:
      - `run-opentitan-lec-results-jsonl-file.test`
      - `run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+   - pairwise BMC schema JSONL rows now include per-case timing/artifact
+     metadata (`frontend_time_ms`, `solver_time_ms`, `log_path`,
+     `artifact_dir`) with stage-aware log-path inference
+   - OpenTitan AES BMC schema JSONL lane now inherits pairwise metadata parity
+     via delegated pairwise runner output
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status

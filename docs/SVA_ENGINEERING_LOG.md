@@ -2,6 +2,42 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: pairwise/OpenTitan BMC JSONL metadata parity):
+  - realization:
+    - pairwise BMC JSONL rows emitted schema keys but left
+      `frontend_time_ms`/`solver_time_ms` as `null` and
+      `log_path`/`artifact_dir` empty.
+    - OpenTitan AES BMC inherits pairwise JSONL rows, so this gap propagated
+      to that real-workload wrapper lane.
+  - implemented:
+    - `utils/run_pairwise_circt_bmc.py`
+      - recorded per-case artifact and stage-log paths while constructing case
+        workdirs.
+      - added stage-aware log-path inference for JSONL projection:
+        - `CIRCT_VERILOG_*` -> `circt-verilog.log`
+        - `CIRCT_OPT_*` -> `circt-opt.log`
+        - fallback -> `circt-bmc.log`
+      - projected non-null metadata in JSONL rows:
+        - `frontend_time_ms=0`
+        - `solver_time_ms=0`
+        - `log_path=<stage log>`
+        - `artifact_dir=<case workdir>`
+    - tightened regressions:
+      - `test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test`
+      - `test/Tools/run-opentitan-bmc-results-jsonl-file.test`
+      - now assert integer timing fields and non-empty path metadata.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test`
+      - result: fail (new metadata assertions).
+    - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test`
+      - result: `2/2` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS1/WS6: OpenTitan AES/connectivity LEC JSONL metadata parity):
   - realization:
     - FPV LEC JSONL rows already emitted timing/artifact metadata, but OpenTitan

@@ -8,7 +8,7 @@
 // RUN: printf '#!/usr/bin/env bash\necho "BMC_RESULT=UNSAT"\nexit 0\n' > %t/bin/circt-bmc
 // RUN: chmod +x %t/bin/circt-bmc
 // RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc BMC_RUN_SMTLIB=0 BMC_PREPARE_CORE_WITH_CIRCT_OPT=0 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_bmc.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir --results-jsonl-file %t/results.jsonl | FileCheck %s
-// RUN: python3 -c "import json; rows=[json.loads(line) for line in open('%t/results.jsonl', encoding='utf-8') if line.strip()]; assert len(rows)==1; row=rows[0]; assert row['suite']=='opentitan'; assert row['mode']=='BMC'; assert row['case_id']=='aes_sbox_canright'; assert row['status']=='PASS'; assert row['reason_code']=='UNSAT'; assert row['stage']=='result'"
+// RUN: python3 -c "import json; rows=[json.loads(line) for line in open('%t/results.jsonl', encoding='utf-8') if line.strip()]; assert len(rows)==1; row=rows[0]; assert row['suite']=='opentitan'; assert row['mode']=='BMC'; assert row['case_id']=='aes_sbox_canright'; assert row['status']=='PASS'; assert row['reason_code']=='UNSAT'; assert row['stage']=='result'; assert row['frontend_time_ms']==0; assert row['solver_time_ms']==0; assert row['log_path'].endswith('/work/aes_sbox_canright/circt-bmc.log'); assert row['artifact_dir'].endswith('/work/aes_sbox_canright')"
 //
 // CHECK: Running BMC on 1 pairwise case(s)...
 // CHECK: opentitan BMC summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0

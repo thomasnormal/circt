@@ -2199,6 +2199,8 @@ def main() -> int:
     timeout = 0
     skipped = 0
     total = 0
+    case_artifact_dir_by_case_id: dict[str, str] = {}
+    case_log_paths_by_case_id: dict[str, tuple[str, str, str]] = {}
     try:
         print(f"Running BMC on {len(cases)} pairwise case(s)...", flush=True)
         for case in cases:
@@ -2253,6 +2255,12 @@ def main() -> int:
             verilog_log_path = case_dir / "circt-verilog.log"
             opt_log_path = case_dir / "circt-opt.log"
             bmc_log_path = case_dir / "circt-bmc.log"
+            case_artifact_dir_by_case_id[case.case_id] = str(case_dir)
+            case_log_paths_by_case_id[case.case_id] = (
+                str(verilog_log_path),
+                str(opt_log_path),
+                str(bmc_log_path),
+            )
             bmc_out_path = case_dir / "circt-bmc.out"
             out_mlir = case_dir / "pairwise_bmc.mlir"
             prepped_mlir = case_dir / "pairwise_bmc.prepared.mlir"
@@ -3694,11 +3702,25 @@ def main() -> int:
         results_jsonl_path = Path(args.results_jsonl_file)
         solver_label = "" if bmc_smoke_only else "z3"
         json_rows: list[dict[str, object]] = []
+
+        def infer_jsonl_log_path(case_id: str, reason_code: str) -> str:
+            verilog_log, opt_log, solver_log = case_log_paths_by_case_id.get(
+                case_id, ("", "", "")
+            )
+            reason_norm = reason_code.strip().upper()
+            if "CIRCT_VERILOG" in reason_norm:
+                return verilog_log
+            if "CIRCT_OPT" in reason_norm:
+                return opt_log
+            return solver_log
+
         for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
             if len(row) < 5:
                 continue
             status, case_id, case_path, suite, mode = row[:5]
             reason_code = extract_result_reason_code(row)
+            artifact_dir = case_artifact_dir_by_case_id.get(case_id, "")
+            log_path = infer_jsonl_log_path(case_id, reason_code)
             json_rows.append(
                 _make_formal_result_row(
                     suite=suite,
@@ -3708,6 +3730,10 @@ def main() -> int:
                     status=status,
                     reason_code=reason_code,
                     solver=solver_label,
+                    frontend_time_ms=0,
+                    solver_time_ms=0,
+                    log_path=log_path,
+                    artifact_dir=artifact_dir,
                 )
             )
         _write_formal_results_jsonl(results_jsonl_path, json_rows)
