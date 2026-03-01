@@ -459,11 +459,12 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
   // These mirror call_indirect intercepts but run at function entry so cache
   // fast paths and wrapper hops cannot bypass the rendezvous logic.
   if (isSequencerHandshakeFunc("::wait_for_grant")) {
-    if (!args.empty() && !args[0].isX()) {
-      uint64_t sqrAddr = normalizeUvmSequencerAddress(procId, args[0].getUInt64());
-      if (sqrAddr != 0)
-        itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
-    }
+    if (args.empty() || args[0].isX())
+      return false;
+    uint64_t sqrAddr = normalizeUvmSequencerAddress(procId, args[0].getUInt64());
+    if (sqrAddr == 0)
+      return false;
+    itemToSequencer[sequencerProcKey(procId)] = sqrAddr;
     noteUvmFastPathActionHit("func.body.sequencer.wait_for_grant");
     return true;
   }
@@ -490,19 +491,19 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     if (queueAddr == 0)
       queueAddr = sqrAddr;
     queueAddr = normalizeUvmSequencerAddress(procId, queueAddr);
-    if (itemAddr != 0 && queueAddr != 0) {
-      sequencerItemFifo[queueAddr].push_back(itemAddr);
-      recordUvmSequencerItemOwner(itemAddr, queueAddr);
-      sequencePendingItemsByProc[procId].push_back(itemAddr);
-      if (seqAddr != 0)
-        sequencePendingItemsBySeq[seqAddr].push_back(itemAddr);
-      wakeUvmSequencerGetWaiterForPush(queueAddr);
-      if (traceSeqEnabled) {
-        llvm::errs() << "[SEQ-FBODY] send_request item=0x"
-                     << llvm::utohexstr(itemAddr) << " sqr=0x"
-                     << llvm::utohexstr(queueAddr) << " depth="
-                     << sequencerItemFifo[queueAddr].size() << "\n";
-      }
+    if (itemAddr == 0 || queueAddr == 0)
+      return false;
+    sequencerItemFifo[queueAddr].push_back(itemAddr);
+    recordUvmSequencerItemOwner(itemAddr, queueAddr);
+    sequencePendingItemsByProc[procId].push_back(itemAddr);
+    if (seqAddr != 0)
+      sequencePendingItemsBySeq[seqAddr].push_back(itemAddr);
+    wakeUvmSequencerGetWaiterForPush(queueAddr);
+    if (traceSeqEnabled) {
+      llvm::errs() << "[SEQ-FBODY] send_request item=0x"
+                   << llvm::utohexstr(itemAddr) << " sqr=0x"
+                   << llvm::utohexstr(queueAddr) << " depth="
+                   << sequencerItemFifo[queueAddr].size() << "\n";
     }
     noteUvmFastPathActionHit("func.body.sequencer.send_request");
     return true;
@@ -524,10 +525,8 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     if (itemAddr == 0 && procIt != sequencePendingItemsByProc.end() &&
         !procIt->second.empty())
       itemAddr = procIt->second.front();
-    if (itemAddr == 0) {
-      noteUvmFastPathActionHit("func.body.sequencer.wait_for_item_done_empty");
-      return true;
-    }
+    if (itemAddr == 0)
+      return false;
 
     auto erasePendingItemByProc = [&](uint64_t item) {
       auto it = sequencePendingItemsByProc.find(procId);

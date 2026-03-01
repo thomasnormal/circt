@@ -13440,3 +13440,38 @@
     - `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
     - `test/Tools/circt-sim/uvm-component-get-child-bracket-runtime.sv`
     - result: 4/4 passed.
+
+## 2026-03-01 - Sequencer send_request unresolved-context fast-path fallback
+
+- realization:
+  - `handleUvmFuncBodyFastPath` sequencer handshake hooks could return `true`
+    even when no valid sequencer queue/item context was available.
+  - in particular, `send_request` could be silently swallowed when queue
+    resolution failed (`queueAddr == 0`), dropping work instead of executing the
+    canonical function body.
+
+- TDD repro:
+  - added regression:
+    - `test/Tools/circt-sim/uvm-sequencer-send-request-unresolved-fallback.mlir`
+  - before fix, test failed with:
+    - `send_request_fallback_counter = 0`
+
+- implemented:
+  - `tools/circt-sim/UVMFastPaths.cpp`
+    - `wait_for_grant`: fast-path only when a non-zero normalized sequencer
+      address is available; otherwise fall back.
+    - `send_request`: fall back when `itemAddr == 0` or resolved `queueAddr == 0`
+      instead of swallowing the call.
+    - `wait_for_item_done`: fall back when no pending item can be resolved,
+      instead of treating empty state as implicit success.
+
+- validation:
+  - focused sequencer tests:
+    - `uvm-sequencer-send-request-unresolved-fallback.mlir`
+    - `uvm-sequencer-wait-for-grant-send-request-runtime.sv`
+    - `uvm-sequencer-parallel-multiqueue-item-done-runtime.sv`
+    - `uvm-sequencer-dual-unconnected-routing.sv`
+    - `Runtime/uvm/uvm_send_request_test.sv`
+    - result: all passed.
+  - re-ran the previously fixed UVM fast-path subset plus the new regression:
+    - result: all passed.

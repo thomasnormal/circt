@@ -82,6 +82,12 @@ reduction must be staged and measurable.
     getters and `uvm_get_report_object` paths.
   - `uvm-run-test-single-entry-guard.mlir` now expects hard failure propagation
     (`not circt-sim ...`) under `CIRCT_SIM_ENFORCE_SINGLE_RUN_TEST=1`.
+- [x] Closed sequencer silent-drop fast-path gap for unresolved send_request:
+  - `handleUvmFuncBodyFastPath` now falls back to canonical function bodies
+    when `wait_for_grant` / `send_request` / `wait_for_item_done` cannot
+    resolve a valid sequencer/item context.
+  - added regression:
+    - `test/Tools/circt-sim/uvm-sequencer-send-request-unresolved-fallback.mlir`
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality still needs core runtime closure (no retry dependence).
   - `axi4Lite` interpreted run remains nondeterministic across two failure modes:
