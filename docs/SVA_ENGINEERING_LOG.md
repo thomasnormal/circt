@@ -2,6 +2,24 @@
 
 ## 2026-03-01
 
+- Iteration update (WS2-T1: multiclock unsupported diagnostic inventory):
+  - realization:
+    - lower-to-bmc multiclock unsupported paths had regression coverage for
+      generic failures, but no dedicated tests for the more actionable
+      diagnostics that include:
+      - explicit clock-domain names
+      - unresolved clock-expression tagging
+    - this made it harder to detect diagnostic regressions while iterating on
+      multiclock closure.
+  - implemented:
+    - added `test/Tools/circt-bmc/lower-to-bmc-multiclock-diagnostics.mlir`
+      with split-input verify-diagnostics coverage for:
+      - explicit clock-domain conflict
+      - explicit domain + unresolved expression conflict
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-bmc/lower-to-bmc-multiclock-diagnostics.mlir`
+      - result: pass.
+
 - Iteration update (WS0-T1: baseline manifest contract validator + shared parser):
   - realization:
     - baseline manifest validation logic was duplicated in

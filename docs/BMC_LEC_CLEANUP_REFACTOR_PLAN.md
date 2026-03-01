@@ -396,8 +396,12 @@ Current workstream status in this branch:
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
    - runner shared-library extraction still partial
-3. WS2: not started
-   - multiclock unsupported root causes identified but no core lowering changes landed in this slice
+3. WS2: in progress
+   - multiclock unsupported root causes identified
+   - diagnostic inventory coverage added for lower-to-bmc single-clock
+     rejection paths, including explicit clock-name and unresolved-expression
+     diagnostics
+   - core multiclock semantic lowering changes still pending
 4. WS3: not started
    - register-init unsupported inventory exists, implementation pending
 5. WS4: in progress
