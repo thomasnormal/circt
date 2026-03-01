@@ -1985,3 +1985,27 @@
 - Realization:
   - Parallel BMC/LEC table structure improves readability and avoids ambiguity
     for non-EDA readers about what each rule/task actually represents.
+
+### OSS OpenTitan LEC frontier shift: TOK_PACKAGESEP -> TOK_IMPORT
+- Repro/verification:
+  - Updated `toy_models/open_source_formal_compare_20260301/run_compare_opentitan_realworld_oss.sh`
+    to pass all FuseSoC `*pkg.sv` files to Yosys/EQY when parsing
+    `top_earlgrey.sv`-based checks.
+  - Reran `toy_models/open_source_formal_compare_20260301/run_compare_opentitan_realworld_oss.sh`.
+  - New result table (`opentitan_realworld_oss.tsv`) now shows Yosys failures as
+    `ERROR: syntax error, unexpected TOK_IMPORT` instead of
+    `TOK_PACKAGESEP`.
+- Root cause:
+  - Previous OSS comparison invocation underfed package dependencies, so parser
+    failed early on package-qualified symbols (`pkg::...`) in
+    `top_earlgrey.sv`.
+  - With package files supplied, Yosys now reaches a deeper unsupported frontend
+    construct: package `import` parsing in
+    `ibex_pmp_reset_pkg.sv:6` (`import ibex_pkg::*;`).
+- Content update:
+  - Updated blog OpenTitan LEC table error text to report the deeper
+    `TOK_IMPORT` blocker (`ibex_pmp_reset_pkg.sv:6`) instead of
+    `TOK_PACKAGESEP`.
+- Realization:
+  - The prior `TOK_PACKAGESEP` row was a harness artifact, not the true OSS
+    frontier for these OpenTitan cases.

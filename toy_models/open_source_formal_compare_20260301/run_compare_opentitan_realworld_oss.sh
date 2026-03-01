@@ -42,19 +42,19 @@ run_case() {
 make_eqy_cfg() {
   local cfg="$1"
   local check="$2"
-  local pkg="$3"
+  local pkg_files="$3"
   local top="$4"
   local base="$5"
   cat > "$cfg" <<CFG
 [options]
 
 [gold]
-read_verilog -sv $check $pkg $top
+read_verilog -sv $check $pkg_files $top
 prep -top ${base}_ref
 rename ${base}_ref top
 
 [gate]
-read_verilog -sv $check $pkg $top
+read_verilog -sv $check $pkg_files $top
 prep -top ${base}_impl
 rename ${base}_impl top
 
@@ -92,7 +92,10 @@ emit_circt_row() {
   for entry in "${CASES[@]}"; do
     IFS='|' read -r case_id work base rule <<< "$entry"
     check="$work/checks/${base}.sv"
-    pkg=$(find "$work/fusesoc" -type f -name 'top_earlgrey_pkg.sv' | head -n 1)
+    # OpenTitan top-level parameters reference many external package symbols.
+    # Feed all package files so Yosys/EQY can resolve package-scoped types and
+    # values before parsing the autogen top.
+    pkg_files=$(find "$work/fusesoc" -type f -name '*pkg.sv' | sort | tr '\n' ' ')
     top=$(find "$work/fusesoc" -type f -name 'top_earlgrey.sv' | head -n 1)
     results_tsv="$(dirname "$work")/results.tsv"
     eqy_cfg="$EQY_DIR/${case_id}.eqy"
@@ -101,9 +104,9 @@ emit_circt_row() {
       "opentitan_${case_id}" \
       "yosys_oss" \
       "$rule" \
-      "yosys -p \"read_verilog -sv $check $pkg $top; prep -top ${base}_impl\""
+      "yosys -p \"read_verilog -sv $check $pkg_files $top; prep -top ${base}_impl\""
 
-    make_eqy_cfg "$eqy_cfg" "$check" "$pkg" "$top" "$base"
+    make_eqy_cfg "$eqy_cfg" "$check" "$pkg_files" "$top" "$base"
     run_case \
       "opentitan_${case_id}" \
       "eqy_oss" \
