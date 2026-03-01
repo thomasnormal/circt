@@ -3163,6 +3163,22 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
   };
   auto printProcRows = [&](llvm::StringRef title,
                            const llvm::DenseMap<ProcessId, uint64_t> &counts) {
+    auto modelToString = [](ExecModel model) -> llvm::StringRef {
+      switch (model) {
+      case ExecModel::CallbackStaticObserved:
+        return "callback-static";
+      case ExecModel::CallbackDynamicWait:
+        return "callback-dynamic";
+      case ExecModel::CallbackTimeOnly:
+        return "callback-time";
+      case ExecModel::OneShotCallback:
+        return "oneshot-callback";
+      case ExecModel::Coroutine:
+        return "coroutine";
+      }
+      return "unknown";
+    };
+
     os << "[circt-sim] " << title << " (top " << topN << "):\n";
     llvm::SmallVector<HotProcRow, 32> rows;
     rows.reserve(counts.size());
@@ -3189,6 +3205,13 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
         if (!name.empty())
           os << " " << name;
       }
+      auto modelIt = processExecModels.find(pid);
+      if (modelIt != processExecModels.end())
+        os << " model=" << modelToString(modelIt->second);
+      auto parentFnIt = forkSpawnParentFunctionName.find(pid);
+      if (parentFnIt != forkSpawnParentFunctionName.end() &&
+          !parentFnIt->second.empty())
+        os << " spawn_parent=" << parentFnIt->second;
       os << "\n";
     }
   };
