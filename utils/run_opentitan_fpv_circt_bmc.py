@@ -35,6 +35,9 @@ if _FORMAL_LIB_DIR.is_dir():
 try:
     from formal_results import make_result_row as _make_formal_result_row
     from formal_results import write_results_jsonl as _write_formal_results_jsonl
+    from formal_results import (
+        write_results_jsonl_from_case_rows as _write_formal_results_jsonl_from_case_rows,
+    )
 except Exception:
 
     def _infer_stage(status: str, reason_code: str) -> str:
@@ -95,6 +98,48 @@ except Exception:
             for row in rows:
                 handle.write(json.dumps(row, sort_keys=True))
                 handle.write("\n")
+
+    def _write_formal_results_jsonl_from_case_rows(
+        path: Path,
+        rows: list[tuple[str, str, str, str, str, str]],
+        *,
+        solver: str = "",
+        case_metadata_by_case_id: dict[
+            str, tuple[int | None, int | None, str, str]
+        ]
+        | None = None,
+    ) -> None:
+        payload_rows: list[dict[str, object]] = []
+        for status, case_id, case_path, suite, mode, reason_code in sorted(
+            rows, key=lambda item: (item[1], item[0], item[2])
+        ):
+            frontend_time_ms: int | None = None
+            solver_time_ms: int | None = None
+            log_path = ""
+            artifact_dir = ""
+            if case_metadata_by_case_id is not None:
+                (
+                    frontend_time_ms,
+                    solver_time_ms,
+                    log_path,
+                    artifact_dir,
+                ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
+            payload_rows.append(
+                _make_formal_result_row(
+                    suite=suite,
+                    mode=mode,
+                    case_id=case_id,
+                    case_path=case_path,
+                    status=status,
+                    reason_code=reason_code,
+                    solver=solver,
+                    solver_time_ms=solver_time_ms,
+                    frontend_time_ms=frontend_time_ms,
+                    log_path=log_path,
+                    artifact_dir=artifact_dir,
+                )
+            )
+        _write_formal_results_jsonl(path, payload_rows)
 
 try:
     from runner_common import (
@@ -2703,7 +2748,10 @@ def main() -> int:
             solver_label = (
                 "" if os.environ.get("BMC_SMOKE_ONLY", "0").strip() == "1" else "z3"
             )
-            json_rows: list[dict[str, object]] = []
+            json_case_rows: list[tuple[str, str, str, str, str, str]] = []
+            jsonl_case_metadata_by_case_id: dict[
+                str, tuple[int | None, int | None, str, str]
+            ] = {}
             for row in merged_rows:
                 if len(row) < 5:
                     continue
@@ -2727,22 +2775,21 @@ def main() -> int:
                     log_path = metadata_log_path
                 if metadata_artifact_dir:
                     artifact_dir = metadata_artifact_dir
-                json_rows.append(
-                    _make_formal_result_row(
-                        suite=suite,
-                        mode=mode,
-                        case_id=case_id,
-                        case_path=case_path,
-                        status=status,
-                        reason_code=reason_code,
-                        solver=solver_label,
-                        frontend_time_ms=frontend_time_ms,
-                        solver_time_ms=solver_time_ms,
-                        log_path=log_path,
-                        artifact_dir=artifact_dir,
-                    )
+                json_case_rows.append(
+                    (status, case_id, case_path, suite, mode, reason_code)
                 )
-            _write_formal_results_jsonl(results_jsonl_path, json_rows)
+                jsonl_case_metadata_by_case_id[case_id] = (
+                    frontend_time_ms,
+                    solver_time_ms,
+                    log_path,
+                    artifact_dir,
+                )
+            _write_formal_results_jsonl_from_case_rows(
+                results_jsonl_path,
+                json_case_rows,
+                solver=solver_label,
+                case_metadata_by_case_id=jsonl_case_metadata_by_case_id,
+            )
 
         merged_assertion_rows: list[tuple[str, ...]] = []
         for assertion_path in assertion_result_files:

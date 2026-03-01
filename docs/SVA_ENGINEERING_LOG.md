@@ -2,6 +2,28 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: FPV BMC JSONL projection dedup to shared case-row writer):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` still carried a local final-loop JSON row
+      shaping block despite existing shared helper coverage in
+      `formal_results.write_results_jsonl_from_case_rows(...)`.
+    - this left one more wrapper-local JSON shaping path to keep in sync with
+      schema/projection policy.
+  - implemented:
+    - `utils/run_opentitan_fpv_circt_bmc.py`
+      - imported and used shared
+        `_write_formal_results_jsonl_from_case_rows(...)` in shared-helper mode.
+      - retained copied-runner fallback implementation for lit copy flows.
+      - converted final JSONL emission from local dict-row build loop to:
+        - `json_case_rows` (`status/case_id/case_path/suite/mode/reason_code`)
+        - `jsonl_case_metadata_by_case_id`
+        - shared writer call with solver label + metadata map.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS6: compile-contract stage classification to frontend):
   - realization:
     - FPV wrapper-generated compile-contract errors (for example
