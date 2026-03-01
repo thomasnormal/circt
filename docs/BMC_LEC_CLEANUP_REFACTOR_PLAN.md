@@ -629,3 +629,323 @@ Execute WS0-T2 plus WS0-T3 immediately:
 2. run each baseline three times
 3. emit drift report from schema rows
 4. block further semantic refactors until baseline drift is understood
+
+## 26. Formal Result Schema Contract v1 (Normative)
+
+This section makes WS6 executable by defining strict field behavior.
+
+### Required Fields
+
+1. `schema_version`
+2. `suite`
+3. `mode`
+4. `case_id`
+5. `case_path`
+6. `status`
+7. `reason_code`
+8. `stage`
+9. `solver`
+10. `solver_time_ms`
+11. `frontend_time_ms`
+12. `log_path`
+13. `artifact_dir`
+
+### Allowed Enums
+
+1. `mode`
+   - `BMC`
+   - `LEC`
+   - `CONNECTIVITY_LEC` (temporary compatibility mode label)
+2. `status`
+   - `PASS`
+   - `FAIL`
+   - `ERROR`
+   - `TIMEOUT`
+   - `UNKNOWN`
+   - `SKIP`
+   - `XFAIL`
+   - `XPASS`
+3. `stage`
+   - `frontend`
+   - `lowering`
+   - `solver`
+   - `result`
+   - `postprocess`
+
+### Normalization Rules
+
+1. strings are trimmed and uppercased for enum-like fields
+2. empty `reason_code` is allowed only for `PASS` or `UNKNOWN`
+3. `solver` is empty only for smoke/non-solver paths
+4. timing fields are null if unavailable, otherwise non-negative integers
+5. JSONL rows must be deterministic by sort key:
+   - `(case_id, status, case_path)`
+
+### Versioning Rules
+
+1. additive fields: minor schema note only
+2. enum change or required-field change: increment `schema_version`
+3. keep one release of backward parser compatibility for each version bump
+
+## 27. Reason Code Taxonomy v1
+
+Reason codes are the central unit for drift and timeout analysis.
+
+### BMC Families
+
+1. frontend:
+   - `FRONTEND_COMMAND_TIMEOUT`
+   - `FRONTEND_PARSE_ERROR`
+   - `FRONTEND_RESOURCE_GUARD_RSS`
+   - `FRONTEND_OUT_OF_MEMORY`
+2. lowering:
+   - `BMC_MULTICLOCK_UNSUPPORTED`
+   - `BMC_REGISTER_INIT_UNSUPPORTED`
+   - `BMC_SMT_EXPORT_UNSUPPORTED`
+3. solver:
+   - `SOLVER_COMMAND_TIMEOUT`
+   - `SOLVER_UNKNOWN`
+   - `SOLVER_RESOURCE_EXHAUSTED`
+4. result:
+   - `ASSERTION_VIOLATION`
+   - `PROVEN_UNSAT`
+   - `COVER_WITNESS_FOUND`
+   - `NO_PROPERTY`
+
+### LEC Families
+
+1. frontend:
+   - `FRONTEND_COMMAND_TIMEOUT`
+   - `TOK_PACKAGESEP_PARSE_ERROR`
+   - `TIMESCALE_REQUIRED`
+2. lowering:
+   - `LLHD_REF_UNSUPPORTED`
+   - `LLVM_AGGREGATE_CONVERSION_UNSUPPORTED`
+   - `VPI_ATTR_PARSE_ERROR`
+3. solver:
+   - `SOLVER_COMMAND_TIMEOUT`
+   - `SMTLIB_EXPORT_ERROR`
+4. result:
+   - `EQ`
+   - `NEQ`
+   - `UNKNOWN`
+   - `XPROP_ONLY`
+
+### Mapping Policy
+
+1. every non-pass row must map to one taxonomy code
+2. legacy ad-hoc reason text is allowed only behind compatibility projection
+3. taxonomy changes require update to:
+   - schema validator tests
+   - drift classifier tests
+   - nightly dashboard mapping
+
+## 28. Reproducibility and Drift Protocol
+
+This protocol governs WS0 baseline freeze.
+
+### Inputs to Freeze
+
+1. tool binaries and versions
+2. runner scripts and CLI args
+3. timeout budgets
+4. resource limits
+5. seed/shard selection
+6. target manifests/rules manifests
+
+### Drift Computation
+
+For each case, compare run A vs run B on:
+
+1. `status`
+2. `reason_code`
+3. `stage`
+
+Classify drift:
+
+1. `NO_DRIFT`
+2. `STATUS_DRIFT`
+3. `REASON_DRIFT`
+4. `STAGE_DRIFT`
+5. `MISSING_CASE`
+6. `NEW_CASE`
+
+### Gate Criteria
+
+1. required for WS0 completion:
+   - zero `STATUS_DRIFT`
+   - zero `MISSING_CASE`
+2. allowed temporarily:
+   - bounded `REASON_DRIFT` if reason normalization is in flight
+3. blocked:
+   - any increase in `TIMEOUT` count without explicit waiver
+
+## 29. Baseline Command Templates
+
+These are canonical templates used for baseline capture. Paths can be overridden by environment.
+
+### OpenTitan AES LEC (Z3)
+
+```bash
+OUT=out/aes_lec.tsv \
+FORMAL_RESULTS_JSONL_OUT=out/aes_lec.jsonl \
+LEC_RUN_SMTLIB=1 \
+LEC_SMOKE_ONLY=0 \
+utils/run_opentitan_circt_lec.py \
+  --opentitan-root ~/opentitan \
+  --results-file "$OUT" \
+  --results-jsonl-file "$FORMAL_RESULTS_JSONL_OUT"
+```
+
+### OpenTitan Connectivity LEC (Z3)
+
+```bash
+OUT=out/connectivity_lec.tsv \
+FORMAL_RESULTS_JSONL_OUT=out/connectivity_lec.jsonl \
+LEC_RUN_SMTLIB=1 \
+LEC_SMOKE_ONLY=0 \
+utils/run_opentitan_connectivity_circt_lec.py \
+  --target-manifest <target.tsv> \
+  --rules-manifest <rules.tsv> \
+  --opentitan-root ~/opentitan \
+  --results-file "$OUT" \
+  --results-jsonl-file "$FORMAL_RESULTS_JSONL_OUT"
+```
+
+### sv-tests BMC (Z3)
+
+```bash
+OUT=out/sv_bmc.tsv \
+FORMAL_RESULTS_JSONL_OUT=out/sv_bmc.jsonl \
+BMC_SMOKE_ONLY=0 \
+BMC_RUN_SMTLIB=1 \
+utils/run_sv_tests_circt_bmc.sh ~/sv-tests
+```
+
+## 30. Dependency Map and Critical Path
+
+Dependencies:
+
+1. WS0-T1 is prerequisite for WS0-T2 and WS0-T3.
+2. WS0-T3 is prerequisite for broad WS1 refactors.
+3. WS1-T1 and WS1-T2 are prerequisite for WS1-T3.
+4. WS2-T1 is prerequisite for WS2-T2 and WS2-T3.
+5. WS3-T1 is prerequisite for WS3-T2.
+6. WS4-T1 is prerequisite for WS4-T2 and WS4-T3.
+7. WS5-T1 is prerequisite for WS5-T2.
+8. WS6-T1 is prerequisite for WS6-T2 and WS6-T3.
+
+Critical path for near-term parity:
+
+1. WS0-T1 -> WS0-T2 -> WS0-T3
+2. WS1-T1 -> WS1-T2
+3. WS2-T1 -> WS2-T2
+4. WS4-T1 -> WS4-T2
+5. WS5-T1 -> WS5-T2
+6. WS6-T2 -> nightly schema-only reporting
+
+## 31. Milestone Readiness Checklists
+
+### M1 Checklist (WS0 + WS1)
+
+1. baseline manifests committed and reproducible
+2. runner behavior drift report is clean
+3. shared launcher + classifier integrated in all primary runners
+4. no net loss in lit coverage
+
+### M2 Checklist (WS2 + WS3)
+
+1. multiclock unsupported count reduced on tracked suite
+2. register-init unsupported count reduced on tracked suite
+3. no soundness regressions in existing bmc lit tests
+4. all new behavior guarded by red-to-green tests
+
+### M3 Checklist (WS4 + WS5)
+
+1. LLHD/ref C1 bucket burn-down complete
+2. aggregate legalization covers top OpenTitan patterns
+3. timeout frontier depth improves at fixed budget
+4. unsupported diagnostics are explicit and categorized
+
+### M4 Checklist (WS6)
+
+1. schema validator runs in presubmit
+2. schema-only nightly reports generated successfully
+3. legacy TSV consumers migrated or adapter-shimmed
+4. dashboard and drift tooling consume JSONL contract only
+
+## 32. PR Slicing Strategy
+
+Each slice should be reviewable and reversible.
+
+1. one behavior change per PR when possible
+2. tests first:
+   - red lit test
+   - implementation
+   - green lit + integration slice
+3. include engineering-log entry with:
+   - realization
+   - root cause
+   - command-level validation
+4. avoid mixing:
+   - semantic fixes
+   - large refactors
+   in the same PR unless required
+
+Suggested first 8 PRs:
+
+1. PR1: WS0-T1 schema/manifest validation hardening
+2. PR2: WS0-T2 baseline capture scripts
+3. PR3: WS0-T3 drift comparator + report
+4. PR4: WS1-T1 shared launcher extraction
+5. PR5: WS1-T2 reason classifier extraction
+6. PR6: WS2-T1 multiclock unsupported inventory tests
+7. PR7: WS3-T1 register-init inventory tests
+8. PR8: WS6-T2 strict schema validator CLI
+
+## 33. Performance Guardrails
+
+To prevent regressions while enabling deeper proofs:
+
+1. define fixed timeout budgets per suite:
+   - AES LEC
+   - connectivity LEC
+   - sv-tests BMC
+2. track:
+   - total solver time
+   - P50/P90/P99 solver time
+   - timeout count
+3. block merges that:
+   - increase timeout count by more than 5 percent
+   - increase solver-time P90 by more than 15 percent
+   unless approved with a documented tradeoff
+
+## 34. Decision Record Template
+
+For all material semantic decisions (especially WS2/WS4/WS5), include:
+
+1. context
+2. options considered
+3. selected approach
+4. soundness implications
+5. performance implications
+6. test evidence
+7. rollback strategy
+
+Decision records should live in engineering log entries and reference ticket IDs.
+
+## 35. Next 72-Hour Plan
+
+1. Implement WS0-T2:
+   - add concrete baseline capture wrappers
+   - produce first baseline artifacts for AES LEC, connectivity LEC, sv-tests BMC
+2. Implement WS0-T3:
+   - build drift report from schema JSONL
+   - run three baseline repetitions
+3. Start WS1-T1:
+   - extract shared launcher utility
+   - migrate one runner behind compatibility interface
+4. Publish short status update:
+   - drift summary
+   - blocked items
+   - first proposed WS2/WS3 test list
