@@ -22898,7 +22898,9 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   static bool enableUvmAnalysisNativeInterceptors = []() {
     const char *env =
         std::getenv("CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS");
-    return env && env[0] != '\0' && env[0] != '0';
+    if (!env)
+      return true;
+    return env[0] != '\0' && env[0] != '0';
   }();
   auto isNativeConnectCallee = [&](llvm::StringRef name) {
     if (!name.contains("::connect"))
