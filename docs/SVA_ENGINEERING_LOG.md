@@ -12861,3 +12861,24 @@
 - follow-up status:
   - optional file/allowlist guardrail behavior is now centralized in
     `runner_common` and covered with dedicated regressions.
+
+## 2026-03-01 - Added FPV drift baseline missing-file regression lanes
+
+- realization:
+  - `run_opentitan_fpv_circt_bmc.py` had baseline missing-file diagnostics in
+    code paths, but they were not regression-locked for three key drift lanes.
+
+- implemented:
+  - added baseline missing-file regressions:
+    - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-baseline-missing-file.test`
+    - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-baseline-missing-file.test`
+    - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-baseline-missing-file.test`
+
+- validation:
+  - `build_test/bin/llvm-lit -sv` on the 3 new tests plus existing baseline
+    prerequisite tests for assertion/grouped/summary drift lanes
+  - all passed.
+
+- follow-up status:
+  - FPV drift baseline artifact guardrails are now covered for missing-file
+    failure modes in assertion, grouped-policy, and summary lanes.

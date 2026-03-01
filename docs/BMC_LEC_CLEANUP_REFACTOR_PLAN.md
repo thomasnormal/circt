@@ -471,6 +471,9 @@ Current workstream status in this branch:
      allowlist helper (local fallback retained)
    - connectivity baseline missing-file status lanes are now explicitly
      regression-covered for both BMC and LEC wrappers
+   - FPV BMC missing-baseline-file guardrails are now explicitly
+     regression-covered for assertion-results drift, grouped-policy drift, and
+     FPV summary drift lanes
    - shared optional file/allowlist helper behavior is now regression-covered
      in `formal-runner-common-optional-files.test`
    - shared log-writer truncation controls landed in `runner_common`

@@ -1,0 +1,6 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/work
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tfusesoc_core\ttask\tflow\tsub_flow\trel_path\ttoplevel\tsetup_status\tfile_count\tinclude_dir_count\tdefine_count\tfiles_fingerprint\tinclude_dirs_fingerprint\tdefines_fingerprint\tcontract_fingerprint\tstopat_count\tstopats_fingerprint\tstopats\ttask_profile\ttask_known\tstopat_mode\tblackbox_policy\ttask_policy_fingerprint\tfiles\tinclude_dirs\tdefines\teda_yml_path\tsetup_log_path\tworkdir\nbar_fpv\tlowrisc:fpv:bar_fpv\tFpvDefault\tformal\tfpv\thw/top_earlgrey/formal/ip/bar\tbar_tb\terror\t0\t0\t0\t\t\t\t\t0\ts\t\tfpv_default\t1\tnone\tnone\tp\t\t\t\t/tmp/bar.eda.yml\t/tmp/bar.log\t/tmp/bar.work\n' > %t/contracts.tsv
+// RUN: not sh -c 'OUT=%t/results.tsv %S/../../utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --workdir %t/work --fpv-summary-file %t/fpv-summary.tsv --fpv-summary-baseline-file %t/missing-fpv-summary-baseline.tsv --fpv-summary-drift-file %t/fpv-summary-drift.tsv' 2>&1 | FileCheck %s
+//
+// CHECK: fpv summary file not found: {{.*}}/missing-fpv-summary-baseline.tsv
