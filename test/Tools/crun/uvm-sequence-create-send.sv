@@ -13,9 +13,6 @@
 module tb_top;
   import uvm_pkg::*;
 
-  bit clk;
-  always #5 clk = ~clk;
-
   class cs_item extends uvm_sequence_item;
     `uvm_object_utils(cs_item)
     int data;
@@ -49,7 +46,6 @@ module tb_top;
       forever begin
         seq_item_port.get_next_item(item);
         received_data = item.data;
-        @(posedge clk);
         seq_item_port.item_done();
       end
     endtask
@@ -75,7 +71,6 @@ module tb_top;
       phase.raise_objection(this);
       seq = cs_sequence::type_id::create("seq");
       seq.start(seqr);
-      @(posedge clk);
       `uvm_info("TEST", $sformatf("driver received data: %0d", driver.received_data), UVM_LOW)
       if (driver.received_data == 55)
         `uvm_info("TEST", "create/send: PASS", UVM_LOW)

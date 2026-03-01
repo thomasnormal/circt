@@ -21,7 +21,7 @@ module tb_top;
       super.new(name);
       caught_count = 0;
     endfunction
-    function action_e catch_action();
+    virtual function action_e catch();
       if (get_severity() == UVM_ERROR && get_id() == "DEMOTE_ME") begin
         set_severity(UVM_WARNING);
         caught_count++;

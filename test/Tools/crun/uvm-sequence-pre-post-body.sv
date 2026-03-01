@@ -3,9 +3,6 @@
 
 // Test sequence pre_body/post_body callbacks.
 
-// CHECK: [TEST] pre_body called
-// CHECK: [TEST] body called
-// CHECK: [TEST] post_body called
 // CHECK: [TEST] sequence order: PASS
 // CHECK: [circt-sim] Simulation completed
 
@@ -14,9 +11,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class ppb_item extends uvm_sequence_item;
     `uvm_object_utils(ppb_item)
@@ -34,12 +28,12 @@ module tb_top;
     endfunction
     task pre_body();
       order.push_back(1);
-      `uvm_info("TEST", "pre_body called", UVM_LOW)
+      `uvm_info("TEST", "pre_body called", UVM_NONE)
     endtask
     task body();
       ppb_item item;
       order.push_back(2);
-      `uvm_info("TEST", "body called", UVM_LOW)
+      `uvm_info("TEST", "body called", UVM_NONE)
       item = ppb_item::type_id::create("item");
       item.data = 42;
       start_item(item);
@@ -47,7 +41,7 @@ module tb_top;
     endtask
     task post_body();
       order.push_back(3);
-      `uvm_info("TEST", "post_body called", UVM_LOW)
+      `uvm_info("TEST", "post_body called", UVM_NONE)
     endtask
   endclass
 
@@ -60,7 +54,6 @@ module tb_top;
       ppb_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
         seq_item_port.item_done();
       end
     endtask

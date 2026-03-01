@@ -16,12 +16,13 @@ module tb_top;
   typedef enum int {RED, GREEN, BLUE} color_e;
 
   class enum_obj extends uvm_object;
+    color_e color;
+    int value;
+
     `uvm_object_utils_begin(enum_obj)
       `uvm_field_enum(color_e, color, UVM_ALL_ON)
       `uvm_field_int(value, UVM_ALL_ON)
     `uvm_object_utils_end
-    color_e color;
-    int value;
     function new(string name = "enum_obj");
       super.new(name);
     endfunction

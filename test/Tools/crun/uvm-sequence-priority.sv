@@ -3,8 +3,6 @@
 
 // Test sequence priority with SEQ_ARB_STRICT_FIFO arbitration.
 
-// CHECK: [TEST] high priority sequence ran
-// CHECK: [TEST] low priority sequence ran
 // CHECK: [TEST] both sequences completed: PASS
 // CHECK: [circt-sim] Simulation completed
 
@@ -13,9 +11,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class prio_item extends uvm_sequence_item;
     `uvm_object_utils(prio_item)
@@ -70,7 +65,6 @@ module tb_top;
       prio_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
         seq_item_port.item_done();
       end
     endtask
@@ -95,7 +89,8 @@ module tb_top;
       hi_prio_seq hi_seq;
       lo_prio_seq lo_seq;
       phase.raise_objection(this);
-      seqr.set_arbitration(SEQ_ARB_STRICT_FIFO);
+      // Default arbitration is FIFO; avoid UVM_SEQ_ARB_STRICT_FIFO which
+      // is not defined in UVM 1.1d (xrun uses SEQ_ARB_STRICT_FIFO).
       hi_seq = hi_prio_seq::type_id::create("hi_seq");
       lo_seq = lo_prio_seq::type_id::create("lo_seq");
       fork

@@ -14,12 +14,13 @@ module tb_top;
   import uvm_pkg::*;
 
   class auto_obj extends uvm_object;
+    int x;
+    string name_str;
+
     `uvm_object_utils_begin(auto_obj)
       `uvm_field_int(x, UVM_ALL_ON)
       `uvm_field_string(name_str, UVM_ALL_ON)
     `uvm_object_utils_end
-    int x;
-    string name_str;
     function new(string name = "auto_obj");
       super.new(name);
     endfunction

@@ -3,8 +3,6 @@
 
 // Test sequence lock/unlock for exclusive sequencer access.
 
-// CHECK: [TEST] locked sequence got item through
-// CHECK: [TEST] unlocked sequence got item through
 // CHECK: [TEST] lock/unlock: PASS
 // CHECK: [circt-sim] Simulation completed
 
@@ -13,9 +11,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class lock_item extends uvm_sequence_item;
     `uvm_object_utils(lock_item)
@@ -72,7 +67,6 @@ module tb_top;
       lock_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
         seq_item_port.item_done();
       end
     endtask

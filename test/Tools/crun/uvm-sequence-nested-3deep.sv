@@ -24,8 +24,10 @@ module tb_top;
 
   class edge_seq_c extends uvm_sequence #(edge_item);
     `uvm_object_utils(edge_seq_c)
+    bit done;
     function new(string name = "edge_seq_c");
       super.new(name);
+      done = 0;
     endfunction
     task body();
       edge_item item;
@@ -33,33 +35,37 @@ module tb_top;
       item.level = 3;
       start_item(item);
       finish_item(item);
-      `uvm_info("TEST", "seq_c body ran: PASS", UVM_LOW)
+      done = 1;
     endtask
   endclass
 
   class edge_seq_b extends uvm_sequence #(edge_item);
     `uvm_object_utils(edge_seq_b)
+    bit done;
+    edge_seq_c seq_c;
     function new(string name = "edge_seq_b");
       super.new(name);
+      done = 0;
     endfunction
     task body();
-      edge_seq_c seq_c;
       seq_c = edge_seq_c::type_id::create("seq_c");
       seq_c.start(m_sequencer);
-      `uvm_info("TEST", "seq_b body ran: PASS", UVM_LOW)
+      done = 1;
     endtask
   endclass
 
   class edge_seq_a extends uvm_sequence #(edge_item);
     `uvm_object_utils(edge_seq_a)
+    bit done;
+    edge_seq_b seq_b;
     function new(string name = "edge_seq_a");
       super.new(name);
+      done = 0;
     endfunction
     task body();
-      edge_seq_b seq_b;
       seq_b = edge_seq_b::type_id::create("seq_b");
       seq_b.start(m_sequencer);
-      `uvm_info("TEST", "seq_a body ran: PASS", UVM_LOW)
+      done = 1;
     endtask
   endclass
 
@@ -109,6 +115,18 @@ module tb_top;
       phase.raise_objection(this);
       seq = edge_seq_a::type_id::create("seq_a");
       seq.start(env.sqr);
+      if (seq.seq_b.seq_c.done)
+        `uvm_info("TEST", "seq_c body ran: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "seq_c body ran: FAIL")
+      if (seq.seq_b.done)
+        `uvm_info("TEST", "seq_b body ran: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "seq_b body ran: FAIL")
+      if (seq.done)
+        `uvm_info("TEST", "seq_a body ran: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "seq_a body ran: FAIL")
       phase.drop_objection(this);
     endtask
   endclass

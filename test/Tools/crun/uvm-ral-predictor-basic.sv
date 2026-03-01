@@ -1,4 +1,4 @@
-// RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
+// RUN: crun %s --uvm-path=%S/../../../lib/Runtime/uvm-core --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
 
 // Test uvm_reg_predictor setup: create predictor, set map and adapter.
@@ -23,7 +23,7 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      data = uvm_reg_field::create("data");
+      data = uvm_reg_field::type_id::create("data");
       data.configure(this, 32, 0, "RW", 0, 0, 1, 1, 1);
     endfunction
   endclass
@@ -65,32 +65,36 @@ module tb_top;
 
   class ral_pred_test extends uvm_test;
     `uvm_component_utils(ral_pred_test)
+    pred_block blk;
+    uvm_reg_predictor#(my_bus_item) pred;
+    my_adapter adapter;
+
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
-    task run_phase(uvm_phase phase);
-      pred_block blk;
-      uvm_reg_predictor#(my_bus_item) pred;
-      my_adapter adapter;
-      phase.raise_objection(this);
-
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
       blk = pred_block::type_id::create("blk");
       blk.configure(null, "");
       blk.build();
 
       pred = uvm_reg_predictor#(my_bus_item)::type_id::create("pred", this);
+      adapter = my_adapter::type_id::create("adapter");
+      pred.map = blk.default_map;
+      pred.adapter = adapter;
+    endfunction
+
+    task run_phase(uvm_phase phase);
+      phase.raise_objection(this);
+
       if (pred != null)
         `uvm_info("TEST", "predictor created: PASS", UVM_LOW)
       else `uvm_error("TEST", "predictor created: FAIL")
 
-      adapter = my_adapter::type_id::create("adapter");
       if (adapter != null)
         `uvm_info("TEST", "adapter created: PASS", UVM_LOW)
       else `uvm_error("TEST", "adapter created: FAIL")
-
-      pred.map = blk.default_map;
-      pred.adapter = adapter;
 
       if (pred.get_name() == "pred")
         `uvm_info("TEST", "predictor name: PASS", UVM_LOW)

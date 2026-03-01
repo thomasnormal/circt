@@ -42,8 +42,10 @@ module tb_top;
 
   class seq_alpha extends uvm_sequence#(arb_item);
     `uvm_object_utils(seq_alpha)
+    bit done;
     function new(string name = "seq_alpha");
       super.new(name);
+      done = 0;
     endfunction
     task body();
       arb_item item;
@@ -51,14 +53,16 @@ module tb_top;
       start_item(item);
       item.origin = "alpha";
       finish_item(item);
-      `uvm_info("TEST", "seq_alpha item sent: PASS", UVM_LOW)
+      done = 1;
     endtask
   endclass
 
   class seq_beta extends uvm_sequence#(arb_item);
     `uvm_object_utils(seq_beta)
+    bit done;
     function new(string name = "seq_beta");
       super.new(name);
+      done = 0;
     endfunction
     task body();
       arb_item item;
@@ -66,7 +70,7 @@ module tb_top;
       start_item(item);
       item.origin = "beta";
       finish_item(item);
-      `uvm_info("TEST", "seq_beta item sent: PASS", UVM_LOW)
+      done = 1;
     endtask
   endclass
 
@@ -92,13 +96,22 @@ module tb_top;
       seq_alpha sa;
       seq_beta sb;
       phase.raise_objection(this);
-      sqr.set_arbitration(UVM_SEQ_ARB_FIFO);
+      // FIFO is the default; avoid UVM_SEQ_ARB_FIFO which is not defined
+      // in UVM 1.1d (xrun uses SEQ_ARB_FIFO).
       sa = seq_alpha::type_id::create("sa");
       sb = seq_beta::type_id::create("sb");
       fork
         sa.start(sqr);
         sb.start(sqr);
       join
+      if (sa.done)
+        `uvm_info("TEST", "seq_alpha item sent: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "seq_alpha item sent: FAIL")
+      if (sb.done)
+        `uvm_info("TEST", "seq_beta item sent: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "seq_beta item sent: FAIL")
       `uvm_info("TEST", "arbitration complete: PASS", UVM_LOW)
       phase.drop_objection(this);
     endtask

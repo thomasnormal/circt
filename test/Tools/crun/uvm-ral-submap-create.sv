@@ -1,11 +1,12 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
 
-// Probe: test creating a sub-map and adding it to a parent map.
-// No offset queries or bus transactions — just the setup API.
+// Probe: test creating a sub-map via a child reg_block.
+// UVM 1.1d requires the submap's parent block to be a child of the
+// parent map's block, so we use a proper parent/child block hierarchy.
 
 // CHECK: [TEST] parent map create: PASS
-// CHECK: [TEST] sub map create: PASS
+// CHECK: [TEST] child block create: PASS
 // CHECK: [TEST] add submap: PASS
 // CHECK: [circt-sim] Simulation completed
 
@@ -15,27 +16,41 @@
 module tb_top;
   import uvm_pkg::*;
 
-  class probe_block extends uvm_reg_block;
-    `uvm_object_utils(probe_block)
+  class child_block extends uvm_reg_block;
+    `uvm_object_utils(child_block)
 
-    uvm_reg_map parent_map;
-    uvm_reg_map sub_map;
-
-    function new(string name = "probe_block");
+    function new(string name = "child_block");
       super.new(name, UVM_NO_COVERAGE);
     endfunction
 
     virtual function void build();
-      parent_map = create_map("parent_map", 'h0, 4, UVM_LITTLE_ENDIAN);
-      if (parent_map != null)
+      default_map = create_map("child_map", 'h0, 4, UVM_LITTLE_ENDIAN);
+    endfunction
+  endclass
+
+  class parent_block extends uvm_reg_block;
+    `uvm_object_utils(parent_block)
+    child_block child;
+
+    function new(string name = "parent_block");
+      super.new(name, UVM_NO_COVERAGE);
+    endfunction
+
+    virtual function void build();
+      default_map = create_map("parent_map", 'h0, 4, UVM_LITTLE_ENDIAN);
+      if (default_map != null)
         $display("[TEST] parent map create: PASS");
 
-      sub_map = create_map("sub_map", 'h100, 4, UVM_LITTLE_ENDIAN);
-      if (sub_map != null)
-        $display("[TEST] sub map create: PASS");
+      child = child_block::type_id::create("child");
+      child.configure(this, "child");
+      child.build();
+      if (child != null)
+        $display("[TEST] child block create: PASS");
 
-      parent_map.add_submap(sub_map, 'h100);
+      default_map.add_submap(child.default_map, 'h100);
       $display("[TEST] add submap: PASS");
+
+      lock_model();
     endfunction
   endclass
 
@@ -47,8 +62,10 @@ module tb_top;
     endfunction
 
     function void build_phase(uvm_phase phase);
-      probe_block blk;
-      blk = probe_block::type_id::create("blk");
+      parent_block blk;
+      super.build_phase(phase);
+      blk = parent_block::type_id::create("blk");
+      blk.configure(null, "");
       blk.build();
     endfunction
 

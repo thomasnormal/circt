@@ -16,15 +16,15 @@ module tb_top;
   import uvm_pkg::*;
 
   class probe_int_item extends uvm_object;
+    int addr;
+    int data;
+    int id;
+
     `uvm_object_utils_begin(probe_int_item)
       `uvm_field_int(addr, UVM_ALL_ON)
       `uvm_field_int(data, UVM_ALL_ON)
       `uvm_field_int(id, UVM_ALL_ON)
     `uvm_object_utils_end
-
-    int addr;
-    int data;
-    int id;
 
     function new(string name = "probe_int_item");
       super.new(name);

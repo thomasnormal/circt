@@ -15,22 +15,24 @@ module tb_top;
   import uvm_pkg::*;
 
   class inner_obj extends uvm_object;
+    int value;
+
     `uvm_object_utils_begin(inner_obj)
       `uvm_field_int(value, UVM_ALL_ON)
     `uvm_object_utils_end
-    int value;
     function new(string name = "inner_obj");
       super.new(name);
     endfunction
   endclass
 
   class outer_obj extends uvm_object;
+    string label;
+    inner_obj child;
+
     `uvm_object_utils_begin(outer_obj)
       `uvm_field_string(label, UVM_ALL_ON)
       `uvm_field_object(child, UVM_ALL_ON)
     `uvm_object_utils_end
-    string label;
-    inner_obj child;
     function new(string name = "outer_obj");
       super.new(name);
     endfunction

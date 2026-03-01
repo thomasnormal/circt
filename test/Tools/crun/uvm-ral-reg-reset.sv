@@ -24,9 +24,9 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      lo = uvm_reg_field::create("lo");
+      lo = uvm_reg_field::type_id::create("lo");
       lo.configure(this, 16, 0, "RW", 0, 16'hBEEF, 1, 1, 1);
-      hi = uvm_reg_field::create("hi");
+      hi = uvm_reg_field::type_id::create("hi");
       hi.configure(this, 16, 16, "RW", 0, 16'hCAFE, 1, 1, 1);
     endfunction
   endclass

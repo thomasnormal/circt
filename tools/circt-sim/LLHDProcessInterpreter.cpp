@@ -1348,6 +1348,72 @@ uint64_t LLHDProcessInterpreter::takeUvmSequencerItemOwner(uint64_t itemAddr) {
   return sqrAddr;
 }
 
+void LLHDProcessInterpreter::recordUvmSequenceItemOwner(uint64_t itemAddr,
+                                                        uint64_t seqAddr) {
+  if (itemAddr == 0 || seqAddr == 0)
+    return;
+  itemToSequence[itemAddr] = seqAddr;
+}
+
+uint64_t LLHDProcessInterpreter::takeUvmSequenceItemOwner(uint64_t itemAddr) {
+  if (itemAddr == 0)
+    return 0;
+  auto it = itemToSequence.find(itemAddr);
+  if (it == itemToSequence.end())
+    return 0;
+  uint64_t seqAddr = it->second;
+  itemToSequence.erase(it);
+  return seqAddr;
+}
+
+void LLHDProcessInterpreter::deliverUvmSequenceResponse(
+    ProcessId procId, uint64_t itemAddr, InterpretedValue responseVal,
+    mlir::Operation *callSite) {
+  if (itemAddr == 0 || responseVal.isX())
+    return;
+  if (!rootModule)
+    return;
+  uint64_t responseAddr = responseVal.getUInt64();
+  if (responseAddr == 0)
+    return;
+
+  uint64_t seqAddr = takeUvmSequenceItemOwner(itemAddr);
+  if (seqAddr == 0) {
+    auto getParentSequenceFunc = rootModule.lookupSymbol<func::FuncOp>(
+        "uvm_pkg::uvm_sequence_item::get_parent_sequence");
+    if (getParentSequenceFunc) {
+      SmallVector<InterpretedValue, 1> parentArgs{
+          InterpretedValue(llvm::APInt(64, itemAddr))};
+      SmallVector<InterpretedValue, 1> parentResults;
+      auto &callState = processStates[procId];
+      ++callState.callDepth;
+      auto getParentResult = interpretFuncBody(
+          procId, getParentSequenceFunc, parentArgs, parentResults, callSite);
+      --callState.callDepth;
+      if (succeeded(getParentResult) && !parentResults.empty() &&
+          !parentResults[0].isX())
+        seqAddr = normalizeUvmObjectKey(procId, parentResults[0].getUInt64());
+    }
+  }
+  if (seqAddr == 0)
+    return;
+
+  auto putBaseResponseFunc = rootModule.lookupSymbol<func::FuncOp>(
+      "uvm_pkg::uvm_sequence_base::put_base_response");
+  if (!putBaseResponseFunc)
+    return;
+
+  SmallVector<InterpretedValue, 2> putArgs{
+      InterpretedValue(llvm::APInt(64, seqAddr)),
+      InterpretedValue(llvm::APInt(64, responseAddr))};
+  SmallVector<InterpretedValue, 1> putResults;
+  auto &callState = processStates[procId];
+  ++callState.callDepth;
+  (void)interpretFuncBody(procId, putBaseResponseFunc, putArgs, putResults,
+                          callSite);
+  --callState.callDepth;
+}
+
 void LLHDProcessInterpreter::recordUvmDequeuedItem(ProcessId procId,
                                                    uint64_t portAddr,
                                                    uint64_t queueAddr,
@@ -13079,6 +13145,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       finishItemWaiters.erase(itemAddr);
       itemDoneReceived.erase(itemAddr);
       (void)takeUvmSequencerItemOwner(itemAddr);
+      (void)takeUvmSequenceItemOwner(itemAddr);
     }
   };
   if (auto *proc = scheduler.getProcess(procId)) {
@@ -13206,6 +13273,7 @@ void LLHDProcessInterpreter::finalizeProcess(ProcessId procId, bool killed) {
       finishItemWaiters.erase(itemAddr);
       itemDoneReceived.erase(itemAddr);
       (void)takeUvmSequencerItemOwner(itemAddr);
+      (void)takeUvmSequenceItemOwner(itemAddr);
     }
   }
 
@@ -23049,6 +23117,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         takeUvmDequeuedItemForDone(procId, doneAddr, callOp.getOperation());
     if (itemAddr != 0) {
       itemDoneReceived.insert(itemAddr);
+      InterpretedValue responseVal = InterpretedValue::makeX(64);
+      if (callOp.getNumOperands() > 1)
+        responseVal = getValue(procId, callOp.getOperand(1));
+      deliverUvmSequenceResponse(procId, itemAddr, responseVal,
+                                 callOp.getOperation());
 
       auto waiterIt = finishItemWaiters.find(itemAddr);
       if (waiterIt != finishItemWaiters.end()) {

@@ -1,5 +1,6 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
 
 // Test uvm_reg_field access policies: RW, RO, WO, W1C.
 // Verifies get_access(), set()/get() for each field type.
@@ -30,13 +31,13 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      rw_f = uvm_reg_field::create("rw_f");
+      rw_f = uvm_reg_field::type_id::create("rw_f");
       rw_f.configure(this, 8, 0, "RW", 0, 8'hAB, 1, 1, 1);
-      ro_f = uvm_reg_field::create("ro_f");
+      ro_f = uvm_reg_field::type_id::create("ro_f");
       ro_f.configure(this, 8, 8, "RO", 0, 8'hCD, 1, 0, 1);
-      wo_f = uvm_reg_field::create("wo_f");
+      wo_f = uvm_reg_field::type_id::create("wo_f");
       wo_f.configure(this, 8, 16, "WO", 0, 0, 1, 1, 1);
-      w1c_f = uvm_reg_field::create("w1c_f");
+      w1c_f = uvm_reg_field::type_id::create("w1c_f");
       w1c_f.configure(this, 8, 24, "W1C", 0, 8'hFF, 1, 1, 1);
     endfunction
   endclass

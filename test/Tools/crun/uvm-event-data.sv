@@ -42,24 +42,18 @@ module tb_top;
       p.code = 42;
       p.msg = "hello";
 
+      // Use join (not join_any) to avoid race between trigger and waiter.
+      // join_any + disable fork can kill the waiter before it reads data.
       fork
-        // Waiter: wait for trigger, then retrieve data
         begin
           ev.wait_trigger();
-          retrieved = ev.get_trigger_data();
         end
-        // Trigger with data payload after delay
         begin
           #10ns;
           ev.trigger(p);
         end
-        // Timeout guard
-        begin
-          #1000ns;
-          `uvm_error("TEST", "TIMEOUT waiting for event")
-        end
-      join_any
-      disable fork;
+      join
+      retrieved = ev.get_trigger_data();
 
       // Test 1: data was received
       if (retrieved != null)

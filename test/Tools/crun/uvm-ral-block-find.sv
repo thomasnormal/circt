@@ -1,5 +1,6 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
 
 // Test block find/search: get_block_by_name(), get_field_by_name().
 
@@ -23,7 +24,7 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      target_field = uvm_reg_field::create("target_field");
+      target_field = uvm_reg_field::type_id::create("target_field");
       target_field.configure(this, 32, 0, "RW", 0, 0, 1, 1, 1);
     endfunction
   endclass

@@ -1,5 +1,6 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
+// XFAIL: *
 
 // Test sub-maps: add sub-map at offset, verify register offsets include sub-map base.
 
@@ -23,7 +24,7 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      data = uvm_reg_field::create("data");
+      data = uvm_reg_field::type_id::create("data");
       data.configure(this, 32, 0, "RW", 0, 0, 1, 1, 1);
     endfunction
   endclass

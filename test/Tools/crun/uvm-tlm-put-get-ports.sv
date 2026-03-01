@@ -25,6 +25,13 @@ module tb_top;
     task put(int val);
       last_val = val;
     endtask
+    function bit try_put(int val);
+      last_val = val;
+      return 1;
+    endfunction
+    function bit can_put();
+      return 1;
+    endfunction
   endclass
 
   class get_provider extends uvm_component;
@@ -41,6 +48,13 @@ module tb_top;
     task get(output int val);
       val = provide_val;
     endtask
+    function bit try_get(output int val);
+      val = provide_val;
+      return 1;
+    endfunction
+    function bit can_get();
+      return 1;
+    endfunction
   endclass
 
   class put_get_test extends uvm_test;

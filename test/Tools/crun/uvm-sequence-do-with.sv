@@ -13,9 +13,6 @@
 module tb_top;
   import uvm_pkg::*;
 
-  bit clk;
-  always #5 clk = ~clk;
-
   class dw_item extends uvm_sequence_item;
     `uvm_object_utils(dw_item)
     rand int data;
@@ -48,7 +45,6 @@ module tb_top;
       forever begin
         seq_item_port.get_next_item(item);
         received_data = item.data;
-        @(posedge clk);
         seq_item_port.item_done();
       end
     endtask

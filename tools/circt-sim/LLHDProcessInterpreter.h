@@ -3613,6 +3613,17 @@ private:
   /// Consume ownership mapping for sequence item and return sequencer address.
   uint64_t takeUvmSequencerItemOwner(uint64_t itemAddr);
 
+  /// Record ownership mapping for sequence item -> sequence object address.
+  void recordUvmSequenceItemOwner(uint64_t itemAddr, uint64_t seqAddr);
+
+  /// Consume ownership mapping for sequence item and return sequence address.
+  uint64_t takeUvmSequenceItemOwner(uint64_t itemAddr);
+
+  /// Resolve sequence owner for an item_done completion and enqueue response.
+  void deliverUvmSequenceResponse(ProcessId procId, uint64_t itemAddr,
+                                  InterpretedValue responseVal,
+                                  mlir::Operation *callSite);
+
   /// Track a dequeued sequence item for the caller process and for pull-port /
   /// sequencer aliases used by item_done resolution.
   void recordUvmDequeuedItem(ProcessId procId, uint64_t portAddr,
@@ -3818,6 +3829,10 @@ private:
   /// Set during start_item() interception so finish_item() knows which
   /// sequencer FIFO to push the item into.
   llvm::DenseMap<uint64_t, uint64_t> itemToSequencer;
+
+  /// Maps sequence item address to the sequence object that issued it.
+  /// Used to route item_done(response) into get_response queues.
+  llvm::DenseMap<uint64_t, uint64_t> itemToSequence;
   uint64_t uvmSeqItemOwnerStores = 0;
   uint64_t uvmSeqItemOwnerErases = 0;
   uint64_t uvmSeqItemOwnerLive = 0;

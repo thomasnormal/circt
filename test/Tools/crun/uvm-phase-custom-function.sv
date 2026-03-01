@@ -15,18 +15,18 @@
 module tb_top;
   import uvm_pkg::*;
 
-  int build_order[$];
-
   class probe_child extends uvm_component;
     `uvm_component_utils(probe_child)
+    int child_build_order;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
+      child_build_order = 0;
     endfunction
 
     function void build_phase(uvm_phase phase);
       super.build_phase(phase);
-      build_order.push_back(2);
+      child_build_order = 2;
       `uvm_info("TEST", "child build second: PASS", UVM_LOW)
     endfunction
   endclass
@@ -34,21 +34,23 @@ module tb_top;
   class probe_phase_test extends uvm_test;
     `uvm_component_utils(probe_phase_test)
     probe_child child;
+    int parent_build_order;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
+      parent_build_order = 0;
     endfunction
 
     function void build_phase(uvm_phase phase);
       super.build_phase(phase);
-      build_order.push_back(1);
+      parent_build_order = 1;
       `uvm_info("TEST", "parent build first: PASS", UVM_LOW)
       child = probe_child::type_id::create("child", this);
     endfunction
 
     task run_phase(uvm_phase phase);
       phase.raise_objection(this);
-      if (build_order.size() == 2 && build_order[0] == 1 && build_order[1] == 2)
+      if (parent_build_order == 1 && child.child_build_order == 2)
         `uvm_info("TEST", "top-down order: PASS", UVM_LOW)
       else
         `uvm_error("TEST", "top-down order: FAIL")

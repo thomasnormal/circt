@@ -27,20 +27,23 @@ module tb_top;
 
   class fifo_test extends uvm_test;
     `uvm_component_utils(fifo_test)
+    uvm_tlm_fifo #(simple_txn) fifo;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      // Use unbounded FIFO (size 0) to avoid capacity enforcement bugs
+      fifo = new("fifo", this, 0);
+    endfunction
+
     task run_phase(uvm_phase phase);
-      uvm_tlm_fifo #(simple_txn) fifo;
       simple_txn txn, got;
       bit ok;
 
       phase.raise_objection(this);
-
-      // Use unbounded FIFO (size 0) to avoid capacity enforcement bugs
-      fifo = new("fifo", this, 0);
 
       // Test 1: basic put/get
       txn = simple_txn::type_id::create("t1");

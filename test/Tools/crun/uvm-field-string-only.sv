@@ -15,13 +15,13 @@ module tb_top;
   import uvm_pkg::*;
 
   class probe_str_item extends uvm_object;
+    string name_f;
+    string desc_f;
+
     `uvm_object_utils_begin(probe_str_item)
       `uvm_field_string(name_f, UVM_ALL_ON)
       `uvm_field_string(desc_f, UVM_ALL_ON)
     `uvm_object_utils_end
-
-    string name_f;
-    string desc_f;
 
     function new(string name = "probe_str_item");
       super.new(name);

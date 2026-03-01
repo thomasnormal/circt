@@ -28,11 +28,11 @@ module tb_top;
     endfunction
 
     virtual function void build();
-      f0 = uvm_reg_field::create("f0");
+      f0 = uvm_reg_field::type_id::create("f0");
       f0.configure(this, 8, 0, "RW", 0, 0, 1, 1, 1);
-      f1 = uvm_reg_field::create("f1");
+      f1 = uvm_reg_field::type_id::create("f1");
       f1.configure(this, 12, 8, "RW", 1, 0, 1, 1, 1);
-      f2 = uvm_reg_field::create("f2");
+      f2 = uvm_reg_field::type_id::create("f2");
       f2.configure(this, 4, 24, "RO", 0, 4'hA, 1, 0, 1);
     endfunction
   endclass

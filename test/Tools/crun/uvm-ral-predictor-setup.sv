@@ -33,27 +33,33 @@ module tb_top;
   class probe_predictor_test extends uvm_test;
     `uvm_component_utils(probe_predictor_test)
 
+    probe_adapter adapter;
+    uvm_reg_predictor #(uvm_sequence_item) predictor;
+
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
-    task run_phase(uvm_phase phase);
-      probe_adapter adapter;
-      uvm_reg_predictor #(uvm_sequence_item) predictor;
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      // Components must be created in build_phase (illegal after in UVM 1.1d)
+      adapter = probe_adapter::type_id::create("adapter");
+      predictor = uvm_reg_predictor #(uvm_sequence_item)::type_id::create("predictor", this);
+      if (predictor != null)
+        predictor.adapter = adapter;
+    endfunction
 
+    task run_phase(uvm_phase phase);
       phase.raise_objection(this);
 
-      adapter = probe_adapter::type_id::create("adapter");
       if (adapter != null)
         `uvm_info("TEST", "adapter create: PASS", UVM_LOW)
       else
         `uvm_error("TEST", "adapter create: FAIL")
 
-      predictor = uvm_reg_predictor #(uvm_sequence_item)::type_id::create("predictor", this);
-      if (predictor != null) begin
-        predictor.adapter = adapter;
+      if (predictor != null)
         `uvm_info("TEST", "predictor create: PASS", UVM_LOW)
-      end else
+      else
         `uvm_error("TEST", "predictor create: FAIL")
 
       phase.drop_objection(this);

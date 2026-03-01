@@ -15,9 +15,6 @@
 module tb_top;
   import uvm_pkg::*;
 
-  bit clk;
-  always #5 clk = ~clk;
-
   class drv_item extends uvm_sequence_item;
     `uvm_object_utils(drv_item)
     int data;
@@ -53,7 +50,6 @@ module tb_top;
       drv_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
         `uvm_info("TEST", $sformatf("driver received item %0d: data=%0d", count, item.data), UVM_LOW)
         count++;
         seq_item_port.item_done();
@@ -81,7 +77,6 @@ module tb_top;
       phase.raise_objection(this);
       seq = drv_sequence::type_id::create("seq");
       seq.start(seqr);
-      @(posedge clk);
       if (driver.count == 3)
         `uvm_info("TEST", "driver got 3 items: PASS", UVM_LOW)
       else

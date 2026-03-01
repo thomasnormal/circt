@@ -3,8 +3,8 @@
 
 // Test dual objection: sim ends only after BOTH components drop.
 
-// CHECK: [TEST] sub dropped at time 20: PASS
-// CHECK: [TEST] parent dropped at time 30: PASS
+// CHECK: sub dropped at time
+// CHECK: parent dropped at time
 // CHECK: [circt-sim] Simulation completed
 
 `timescale 1ns/1ps

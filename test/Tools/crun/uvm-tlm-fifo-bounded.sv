@@ -3,7 +3,6 @@
 
 // Test bounded TLM FIFO capacity enforcement.
 // Verifies try_put fails when FIFO is full and succeeds after get.
-// KNOWN BROKEN: capacity enforcement may not work.
 
 // CHECK: [TEST] bounded put 2: PASS
 // CHECK: [TEST] full try_put rejected: PASS
@@ -26,20 +25,23 @@ module tb_top;
 
   class bounded_fifo_test extends uvm_test;
     `uvm_component_utils(bounded_fifo_test)
+    uvm_tlm_fifo #(bnd_txn) fifo;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      // Create bounded FIFO with capacity 2
+      fifo = new("fifo", this, 2);
+    endfunction
+
     task run_phase(uvm_phase phase);
-      uvm_tlm_fifo #(bnd_txn) fifo;
       bnd_txn txn, got;
       bit ok;
 
       phase.raise_objection(this);
-
-      // Create bounded FIFO with capacity 2
-      fifo = new("fifo", this, 2);
 
       // Put 2 items (should succeed)
       txn = bnd_txn::type_id::create("t1");

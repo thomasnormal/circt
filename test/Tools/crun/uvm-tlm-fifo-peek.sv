@@ -24,19 +24,22 @@ module tb_top;
 
   class fifo_peek_test extends uvm_test;
     `uvm_component_utils(fifo_peek_test)
+    uvm_tlm_fifo #(peek_item) fifo;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      fifo = new("fifo", this, 0);
+    endfunction
+
     task run_phase(uvm_phase phase);
-      uvm_tlm_fifo #(peek_item) fifo;
       peek_item txn, peeked, got;
       bit ok;
 
       phase.raise_objection(this);
-
-      fifo = new("fifo", this, 0);
 
       txn = peek_item::type_id::create("t1");
       txn.value = 123;
