@@ -6241,3 +6241,18 @@ Status update (2026-03-01): this gap is closed in this workspace. Added executio
 
 ### [x] 2076. `test/Runtime/uvm/uvm_factory_test.sv:23`
 Status update (2026-03-01): this gap is closed in this workspace. `test_override_priority` now passes semantically with correct UVM precedence (instance override over type override). Root cause was wrapper-only by-type factory bypass in `circt-sim` that ignored instance-override state; fixed by tracking instance-override configuration across `func.call` and `func.call_indirect` and disabling wrapper-substitution bypass when instance overrides are present (`tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`).
+
+### [x] 2077. `test/Tools/crun/uvm-factory-override-priority.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. The test is now semantic (no `XFAIL`) and verifies last type override wins at runtime. Root cause was stale simulator-local by-type override-map substitution bypassing canonical UVM factory resolution on replacement paths; fixed by removing override-map substitution in `tools/circt-sim/LLHDProcessInterpreter.cpp` and `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`.
+
+### [x] 2078. `test/Tools/crun/uvm-factory-double-override.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and confirmed semantic pass (`double override second wins: PASS`) after eliminating stale by-type override-map substitution.
+
+### [x] 2079. `test/Tools/crun/uvm-factory-override-chain.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL`; override chain semantics now execute correctly (`A->B->C`) through canonical UVM factory behavior.
+
+### [x] 2080. `test/Tools/crun/uvm-factory-override-inst-path.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL`; instance-path override now passes semantically in crun (`factory inst override type: PASS`).
+
+### [x] 2081. `test/Tools/crun/uvm-factory-create.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Test intent was corrected to UVM lifecycle semantics by moving component creation into `build_phase` (creating components in `run_phase` is illegal and trips `ILLCRT` in compliant UVM). Runtime checks now validate object creation, component creation, and multiple object creates semantically.

@@ -10207,3 +10207,49 @@
   - broader component slice:
     - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-component-*.sv test/Tools/crun/uvm-root-find.sv`
     - result: `7 passed, 2 expectedly failed`.
+
+## 2026-03-01 - UVM factory type-override replacement semantics (remove stale by-type override map)
+
+- realization:
+  - Red semantic gate after unmasking XFAIL:
+    - `test/Tools/crun/uvm-factory-override-priority.sv`
+    - observed `last override wins: FAIL (got override_b)`.
+  - UVM logged `TPREGR` replacement to `override_c`, but create-by-type still
+    returned `override_b`.
+  - Root cause was simulator-specific override-map substitution in by-type
+    helper/call_indirect fast paths:
+    - map capture did not reliably update on replacement paths,
+    - create-by-type fallback consumed stale map entries and bypassed canonical
+      UVM factory resolution.
+
+- implemented:
+  - Removed stale by-type override-map substitution paths:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - deleted helper-wrapper override-map recording and override-based
+        wrapper substitution in `create_by_type*` fallbacks,
+      - restricted by-type helper fallback to no-override mode only.
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      - deleted override-map recording for
+        `uvm_default_factory::set_type_override_by_type`,
+      - deleted override-map-based interception for
+        `create_object_by_type`/`create_component_by_type`.
+    - `tools/circt-sim/LLHDProcessInterpreter.h`
+      - removed dead `nativeFactoryTypeOverridesByWrapper` state.
+  - Upgraded crun semantic coverage by removing resolved XFAILs:
+    - `test/Tools/crun/uvm-factory-override-priority.sv`
+    - `test/Tools/crun/uvm-factory-double-override.sv`
+    - `test/Tools/crun/uvm-factory-override-chain.sv`
+    - `test/Tools/crun/uvm-factory-override-inst-path.sv`
+  - Corrected semantic test intent in:
+    - `test/Tools/crun/uvm-factory-create.sv`
+    - moved component creation into `build_phase` (legal UVM lifecycle).
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+    - `utils/ninja-with-lock.sh -C build_test crun`
+  - semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-override-priority.sv test/Tools/crun/uvm-factory-double-override.sv test/Tools/crun/uvm-factory-override-chain.sv test/Tools/crun/uvm-factory-create.sv test/Tools/crun/uvm-factory-override-inst-path.sv`
+      - result: `5 passed`
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv`
+      - result: `1 passed`.

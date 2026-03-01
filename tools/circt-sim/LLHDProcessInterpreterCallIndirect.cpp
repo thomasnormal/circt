@@ -2896,37 +2896,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (traceConfigDbEnabled && procId == 1)
       llvm::errs() << "[CFG-CI-PROC1] callee=" << calleeName << "\n";
 
-    // Record explicit by-type overrides so by-type create calls can apply a
-    // semantic fallback even if interpreted factory lookup misses them.
-    if ((calleeName == "uvm_pkg::uvm_default_factory::set_type_override_by_type" ||
-         calleeName == "uvm_pkg::uvm_factory::set_type_override_by_type") &&
-        callIndirectOp.getArgOperands().size() >= 3) {
-      InterpretedValue reqWrapperVal =
-          getValue(procId, callIndirectOp.getArgOperands()[1]);
-      InterpretedValue ovrWrapperVal =
-          getValue(procId, callIndirectOp.getArgOperands()[2]);
-      if (!reqWrapperVal.isX() && !ovrWrapperVal.isX()) {
-        uint64_t reqWrapper = reqWrapperVal.getUInt64();
-        uint64_t ovrWrapper = ovrWrapperVal.getUInt64();
-        if (reqWrapper != 0 && ovrWrapper != 0) {
-          uint64_t reqCanonical = canonicalizeUvmObjectAddress(procId, reqWrapper);
-          uint64_t ovrCanonical = canonicalizeUvmObjectAddress(procId, ovrWrapper);
-          nativeFactoryTypeOverridesByWrapper[reqWrapper] = ovrWrapper;
-          nativeFactoryTypeOverridesByWrapper[reqCanonical] = ovrCanonical;
-          if (traceUvmFactoryByTypeEnabled()) {
-            llvm::errs() << "[UVM-BYTYPE] override-map set req=0x"
-                         << llvm::format_hex(reqWrapper, 16)
-                         << " req_canon=0x"
-                         << llvm::format_hex(reqCanonical, 16)
-                         << " -> ovr=0x"
-                         << llvm::format_hex(ovrWrapper, 16)
-                         << " ovr_canon=0x"
-                         << llvm::format_hex(ovrCanonical, 16) << "\n";
-          }
-        }
-      }
-    }
-
     // Intercept uvm_default_factory::register — fast-path native
     // registration. The original MLIR calls get_type_name 3-7 times via
     // vtable, does string comparisons, assoc array lookups, and override
@@ -3094,91 +3063,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
       return true;
     };
-
-    auto tryCreateUsingRecordedByTypeOverride =
-        [&](uint64_t requestedWrapperAddr, uint64_t slotIndex,
-            llvm::ArrayRef<InterpretedValue> extraArgs,
-            InterpretedValue &outResult) -> bool {
-      if (requestedWrapperAddr == 0)
-        return false;
-
-      auto tryInvoke = [&](uint64_t key) -> bool {
-        auto it = nativeFactoryTypeOverridesByWrapper.find(key);
-        if (it == nativeFactoryTypeOverridesByWrapper.end() || it->second == 0 ||
-            it->second == requestedWrapperAddr)
-          return false;
-        return tryInvokeWrapperFactoryMethod(it->second, slotIndex, extraArgs,
-                                             outResult);
-      };
-
-      if (tryInvoke(requestedWrapperAddr))
-        return true;
-      uint64_t canonical = canonicalizeUvmObjectAddress(procId, requestedWrapperAddr);
-      if (canonical != requestedWrapperAddr && tryInvoke(canonical))
-        return true;
-      return false;
-    };
-
-    if ((calleeName == "uvm_pkg::uvm_default_factory::create_object_by_type" ||
-         calleeName == "uvm_pkg::uvm_factory::create_object_by_type") &&
-        callIndirectOp.getNumResults() >= 1 &&
-        callIndirectOp.getArgOperands().size() >= 4) {
-      InterpretedValue wrapperVal =
-          getValue(procId, callIndirectOp.getArgOperands()[1]);
-      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
-        InterpretedValue nameArg =
-            getValue(procId, callIndirectOp.getArgOperands()[3]);
-        InterpretedValue createdObj;
-        if (tryCreateUsingRecordedByTypeOverride(wrapperVal.getUInt64(),
-                                                 /*slotIndex=*/0, {nameArg},
-                                                 createdObj)) {
-          setValue(procId, callIndirectOp.getResults()[0], createdObj);
-          if (traceUvmFactoryByTypeEnabled()) {
-            llvm::errs() << "[UVM-BYTYPE] override-map create_object hit req=0x"
-                         << llvm::format_hex(wrapperVal.getUInt64(), 16)
-                         << " result=0x"
-                         << llvm::format_hex(createdObj.isX()
-                                                 ? 0
-                                                 : createdObj.getUInt64(),
-                                             16)
-                         << "\n";
-          }
-          return success();
-        }
-      }
-    }
-
-    if ((calleeName == "uvm_pkg::uvm_default_factory::create_component_by_type" ||
-         calleeName == "uvm_pkg::uvm_factory::create_component_by_type") &&
-        callIndirectOp.getNumResults() >= 1 &&
-        callIndirectOp.getArgOperands().size() >= 5) {
-      InterpretedValue wrapperVal =
-          getValue(procId, callIndirectOp.getArgOperands()[1]);
-      if (!wrapperVal.isX() && wrapperVal.getUInt64() != 0) {
-        InterpretedValue nameArg =
-            getValue(procId, callIndirectOp.getArgOperands()[3]);
-        InterpretedValue parentArg =
-            getValue(procId, callIndirectOp.getArgOperands()[4]);
-        InterpretedValue createdObj;
-        if (tryCreateUsingRecordedByTypeOverride(wrapperVal.getUInt64(),
-                                                 /*slotIndex=*/1,
-                                                 {nameArg, parentArg},
-                                                 createdObj)) {
-          setValue(procId, callIndirectOp.getResults()[0], createdObj);
-          if (traceUvmFactoryByTypeEnabled()) {
-            llvm::errs()
-                << "[UVM-BYTYPE] override-map create_component hit req=0x"
-                << llvm::format_hex(wrapperVal.getUInt64(), 16)
-                << " result=0x"
-                << llvm::format_hex(createdObj.isX() ? 0
-                                                     : createdObj.getUInt64(),
-                                    16)
-                << "\n";
-          }
-          return success();
-        }
-      }
-    }
 
     // Intercept create_component_by_type/object_by_type — when factory
     // register fast-path stores wrappers in nativeFactoryTypeNames, executing

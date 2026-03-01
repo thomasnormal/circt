@@ -4101,10 +4101,6 @@ private:
   /// get_type_name once instead of 7 times). Used by find_wrapper_by_name.
   llvm::StringMap<uint64_t> nativeFactoryTypeNames;
 
-  /// Runtime map for by-type factory overrides: requested wrapper -> override
-  /// wrapper. Used as a semantic backstop when interpreted UVM lookup fails.
-  llvm::DenseMap<uint64_t, uint64_t> nativeFactoryTypeOverridesByWrapper;
-
   /// Set once any UVM factory override API is called.
   /// When true, by-type native fast paths must be disabled to preserve
   /// override semantics.

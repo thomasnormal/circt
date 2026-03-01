@@ -5,8 +5,8 @@
 // Verifies that the factory can create instances of registered types.
 // NOTE: Factory overrides (set_type_override) are known broken — not tested here.
 
-// CHECK: [TEST] object create: PASS
 // CHECK: [TEST] component create: PASS
+// CHECK: [TEST] object create: PASS
 // CHECK: [TEST] multiple creates: PASS
 // CHECK: [circt-sim] Simulation completed
 
@@ -34,14 +34,25 @@ module tb_top;
 
   class factory_test extends uvm_test;
     `uvm_component_utils(factory_test)
+    my_comp comp;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+
+      // Component creation is only legal during build.
+      comp = my_comp::type_id::create("test_comp", this);
+      if (comp != null && comp.get_name() == "test_comp")
+        `uvm_info("TEST", "component create: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "component create: FAIL")
+    endfunction
+
     task run_phase(uvm_phase phase);
       my_item item;
-      my_comp comp;
       my_item items[3];
 
       phase.raise_objection(this);
@@ -53,14 +64,7 @@ module tb_top;
       else
         `uvm_error("TEST", "object create: FAIL")
 
-      // Test 2: create component via factory
-      comp = my_comp::type_id::create("test_comp", this);
-      if (comp != null && comp.get_name() == "test_comp")
-        `uvm_info("TEST", "component create: PASS", UVM_LOW)
-      else
-        `uvm_error("TEST", "component create: FAIL")
-
-      // Test 3: create multiple objects
+      // Test 2: create multiple objects
       for (int i = 0; i < 3; i++) begin
         items[i] = my_item::type_id::create($sformatf("item_%0d", i));
         items[i].value = i * 10;
