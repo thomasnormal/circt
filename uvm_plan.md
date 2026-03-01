@@ -36,6 +36,9 @@ reduction must be staged and measurable.
 - [x] Closed AVIP dual-top autodetect gap for non-canonical top names:
   - `circt-sim` now auto-detects split tops for suffix-based names (e.g. `Axi4LiteHdlTop` + `Axi4LiteHvlTop`), not just exact `hdl_top`/`hvl_top`.
   - Added regression: `test/Tools/circt-sim/auto-dual-top-suffix-hdltop-hvltop.mlir`.
+- [x] Closed call-indirect timeout non-cooperative hang in sim runtime:
+  - `interpretFuncCallIndirect` now cooperatively honors abort requests and halts process execution on timeout-driven abort paths.
+  - Added regression: `test/Tools/circt-sim/call-indirect-timeout-cooperative-abort.mlir`.
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality: occasional `$finish` grace-expiry / 0-fs completion with 0% activity coverage still needs core runtime closure (no retry dependence).
 - [ ] Continue Wave C reduction with parity gates for:

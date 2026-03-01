@@ -2,6 +2,38 @@
 
 ## 2026-03-01
 
+- Iteration update (AVIP timeout hang: call_indirect path did not cooperatively
+  honor abort):
+  - realization:
+    - a minimal runtime repro showed `circt-sim` could print
+      `Wall-clock timeout reached` and still keep running until externally
+      SIGKILLed.
+    - root cause was timeout/abort checks not being consulted frequently
+      enough in heavy `func.call_indirect` traffic, especially when local
+      function-body 16K-op checks were not reached quickly.
+  - implemented:
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      - added a cooperative abort gate at `interpretFuncCallIndirect` entry:
+        - if abort requested, mark process halted, trigger abort callback,
+          zero-fill call results, and return.
+      - added abort-aware handling on failed dispatched calls:
+        - if abort requested after callee returns failure, mark halted and
+          abort cleanly instead of continuing call-indirect traffic.
+    - tests:
+      - added failing-first regression:
+        `test/Tools/circt-sim/call-indirect-timeout-cooperative-abort.mlir`
+      - this test reproduces a timeout under deep call-indirect recursion and
+        checks that simulation now exits cleanly without outer SIGKILL.
+  - validation:
+    - failing repro before fix:
+      - `timeout --signal=KILL 8s build_test/bin/circt-sim /tmp/call_indirect_abort_spin_repro.mlir --top top --timeout=1 --resource-guard=false`
+      - result: killed (`RC=137`) after only printing timeout banner.
+    - after fix:
+      - same command result: `RC=1` with clean timeout/interrupt/exit lines.
+    - lit:
+      - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/call-indirect-timeout-cooperative-abort.mlir test/Tools/circt-sim/timeout-no-spurious-vtable-warning.mlir`
+      - result: pass.
+
 - Iteration update (AVIP sequencer liveness: unresolved multi-queue
   get_next_item stall):
   - realization:

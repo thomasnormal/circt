@@ -546,6 +546,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
       };
     auto &callState = processStates[procId];
+    // Cooperatively honor wall-clock abort requests on every dynamic dispatch.
+    // Deep call_indirect chains can avoid the 16K-op abort checks in function
+    // bodies for long periods, so bail out here to keep timeout handling
+    // responsive.
+    if (isAbortRequested()) {
+      callState.halted = true;
+      if (abortCallback)
+        abortCallback();
+      setCallIndirectResults({});
+      return success();
+    }
     constexpr size_t maxCallDepth = 1024;
     if (callState.callDepth >= maxCallDepth) {
       static bool warnedCallIndirectMaxDepth = false;
@@ -4651,6 +4662,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       // without returning success(). In this case, the suspension is valid
       // and we should propagate it, not treat it as an error.
       auto &suspState = processStates[procId];
+      if (isAbortRequested()) {
+        suspState.halted = true;
+        if (abortCallback)
+          abortCallback();
+        return success();
+      }
       if (suspState.waiting) {
         // The function suspended -- this is not an error. Propagate the
         // suspension so the caller can save a call stack frame.
