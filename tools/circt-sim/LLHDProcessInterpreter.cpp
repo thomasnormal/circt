@@ -2283,6 +2283,15 @@ LogicalResult LLHDProcessInterpreter::initialize(hw::HWModuleOp hwModule) {
   // Store the root module for symbol lookup
   rootModule = hwModule->getParentOfType<ModuleOp>();
 
+  // Build circt-compile signal ID table once. compileProcessBodies assigns
+  // IDs by root-module llhd.sig walk order (1-based).
+  if (compiledSignalIdToValue.empty() && rootModule) {
+    compiledSignalIdToValue.push_back(Value());
+    rootModule.walk([&](llhd::SignalOp sigOp) {
+      compiledSignalIdToValue.push_back(sigOp.getResult());
+    });
+  }
+
   // Register VPI parameters from the top-level module so that cocotb can
   // access them via dut.PARAM_NAME.value.
   if (auto paramsAttr = hwModule->getAttrOfType<mlir::DictionaryAttr>(
@@ -4238,6 +4247,89 @@ SignalId LLHDProcessInterpreter::getSignalIdInInstance(Value signalRef,
   return 0; // Invalid signal ID
 }
 
+SignalId
+LLHDProcessInterpreter::remapAOTCompiledSignalId(uint32_t compiledSigId) const {
+  static bool traceRemap =
+      std::getenv("CIRCT_AOT_TRACE_SIGNAL_ID_REMAP") != nullptr;
+  SignalId mappedSigId = compiledSigId;
+  Value signalRefForTrace;
+
+  if (compiledSigId == 0) {
+    mappedSigId = 0;
+  } else if (compiledSigId >= compiledSignalIdToValue.size()) {
+    mappedSigId = compiledSigId;
+  } else {
+    Value signalRef = compiledSignalIdToValue[compiledSigId];
+    signalRefForTrace = signalRef;
+    if (!signalRef) {
+      mappedSigId = compiledSigId;
+    } else {
+      ProcessId contextProcId = InvalidProcessId;
+      if (activeProcessId != InvalidProcessId)
+        contextProcId = activeProcessId;
+      else if (activeAOTCompiledCallbackProcessId != InvalidProcessId)
+        contextProcId = activeAOTCompiledCallbackProcessId;
+
+      // Prefer active process instance mapping when available.
+      if (contextProcId != InvalidProcessId) {
+        auto stateIt = processStates.find(contextProcId);
+        if (stateIt != processStates.end()) {
+          InstanceId instanceId = stateIt->second.instanceId;
+          if (instanceId != 0) {
+            auto instIt = instanceValueToSignal.find(instanceId);
+            if (instIt != instanceValueToSignal.end()) {
+              auto sigIt = instIt->second.find(signalRef);
+              if (sigIt != instIt->second.end() && sigIt->second != 0)
+                mappedSigId = sigIt->second;
+            }
+          }
+        }
+      }
+
+      // Top-level/global mapping fallback.
+      if (mappedSigId == compiledSigId) {
+        auto topIt = valueToSignal.find(signalRef);
+        if (topIt != valueToSignal.end() && topIt->second != 0)
+          mappedSigId = topIt->second;
+      }
+
+      // Last-resort fallback: unique signal across instances.
+      if (mappedSigId == compiledSigId) {
+        SignalId uniqueSigId = 0;
+        bool ambiguous = false;
+        for (const auto &ctx : instanceValueToSignal) {
+          auto instIt = ctx.second.find(signalRef);
+          if (instIt == ctx.second.end())
+            continue;
+          if (uniqueSigId != 0 && uniqueSigId != instIt->second) {
+            ambiguous = true;
+            break;
+          }
+          uniqueSigId = instIt->second;
+        }
+        if (!ambiguous && uniqueSigId != 0)
+          mappedSigId = uniqueSigId;
+      }
+    }
+  }
+
+  if (traceRemap) {
+    llvm::errs() << "[circt-sim] remap-sig compiled=" << compiledSigId
+                 << " mapped=" << mappedSigId << " active_proc="
+                 << activeProcessId << " callback_proc="
+                 << activeAOTCompiledCallbackProcessId;
+    if (signalRefForTrace) {
+      SignalId topMapped = 0;
+      auto topIt = valueToSignal.find(signalRefForTrace);
+      if (topIt != valueToSignal.end())
+        topMapped = topIt->second;
+      llvm::errs() << " top_map=" << topMapped;
+    }
+    llvm::errs() << "\n";
+  }
+  return mappedSigId;
+}
+
 llvm::StringRef LLHDProcessInterpreter::getSignalName(SignalId id) const {
   auto it = signalIdToName.find(id);
   if (it != signalIdToName.end())
@@ -5463,7 +5555,8 @@ void LLHDProcessInterpreter::executeModuleDrives(ProcessId procId) {
     // Get the signal ID
     SignalId sigId = getSignalId(driveOp.getSignal());
     if (sigId == 0) {
-      LLVM_DEBUG(llvm::dbgs() << "  Error: Unknown signal in module drive\n");
+      // Fallback for sub-reference targets (sig.array_get / struct_extract).
+      (void)interpretDrive(procId, driveOp);
       continue;
     }
 
@@ -5653,8 +5746,10 @@ void LLHDProcessInterpreter::executeModuleDrivesForSignal(SignalId sigId) {
     llhd::DriveOp driveOp = entry.driveOp;
 
     SignalId dstSigId = getSignalId(driveOp.getSignal());
-    if (dstSigId == 0)
+    if (dstSigId == 0) {
+      (void)interpretDrive(entry.procId, driveOp);
       continue;
+    }
 
     if (dstSigId == 9 || dstSigId == 10)
       maybeTraceModuleDriveTrigger(sigId, dstSigId, entry.procId);
@@ -5866,9 +5961,6 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
     ScopedInputValueMap inputScope(*this, driveInputMap);
 
     SignalId targetSigId = getSignalId(driveOp.getSignal());
-    if (targetSigId == 0)
-      continue;
-
     DriveInfo info;
     info.driveOp = driveOp;
     info.inputMap = driveInputMap;
@@ -5879,6 +5971,54 @@ void LLHDProcessInterpreter::registerContinuousAssignments(
     if (driveOp.getEnable())
       collectSignalIds(driveOp.getEnable(), info.sourceSignals);
     expandInterfacePtrSignals(info.sourceSignals);
+
+    if (targetSigId == 0) {
+      // Sub-reference targets (sig.array_get / sig.struct_extract /
+      // sig.extract) do not have direct signal IDs. Handle them via fallback
+      // execution paths instead of dropping the drive.
+      if (!info.processIds.empty()) {
+        for (ProcessId procId : info.processIds) {
+          bool alreadyRegistered = false;
+          for (const auto &md : moduleDrives) {
+            if (md.driveOp == info.driveOp && md.procId == procId &&
+                md.instanceId == instanceId) {
+              alreadyRegistered = true;
+              break;
+            }
+          }
+          if (!alreadyRegistered)
+            moduleDrives.push_back(
+                {info.driveOp, procId, instanceId, info.inputMap});
+        }
+      }
+
+      if (!info.sourceSignals.empty()) {
+        std::string processName = "cont_assign_subref_" +
+                                  std::to_string(
+                                      reinterpret_cast<uintptr_t>(
+                                          driveOp.getOperation()));
+        ProcessId procId = scheduler.registerProcess(
+            processName, [this, driveOp, instanceId, driveInputMap]() {
+              ScopedInstanceContext scope(*this, instanceId);
+              ScopedInputValueMap inputScope(*this, driveInputMap);
+              executeContinuousAssignment(driveOp);
+            });
+
+        auto *process = scheduler.getProcess(procId);
+        if (process) {
+          process->setCombinational(true);
+          for (SignalId srcSigId : info.sourceSignals)
+            scheduler.addSensitivity(procId, srcSigId);
+        }
+        queueDeferredInterfaceSensitivityExpansion(procId, info.sourceSignals);
+        executeContinuousAssignment(driveOp);
+        scheduler.scheduleProcess(procId, SchedulingRegion::Active);
+      } else if (info.processIds.empty()) {
+        // Constant sub-reference drive: execute once at initialization.
+        executeContinuousAssignment(driveOp);
+      }
+      continue;
+    }
 
     drivesBySignal[targetSigId].push_back(std::move(info));
   }
@@ -6290,6 +6430,20 @@ SignalId LLHDProcessInterpreter::resolveSignalId(mlir::Value value) const {
       }
     }
   }
+  // Trace through LLHD sub-reference ops to find the underlying root signal.
+  // This is required for nested element/field refs such as:
+  //   llhd.sig.array_get(llhd.sig.array_get(%sig, ...), ...)
+  // and
+  //   llhd.sig.struct_extract(llhd.sig.array_get(%sig, ...), ...).
+  // Specialized probe/drive handlers still preserve sub-reference semantics;
+  // this only recovers the parent signal identity for bookkeeping.
+  if (auto sigExtractOp = value.getDefiningOp<llhd::SigExtractOp>())
+    return cacheAndReturn(resolveSignalId(sigExtractOp.getInput()));
+  if (auto sigStructExtractOp = value.getDefiningOp<llhd::SigStructExtractOp>())
+    return cacheAndReturn(resolveSignalId(sigStructExtractOp.getInput()));
+  if (auto sigArrayGetOp = value.getDefiningOp<llhd::SigArrayGetOp>())
+    return cacheAndReturn(resolveSignalId(sigArrayGetOp.getInput()));
+
   // NOTE: We explicitly do NOT trace through llhd::ProbeOp here.
   // The result of a probe is a VALUE (not a signal reference).
   // Operations on probe results should treat them as values, not signals.
@@ -18246,6 +18400,32 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         }
       }
 
+      // Keep the struct base (after peeling nested struct extracts) for
+      // field-offset computation, then peel any enclosing array element refs
+      // to recover the root parent signal and their cumulative bit offset.
+      Value structBaseSignal = parentSignal;
+      unsigned parentArrayBitOffset = 0;
+      while (auto parentArrayGet =
+                 parentSignal.getDefiningOp<llhd::SigArrayGetOp>()) {
+        InterpretedValue indexVal = getValue(procId, parentArrayGet.getIndex());
+        if (indexVal.isX())
+          return success();
+        if (isImportedArrayIndexOutOfBoundsSentinel(procId,
+                                                    parentArrayGet.getIndex()))
+          return success();
+
+        auto arrayType = cast<hw::ArrayType>(
+            unwrapSignalType(parentArrayGet.getInput().getType()));
+        uint64_t index = indexVal.getUInt64();
+        if (index >= arrayType.getNumElements())
+          return success();
+
+        parentArrayBitOffset += static_cast<unsigned>(
+            index * getTypeWidth(arrayType.getElementType()));
+        parentSignal = parentArrayGet.getInput();
+        parentSigId = getSignalId(parentSignal);
+      }
+
       // Remap function block-argument refs to their caller operands.
       if (parentSigId == 0)
         remapRefBlockArgSource(parentSignal);
@@ -18700,7 +18880,7 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       // Compute the bit offset by walking the extract chain in reverse
       // (from root signal to the target field)
       unsigned bitOffset = 0;
-      Type currentType = parentSignal.getType();
+      Type currentType = structBaseSignal.getType();
       if (auto refType = dyn_cast<llhd::RefType>(currentType))
         currentType = refType.getNestedType();
 
@@ -18729,6 +18909,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
         bitOffset += fieldOffset;
         currentType = elements[fieldIndex].type;
       }
+
+      bitOffset += parentArrayBitOffset;
 
       unsigned fieldWidth = getTypeWidth(currentType);
 
@@ -18792,8 +18974,45 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     // Handle llhd.sig.array_get - drive to an element within an array signal.
     // We need to read-modify-write the parent signal.
     if (auto sigArrayGetOp = signal.getDefiningOp<llhd::SigArrayGetOp>()) {
-      Value parentSignal = sigArrayGetOp.getInput();
+      Value immediateParentSignal = sigArrayGetOp.getInput();
+      Value parentSignal = immediateParentSignal;
       SignalId parentSigId = getSignalId(parentSignal);
+
+      // Handle nested array element refs by peeling parent sig.array_get ops
+      // and accumulating their bit offsets into the eventual root signal.
+      unsigned parentArrayBitOffset = 0;
+      while (auto parentArrayGet =
+                 parentSignal.getDefiningOp<llhd::SigArrayGetOp>()) {
+        InterpretedValue parentIndexVal =
+            getValue(procId, parentArrayGet.getIndex());
+        if (parentIndexVal.isX()) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Warning: X index in parent array drive\n");
+          return success();
+        }
+        if (isImportedArrayIndexOutOfBoundsSentinel(
+                procId, parentArrayGet.getIndex())) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Warning: imported OOB sentinel in parent array "
+                        "drive\n");
+          return success();
+        }
+
+        auto parentArrayType = cast<hw::ArrayType>(
+            unwrapSignalType(parentArrayGet.getInput().getType()));
+        uint64_t parentIndex = parentIndexVal.getUInt64();
+        if (parentIndex >= parentArrayType.getNumElements()) {
+          LLVM_DEBUG(llvm::dbgs() << "  Warning: parent array index "
+                                  << parentIndex << " out of bounds (size "
+                                  << parentArrayType.getNumElements() << ")\n");
+          return success();
+        }
+
+        parentArrayBitOffset += static_cast<unsigned>(
+            parentIndex * getTypeWidth(parentArrayType.getElementType()));
+        parentSignal = parentArrayGet.getInput();
+        parentSigId = getSignalId(parentSignal);
+      }
 
       // If not found directly, try resolveSignalId
       if (parentSigId == 0) {
@@ -18869,6 +19088,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     }
                   } else {
                     APInt val = driveVal.getAPInt();
+                    if (isa<hw::StructType, hw::ArrayType>(elementType))
+                      val = convertHWToLLVMLayoutByHWType(val, elementType);
                     if (val.getBitWidth() < elementWidth)
                       val = val.zext(elementWidth);
                     else if (val.getBitWidth() > elementWidth)
@@ -18990,6 +19211,10 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                     APInt elemValue =
                         driveVal.isX() ? APInt::getZero(elemWidth)
                                        : driveVal.getAPInt();
+                    if (!driveVal.isX() &&
+                        isa<hw::StructType, hw::ArrayType>(elemType))
+                      elemValue =
+                          convertHWToLLVMLayoutByHWType(elemValue, elemType);
                     if (elemValue.getBitWidth() < elemWidth)
                       elemValue = elemValue.zext(elemWidth);
                     else if (elemValue.getBitWidth() > elemWidth)
@@ -19106,7 +19331,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
                                      : parentVal.getAPInt();
 
       // Get array element type and width
-      auto arrayType = cast<hw::ArrayType>(unwrapSignalType(parentSignal.getType()));
+      auto arrayType =
+          cast<hw::ArrayType>(unwrapSignalType(immediateParentSignal.getType()));
       Type elementType = arrayType.getElementType();
       unsigned elementWidth = getTypeWidth(elementType);
       size_t numElements = arrayType.getNumElements();
@@ -19121,7 +19347,8 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
       // hw::ArrayType layout: element 0 at low bits, element N-1 at high bits.
       // If the array ref came from a struct field extract, include that field's
       // low-bit offset within the parent signal.
-      unsigned bitOffset = index * elementWidth;
+      unsigned bitOffset =
+          static_cast<unsigned>(index * elementWidth) + parentArrayBitOffset;
       if (parentSignal.getDefiningOp<llhd::SigStructExtractOp>()) {
         llvm::SmallVector<llhd::SigStructExtractOp, 4> extractChain;
         Value rootSignal = parentSignal;
@@ -43974,6 +44201,17 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     });
     return hasCall;
   };
+  auto shouldRearmCompiledCallbackMinnow = [this](ProcessId procId) -> bool {
+    if (!scheduler.isMinnowProcess(procId))
+      return false;
+    auto planIt = processCallbackPlans.find(procId);
+    if (planIt == processCallbackPlans.end())
+      return true;
+    const CallbackPlan &plan = planIt->second;
+    if (plan.model != ExecModel::CallbackTimeOnly)
+      return true;
+    return plan.timeOnlyNeedsRearm;
+  };
   for (uint32_t i = 0; i < mod->num_procs; i++) {
     llvm::StringRef procName(mod->proc_names[i]);
     auto it = processNameToId.find(procName);
@@ -43990,33 +44228,25 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
 
       if (kind == CIRCT_PROC_CALLBACK) {
         auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-        auto compiledCallback = [this, fptr, ctxPtr, procId]() {
+        auto compiledCallback = [this, fptr, ctxPtr, procId,
+                                 shouldRearmCompiledCallbackMinnow]() {
+          ProcessId savedCallbackProcId = activeAOTCompiledCallbackProcessId;
+          activeAOTCompiledCallbackProcessId = procId;
+          auto restoreCallbackProcId = llvm::make_scope_exit([&]() {
+            activeAOTCompiledCallbackProcessId = savedCallbackProcId;
+          });
+
           ++compiledCallbackInvocations;
           ++compiledCallbackInvocationsByProcess[procId];
           fptr(*ctxPtr, nullptr);
           // Re-arm if the process is a minnow (time-based callback).
           // The AOT compiler currently marks all processes as CALLBACK,
           // but many are actually time-only (minnow) processes.
-          if (scheduler.isMinnowProcess(procId))
+          if (shouldRearmCompiledCallbackMinnow(procId))
             scheduler.rearmMinnow(procId);
         };
-        auto compiledCallbackWithProcessContext =
-            [this, procId, callback = compiledCallback]() mutable {
-              auto stateIt = processStates.find(procId);
-              if (stateIt == processStates.end())
-                return;
-              ProcessExecutionState &state = stateIt->second;
-
-              ProcessId savedActiveProcessId = activeProcessId;
-              ProcessExecutionState *savedActiveProcessState =
-                  activeProcessState;
-              activeProcessId = procId;
-              activeProcessState = &state;
-              auto restoreActiveProcessState = llvm::make_scope_exit([&]() {
-                activeProcessId = savedActiveProcessId;
-                activeProcessState = savedActiveProcessState;
-              });
-
+        auto compiledCallbackWithTLS =
+            [this, callback = std::move(compiledCallback)]() mutable {
               void *prevTls = __circt_sim_get_tls_ctx();
               __circt_sim_set_tls_ctx(static_cast<void *>(this));
               __circt_sim_set_tls_normalize(
@@ -44053,7 +44283,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
 
         if (installImmediately) {
           if (auto *process = scheduler.getProcess(procId))
-            process->setCallback(std::move(compiledCallbackWithProcessContext));
+            process->setCallback(std::move(compiledCallbackWithTLS));
           else if (traceProcessWiring)
             llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
                          << " missing scheduler process handle for immediate "
@@ -44062,7 +44292,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
           // Default behavior: defer callback installation until the process's
           // first interpreted llhd.wait executes. This keeps initial wait
           // scheduling semantics in interpreted mode for wait-based callbacks.
-          pendingCompiledCallbacks[procId] = std::move(compiledCallback);
+          pendingCompiledCallbacks[procId] = std::move(compiledCallbackWithTLS);
         }
         matched++;
       } else if (kind == CIRCT_PROC_MINNOW) {
@@ -44071,12 +44301,32 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
         // The interpreted path does this in interpretWait(); compiled code
         // bypasses that, so we re-arm explicitly here.
         auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
-        pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
+        auto compiledMinnowCallback = [this, fptr, ctxPtr, procId,
+                                       shouldRearmCompiledCallbackMinnow]() {
+          ProcessId savedCallbackProcId = activeAOTCompiledCallbackProcessId;
+          activeAOTCompiledCallbackProcessId = procId;
+          auto restoreCallbackProcId = llvm::make_scope_exit([&]() {
+            activeAOTCompiledCallbackProcessId = savedCallbackProcId;
+          });
+
           ++compiledCallbackInvocations;
           ++compiledCallbackInvocationsByProcess[procId];
           fptr(*ctxPtr, nullptr);
-          scheduler.rearmMinnow(procId);
+          if (shouldRearmCompiledCallbackMinnow(procId))
+            scheduler.rearmMinnow(procId);
         };
+        pendingCompiledCallbacks[procId] =
+            [this, callback = std::move(compiledMinnowCallback)]()
+                mutable {
+                  void *prevTls = __circt_sim_get_tls_ctx();
+                  __circt_sim_set_tls_ctx(static_cast<void *>(this));
+                  __circt_sim_set_tls_normalize(
+                      LLHDProcessInterpreter::normalizeVirtualPtr);
+                  auto restoreTlsContext = llvm::make_scope_exit(
+                      [&]() { __circt_sim_set_tls_ctx(prevTls); });
+
+                  callback();
+                };
         matched++;
       }
       // COROUTINE kind: skip for now (stay interpreted)

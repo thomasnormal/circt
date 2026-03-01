@@ -1118,6 +1118,7 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
     llhd::ProcessOp processOp,
     const llvm::DenseMap<Value, SignalId> &valueToSignal) {
   CallbackPlan plan;
+  bool resumePathsReenterWait = false;
 
   // Step A: Fast coroutine filters — bail early, no CFG walking.
   {
@@ -1239,6 +1240,7 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
       }
     }
 
+    resumePathsReenterWait = allReachWait;
     if (!allReachWait) {
       llvm::DenseSet<Block *> nonReenterTail;
       for (Block *fwd : forwardReachable)
@@ -1322,6 +1324,7 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
   } else if (W.getDelay()) {
     // Delay-only wait (no observed signals).
     plan.model = ExecModel::CallbackTimeOnly;
+    plan.timeOnlyNeedsRearm = resumePathsReenterWait;
     // Extract constant delay if available.
     if (auto constOp = W.getDelay().getDefiningOp<llhd::ConstantTimeOp>()) {
       // Encode as ns + delta*epsilon. For now, extract just the integer value.
@@ -1427,7 +1430,8 @@ CallbackPlan AOTProcessCompiler::classifyProcess(
     if (plan.model == ExecModel::CallbackStaticObserved)
       llvm::dbgs() << " (" << plan.staticSignals.size() << " signals)";
     if (plan.model == ExecModel::CallbackTimeOnly)
-      llvm::dbgs() << " (delay=" << plan.delayValue << ")";
+      llvm::dbgs() << " (delay=" << plan.delayValue
+                   << ", rearm=" << plan.timeOnlyNeedsRearm << ")";
     if (plan.hasFrame())
       llvm::dbgs() << " (frame: " << plan.frameSlotTypes.size() << " slots)";
     if (plan.needsInitRun)

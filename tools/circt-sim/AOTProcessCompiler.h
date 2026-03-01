@@ -95,6 +95,11 @@ struct CallbackPlan {
   /// For CallbackTimeOnly: the constant delay in simulation time units.
   uint64_t delayValue = 0;
 
+  /// For CallbackTimeOnly: true when every resume-reachable path returns to
+  /// the wait block. In this case, runtime callback dispatch must explicitly
+  /// re-arm the minnow after each compiled callback invocation.
+  bool timeOnlyNeedsRearm = false;
+
   /// Types of the loop-carried values (wait.destOperands). These define the
   /// CallbackFrame layout — each value is stored/loaded across activations.
   /// Empty if the wait has no destOperands (no loop-carried state).

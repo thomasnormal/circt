@@ -255,6 +255,29 @@ extern "C" void __circt_sim_call_interpreted(CirctSimCtx * /*ctx*/,
 /// initialization so that extern "C" ABI functions can access signal memory
 /// without going through the opaque CirctSimCtx pointer.
 static ProcessScheduler *g_aotScheduler = nullptr;
+/// Global pointer to the LLHD interpreter. Used to remap circt-compile signal
+/// IDs to runtime SignalIds for the active process instance.
+static LLHDProcessInterpreter *g_aotInterpreter = nullptr;
+
+static uint32_t remapAndValidateAOTSignalId(uint32_t sigId,
+                                            llvm::StringRef apiName) {
+  if (!g_aotScheduler)
+    return 0;
+  uint32_t originalSigId = sigId;
+  if (g_aotInterpreter)
+    sigId = g_aotInterpreter->remapAOTCompiledSignalId(sigId);
+  uint32_t numSignals = static_cast<uint32_t>(g_aotScheduler->getNumSignals());
+  if (sigId == 0 || sigId > numSignals) {
+    if (std::getenv("CIRCT_AOT_TRACE_SIGNAL_ID_REMAP")) {
+      llvm::errs() << "[circt-sim] " << apiName
+                   << " dropped invalid signal id: compiled=" << originalSigId
+                   << " remapped=" << sigId << " num_signals=" << numSignals
+                   << "\n";
+    }
+    return 0;
+  }
+  return sigId;
+}
 
 namespace {
 
@@ -314,7 +337,8 @@ extern "C" const CirctSimHot *__circt_sim_get_hot(CirctSimCtx * /*ctx*/) {
 
 extern "C" uint64_t __circt_sim_signal_read_u64(CirctSimCtx * /*ctx*/,
                                                 uint32_t sigId) {
-  if (!g_aotScheduler)
+  sigId = remapAndValidateAOTSignalId(sigId, "__circt_sim_signal_read_u64");
+  if (!sigId)
     return 0;
   uint64_t *base = g_aotScheduler->getSignalMemoryBase();
   return base[sigId];
@@ -324,7 +348,8 @@ extern "C" void __circt_sim_signal_drive_u64(CirctSimCtx * /*ctx*/,
                                              uint32_t sigId, uint64_t val,
                                              uint8_t delayKind,
                                              uint64_t delay) {
-  if (!g_aotScheduler)
+  sigId = remapAndValidateAOTSignalId(sigId, "__circt_sim_signal_drive_u64");
+  if (!sigId)
     return;
   if (delayKind == 2) {
     // NBA: queue for deferred commit in NBA phase.
@@ -346,19 +371,22 @@ extern "C" void __circt_sim_signal_drive_u64(CirctSimCtx * /*ctx*/,
 
 extern "C" void __circt_sim_drive_delta(CirctSimCtx * /*ctx*/, uint32_t sigId,
                                         uint64_t val) {
-  if (g_aotScheduler)
+  sigId = remapAndValidateAOTSignalId(sigId, "__circt_sim_drive_delta");
+  if (sigId)
     g_aotScheduler->updateSignalFast(sigId, val, /*width=*/0);
 }
 
 extern "C" void __circt_sim_drive_nba(CirctSimCtx * /*ctx*/, uint32_t sigId,
                                       uint64_t val) {
-  if (g_aotScheduler)
+  sigId = remapAndValidateAOTSignalId(sigId, "__circt_sim_drive_nba");
+  if (sigId)
     g_aotScheduler->queueSignalUpdateFast(sigId, val, /*width=*/0);
 }
 
 extern "C" void __circt_sim_drive_time(CirctSimCtx * /*ctx*/, uint32_t sigId,
                                        uint64_t val, uint64_t delay) {
-  if (!g_aotScheduler)
+  sigId = remapAndValidateAOTSignalId(sigId, "__circt_sim_drive_time");
+  if (!sigId)
     return;
   auto currentTime = g_aotScheduler->getCurrentTime();
   SimTime resumeTime(currentTime.realTime + delay, 0);
@@ -976,6 +1004,10 @@ public:
         parallelScheduler(nullptr) {}
 
   ~SimulationContext() {
+    if (g_aotInterpreter == llhdInterpreter.get())
+      g_aotInterpreter = nullptr;
+    if (g_aotScheduler == &scheduler)
+      g_aotScheduler = nullptr;
     stopWatchdogThread();
     if (parallelScheduler) {
       parallelScheduler->stopWorkers();
@@ -1629,6 +1661,7 @@ LogicalResult SimulationContext::buildSimulationModel(hw::HWModuleOp hwModule) {
     // modules - the interpreter accumulates signals and processes across calls)
     if (!llhdInterpreter) {
       llhdInterpreter = std::make_unique<LLHDProcessInterpreter>(scheduler);
+      g_aotInterpreter = llhdInterpreter.get();
       llhdInterpreter->setMaxProcessSteps(maxProcessSteps);
       llhdInterpreter->setCollectOpStats(printOpStats);
       llhdInterpreter->setShouldAbortCallback([this]() {

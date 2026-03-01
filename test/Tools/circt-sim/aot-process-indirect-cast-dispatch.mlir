@@ -8,6 +8,8 @@
 // COMPILE: [circt-compile] Processes: 3 total, 2 callback-eligible, 1 rejected
 // RUNTIME-NOT: FATAL: trampoline dispatch
 // RUNTIME: a=1
+// RUNTIME-NOT: a=
+// RUNTIME: Coverage Report
 
 llvm.func private @set_true() -> i1 {
   %true = llvm.mlir.constant(true) : i1

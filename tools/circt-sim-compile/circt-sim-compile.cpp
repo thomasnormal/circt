@@ -5034,9 +5034,6 @@ static unsigned compileProcessBodies(
                                      {ptrTy, i32Ty, i64Ty, i64Ty, i8Ty,
                                       i64Ty},
                                      {}));
-  // Direct signal memory access: get hot data pointer.
-  getOrDeclareFunc("__circt_sim_get_hot",
-                   FunctionType::get(mlirCtx, {ptrTy}, {ptrTy}));
   // Specialized drive entry points (avoid delay_kind branching).
   getOrDeclareFunc("__circt_sim_drive_delta",
                    FunctionType::get(mlirCtx, {ptrTy, i32Ty, i64Ty}, {}));
@@ -5172,18 +5169,8 @@ static unsigned compileProcessBodies(
         mapping.map(arg, newBlock->addArgument(arg.getType(), arg.getLoc()));
     }
 
-    // Entry: get hot data pointer for direct signal memory access,
-    // then branch to first body block.
+    // Entry: branch to first body block.
     OpBuilder builder(entry, entry->begin());
-
-    // %hot = call @__circt_sim_get_hot(%ctx) → CirctSimHot*
-    auto hotCall = func::CallOp::create(
-        builder, loc, "__circt_sim_get_hot", TypeRange{ptrTy},
-        ValueRange{ctxArg});
-    Value hotPtr = hotCall.getResult(0);
-    // sig2_base is the first field of CirctSimHot (offset 0).
-    // load ptr from hotPtr gives us the uint64_t* signal memory base.
-    Value sig2Base = LLVM::LoadOp::create(builder, loc, ptrTy, hotPtr);
 
     cf::BranchOp::create(builder, loc, blockMap[bodyBlocks[0]]);
 
@@ -5335,15 +5322,11 @@ static unsigned compileProcessBodies(
             // 4-state narrow fast lane: physical width is 2*N.
             unsigned logW = *w;
             if (2 * logW <= 64) {
-              // Fits in one u64: direct memory load from sig2_base.
-              auto fourStateSigI64 = LLVM::ConstantOp::create(
-                  builder, opLoc, i64Ty,
-                  builder.getI64IntegerAttr(sigId));
-              auto fourStateElemPtr = LLVM::GEPOp::create(
-                  builder, opLoc, ptrTy, i64Ty, sig2Base,
-                  ValueRange{fourStateSigI64});
-              Value raw = LLVM::LoadOp::create(builder, opLoc, i64Ty,
-                                               fourStateElemPtr);
+              // Fits in one u64: read packed payload through runtime helper.
+              auto rawCall = func::CallOp::create(
+                  builder, opLoc, "__circt_sim_signal_read_u64",
+                  TypeRange{i64Ty}, ValueRange{ctxArg, sigIdVal});
+              Value raw = rawCall.getResult(0);
               // HW struct bit order: value=high N bits, unknown=low N bits.
               auto intLogTy = IntegerType::get(mlirCtx, logW);
               Value xz = raw;
@@ -5388,17 +5371,11 @@ static unsigned compileProcessBodies(
               mapping.map(prbOp.getResult(), val); // dummy
             }
           } else {
-            // 2-state integer signal: direct memory load from sig2_base.
-            // %ptr = gep i64, sig2_base, sigId
-            // %raw = load i64, %ptr
-            auto sigIdI64 = LLVM::ConstantOp::create(
-                builder, opLoc, i64Ty,
-                builder.getI64IntegerAttr(sigId));
-            auto elemPtr = LLVM::GEPOp::create(
-                builder, opLoc, ptrTy, i64Ty, sig2Base,
-                ValueRange{sigIdI64});
-            Value result = LLVM::LoadOp::create(builder, opLoc, i64Ty,
-                                                elemPtr);
+            // 2-state integer signal read through runtime helper.
+            auto readCall = func::CallOp::create(
+                builder, opLoc, "__circt_sim_signal_read_u64",
+                TypeRange{i64Ty}, ValueRange{ctxArg, sigIdVal});
+            Value result = readCall.getResult(0);
             if (auto intTy = dyn_cast<IntegerType>(resultTy)) {
               if (intTy.getWidth() < 64)
                 result =

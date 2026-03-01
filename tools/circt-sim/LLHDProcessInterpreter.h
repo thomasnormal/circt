@@ -965,6 +965,10 @@ public:
   SignalId getSignalIdInInstance(mlir::Value signalRef,
                                  InstanceId instanceId) const;
 
+  /// Remap an AOT-compiled signal ID (assigned by circt-compile's module walk)
+  /// to the runtime SignalId for the currently active process instance.
+  SignalId remapAOTCompiledSignalId(uint32_t compiledSigId) const;
+
   /// Get the signal name for a signal ID.
   llvm::StringRef getSignalName(SignalId id) const;
 
@@ -4453,6 +4457,14 @@ private:
   uint64_t interpreterProcessInvocations = 0;
   llvm::DenseMap<ProcessId, uint64_t> compiledCallbackInvocationsByProcess;
   llvm::DenseMap<ProcessId, std::string> compiledProcessNamesById;
+  /// Current compiled-callback process context for deferred callbacks that do
+  /// not run through executeProcess(). Used for AOT signal-id remapping.
+  ProcessId activeAOTCompiledCallbackProcessId = InvalidProcessId;
+
+  /// circt-compile numbers llhd.sig values by root-module walk order when
+  /// lowering process probes/drives. Index 0 is invalid; entry i stores the
+  /// original llhd.sig Value for compiled signal ID i.
+  llvm::SmallVector<mlir::Value, 0> compiledSignalIdToValue;
 
   /// Compiled callbacks waiting for the process's first interpreted run
   /// (entry block → llhd.wait) to complete before being installed.
