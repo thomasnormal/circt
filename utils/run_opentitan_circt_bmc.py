@@ -24,6 +24,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
+try:
+    from runner_common import parse_nonnegative_int as _shared_parse_nonnegative_int
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
 
 def parse_nonnegative_int(raw: str, name: str) -> int:
     try:
@@ -35,6 +47,12 @@ def parse_nonnegative_int(raw: str, name: str) -> int:
         print(f"invalid {name}: {raw}", file=sys.stderr)
         raise SystemExit(1)
     return value
+
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_nonnegative_int(raw: str, name: str) -> int:
+        return _shared_parse_nonnegative_int(raw, name)
 
 
 def parse_optional_nonnegative_int(raw: str, name: str, line_no: int) -> int | None:

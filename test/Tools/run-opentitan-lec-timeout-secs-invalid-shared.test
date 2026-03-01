@@ -1,0 +1,8 @@
+// RUN: rm -rf %t/ot
+// RUN: mkdir -p %t/ot/hw/ip/aes/rtl %t/ot/hw/ip/prim/rtl %t/ot/hw/ip/prim_xilinx/rtl %t/work
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_sbox_lut.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright.sv
+// RUN: touch %t/ot/hw/ip/aes/rtl/aes_pkg.sv %t/ot/hw/ip/aes/rtl/aes_reg_pkg.sv %t/ot/hw/ip/aes/rtl/aes_sbox_canright_pkg.sv
+// RUN: touch %t/ot/hw/ip/prim/rtl/prim_util_pkg.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_buf.sv %t/ot/hw/ip/prim_xilinx/rtl/prim_xilinx_xor2.sv
+// RUN: not env LEC_SMOKE_ONLY=1 LEC_TIMEOUT_SECS=-1 %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir 2>&1 | FileCheck %s
+//
+// CHECK: invalid LEC_TIMEOUT_SECS: -1

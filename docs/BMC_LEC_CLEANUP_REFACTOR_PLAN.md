@@ -503,6 +503,15 @@ Current workstream status in this branch:
      `runner_common.parse_nonnegative_int` with local fallback retained
    - FPV BMC shared-path invalid `--max-targets` diagnostics are now
      regression-covered (`run-opentitan-fpv-circt-bmc-max-targets-invalid-shared.test`)
+   - OpenTitan AES BMC nonnegative-int parsing now consumes shared
+     `runner_common.parse_nonnegative_int` with local fallback retained
+   - OpenTitan AES BMC shared-path invalid `BOUND` diagnostics are now
+     regression-covered (`run-opentitan-bmc-invalid-bound-shared.test`)
+   - OpenTitan AES LEC nonnegative-int parsing now consumes shared
+     `runner_common.parse_nonnegative_int` with local fallback retained
+   - OpenTitan AES LEC shared-path invalid `LEC_TIMEOUT_SECS` diagnostics are
+     now regression-covered
+     (`run-opentitan-lec-timeout-secs-invalid-shared.test`)
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial
