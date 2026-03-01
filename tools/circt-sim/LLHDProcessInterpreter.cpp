@@ -9954,12 +9954,14 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
     None,
     Forward,
     StructExtract,
+    UnionExtract,
     ArrayGet,
     ArrayCreate,
     ArraySlice,
     ArrayConcat,
     ArrayInject,
     StructCreate,
+    UnionCreate,
     StructInject,
     StructInjectLegacy,
     Bitcast,
@@ -10342,6 +10344,13 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         continue;
       }
 
+      if (current.getDefiningOp<hw::UnionExtractOp>()) {
+        frame.kind = EvalKind::UnionExtract;
+        frame.stage = 1;
+        pushValue(current.getDefiningOp<hw::UnionExtractOp>().getInput());
+        continue;
+      }
+
       if (current.getDefiningOp<hw::ArrayGetOp>()) {
         frame.kind = EvalKind::ArrayGet;
         frame.stage = 1;
@@ -10394,6 +10403,13 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
         auto createOp = current.getDefiningOp<hw::StructCreateOp>();
         for (Value input : createOp.getInput())
           pushValue(input);
+        continue;
+      }
+
+      if (current.getDefiningOp<hw::UnionCreateOp>()) {
+        frame.kind = EvalKind::UnionCreate;
+        frame.stage = 1;
+        pushValue(current.getDefiningOp<hw::UnionCreateOp>().getInput());
         continue;
       }
 
@@ -10720,6 +10736,31 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
       finish(InterpretedValue(fieldVal));
       break;
     }
+    case EvalKind::UnionExtract: {
+      auto extractOp = current.getDefiningOp<hw::UnionExtractOp>();
+      InterpretedValue inputVal = getCached(extractOp.getInput());
+      if (inputVal.isX()) {
+        if (auto encoded = getEncodedUnknownForType(extractOp.getType()))
+          finish(InterpretedValue(*encoded));
+        else
+          finish(makeUnknown(current));
+        break;
+      }
+      auto unionType =
+          hw::type_cast<hw::UnionType>(extractOp.getInput().getType());
+      auto elements = unionType.getElements();
+      uint32_t fieldIndex = extractOp.getFieldIndex();
+      if (fieldIndex >= elements.size()) {
+        finish(makeUnknown(current));
+        break;
+      }
+      unsigned fieldOffset = elements[fieldIndex].offset;
+      unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+      APInt fieldVal =
+          inputVal.getAPInt().extractBits(fieldWidth, fieldOffset);
+      finish(InterpretedValue(fieldVal));
+      break;
+    }
     case EvalKind::ArrayGet: {
       auto arrayGetOp = current.getDefiningOp<hw::ArrayGetOp>();
       InterpretedValue arrayVal = getCached(arrayGetOp.getInput());
@@ -10895,6 +10936,42 @@ InterpretedValue LLHDProcessInterpreter::evaluateContinuousValueImpl(
           safeInsertBits(result,fieldBits, bitOffset);
         }
       }
+      finish(InterpretedValue(result));
+      break;
+    }
+    case EvalKind::UnionCreate: {
+      auto createOp = current.getDefiningOp<hw::UnionCreateOp>();
+      auto unionType = hw::type_cast<hw::UnionType>(createOp.getType());
+      auto elements = unionType.getElements();
+      uint32_t fieldIndex = createOp.getFieldIndex();
+      unsigned totalWidth = getTypeWidth(unionType);
+      if (fieldIndex >= elements.size()) {
+        finish(InterpretedValue::makeX(totalWidth));
+        break;
+      }
+
+      unsigned fieldOffset = elements[fieldIndex].offset;
+      unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+      InterpretedValue inputVal = getCached(createOp.getInput());
+      if (inputVal.isX()) {
+        if (auto encoded = getEncodedUnknownForType(elements[fieldIndex].type)) {
+          APInt result(totalWidth, 0);
+          APInt fieldBits = encoded->zextOrTrunc(fieldWidth);
+          safeInsertBits(result,fieldBits, fieldOffset);
+          finish(InterpretedValue(result));
+        } else {
+          finish(InterpretedValue::makeX(totalWidth));
+        }
+        break;
+      }
+
+      APInt result(totalWidth, 0);
+      APInt fieldBits = inputVal.getAPInt();
+      if (fieldBits.getBitWidth() < fieldWidth)
+        fieldBits = fieldBits.zext(fieldWidth);
+      else if (fieldBits.getBitWidth() > fieldWidth)
+        fieldBits = fieldBits.trunc(fieldWidth);
+      safeInsertBits(result,fieldBits, fieldOffset);
       finish(InterpretedValue(result));
       break;
     }
@@ -15181,6 +15258,77 @@ arith_dispatch:
     safeInsertBits(result,fieldValue, fieldOffset);
 
     setValue(procId, structInjectOp.getResult(), InterpretedValue(result));
+    return success();
+  }
+
+  //===--------------------------------------------------------------------===//
+  // HW Union Operations
+  //===--------------------------------------------------------------------===//
+
+  if (auto unionExtractOp = dyn_cast<hw::UnionExtractOp>(op)) {
+    InterpretedValue unionVal = getValue(procId, unionExtractOp.getInput());
+    if (unionVal.isX()) {
+      if (auto encoded = getEncodedUnknownForType(unionExtractOp.getType())) {
+        setValue(procId, unionExtractOp.getResult(),
+                 InterpretedValue(*encoded));
+      } else {
+        setValue(procId, unionExtractOp.getResult(),
+                 InterpretedValue::makeX(getTypeWidth(unionExtractOp.getType())));
+      }
+      return success();
+    }
+
+    auto unionType = cast<hw::UnionType>(unionExtractOp.getInput().getType());
+    auto elements = unionType.getElements();
+    uint32_t fieldIndex = unionExtractOp.getFieldIndex();
+    if (fieldIndex >= elements.size()) {
+      setValue(procId, unionExtractOp.getResult(),
+               InterpretedValue::makeX(getTypeWidth(unionExtractOp.getType())));
+      return success();
+    }
+
+    unsigned fieldOffset = elements[fieldIndex].offset;
+    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+    APInt fieldValue = unionVal.getAPInt().extractBits(fieldWidth, fieldOffset);
+    setValue(procId, unionExtractOp.getResult(), InterpretedValue(fieldValue));
+    return success();
+  }
+
+  if (auto unionCreateOp = dyn_cast<hw::UnionCreateOp>(op)) {
+    auto unionType = cast<hw::UnionType>(unionCreateOp.getType());
+    auto elements = unionType.getElements();
+    uint32_t fieldIndex = unionCreateOp.getFieldIndex();
+    unsigned totalWidth = getTypeWidth(unionType);
+    if (fieldIndex >= elements.size()) {
+      setValue(procId, unionCreateOp.getResult(),
+               InterpretedValue::makeX(totalWidth));
+      return success();
+    }
+
+    unsigned fieldOffset = elements[fieldIndex].offset;
+    unsigned fieldWidth = getTypeWidth(elements[fieldIndex].type);
+    InterpretedValue inputVal = getValue(procId, unionCreateOp.getInput());
+
+    APInt result(totalWidth, 0);
+    if (inputVal.isX()) {
+      if (auto encoded = getEncodedUnknownForType(elements[fieldIndex].type)) {
+        APInt fieldBits = encoded->zextOrTrunc(fieldWidth);
+        safeInsertBits(result,fieldBits, fieldOffset);
+        setValue(procId, unionCreateOp.getResult(), InterpretedValue(result));
+      } else {
+        setValue(procId, unionCreateOp.getResult(),
+                 InterpretedValue::makeX(totalWidth));
+      }
+      return success();
+    }
+
+    APInt fieldBits = inputVal.getAPInt();
+    if (fieldBits.getBitWidth() < fieldWidth)
+      fieldBits = fieldBits.zext(fieldWidth);
+    else if (fieldBits.getBitWidth() > fieldWidth)
+      fieldBits = fieldBits.trunc(fieldWidth);
+    safeInsertBits(result,fieldBits, fieldOffset);
+    setValue(procId, unionCreateOp.getResult(), InterpretedValue(result));
     return success();
   }
 
@@ -26673,9 +26821,9 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
       return true;
     return isa<LLVM::LoadOp, LLVM::ExtractValueOp, LLVM::InsertValueOp,
                LLVM::GEPOp, mlir::UnrealizedConversionCastOp, hw::StructCreateOp,
-               hw::StructExtractOp, hw::ArrayCreateOp, hw::ArrayGetOp,
-               hw::ArraySliceOp, hw::ArrayConcatOp, llhd::ProbeOp,
-               seq::FirRegOp>(op);
+               hw::StructExtractOp, hw::UnionCreateOp, hw::UnionExtractOp,
+               hw::ArrayCreateOp, hw::ArrayGetOp, hw::ArraySliceOp,
+               hw::ArrayConcatOp, llhd::ProbeOp, seq::FirRegOp>(op);
   };
 
   // Check per-instance module-level init values first (child module context).
@@ -26895,8 +27043,9 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
 
   if (auto *defOp = value.getDefiningOp()) {
     if (isa<hw::StructExtractOp, hw::StructCreateOp, hw::StructInjectOp,
-            comb::XorOp, comb::AndOp, comb::OrOp, comb::ICmpOp, comb::MuxOp,
-            comb::ConcatOp, comb::ExtractOp, comb::AddOp, comb::SubOp>(defOp)) {
+            hw::UnionExtractOp, hw::UnionCreateOp, comb::XorOp, comb::AndOp,
+            comb::OrOp, comb::ICmpOp, comb::MuxOp, comb::ConcatOp,
+            comb::ExtractOp, comb::AddOp, comb::SubOp>(defOp)) {
       InterpretedValue iv = evaluateContinuousValue(value);
       valueMap[value] = iv;
       return iv;
@@ -27320,6 +27469,18 @@ unsigned LLHDProcessInterpreter::getTypeWidthUncached(Type type) {
     return totalWidth;
   }
 
+  // Handle hw.union types.
+  if (auto unionType = dyn_cast<hw::UnionType>(type)) {
+    unsigned maxWidth = 0;
+    for (auto field : unionType.getElements()) {
+      unsigned fieldWidth = getTypeWidth(field.type);
+      unsigned fieldEnd = static_cast<unsigned>(field.offset) + fieldWidth;
+      if (fieldEnd > maxWidth)
+        maxWidth = fieldEnd;
+    }
+    return maxWidth;
+  }
+
   // Handle LLVM pointer types (64 bits)
   if (isa<LLVM::LLVMPointerType>(type))
     return 64;
@@ -27398,6 +27559,18 @@ unsigned LLHDProcessInterpreter::getLogicalWidth(Type type) {
     for (auto field : elements)
       total += getLogicalWidth(field.type);
     return total;
+  }
+
+  // For hw::UnionType, use the packed bit width.
+  if (auto unionType = dyn_cast<hw::UnionType>(type)) {
+    unsigned maxWidth = 0;
+    for (auto field : unionType.getElements()) {
+      unsigned fieldEnd =
+          static_cast<unsigned>(field.offset) + getLogicalWidth(field.type);
+      if (fieldEnd > maxWidth)
+        maxWidth = fieldEnd;
+    }
+    return maxWidth;
   }
 
   // For hw::ArrayType, multiply element logical width by count.

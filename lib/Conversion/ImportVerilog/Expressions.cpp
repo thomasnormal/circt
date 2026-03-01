@@ -4644,6 +4644,23 @@ struct RvalueExprVisitor : public ExprVisitor {
 
   /// Handle calls.
   Value visit(const slang::ast::CallExpression &expr) {
+    auto isUnpackedArrayOfPredefinedInteger = [&](const slang::ast::Type &type) {
+      const auto *current = &type.getCanonicalType();
+      bool sawUnpacked = false;
+      while (auto *arrayTy =
+                 current->as_if<slang::ast::FixedSizeUnpackedArrayType>()) {
+        sawUnpacked = true;
+        current = &arrayTy->elementType.getCanonicalType();
+      }
+      if (!sawUnpacked)
+        return false;
+      auto *predefIntTy = current->as_if<slang::ast::PredefinedIntegerType>();
+      if (!predefIntTy)
+        return false;
+      return predefIntTy->integerKind !=
+             slang::ast::PredefinedIntegerType::Kind::Time;
+    };
+
     // Try to materialize constant values directly.
     // Skip constant evaluation for system calls that need runtime behavior
     // ($test$plusargs, $value$plusargs) since slang returns nullptr for them
@@ -4653,14 +4670,35 @@ struct RvalueExprVisitor : public ExprVisitor {
             &expr.subroutine)) {
       if (sci->subroutine->name == "$test$plusargs" ||
           sci->subroutine->name == "$value$plusargs" ||
-          sci->subroutine->name == "$initstate")
+          sci->subroutine->name == "$initstate" ||
+          sci->subroutine->name == "$cast")
         skipConstEval = true;
     }
     if (!skipConstEval) {
       auto constant = context.evaluateConstant(expr);
-      if (auto value =
-              context.materializeConstant(constant, *expr.type, loc))
+      if (auto value = context.materializeConstant(constant, *expr.type, loc)) {
+        // Slang currently over-counts one packed dimension for unpacked arrays
+        // of predefined integer scalar types (int/shortint/longint/byte).
+        // Correct this at lowering time for $dimensions.
+        if (auto *sci = std::get_if<slang::ast::CallExpression::SystemCallInfo>(
+                &expr.subroutine)) {
+          if (sci->subroutine->name == "$dimensions" &&
+              expr.arguments().size() == 1 &&
+              isUnpackedArrayOfPredefinedInteger(*expr.arguments()[0]->type) &&
+              constant.isInteger()) {
+            auto maybeDims = constant.integer().as<int64_t>();
+            if (maybeDims && *maybeDims > 0) {
+              auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+              auto corrected = moore::ConstantOp::create(builder, loc, i32Ty,
+                                                         *maybeDims - 1);
+              auto resultTy = context.convertType(*expr.type);
+              return context.materializeConversion(resultTy, corrected,
+                                                   expr.type->isSigned(), loc);
+            }
+          }
+        }
         return value;
+      }
     }
 
     return std::visit(
@@ -7128,11 +7166,63 @@ struct RvalueExprVisitor : public ExprVisitor {
         auto castValue = context.materializeConversion(destTy, srcRvalue,
                                                        args[1]->type->isSigned(),
                                                        loc);
-        if (castValue) {
-          // Store the cast value to the destination
-          moore::BlockingAssignOp::create(builder, loc, destLvalue, castValue);
+        if (!castValue) {
+          auto intTy = moore::IntType::getInt(context.getContext(), 32);
+          return moore::ConstantOp::create(builder, loc, intTy, 0);
         }
-        // Return 1 (success) - static cast always succeeds
+
+        const auto &destCanonical = destExpr->type->getCanonicalType();
+        if (destCanonical.kind == slang::ast::SymbolKind::EnumType) {
+          // IEEE 1800-2017 §8.16: enum $cast succeeds iff source value is one
+          // of the destination enum's defined members.
+          auto *enumType = destCanonical.as_if<slang::ast::EnumType>();
+          auto enumIntTy = dyn_cast<moore::IntType>(castValue.getType());
+          if (!enumType || !enumIntTy) {
+            mlir::emitError(loc) << "unsupported enum $cast destination type: "
+                                 << castValue.getType();
+            return {};
+          }
+
+          auto i1Ty = moore::IntType::get(context.getContext(), 1,
+                                          enumIntTy.getDomain());
+          Value isMember = moore::ConstantOp::create(builder, loc, i1Ty, 0);
+          for (const auto &member : enumType->values()) {
+            const auto &cv = member.getValue();
+            if (!cv)
+              continue;
+            auto fvint = convertSVIntToFVInt(cv.integer());
+            if (fvint.getBitWidth() != enumIntTy.getWidth())
+              fvint = fvint.zext(enumIntTy.getWidth());
+            auto enumConst =
+                moore::ConstantOp::create(builder, loc, enumIntTy, fvint);
+            auto eq = moore::EqOp::create(builder, loc, castValue, enumConst);
+            isMember = moore::OrOp::create(builder, loc, isMember, eq);
+          }
+
+          auto cond = context.convertToBool(isMember);
+          if (!cond)
+            return {};
+          auto currentValue = moore::ReadOp::create(builder, loc, destLvalue);
+          auto selected = moore::ConditionalOp::create(builder, loc, destTy,
+                                                       cond);
+          {
+            OpBuilder::InsertionGuard guard(builder);
+            builder.setInsertionPointToStart(
+                &selected.getTrueRegion().emplaceBlock());
+            moore::YieldOp::create(builder, loc, castValue);
+            builder.setInsertionPointToStart(
+                &selected.getFalseRegion().emplaceBlock());
+            moore::YieldOp::create(builder, loc, currentValue);
+          }
+          moore::BlockingAssignOp::create(builder, loc, destLvalue,
+                                          selected.getResult());
+          auto intTy = moore::IntType::getInt(context.getContext(), 32);
+          return context.materializeConversion(intTy, isMember,
+                                               /*isSigned=*/false, loc);
+        }
+
+        // Non-enum static cast: assign converted value and report success.
+        moore::BlockingAssignOp::create(builder, loc, destLvalue, castValue);
         auto intTy = moore::IntType::getInt(context.getContext(), 32);
         return moore::ConstantOp::create(builder, loc, intTy, 1);
       }
@@ -9041,6 +9131,45 @@ struct RvalueExprVisitor : public ExprVisitor {
         dynamicArrayValue = value;
         operands.push_back(value); // Placeholder, will be split later
         continue;
+      }
+
+      // Handle fixed-size unpacked arrays by flattening elements to a bit
+      // vector in index order before applying streaming slicing logic.
+      if (auto fixedArrayTy = dyn_cast<moore::UnpackedArrayType>(value.getType())) {
+        auto elemTy = fixedArrayTy.getElementType();
+        auto elemBits = elemTy.getBitSize();
+        if (!elemBits) {
+          mlir::emitError(operandLoc)
+              << "streaming concatenation requires fixed unpacked array "
+                 "elements with known bit width, got "
+              << elemTy;
+          return {};
+        }
+
+        SmallVector<Value> flatElems;
+        flatElems.reserve(fixedArrayTy.getSize());
+        auto i32Ty = moore::IntType::getInt(context.getContext(), 32);
+        for (unsigned i = 0, e = fixedArrayTy.getSize(); i < e; ++i) {
+          auto idx = moore::ConstantOp::create(builder, operandLoc, i32Ty, i);
+          Value elem =
+              moore::DynExtractOp::create(builder, operandLoc, elemTy, value,
+                                          idx)
+                  .getResult();
+          elem = context.convertToSimpleBitVector(elem);
+          if (!elem)
+            return {};
+          flatElems.push_back(elem);
+        }
+
+        if (flatElems.empty()) {
+          mlir::emitError(operandLoc)
+              << "streaming concatenation does not support empty unpacked "
+                 "arrays";
+          return {};
+        }
+        value = flatElems.size() == 1
+                    ? flatElems.front()
+                    : moore::ConcatOp::create(builder, operandLoc, flatElems);
       }
 
       value = context.convertToSimpleBitVector(value);

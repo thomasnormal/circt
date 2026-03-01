@@ -14055,31 +14055,50 @@ struct ReadOpConversion : public OpConversionPattern<ReadOp> {
       // signal in the current block, return that value instead of probing the
       // old signal state.
       //
-      // Stop this forwarding at fork/wait barriers. Reads after
-      // fork/join_any/join_none/wait_fork must observe the concurrent runtime
-      // state, not a stale pre-fork drive from the same block.
+      // Stop this forwarding at fork/wait barriers and at side-effecting ops
+      // such as function calls. Reads after these boundaries must observe
+      // runtime state, not a stale pre-boundary drive.
       auto isReadForwardBarrier = [](Operation *prev) -> bool {
-        return isa<ForkOp, WaitForkOp, DisableForkOp, WaitDelayOp, WaitEventOp,
-                   sim::SimForkOp, sim::SimWaitForkOp, sim::SimDisableForkOp,
-                   llhd::WaitOp>(prev);
+        if (isa<ForkOp, WaitForkOp, DisableForkOp, WaitDelayOp, WaitEventOp,
+                sim::SimForkOp, sim::SimWaitForkOp, sim::SimDisableForkOp,
+                llhd::WaitOp>(prev))
+          return true;
+
+        // Calls (and any op with unknown/recursive memory effects) may mutate
+        // refs passed as arguments, so forwarding must not cross them.
+        if (isa<func::CallOp, func::CallIndirectOp, LLVM::CallOp>(prev))
+          return true;
+
+        if (hasUnknownEffects(prev) ||
+            prev->hasTrait<OpTrait::HasRecursiveMemoryEffects>())
+          return true;
+
+        if (auto memOp = dyn_cast<MemoryEffectOpInterface>(prev))
+          if (memOp.hasEffect<MemoryEffects::Write>() ||
+              memOp.hasEffect<MemoryEffects::Allocate>() ||
+              memOp.hasEffect<MemoryEffects::Free>())
+            return true;
+
+        return false;
       };
       if (isa<llhd::RefType>(input.getType())) {
         for (Operation *prev = op->getPrevNode(); prev;
              prev = prev->getPrevNode()) {
+          auto drive = dyn_cast<llhd::DriveOp>(prev);
+          if (drive && drive.getSignal() == input && !drive.getEnable()) {
+            auto timeOp =
+                drive.getTime().getDefiningOp<llhd::ConstantTimeOp>();
+            if (timeOp) {
+              auto time = timeOp.getValue();
+              if (time.getTime() == 0 && time.getDelta() == 0 &&
+                  time.getEpsilon() <= 1) {
+                rewriter.replaceOp(op, drive.getValue());
+                return success();
+              }
+            }
+          }
           if (isReadForwardBarrier(prev))
             break;
-          auto drive = dyn_cast<llhd::DriveOp>(prev);
-          if (!drive || drive.getSignal() != input || drive.getEnable())
-            continue;
-          auto timeOp = drive.getTime().getDefiningOp<llhd::ConstantTimeOp>();
-          if (!timeOp)
-            continue;
-          auto time = timeOp.getValue();
-          if (time.getTime() != 0 || time.getDelta() != 0 ||
-              time.getEpsilon() > 1)
-            continue;
-          rewriter.replaceOp(op, drive.getValue());
-          return success();
         }
       }
 
