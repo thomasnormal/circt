@@ -11263,3 +11263,30 @@
   - focused tests:
     - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-retry.test test/Tools/run-opentitan-lec-launch-retry-transient.test test/Tools/run-opentitan-connectivity-circt-lec-tool-invoke-permission-error.test`
     - `3 passed`
+
+## 2026-03-01 - WS1 drop-reason parser dedup for LEC runners
+
+- realization:
+  - `normalize_drop_reason` and `extract_drop_reasons` were duplicated in both
+    OpenTitan LEC runner scripts, creating maintainability drift risk for
+    strict-gate diagnostics.
+
+- implemented:
+  - `utils/formal/lib/runner_common.py`
+    - added shared:
+      - `normalize_drop_reason(...)`
+      - `extract_drop_reasons(...)`
+  - migrated wrappers:
+    - `utils/run_opentitan_circt_lec.py`
+    - `utils/run_opentitan_connectivity_circt_lec.py`
+    - when shared helpers are available, both scripts now use common parser.
+  - tests:
+    - added `test/Tools/formal-runner-common-drop-reasons.test`
+    - added helper driver `test/Tools/Inputs/formal_runner_common_drop_reasons.py`
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py test/Tools/Inputs/formal_runner_common_drop_reasons.py`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-drop-reasons.test test/Tools/formal-runner-common-retry.test test/Tools/run-opentitan-lec-launch-retry-transient.test test/Tools/run-opentitan-connectivity-circt-lec-timeout-reasons-preprocess.test test/Tools/run-opentitan-connectivity-circt-lec-tool-invoke-permission-error.test`
+    - `5 passed`

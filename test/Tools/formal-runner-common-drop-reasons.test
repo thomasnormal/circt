@@ -1,0 +1,3 @@
+// RUN: python3 %S/Inputs/formal_runner_common_drop_reasons.py %S/../../utils/formal/lib | FileCheck %s
+
+// CHECK: PASS: shared formal runner drop-reason helpers

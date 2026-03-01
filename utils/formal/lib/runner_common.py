@@ -88,6 +88,29 @@ def parse_retryable_patterns(raw: str) -> list[str]:
     return [token.strip() for token in raw.split(",") if token.strip()]
 
 
+def normalize_drop_reason(line: str) -> str:
+    line = line.replace("\t", " ").strip()
+    line = re.sub(r"^[^:\n]+:\d+(?::\d+)?:\s*", "", line)
+    line = re.sub(r"^[Ww]arning:\s*", "", line)
+    line = re.sub(r"\s+", " ", line)
+    line = re.sub(r"\d+", "<n>", line)
+    line = line.replace(";", ",")
+    if len(line) > 240:
+        line = line[:240]
+    return line
+
+
+def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
+    reasons: set[str] = set()
+    for line in log_text.splitlines():
+        if pattern not in line:
+            continue
+        reason = normalize_drop_reason(line)
+        if reason:
+            reasons.add(reason)
+    return sorted(reasons)
+
+
 def load_allowlist(
     path: Path, fail_fn: Callable[[str], None] | None = None
 ) -> Allowlist:

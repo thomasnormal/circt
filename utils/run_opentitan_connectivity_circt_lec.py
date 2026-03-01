@@ -1313,8 +1313,10 @@ def compute_contract_fingerprint(fields: list[str]) -> str:
 
 try:
     from runner_common import (
+        extract_drop_reasons as _shared_extract_drop_reasons,
         is_allowlisted as _shared_is_allowlisted,
         load_allowlist as _shared_load_allowlist,
+        normalize_drop_reason as _shared_normalize_drop_reason,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
         read_status_summary as _shared_read_status_summary,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
@@ -1388,6 +1390,12 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
                 handle.write("\n")
 
 if _HAS_SHARED_FORMAL_HELPERS:
+
+    def normalize_drop_reason(line: str) -> str:
+        return _shared_normalize_drop_reason(line)
+
+    def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
+        return _shared_extract_drop_reasons(log_text, pattern)
 
     def parse_nonnegative_int(raw: str, name: str) -> int:
         return _shared_parse_nonnegative_int(raw, name, fail)

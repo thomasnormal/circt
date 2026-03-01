@@ -275,6 +275,8 @@ def run_and_log(
 
 try:
     from runner_common import (
+        extract_drop_reasons as _shared_extract_drop_reasons,
+        normalize_drop_reason as _shared_normalize_drop_reason,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
         write_log as _shared_write_log,
     )
@@ -344,6 +346,12 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
                 handle.write("\n")
 
 if _HAS_SHARED_FORMAL_HELPERS:
+
+    def normalize_drop_reason(line: str) -> str:
+        return _shared_normalize_drop_reason(line)
+
+    def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
+        return _shared_extract_drop_reasons(log_text, pattern)
 
     def write_log(path: Path, stdout: str, stderr: str) -> None:
         _shared_write_log(path, stdout, stderr)

@@ -382,6 +382,7 @@ Current workstream status in this branch:
    - shared formal schema helper landed
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
+   - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
    - runner shared-library extraction still partial
 3. WS2: not started
    - multiclock unsupported root causes identified but no core lowering changes landed in this slice
