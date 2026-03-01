@@ -12,7 +12,10 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/StringMap.h"
+#include "llvm/ADT/StringSet.h"
 
 using namespace mlir;
 using namespace circt;
@@ -39,8 +42,11 @@ struct ConstructLECPass
   using circt::impl::ConstructLECBase<ConstructLECPass>::ConstructLECBase;
   void runOnOperation() override;
   hw::HWModuleOp lookupModule(StringRef name);
-  Value constructMiter(OpBuilder builder, Location loc, hw::HWModuleOp moduleA,
-                       hw::HWModuleOp moduleB, bool withResult);
+  FailureOr<Value> constructMiter(OpBuilder builder, Location loc,
+                                  hw::HWModuleOp moduleA,
+                                  hw::HWModuleOp moduleB,
+                                  ArrayRef<StringAttr> inputNames,
+                                  ArrayRef<Type> inputTypes, bool withResult);
 };
 } // namespace
 
@@ -87,51 +93,164 @@ static bool portsMatch(ArrayRef<Attribute> aNames, ArrayRef<Type> aTypes,
   return true;
 }
 
-static LogicalResult alignModuleInputs(hw::HWModuleOp shorter,
-                                       hw::HWModuleOp longer) {
-  auto shorterType = shorter.getModuleType();
-  auto longerType = longer.getModuleType();
-  auto shorterNames = shorterType.getInputNames();
-  auto shorterTypes = shorterType.getInputTypes();
-  auto longerNames = longerType.getInputNames();
-  auto longerTypes = longerType.getInputTypes();
-
-  if (shorterNames.size() > longerNames.size())
+static LogicalResult collectInputPorts(hw::HWModuleOp module,
+                                       SmallVectorImpl<StringAttr> &names,
+                                       SmallVectorImpl<Type> &types,
+                                       llvm::StringMap<Type> &typeByName) {
+  auto inputNames = module.getInputNames();
+  auto inputTypes = module.getInputTypes();
+  if (inputNames.size() != inputTypes.size()) {
+    module.emitError("input names/types size mismatch in module type");
     return failure();
-  for (unsigned i = 0, e = shorterNames.size(); i < e; ++i) {
-    if (shorterNames[i] != longerNames[i] ||
-        shorterTypes[i] != longerTypes[i])
-      return failure();
   }
-
-  for (unsigned i = shorterNames.size(), e = longerNames.size(); i < e; ++i) {
-    shorter.insertInput(shorter.getNumInputPorts(),
-                        cast<StringAttr>(longerNames[i]), longerTypes[i]);
+  llvm::StringSet<> seenInModule;
+  for (auto [nameAttr, type] : llvm::zip(inputNames, inputTypes)) {
+    auto name = dyn_cast<StringAttr>(nameAttr);
+    if (!name) {
+      module.emitError("expected string input port name, got ") << nameAttr;
+      return failure();
+    }
+    StringRef nameStr = name.getValue();
+    if (!seenInModule.insert(nameStr).second) {
+      module.emitError("duplicate input port name in module type: ") << name;
+      return failure();
+    }
+    names.push_back(name);
+    types.push_back(type);
+    typeByName.insert({nameStr, type});
   }
   return success();
 }
 
-Value ConstructLECPass::constructMiter(OpBuilder builder, Location loc,
-                                       hw::HWModuleOp moduleA,
-                                       hw::HWModuleOp moduleB,
-                                       bool withResult) {
+static bool isInputSubset(const llvm::StringMap<Type> &subset,
+                          const llvm::StringMap<Type> &superset) {
+  for (const auto &it : subset) {
+    auto found = superset.find(it.getKey());
+    if (found == superset.end() || found->second != it.getValue())
+      return false;
+  }
+  return true;
+}
+
+static LogicalResult cloneModuleToLECCircuit(OpBuilder &builder, Location loc,
+                                             hw::HWModuleOp module,
+                                             Region &circuit,
+                                             ArrayRef<StringAttr> inputNames,
+                                             ArrayRef<Type> inputTypes) {
+  if (inputNames.size() != inputTypes.size()) {
+    module.emitError("aligned LEC input names/types size mismatch");
+    return failure();
+  }
+  auto *sourceBlock = module.getBodyBlock();
+  if (!sourceBlock) {
+    module.emitError("expected module body block");
+    return failure();
+  }
+
+  auto *targetBlock = new Block();
+  for (Type type : inputTypes)
+    targetBlock->addArgument(type, loc);
+  circuit.push_back(targetBlock);
+
+  llvm::StringMap<BlockArgument> alignedArgsByName;
+  for (auto [index, name] : llvm::enumerate(inputNames)) {
+    if (!alignedArgsByName.insert({name.getValue(), targetBlock->getArgument(index)})
+             .second) {
+      module.emitError("duplicate aligned input name in LEC miter: ") << name;
+      return failure();
+    }
+  }
+
+  auto sourceInputNames = module.getInputNames();
+  auto sourceInputTypes = module.getInputTypes();
+  if (sourceInputNames.size() != sourceInputTypes.size() ||
+      sourceInputNames.size() != sourceBlock->getNumArguments()) {
+    module.emitError("module body arguments do not match module input ports");
+    return failure();
+  }
+
+  IRMapping mapper;
+  mapper.map(sourceBlock, targetBlock);
+  for (auto [index, input] :
+       llvm::enumerate(llvm::zip(sourceInputNames, sourceInputTypes))) {
+    auto [nameAttr, type] = input;
+    auto name = dyn_cast<StringAttr>(nameAttr);
+    if (!name) {
+      module.emitError("expected string input port name, got ") << nameAttr;
+      return failure();
+    }
+    auto found = alignedArgsByName.find(name.getValue());
+    if (found == alignedArgsByName.end()) {
+      module.emitError("missing aligned input for module input: ") << name;
+      return failure();
+    }
+    if (found->second.getType() != type) {
+      module.emitError("aligned input type mismatch for port ")
+          << name << ": " << found->second.getType() << " vs " << type;
+      return failure();
+    }
+    mapper.map(sourceBlock->getArgument(index), found->second);
+  }
+
+  OpBuilder::InsertionGuard guard(builder);
+  builder.setInsertionPointToStart(targetBlock);
+  SmallVector<std::pair<Operation *, Operation *>> clonedOps;
+  auto cloneOptions =
+      Operation::CloneOptions::all().cloneRegions(false).cloneOperands(false);
+  for (auto &op : sourceBlock->without_terminator()) {
+    Operation *newOp = op.clone(mapper, cloneOptions);
+    targetBlock->push_back(newOp);
+    clonedOps.emplace_back(&op, newOp);
+  }
+
+  SmallVector<Value> remappedOperands;
+  for (auto [oldOp, newOp] : clonedOps) {
+    remappedOperands.resize(oldOp->getNumOperands());
+    llvm::transform(oldOp->getOperands(), remappedOperands.begin(),
+                    [&](Value operand) { return mapper.lookupOrDefault(operand); });
+    newOp->setOperands(remappedOperands);
+    for (auto [oldRegion, newRegion] :
+         llvm::zip(oldOp->getRegions(), newOp->getRegions()))
+      oldRegion.cloneInto(&newRegion, mapper);
+  }
+
+  auto *sourceTerminator = sourceBlock->getTerminator();
+  SmallVector<Value> yieldedValues;
+  yieldedValues.reserve(sourceTerminator->getNumOperands());
+  for (Value operand : sourceTerminator->getOperands())
+    yieldedValues.push_back(mapper.lookupOrDefault(operand));
+  verif::YieldOp::create(builder, loc, yieldedValues);
+
+  return success();
+}
+
+FailureOr<Value> ConstructLECPass::constructMiter(
+    OpBuilder builder, Location loc, hw::HWModuleOp moduleA,
+    hw::HWModuleOp moduleB, ArrayRef<StringAttr> inputNames,
+    ArrayRef<Type> inputTypes, bool withResult) {
 
   // Create the miter circuit that return equivalence result.
   auto lecOp =
       verif::LogicEquivalenceCheckingOp::create(builder, loc, withResult);
 
-  builder.cloneRegionBefore(moduleA.getBody(), lecOp.getFirstCircuit(),
-                            lecOp.getFirstCircuit().end());
-  builder.cloneRegionBefore(moduleB.getBody(), lecOp.getSecondCircuit(),
-                            lecOp.getSecondCircuit().end());
+  if (failed(cloneModuleToLECCircuit(builder, loc, moduleA,
+                                     lecOp.getFirstCircuit(), inputNames,
+                                     inputTypes)) ||
+      failed(cloneModuleToLECCircuit(builder, loc, moduleB,
+                                     lecOp.getSecondCircuit(), inputNames,
+                                     inputTypes))) {
+    lecOp->erase();
+    return failure();
+  }
 
-  auto inputNames = moduleA.getInputNames();
-  if (!inputNames.empty())
-    lecOp->setAttr("lec.input_names", builder.getArrayAttr(inputNames));
-  if (moduleA.getNumInputPorts() != 0) {
+  if (!inputNames.empty()) {
+    SmallVector<Attribute> nameAttrs(inputNames.begin(), inputNames.end());
+    lecOp->setAttr("lec.input_names", builder.getArrayAttr(nameAttrs));
+  }
+  if (!inputTypes.empty()) {
     SmallVector<Attribute> typeAttrs;
-    typeAttrs.reserve(moduleA.getNumInputPorts());
-    for (Type type : moduleA.getInputTypes())
+    typeAttrs.reserve(inputTypes.size());
+    for (Type type : inputTypes)
       typeAttrs.push_back(TypeAttr::get(type));
     lecOp->setAttr("lec.input_types", builder.getArrayAttr(typeAttrs));
   }
@@ -140,19 +259,8 @@ Value ConstructLECPass::constructMiter(OpBuilder builder, Location loc,
   if (moduleA != moduleB)
     moduleB->erase();
 
-  {
-    auto *term = lecOp.getFirstCircuit().front().getTerminator();
-    OpBuilder::InsertionGuard guard(builder);
-    builder.setInsertionPoint(term);
-    verif::YieldOp::create(builder, loc, term->getOperands());
-    term->erase();
-    term = lecOp.getSecondCircuit().front().getTerminator();
-    builder.setInsertionPoint(term);
-    verif::YieldOp::create(builder, loc, term->getOperands());
-    term->erase();
-  }
-
-  return withResult ? lecOp.getIsProven() : Value{};
+  return withResult ? FailureOr<Value>(lecOp.getIsProven())
+                    : FailureOr<Value>(Value{});
 }
 
 void ConstructLECPass::runOnOperation() {
@@ -187,18 +295,42 @@ void ConstructLECPass::runOnOperation() {
       IntegerAttr::get(IntegerType::get(&getContext(), 32),
                        selectedAbstractedInputCount));
 
+  SmallVector<StringAttr> moduleAInputNames, moduleBInputNames;
+  SmallVector<Type> moduleAInputTypes, moduleBInputTypes;
+  llvm::StringMap<Type> moduleAInputTypeByName, moduleBInputTypeByName;
+  if (failed(collectInputPorts(moduleA, moduleAInputNames, moduleAInputTypes,
+                               moduleAInputTypeByName)) ||
+      failed(collectInputPorts(moduleB, moduleBInputNames, moduleBInputTypes,
+                               moduleBInputTypeByName))) {
+    return signalPassFailure();
+  }
+
+  SmallVector<StringAttr> alignedInputNames = moduleAInputNames;
+  SmallVector<Type> alignedInputTypes = moduleAInputTypes;
+
   if (moduleA.getModuleType() != moduleB.getModuleType()) {
     if (allowIOAlignment) {
       auto outputsA = moduleA.getModuleType().getOutputNames();
       auto outputsATypes = moduleA.getModuleType().getOutputTypes();
       auto outputsB = moduleB.getModuleType().getOutputNames();
       auto outputsBTypes = moduleB.getModuleType().getOutputTypes();
+      bool aSubsetB = isInputSubset(moduleAInputTypeByName, moduleBInputTypeByName);
+      bool bSubsetA = isInputSubset(moduleBInputTypeByName, moduleAInputTypeByName);
       if (!portsMatch(outputsA, outputsATypes, outputsB, outputsBTypes) ||
-          (failed(alignModuleInputs(moduleA, moduleB)) &&
-           failed(alignModuleInputs(moduleB, moduleA)))) {
+          (!aSubsetB && !bSubsetA)) {
         moduleA.emitError("module's IO types don't match second modules: ")
             << moduleA.getModuleType() << " vs " << moduleB.getModuleType();
         return signalPassFailure();
+      }
+
+      llvm::StringSet<> seenAligned;
+      for (auto name : alignedInputNames)
+        seenAligned.insert(name.getValue());
+      for (auto [name, type] : llvm::zip(moduleBInputNames, moduleBInputTypes)) {
+        if (seenAligned.insert(name.getValue()).second) {
+          alignedInputNames.push_back(name);
+          alignedInputTypes.push_back(type);
+        }
       }
     } else {
       moduleA.emitError("module's IO types don't match second modules: ")
@@ -209,7 +341,9 @@ void ConstructLECPass::runOnOperation() {
 
   // Only construct the miter with no additional insertions.
   if (insertMode == lec::InsertAdditionalModeEnum::None) {
-    constructMiter(builder, loc, moduleA, moduleB, /*withResult*/ false);
+    if (failed(constructMiter(builder, loc, moduleA, moduleB, alignedInputNames,
+                              alignedInputTypes, /*withResult*/ false)))
+      return signalPassFailure();
     return;
   }
 
@@ -246,8 +380,11 @@ void ConstructLECPass::runOnOperation() {
 
   // Create the miter circuit that returns equivalence result.
   auto areEquivalent =
-      constructMiter(builder, loc, moduleA, moduleB, /*withResult*/ true);
-  assert(!!areEquivalent && "Expected LEC operation with result.");
+      constructMiter(builder, loc, moduleA, moduleB, alignedInputNames,
+                     alignedInputTypes, /*withResult*/ true);
+  if (failed(areEquivalent))
+    return signalPassFailure();
+  assert(*areEquivalent && "Expected LEC operation with result.");
 
   // TODO: we should find a more elegant way of reporting the result than
   // already inserting some LLVM here
@@ -255,7 +392,7 @@ void ConstructLECPass::runOnOperation() {
       lookupOrCreateStringGlobal(builder, getOperation(), "c1 == c2\n");
   Value neqFormatString =
       lookupOrCreateStringGlobal(builder, getOperation(), "c1 != c2\n");
-  Value formatString = LLVM::SelectOp::create(builder, loc, areEquivalent,
+  Value formatString = LLVM::SelectOp::create(builder, loc, *areEquivalent,
                                               eqFormatString, neqFormatString);
   LLVM::CallOp::create(builder, loc, printfFunc.value(),
                        ValueRange{formatString});

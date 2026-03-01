@@ -674,6 +674,102 @@ def sanitize_token(token: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", token)
 
 
+_SV_NUMERIC_LITERAL_RE = re.compile(
+    r"^(?:\d+[sS]?'[bBdDhHoO][0-9a-fA-F_xXzZ?]+|'[bBdDhHoO][0-9a-fA-F_xXzZ?]+|\d+)$"
+)
+_SV_PATH_TOKEN_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_$]*(?:\[[^][]+\])?(?:\.[A-Za-z_][A-Za-z0-9_$]*(?:\[[^][]+\])?)*$"
+)
+
+
+def split_top_level_csv(expr: str) -> list[str]:
+    items: list[str] = []
+    start = 0
+    brace_depth = 0
+    bracket_depth = 0
+    paren_depth = 0
+    for index, char in enumerate(expr):
+        if char == "{":
+            brace_depth += 1
+            continue
+        if char == "}":
+            if brace_depth > 0:
+                brace_depth -= 1
+            continue
+        if char == "[":
+            bracket_depth += 1
+            continue
+        if char == "]":
+            if bracket_depth > 0:
+                bracket_depth -= 1
+            continue
+        if char == "(":
+            paren_depth += 1
+            continue
+        if char == ")":
+            if paren_depth > 0:
+                paren_depth -= 1
+            continue
+        if (
+            char == ","
+            and brace_depth == 0
+            and bracket_depth == 0
+            and paren_depth == 0
+        ):
+            items.append(expr[start:index].strip())
+            start = index + 1
+    tail = expr[start:].strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def scope_signal_term(term: str, block_path: str) -> str:
+    token = term.strip()
+    if not token or not block_path:
+        return token
+    if token.startswith("{") and token.endswith("}"):
+        return scope_signal_expr(token, block_path)
+    if token.startswith("$"):
+        return token
+    if _SV_NUMERIC_LITERAL_RE.fullmatch(token):
+        return token
+    if not _SV_PATH_TOKEN_RE.fullmatch(token):
+        return token
+    if token.startswith(block_path + "."):
+        return token
+    return f"{block_path}.{token}"
+
+
+def scope_signal_expr(signal_expr: str, block_path: str) -> str:
+    token = signal_expr.strip()
+    if not token or not block_path:
+        return token
+    if not (token.startswith("{") and token.endswith("}")):
+        return scope_signal_term(token, block_path)
+    inner = token[1:-1].strip()
+    if not inner:
+        return "{}"
+    parts = split_top_level_csv(inner)
+    scoped_parts = [scope_signal_term(part, block_path) for part in parts]
+    return "{%s}" % ", ".join(scoped_parts)
+
+
+def normalize_known_endpoint_aliases(block_path: str, signal_name: str) -> tuple[str, str]:
+    block = block_path.strip()
+    signal = signal_name.strip()
+    # OpenTitan connectivity CSVs may reference historical internal RAM
+    # hierarchy (`...u_prim_ram_1p_adv.u_mem.cfg_i`) while generated RTL
+    # exposes the intended endpoint at the parent wrapper `cfg_i` port.
+    if signal == "cfg_i" and block.endswith(".u_prim_ram_1p_adv.u_mem"):
+        block = block[: -len(".u_prim_ram_1p_adv.u_mem")]
+    # Some OpenTitan 1p memory wrappers expose `cfg_i` directly at
+    # `...u_memory_1p` while CSV contracts still point at `...u_memory_1p.u_mem`.
+    if signal == "cfg_i" and block.endswith(".u_memory_1p.u_mem"):
+        block = block[: -len(".u_mem")]
+    return block, signal
+
+
 def block_signal_expr(block: str, signal: str, top_module: str) -> str:
     b = block.strip()
     s = signal.strip()
@@ -682,8 +778,9 @@ def block_signal_expr(block: str, signal: str, top_module: str) -> str:
             b = ""
         elif b.startswith(top_module + "."):
             b = b[len(top_module) + 1 :]
+    b, s = normalize_known_endpoint_aliases(b, s)
     if b and s:
-        return f"{b}.{s}"
+        return scope_signal_expr(s, b)
     return b or s
 
 
@@ -691,36 +788,22 @@ def scope_under_instance(expr: str, instance_name: str) -> str:
     token = expr.strip()
     if not token:
         return ""
+    if token.startswith("{") and token.endswith("}"):
+        return scope_signal_expr(token, instance_name)
     if token.startswith(instance_name + "."):
         return token
     return f"{instance_name}.{token}"
 
 
-CONST_INDEXED_BIT_RE = re.compile(r"^\s*(.+?)\[(\d+)\]\s*$")
-
-
 def rewrite_const_indexed_bit(expr: str) -> str:
-    """Rewrite `foo[3]` to shift/mask form to avoid frontend crashes.
+    """Preserve indexed expressions exactly as written.
 
-    Some OpenTitan connectivity paths trigger `circt-verilog` crashes in
-    SimplifyProcedures when directly using hierarchical constant bit-select
-    syntax in generated wrappers. Rewrite the common constant-index case into
-    an equivalent `$unsigned` shift/mask form while preserving selected element
-    width for unpacked arrays (for example `mubi4_t [N-1:0]`).
+    Direct indexed hierarchical paths are semantically precise. Transforming
+    them can introduce width- and X-propagation mismatches that turn valid OpenTitan
+    connectivity proofs into false `NEQ` results.
     """
 
-    match = CONST_INDEXED_BIT_RE.fullmatch(expr.strip())
-    if not match:
-        return expr
-    base_expr = match.group(1).strip()
-    index = match.group(2)
-    elem_width = f"$bits({base_expr}[0])"
-    shift_amount = f"(({index}) * ({elem_width}))"
-    trim_amount = f"(($size({base_expr}) - 1) * ({elem_width}))"
-    shifted = f"(($unsigned({base_expr})) >> {shift_amount})"
-    # Keep only the selected element bits without using `$bits(<hierarchical>)`
-    # in a constant-expression context (which many frontends reject).
-    return f"((({shifted}) << {trim_amount}) >> {trim_amount})"
+    return expr
 
 
 def build_condition_guard_expr(
@@ -777,7 +860,7 @@ def synthesize_rule_wrappers(
         assertion_expr = f"((!({guard_expr})) || {assertion_expr})"
     body = f"""// Auto-generated connectivity LEC wrappers for {rule_id}
 module {ref_module}(output logic result);
-  {bind_top} dut();
+  // Keep the reference side trivial to avoid flattening the full DUT twice.
   assign result = 1'b1;
 endmodule
 
