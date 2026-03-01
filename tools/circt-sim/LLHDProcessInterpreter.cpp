@@ -572,7 +572,22 @@ static bool shouldDenyUnmappedZeroArgUvmHelperCall(mlir::func::FuncOp funcOp) {
 
 static bool shouldDenyUnmappedNativeCallByDefault(mlir::func::FuncOp funcOp) {
   llvm::StringRef calleeName = funcOp.getName();
+  static bool allowUnsafeUnmappedReportingOptIn = []() {
+    const char *env =
+        std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING_UNMAPPED_UNSAFE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   auto isReportingOptInUnmappedAllowName = [&](llvm::StringRef name) -> bool {
+    // Keep a few high-risk unmapped reporting helpers interpreted by default:
+    // native dispatch here has caused AVIP-level functional regressions in
+    // analysis write/connect behavior. An explicit UNSAFE opt-in can be used
+    // for controlled experiments.
+    bool isKnownFragileReportingHelper =
+        name == "uvm_pkg::uvm_get_report_object" ||
+        name.ends_with("::uvm_get_report_object") ||
+        name == "uvm_pkg::uvm_report_object::get_report_verbosity_level";
+    if (!allowUnsafeUnmappedReportingOptIn && isKnownFragileReportingHelper)
+      return false;
     if (name.contains("::uvm_printer_element::get_children") ||
         name.contains("::uvm_printer_element_proxy::get_immediate_children"))
       return false;
