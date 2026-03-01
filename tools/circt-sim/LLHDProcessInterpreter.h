@@ -3378,6 +3378,9 @@ private:
   };
   void noteInterpretedFuncCallFallback(llvm::StringRef calleeName,
                                        DirectInterpretedFallbackReason reason);
+  /// Allow a small, policy-gated subset of direct native calls while already
+  /// executing under trampoline-induced AOT depth.
+  bool shouldAllowNestedDirectNativeFunc(mlir::func::FuncOp funcOp) const;
   bool shouldSkipMayYieldDirectNativeFunc(uint32_t fid, ProcessId contextProcId,
                                           llvm::StringRef dispatchKind);
   bool shouldSkipMayYieldEntryDispatch(uint32_t fid, bool isNativeEntry,

@@ -22053,6 +22053,24 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (profilingEnabled)
     ++funcCallProfile[calleeName];
   noteAotCalleeNameCall(calleeName);
+  auto maybeTraceDepthFallback = [&](llvm::StringRef depthCallee) {
+    static bool traceDepthFallback =
+        std::getenv("CIRCT_AOT_TRACE_DEPTH_FALLBACKS") != nullptr;
+    if (!traceDepthFallback)
+      return;
+    static uint64_t traceDepthFallbackLimit = []() -> uint64_t {
+      if (const char *s = std::getenv("CIRCT_AOT_TRACE_DEPTH_FALLBACKS_LIMIT"))
+        return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
+      return 200;
+    }();
+    static uint64_t traceDepthFallbackCount = 0;
+    if (traceDepthFallbackCount >= traceDepthFallbackLimit)
+      return;
+    llvm::errs() << "[AOT TRACE] func.call depth-fallback callee="
+                 << depthCallee << " aotDepth=" << aotDepth
+                 << " active_proc=" << activeProcessId << "\n";
+    ++traceDepthFallbackCount;
+  };
 
   // Fast path for CallOps with cached no-interception result.
   // Skips all UVM string-matching interceptors (~20+ checks).
@@ -25258,7 +25276,7 @@ no_uvm_objection_intercept:
         fallbackReason = DirectInterpretedFallbackReason::MayYield;
         goto func_call_interpreted_fallback;
       }
-      if (aotDepth == 0) {
+      if (aotDepth == 0 || shouldAllowNestedDirectNativeFunc(funcOp)) {
         void *fptr = nativeIt->second;
         unsigned numArgs = args.size();
         unsigned numResults = callOp.getNumResults();
@@ -25656,6 +25674,7 @@ no_uvm_objection_intercept:
       } else {
         ++nativeFuncSkippedDepth;
         fallbackReason = DirectInterpretedFallbackReason::Depth;
+        maybeTraceDepthFallback(calleeName);
       }
       // Fell through — can't native dispatch, use interpreter.
       ++interpretedFuncCallCount;
@@ -25794,6 +25813,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
 
   // Call depth check.
   auto &state = processStates[procId];
+  auto maybeTraceDepthFallback = [&](llvm::StringRef depthCallee) {
+    static bool traceDepthFallback =
+        std::getenv("CIRCT_AOT_TRACE_DEPTH_FALLBACKS") != nullptr;
+    if (!traceDepthFallback)
+      return;
+    static uint64_t traceDepthFallbackLimit = []() -> uint64_t {
+      if (const char *s = std::getenv("CIRCT_AOT_TRACE_DEPTH_FALLBACKS_LIMIT"))
+        return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
+      return 200;
+    }();
+    static uint64_t traceDepthFallbackCount = 0;
+    if (traceDepthFallbackCount >= traceDepthFallbackLimit)
+      return;
+    llvm::errs() << "[AOT TRACE] func.call depth-fallback callee="
+                 << depthCallee << " aotDepth=" << aotDepth
+                 << " active_proc=" << activeProcessId << "\n";
+    ++traceDepthFallbackCount;
+  };
   constexpr size_t maxCallDepth = 1024;
   if (state.callDepth >= maxCallDepth) {
     for (Value result : callOp.getResults()) {
@@ -25896,7 +25933,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   if (forcedInterpreter)
     ++interpretedFuncCallCount;
   if (nfp) {
-    if (aotDepth == 0) {
+    if (aotDepth == 0 || shouldAllowNestedDirectNativeFunc(funcOp)) {
       unsigned numArgs = args.size();
       unsigned numResults = callOp.getNumResults();
       auto isNativeScalarType = [](mlir::Type ty) -> bool {
@@ -26282,6 +26319,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
     } else {
       ++nativeFuncSkippedDepth;
       fallbackReason = DirectInterpretedFallbackReason::Depth;
+      maybeTraceDepthFallback(callOp.getCallee());
     }
     // Fell through — can't native dispatch (wide args), use interpreter.
     if (fallbackReason == DirectInterpretedFallbackReason::NoNativePtr)
@@ -44418,6 +44456,19 @@ void LLHDProcessInterpreter::noteAotDirectYieldSkip(uint32_t fid) {
   if (fid >= aotDirectYieldSkipCounts.size())
     return;
   ++aotDirectYieldSkipCounts[fid];
+}
+
+bool LLHDProcessInterpreter::shouldAllowNestedDirectNativeFunc(
+    mlir::func::FuncOp funcOp) const {
+  if (aotDepth != 1)
+    return false;
+  if (std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING") == nullptr)
+    return false;
+  llvm::StringRef name = funcOp.getName();
+  return name == "uvm_pkg::uvm_report_handler::initialize" ||
+         name == "uvm_pkg::uvm_report_handler::set_default_file" ||
+         name == "uvm_pkg::uvm_report_handler::set_severity_action" ||
+         name == "uvm_pkg::uvm_report_handler::set_severity_file";
 }
 
 void LLHDProcessInterpreter::noteInterpretedFuncCallFallback(
