@@ -390,6 +390,8 @@ Current workstream status in this branch:
      validation (`--validate-results-schema`)
    - baseline capture now supports strict cross-row schema gating via
      `--validate-results-schema-strict-contract`
+   - strict schema-gating CLI contract is regression-covered (strict flag
+     requires base schema validation flag)
    - baseline manifests now support per-command expected return-code contracts
      (`expected_returncodes`) for bounded-timeout frontier lanes
    - WS0 manifest writer now supports per-lane expected return-code flags

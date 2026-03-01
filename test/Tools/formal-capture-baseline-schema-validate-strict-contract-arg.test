@@ -1,0 +1,3 @@
+// RUN: rm -rf %t
+// RUN: not python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/missing.json --out-dir %t/out --repeat 1 --validate-results-schema-strict-contract 2>&1 | FileCheck %s
+// CHECK: --validate-results-schema-strict-contract requires --validate-results-schema
