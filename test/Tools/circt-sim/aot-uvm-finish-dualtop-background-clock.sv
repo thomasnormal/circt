@@ -7,6 +7,7 @@
 // wait_for_state on stale phase wrappers.
 // CHECK: DROP_DONE
 // CHECK: REPORT_DONE
+// CHECK-NOT: ILLCRT
 // CHECK-NOT: Main loop exit: maxTime reached
 // CHECK-NOT: advanceTime() returned false
 

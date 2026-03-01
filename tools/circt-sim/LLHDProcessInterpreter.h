@@ -3572,7 +3572,11 @@ private:
                                  llvm::ArrayRef<InterpretedValue> args);
 
   /// Map a phase wrapper address onto the active common-domain phase graph.
-  uint64_t mapUvmPhaseAddressToActiveGraph(ProcessId procId, uint64_t phaseAddr);
+  /// `allowUnknownImpZeroToActiveRoot` enables a conservative deadlock-avoid
+  /// fallback for stale `m_imp==0` wrappers that cannot be identified.
+  uint64_t mapUvmPhaseAddressToActiveGraph(
+      ProcessId procId, uint64_t phaseAddr,
+      bool allowUnknownImpZeroToActiveRoot = false);
 
   /// Canonicalize UVM phase-handle call arguments onto the active graph.
   /// This currently remaps:

@@ -256,7 +256,8 @@ void LLHDProcessInterpreter::recordUvmPhaseAddSequence(
 }
 
 uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
-    ProcessId procId, uint64_t phaseAddr) {
+    ProcessId procId, uint64_t phaseAddr,
+    bool allowUnknownImpZeroToActiveRoot) {
   static bool tracePhaseRemap = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_REMAP");
     return env && env[0] != '\0' && env[0] != '0';
@@ -353,9 +354,11 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
         }
       }
       // Host-backed stale wrappers can lose the root-key/wrapper-key relation.
-      // For wait-for-state style remaps, converge unknown m_imp==0 wrappers
-      // onto the active root to avoid deadlocking on stale phase objects.
-      if (normalized != activePhaseRootAddr) {
+      // Only allow this deadlock-avoid fallback for explicit wait-for-state
+      // remaps; applying it to generic phase APIs (e.g. find arg1) can rewrite
+      // unrelated phase handles and perturb phase ordering.
+      if (allowUnknownImpZeroToActiveRoot &&
+          normalized != activePhaseRootAddr) {
         auto readPhaseName = [&](uint64_t addr) -> std::string {
           if (addr == 0)
             return {};
@@ -545,7 +548,10 @@ void LLHDProcessInterpreter::maybeRemapUvmPhaseArgsToActiveGraph(
 
   if (remapArg0ToActiveGraph) {
     uint64_t oldPhase = args[0].getUInt64();
-    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(procId, oldPhase);
+    bool allowUnknownImpZeroToActiveRoot =
+        calleeName == "uvm_pkg::uvm_phase::wait_for_state";
+    uint64_t newPhase = mapUvmPhaseAddressToActiveGraph(
+        procId, oldPhase, allowUnknownImpZeroToActiveRoot);
     if (calleeName == "uvm_pkg::uvm_phase::wait_for_state" && newPhase != 0 &&
         args.size() >= 3 && !args[1].isX() && !args[2].isX()) {
       auto currentPhaseIt = currentExecutingPhaseAddr.find(procId);
