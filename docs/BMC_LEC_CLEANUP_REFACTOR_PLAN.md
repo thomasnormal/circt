@@ -368,3 +368,264 @@ Start with WS1 in a narrow, low-risk cut:
 3. Add or update lit tests to lock behavior.
 4. Land in small commits before broader extraction.
 
+## 16. Status Snapshot (as of March 1, 2026)
+
+Current workstream status in this branch:
+
+1. WS0: in progress
+   - baseline manifest writer landed
+   - unsupported diagnostics audit scaffold landed
+   - baseline freezing and three-run reproducibility gate still pending
+2. WS1: in progress
+   - shared formal schema helper landed
+   - runner shared-library extraction still partial
+3. WS2: not started
+   - multiclock unsupported root causes identified but no core lowering changes landed in this slice
+4. WS3: not started
+   - register-init unsupported inventory exists, implementation pending
+5. WS4: in progress
+   - several LLHD/ref compatibility rewrites exist in runner/tooling flow
+   - systematic category burn-down matrix not completed
+6. WS5: in progress
+   - several array/aggregate LEC lowering tests exist
+   - full aggregate legalization plan still incomplete
+7. WS6: in progress
+   - JSONL schema emission landed in major runners
+   - schema docs + dashboards + strict schema validation tooling still pending
+
+## 17. Execution Backlog (Ticket-Level)
+
+The following backlog is the concrete implementation queue. IDs are stable handles for engineering logs and commits.
+
+### WS0 Tickets
+
+1. WS0-T1: baseline manifest contract v1
+   - define required keys and invariants
+   - add parser validation tool
+2. WS0-T2: baseline capture scripts for:
+   - OpenTitan LEC connectivity frontier
+   - OpenTitan AES LEC suite
+   - sv-tests BMC chapter slices
+3. WS0-T3: three-run reproducibility gate
+   - classify drift by status, reason_code, and stage
+4. WS0-T4: baseline artifact retention policy
+   - max artifact size
+   - stable per-case log naming
+
+### WS1 Tickets
+
+1. WS1-T1: shared command launcher module
+   - retry policy
+   - timeout policy
+   - resource guard handling
+2. WS1-T2: shared reason classifier module
+   - timeout reason normalization
+   - frontend error taxonomy
+   - solver error taxonomy
+3. WS1-T3: shared result writer
+   - JSONL schema writer
+   - TSV projection helper
+4. WS1-T4: script-level dead code cleanup
+   - remove duplicated fallback paths
+   - delete stale environment toggles no longer used
+
+### WS2 Tickets
+
+1. WS2-T1: multiclock unsupported inventory
+   - map each unsupported message to one failing lit test
+2. WS2-T2: domain-aware check lowering
+   - represent per-domain step semantics in BMC lowering
+3. WS2-T3: cross-domain scheduling semantics
+   - deterministic step relation for multi-domain checks
+4. WS2-T4: multiclock counterexample metadata
+   - include clock-domain event traces in witness output
+
+### WS3 Tickets
+
+1. WS3-T1: register-init shape inventory
+   - direct init
+   - folded init
+   - cast/aggregate wrapped init
+2. WS3-T2: init normalization in externalizer path
+3. WS3-T3: unsupported diagnostics tightening
+   - emit exact unsupported init form and op location
+
+### WS4 Tickets
+
+1. WS4-T1: LLHD/ref unsupported matrix
+   - category C1/C2/C3 ownership mapping
+2. WS4-T2: C1 rewrite completion
+3. WS4-T3: C2 bounded CFG-sensitive rewrites
+4. WS4-T4: C3 documentation and user-facing diagnostics
+
+### WS5 Tickets
+
+1. WS5-T1: aggregate conversion pattern inventory
+2. WS5-T2: legalization for common extract/insert/load/store families
+3. WS5-T3: verifier pass for residual non-canonical aggregate forms
+4. WS5-T4: OpenTitan-derived regression pack for aggregate cones
+
+### WS6 Tickets
+
+1. WS6-T1: schema contract doc and versioning policy
+2. WS6-T2: strict schema validator CLI
+3. WS6-T3: migration adapters for old TSV pipelines
+4. WS6-T4: dashboard inputs from schema-only data
+
+## 18. Timeout Frontier Program (Z3 Mode)
+
+This is the dedicated program to push the timeout frontier deeper with real OpenTitan workloads.
+
+### Definition
+
+A timeout frontier case is a case that:
+
+1. passes preprocessing/lowering
+2. reaches solver stage in real Z3 mode
+3. returns `TIMEOUT` at or above a configured timeout budget
+
+### Method
+
+1. Build per-case timing table with:
+   - frontend_time_ms
+   - solver_time_ms
+   - status
+   - reason_code
+2. Bin cases by runtime percentiles:
+   - P50
+   - P90
+   - P99
+3. Focus optimization on:
+   - top 10 cumulative solver-time contributors
+   - top 10 frequent timeout reason_code families
+
+### Optimization Loop
+
+1. pick one reason_code cluster
+2. create minimal reproducer
+3. profile generated SMT/IR size and solver behavior
+4. implement one change
+5. re-run frontier table
+6. keep change only if:
+   - timeout count decreases, or
+   - same timeout count but lower total solver time
+
+### Exit Criteria
+
+1. no regression in pass/fail semantics
+2. timeout frontier shifts forward by at least 25 percent in case count at fixed budget
+3. solver-time P90 reduced by at least 20 percent on frontier suite
+
+## 19. Test Strategy Matrix
+
+Every ticket should land with one test from each relevant layer.
+
+1. unit-level
+   - helper/parser/classifier behavior
+2. lit regression
+   - exact failing lowering or runner behavior
+3. integration runner
+   - end-to-end harness flow over synthetic fixture
+4. real-workload smoke
+   - OpenTitan shard or sv-tests slice
+
+Minimum policy:
+
+1. no semantic change without a red-to-green lit test
+2. no runner output change without schema/TSV regression updates
+3. no timeout-classification change without reason-code regression tests
+
+## 20. CI and Automation Plan
+
+### Presubmit Gates
+
+1. `check-circt` formal-focused lit subset:
+   - `test/Tools/circt-bmc/*`
+   - `test/Tools/circt-lec/*`
+   - runner `test/Tools/run-*formal*`
+2. schema tests:
+   - formal result schema generation
+   - manifest generation and parsing
+
+### Periodic Gates (nightly)
+
+1. OpenTitan connectivity LEC shard suite in Z3 mode
+2. OpenTitan AES LEC suite in Z3 mode
+3. sv-tests BMC tagged suites with fixed seeds
+
+### Reporting
+
+Nightly report should publish:
+
+1. pass/fail/error/timeout counts by suite
+2. timeout frontier top cases by solver_time_ms
+3. unsupported diagnostic counts by category
+4. drift vs previous baseline
+
+## 21. Rollout and Compatibility
+
+1. keep existing TSV outputs during migration
+2. treat JSONL as source-of-truth once adapters are complete
+3. announce schema version bumps with migration note
+4. deprecate legacy fields in two-step process:
+   - first release: emit both old and new
+   - second release: remove old after consumers migrate
+
+## 22. Quality and Refactor Cleanup Targets
+
+These are explicit cleanup targets to avoid long-term code rot.
+
+1. `utils/run_sv_tests_circt_bmc.sh`
+   - split into reusable library + thin CLI
+   - reduce line count by at least 30 percent
+2. `utils/run_opentitan_connectivity_circt_lec.py`
+   - isolate case generation from execution
+   - isolate reason classification from command launch
+3. dead-path cleanup
+   - remove duplicate fallback paths superseded by common helpers
+4. reason code normalization
+   - one canonical enum source
+   - no ad-hoc mixed-case reason names
+
+## 23. Four-Week Execution Calendar
+
+### Week 1
+
+1. complete WS0-T1/T2/T3
+2. freeze baseline artifacts
+3. publish first drift report
+
+### Week 2
+
+1. complete WS1-T1/T2
+2. move runners to shared launcher/classifier
+3. verify no behavior drift on baseline
+
+### Week 3
+
+1. complete WS2-T1/T2 and WS3-T1/T2
+2. land first multiclock and init-form closure patches
+3. run OpenTitan BMC shard validation in Z3 mode
+
+### Week 4
+
+1. complete WS4-T1/T2 and WS5-T1/T2
+2. run timeout frontier loop on OpenTitan LEC
+3. publish milestone assessment for M1/M2/M3 readiness
+
+## 24. Open Questions to Resolve Early
+
+1. Should multiclock semantics in BMC be lockstep, event-driven, or hybrid by default?
+2. Which aggregate legalization boundary belongs in LEC tool vs conversion pass?
+3. Do we keep legacy runner-specific reason codes or enforce global enum now?
+4. What is the strict resource budget for nightly OpenTitan Z3 runs?
+5. Which dashboard consumers need compatibility adapters before schema-only switch?
+
+## 25. Updated Next Action
+
+Execute WS0-T2 plus WS0-T3 immediately:
+
+1. capture frozen baseline manifests for OpenTitan AES LEC, connectivity LEC, and sv-tests BMC
+2. run each baseline three times
+3. emit drift report from schema rows
+4. block further semantic refactors until baseline drift is understood
