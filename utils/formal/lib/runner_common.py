@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import re
 import subprocess
 import sys
@@ -18,6 +19,11 @@ from typing import Callable, Iterable, Sequence
 
 Allowlist = tuple[set[str], list[str], list[re.Pattern[str]]]
 DriftRow = tuple[str, str, str, str, str]
+DEFAULT_RETRYABLE_PATTERNS = (
+    "text file busy",
+    "resource temporarily unavailable",
+    "stale file handle",
+)
 
 
 def fail(msg: str) -> None:
@@ -76,6 +82,10 @@ def parse_exit_codes(
             fail_fn(f"invalid {name}: {raw}")
             raise AssertionError("unreachable")
     return out
+
+
+def parse_retryable_patterns(raw: str) -> list[str]:
+    return [token.strip() for token in raw.split(",") if token.strip()]
 
 
 def load_allowlist(
@@ -234,6 +244,51 @@ def run_command_logged(
             stderr=result.stderr,
         )
     raise AssertionError("unreachable")
+
+
+def run_command_logged_with_env_retry(
+    cmd: list[str],
+    log_path: Path,
+    *,
+    timeout_secs: int = 0,
+    out_path: Path | None = None,
+    fail_fn: Callable[[str], None] | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    if fail_fn is None:
+        fail_fn = fail
+    resolved_env = os.environ if env is None else env
+    retry_attempts = parse_nonnegative_int(
+        resolved_env.get("FORMAL_LAUNCH_RETRY_ATTEMPTS", "1"),
+        "FORMAL_LAUNCH_RETRY_ATTEMPTS",
+        fail_fn,
+    )
+    retry_backoff_secs = parse_nonnegative_float(
+        resolved_env.get("FORMAL_LAUNCH_RETRY_BACKOFF_SECS", "0.2"),
+        "FORMAL_LAUNCH_RETRY_BACKOFF_SECS",
+        fail_fn,
+    )
+    retryable_exit_codes = parse_exit_codes(
+        resolved_env.get("FORMAL_LAUNCH_RETRYABLE_EXIT_CODES", "126,127"),
+        "FORMAL_LAUNCH_RETRYABLE_EXIT_CODES",
+        fail_fn,
+    )
+    retryable_patterns = parse_retryable_patterns(
+        resolved_env.get(
+            "FORMAL_LAUNCH_RETRYABLE_PATTERNS",
+            ",".join(DEFAULT_RETRYABLE_PATTERNS),
+        )
+    )
+    return run_command_logged(
+        cmd,
+        log_path,
+        timeout_secs=timeout_secs,
+        out_path=out_path,
+        retry_attempts=retry_attempts,
+        retry_backoff_secs=retry_backoff_secs,
+        retryable_exit_codes=retryable_exit_codes,
+        retryable_output_patterns=retryable_patterns,
+    )
 
 
 def write_status_summary(

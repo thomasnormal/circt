@@ -49,6 +49,42 @@ def main() -> int:
     assert marker.exists(), "marker was not created by first attempt"
     assert "ok-retry" in output, "second attempt output missing"
     assert "ok-retry" in out_path.read_text(encoding="utf-8"), "stdout capture missing"
+
+    # Also validate the shared env-driven retry wrapper to prevent drift
+    # between script wrappers and common retry policy parsing.
+    marker_env = tmp_dir / "retry-env.marker"
+    log_path_env = tmp_dir / "runner-env.log"
+    out_path_env = tmp_dir / "runner-env.out"
+    cmd_payload_env = "\n".join(
+        [
+            "import pathlib",
+            "import sys",
+            f"marker = pathlib.Path({str(marker_env)!r})",
+            "if not marker.exists():",
+            "    marker.write_text('1', encoding='utf-8')",
+            "    print('resource temporarily unavailable', file=sys.stderr)",
+            "    raise SystemExit(126)",
+            "print('ok-env-retry')",
+        ]
+    )
+    env = {
+        "FORMAL_LAUNCH_RETRY_ATTEMPTS": "2",
+        "FORMAL_LAUNCH_RETRY_BACKOFF_SECS": "0",
+        "FORMAL_LAUNCH_RETRYABLE_EXIT_CODES": "126",
+        "FORMAL_LAUNCH_RETRYABLE_PATTERNS": "resource temporarily unavailable",
+    }
+    output_env = runner_common.run_command_logged_with_env_retry(
+        [sys.executable, "-c", cmd_payload_env],
+        log_path_env,
+        timeout_secs=5,
+        out_path=out_path_env,
+        env=env,
+    )
+    assert marker_env.exists(), "env marker missing"
+    assert "ok-env-retry" in output_env, "env retry output missing"
+    assert "ok-env-retry" in out_path_env.read_text(
+        encoding="utf-8"
+    ), "env stdout capture missing"
     print("PASS: shared formal runner retry helper")
     return 0
 

@@ -11231,3 +11231,35 @@
   - focused suite:
     - `build_test/bin/llvm-lit -sv test/Tools/formal-validate-results-schema.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-capture-baseline.test test/Tools/formal-drift-compare.test`
     - `4 passed`
+
+## 2026-03-01 - WS1 shared launcher dedup for OpenTitan LEC runners
+
+- realization:
+  - `run_opentitan_circt_lec.py` and
+    `run_opentitan_connectivity_circt_lec.py` both duplicated environment
+    parsing for retry policy (`FORMAL_LAUNCH_RETRY_*`) before delegating to
+    `runner_common.run_command_logged`.
+  - This drift risk directly conflicts with WS1 modularization goals.
+
+- implemented:
+  - `utils/formal/lib/runner_common.py`
+    - added `run_command_logged_with_env_retry(...)`
+      - centralizes retry env parsing
+      - delegates to `run_command_logged`
+    - added `parse_retryable_patterns(...)`
+    - added shared default retryable patterns constant.
+  - migrated wrappers:
+    - `utils/run_opentitan_circt_lec.py`
+    - `utils/run_opentitan_connectivity_circt_lec.py`
+    - both now call shared env-retry helper instead of local parsing.
+  - expanded retry helper coverage:
+    - `test/Tools/Inputs/formal_runner_common_retry.py` now validates both:
+      - direct retry API
+      - env-driven retry API.
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py test/Tools/Inputs/formal_runner_common_retry.py`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-retry.test test/Tools/run-opentitan-lec-launch-retry-transient.test test/Tools/run-opentitan-connectivity-circt-lec-tool-invoke-permission-error.test`
+    - `3 passed`

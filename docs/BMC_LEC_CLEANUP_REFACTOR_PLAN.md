@@ -380,6 +380,8 @@ Current workstream status in this branch:
    - real OpenTitan baseline runs + first drift report still pending
 2. WS1: in progress
    - shared formal schema helper landed
+   - shared env-driven retry launcher landed in `runner_common`
+   - OpenTitan LEC runners migrated off duplicated retry parsing
    - runner shared-library extraction still partial
 3. WS2: not started
    - multiclock unsupported root causes identified but no core lowering changes landed in this slice
