@@ -516,6 +516,42 @@ static bool decodePtrLenStructNativeAbiArg(const InterpretedValue &value,
   return true;
 }
 
+static bool shouldAllowUntrackedPtrLenNativeForReporting(
+    mlir::func::FuncOp funcOp, uint64_t ptrValue, uint64_t lenValue) {
+  if (ptrValue == 0)
+    return false;
+  static bool allowNativeUvmReportingOptIn = []() {
+    return std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr ||
+           std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING") != nullptr;
+  }();
+  if (!allowNativeUvmReportingOptIn)
+    return false;
+  llvm::StringRef calleeName = funcOp.getName();
+  if (calleeName != "uvm_pkg::uvm_report_object::get_report_verbosity_level" &&
+      calleeName != "uvm_pkg::uvm_report_handler::get_verbosity_level" &&
+      calleeName != "uvm_pkg::uvm_report_object::get_report_action" &&
+      calleeName != "uvm_pkg::uvm_report_handler::get_action" &&
+      calleeName != "uvm_pkg::uvm_report_object::uvm_report_enabled")
+    return false;
+
+  constexpr uint64_t kMinReasonablePtr = 0x10000ULL;
+  constexpr uint64_t kVirtualLo = 0x10000000ULL;
+  constexpr uint64_t kVirtualHi = 0x20000000ULL;
+  constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+  constexpr uint64_t kTaggedHi = 0x100000000ULL;
+  constexpr uint64_t kMaxReportingIdLen = 1ULL << 20; // 1 MiB safety cap.
+
+  if (ptrValue < kMinReasonablePtr)
+    return false;
+  if (ptrValue >= kVirtualLo && ptrValue < kVirtualHi)
+    return false;
+  if (ptrValue >= kTaggedLo && ptrValue < kTaggedHi)
+    return false;
+  if (lenValue > kMaxReportingIdLen)
+    return false;
+  return true;
+}
+
 static bool shouldDenyUnmappedZeroArgUvmHelperCall(mlir::func::FuncOp funcOp) {
   static bool allowUnsafeZeroArgHelpers =
       std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_ZEROARG_HELPERS_UNSAFE") !=
@@ -25108,8 +25144,14 @@ no_uvm_objection_intercept:
               bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
               ptrLenArgPtr = normalizeNativeCallPointerArg(
                   procId, funcOp.getName(), ptrLenArgPtr);
+              bool allowUntrackedPtrLenReporting =
+                  isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
+                  !isKnownPointerAddress(ptrLenArgPtr) &&
+                  shouldAllowUntrackedPtrLenNativeForReporting(
+                      funcOp, ptrLenArgPtr, ptrLenArgLen);
               if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
-                  !isKnownPointerAddress(ptrLenArgPtr)) {
+                  !isKnownPointerAddress(ptrLenArgPtr) &&
+                  !allowUntrackedPtrLenReporting) {
                 if (traceNativeCalls) {
                   llvm::errs()
                       << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
@@ -25674,8 +25716,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
             bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
             ptrLenArgPtr =
                 normalizeNativeCallPointerArg(procId, funcOp.getName(), ptrLenArgPtr);
+            bool allowUntrackedPtrLenReporting =
+                isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
+                !isKnownPointerAddress(ptrLenArgPtr) &&
+                shouldAllowUntrackedPtrLenNativeForReporting(
+                    funcOp, ptrLenArgPtr, ptrLenArgLen);
             if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
-                !isKnownPointerAddress(ptrLenArgPtr)) {
+                !isKnownPointerAddress(ptrLenArgPtr) &&
+                !allowUntrackedPtrLenReporting) {
               if (traceNativeCalls) {
                 llvm::errs()
                     << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
