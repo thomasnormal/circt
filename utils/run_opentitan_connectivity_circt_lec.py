@@ -1755,6 +1755,16 @@ def main() -> int:
         os.environ.get("LEC_BATCH_PRECHECK_MIN_CASES", "4"),
         "LEC_BATCH_PRECHECK_MIN_CASES",
     )
+    batch_precheck_timeout_split_mode = os.environ.get(
+        "LEC_BATCH_PRECHECK_TIMEOUT_SPLIT_MODE", "auto"
+    ).strip().lower()
+    if batch_precheck_timeout_split_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_BATCH_PRECHECK_TIMEOUT_SPLIT_MODE: "
+                f"{batch_precheck_timeout_split_mode} (expected auto|on|off)"
+            )
+        )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -2238,7 +2248,8 @@ def main() -> int:
                     shared_dir / "circt-opt.emit-bytecode.log"
                 )
                 batch_precheck_enabled = (
-                    len(batch_cases) >= batch_precheck_min_cases
+                    len(batch_cases) > 1
+                    and len(batch_cases) >= batch_precheck_min_cases
                     and (
                         batch_precheck_mode == "on"
                         or (
@@ -2734,6 +2745,29 @@ def main() -> int:
                                 "batch_precheck_timeout",
                             )
                         )
+                        split_batch_after_precheck_timeout = (
+                            len(batch_cases) > 1
+                            and (
+                                batch_precheck_timeout_split_mode == "on"
+                                or (
+                                    batch_precheck_timeout_split_mode == "auto"
+                                    and lec_run_smtlib
+                                    and not lec_smoke_only
+                                )
+                            )
+                        )
+                        if split_batch_after_precheck_timeout:
+                            split_point = max(1, len(batch_cases) // 2)
+                            pending_batches.insert(0, batch_cases[split_point:])
+                            pending_batches.insert(0, batch_cases[:split_point])
+                            print(
+                                "opentitan connectivity lec: splitting batch after "
+                                "precheck timeout "
+                                f"(batch={batch_index}, size={len(batch_cases)})",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                            continue
 
                 for case in batch_cases:
                     case_dir = workdir / "cases" / sanitize_token(case.case_id)

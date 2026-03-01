@@ -974,3 +974,48 @@
     - `rstmgr_rst_en.csv:RSTMGR_LC_IO_DIV4_D0_ALERT_0_RST_EN`
     - result: `PASS ... EQ` under real Z3 (previously observed as
       `CIRCT_LEC_ERROR`/`CIRCT_VERILOG_ERROR` in older artifacts).
+
+## 2026-03-01 - Split batches on precheck timeout and close historical Z3 frontier set
+
+- realization:
+  - when batch precheck times out, falling back to per-case checks on the same
+    oversized shared IR is expensive and can amplify timeout churn.
+  - existing batch splitting handled frontend failures and size caps, but not
+    solver precheck timeouts.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_BATCH_PRECHECK_TIMEOUT_SPLIT_MODE` (`auto|on|off`,
+      default `auto`).
+      - `auto` enables split-on-timeout for real solver runs
+        (`LEC_RUN_SMTLIB=1`, `LEC_SMOKE_ONLY=0`).
+    - on batch precheck timeout with multi-case batch, the runner now
+      bisects the batch and retries smaller batches before per-case fallback.
+    - hardened precheck gating to require at least two cases, avoiding invalid
+      singleton aggregate wrapper generation even if
+      `LEC_BATCH_PRECHECK_MIN_CASES` is set to `1`.
+
+- regressions:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-batch-precheck-timeout-split.test`
+    - reproduces a first precheck timeout and verifies the runner splits and
+      resolves via smaller prechecks without per-case `circt-lec` invocations.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+  - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+    (`54/54` pass).
+  - real OpenTitan Z3 rerun for historical failing set
+    (`ast_mem_cfg`, selected `clkmgr_cg_en`, selected `rstmgr_rst_en`)
+    with:
+    - `LEC_RUN_SMTLIB=1`
+    - `LEC_SMOKE_ONLY=0`
+    - `CIRCT_TIMEOUT_SECS=180`
+    - `CIRCT_LEC_ARGS='--verify-each=false'`
+    - `LEC_BATCH_PRECHECK_TIMEOUT_SPLIT_MODE=on`
+  - result:
+    - summary: `total=19 pass=19 fail=0 xfail=0 xpass=0 error=0 skip=0`
+    - batch-precheck fast-pass observed on:
+      - `batch=0` (`11` `ast_mem_cfg` rules)
+      - `batch=2` (`6` `rstmgr_rst_en` rules)
+    - previously problematic `clkmgr_cg_en` pair now both `PASS ... EQ`.
