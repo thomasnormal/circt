@@ -10417,3 +10417,35 @@
   - cross-check slice:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `25 passed, 2 expectedly failed` (`uvm-factory-create-by-name`, `uvm-factory-create-null-parent`).
+
+## 2026-03-01 - UVM factory create-by-name semantic closure
+
+- realization:
+  - `test/Tools/crun/uvm-factory-create-by-name.sv` first failed at compile
+    time due undeclared `factory` handle.
+  - After adding explicit factory acquisition, semantic run exposed a second
+    issue: component creation by name in `run_phase` hit
+    `UVM_FATAL [ILLCRT]` (illegal component creation after build phase).
+
+- implemented:
+  - Removed stale `XFAIL` and fixed test semantics:
+    - declared/acquired factory via
+      `uvm_coreservice_t::get(); factory = cs.get_factory();`
+    - moved `create_component_by_name` check into `build_phase` (legal phase).
+    - kept `create_object_by_name` check in `run_phase`.
+  - Updated check order to match legal phase execution order
+    (component check before object check).
+
+- validation:
+  - red #1 (compile):
+    - `build_test/bin/crun test/Tools/crun/uvm-factory-create-by-name.sv --top tb_top -v 0`
+    - observed undeclared identifier `factory`.
+  - red #2 (semantic):
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create-by-name.sv`
+    - observed `UVM_FATAL [ILLCRT]` from run-phase component creation.
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create-by-name.sv`
+    - result: `1 passed`.
+  - cross-check slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `26 passed, 1 expectedly failed` (remaining `uvm-factory-create-null-parent.sv`).

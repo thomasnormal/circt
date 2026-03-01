@@ -6280,3 +6280,9 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed stale 
 
 ### [x] 2089. `test/Tools/crun/uvm-objection-callback.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Objection callback semantics now execute correctly without `XFAIL`: `uvm_component::raised` and `uvm_component::dropped` are observed in runtime (`raised callback fired: PASS`, `dropped callback fired: PASS`). Root cause was objection fast-path interception bypassing UVM objection object execution and therefore skipping component callback dispatch; fixed by dispatching component objection callbacks from the fast-path paths while preserving native objection-count tracking for scheduler/wait semantics (`tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`).
+
+### [x] 2090. `test/Tools/crun/uvm-factory-create-by-name.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and made the test semantically valid: added explicit coreservice/factory acquisition (`uvm_coreservice_t::get()` / `get_factory()`), then moved component-by-name creation to `build_phase` to satisfy UVM lifecycle legality (component create in `run_phase` triggers `ILLCRT`). Runtime checks now pass for both `create_component_by_name` and `create_object_by_name`.
+
+### [ ] 2091. `test/Tools/crun/uvm-factory-create-null-parent.sv:1`
+Status update (2026-03-01): still unresolved in this workspace. Current behavior under crun is `UVM_FATAL [FCTTYP]` when creating a component with `null` parent in `run_phase` (factory returns `null` for requested component type). This needs an explicit semantic decision and test intent adjustment (or runtime fix) before removing `XFAIL`.

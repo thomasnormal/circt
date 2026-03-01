@@ -1,12 +1,10 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: uvm_coreservice_t::get().get_factory() not available — undeclared identifier 'factory'
 
 // Test factory create_object_by_name and create_component_by_name.
 
-// CHECK: [TEST] create_object_by_name: PASS
 // CHECK: [TEST] create_component_by_name: PASS
+// CHECK: [TEST] create_object_by_name: PASS
 // CHECK: [circt-sim] Simulation completed
 
 `timescale 1ns/1ps
@@ -32,16 +30,39 @@ module tb_top;
 
   class edge_factory_name_test extends uvm_test;
     `uvm_component_utils(edge_factory_name_test)
+    edge_named_comp comp;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    function void build_phase(uvm_phase phase);
+      uvm_coreservice_t cs;
+      uvm_factory factory;
+      uvm_component created_comp;
+      super.build_phase(phase);
+
+      cs = uvm_coreservice_t::get();
+      factory = cs.get_factory();
+
+      // Component creation is legal in build_phase.
+      created_comp =
+          factory.create_component_by_name("edge_named_comp", "", "comp_inst", this);
+      if ($cast(comp, created_comp) && comp.get_name() == "comp_inst")
+        `uvm_info("TEST", "create_component_by_name: PASS", UVM_LOW)
+      else
+        `uvm_error("TEST", "create_component_by_name: FAIL")
+    endfunction
+
     task run_phase(uvm_phase phase);
+      uvm_coreservice_t cs;
+      uvm_factory factory;
       uvm_object obj;
-      uvm_component comp;
       edge_named_obj typed_obj;
       phase.raise_objection(this);
+
+      cs = uvm_coreservice_t::get();
+      factory = cs.get_factory();
 
       // Test create_object_by_name
       obj = factory.create_object_by_name("edge_named_obj", "", "obj_inst");
@@ -49,13 +70,6 @@ module tb_top;
         `uvm_info("TEST", "create_object_by_name: PASS", UVM_LOW)
       else
         `uvm_error("TEST", "create_object_by_name: FAIL")
-
-      // Test create_component_by_name
-      comp = factory.create_component_by_name("edge_named_comp", "", "comp_inst", this);
-      if (comp != null && comp.get_name() == "comp_inst")
-        `uvm_info("TEST", "create_component_by_name: PASS", UVM_LOW)
-      else
-        `uvm_error("TEST", "create_component_by_name: FAIL")
 
       phase.drop_objection(this);
     endtask
