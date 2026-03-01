@@ -175,7 +175,29 @@ def _coerce_text(payload: str | bytes | None) -> str:
     return payload
 
 
-def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+def _truncate_log_bytes(
+    encoded: bytes, max_log_bytes: int, truncation_label: str
+) -> bytes:
+    if max_log_bytes <= 0 or len(encoded) <= max_log_bytes:
+        return encoded
+    notice = (
+        f"\n[{truncation_label}] log truncated from "
+        f"{len(encoded)} to {max_log_bytes} bytes\n"
+    ).encode("utf-8")
+    if max_log_bytes <= len(notice):
+        return encoded[:max_log_bytes]
+    keep = max_log_bytes - len(notice)
+    return encoded[:keep] + notice
+
+
+def write_log(
+    path: Path,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    max_log_bytes: int = 0,
+    truncation_label: str = "formal_runner_common",
+) -> None:
     stdout_text = _coerce_text(stdout)
     stderr_text = _coerce_text(stderr)
     payload = ""
@@ -185,7 +207,8 @@ def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None
             payload += "\n"
     if stderr_text:
         payload += stderr_text
-    path.write_text(payload, encoding="utf-8")
+    encoded = payload.encode("utf-8", errors="replace")
+    path.write_bytes(_truncate_log_bytes(encoded, max_log_bytes, truncation_label))
 
 
 def run_command_logged(
@@ -198,6 +221,8 @@ def run_command_logged(
     retry_backoff_secs: float = 0.0,
     retryable_exit_codes: set[int] | None = None,
     retryable_output_patterns: Sequence[str] = (),
+    max_log_bytes: int = 0,
+    truncation_label: str = "formal_runner_common",
 ) -> str:
     attempts = retry_attempts if retry_attempts > 0 else 1
     retry_codes = retryable_exit_codes if retryable_exit_codes is not None else set()
@@ -216,7 +241,13 @@ def run_command_logged(
         except subprocess.TimeoutExpired as exc:
             last_stdout = _coerce_text(exc.stdout)
             last_stderr = _coerce_text(exc.stderr)
-            write_log(log_path, last_stdout, last_stderr)
+            write_log(
+                log_path,
+                last_stdout,
+                last_stderr,
+                max_log_bytes=max_log_bytes,
+                truncation_label=truncation_label,
+            )
             if out_path is not None:
                 out_path.write_text(last_stdout, encoding="utf-8")
             if attempt < attempts:
@@ -227,7 +258,13 @@ def run_command_logged(
         except OSError as exc:
             last_stdout = ""
             last_stderr = f"{exc.__class__.__name__}: {exc}"
-            write_log(log_path, last_stdout, last_stderr)
+            write_log(
+                log_path,
+                last_stdout,
+                last_stderr,
+                max_log_bytes=max_log_bytes,
+                truncation_label=truncation_label,
+            )
             if out_path is not None:
                 out_path.write_text(last_stdout, encoding="utf-8")
             retryable = 127 in retry_codes
@@ -246,7 +283,13 @@ def run_command_logged(
 
         last_stdout = result.stdout or ""
         last_stderr = result.stderr or ""
-        write_log(log_path, last_stdout, last_stderr)
+        write_log(
+            log_path,
+            last_stdout,
+            last_stderr,
+            max_log_bytes=max_log_bytes,
+            truncation_label=truncation_label,
+        )
         if out_path is not None:
             out_path.write_text(last_stdout, encoding="utf-8")
         if result.returncode == 0:
@@ -277,6 +320,8 @@ def run_command_logged_with_env_retry(
     out_path: Path | None = None,
     fail_fn: Callable[[str], None] | None = None,
     env: dict[str, str] | None = None,
+    max_log_bytes: int = 0,
+    truncation_label: str = "formal_runner_common",
 ) -> str:
     if fail_fn is None:
         fail_fn = fail
@@ -311,6 +356,8 @@ def run_command_logged_with_env_retry(
         retry_backoff_secs=retry_backoff_secs,
         retryable_exit_codes=retryable_exit_codes,
         retryable_output_patterns=retryable_patterns,
+        max_log_bytes=max_log_bytes,
+        truncation_label=truncation_label,
     )
 
 

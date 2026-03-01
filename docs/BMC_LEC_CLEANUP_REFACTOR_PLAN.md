@@ -395,6 +395,8 @@ Current workstream status in this branch:
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
+   - shared log-writer truncation controls landed in `runner_common`
+     and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial
 3. WS2: in progress
    - multiclock unsupported root causes identified

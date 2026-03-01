@@ -25,37 +25,11 @@ from baseline_manifest import (  # noqa: E402
     ManifestValidationError,
     load_manifest_commands,
 )
+from runner_common import write_log  # noqa: E402
 
 
 def fail(msg: str) -> NoReturn:
     raise SystemExit(msg)
-
-
-def coerce_text_output(raw: str | bytes | None) -> str:
-    if raw is None:
-        return ""
-    if isinstance(raw, bytes):
-        return raw.decode("utf-8", errors="replace")
-    return raw
-
-
-def write_log_text(log_path: Path, log_data: str, max_log_bytes: int) -> None:
-    if max_log_bytes <= 0:
-        log_path.write_text(log_data, encoding="utf-8")
-        return
-    encoded = log_data.encode("utf-8", errors="replace")
-    if len(encoded) <= max_log_bytes:
-        log_path.write_bytes(encoded)
-        return
-    notice = (
-        "\n[capture_formal_baseline] log truncated from "
-        f"{len(encoded)} to {max_log_bytes} bytes\n"
-    ).encode("utf-8")
-    if max_log_bytes <= len(notice):
-        log_path.write_bytes(encoded[:max_log_bytes])
-        return
-    keep = max_log_bytes - len(notice)
-    log_path.write_bytes(encoded[:keep] + notice)
 
 
 def run_manifest_command(
@@ -96,33 +70,30 @@ def run_manifest_command(
             timeout=timeout_secs if timeout_secs > 0 else None,
         )
     except subprocess.TimeoutExpired as exc:
-        stdout = coerce_text_output(exc.stdout)
-        stderr = coerce_text_output(exc.stderr)
-        log_data = ""
-        if stdout:
-            log_data += stdout
-            if not log_data.endswith("\n"):
-                log_data += "\n"
-        if stderr:
-            log_data += stderr
-            if not log_data.endswith("\n"):
-                log_data += "\n"
-        log_data += (
+        stderr: str | bytes | None = exc.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        timeout_note = (
             "[capture_formal_baseline] command timeout after "
             f"{timeout_secs}s\n"
         )
-        write_log_text(log_path, log_data, max_log_bytes)
+        write_log(
+            log_path,
+            exc.stdout,
+            f"{stderr or ''}{timeout_note}",
+            max_log_bytes=max_log_bytes,
+            truncation_label="capture_formal_baseline",
+        )
         out_tsv.write_text("", encoding="utf-8")
         out_jsonl.write_text("", encoding="utf-8")
         return 124, out_tsv, out_jsonl, log_path
-    log_data = ""
-    if proc.stdout:
-        log_data += proc.stdout
-        if not log_data.endswith("\n"):
-            log_data += "\n"
-    if proc.stderr:
-        log_data += proc.stderr
-    write_log_text(log_path, log_data, max_log_bytes)
+    write_log(
+        log_path,
+        proc.stdout,
+        proc.stderr,
+        max_log_bytes=max_log_bytes,
+        truncation_label="capture_formal_baseline",
+    )
     return proc.returncode, out_tsv, out_jsonl, log_path
 
 

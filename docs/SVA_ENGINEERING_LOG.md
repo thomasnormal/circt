@@ -2,6 +2,37 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: shared log truncation in runner_common + capture dedup):
+  - realization:
+    - log-size capping logic for formal command logs existed only in
+      `capture_formal_baseline.py`, while shared runner helpers still had
+      uncapped direct log writes.
+    - this left duplicated behavior and made per-run artifact growth controls
+      inconsistent across capture vs shared launch helpers.
+  - implemented:
+    - `utils/formal/lib/runner_common.py`
+      - extended `write_log()` with optional:
+        - `max_log_bytes`
+        - `truncation_label`
+      - plumbed log-cap controls through:
+        - `run_command_logged()`
+        - `run_command_logged_with_env_retry()`
+    - `utils/formal/capture_formal_baseline.py`
+      - removed local ad-hoc log truncation helper.
+      - now reuses shared `runner_common.write_log()` with
+        `truncation_label="capture_formal_baseline"` to preserve existing log
+        marker semantics.
+    - tests:
+      - extended `test/Tools/Inputs/formal_runner_common_retry.py` to assert:
+        - capped log size for `run_command_logged()`
+        - capped log size for `run_command_logged_with_env_retry()`
+        - truncation marker presence in both paths
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/formal/capture_formal_baseline.py test/Tools/Inputs/formal_runner_common_retry.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-retry.test test/Tools/formal-runner-common-drop-reasons.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-log-cap.test test/Tools/formal-capture-baseline-invalid-timeout.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-validate-results-schema.test test/Tools/formal-drift-compare.test`
+      - result: `12/12` pass.
+
 - Iteration update (WS2-T1: multiclock unsupported diagnostic inventory):
   - realization:
     - lower-to-bmc multiclock unsupported paths had regression coverage for

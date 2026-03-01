@@ -85,6 +85,41 @@ def main() -> int:
     assert "ok-env-retry" in out_path_env.read_text(
         encoding="utf-8"
     ), "env stdout capture missing"
+
+    # Validate centralized log truncation support used by multiple runners.
+    cap_log_path = tmp_dir / "runner-cap.log"
+    noisy_payload = "X" * 512
+    runner_common.run_command_logged(
+        [sys.executable, "-c", f"print({noisy_payload!r})"],
+        cap_log_path,
+        timeout_secs=5,
+        max_log_bytes=128,
+        truncation_label="formal_runner_common_retry",
+    )
+    cap_log_size = cap_log_path.stat().st_size
+    assert cap_log_size <= 128, f"log cap exceeded: {cap_log_size}"
+    cap_log_text = cap_log_path.read_text(encoding="utf-8")
+    assert (
+        "log truncated from" in cap_log_text
+    ), "missing truncation marker in capped log"
+
+    # Ensure env-driven retry wrapper forwards log-cap controls.
+    cap_env_log_path = tmp_dir / "runner-env-cap.log"
+    runner_common.run_command_logged_with_env_retry(
+        [sys.executable, "-c", f"print({noisy_payload!r})"],
+        cap_env_log_path,
+        timeout_secs=5,
+        env={"FORMAL_LAUNCH_RETRY_ATTEMPTS": "1"},
+        max_log_bytes=96,
+        truncation_label="formal_runner_common_retry_env",
+    )
+    cap_env_log_size = cap_env_log_path.stat().st_size
+    assert cap_env_log_size <= 96, f"env log cap exceeded: {cap_env_log_size}"
+    cap_env_log_text = cap_env_log_path.read_text(encoding="utf-8")
+    assert (
+        "log truncated from" in cap_env_log_text
+    ), "missing env truncation marker in capped log"
+
     print("PASS: shared formal runner retry helper")
     return 0
 
