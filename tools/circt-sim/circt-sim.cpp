@@ -4052,6 +4052,7 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
                  << simulatedNsPerS << "\n";
     llvm::errs() << "[circt-sim] Compiled callback invocations:   "
                  << interp.getCompiledCallbackInvocations() << "\n";
+    interp.dumpHotCompiledCallbackProcesses(llvm::errs(), /*topN=*/20);
     llvm::errs() << "[circt-sim] Interpreter process invocations:  "
                  << interp.getInterpreterProcessInvocations() << "\n";
     llvm::errs() << "[circt-sim] Compiled function calls:          "

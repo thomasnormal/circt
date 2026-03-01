@@ -15,6 +15,8 @@
 // TRACE: compiled-proc name=child.process_0
 // TRACE-SAME: kind=CALLBACK model=CallbackTimeOnly
 // TRACE: Compiled callback invocations: {{[2-9][0-9]*}}
+// TRACE: Hot compiled process callbacks (top 20):
+// TRACE: {{[0-9]+}}x pid=[[PID:[0-9]+]] child.process_0
 //
 // DISABLE-ALL: [circt-sim] CIRCT_AOT_DISABLE_ALL: all native dispatch disabled
 // DISABLE-ALL: [circt-sim] compiled process wiring disabled (CIRCT_AOT_DISABLE_ALL)

@@ -981,6 +981,9 @@ public:
   /// writes change an input signal.
   void executeModuleDrivesForSignal(SignalId sigId);
 
+  /// Wake signal-backed wait(condition) sleepers for a changed signal.
+  void wakeSignalConditionWaiters(SignalId signalId);
+
   /// Register a top-level hw.output update. When the associated llhd.process
   /// yields new values via interpretWait, executeInstanceOutputUpdates will
   /// immediately re-evaluate and update the output signal. This ensures
@@ -1273,6 +1276,8 @@ public:
   }
   uint32_t getMaxAotDepth() const { return maxAotDepth; }
   void dumpAotHotUncompiledFuncs(llvm::raw_ostream &os, size_t topN) const;
+  void dumpHotCompiledCallbackProcesses(llvm::raw_ostream &os,
+                                        size_t topN) const;
 
   /// Get the per-function interpreted call counts (for hottest-callee report).
   const llvm::DenseMap<mlir::Operation *, uint64_t> &
@@ -1864,6 +1869,10 @@ private:
   void removeQueueNotEmptyWaiter(ProcessId procId);
   /// Wake queue-backed wait(condition) waiters for a queue that became non-empty.
   void wakeQueueNotEmptyWaitersIfReady(uint64_t queueAddr);
+
+  /// Register/remove wait(condition) signal waiters keyed by signal ID.
+  void enqueueSignalConditionWaiter(ArrayRef<SignalId> signalIds, ProcessId procId);
+  void removeSignalConditionWaiter(ProcessId procId);
 
   /// Handle UVM-focused fast-paths at func body entry.
   /// Returns true when handled; caller should skip normal function execution.
@@ -3964,6 +3973,14 @@ private:
   /// Reverse index to remove queue waiters when processes complete/deopt.
   llvm::DenseMap<ProcessId, uint64_t> queueWaitAddrByProc;
 
+  /// Processes blocked in signal-backed wait(condition) calls.
+  /// Key: signal ID, value: waiting process IDs.
+  llvm::DenseMap<SignalId, llvm::SmallVector<ProcessId, 4>>
+      signalConditionWaiters;
+  /// Reverse index to remove signal waiters when processes complete/deopt.
+  llvm::DenseMap<ProcessId, llvm::SmallVector<SignalId, 4>>
+      signalWaitSignalsByProc;
+
   /// Function phase IMP sequencing: tracks which function phase IMP nodes
   /// have completed their traversal. The UVM phase graph IMP nodes for
   /// function phases (build, connect, end_of_elaboration, start_of_simulation)
@@ -4434,6 +4451,8 @@ private:
   /// AOT invocation counters (for --stats reporting).
   uint64_t compiledCallbackInvocations = 0;
   uint64_t interpreterProcessInvocations = 0;
+  llvm::DenseMap<ProcessId, uint64_t> compiledCallbackInvocationsByProcess;
+  llvm::DenseMap<ProcessId, std::string> compiledProcessNamesById;
 
   /// Compiled callbacks waiting for the process's first interpreted run
   /// (entry block → llhd.wait) to complete before being installed.

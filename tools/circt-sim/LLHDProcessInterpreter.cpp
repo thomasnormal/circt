@@ -24109,19 +24109,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         return static_cast<MooreObjectionHandle>(addr - 0xE0000000ULL);
       return MOORE_OBJECTION_INVALID_HANDLE;
     };
+    auto getSyntheticHandle = [&](InterpretedValue selfVal,
+                                  MooreObjectionHandle &handle) -> bool {
+      if (selfVal.isX())
+        return false;
+      handle = syntheticToHandle(selfVal.getUInt64());
+      return handle != MOORE_OBJECTION_INVALID_HANDLE;
+    };
 
     if (calleeName.contains("get_objection_total") ||
         calleeName.contains("get_objection_count")) {
       InterpretedValue selfVal = args[0]; // uvm_objection* this
-      if (selfVal.isX()) {
-        auto result = callOp.getResult(0);
-        setValue(procId, result, InterpretedValue(llvm::APInt(32, 0)));
-        return success();
-      }
-      MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
-      int64_t count = 0;
-      if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-        count = __moore_objection_get_count(handle);
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (!getSyntheticHandle(selfVal, handle))
+        goto no_uvm_objection_intercept;
+      int64_t count = __moore_objection_get_count(handle);
       auto result = callOp.getResult(0);
       setValue(procId, result,
               InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(count))));
@@ -24132,26 +24134,22 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       InterpretedValue selfVal = args[0];
       InterpretedValue drainVal =
           args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(64, 0));
-      if (!selfVal.isX()) {
-        MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
-        if (handle != MOORE_OBJECTION_INVALID_HANDLE) {
-          int64_t drainTime = drainVal.isX()
-                                  ? 0
-                                  : static_cast<int64_t>(drainVal.getUInt64());
-          __moore_objection_set_drain_time(handle, drainTime);
-        }
-      }
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (!getSyntheticHandle(selfVal, handle))
+        goto no_uvm_objection_intercept;
+      int64_t drainTime = drainVal.isX()
+                              ? 0
+                              : static_cast<int64_t>(drainVal.getUInt64());
+      __moore_objection_set_drain_time(handle, drainTime);
       return success();
     }
 
     if (calleeName.contains("get_drain_time") && callOp.getNumResults() >= 1) {
       InterpretedValue selfVal = args[0];
-      int64_t drainTime = 0;
-      if (!selfVal.isX()) {
-        MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
-        if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-          drainTime = __moore_objection_get_drain_time(handle);
-      }
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (!getSyntheticHandle(selfVal, handle))
+        goto no_uvm_objection_intercept;
+      int64_t drainTime = __moore_objection_get_drain_time(handle);
       setValue(procId, callOp.getResult(0),
                InterpretedValue(llvm::APInt(64, static_cast<uint64_t>(drainTime))));
       return success();
@@ -24161,13 +24159,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       InterpretedValue selfVal = args[0];
       InterpretedValue countVal =
           args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
-      if (!selfVal.isX()) {
-        MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
-        int64_t count =
-            countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
-        if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-          raisePhaseObjection(handle, count);
-      }
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (!getSyntheticHandle(selfVal, handle))
+        goto no_uvm_objection_intercept;
+      int64_t count =
+          countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+      raisePhaseObjection(handle, count);
       return success();
     }
 
@@ -24175,13 +24172,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       InterpretedValue selfVal = args[0];
       InterpretedValue countVal =
           args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
-      if (!selfVal.isX()) {
-        MooreObjectionHandle handle = syntheticToHandle(selfVal.getUInt64());
-        int64_t count =
-            countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
-        if (handle != MOORE_OBJECTION_INVALID_HANDLE)
-          dropPhaseObjection(handle, count);
-      }
+      MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
+      if (!getSyntheticHandle(selfVal, handle))
+        goto no_uvm_objection_intercept;
+      int64_t count =
+          countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
+      dropPhaseObjection(handle, count);
       return success();
     }
 
@@ -24197,20 +24193,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       // Get the objection handle from the synthetic self pointer.
       InterpretedValue selfVal = args[0];
       MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
-      if (!selfVal.isX())
-        handle = syntheticToHandle(selfVal.getUInt64());
-
-      if (handle == MOORE_OBJECTION_INVALID_HANDLE) {
-        if (traceUvmObjection) {
-          uint64_t rawSelf = selfVal.isX() ? 0 : selfVal.getUInt64();
-          llvm::errs() << "[UVM-OBJ] proc=" << procId
-                       << " callee=" << calleeName
-                       << " wait_for invalid self=0x"
-                       << llvm::format_hex(rawSelf, 16) << "\n";
-        }
-        objectionWaitForStateByProc.erase(procId);
-        return success();
-      }
+      if (!getSyntheticHandle(selfVal, handle))
+        goto no_uvm_objection_intercept;
 
       // Check current objection count.
       int64_t count = 0;
@@ -24297,6 +24281,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       return success();
     }
   }
+no_uvm_objection_intercept:
 
   // Intercept UVM config_db implementation set/get/exists methods.
   // These are stub methods generated by MooreToCore for the UVM config_db class.
@@ -31766,8 +31751,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         bool forceVirtualMalloc =
             !forceHostMalloc &&
             std::getenv("CIRCT_SIM_FORCE_VIRTUAL_MALLOC") != nullptr;
+        // Only force host-backed malloc when native code may dereference the
+        // returned pointer. Merely loading a compiled module (e.g. with
+        // CIRCT_AOT_DISABLE_ALL active) must not switch interpreter malloc
+        // semantics, or compile/interpret parity drifts even with native
+        // dispatch disabled.
+        bool nativeModuleInitActive = (tlsNativeModuleInitInterpreter == this);
+        bool aotDisableAllActive =
+            std::getenv("CIRCT_AOT_DISABLE_ALL") != nullptr;
+        bool compiledLoaderActive =
+            compiledLoaderForModuleInit != nullptr && !aotDisableAllActive;
         bool compiledExecutionActive =
-            compiledLoaderForModuleInit != nullptr || !nativeFuncPtrs.empty() ||
+            nativeModuleInitActive || compiledLoaderActive ||
+            compiledFuncEntries != nullptr || !nativeFuncPtrs.empty() ||
             aotDepth != 0;
         bool useHostMalloc =
             forceHostMalloc || (!forceVirtualMalloc && compiledExecutionActive);
@@ -33335,7 +33331,8 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             if (elemBlock && elemBlock->initialized) {
               size_t availableBytes = (elemOffset < elemBlock->size)
                   ? elemBlock->size - elemOffset : 0;
-              size_t copySize = std::min(static_cast<size_t>(elemSize), availableBytes);
+              size_t copySize =
+                  std::min(static_cast<size_t>(elemSize), availableBytes);
               if (copySize > 0)
                 std::memcpy(newBlock.bytes() + queueLen * elemSize,
                             elemBlock->bytes() + elemOffset, copySize);
@@ -33362,6 +33359,18 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
                                     << " elemSize=" << elemSize
                                     << " newLen=" << newLen << "\n");
             traceQueueOp("push_back", queueAddr, queueLen, newLen);
+            if (traceQueueOpsEnabled()) {
+              size_t recordedSize = 0;
+              auto recordedIt = mallocBlocks.find(newDataAddr);
+              if (recordedIt != mallocBlocks.end())
+                recordedSize = recordedIt->second.size;
+              llvm::errs() << "[QUEUE] proc=" << procId
+                           << " op=push_back_elem_size queue=0x"
+                           << llvm::format_hex(queueAddr, 16)
+                           << " elem_size=" << elemSize
+                           << " data=0x" << llvm::format_hex(newDataAddr, 16)
+                           << " block_size=" << recordedSize << "\n";
+            }
 
             // Wake wait(condition) queue waiters now that this queue is non-empty.
             wakeQueueNotEmptyWaitersIfReady(queueAddr);
@@ -43252,8 +43261,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
          name.contains("uvm_bottomup_phase::m_traverse") ||
          name.contains("uvm_component::set_domain")))
       return true;
-    // Component hierarchy mutators update Moore-assoc-backed name/child maps.
-    if (!allowNativeUvmHierarchy && name.contains("::m_add_child"))
+    // Component hierarchy mutators/walkers update or traverse Moore-assoc-
+    // backed child maps and rely on interpreter-side semantics.
+    if (!allowNativeUvmHierarchy &&
+        (name.contains("::m_add_child") ||
+         name.contains("::uvm_component_proxy::get_immediate_children")))
       return true;
     // UVM objection methods — must go through interpreter interceptors.
     if (name.contains("raise_objection") || name.contains("drop_objection"))
@@ -43989,11 +44001,13 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     uint8_t kind = mod->proc_kind[i];
     void *entry = const_cast<void *>(mod->proc_entry[i]);
     for (ProcessId procId : it->second) {
+      compiledProcessNamesById[procId] = procName.str();
 
       if (kind == CIRCT_PROC_CALLBACK) {
         auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
         auto compiledCallback = [this, fptr, ctxPtr, procId]() {
           ++compiledCallbackInvocations;
+          ++compiledCallbackInvocationsByProcess[procId];
           fptr(*ctxPtr, nullptr);
           // Re-arm if the process is a minnow (time-based callback).
           // The AOT compiler currently marks all processes as CALLBACK,
@@ -44074,6 +44088,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
         auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
         pendingCompiledCallbacks[procId] = [this, fptr, ctxPtr, procId]() {
           ++compiledCallbackInvocations;
+          ++compiledCallbackInvocationsByProcess[procId];
           fptr(*ctxPtr, nullptr);
           scheduler.rearmMinnow(procId);
         };

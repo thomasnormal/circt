@@ -3159,6 +3159,43 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
   }
 }
 
+void LLHDProcessInterpreter::dumpHotCompiledCallbackProcesses(
+    llvm::raw_ostream &os, size_t topN) const {
+  if (compiledCallbackInvocationsByProcess.empty())
+    return;
+
+  struct CallbackRow {
+    ProcessId pid = 0;
+    uint64_t calls = 0;
+  };
+  llvm::SmallVector<CallbackRow, 16> rows;
+  rows.reserve(compiledCallbackInvocationsByProcess.size());
+  for (const auto &entry : compiledCallbackInvocationsByProcess) {
+    if (entry.second == 0)
+      continue;
+    rows.push_back(CallbackRow{entry.first, entry.second});
+  }
+  if (rows.empty())
+    return;
+
+  llvm::sort(rows, [](const CallbackRow &lhs, const CallbackRow &rhs) {
+    if (lhs.calls != rhs.calls)
+      return lhs.calls > rhs.calls;
+    return lhs.pid < rhs.pid;
+  });
+
+  os << "[circt-sim] Hot compiled process callbacks (top " << topN << "):\n";
+  size_t limit = std::min(topN, rows.size());
+  for (size_t i = 0; i < limit; ++i) {
+    ProcessId pid = rows[i].pid;
+    os << "[circt-sim]   " << rows[i].calls << "x pid=" << pid;
+    auto nameIt = compiledProcessNamesById.find(pid);
+    if (nameIt != compiledProcessNamesById.end() && !nameIt->second.empty())
+      os << " " << nameIt->second;
+    os << "\n";
+  }
+}
+
 void LLHDProcessInterpreter::maybeTraceDisableForkChild(
     ProcessId procId, ForkId forkId, ProcessId childProcId,
     llvm::StringRef mode) const {
