@@ -28128,41 +28128,66 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
     }
 
     if (classDecl) {
-      for (auto propDecl : classDecl.getBody().getOps<ClassPropertyDeclOp>()) {
-        auto pathOpt = structInfo->getFieldPath(propDecl.getSymName());
-        if (!pathOpt)
-          continue;
-        Type fieldTy = resolveStructFieldType(structTy, *pathOpt);
-        if (!fieldTy)
-          continue;
+      // Preserve fields across the full inheritance chain. Only preserving
+      // most-derived properties can clobber inherited sequence metadata (e.g.
+      // uvm_sequence_item::m_sequence_id) during randomize().
+      llvm::DenseSet<StringRef> seenProperties;
+      auto collectPreservedFields = [&](ClassDeclOp decl) {
+        for (auto propDecl : decl.getBody().getOps<ClassPropertyDeclOp>()) {
+          StringRef propName = propDecl.getSymName();
+          if (!seenProperties.insert(propName).second)
+            continue;
 
-        SmallVector<LLVM::GEPArg> gepIndices;
-        gepIndices.push_back(0);
-        for (unsigned idx : *pathOpt)
-          gepIndices.push_back(static_cast<int32_t>(idx));
+          auto pathOpt = structInfo->getFieldPath(propName);
+          if (!pathOpt)
+            continue;
+          Type fieldTy = resolveStructFieldType(structTy, *pathOpt);
+          if (!fieldTy)
+            continue;
 
-        auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
-                                            classPtr, gepIndices);
-        auto fieldVal =
-            LLVM::LoadOp::create(rewriter, loc, fieldTy, fieldPtr);
+          SmallVector<LLVM::GEPArg> gepIndices;
+          gepIndices.push_back(0);
+          for (unsigned idx : *pathOpt)
+            gepIndices.push_back(static_cast<int32_t>(idx));
 
-        // Determine if this property should be randomized.
-        // With variable_list: only listed properties are randomized.
-        // Without: only rand-declared properties are randomized.
-        bool isRandomTarget =
-            hasVarList ? varListNames.contains(propDecl.getSymName())
-                       : propDecl.isRandomizable();
+          auto fieldPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, structTy,
+                                              classPtr, gepIndices);
+          auto fieldVal =
+              LLVM::LoadOp::create(rewriter, loc, fieldTy, fieldPtr);
 
-        if (isRandomTarget) {
-          Value enabled = createRandEnabledCheck(propDecl.getSymName());
-          auto zero = arith::ConstantOp::create(
-              rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
-          Value shouldRestore = arith::CmpIOp::create(
-              rewriter, loc, arith::CmpIPredicate::eq, enabled, zero);
-          conditionalRestores.emplace_back(fieldPtr, fieldVal, shouldRestore);
-        } else {
-          preservedFields.push_back({fieldPtr, fieldVal});
+          // Determine if this property should be randomized.
+          // With variable_list: only listed properties are randomized.
+          // Without: only rand-declared properties are randomized.
+          bool isRandomTarget =
+              hasVarList ? varListNames.contains(propName)
+                         : propDecl.isRandomizable();
+
+          if (isRandomTarget) {
+            Value enabled = createRandEnabledCheck(propName);
+            auto zero = arith::ConstantOp::create(
+                rewriter, loc, i1Ty, rewriter.getBoolAttr(false));
+            Value shouldRestore = arith::CmpIOp::create(
+                rewriter, loc, arith::CmpIPredicate::eq, enabled, zero);
+            conditionalRestores.emplace_back(fieldPtr, fieldVal, shouldRestore);
+          } else {
+            preservedFields.push_back({fieldPtr, fieldVal});
+          }
         }
+      };
+
+      ClassDeclOp decl = classDecl;
+      while (decl) {
+        collectPreservedFields(decl);
+        auto baseAttr = decl.getBaseAttr();
+        if (!baseAttr)
+          break;
+        auto *baseSym = mod.lookupSymbol(baseAttr);
+        if (!baseSym)
+          break;
+        auto baseClass = dyn_cast<ClassDeclOp>(baseSym);
+        if (!baseClass)
+          break;
+        decl = baseClass;
       }
     }
 

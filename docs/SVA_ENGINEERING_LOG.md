@@ -11538,3 +11538,34 @@
 - follow-up status:
   - this fix removes the randomization failure mode in `test/Runtime/uvm/uvm_sequence_test.sv`.
   - remaining UVM failures are now dominated by sequence response/progress semantics and independent phase-ordering semantics (`uvm_phase_ordering_semantic_test.sv`).
+
+## 2026-03-01 - Preserve inherited non-rand class state across randomize()
+
+- realization:
+  - `randomize()` field preservation in MooreToCore only walked properties declared in the most-derived class.
+  - inherited non-rand base fields were not preserved and could be clobbered by `__moore_randomize_basic`.
+  - this directly broke UVM response routing: sequence metadata (`m_sequence_id` in `uvm_sequence_item`) was corrupted, causing
+    `Dropping response for sequence ..., sequence not found` and `uvm_sequence_test.sv` timeout/hang behavior.
+
+- proof before fix:
+  - new regression (fails on pre-fix):
+    - `test/Tools/circt-sim/randomize-preserves-inherited-nonrand.sv`
+  - ad-hoc UVM probe also showed `set_sequence_id(1234)` changing after `randomize()`.
+
+- implemented:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+    - extended randomize preservation walk to include full class inheritance chain (derived + base classes), with shadowing-safe dedup.
+    - inherited non-rand properties are now snapshot/restored, and rand properties still use rand_enabled-guarded restore logic.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-verilog circt-sim`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/randomize-preserves-inherited-nonrand.sv test/Tools/circt-sim/constraint-unsigned-range-cross-sign.sv`
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_sequence_test.sv`
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_send_request_test.sv`
+    - all passed
+
+- follow-up status:
+  - `uvm_sequence_test.sv` is now green with proper response progress.
+  - remaining tracked UVM semantic failure in this lane: `uvm_phase_ordering_semantic_test.sv`.
