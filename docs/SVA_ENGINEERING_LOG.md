@@ -2,6 +2,18 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: row-allowlist missing-file regressions added for FPV drift lanes):
+  - realization:
+    - after adding missing-file guards for FPV assertion/grouped drift
+      allowlists, row-allowlist variants were still uncovered by lit tests.
+  - implemented:
+    - added regressions for row-allowlist missing-file diagnostics:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-row-allowlist-missing-file.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-missing-file.test`
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-row-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-row-allowlist-missing-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1/WS6: assertion/grouped drift allowlist file validation hardened):
   - realization:
     - FPV-BMC assertion drift and grouped-policy drift paths also loaded

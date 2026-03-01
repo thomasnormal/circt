@@ -435,6 +435,8 @@ Current workstream status in this branch:
      existence before load, eliminating traceback-prone missing-file paths
    - FPV BMC assertion-drift and grouped-policy-drift allowlist paths now
      validate file existence before load, closing the same traceback class
+   - FPV BMC drift allowlist guardrails are now regression-covered for both
+     target-level and row-level allowlist flags across summary/assertion/grouped lanes
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
