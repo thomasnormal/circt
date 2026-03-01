@@ -663,12 +663,27 @@ def infer_external_hierarchy_top_fallback(
             root = token.split(".", 1)[0].strip()
             if root:
                 roots.add(root)
-    if not roots or all(root == current_top for root in roots):
-        return ""
     target_suffixes = (f"/{target_name}.sv", f"/{target_name}.v")
     if not any(path.endswith(target_suffixes) for path in source_files):
         return ""
-    return target_name
+    if roots and any(root != current_top for root in roots):
+        return target_name
+
+    # Some OpenTitan rules leave one endpoint unscoped and reference chip-wrapper
+    # pad names directly (for example `{FLASH_TEST_MODE1, FLASH_TEST_MODE0}`).
+    # If those identifiers are ports on the chip wrapper but not on the current
+    # top module, bind against the chip wrapper.
+    unscoped_roots = infer_unscoped_signal_roots(groups)
+    if not unscoped_roots:
+        return ""
+    current_top_ports = extract_module_port_names(current_top, source_files)
+    target_top_ports = extract_module_port_names(target_name, source_files)
+    if not target_top_ports:
+        return ""
+    for root in sorted(unscoped_roots):
+        if root in target_top_ports and root not in current_top_ports:
+            return target_name
+    return ""
 
 
 def sanitize_token(token: str) -> str:
@@ -681,6 +696,149 @@ _SV_NUMERIC_LITERAL_RE = re.compile(
 _SV_PATH_TOKEN_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_$]*(?:\[[^][]+\])?(?:\.[A-Za-z_][A-Za-z0-9_$]*(?:\[[^][]+\])?)*$"
 )
+_SV_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+_SV_PORT_NOISE_TOKENS = {
+    "input",
+    "output",
+    "inout",
+    "wire",
+    "logic",
+    "reg",
+    "signed",
+    "unsigned",
+    "var",
+    "supply0",
+    "supply1",
+    "tri",
+    "tri0",
+    "tri1",
+    "wand",
+    "wor",
+    "uwire",
+    "const",
+    "ref",
+}
+_MODULE_PORT_CACHE: dict[tuple[str, int], set[str]] = {}
+
+
+def _find_matching_paren_end(text: str, start: int) -> int:
+    if start < 0 or start >= len(text) or text[start] != "(":
+        return -1
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "(":
+            depth += 1
+            continue
+        if char != ")":
+            continue
+        depth -= 1
+        if depth == 0:
+            return index + 1
+    return -1
+
+
+def _strip_sv_comments(text: str) -> str:
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", "", text)
+    return text
+
+
+def _extract_module_header_ports(module_name: str, text: str) -> set[str]:
+    module_re = re.compile(rf"\bmodule\s+{re.escape(module_name)}\b")
+    match = module_re.search(text)
+    if match is None:
+        return set()
+    index = match.end()
+    while index < len(text) and text[index].isspace():
+        index += 1
+    if index < len(text) and text[index] == "#":
+        index += 1
+        while index < len(text) and text[index].isspace():
+            index += 1
+        params_end = _find_matching_paren_end(text, index)
+        if params_end < 0:
+            return set()
+        index = params_end
+    while index < len(text) and text[index].isspace():
+        index += 1
+    ports_end = _find_matching_paren_end(text, index)
+    if ports_end < 0:
+        return set()
+    port_payload = text[index + 1 : ports_end - 1]
+    names: set[str] = set()
+    for entry in split_top_level_csv(port_payload):
+        token = entry.strip()
+        if not token:
+            continue
+        token = token.split("=", 1)[0].strip()
+        words = _SV_IDENTIFIER_RE.findall(token)
+        if not words:
+            continue
+        for candidate in reversed(words):
+            if candidate.lower() in _SV_PORT_NOISE_TOKENS:
+                continue
+            names.add(candidate)
+            break
+    return names
+
+
+def extract_module_port_names(module_name: str, source_files: Sequence[str]) -> set[str]:
+    token = module_name.strip()
+    if not token:
+        return set()
+    cache_key = (token, id(source_files))
+    cached = _MODULE_PORT_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    for path_text in source_files:
+        path = Path(path_text)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        names = _extract_module_header_ports(token, _strip_sv_comments(text))
+        if names:
+            _MODULE_PORT_CACHE[cache_key] = names
+            return names
+    _MODULE_PORT_CACHE[cache_key] = set()
+    return _MODULE_PORT_CACHE[cache_key]
+
+
+def extract_unscoped_signal_roots(signal_expr: str) -> set[str]:
+    token = signal_expr.strip()
+    if not token:
+        return set()
+    if token.startswith("{") and token.endswith("}"):
+        inner = token[1:-1].strip()
+        if not inner:
+            return set()
+        roots: set[str] = set()
+        for part in split_top_level_csv(inner):
+            roots.update(extract_unscoped_signal_roots(part))
+        return roots
+    if token.startswith("$"):
+        return set()
+    if _SV_NUMERIC_LITERAL_RE.fullmatch(token):
+        return set()
+    if not _SV_PATH_TOKEN_RE.fullmatch(token):
+        return set()
+    root = token.split(".", 1)[0].strip()
+    root = root.split("[", 1)[0].strip()
+    if not root:
+        return set()
+    return {root}
+
+
+def infer_unscoped_signal_roots(groups: Sequence[ConnectivityConnectionGroup]) -> set[str]:
+    roots: set[str] = set()
+    for group in groups:
+        for rule in (group.connection, *group.conditions):
+            if not rule.src_block.strip():
+                roots.update(extract_unscoped_signal_roots(rule.src_signal))
+            if not rule.dest_block.strip():
+                roots.update(extract_unscoped_signal_roots(rule.dest_signal))
+    return roots
 
 
 def split_top_level_csv(expr: str) -> list[str]:

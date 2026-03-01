@@ -1055,3 +1055,51 @@
     - explicit `bind-top`: `ELAPSED=391s`
     - new default `auto` (`auto->bind-top` chosen): `ELAPSED=299s`
     - all runs preserved `19/19 PASS`.
+
+## 2026-03-01 - Fix mixed-top fallback for unscoped chip-port concat rules
+
+- realization:
+  - OpenTitan rule `analog_sigs.csv:FLASH_TEST_MODE_O` could fail frontend import
+    with:
+    - `error: could not resolve hierarchical path name 'FLASH_TEST_MODE1'`
+  - root cause:
+    - fallback-to-chip inference only considered explicit block roots.
+    - the rule endpoint `{FLASH_TEST_MODE1, FLASH_TEST_MODE0}` is unscoped
+      (`src_block=""`), so no external-root signal was seen.
+    - runner stayed on `top_earlgrey`, generating invalid:
+      - `{dut.FLASH_TEST_MODE1, dut.FLASH_TEST_MODE0}`
+      under `top_earlgrey dut();`
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - extended `infer_external_hierarchy_top_fallback` to also inspect
+      unscoped signal roots.
+    - added lightweight module-header port extraction from source files.
+    - when an unscoped root is a port on `target_name` but not on
+      `current_top`, fallback now selects chip-wrapper top.
+    - this preserves previous explicit external-root behavior and adds the
+      missing unscoped-chip-port case.
+
+- regressions:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-chip-port-fallback-unscoped-concat.test`
+    - reproduces `FLASH_TEST_MODE_O`-style unscoped concat source.
+    - asserts wrapper binds `chip_earlgrey_asic dut();` and scopes destination
+      under `dut.top_earlgrey...`.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+  - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+    (`58/58` pass).
+  - real OpenTitan Z3 repro:
+    - command:
+      - `LEC_RUN_SMTLIB=1 LEC_SMOKE_ONLY=0 CIRCT_TIMEOUT_SECS=120`
+      - `--target-manifest toy_models/opentitan_z3_frontier_probe/target.tsv`
+      - `--rules-manifest toy_models/opentitan_z3_frontier_probe/rules.tsv`
+      - `--rule-filter 'FLASH_TEST_MODE_O'`
+    - observed:
+      - `top=chip_earlgrey_asic`
+      - wrapper expression:
+        `({dut.FLASH_TEST_MODE1, dut.FLASH_TEST_MODE0}) === (dut.top_earlgrey.u_flash_ctrl.u_eflash.u_flash.flash_test_mode_a_io)`
+    - result:
+      - `PASS connectivity::analog_sigs.csv:FLASH_TEST_MODE_O ... EQ`.
