@@ -75,6 +75,42 @@ static Value createUnifiedOrOp(OpBuilder &builder, Location loc, Value lhs,
   return moore::OrOp::create(builder, loc, unifiedLhs, unifiedRhs);
 }
 
+/// Detect expression constructs that must not be compile-time folded in
+/// procedural `if` conditions because they can change runtime behavior.
+struct SideEffectExpressionDetector
+    : public slang::ast::ASTVisitor<SideEffectExpressionDetector, false, true,
+                                    true> {
+  bool hasSideEffects = false;
+
+  void handle(const slang::ast::CallExpression &) { hasSideEffects = true; }
+  void handle(const slang::ast::AssignmentExpression &) {
+    hasSideEffects = true;
+  }
+
+  void handle(const slang::ast::UnaryExpression &expr) {
+    using slang::ast::UnaryOperator;
+    if (expr.op == UnaryOperator::Preincrement ||
+        expr.op == UnaryOperator::Predecrement ||
+        expr.op == UnaryOperator::Postincrement ||
+        expr.op == UnaryOperator::Postdecrement)
+      hasSideEffects = true;
+  }
+};
+
+static bool canFoldConditionalStatementConstant(
+    const slang::ast::ConditionalStatement &stmt) {
+  for (const auto &condition : stmt.conditions) {
+    if (condition.pattern)
+      return false;
+
+    SideEffectExpressionDetector detector;
+    condition.expr->visit(detector);
+    if (detector.hasSideEffects)
+      return false;
+  }
+  return true;
+}
+
 static verif::ClockEdge
 convertEdgeKindVerif(const slang::ast::EdgeKind edge) {
   switch (edge) {
@@ -1521,20 +1557,20 @@ struct StmtVisitor {
     // compile-time boolean, we can emit only the taken branch and skip the
     // others (avoids lowering unreachable helper code in large macros).
     std::optional<bool> constCond;
-    for (const auto &condition : stmt.conditions) {
-      if (condition.pattern)
-        break;
-      auto cv = context.evaluateConstant(*condition.expr);
-      if (cv.bad())
-        break;
-      if (cv.isTrue()) {
-        constCond = constCond ? (*constCond && true) : true;
-      } else if (cv.isFalse()) {
-        constCond = constCond ? (*constCond && false) : false;
-      } else {
-        // Non-boolean constant (e.g., string) - cannot fold.
-        constCond.reset();
-        break;
+    if (canFoldConditionalStatementConstant(stmt)) {
+      for (const auto &condition : stmt.conditions) {
+        auto cv = context.evaluateConstant(*condition.expr);
+        if (cv.bad())
+          break;
+        if (cv.isTrue()) {
+          constCond = constCond ? (*constCond && true) : true;
+        } else if (cv.isFalse()) {
+          constCond = constCond ? (*constCond && false) : false;
+        } else {
+          // Non-boolean constant (e.g., string) - cannot fold.
+          constCond.reset();
+          break;
+        }
       }
     }
     if (constCond.has_value()) {

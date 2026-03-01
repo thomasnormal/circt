@@ -4662,12 +4662,15 @@ struct RvalueExprVisitor : public ExprVisitor {
     };
 
     // Try to materialize constant values directly.
-    // Skip constant evaluation for system calls that need runtime behavior
-    // ($test$plusargs, $value$plusargs) since slang returns nullptr for them
-    // and we want to emit runtime calls instead.
-    bool skipConstEval = false;
+    // Only system calls are eligible for this fast path; user subroutine calls
+    // can have side effects (e.g. static locals) and must remain runtime calls.
+    //
+    // Also skip constant evaluation for specific system calls that require
+    // runtime behavior ($test$plusargs, $value$plusargs, $initstate, $cast).
+    bool skipConstEval = true;
     if (auto *sci = std::get_if<slang::ast::CallExpression::SystemCallInfo>(
             &expr.subroutine)) {
+      skipConstEval = false;
       if (sci->subroutine->name == "$test$plusargs" ||
           sci->subroutine->name == "$value$plusargs" ||
           sci->subroutine->name == "$initstate" ||
