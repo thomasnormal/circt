@@ -93,6 +93,12 @@ def main() -> int:
         help="Environment assignment (KEY=VALUE) for AES LEC command.",
     )
     parser.add_argument(
+        "--aes-command-timeout-secs",
+        type=int,
+        default=0,
+        help="Optional per-command timeout (seconds) for AES LEC lane.",
+    )
+    parser.add_argument(
         "--connectivity-extra",
         action="append",
         default=[],
@@ -105,6 +111,12 @@ def main() -> int:
         help="Environment assignment (KEY=VALUE) for connectivity LEC command.",
     )
     parser.add_argument(
+        "--connectivity-command-timeout-secs",
+        type=int,
+        default=0,
+        help="Optional per-command timeout (seconds) for connectivity LEC lane.",
+    )
+    parser.add_argument(
         "--bmc-extra",
         action="append",
         default=[],
@@ -115,6 +127,12 @@ def main() -> int:
         action="append",
         default=[],
         help="Environment assignment (KEY=VALUE) for sv-tests BMC command.",
+    )
+    parser.add_argument(
+        "--bmc-command-timeout-secs",
+        type=int,
+        default=0,
+        help="Optional per-command timeout (seconds) for sv-tests BMC lane.",
     )
     args = parser.parse_args()
 
@@ -132,6 +150,16 @@ def main() -> int:
     aes_env = parse_env_assignments(args.aes_env, "aes")
     connectivity_env = parse_env_assignments(args.connectivity_env, "connectivity")
     bmc_env = parse_env_assignments(args.bmc_env, "bmc")
+    for name, value in (
+        ("--aes-command-timeout-secs", args.aes_command_timeout_secs),
+        (
+            "--connectivity-command-timeout-secs",
+            args.connectivity_command_timeout_secs,
+        ),
+        ("--bmc-command-timeout-secs", args.bmc_command_timeout_secs),
+    ):
+        if value < 0:
+            raise SystemExit(f"{name} must be >= 0")
     repo_root = Path(__file__).resolve().parents[2]
 
     commands: list[dict[str, str]] = []
@@ -150,6 +178,7 @@ def main() -> int:
                 args.aes_extra,
                 aes_env,
             ),
+            "timeout_secs": args.aes_command_timeout_secs,
         }
     )
     if target_manifest and rules_manifest:
@@ -172,6 +201,7 @@ def main() -> int:
                     args.connectivity_extra,
                     connectivity_env,
                 ),
+                "timeout_secs": args.connectivity_command_timeout_secs,
             }
         )
     commands.append(
@@ -188,6 +218,7 @@ def main() -> int:
                 args.bmc_extra,
                 bmc_env,
             ),
+            "timeout_secs": args.bmc_command_timeout_secs,
         }
     )
 

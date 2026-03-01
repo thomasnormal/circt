@@ -1,0 +1,16 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nimport os\nimport time\nos.write(1, b\"stdout-before-timeout\\n\")\nos.write(2, b\"stderr-before-timeout\\n\")\ntime.sleep(5)\n' > %t/bin/slow_runner.py
+// RUN: chmod +x %t/bin/slow_runner.py
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-timeout --command suite=toy --command mode=LEC --command id=slow_case --command cwd=%t --command command='python3 bin/slow_runner.py'
+// RUN: not python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out --repeat 1 --command-timeout-secs 1 --stop-on-command-failure
+// RUN: FileCheck %s --check-prefix=EXEC < %t/out/execution.tsv
+// RUN: FileCheck %s --check-prefix=LOG < %t/out/run-01/slow_case/command.log
+// RUN: test -f %t/out/run-01/slow_case/results.tsv
+// RUN: test -f %t/out/run-01/slow_case/results.jsonl
+//
+// EXEC: run_index{{[[:space:]]+}}command_index{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}case_label{{[[:space:]]+}}returncode
+// EXEC: 1{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}slow_case{{[[:space:]]+}}124{{[[:space:]]+}}{{.*}}formal-capture-baseline-timeout.test.tmp{{[[:space:]]+}}1{{[[:space:]]+}}python3 bin/slow_runner.py
+// LOG: stdout-before-timeout
+// LOG: stderr-before-timeout
+// LOG: [capture_formal_baseline] command timeout after 1s

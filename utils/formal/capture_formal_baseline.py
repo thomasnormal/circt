@@ -37,6 +37,33 @@ class ManifestCommand:
     case_label: str
     command: str
     cwd: str
+    timeout_secs: int
+
+
+def parse_timeout_value(raw: object, field_name: str, index: int) -> int:
+    if raw is None or raw == "":
+        return 0
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        fail(
+            f"manifest commands[{index}] {field_name} must be an integer "
+            f"(got: {raw!r})"
+        )
+    if value < 0:
+        fail(
+            f"manifest commands[{index}] {field_name} must be non-negative "
+            f"(got: {raw!r})"
+        )
+    return value
+
+
+def coerce_text_output(raw: str | bytes | None) -> str:
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw
 
 
 def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCommand]]:
@@ -76,6 +103,9 @@ def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCom
                 case_label=slugify(label_seed),
                 command=command,
                 cwd=str(raw.get("cwd", "")).strip(),
+                timeout_secs=parse_timeout_value(
+                    raw.get("timeout_secs", 0), "timeout_secs", index
+                ),
             )
         )
     return payload, commands
@@ -87,6 +117,7 @@ def run_manifest_command(
     run_index: int,
     command_dir: Path,
     default_command_cwd: Path,
+    default_command_timeout_secs: int,
 ) -> tuple[int, Path, Path, Path]:
     command_dir.mkdir(parents=True, exist_ok=True)
     out_tsv = command_dir / "results.tsv"
@@ -101,16 +132,41 @@ def run_manifest_command(
     env["FORMAL_BASELINE_MODE"] = entry.mode
     env["FORMAL_BASELINE_CASE_LABEL"] = entry.case_label
     command_cwd = Path(entry.cwd).resolve() if entry.cwd else default_command_cwd
-    proc = subprocess.run(
-        entry.command,
-        shell=True,
-        executable="/bin/bash",
-        cwd=str(command_cwd),
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
+    timeout_secs = (
+        entry.timeout_secs if entry.timeout_secs > 0 else default_command_timeout_secs
     )
+    try:
+        proc = subprocess.run(
+            entry.command,
+            shell=True,
+            executable="/bin/bash",
+            cwd=str(command_cwd),
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_secs if timeout_secs > 0 else None,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = coerce_text_output(exc.stdout)
+        stderr = coerce_text_output(exc.stderr)
+        log_data = ""
+        if stdout:
+            log_data += stdout
+            if not log_data.endswith("\n"):
+                log_data += "\n"
+        if stderr:
+            log_data += stderr
+            if not log_data.endswith("\n"):
+                log_data += "\n"
+        log_data += (
+            "[capture_formal_baseline] command timeout after "
+            f"{timeout_secs}s\n"
+        )
+        log_path.write_text(log_data, encoding="utf-8")
+        out_tsv.write_text("", encoding="utf-8")
+        out_jsonl.write_text("", encoding="utf-8")
+        return 124, out_tsv, out_jsonl, log_path
     log_data = ""
     if proc.stdout:
         log_data += proc.stdout
@@ -166,6 +222,15 @@ def main() -> int:
         default=".",
         help="Default working directory for manifest commands (default: current directory).",
     )
+    parser.add_argument(
+        "--command-timeout-secs",
+        type=int,
+        default=0,
+        help=(
+            "Default timeout in seconds for each manifest command "
+            "(0 disables timeout)."
+        ),
+    )
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--stop-on-command-failure", action="store_true")
     parser.add_argument("--fail-on-status-drift", action="store_true")
@@ -181,6 +246,8 @@ def main() -> int:
     default_command_cwd = Path(args.command_cwd).resolve()
     if not default_command_cwd.is_dir():
         fail(f"default command cwd not found: {default_command_cwd}")
+    if args.command_timeout_secs < 0:
+        fail("--command-timeout-secs must be >= 0")
     drift_script = (Path(__file__).resolve().parent / "compare_formal_results_drift.py")
     if not drift_script.is_file():
         fail(f"drift comparator script not found: {drift_script}")
@@ -205,6 +272,7 @@ def main() -> int:
                 run_index=run_index,
                 command_dir=command_dir,
                 default_command_cwd=default_command_cwd,
+                default_command_timeout_secs=args.command_timeout_secs,
             )
             execution_rows.append(
                 (
@@ -215,6 +283,11 @@ def main() -> int:
                     entry.case_label,
                     str(returncode),
                     entry.cwd or str(default_command_cwd),
+                    str(
+                        entry.timeout_secs
+                        if entry.timeout_secs > 0
+                        else args.command_timeout_secs
+                    ),
                     entry.command,
                     str(out_tsv),
                     str(out_jsonl),
@@ -232,7 +305,8 @@ def main() -> int:
     with execution_tsv.open("w", encoding="utf-8") as handle:
         handle.write(
             "run_index\tcommand_index\tsuite\tmode\tcase_label\treturncode\t"
-            "command_cwd\tcommand\tresults_tsv\tresults_jsonl\tlog_path\n"
+            "command_cwd\tcommand_timeout_secs\tcommand\tresults_tsv\t"
+            "results_jsonl\tlog_path\n"
         )
         for row in execution_rows:
             handle.write("\t".join(row))

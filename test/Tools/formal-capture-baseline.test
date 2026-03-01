@@ -10,8 +10,8 @@
 // RUN: FileCheck %s --check-prefix=FAILDRIFT < %t/out-drift/drift/toy_case.run01-vs-run02.summary.json
 //
 // OKEXEC: run_index{{[[:space:]]+}}command_index{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}case_label{{[[:space:]]+}}returncode
-// OKEXEC: 1{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}toy_case{{[[:space:]]+}}0{{[[:space:]]+}}{{.*}}formal-capture-baseline.test.tmp{{[[:space:]]+}}python3 bin/fake_runner.py
-// OKEXEC: 2{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}toy_case{{[[:space:]]+}}0{{[[:space:]]+}}{{.*}}formal-capture-baseline.test.tmp{{[[:space:]]+}}python3 bin/fake_runner.py
+// OKEXEC: 1{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}toy_case{{[[:space:]]+}}0{{[[:space:]]+}}{{.*}}formal-capture-baseline.test.tmp{{[[:space:]]+}}0{{[[:space:]]+}}python3 bin/fake_runner.py
+// OKEXEC: 2{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}toy_case{{[[:space:]]+}}0{{[[:space:]]+}}{{.*}}formal-capture-baseline.test.tmp{{[[:space:]]+}}0{{[[:space:]]+}}python3 bin/fake_runner.py
 //
 // OKDRIFT: "NO_DRIFT": 1
 // OKDRIFT: "STATUS_DRIFT": 0

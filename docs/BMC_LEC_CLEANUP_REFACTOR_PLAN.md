@@ -377,6 +377,11 @@ Current workstream status in this branch:
    - unsupported diagnostics audit scaffold landed
    - baseline capture runner landed (`capture_formal_baseline.py`)
    - schema drift comparator landed (`compare_formal_results_drift.py`)
+   - per-lane manifest timeout controls landed in WS0 writer (`timeout_secs`)
+   - baseline capture now supports default/per-command timeout budgets and
+     emits timeout budgets in `execution.tsv`
+   - timeout capture path is now robust to `TimeoutExpired` byte
+     stdout/stderr payloads (no Python type crash)
    - first 3-run real mini-baseline completed for AES LEC + sv-tests BMC with zero status/reason/stage drift
    - OpenTitan connectivity LEC lane remains the timeout frontier blocker for full WS0 parity capture
 2. WS1: in progress

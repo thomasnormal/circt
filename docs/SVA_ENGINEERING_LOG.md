@@ -2,6 +2,41 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0 baseline timeout controls + crash fix):
+  - realization:
+    - `utils/formal/capture_formal_baseline.py` added timeout handling, but
+      live runs could crash in timeout paths with:
+      `TypeError: can only concatenate str (not "bytes") to str`.
+    - root cause was direct string concatenation of
+      `subprocess.TimeoutExpired.stdout/stderr`, which may be `bytes`.
+  - implemented:
+    - `utils/formal/capture_formal_baseline.py`
+      - added `coerce_text_output()` and used it in timeout handling.
+      - kept timeout result semantics (`returncode=124`) and empty
+        `results.tsv`/`results.jsonl` stubs.
+      - added default timeout CLI (`--command-timeout-secs`) and execution
+        report field (`command_timeout_secs`).
+    - `utils/formal/write_ws0_baseline_manifest.py`
+      - added per-lane timeout flags:
+        `--aes-command-timeout-secs`,
+        `--connectivity-command-timeout-secs`,
+        `--bmc-command-timeout-secs`.
+      - emits `timeout_secs` per command in manifest.
+    - tests:
+      - updated:
+        - `test/Tools/formal-capture-baseline.test`
+        - `test/Tools/formal-ws0-baseline-manifest.test`
+      - added:
+        - `test/Tools/formal-capture-baseline-timeout.test`
+          (timeout path with stdout/stderr payloads)
+        - `test/Tools/formal-capture-baseline-invalid-timeout.test`
+        - `test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test`
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py utils/formal/write_ws0_baseline_manifest.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-invalid-timeout.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-drift-compare.test`
+      - result: `6/6` pass.
+
 - Iteration update (UVM phase-hopper objection underflow):
   - realization:
     - `test/Runtime/uvm/uvm_simple_test.sv` and

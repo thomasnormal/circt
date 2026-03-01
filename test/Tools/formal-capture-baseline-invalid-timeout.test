@@ -1,0 +1,5 @@
+// RUN: mkdir -p %t
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-invalid-timeout --command suite=toy --command mode=LEC --command id=toy_case --command command='echo pass'
+// RUN: not python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out --command-timeout-secs -1 2>&1 | FileCheck %s
+//
+// CHECK: --command-timeout-secs must be >= 0
