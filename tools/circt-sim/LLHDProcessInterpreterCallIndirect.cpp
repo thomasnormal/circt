@@ -1023,25 +1023,23 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Record port connect() in X-fallback path.
         // Do not bypass UVM connect() bookkeeping; allow canonical behavior.
-        if (resolvedName.contains("uvm_port_base") &&
-            resolvedName.contains("::connect") &&
+        auto isNativeConnectResolvedName = [&](llvm::StringRef name) {
+          if (!name.contains("::connect"))
+            return false;
+          return name.contains("uvm_port_base") ||
+                 name.contains("uvm_analysis_port") ||
+                 name.contains("uvm_analysis_export") ||
+                 name.contains("uvm_analysis_imp") ||
+                 name.contains("uvm_seq_item_pull_") ||
+                 (name.contains("uvm_tlm_") &&
+                  (name.contains("_port") || name.contains("_export") ||
+                   name.contains("_imp")));
+        };
+        if (isNativeConnectResolvedName(resolvedName) &&
             !resolvedName.contains("connect_phase") && args.size() >= 2) {
           uint64_t rawSelfAddr2 = args[0].isX() ? 0 : args[0].getUInt64();
           uint64_t rawProviderAddr2 = args[1].isX() ? 0 : args[1].getUInt64();
-          uint64_t selfAddr2 =
-              canonicalizeUvmObjectAddress(procId, rawSelfAddr2);
-          uint64_t providerAddr2 =
-              canonicalizeUvmObjectAddress(procId, rawProviderAddr2);
-          if (selfAddr2 != 0 && providerAddr2 != 0) {
-            auto &conns = analysisPortConnections[selfAddr2];
-            if (std::find(conns.begin(), conns.end(), providerAddr2) ==
-                conns.end()) {
-              conns.push_back(providerAddr2);
-              invalidateUvmSequencerQueueCache(selfAddr2);
-              if (analysisPortTerminalCache.erase(selfAddr2))
-                ++analysisPortTerminalCacheInvalidations;
-            }
-          }
+          recordUvmPortConnection(procId, rawSelfAddr2, rawProviderAddr2);
         }
 
         // Intercept analysis write entrypoints in X-fallback path.
@@ -1501,19 +1499,23 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
 
         // Record port connect() in static fallback path.
         // Do not bypass UVM connect() bookkeeping; allow canonical behavior.
-        if (resolvedName.contains("uvm_port_base") &&
-            resolvedName.contains("::connect") &&
+        auto isNativeConnectResolvedName = [&](llvm::StringRef name) {
+          if (!name.contains("::connect"))
+            return false;
+          return name.contains("uvm_port_base") ||
+                 name.contains("uvm_analysis_port") ||
+                 name.contains("uvm_analysis_export") ||
+                 name.contains("uvm_analysis_imp") ||
+                 name.contains("uvm_seq_item_pull_") ||
+                 (name.contains("uvm_tlm_") &&
+                  (name.contains("_port") || name.contains("_export") ||
+                   name.contains("_imp")));
+        };
+        if (isNativeConnectResolvedName(resolvedName) &&
             !resolvedName.contains("connect_phase") && sArgs.size() >= 2) {
-          uint64_t selfAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
-          uint64_t providerAddr3 = sArgs[1].isX() ? 0 : sArgs[1].getUInt64();
-          if (selfAddr3 != 0 && providerAddr3 != 0) {
-            auto &conns = analysisPortConnections[selfAddr3];
-            if (std::find(conns.begin(), conns.end(), providerAddr3) ==
-                conns.end()) {
-              conns.push_back(providerAddr3);
-              invalidateUvmSequencerQueueCache(selfAddr3);
-            }
-          }
+          uint64_t rawSelfAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
+          uint64_t rawProviderAddr3 = sArgs[1].isX() ? 0 : sArgs[1].getUInt64();
+          recordUvmPortConnection(procId, rawSelfAddr3, rawProviderAddr3);
         }
 
         // Intercept resource_db in static fallback path.
@@ -4240,7 +4242,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return name.contains("uvm_port_base") ||
              name.contains("uvm_analysis_port") ||
              name.contains("uvm_analysis_export") ||
-             name.contains("uvm_analysis_imp");
+             name.contains("uvm_analysis_imp") ||
+             name.contains("uvm_seq_item_pull_") ||
+             (name.contains("uvm_tlm_") &&
+              (name.contains("_port") || name.contains("_export") ||
+               name.contains("_imp")));
     };
     if (isNativeConnectCallee(calleeName) &&
         !calleeName.contains("connect_phase") && args.size() >= 2) {
@@ -4249,17 +4255,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       uint64_t selfAddr = canonicalizeUvmObjectAddress(procId, rawSelfAddr);
       uint64_t providerAddr =
           canonicalizeUvmObjectAddress(procId, rawProviderAddr);
-      if (selfAddr != 0 && providerAddr != 0) {
-        auto &conns = analysisPortConnections[selfAddr];
-        if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
-          conns.push_back(providerAddr);
-          invalidateUvmSequencerQueueCache(selfAddr);
-          if (analysisPortTerminalCache.erase(selfAddr))
-            ++analysisPortTerminalCacheInvalidations;
-        }
-      }
+      recordUvmPortConnection(procId, rawSelfAddr, rawProviderAddr);
       if (traceAnalysisEnabled)
         llvm::errs() << "[ANALYSIS-CONNECT] " << calleeName
+                     << " self_raw=0x" << llvm::format_hex(rawSelfAddr, 0)
+                     << " provider_raw=0x"
+                     << llvm::format_hex(rawProviderAddr, 0)
                      << " self=0x" << llvm::format_hex(selfAddr, 0)
                      << " provider=0x" << llvm::format_hex(providerAddr, 0)
                      << "\n";

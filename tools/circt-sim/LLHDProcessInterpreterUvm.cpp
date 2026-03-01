@@ -1358,6 +1358,35 @@ bool LLHDProcessInterpreter::resolveUvmSequencerQueueAddress(
     if (strong)
       return true;
   }
+
+  // Last-resort heuristic: if there is exactly one non-empty sequencer FIFO
+  // visible at this point, use it. This recovers alias/connection misses where
+  // get_next_item sees a pull-port object variant not present in the connection
+  // graph, while preserving determinism (no selection when ambiguous).
+  uint64_t soleReadyQueue = 0;
+  llvm::DenseSet<uint64_t> seenReadyQueues;
+  for (auto &entry : sequencerItemFifo) {
+    if (entry.second.empty())
+      continue;
+    uint64_t candidate = entry.first;
+    (void)canonicalizeUvmSequencerQueueAddress(procId, candidate, callSite);
+    if (candidate == 0 || !seenReadyQueues.insert(candidate).second)
+      continue;
+    if (soleReadyQueue == 0) {
+      soleReadyQueue = candidate;
+      continue;
+    }
+    soleReadyQueue = 0;
+    break;
+  }
+  if (soleReadyQueue != 0) {
+    queueAddr = soleReadyQueue;
+    if (traceResolve)
+      llvm::errs() << "[SEQ-RESOLVE] select sole-ready queue=0x"
+                   << llvm::format_hex(queueAddr, 16) << "\n";
+    return true;
+  }
+
   if (traceResolve)
     llvm::errs() << "[SEQ-RESOLVE] miss\n";
   return false;
@@ -1392,6 +1421,51 @@ void LLHDProcessInterpreter::seedAnalysisPortConnectionWorklist(
     uint64_t canonicalKey = canonicalizeUvmObjectAddress(procId, keyAddr);
     if (canonicalKey == canonicalPort)
       appendProviders(keyAddr);
+  }
+}
+
+void LLHDProcessInterpreter::recordUvmPortConnection(ProcessId procId,
+                                                     uint64_t rawSelfAddr,
+                                                     uint64_t rawProviderAddr) {
+  if (rawSelfAddr == 0 || rawProviderAddr == 0)
+    return;
+
+  auto collectAliases = [&](uint64_t rawAddr,
+                            llvm::SmallVectorImpl<uint64_t> &aliases) {
+    llvm::DenseSet<uint64_t> seen;
+    auto addAlias = [&](uint64_t addr) {
+      if (addr != 0 && seen.insert(addr).second)
+        aliases.push_back(addr);
+    };
+
+    addAlias(rawAddr);
+    addAlias(canonicalizeUvmObjectAddress(procId, rawAddr));
+    for (uint64_t mask : {~uint64_t(1), ~uint64_t(3), ~uint64_t(7)}) {
+      uint64_t masked = rawAddr & mask;
+      addAlias(masked);
+      addAlias(canonicalizeUvmObjectAddress(procId, masked));
+    }
+  };
+
+  llvm::SmallVector<uint64_t, 8> selfAliases;
+  llvm::SmallVector<uint64_t, 8> providerAliases;
+  collectAliases(rawSelfAddr, selfAliases);
+  collectAliases(rawProviderAddr, providerAliases);
+
+  for (uint64_t selfAddr : selfAliases) {
+    auto &conns = analysisPortConnections[selfAddr];
+    bool inserted = false;
+    for (uint64_t providerAddr : providerAliases) {
+      if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
+        conns.push_back(providerAddr);
+        inserted = true;
+      }
+    }
+    if (!inserted)
+      continue;
+    invalidateUvmSequencerQueueCache(selfAddr);
+    if (analysisPortTerminalCache.erase(selfAddr))
+      ++analysisPortTerminalCacheInvalidations;
   }
 }
 

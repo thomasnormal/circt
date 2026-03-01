@@ -10681,3 +10681,66 @@
   - regression slice:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-tlm-*.sv`
       - result: `15 passed, 1 expectedly failed` (`uvm-tlm-analysis-100.sv`).
+
+## 2026-03-01 - UVM multi-agent sequencer resolution + integration unmasking
+
+- realization:
+  - Three integration tests were still `XFAIL` due class methods referencing
+    module-scope clocks:
+    - `uvm-integ-seq-driver-scoreboard.sv`
+    - `uvm-integ-factory-config-seq.sv`
+    - `uvm-integ-multi-agent.sv`
+  - After semanticizing these tests to time-based waits, two passed immediately,
+    but `uvm-integ-multi-agent.sv` exposed a real runtime bug: one driver’s
+    `get_next_item` pull-port alias did not resolve to any sequencer queue and
+    blocked forever.
+  - Trace evidence showed:
+    - two sequence items were pushed to distinct sequencer FIFOs
+    - first pull-port resolved and popped
+    - second pull-port remained unresolved (`[SEQ-RESOLVE] miss`) despite a
+      single remaining non-empty queue.
+
+- implemented:
+  - Test semanticization (removed stale `XFAIL`, replaced `@(posedge clk)` with
+    `#10ns`) in:
+    - `test/Tools/crun/uvm-integ-seq-driver-scoreboard.sv`
+    - `test/Tools/crun/uvm-integ-factory-config-seq.sv`
+    - `test/Tools/crun/uvm-integ-multi-agent.sv`
+  - Runtime robustness for UVM port/queue resolution:
+    - Added alias-aware connection recording helper:
+      - `recordUvmPortConnection(procId, rawSelfAddr, rawProviderAddr)`
+      - records raw/canonical/tag-cleared aliases for self/provider endpoints.
+      - files:
+        - `tools/circt-sim/LLHDProcessInterpreter.h`
+        - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - Broadened connect interception matching to include seq-item pull and
+      UVM TLM port/export/imp class names in both call paths:
+      - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+    - Added deterministic last-resort sequencer fallback in
+      `resolveUvmSequencerQueueAddress`:
+      - if graph lookup misses and exactly one non-empty sequencer FIFO exists,
+        select that queue (`select sole-ready queue` trace marker).
+
+- validation:
+  - red (after unmasking):
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-multi-agent.sv`
+    - failed (no PASS markers; long-running blocked simulation).
+    - traced with:
+      - `CIRCT_SIM_TRACE_SEQ=1 CIRCT_SIM_TRACE_ANALYSIS=1 build_test/bin/crun test/Tools/crun/uvm-integ-multi-agent.sv --top tb_top -v 0 --max-time 200000`
+      - observed second pull-port unresolved after first queue pop.
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test crun`
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-seq-driver-scoreboard.sv` -> `1 passed`
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-factory-config-seq.sv` -> `1 passed`
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-multi-agent.sv` -> `1 passed`
+    - direct multi-agent run prints:
+      - `agent_a produced 4 items`
+      - `agent_b produced 3 items`
+      - `multi-agent: PASS`
+  - regression slices:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-integ-*.sv`
+      - result: `11 passed, 1 expectedly failed` (`uvm-integ-ral-config-env.sv`)
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-*.sv`
+      - result: `153 passed, 15 expectedly failed`.

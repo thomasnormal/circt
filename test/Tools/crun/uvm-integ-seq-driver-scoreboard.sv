@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: class method references module-scope clk — slang reports "unknown name `clk`"
 
 // Integration: sequence → driver → analysis_port → scoreboard data path.
 
@@ -14,9 +12,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class integ_sds_item extends uvm_sequence_item;
     `uvm_object_utils(integ_sds_item)
@@ -71,7 +66,7 @@ module tb_top;
       integ_sds_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
+        #10ns;
         ap.write(item);
         seq_item_port.item_done();
       end

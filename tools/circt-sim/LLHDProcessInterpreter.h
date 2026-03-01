@@ -3577,6 +3577,12 @@ private:
       ProcessId procId, uint64_t portAddr,
       llvm::SmallVectorImpl<uint64_t> &worklist);
 
+  /// Record a native UVM/TLM port connection using raw and canonical alias keys.
+  /// This keeps sequencer/analysis lookup robust when connect/get paths use
+  /// different object aliases (subobject pointers, tag variants).
+  void recordUvmPortConnection(ProcessId procId, uint64_t rawSelfAddr,
+                               uint64_t rawProviderAddr);
+
   /// Canonicalize a queue hint to the owning sequencer address.
   /// Returns true when the resolved address is strong enough to cache.
   bool canonicalizeUvmSequencerQueueAddress(ProcessId procId,

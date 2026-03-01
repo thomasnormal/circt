@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: class method references module-scope clk — slang reports "unknown name `clk`"
 
 // Integration: factory override + config_db num_items + sequence generation.
 
@@ -14,9 +12,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class integ_fcs_item extends uvm_sequence_item;
     `uvm_object_utils(integ_fcs_item)
@@ -71,7 +66,7 @@ module tb_top;
       integ_fcs_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
+        #10ns;
         last_type = item.item_type_name();
         if (last_type != "integ_fcs_custom_item") all_custom = 0;
         recv_count++;

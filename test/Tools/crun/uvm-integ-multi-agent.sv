@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: class method references module-scope clk — slang reports "unknown name `clk`"
 
 // Integration: two agents with independent sequencers running in parallel.
 
@@ -15,9 +13,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class integ_ma_item extends uvm_sequence_item;
     `uvm_object_utils(integ_ma_item)
@@ -56,7 +51,7 @@ module tb_top;
       integ_ma_item item;
       forever begin
         seq_item_port.get_next_item(item);
-        @(posedge clk);
+        #10ns;
         driven_count++;
         seq_item_port.item_done();
       end
@@ -71,9 +66,12 @@ module tb_top;
       super.new(name, parent);
     endfunction
     function void build_phase(uvm_phase phase);
+      string sqr_name, drv_name;
       super.build_phase(phase);
-      sqr = uvm_sequencer#(integ_ma_item)::type_id::create("sqr", this);
-      drv = integ_ma_driver::type_id::create("drv", this);
+      sqr_name = {get_name(), "_sqr"};
+      drv_name = {get_name(), "_drv"};
+      sqr = uvm_sequencer#(integ_ma_item)::type_id::create(sqr_name, this);
+      drv = integ_ma_driver::type_id::create(drv_name, this);
     endfunction
     function void connect_phase(uvm_phase phase);
       drv.seq_item_port.connect(sqr.seq_item_export);

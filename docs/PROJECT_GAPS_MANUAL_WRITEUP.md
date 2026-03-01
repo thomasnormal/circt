@@ -6310,3 +6310,12 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed stale 
 
 ### [x] 2098. `test/Tools/crun/uvm-tlm-transport-channel.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and fixed the same lifecycle legality issue as entry 2097 (component creation moved to `build_phase`). End-to-end request/response semantics now pass under crun (`request received: PASS`, `response received: PASS`).
+
+### [x] 2099. `test/Tools/crun/uvm-integ-seq-driver-scoreboard.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and replaced illegal class-to-module clock reference with time-based delay in the driver (`#10ns`). The integration path `sequence -> driver -> analysis_port -> scoreboard` now executes semantically and validates ordered delivery (`scoreboard received 5 items in order`, `seq-driver-scoreboard: PASS`).
+
+### [x] 2100. `test/Tools/crun/uvm-integ-factory-config-seq.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and replaced illegal class-to-module clock reference with time-based delay in the driver (`#10ns`). Factory override plus sequence generation semantics now pass under crun (`received 6 items of type integ_fcs_custom_item`, `factory-config-seq: PASS`).
+
+### [x] 2101. `test/Tools/crun/uvm-integ-multi-agent.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and fixed a real runtime issue uncovered by semantic unmasking: one agent's `get_next_item` pull-port alias failed queue resolution and blocked forever. Runtime hardening in `circt-sim` now records alias-aware UVM port connections and applies a deterministic sole-ready-queue fallback when graph resolution misses (`tools/circt-sim/LLHDProcessInterpreter.h`, `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`). Multi-agent parallel sequencing now passes (`agent_a produced 4 items`, `agent_b produced 3 items`, `multi-agent: PASS`).

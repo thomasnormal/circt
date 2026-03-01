@@ -22863,7 +22863,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return name.contains("uvm_port_base") ||
            name.contains("uvm_analysis_port") ||
            name.contains("uvm_analysis_export") ||
-           name.contains("uvm_analysis_imp");
+           name.contains("uvm_analysis_imp") ||
+           name.contains("uvm_seq_item_pull_") ||
+           (name.contains("uvm_tlm_") &&
+            (name.contains("_port") || name.contains("_export") ||
+             name.contains("_imp")));
   };
   if (isNativeConnectCallee(calleeName) &&
       !calleeName.contains("connect_phase") &&
@@ -22872,18 +22876,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     InterpretedValue providerVal = getValue(procId, callOp.getOperand(1));
     uint64_t rawSelfAddr = selfVal.isX() ? 0 : selfVal.getUInt64();
     uint64_t rawProviderAddr = providerVal.isX() ? 0 : providerVal.getUInt64();
-    uint64_t selfAddr = canonicalizeUvmObjectAddress(procId, rawSelfAddr);
-    uint64_t providerAddr = canonicalizeUvmObjectAddress(procId, rawProviderAddr);
-    if (selfAddr != 0 && providerAddr != 0) {
-      auto &conns = analysisPortConnections[selfAddr];
-      if (std::find(conns.begin(), conns.end(), providerAddr) == conns.end()) {
-        conns.push_back(providerAddr);
-        invalidateUvmSequencerQueueCache(selfAddr);
-        // Invalidate analysis port terminal cache for this port.
-        if (analysisPortTerminalCache.erase(selfAddr))
-          ++analysisPortTerminalCacheInvalidations;
-      }
-    }
+    recordUvmPortConnection(procId, rawSelfAddr, rawProviderAddr);
     // Fall through to the canonical UVM connect() implementation.
   }
 
