@@ -2964,16 +2964,34 @@ def main() -> int:
                 allow_exact: set[str] = set()
                 allow_prefix: list[str] = []
                 allow_regex: list[re.Pattern[str]] = []
+                fpv_summary_drift_allowlist_path: Path | None = None
                 if args.fpv_summary_drift_allowlist_file:
+                    fpv_summary_drift_allowlist_path = Path(
+                        args.fpv_summary_drift_allowlist_file
+                    ).resolve()
+                    if not fpv_summary_drift_allowlist_path.is_file():
+                        fail(
+                            "fpv summary drift allowlist file not found: "
+                            f"{fpv_summary_drift_allowlist_path}"
+                        )
                     allow_exact, allow_prefix, allow_regex = load_allowlist(
-                        Path(args.fpv_summary_drift_allowlist_file).resolve()
+                        fpv_summary_drift_allowlist_path
                     )
                 row_allow_exact: set[str] = set()
                 row_allow_prefix: list[str] = []
                 row_allow_regex: list[re.Pattern[str]] = []
+                fpv_summary_drift_row_allowlist_path: Path | None = None
                 if args.fpv_summary_drift_row_allowlist_file:
+                    fpv_summary_drift_row_allowlist_path = Path(
+                        args.fpv_summary_drift_row_allowlist_file
+                    ).resolve()
+                    if not fpv_summary_drift_row_allowlist_path.is_file():
+                        fail(
+                            "fpv summary drift row allowlist file not found: "
+                            f"{fpv_summary_drift_row_allowlist_path}"
+                        )
                     row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
-                        Path(args.fpv_summary_drift_row_allowlist_file).resolve()
+                        fpv_summary_drift_row_allowlist_path
                     )
 
                 drift_rows: list[tuple[str, str, str, str]] = []

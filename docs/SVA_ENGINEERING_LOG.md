@@ -2,6 +2,27 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: FPV summary drift allowlist file validation hardened):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` loaded
+      `--fpv-summary-drift-allowlist-file` and
+      `--fpv-summary-drift-row-allowlist-file` directly via `load_allowlist`.
+    - when either file path was missing, Python could raise an uncaught
+      `FileNotFoundError` traceback instead of a stable runner diagnostic.
+  - implemented:
+    - added explicit existence checks before loading both FPV-summary drift
+      allowlist files, with deterministic fail messages:
+      - `fpv summary drift allowlist file not found: ...`
+      - `fpv summary drift row allowlist file not found: ...`
+    - added regressions:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-missing-file.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-row-allowlist-missing-file.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-row-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1-T1/T2: FPV BMC summary-drift allowlist parsing migrated to shared library):
   - realization:
     - `run_opentitan_fpv_circt_bmc.py` still carried local allowlist
