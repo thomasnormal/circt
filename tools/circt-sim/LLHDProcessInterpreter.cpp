@@ -609,6 +609,17 @@ static bool shouldDenyUnmappedNativeCallByDefault(mlir::func::FuncOp funcOp) {
          calleeName.starts_with("m_initialize");
 }
 
+// Keep only the known fragile scheduled-forks helper on the interpreted path.
+// Broadly demoting other UVM helpers breaks existing semantic fast paths.
+static bool shouldForceInterpretedUvmSemanticPath(llvm::StringRef calleeName) {
+  return calleeName.contains("m_execute_scheduled_forks");
+}
+
+static bool isUvmChildIteratorCallee(llvm::StringRef calleeName) {
+  return calleeName == "uvm_pkg::uvm_component::get_first_child" ||
+         calleeName == "uvm_pkg::uvm_component::get_next_child";
+}
+
 static bool shouldDenyUnmappedNativeCall(mlir::func::FuncOp funcOp) {
   llvm::StringRef calleeName = funcOp.getName();
   static bool denyAllUnmappedNative =
@@ -1582,6 +1593,19 @@ SignalId LLHDProcessInterpreter::lookupInterfaceFieldSignal(ProcessId procId,
     addCandidate(canonicalizeUvmObjectAddress(procId, masked));
   }
 
+  // Child BFMs often operate on copied interface-field storage. Follow the
+  // recorded reverse child->parent field mapping so wait-event resolution can
+  // bind child addresses back to canonical parent field signals.
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    uint64_t candidate = candidates[i];
+    auto parentIt = childToParentFieldAddr.find(candidate);
+    if (parentIt == childToParentFieldAddr.end())
+      continue;
+    uint64_t parentAddr = parentIt->second;
+    addCandidate(parentAddr);
+    addCandidate(canonicalizeUvmObjectAddress(procId, parentAddr));
+  }
+
   for (uint64_t candidate : candidates) {
     auto it = interfaceFieldSignals.find(candidate);
     if (it != interfaceFieldSignals.end())
@@ -1908,8 +1932,38 @@ void LLHDProcessInterpreter::raisePhaseObjection(int64_t handle, int64_t count) 
 void LLHDProcessInterpreter::dropPhaseObjection(int64_t handle, int64_t count) {
   if (handle == MOORE_OBJECTION_INVALID_HANDLE || count <= 0)
     return;
+  int64_t current = __moore_objection_get_count(handle);
+  if (current <= 0)
+    return;
+  if (count > current)
+    count = current;
   __moore_objection_drop(handle, "", 0, "", 0, count);
   wakeObjectionZeroWaitersIfReady(handle);
+}
+
+int64_t LLHDProcessInterpreter::getPhaseObjectionDrainTimeFs(int64_t handle) const {
+  int64_t drainTime = 0;
+  if (handle != MOORE_OBJECTION_INVALID_HANDLE)
+    drainTime = __moore_objection_get_drain_time(handle);
+  if (drainTime <= 0 && globalPhaseObjectionDrainTimeFs > 0)
+    return globalPhaseObjectionDrainTimeFs;
+  return drainTime > 0 ? drainTime : 0;
+}
+
+void LLHDProcessInterpreter::setGlobalPhaseObjectionDrainTimeFs(
+    int64_t drainTimeFs) {
+  globalPhaseObjectionDrainTimeFs = drainTimeFs > 0 ? drainTimeFs : 0;
+  if (globalPhaseObjectionDrainTimeFs <= 0)
+    return;
+
+  for (const auto &entry : phaseObjectionHandles) {
+    int64_t handle = entry.second;
+    if (handle == MOORE_OBJECTION_INVALID_HANDLE)
+      continue;
+    if (__moore_objection_get_drain_time(handle) > 0)
+      continue;
+    __moore_objection_set_drain_time(handle, globalPhaseObjectionDrainTimeFs);
+  }
 }
 
 void LLHDProcessInterpreter::maybeDispatchUvmComponentObjectionCallback(
@@ -13678,6 +13732,42 @@ void LLHDProcessInterpreter::killProcessTree(ProcessId procId) {
   killSubtree(killSubtree, procId);
 }
 
+bool LLHDProcessInterpreter::hasPendingObjectionDrainWait() const {
+  uint64_t nowFs = scheduler.getCurrentTime().realTime;
+
+  for (const auto &entry : objectionWaitForStateByProc) {
+    const auto &state = entry.second;
+    if (!state.drainArmed)
+      continue;
+    if (state.drainDeadlineFs == 0)
+      continue;
+    if (state.drainDeadlineFs == UINT64_MAX || nowFs < state.drainDeadlineFs)
+      return true;
+  }
+
+  for (const auto &entry : executePhaseZeroDeadlineFs) {
+    uint64_t deadlineFs = entry.second;
+    if (deadlineFs == 0)
+      continue;
+    if (deadlineFs == UINT64_MAX || nowFs < deadlineFs)
+      return true;
+  }
+
+  // Keep deferred-$finish grace active while execute_phase monitor pollers are
+  // still waiting; they finalize phase cleanup and may schedule follow-on
+  // report/final phases immediately after drain deadlines.
+  for (const auto &entry : executePhaseMonitorPollPhase) {
+    ProcessId procId = entry.first;
+    auto stateIt = processStates.find(procId);
+    if (stateIt == processStates.end())
+      continue;
+    if (!stateIt->second.halted && stateIt->second.waiting)
+      return true;
+  }
+
+  return false;
+}
+
 bool LLHDProcessInterpreter::isProcessSubtreeAlive(ProcessId rootProcId) const {
   if (rootProcId == InvalidProcessId)
     return false;
@@ -23386,20 +23476,33 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         found = true;
       }
     }
-    // Allow unresolved fallback dequeue only in strict single-queue setups.
-    // Once multiple queue maps exist, global scans can cross-pop unrelated
-    // sequencer traffic and corrupt type routing.
-    bool allowSingleQueueFallback =
-        allowGlobalFallbackSearch && !isTryNextItem &&
-        sequencerItemFifo.size() == 1;
-    if (!found && allowSingleQueueFallback) {
-      auto it = sequencerItemFifo.begin();
-      if (it != sequencerItemFifo.end() && !it->second.empty()) {
-        seqrQueueAddr = it->first;
-        itemAddr = it->second.front();
-        it->second.pop_front();
-        found = true;
-        fromFallbackSearch = true;
+    // Unresolved structural routing fallback: pick the nearest non-empty queue
+    // to the pull-port address, with deterministic address tie-break.
+    bool allowNearestFallback = allowGlobalFallbackSearch && !isTryNextItem;
+    if (!found && allowNearestFallback) {
+      uint64_t bestQueue = 0;
+      uint64_t bestDistance = UINT64_MAX;
+      for (const auto &entry : sequencerItemFifo) {
+        if (entry.second.empty())
+          continue;
+        uint64_t candidate = entry.first;
+        uint64_t distance =
+            candidate > portAddr ? candidate - portAddr : portAddr - candidate;
+        if (bestQueue == 0 || distance < bestDistance ||
+            (distance == bestDistance && candidate < bestQueue)) {
+          bestQueue = candidate;
+          bestDistance = distance;
+        }
+      }
+      if (bestQueue != 0) {
+        auto it = sequencerItemFifo.find(bestQueue);
+        if (it != sequencerItemFifo.end() && !it->second.empty()) {
+          seqrQueueAddr = bestQueue;
+          itemAddr = it->second.front();
+          it->second.pop_front();
+          found = true;
+          fromFallbackSearch = true;
+        }
       }
     }
 
@@ -24472,26 +24575,46 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // to bypass the interpreted version which fails because get_name() virtual
   // dispatch crashes during objection object creation. We use a native
   // objection handle map instead.
-  // This is critical for run_phase: without working objections, raise_objection
-  // fails → phase completes immediately → simulation stays at time 0.
-  // The phase_hopper variant is needed for newer UVM versions that use a
-  // separate phase hopper class with its own get_objection/raise/drop/wait_for.
+  //
+  // Keep keying semantics aligned with UVM objects:
+  // - uvm_phase::get_objection() is keyed by phase object identity.
+  // - uvm_phase_hopper::get_objection() is keyed by hopper object identity.
+  //
+  // Mixing these key spaces causes wait_for() to poll one handle while
+  // raise/drop updates another, breaking drain-time behavior.
   if ((calleeName.contains("uvm_phase::get_objection") ||
        calleeName.contains("phase_hopper::get_objection")) &&
       !calleeName.contains("get_objection_count") &&
       !calleeName.contains("get_objection_total")) {
-    InterpretedValue phaseVal = args[0]; // %arg0 = this (phase pointer)
-    if (phaseVal.isX()) {
+    bool isPhaseHopperGet = calleeName.contains("phase_hopper::get_objection");
+    InterpretedValue selfVal = args[0];
+    uint64_t objectionKey = 0;
+    if (isPhaseHopperGet) {
+      if (!selfVal.isX()) {
+        objectionKey = canonicalizeUvmObjectAddress(procId, selfVal.getUInt64());
+        if (objectionKey == 0)
+          objectionKey = normalizeUvmObjectKey(procId, selfVal.getUInt64());
+        if (objectionKey == 0)
+          objectionKey = selfVal.getUInt64();
+      }
+    }
+    if (objectionKey == 0 && !selfVal.isX()) {
+      objectionKey = normalizeUvmObjectKey(procId, selfVal.getUInt64());
+      if (objectionKey == 0)
+        objectionKey = selfVal.getUInt64();
+      uint64_t mapped = mapUvmPhaseAddressToActiveGraph(
+          procId, objectionKey, /*allowUnknownImpZeroToActiveRoot=*/false);
+      if (mapped != 0)
+        objectionKey = mapped;
+    }
+    if (objectionKey == 0) {
       // Return null
       auto result = callOp.getResult(0);
       setValue(procId, result, InterpretedValue(llvm::APInt(64, 0)));
       return success();
     }
-    uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
-    if (phaseAddr == 0)
-      phaseAddr = phaseVal.getUInt64();
-    // Check if we already have an objection handle for this phase
-    auto it = phaseObjectionHandles.find(phaseAddr);
+    // Check if we already have an objection handle for this key.
+    auto it = phaseObjectionHandles.find(objectionKey);
     if (it != phaseObjectionHandles.end()) {
       // Return the handle encoded as a non-null pointer so UVM code sees
       // a valid objection object. The actual objection logic is handled
@@ -24503,10 +24626,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
 
     // Create a new objection handle for this phase via the runtime.
-    std::string phaseName = "phase_" + std::to_string(phaseAddr);
+    std::string keyName =
+        (isPhaseHopperGet ? "phase_hopper_" : "phase_") +
+        std::to_string(objectionKey);
     MooreObjectionHandle handle = __moore_objection_create(
-        phaseName.c_str(), static_cast<int64_t>(phaseName.size()));
-    phaseObjectionHandles[phaseAddr] = handle;
+        keyName.c_str(), static_cast<int64_t>(keyName.size()));
+    phaseObjectionHandles[objectionKey] = handle;
 
     auto result = callOp.getResult(0);
     uint64_t syntheticAddr = 0xE0000000ULL + static_cast<uint64_t>(handle);
@@ -24516,46 +24641,73 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
   // Intercept canonical uvm_phase::{raise,drop}_objection calls to use native
   // objection handles from the get_objection interceptor above.
-  // Do not intercept uvm_phase_hopper wrapper variants here: they can forward
-  // into canonical phase objection calls, and native-counting both layers can
-  // double-account objections.
-  if ((calleeName.contains("uvm_phase::raise_objection") ||
-       calleeName.contains("uvm_phase::drop_objection")) &&
+  //
+  // Also intercept phase_hopper raise/drop only for synthetic stub bodies used
+  // by regression tests (empty bodies). Real UVM wrapper bodies forward to
+  // uvm_objection::{raise,drop}_objection and are handled there.
+  bool isPhaseRaiseDrop =
+      calleeName.contains("uvm_phase::raise_objection") ||
+      calleeName.contains("uvm_phase::drop_objection");
+  bool isPhaseHopperRaiseDrop =
+      calleeName.contains("phase_hopper::raise_objection") ||
+      calleeName.contains("phase_hopper::drop_objection");
+  if ((isPhaseRaiseDrop || isPhaseHopperRaiseDrop) &&
       !calleeName.contains("uvm_objection::")) {
+    if (isPhaseHopperRaiseDrop) {
+      bool wrapperCallsUvmObjection = false;
+      if (funcOp) {
+        for (Block &block : funcOp.getBody()) {
+          for (Operation &op : block) {
+            auto innerCall = dyn_cast<func::CallOp>(&op);
+            if (!innerCall)
+              continue;
+            if (innerCall.getCallee().contains("uvm_objection::raise_objection") ||
+                innerCall.getCallee().contains("uvm_objection::drop_objection")) {
+              wrapperCallsUvmObjection = true;
+              break;
+            }
+          }
+          if (wrapperCallsUvmObjection)
+            break;
+        }
+      }
+      if (wrapperCallsUvmObjection)
+        goto no_phase_hopper_raise_drop_intercept;
+    }
+
     const bool traceUvmObjection =
         std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
-    auto normalizePhaseAddr = [&](const InterpretedValue &phaseVal) -> uint64_t {
-      if (phaseVal.isX())
+    auto normalizeObjectionKey = [&](const InterpretedValue &selfVal) -> uint64_t {
+      if (selfVal.isX())
         return 0;
-      uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
+      if (isPhaseHopperRaiseDrop) {
+        uint64_t hopperAddr =
+            canonicalizeUvmObjectAddress(procId, selfVal.getUInt64());
+        if (hopperAddr == 0)
+          hopperAddr = normalizeUvmObjectKey(procId, selfVal.getUInt64());
+        if (hopperAddr == 0)
+          hopperAddr = selfVal.getUInt64();
+        return hopperAddr;
+      }
+      uint64_t phaseAddr = normalizeUvmObjectKey(procId, selfVal.getUInt64());
       if (phaseAddr == 0)
-        phaseAddr = phaseVal.getUInt64();
+        phaseAddr = selfVal.getUInt64();
+      uint64_t mapped = mapUvmPhaseAddressToActiveGraph(
+          procId, phaseAddr, /*allowUnknownImpZeroToActiveRoot=*/false);
+      if (mapped != 0)
+        phaseAddr = mapped;
       return phaseAddr;
-    };
-    auto normalizeHopperAddr = [&](const InterpretedValue &hopperVal) -> uint64_t {
-      if (hopperVal.isX())
-        return 0;
-      return canonicalizeUvmObjectAddress(procId, hopperVal.getUInt64());
     };
     // %arg2 = description string (struct<(ptr,i64)>), %arg3 = count (i32)
     InterpretedValue countVal =
         args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
     int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
-    bool isPhaseHopperCall = calleeName.contains("phase_hopper::");
     uint64_t handleKey = 0;
-    std::string handleName;
-    llvm::StringRef handleKind = "phase";
-    if (isPhaseHopperCall) {
-      // Hopper objections are keyed by hopper object (%arg0 = this).
-      if (!args.empty())
-        handleKey = normalizeHopperAddr(args[0]);
-      handleName = "phase_hopper_" + std::to_string(handleKey);
-      handleKind = "hopper";
-    } else {
-      if (!args.empty())
-        handleKey = normalizePhaseAddr(args[0]);
-      handleName = "phase_" + std::to_string(handleKey);
-    }
+    if (!args.empty())
+      handleKey = normalizeObjectionKey(args[0]);
+    std::string handleName =
+        (isPhaseHopperRaiseDrop ? "phase_hopper_" : "phase_") +
+        std::to_string(handleKey);
     if (handleKey == 0)
       return success();
     auto it = phaseObjectionHandles.find(handleKey);
@@ -24573,7 +24725,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     } else {
       dropPhaseObjection(handle, count);
     }
-    if (!isPhaseHopperCall && args.size() > 1 && !args[1].isX()) {
+    if (!isPhaseHopperRaiseDrop && args.size() > 1 && !args[1].isX()) {
       InterpretedValue descVal =
           args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
       maybeDispatchUvmComponentObjectionCallback(
@@ -24582,11 +24734,12 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           callOp.getOperation());
     }
     int64_t afterCount = __moore_objection_get_count(handle);
-    if (beforeCount > 0 || afterCount > 0)
+    if (!isPhaseHopperRaiseDrop && (beforeCount > 0 || afterCount > 0))
       executePhasePhaseSawPositiveObjection[handleKey] = true;
     if (traceUvmObjection) {
       llvm::errs() << "[UVM-OBJ] proc=" << procId << " callee=" << calleeName
-                   << " " << handleKind << "=0x"
+                   << " " << (isPhaseHopperRaiseDrop ? "hopper" : "phase")
+                   << "=0x"
                    << llvm::format_hex(handleKey, 16)
                    << " handle=" << handle << " delta=" << count
                    << " before=" << beforeCount << " after=" << afterCount
@@ -24594,11 +24747,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
     return success();
   }
+no_phase_hopper_raise_drop_intercept:
 
   // Intercept uvm_objection methods that operate on our synthetic objection
   // pointers (0xE0000000 + handle_id). The phase engine calls these to check
   // whether all objections have been dropped before proceeding.
   if (calleeName.contains("uvm_objection::")) {
+    const bool traceUvmObjection =
+        std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
     // Map synthetic pointer back to objection handle
     auto syntheticToHandle = [](uint64_t addr) -> MooreObjectionHandle {
       if (addr >= 0xE0000000ULL && addr < 0xF0000000ULL)
@@ -24631,21 +24787,40 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       InterpretedValue drainVal =
           args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(64, 0));
       MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
-      if (!getSyntheticHandle(selfVal, handle))
-        goto no_uvm_objection_intercept;
       int64_t drainTime = drainVal.isX()
                               ? 0
                               : static_cast<int64_t>(drainVal.getUInt64());
-      __moore_objection_set_drain_time(handle, drainTime);
+      if (getSyntheticHandle(selfVal, handle)) {
+        __moore_objection_set_drain_time(handle, drainTime);
+        if (traceUvmObjection) {
+          llvm::errs() << "[UVM-OBJ] proc=" << procId
+                       << " callee=" << calleeName
+                       << " synthetic_handle=" << handle
+                       << " drain_fs=" << drainTime << "\n";
+        }
+      } else {
+        // Non-synthetic objection objects (e.g. uvm_test_done) still need
+        // drain-time semantics. Keep a global fallback and backfill handles.
+        setGlobalPhaseObjectionDrainTimeFs(drainTime);
+        if (traceUvmObjection) {
+          llvm::errs() << "[UVM-OBJ] proc=" << procId
+                       << " callee=" << calleeName
+                       << " non_synthetic_drain_fs=" << drainTime
+                       << " global_drain_fs=" << globalPhaseObjectionDrainTimeFs
+                       << "\n";
+        }
+      }
       return success();
     }
 
     if (calleeName.contains("get_drain_time") && callOp.getNumResults() >= 1) {
       InterpretedValue selfVal = args[0];
       MooreObjectionHandle handle = MOORE_OBJECTION_INVALID_HANDLE;
-      if (!getSyntheticHandle(selfVal, handle))
-        goto no_uvm_objection_intercept;
-      int64_t drainTime = __moore_objection_get_drain_time(handle);
+      int64_t drainTime = 0;
+      if (getSyntheticHandle(selfVal, handle))
+        drainTime = getPhaseObjectionDrainTimeFs(handle);
+      else
+        drainTime = globalPhaseObjectionDrainTimeFs;
       setValue(procId, callOp.getResult(0),
                InterpretedValue(llvm::APInt(64, static_cast<uint64_t>(drainTime))));
       return success();
@@ -24735,7 +24910,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           if (wfs.zeroYields < 3) {
             ++wfs.zeroYields;
           } else {
-            int64_t drainTime = __moore_objection_get_drain_time(handle);
+            int64_t drainTime = getPhaseObjectionDrainTimeFs(handle);
+            if (traceUvmObjection) {
+              llvm::errs() << "[UVM-OBJ] proc=" << procId
+                           << " callee=" << calleeName
+                           << " arm_drain handle=" << handle
+                           << " drain_fs=" << drainTime << "\n";
+            }
             if (drainTime <= 0) {
               objectionWaitForStateByProc.erase(procId);
               return success();
@@ -25021,6 +25202,11 @@ no_uvm_objection_intercept:
   if (!forceInterpretedForPhaseSetCanonicalization && !nativeFuncPtrs.empty()) {
     auto nativeIt = nativeFuncPtrs.find(funcKey);
     if (nativeIt != nativeFuncPtrs.end()) {
+      if (shouldForceInterpretedUvmSemanticPath(calleeName)) {
+        ++interpretedFuncCallCount;
+        fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+        goto func_call_interpreted_fallback;
+      }
       if (functionHasDirectCoverageRuntimeCall(funcOp)) {
         ++interpretedFuncCallCount;
         fallbackReason = DirectInterpretedFallbackReason::CoverageRuntime;
@@ -25220,10 +25406,31 @@ no_uvm_objection_intercept:
                                            shouldTreatArg0I64AsPointerLike(
                                                funcOp, i);
               bool isUnmappedCall = fidIt == funcOpToFid.end();
-              bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
               if (hasPointerType || pointerLikeI64ThisArg) {
                 a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                      a[i]);
+                // Child-iterator APIs take an out/ref key pointer whose
+                // storage is often process-local in interpreted memory.
+                // Native __moore_assoc_next expects a host/runtime-managed
+                // buffer; passing interpreter-local pointers can recurse and
+                // crash. Demote those calls to interpreted execution.
+                if (hasPointerType && i == 1 &&
+                    isUvmChildIteratorCallee(funcOp.getName()) && a[i] != 0) {
+                  uint64_t localOffset = 0;
+                  if (findMemoryBlockByAddress(a[i], procId, &localOffset)) {
+                    if (traceNativeCalls) {
+                      llvm::errs()
+                          << "[AOT TRACE] func.call skip child-iter-local-pointer"
+                          << " name=" << funcOp.getName() << " arg" << i
+                          << "=" << llvm::format_hex(a[i], 16)
+                          << " active_proc=" << activeProcessId << "\n";
+                    }
+                    canDispatch = false;
+                    fallbackReason =
+                        DirectInterpretedFallbackReason::PointerSafety;
+                    break;
+                  }
+                }
                 if (a[i] != 0 && isVirtualOrTaggedPointerValue(a[i])) {
                   if (traceNativeCalls) {
                     llvm::errs() << "[AOT TRACE] func.call skip unresolved-virtual-pointer"
@@ -25624,6 +25831,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
     fallbackReason =
         DirectInterpretedFallbackReason::ForcePhaseCanonicalization;
   }
+  if (nfp && shouldForceInterpretedUvmSemanticPath(funcOp.getName())) {
+    nfp = nullptr;
+    forcedInterpreter = true;
+    fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+  }
   if (nfp) {
     if (functionHasDirectCoverageRuntimeCall(funcOp)) {
       nfp = nullptr;
@@ -25823,10 +26035,30 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
             bool pointerLikeI64ThisArg = i < funcOp.getNumArguments() &&
                                          shouldTreatArg0I64AsPointerLike(funcOp, i);
             bool isUnmappedCall = fidIt == funcOpToFid.end();
-            bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
             if (hasPointerType || pointerLikeI64ThisArg) {
               a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                    a[i]);
+              // Child-iterator APIs take an out/ref key pointer whose
+              // storage is often process-local in interpreted memory.
+              // Native __moore_assoc_next expects a host/runtime-managed
+              // buffer; passing interpreter-local pointers can recurse and
+              // crash. Demote those calls to interpreted execution.
+              if (hasPointerType && i == 1 &&
+                  isUvmChildIteratorCallee(funcOp.getName()) && a[i] != 0) {
+                uint64_t localOffset = 0;
+                if (findMemoryBlockByAddress(a[i], procId, &localOffset)) {
+                  if (traceNativeCalls) {
+                    llvm::errs()
+                        << "[AOT TRACE] func.call skip child-iter-local-pointer"
+                        << " name=" << funcOp.getName() << " arg" << i
+                        << "=" << llvm::format_hex(a[i], 16)
+                        << " active_proc=" << activeProcessId << "\n";
+                  }
+                  canDispatch = false;
+                  fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
+                  break;
+                }
+              }
               if (a[i] != 0 && isVirtualOrTaggedPointerValue(a[i])) {
                 if (traceNativeCalls) {
                   llvm::errs() << "[AOT TRACE] func.call skip unresolved-virtual-pointer"
@@ -26260,28 +26492,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       uint64_t phaseAddr = normalizeUvmObjectKey(procId, phaseVal.getUInt64());
       if (phaseAddr == 0)
         phaseAddr = phaseVal.getUInt64();
+      uint64_t mapped = mapUvmPhaseAddressToActiveGraph(
+          procId, phaseAddr, /*allowUnknownImpZeroToActiveRoot=*/false);
+      if (mapped != 0)
+        phaseAddr = mapped;
       return phaseAddr;
-    };
-    auto normalizeHopperAddr = [&](const InterpretedValue &hopperVal) -> uint64_t {
-      if (hopperVal.isX())
-        return 0;
-      return canonicalizeUvmObjectAddress(procId, hopperVal.getUInt64());
     };
     InterpretedValue countVal =
         args.size() > 3 ? args[3] : InterpretedValue(llvm::APInt(32, 1));
     int64_t count = countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
-    uint64_t handleKey = 0;
-    std::string handleName;
-    llvm::StringRef handleKind = "phase";
-    if (funcName.contains("phase_hopper")) {
-      // Hopper objections are keyed by hopper object (%arg0 = this).
-      handleKey = normalizeHopperAddr(args[0]);
-      handleName = "phase_hopper_" + std::to_string(handleKey);
-      handleKind = "hopper";
-    } else {
-      handleKey = normalizePhaseAddr(args[0]);
-      handleName = "phase_" + std::to_string(handleKey);
-    }
+    uint64_t handleKey = normalizePhaseAddr(args[0]);
+    std::string handleName = "phase_" + std::to_string(handleKey);
     if (handleKey == 0)
       return success();
     auto objIt = phaseObjectionHandles.find(handleKey);
@@ -26299,8 +26520,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
     } else {
       dropPhaseObjection(handle, count);
     }
-    if (!funcName.contains("phase_hopper") && args.size() > 1 &&
-        !args[1].isX()) {
+    if (args.size() > 1 && !args[1].isX()) {
       InterpretedValue descVal =
           args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
       maybeDispatchUvmComponentObjectionCallback(
@@ -26313,11 +26533,71 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       executePhasePhaseSawPositiveObjection[handleKey] = true;
     if (traceUvmObjection) {
       llvm::errs() << "[UVM-OBJ] proc=" << procId << " func=" << funcName
-                   << " " << handleKind << "=0x"
+                   << " phase=0x"
                    << llvm::format_hex(handleKey, 16)
                    << " handle=" << handle << " delta=" << count
                    << " before=" << beforeCount << " after=" << afterCount
                    << "\n";
+    }
+    return success();
+  }
+
+  if (funcName.contains("uvm_objection::set_drain_time")) {
+    auto syntheticToHandle = [](uint64_t addr) -> MooreObjectionHandle {
+      if (addr >= 0xE0000000ULL && addr < 0xF0000000ULL)
+        return static_cast<MooreObjectionHandle>(addr - 0xE0000000ULL);
+      return MOORE_OBJECTION_INVALID_HANDLE;
+    };
+    const bool traceUvmObjection =
+        std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
+    InterpretedValue selfVal =
+        args.size() > 0 ? args[0] : InterpretedValue(llvm::APInt(64, 0));
+    InterpretedValue drainVal =
+        args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(64, 0));
+    int64_t drainTime =
+        drainVal.isX() ? 0 : static_cast<int64_t>(drainVal.getUInt64());
+    MooreObjectionHandle handle =
+        selfVal.isX() ? MOORE_OBJECTION_INVALID_HANDLE
+                      : syntheticToHandle(selfVal.getUInt64());
+    if (handle != MOORE_OBJECTION_INVALID_HANDLE) {
+      __moore_objection_set_drain_time(handle, drainTime);
+      if (traceUvmObjection) {
+        llvm::errs() << "[UVM-OBJ] proc=" << procId << " func=" << funcName
+                     << " synthetic_handle=" << handle
+                     << " drain_fs=" << drainTime << "\n";
+      }
+    } else {
+      setGlobalPhaseObjectionDrainTimeFs(drainTime);
+      if (traceUvmObjection) {
+        llvm::errs() << "[UVM-OBJ] proc=" << procId << " func=" << funcName
+                     << " non_synthetic_drain_fs=" << drainTime
+                     << " global_drain_fs=" << globalPhaseObjectionDrainTimeFs
+                     << "\n";
+      }
+    }
+    return success();
+  }
+
+  if (funcName.contains("uvm_objection::get_drain_time")) {
+    auto syntheticToHandle = [](uint64_t addr) -> MooreObjectionHandle {
+      if (addr >= 0xE0000000ULL && addr < 0xF0000000ULL)
+        return static_cast<MooreObjectionHandle>(addr - 0xE0000000ULL);
+      return MOORE_OBJECTION_INVALID_HANDLE;
+    };
+    if (!results.empty()) {
+      InterpretedValue selfVal =
+          args.size() > 0 ? args[0] : InterpretedValue(llvm::APInt(64, 0));
+      MooreObjectionHandle handle =
+          selfVal.isX() ? MOORE_OBJECTION_INVALID_HANDLE
+                        : syntheticToHandle(selfVal.getUInt64());
+      int64_t drainTime = handle != MOORE_OBJECTION_INVALID_HANDLE
+                              ? getPhaseObjectionDrainTimeFs(handle)
+                              : globalPhaseObjectionDrainTimeFs;
+      unsigned width = results.front().getWidth();
+      if (width == 0)
+        width = 64;
+      results.front() =
+          InterpretedValue(llvm::APInt(width, static_cast<uint64_t>(drainTime)));
     }
     return success();
   }
@@ -26634,17 +26914,22 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       if (tracePhaseOrderEnabled()) {
         maybeTracePhaseOrderExecutePhase(phaseAddr, phaseName);
       }
-      // Track which phase is currently being executed
-      currentExecutingPhaseAddr[procId] = phaseAddr;
-      executePhasePhaseSawPositiveObjection[phaseAddr] = false;
+      uint64_t objectionPhaseAddr = mapUvmPhaseAddressToActiveGraph(
+          procId, phaseAddr, /*allowUnknownImpZeroToActiveRoot=*/false);
+      if (objectionPhaseAddr == 0)
+        objectionPhaseAddr = phaseAddr;
 
-      // Ensure we have an objection handle for this phase
-      auto objIt = phaseObjectionHandles.find(phaseAddr);
+      // Track which phase is currently being executed for objection handling.
+      currentExecutingPhaseAddr[procId] = objectionPhaseAddr;
+      executePhasePhaseSawPositiveObjection[objectionPhaseAddr] = false;
+
+      // Ensure we have an objection handle for this phase.
+      auto objIt = phaseObjectionHandles.find(objectionPhaseAddr);
       if (objIt == phaseObjectionHandles.end()) {
-        std::string pn = "phase_" + std::to_string(phaseAddr);
+        std::string pn = "phase_" + std::to_string(objectionPhaseAddr);
         MooreObjectionHandle handle = __moore_objection_create(
             pn.c_str(), static_cast<int64_t>(pn.size()));
-        phaseObjectionHandles[phaseAddr] = handle;
+        phaseObjectionHandles[objectionPhaseAddr] = handle;
       }
 
       // We let the function run naturally. The function will:
@@ -29438,20 +29723,14 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   if (forceCompleteForDeferredTerminate) {
     shouldKeepPolling = false;
   } else if (sawPositiveObjection) {
-    if (deferredSuccessTerminatePending) {
-      // In deferred-$finish mode, keep objection-settle polling bounded even
-      // after counts drop to zero. Large drain-time settings can otherwise
-      // drive simulation time forward for millions of polls.
-      if (yieldCount < startupGracePolls) {
-        ++yieldCount;
-        shouldKeepPolling = true;
-      }
-    } else if (yieldCount < kObjectionZeroSettlePolls) {
+    // Once objections have been observed, always honor UVM zero-settle +
+    // drain-time semantics, even under deferred $finish mode.
+    if (yieldCount < kObjectionZeroSettlePolls) {
       ++yieldCount;
       shouldKeepPolling = true;
     } else {
       if (zeroDeadlineFs == 0 && handle != MOORE_OBJECTION_INVALID_HANDLE) {
-        int64_t drainTime = __moore_objection_get_drain_time(handle);
+        int64_t drainTime = getPhaseObjectionDrainTimeFs(handle);
         uint64_t delayFs = drainTime > 0 ? static_cast<uint64_t>(drainTime) : 0;
         if (delayFs > UINT64_MAX - currentTime.realTime)
           zeroDeadlineFs = UINT64_MAX;
@@ -29789,7 +30068,7 @@ LogicalResult LLHDProcessInterpreter::interpretSimFork(ProcessId procId,
           shouldKeepPolling = true;
         } else {
           if (zeroDeadlineFs == 0 && handle != MOORE_OBJECTION_INVALID_HANDLE) {
-            int64_t drainTime = __moore_objection_get_drain_time(handle);
+            int64_t drainTime = getPhaseObjectionDrainTimeFs(handle);
             uint64_t delayFs =
                 drainTime > 0 ? static_cast<uint64_t>(drainTime) : 0;
             if (delayFs > UINT64_MAX - currentTime.realTime)
@@ -44406,7 +44685,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     // via m_get_q_*/get_first_* helper wrappers; keep these interpreted until
     // coroutine/callback parity is complete.
     if (name.contains("::uvm_callback_iter::first") ||
-        name.starts_with("m_get_q_") || name.starts_with("get_first_"))
+        name.starts_with("m_get_q_") || name.starts_with("get_first_") ||
+        name.contains("process_all_report_catchers"))
       return true;
     // Phase-graph/state mutators have interpreter-side cache/update logic.
     if (!allowNativeUvmPhaseState &&

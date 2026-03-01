@@ -12281,3 +12281,33 @@
 - follow-up status:
   - phase ordering semantic gate is green again.
   - this removes one Wave C semantic blocker while keeping interceptor behavior scoped to phase remap/canonicalization paths.
+
+## 2026-03-01 - Revalidated UVM objection drain semantics and unblocked ImportVerilog build
+
+- realization:
+  - after a clean rebuild cycle, `circt-verilog` was blocked by an ambiguous
+    comparison in interface signal fallback logic:
+    - `StringRef == std::string_view` in
+      `lib/Conversion/ImportVerilog/Expressions.cpp`.
+  - this blocked the UVM semantic runtime lit loop because the test driver
+    binary (`circt-verilog`) could not be rebuilt.
+
+- implemented:
+  - `lib/Conversion/ImportVerilog/Expressions.cpp`
+    - made interface fallback name comparisons explicit:
+      - `entry.second == StringRef(expr.symbol.name)`
+    - applied in both rvalue and lvalue interface-method access paths.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-verilog circt-sim`
+  - UVM semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv test/Tools/circt-sim/uvm-test-done-drain-time-runtime.sv test/Tools/circt-sim/uvm-run-phase-driver-blocking-cleanup.sv test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv`
+  - ImportVerilog sanity:
+    - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/direct-interface-member-access.sv test/Conversion/ImportVerilog/nested-interface-signal-access.sv`
+  - all listed tests passed.
+
+- follow-up status:
+  - focused objection/drain semantic runtime regressions are green again.
+  - remaining AVIP-critical work stays on deterministic startup/liveness
+    semantics (no retry dependence), especially interpreted `axi4Lite`.

@@ -49,6 +49,17 @@ reduction must be staged and measurable.
   - replaced fixed-delta IMP→wrapper remap reliance with observed IMP→wrapper mapping in runtime phase canonicalization.
   - semantic gate now green:
     - `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
+- [x] Restored UVM objection/drain semantic gates after runtime rebuild and keying fixes:
+  - `test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv`
+  - `test/Tools/circt-sim/uvm-test-done-drain-time-runtime.sv`
+  - `test/Tools/circt-sim/uvm-run-phase-driver-blocking-cleanup.sv`
+  - `test/Tools/circt-sim/uvm-run-phase-forever-cleanup.sv`
+- [x] Unblocked ImportVerilog build after interface signal fallback updates:
+  - fixed `StringRef == string_view` ambiguity in interface-method signal-name fallback matching in:
+    - `lib/Conversion/ImportVerilog/Expressions.cpp`
+  - sanity gates:
+    - `test/Conversion/ImportVerilog/direct-interface-member-access.sv`
+    - `test/Conversion/ImportVerilog/nested-interface-signal-access.sv`
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality still needs core runtime closure (no retry dependence), with current highest-priority failure:
     - `axi4Lite` interpreted startup `FCTTYP` null-return (`create_8074`/`create_by_type`) after call-indirect depth warning.
