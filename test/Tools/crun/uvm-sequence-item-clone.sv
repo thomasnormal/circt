@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: clone() relies on field automation macros (uvm_field_int) which are not used here
 
 // Test sequence_item clone: clone has same values, is independent.
 
@@ -16,9 +14,12 @@ module tb_top;
   import uvm_pkg::*;
 
   class edge_clone_item extends uvm_sequence_item;
-    `uvm_object_utils(edge_clone_item)
     int addr;
     int data;
+    `uvm_object_utils_begin(edge_clone_item)
+      `uvm_field_int(addr, UVM_DEFAULT)
+      `uvm_field_int(data, UVM_DEFAULT)
+    `uvm_object_utils_end
 
     function new(string name = "edge_clone_item");
       super.new(name);

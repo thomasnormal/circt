@@ -10346,3 +10346,32 @@
   - focused config/integration slice:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv`
     - result: `12 passed`.
+
+## 2026-03-01 - UVM sequence semantic depth (clone + virtual sequence)
+
+- realization:
+  - `test/Tools/crun/uvm-sequence-item-clone.sv` failed semantically:
+    - `clone has same values: FAIL`
+    - `clone is independent: FAIL (addr=0)`
+  - Root cause was test-side semantic mismatch: clone field-copy in UVM requires
+    field automation (`uvm_field_*`) or explicit `do_copy`; this test declared
+    plain fields only.
+  - During sequence-suite recheck, `test/Tools/crun/uvm-sequence-virtual.sv`
+    showed as `XPASS`, indicating a stale `XFAIL`.
+
+- implemented:
+  - Upgraded clone test to real semantic intent:
+    - removed `XFAIL`.
+    - switched to `uvm_object_utils_begin/end` with
+      `uvm_field_int(addr, UVM_DEFAULT)` and
+      `uvm_field_int(data, UVM_DEFAULT)`.
+  - Removed stale `XFAIL` from `uvm-sequence-virtual.sv`.
+
+- validation:
+  - direct semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv`
+    - result: `2 passed`.
+  - suite recheck:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-sequence-*.sv`
+    - result: `11 passed, 3 expectedly failed` (`sequence-library`,
+      `sequence-no-driver`, `sequence-response`), and no `XPASS`.

@@ -1,6 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test virtual sequence that starts sub-sequences on sub-sequencers.
 

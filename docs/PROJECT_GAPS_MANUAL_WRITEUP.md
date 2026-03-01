@@ -6271,3 +6271,9 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL
 
 ### [x] 2086. `test/Tools/crun/uvm-config-db-virtual-if.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and converted to semantic runtime coverage (`config_db virtual interface: PASS`). The test now sets `uvm_config_db#(virtual simple_if)` from module scope using an absolute component path (`uvm_test_top.consumer`) before `run_test`, then validates retrieval in component build-phase. This preserves the virtual-interface config_db semantic objective while avoiding class-scope arbitrary module-symbol references.
+
+### [x] 2087. `test/Tools/crun/uvm-sequence-item-clone.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and made clone semantics explicit by adding field automation (`uvm_object_utils_begin` + `uvm_field_int` for `addr`/`data`). The test now validates real UVM clone behavior (copied values + object independence) instead of silently relying on non-automated default copy behavior.
+
+### [x] 2088. `test/Tools/crun/uvm-sequence-virtual.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL`; virtual sequence execution now passes semantically under crun (`sub_seq_a`, `sub_seq_b`, and virtual-sequence completion markers all observed), and no `XPASS` remains in the sequence suite.
