@@ -1040,3 +1040,18 @@
       - `batch=1` (`2` cases)
       - `batch=2` (`6` cases)
     - summary remains `total=19 pass=19 fail=0 xfail=0 xpass=0 error=0 skip=0`.
+  - added `LEC_CASE_BATCH_MODE=auto` (new default) with
+    `LEC_CASE_BATCH_AUTO_BIND_TOP_MIN_CASES` (default `8`):
+    - in real solver runs (`LEC_RUN_SMTLIB=1`, `LEC_SMOKE_ONLY=0`) above the
+      threshold, auto mode selects `bind-top`.
+    - otherwise, auto mode selects `csv`.
+  - new regression tests:
+    - `test/Tools/run-opentitan-connectivity-circt-lec-batch-mode-auto-bind-top.test`
+    - `test/Tools/run-opentitan-connectivity-circt-lec-batch-mode-auto-csv.test`
+    - plus updates to timeout-retry tests to force `LEC_BATCH_PRECHECK_MODE=off`
+      where they intentionally exercise per-case retries.
+  - historical-set real-Z3 benchmark comparison:
+    - `csv` batching (default before auto): `ELAPSED=585s`
+    - explicit `bind-top`: `ELAPSED=391s`
+    - new default `auto` (`auto->bind-top` chosen): `ELAPSED=299s`
+    - all runs preserved `19/19 PASS`.

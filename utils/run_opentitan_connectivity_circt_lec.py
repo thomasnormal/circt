@@ -1729,14 +1729,18 @@ def main() -> int:
                 f"{no_flatten_timeout_retry_mode} (expected auto|on|off)"
             )
         )
-    case_batch_mode = os.environ.get("LEC_CASE_BATCH_MODE", "csv").strip().lower()
-    if case_batch_mode not in {"csv", "bind-top"}:
+    case_batch_mode = os.environ.get("LEC_CASE_BATCH_MODE", "auto").strip().lower()
+    if case_batch_mode not in {"csv", "bind-top", "auto"}:
         fail(
             (
                 "invalid LEC_CASE_BATCH_MODE: "
-                f"{case_batch_mode} (expected csv|bind-top)"
+                f"{case_batch_mode} (expected csv|bind-top|auto)"
             )
         )
+    case_batch_auto_bind_top_min_cases = parse_nonnegative_int(
+        os.environ.get("LEC_CASE_BATCH_AUTO_BIND_TOP_MIN_CASES", "8"),
+        "LEC_CASE_BATCH_AUTO_BIND_TOP_MIN_CASES",
+    )
     frontend_max_cases_per_batch = parse_nonnegative_int(
         os.environ.get("LEC_FRONTEND_MAX_CASES_PER_BATCH", "18"),
         "LEC_FRONTEND_MAX_CASES_PER_BATCH",
@@ -1948,6 +1952,28 @@ def main() -> int:
         case_top_summary = (
             next(iter(case_tops_used)) if len(case_tops_used) == 1 else "mixed"
         )
+        resolved_case_batch_mode = case_batch_mode
+        if case_batch_mode == "auto":
+            resolved_case_batch_mode = "csv"
+            if (
+                lec_run_smtlib
+                and not lec_smoke_only
+                and case_batch_auto_bind_top_min_cases > 0
+                and len(cases) >= case_batch_auto_bind_top_min_cases
+            ):
+                resolved_case_batch_mode = "bind-top"
+            print(
+                "opentitan connectivity lec: auto-selected case batch mode "
+                f"{resolved_case_batch_mode} (cases={len(cases)} "
+                f"threshold={case_batch_auto_bind_top_min_cases} "
+                f"smtlib={1 if lec_run_smtlib else 0} "
+                f"smoke={1 if lec_smoke_only else 0})",
+                file=sys.stderr,
+                flush=True,
+            )
+        batch_mode_summary = resolved_case_batch_mode
+        if case_batch_mode == "auto":
+            batch_mode_summary = f"auto->{resolved_case_batch_mode}"
 
         print(
             "opentitan connectivity lec: "
@@ -1955,7 +1981,7 @@ def main() -> int:
             f"selected_conditions={sum(len(group.conditions) for group in selected_groups)} "
             f"generated_cases={len(cases)} skipped_connections={skipped_connections} "
             f"top={case_top_summary} shard={rule_shard_index}/{rule_shard_count} "
-            f"batch_mode={case_batch_mode}",
+            f"batch_mode={batch_mode_summary}",
             file=sys.stderr,
             flush=True,
         )
@@ -2136,7 +2162,7 @@ def main() -> int:
         learned_no_flatten = False
 
         case_batch_key_fn: Callable[[ConnectivityLECCase], str]
-        if case_batch_mode == "csv":
+        if resolved_case_batch_mode == "csv":
             case_batch_key_fn = lambda case: case.case_path.rsplit(":", 1)[0]
         else:
             case_batch_key_fn = lambda case: case.bind_top
