@@ -1,4 +1,4 @@
-// RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
+// RUN: crun %s --uvm-path=%S/../../../lib/Runtime/uvm-core --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
 
 // Test UVM component hierarchy navigation:
@@ -58,7 +58,7 @@ module tb_top;
       phase.raise_objection(this);
 
       // Test 1: get_full_name
-      if (mid.leaf_a.get_full_name() == ".uvm_test_top.mid.leaf_a")
+      if (mid.leaf_a.get_full_name() == "uvm_test_top.mid.leaf_a")
         `uvm_info("TEST", "get_full_name: PASS", UVM_LOW)
       else
         `uvm_error("TEST", {"get_full_name: FAIL — got: ", mid.leaf_a.get_full_name()})

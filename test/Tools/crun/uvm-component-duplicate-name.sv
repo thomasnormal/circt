@@ -1,10 +1,10 @@
-// RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
+// RUN: crun %s --uvm-path=%S/../../../lib/Runtime/uvm-core --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
 
 // Negative test: two children with same name under same parent.
-// UVM should produce warning, not crash.
+// UVM should report CLDEXT fatal.
 
-// CHECK: [TEST] duplicate name survived: PASS
+// CHECK: [CLDEXT] Cannot set 'same_name' as a child of 'uvm_test_top', which already has a child by that name.
 // CHECK: [circt-sim] Simulation completed
 
 `timescale 1ns/1ps

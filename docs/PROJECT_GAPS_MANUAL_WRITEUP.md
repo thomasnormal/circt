@@ -1788,6 +1788,10 @@ Status update (2026-02-28): this gap is closed in this workspace. `uvm_component
 
 ### [x] 593. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3337`
 Status update (2026-02-28): this entry is stale duplicate tracking. The active open gap for this TODO remains entry 361.
+Additional semantic closure (2026-03-01): `crun` now resolves bundled
+UVM explicitly in semantic tests (`--uvm-path=%S/../../../lib/Runtime/uvm-core`)
+to avoid environment-dependent runtime drift, and component hierarchy semantics
+were tightened to require no leading-dot full names under crun.
 
 ### [x] 594. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3542`
 Status update (2026-02-28): this entry is stale. `m_unsupported_set_local` is identifier-level naming in override plumbing, not an unresolved feature gap.

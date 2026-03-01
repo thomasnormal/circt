@@ -10166,3 +10166,44 @@
   - full semantic sweep:
     - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
     - result: `33 passed`.
+
+## 2026-03-01 - crun component full-name semantic parity gates
+
+- realization:
+  - Added semantic regression `test/Runtime/uvm/uvm_component_full_name_semantic_test.sv`
+    (5-level hierarchy full-name checks).
+  - It passed in explicit source-tree flows:
+    - `circt-verilog --ir-llhd --uvm-path=lib/Runtime/uvm-core ... | circt-sim`
+  - The same semantics failed under `crun` with leading-dot names (for example
+    `.uvm_test_top`).
+  - In this workspace, ambient UVM resolution can drift to a stale external
+    runtime (`~/uvm-core`), so semantic gates must pin the bundled runtime
+    explicitly.
+
+- implemented:
+  - Removed stale `XFAIL` from
+    `test/Tools/crun/uvm-component-deep-hierarchy.sv`.
+  - Made crun semantic tests deterministic against the bundled UVM runtime:
+    - `test/Tools/crun/uvm-component-deep-hierarchy.sv`
+    - `test/Tools/crun/uvm-component-hierarchy.sv`
+    - `test/Tools/crun/uvm-component-duplicate-name.sv`
+    - each now runs with
+      `--uvm-path=%S/../../../lib/Runtime/uvm-core`.
+  - Strengthened component semantics in crun tests to match bundled UVM:
+    - `test/Tools/crun/uvm-component-hierarchy.sv`
+      - expect `uvm_test_top.mid.leaf_a` (no leading dot).
+    - `test/Tools/crun/uvm-component-duplicate-name.sv`
+      - expect `CLDEXT` fatal (duplicate child names are fatal in current
+        bundled UVM), not "survived".
+
+- validation:
+  - targeted crun semantic red/green:
+    - `build_test/bin/crun test/Tools/crun/uvm-component-deep-hierarchy.sv --uvm-path=lib/Runtime/uvm-core --top tb_top -v 0`
+    - `build_test/bin/crun test/Runtime/uvm/uvm_component_full_name_semantic_test.sv --uvm-path=lib/Runtime/uvm-core --top top -v 0`
+    - both pass with bundled runtime semantics.
+  - lit semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-component-deep-hierarchy.sv test/Runtime/uvm/uvm_component_full_name_semantic_test.sv test/Runtime/uvm/uvm_get_report_object_semantic_test.sv`
+    - result: `3 passed`.
+  - broader component slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-component-*.sv test/Tools/crun/uvm-root-find.sv`
+    - result: `7 passed, 2 expectedly failed`.
