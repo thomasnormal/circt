@@ -2,6 +2,46 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: FPV/connectivity BMC JSONL metadata propagation parity):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` rebuilt final JSONL rows from merged TSV
+      rows and dropped pairwise-provided metadata fields
+      (`frontend_time_ms`, `solver_time_ms`, `log_path`, `artifact_dir`).
+    - timeout fallback and assertion-sharded fallback flows can re-run pairwise
+      with the same per-group JSONL path, so metadata preservation needed to be
+      robust to repeated overwrites.
+  - implemented:
+    - `utils/run_opentitan_fpv_circt_bmc.py`
+      - added per-case JSONL metadata accumulator populated by parsing
+        pairwise shard JSONL artifacts.
+      - updated accumulator after:
+        - primary group run
+        - timeout fallback run
+        - each assertion-sharded fallback run
+      - final merged JSONL writer now projects metadata from the accumulator,
+        with bounded defaults for wrapper-generated rows:
+        - `frontend_time_ms=0`
+        - `solver_time_ms=0`
+        - `artifact_dir=<workdir>` (fallback when pairwise metadata absent)
+    - tightened regressions:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+        now asserts metadata propagation for pairwise-backed PASS row and
+        non-null timing for wrapper-generated ERROR row.
+      - `test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test`
+        now asserts non-null metadata passthrough from delegated pairwise JSONL.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - result: fail (`run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+        metadata assertions).
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - result: `2/2` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-generated-no-cases.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `8/8` pass.
+
 - Iteration update (WS6: sv-tests BMC JSONL metadata parity):
   - realization:
     - `run_sv_tests_circt_bmc.sh` schema JSONL projection still emitted

@@ -446,6 +446,11 @@ Current workstream status in this branch:
    - sv-tests BMC schema JSONL projection now emits non-null timing/artifact
      metadata (`frontend_time_ms`, `solver_time_ms`, `log_path`,
      `artifact_dir`) for parity with pairwise/OpenTitan BMC lanes
+   - OpenTitan FPV BMC merged schema JSONL now preserves per-case metadata
+     projected by pairwise shard JSONL outputs, including timeout fallback and
+     assertion-sharded fallback overwrite paths
+   - OpenTitan connectivity BMC JSONL metadata passthrough from pairwise is now
+     regression-locked (non-null timing/artifact fields)
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status

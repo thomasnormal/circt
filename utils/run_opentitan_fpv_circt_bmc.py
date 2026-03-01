@@ -1846,6 +1846,9 @@ def main() -> int:
     drop_reason_files: list[Path] = []
     timeout_reason_files: list[Path] = []
     resolved_contract_files: list[Path] = []
+    case_jsonl_metadata_by_case_id: dict[
+        str, tuple[int | None, int | None, str, str]
+    ] = {}
     needs_assertion_results = (
         args.assertion_results_file
         or args.fpv_summary_file
@@ -1950,6 +1953,45 @@ def main() -> int:
                 continue
             rows.append(tuple(line.split("\t")))
         return rows
+
+    def update_case_jsonl_metadata_from_file(path: Path) -> None:
+        if not path.exists():
+            return
+        for line in path.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            case_id = str(payload.get("case_id", "")).strip()
+            if not case_id:
+                continue
+            frontend_raw = payload.get("frontend_time_ms")
+            solver_raw = payload.get("solver_time_ms")
+            log_path_raw = payload.get("log_path")
+            artifact_dir_raw = payload.get("artifact_dir")
+            frontend_time_ms = (
+                frontend_raw
+                if isinstance(frontend_raw, int) and not isinstance(frontend_raw, bool)
+                else None
+            )
+            solver_time_ms = (
+                solver_raw
+                if isinstance(solver_raw, int) and not isinstance(solver_raw, bool)
+                else None
+            )
+            log_path = log_path_raw if isinstance(log_path_raw, str) else ""
+            artifact_dir = (
+                artifact_dir_raw if isinstance(artifact_dir_raw, str) else ""
+            )
+            case_jsonl_metadata_by_case_id[case_id] = (
+                frontend_time_ms,
+                solver_time_ms,
+                log_path,
+                artifact_dir,
+            )
 
     def write_result_rows(path: Path, rows: list[tuple[str, ...]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2215,6 +2257,8 @@ def main() -> int:
                         group_cache_dir.mkdir(parents=True, exist_ok=True)
                         cmd_env["BMC_VERILOG_CACHE_DIR"] = str(group_cache_dir)
                 primary_rc = subprocess.run(cmd, check=False, env=cmd_env).returncode
+                if args.results_jsonl_file:
+                    update_case_jsonl_metadata_from_file(group_results_jsonl_path)
                 if not group_results_path.exists():
                     pairwise_rc = max(pairwise_rc, primary_rc if primary_rc else 1)
                     if expected_case_entries:
@@ -2357,6 +2401,10 @@ def main() -> int:
                             fallback_rc = subprocess.run(
                                 fallback_cmd, check=False, env=cmd_env
                             ).returncode
+                            if args.results_jsonl_file:
+                                update_case_jsonl_metadata_from_file(
+                                    group_results_jsonl_path
+                                )
 
                             for flag, fallback_path in fallback_artifacts.items():
                                 if not fallback_path.exists():
@@ -2470,6 +2518,10 @@ def main() -> int:
                                     shard_rc = subprocess.run(
                                         shard_cmd, check=False, env=cmd_env
                                     ).returncode
+                                    if args.results_jsonl_file:
+                                        update_case_jsonl_metadata_from_file(
+                                            group_results_jsonl_path
+                                        )
                                     for flag, shard_artifact_path in shard_artifacts.items():
                                         if not shard_artifact_path.exists():
                                             continue
@@ -2653,6 +2705,24 @@ def main() -> int:
                     continue
                 status, case_id, case_path, suite, mode = row[:5]
                 reason_code = extract_result_reason_code(row)
+                frontend_time_ms: int | None = 0
+                solver_time_ms: int | None = 0
+                log_path = ""
+                artifact_dir = str(workdir)
+                (
+                    metadata_frontend_time_ms,
+                    metadata_solver_time_ms,
+                    metadata_log_path,
+                    metadata_artifact_dir,
+                ) = case_jsonl_metadata_by_case_id.get(case_id, (None, None, "", ""))
+                if metadata_frontend_time_ms is not None:
+                    frontend_time_ms = metadata_frontend_time_ms
+                if metadata_solver_time_ms is not None:
+                    solver_time_ms = metadata_solver_time_ms
+                if metadata_log_path:
+                    log_path = metadata_log_path
+                if metadata_artifact_dir:
+                    artifact_dir = metadata_artifact_dir
                 json_rows.append(
                     _make_formal_result_row(
                         suite=suite,
@@ -2662,6 +2732,10 @@ def main() -> int:
                         status=status,
                         reason_code=reason_code,
                         solver=solver_label,
+                        frontend_time_ms=frontend_time_ms,
+                        solver_time_ms=solver_time_ms,
+                        log_path=log_path,
+                        artifact_dir=artifact_dir,
                     )
                 )
             _write_formal_results_jsonl(results_jsonl_path, json_rows)
