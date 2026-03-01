@@ -1127,7 +1127,26 @@ def _coerce_text(payload: str | bytes | None) -> str:
     return payload
 
 
-def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+def _truncate_log_bytes(encoded: bytes, max_log_bytes: int, truncation_label: str) -> bytes:
+    if max_log_bytes <= 0 or len(encoded) <= max_log_bytes:
+        return encoded
+    notice = (
+        f"\n[{truncation_label}] log truncated from "
+        f"{len(encoded)} to {max_log_bytes} bytes\n"
+    ).encode("utf-8")
+    if max_log_bytes <= len(notice):
+        return encoded[:max_log_bytes]
+    keep = max_log_bytes - len(notice)
+    return encoded[:keep] + notice
+
+
+def write_log(
+    path: Path,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    max_log_bytes: int = 0,
+) -> None:
     stdout_text = _coerce_text(stdout)
     stderr_text = _coerce_text(stderr)
     data = ""
@@ -1137,7 +1156,14 @@ def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None
             data += "\n"
     if stderr_text:
         data += stderr_text
-    path.write_text(data, encoding="utf-8")
+    encoded = data.encode("utf-8", errors="replace")
+    path.write_bytes(
+        _truncate_log_bytes(
+            encoded,
+            max_log_bytes,
+            "run_opentitan_connectivity_circt_lec",
+        )
+    )
 
 
 def strip_vpi_attributes_for_opt(path: Path) -> bool:
@@ -1322,6 +1348,8 @@ def run_and_log(
     log_path: Path,
     timeout_secs: int,
     out_path: Path | None = None,
+    *,
+    log_max_bytes: int = 0,
 ) -> str:
     try:
         result = subprocess.run(
@@ -1334,13 +1362,13 @@ def run_and_log(
     except subprocess.TimeoutExpired as exc:
         stdout = _coerce_text(exc.stdout)
         stderr = _coerce_text(exc.stderr)
-        write_log(log_path, stdout, stderr)
+        write_log(log_path, stdout, stderr, max_log_bytes=log_max_bytes)
         if out_path is not None:
             out_path.write_text(stdout, encoding="utf-8")
         raise
     except OSError as exc:
         err_text = f"{exc.__class__.__name__}: {exc}"
-        write_log(log_path, "", err_text)
+        write_log(log_path, "", err_text, max_log_bytes=log_max_bytes)
         if out_path is not None:
             out_path.write_text("", encoding="utf-8")
         raise subprocess.CalledProcessError(
@@ -1348,7 +1376,7 @@ def run_and_log(
         ) from exc
     stdout = _coerce_text(result.stdout)
     stderr = _coerce_text(result.stderr)
-    write_log(log_path, stdout, stderr)
+    write_log(log_path, stdout, stderr, max_log_bytes=log_max_bytes)
     if out_path is not None:
         out_path.write_text(stdout, encoding="utf-8")
     if result.returncode != 0:
@@ -1515,14 +1543,28 @@ if _HAS_SHARED_FORMAL_HELPERS:
             baseline, current, CONNECTIVITY_LEC_STATUS_FIELDS, allowlist
         )
 
-    def write_log(path: Path, stdout: str, stderr: str) -> None:
-        _shared_write_log(path, stdout, stderr)
+    def write_log(
+        path: Path,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+        *,
+        max_log_bytes: int = 0,
+    ) -> None:
+        _shared_write_log(
+            path,
+            stdout,
+            stderr,
+            max_log_bytes=max_log_bytes,
+            truncation_label="run_opentitan_connectivity_circt_lec",
+        )
 
     def run_and_log(
         cmd: list[str],
         log_path: Path,
         timeout_secs: int,
         out_path: Path | None = None,
+        *,
+        log_max_bytes: int = 0,
     ) -> str:
         return _shared_run_command_logged_with_env_retry(
             cmd,
@@ -1530,6 +1572,8 @@ if _HAS_SHARED_FORMAL_HELPERS:
             timeout_secs=timeout_secs,
             out_path=out_path,
             fail_fn=fail,
+            max_log_bytes=log_max_bytes,
+            truncation_label="run_opentitan_connectivity_circt_lec",
         )
 
 
@@ -1794,6 +1838,10 @@ def main() -> int:
     # infrastructure timeouts on valid long-running cases.
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "600"), "CIRCT_TIMEOUT_SECS"
+    )
+    lec_log_max_bytes = parse_nonnegative_int(
+        os.environ.get("LEC_LOG_MAX_BYTES", "0"),
+        "LEC_LOG_MAX_BYTES",
     )
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
@@ -2680,7 +2728,12 @@ def main() -> int:
                     attempted_multi_driver_retry = False
                     while True:
                         try:
-                            run_and_log(shared_verilog_cmd, shared_verilog_log, timeout_secs)
+                            run_and_log(
+                                shared_verilog_cmd,
+                                shared_verilog_log,
+                                timeout_secs,
+                                log_max_bytes=lec_log_max_bytes,
+                            )
                             break
                         except subprocess.CalledProcessError:
                             if shared_verilog_log.is_file():
@@ -2800,7 +2853,12 @@ def main() -> int:
                     attempted_opt_emit_bytecode_retry = False
                     while True:
                         try:
-                            run_and_log(shared_opt_cmd, shared_opt_log, timeout_secs)
+                            run_and_log(
+                                shared_opt_cmd,
+                                shared_opt_log,
+                                timeout_secs,
+                                log_max_bytes=lec_log_max_bytes,
+                            )
                             shared_core_input = (
                                 shared_core_mlirbc
                                 if batch_opt_emit_bytecode
@@ -2956,6 +3014,7 @@ def main() -> int:
                             batch_precheck_log,
                             timeout_secs,
                             out_path=batch_precheck_out,
+                            log_max_bytes=lec_log_max_bytes,
                         )
                         batch_precheck_result = parse_lec_result(
                             batch_precheck_combined
@@ -3224,7 +3283,11 @@ def main() -> int:
                                 lec_timeout_secs = canonicalizer_timeout_retry_timeout_secs
                             try:
                                 combined = run_and_log(
-                                    lec_cmd, lec_log, lec_timeout_secs, out_path=lec_out
+                                    lec_cmd,
+                                    lec_log,
+                                    lec_timeout_secs,
+                                    out_path=lec_out,
+                                    log_max_bytes=lec_log_max_bytes,
                                 )
                                 run_result = parse_lec_result(combined)
                                 run_diag = parse_lec_diag(combined)
@@ -3628,6 +3691,7 @@ def main() -> int:
                                     case_dir / "circt-lec.timeout-frontier.log",
                                     timeout_secs,
                                     out_path=case_dir / "circt-lec.timeout-frontier.out",
+                                    log_max_bytes=lec_log_max_bytes,
                                 )
                             except subprocess.TimeoutExpired:
                                 timeout_reason = "frontend_command_timeout"

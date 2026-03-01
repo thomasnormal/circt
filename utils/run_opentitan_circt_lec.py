@@ -55,17 +55,53 @@ def replace_text(src: Path, dst: Path, replacements: list[tuple[str, str]]) -> N
     dst.write_text(data)
 
 
-def write_log(path: Path, stdout: str, stderr: str) -> None:
+def _coerce_text(payload: str | bytes | None) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", errors="replace")
+    return payload
+
+
+def _truncate_log_bytes(encoded: bytes, max_log_bytes: int, truncation_label: str) -> bytes:
+    if max_log_bytes <= 0 or len(encoded) <= max_log_bytes:
+        return encoded
+    notice = (
+        f"\n[{truncation_label}] log truncated from "
+        f"{len(encoded)} to {max_log_bytes} bytes\n"
+    ).encode("utf-8")
+    if max_log_bytes <= len(notice):
+        return encoded[:max_log_bytes]
+    keep = max_log_bytes - len(notice)
+    return encoded[:keep] + notice
+
+
+def write_log(
+    path: Path,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    max_log_bytes: int = 0,
+) -> None:
+    stdout_text = _coerce_text(stdout)
+    stderr_text = _coerce_text(stderr)
     data = ""
-    if stdout:
-        data += stdout
+    if stdout_text:
+        data += stdout_text
         if not data.endswith("\n"):
             data += "\n"
-    if stderr:
-        data += stderr
+    if stderr_text:
+        data += stderr_text
     if not data:
         data = ""
-    path.write_text(data)
+    encoded = data.encode("utf-8", errors="replace")
+    path.write_bytes(
+        _truncate_log_bytes(
+            encoded,
+            max_log_bytes,
+            "run_opentitan_circt_lec",
+        )
+    )
 
 def strip_vpi_attributes_for_opt(path: Path) -> bool:
     """Strip trailing vpi.* op attributes that circt-opt may fail to parse."""
@@ -247,6 +283,7 @@ def run_and_log(
     log_path: Path,
     out_path: Path | None = None,
     timeout_secs: int = 0,
+    log_max_bytes: int = 0,
 ) -> str:
     try:
         result = subprocess.run(
@@ -259,13 +296,18 @@ def run_and_log(
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
-        write_log(log_path, stdout, stderr)
+        write_log(log_path, stdout, stderr, max_log_bytes=log_max_bytes)
         if out_path is not None:
-            out_path.write_text(stdout)
+            out_path.write_text(stdout, encoding="utf-8")
         raise
-    write_log(log_path, result.stdout, result.stderr)
+    write_log(
+        log_path,
+        result.stdout,
+        result.stderr,
+        max_log_bytes=log_max_bytes,
+    )
     if out_path is not None:
-        out_path.write_text(result.stdout)
+        out_path.write_text(result.stdout, encoding="utf-8")
     if result.returncode != 0:
         raise subprocess.CalledProcessError(
             result.returncode, cmd, output=result.stdout, stderr=result.stderr
@@ -361,14 +403,27 @@ if _HAS_SHARED_FORMAL_HELPERS:
     def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
         return _shared_extract_drop_reasons(log_text, pattern)
 
-    def write_log(path: Path, stdout: str, stderr: str) -> None:
-        _shared_write_log(path, stdout, stderr)
+    def write_log(
+        path: Path,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+        *,
+        max_log_bytes: int = 0,
+    ) -> None:
+        _shared_write_log(
+            path,
+            stdout,
+            stderr,
+            max_log_bytes=max_log_bytes,
+            truncation_label="run_opentitan_circt_lec",
+        )
 
     def run_and_log(
         cmd: list[str],
         log_path: Path,
         out_path: Path | None = None,
         timeout_secs: int = 0,
+        log_max_bytes: int = 0,
     ) -> str:
         return _shared_run_command_logged_with_env_retry(
             cmd,
@@ -376,6 +431,8 @@ if _HAS_SHARED_FORMAL_HELPERS:
             timeout_secs=timeout_secs,
             out_path=out_path,
             fail_fn=fail,
+            max_log_bytes=log_max_bytes,
+            truncation_label="run_opentitan_circt_lec",
         )
 
 
@@ -529,6 +586,10 @@ def main() -> int:
     lec_timeout_secs = parse_nonnegative_int(
         os.environ.get("LEC_TIMEOUT_SECS", "0"),
         "LEC_TIMEOUT_SECS",
+    )
+    lec_log_max_bytes = parse_nonnegative_int(
+        os.environ.get("LEC_LOG_MAX_BYTES", "0"),
+        "LEC_LOG_MAX_BYTES",
     )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
@@ -751,6 +812,7 @@ def main() -> int:
                     verilog_cmd,
                     verilog_log_path,
                     timeout_secs=lec_timeout_secs,
+                    log_max_bytes=lec_log_max_bytes,
                 )
                 strip_vpi_attributes_for_opt(out_moore)
                 if verilog_log_path.exists():
@@ -774,6 +836,7 @@ def main() -> int:
                     opt_cmd,
                     impl_dir / "circt-opt.log",
                     timeout_secs=lec_timeout_secs,
+                    log_max_bytes=lec_log_max_bytes,
                 )
                 strip_proc_assertions_global_for_lec(out_mlir)
                 stage = "lec"
@@ -782,6 +845,7 @@ def main() -> int:
                     impl_dir / "circt-lec.log",
                     out_path=impl_dir / "circt-lec.out",
                     timeout_secs=lec_timeout_secs,
+                    log_max_bytes=lec_log_max_bytes,
                 )
                 if not lec_smoke_only:
                     lec_log_text = (impl_dir / "circt-lec.log").read_text()
@@ -870,6 +934,7 @@ def main() -> int:
                                 impl_dir / "circt-lec.timeout-frontier.log",
                                 out_path=impl_dir / "circt-lec.timeout-frontier.out",
                                 timeout_secs=lec_timeout_secs,
+                                log_max_bytes=lec_log_max_bytes,
                             )
                         except subprocess.TimeoutExpired:
                             timeout_reason = "frontend_command_timeout"

@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS0: bounded OpenTitan LEC log artifacts with shared log writer):
+  - realization:
+    - both OpenTitan LEC wrapper runners still wrote unbounded per-case tool
+      logs:
+      - `utils/run_opentitan_circt_lec.py`
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+    - this kept large frontier logs uncapped and left local/shared log-writer
+      policy partially duplicated.
+  - implemented:
+    - added `LEC_LOG_MAX_BYTES` (default `0`, unlimited) to both runners.
+    - wired both runners to pass bounded log settings through every
+      `run_and_log(...)` launch path (frontend/opt/solver/timeout-probe).
+    - routed both runners through shared `runner_common.write_log` in
+      shared-helper mode with runner-specific truncation labels:
+      - `run_opentitan_circt_lec`
+      - `run_opentitan_connectivity_circt_lec`
+      (local fallback retained for copied-script lit environments).
+    - added regressions:
+      - `test/Tools/run-opentitan-lec-log-max-bytes.test`
+      - `test/Tools/run-opentitan-lec-log-max-bytes-invalid.test`
+      - `test/Tools/run-opentitan-connectivity-circt-lec-log-max-bytes-shared.test`
+      - `test/Tools/run-opentitan-connectivity-circt-lec-log-max-bytes-invalid-shared.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-log-max-bytes.test test/Tools/run-opentitan-lec-log-max-bytes-invalid.test test/Tools/run-opentitan-connectivity-circt-lec-log-max-bytes-shared.test test/Tools/run-opentitan-connectivity-circt-lec-log-max-bytes-invalid-shared.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-lec-timeout-classification.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-opentitan-connectivity-circt-lec-tool-invoke-permission-error.test`
+      - result: `8/8` pass.
+
 - Iteration update (WS1/WS0: pairwise BMC bounded log artifacts with shared log writer):
   - realization:
     - `run_pairwise_circt_bmc.py` still wrote unbounded per-case tool logs and
