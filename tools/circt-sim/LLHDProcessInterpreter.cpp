@@ -28875,15 +28875,6 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
                  << "\n";
   }
 
-  if (count > 0) {
-    sawPositiveObjection = true;
-    executePhasePhaseSawPositiveObjection[phaseAddr] = true;
-    yieldCount = 0;
-    zeroDeadlineFs = 0;
-    scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
-    return;
-  }
-
   // Keep polling while the master child is alive. Before any objection raise,
   // use a long startup grace to avoid premature completion races. Once
   // objections have been observed and dropped, do a short zero-settle phase
@@ -28893,9 +28884,49 @@ void LLHDProcessInterpreter::pollExecutePhaseMonitorFork(
   constexpr int kNoChildTailGrace = 10;
   int startupGracePolls =
       static_cast<int>(getExecutePhaseStartupGracePollLimit(currentTime));
+  if (startupGracePolls < 1)
+    startupGracePolls = 1;
+  bool forceCompleteForDeferredTerminate = false;
+
+  if (count > 0) {
+    sawPositiveObjection = true;
+    executePhasePhaseSawPositiveObjection[phaseAddr] = true;
+    zeroDeadlineFs = 0;
+    if (deferredSuccessTerminatePending) {
+      // Deferred $finish mode: bound objection-active polling so lingering
+      // objections cannot keep execute_phase monitors alive indefinitely.
+      if (yieldCount < startupGracePolls) {
+        ++yieldCount;
+        scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
+        return;
+      }
+      forceCompleteForDeferredTerminate = true;
+      if (traceExecutePhasePoll) {
+        llvm::errs()
+            << "[EXEC-POLL] deferred cap reached; forcing completion proc="
+            << procId << " phase=0x" << llvm::format_hex(phaseAddr, 16)
+            << " cap=" << startupGracePolls << "\n";
+      }
+    } else {
+      yieldCount = 0;
+      scheduleExecutePhaseMonitorForkPoll(procId, phaseAddr, pollToken, count);
+      return;
+    }
+  }
+
   bool shouldKeepPolling = false;
-  if (sawPositiveObjection) {
-    if (yieldCount < kObjectionZeroSettlePolls) {
+  if (forceCompleteForDeferredTerminate) {
+    shouldKeepPolling = false;
+  } else if (sawPositiveObjection) {
+    if (deferredSuccessTerminatePending) {
+      // In deferred-$finish mode, keep objection-settle polling bounded even
+      // after counts drop to zero. Large drain-time settings can otherwise
+      // drive simulation time forward for millions of polls.
+      if (yieldCount < startupGracePolls) {
+        ++yieldCount;
+        shouldKeepPolling = true;
+      }
+    } else if (yieldCount < kObjectionZeroSettlePolls) {
       ++yieldCount;
       shouldKeepPolling = true;
     } else {
