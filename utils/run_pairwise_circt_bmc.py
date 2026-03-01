@@ -57,6 +57,7 @@ General launch retry tuning:
 - BMC_LAUNCH_RETRYABLE_EXIT_CODES (default: 126,127)
 - BMC_LAUNCH_COPY_FALLBACK (default: 0)
 - BMC_LAUNCH_EVENTS_OUT (optional TSV output)
+- FORMAL_RESULTS_JSONL_OUT (optional unified schema JSONL output)
 
 BMC resource-guard auto-relax retry tuning:
 - BMC_AUTO_RELAX_RESOURCE_GUARD (default: 1)
@@ -129,6 +130,7 @@ from __future__ import annotations
 import argparse
 import errno
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -140,6 +142,11 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
 
 
 @dataclass(frozen=True)
@@ -227,6 +234,66 @@ XILINX_PRIMITIVE_STUB_MODULES = frozenset(
         "IOBUF",
     }
 )
+
+try:
+    from formal_results import make_result_row as _make_formal_result_row
+    from formal_results import write_results_jsonl as _write_formal_results_jsonl
+except Exception:
+
+    def _infer_stage(status: str, reason_code: str) -> str:
+        status_norm = status.strip().upper()
+        reason_norm = reason_code.strip().upper()
+        if status_norm == "TIMEOUT":
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            return "solver"
+        if status_norm in {"ERROR", "FAIL"}:
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            if "SMT" in reason_norm or "Z3" in reason_norm or "LEC" in reason_norm:
+                return "solver"
+        return "result"
+
+    def _make_formal_result_row(
+        *,
+        suite: str,
+        mode: str,
+        case_id: str,
+        case_path: str,
+        status: str,
+        reason_code: str = "",
+        stage: str = "",
+        solver: str = "",
+        solver_time_ms: int | None = None,
+        frontend_time_ms: int | None = None,
+        log_path: str = "",
+        artifact_dir: str = "",
+    ) -> dict[str, object]:
+        stage_value = stage.strip() if stage.strip() else _infer_stage(status, reason_code)
+        return {
+            "schema_version": 1,
+            "suite": suite,
+            "mode": mode,
+            "case_id": case_id,
+            "case_path": case_path,
+            "status": status.strip().upper(),
+            "reason_code": reason_code.strip().upper(),
+            "stage": stage_value,
+            "solver": solver.strip(),
+            "solver_time_ms": solver_time_ms,
+            "frontend_time_ms": frontend_time_ms,
+            "log_path": log_path,
+            "artifact_dir": artifact_dir,
+        }
+
+    def _write_formal_results_jsonl(
+        path: Path, rows: list[dict[str, object]]
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True))
+                handle.write("\n")
 
 
 def parse_nonnegative_int(raw: str, name: str) -> int:
@@ -1454,6 +1521,14 @@ def load_cases(cases_file: Path) -> list[CaseSpec]:
     return cases
 
 
+def extract_result_reason_code(row: tuple[str, ...]) -> str:
+    if len(row) >= 7 and row[6].strip():
+        return row[6]
+    if len(row) >= 6 and row[5].strip():
+        return row[5]
+    return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run pairwise BMC checks from a case manifest."
@@ -1503,6 +1578,11 @@ def main() -> int:
         "--results-file",
         default=os.environ.get("OUT", ""),
         help="Optional TSV output path for per-case rows.",
+    )
+    parser.add_argument(
+        "--results-jsonl-file",
+        default=os.environ.get("FORMAL_RESULTS_JSONL_OUT", ""),
+        help="Optional JSONL output path for unified formal result schema rows.",
     )
     parser.add_argument(
         "--drop-remark-cases-file",
@@ -3522,6 +3602,27 @@ def main() -> int:
             for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
                 handle.write("\t".join(row) + "\n")
         print(f"results: {results_path}", flush=True)
+    if args.results_jsonl_file:
+        results_jsonl_path = Path(args.results_jsonl_file)
+        solver_label = "" if bmc_smoke_only else "z3"
+        json_rows: list[dict[str, object]] = []
+        for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
+            if len(row) < 5:
+                continue
+            status, case_id, case_path, suite, mode = row[:5]
+            reason_code = extract_result_reason_code(row)
+            json_rows.append(
+                _make_formal_result_row(
+                    suite=suite,
+                    mode=mode,
+                    case_id=case_id,
+                    case_path=case_path,
+                    status=status,
+                    reason_code=reason_code,
+                    solver=solver_label,
+                )
+            )
+        _write_formal_results_jsonl(results_jsonl_path, json_rows)
 
     if args.drop_remark_cases_file:
         case_path = Path(args.drop_remark_cases_file)

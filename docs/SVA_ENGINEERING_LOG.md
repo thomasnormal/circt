@@ -2,6 +2,32 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T3/WS6: pairwise BMC schema JSONL emission lane):
+  - realization:
+    - `run_pairwise_circt_bmc.py` only emitted TSV rows; it lacked the unified
+      schema JSONL lane used by WS0 capture/WS6 validators and dashboards.
+    - result rows in this runner carry mixed 6/7-column forms, so JSONL
+      projection needed an explicit reason-code extraction policy.
+  - implemented:
+    - added `--results-jsonl-file` to
+      `utils/run_pairwise_circt_bmc.py` (env default:
+      `FORMAL_RESULTS_JSONL_OUT`).
+    - wired formal schema row emission with stable sort order from existing
+      result rows and per-row reason-code extraction:
+      - prefer reason column (index 6) when present
+      - fallback to diagnostic column (index 5) otherwise
+    - added formal-results helper import path wiring (`utils/formal/lib`) and
+      local fallback writer logic for copied-runner lit environments.
+    - added regression
+      `test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test`.
+  - validation:
+    - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-pairwise-circt-bmc-timeout-bytes-handling.test test/Tools/run-pairwise-circt-bmc-resolved-contracts-file.test`
+      - result: `4/4` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-case-row-writer.test test/Tools/formal-results-schema.test test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-capture-baseline-schema-validate-strict-contract.test test/Tools/formal-capture-baseline-schema-validate-strict-contract-arg.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test`
+      - result: `27/27` pass.
+
 - Iteration update (WS1-T3/WS6: shared case-row formal result writer adoption):
   - realization:
     - OpenTitan LEC runners still duplicated case-row sorting and

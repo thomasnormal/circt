@@ -413,6 +413,8 @@ Current workstream status in this branch:
      (`write_results_tsv`, `write_results_jsonl_from_case_rows`)
    - OpenTitan LEC runners now use shared case-row TSV/JSONL projection
      helpers (duplicated local writer logic removed from hot paths)
+   - pairwise BMC runner now supports schema JSONL output lane
+     (`--results-jsonl-file`, env `FORMAL_RESULTS_JSONL_OUT`)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
