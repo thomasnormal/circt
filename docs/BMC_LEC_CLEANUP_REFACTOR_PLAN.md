@@ -453,6 +453,9 @@ Current workstream status in this branch:
      regression-locked (non-null timing/artifact fields)
    - schema stage inference now classifies `COMPILE_CONTRACT_*` reason codes as
      `frontend` (shared + FPV copied-runner fallback parity)
+   - FPV LEC copied-runner fallback stage inference now classifies
+     `SETUP_ERROR`/`NO_FILES` as `frontend`, aligning copied-runner lit paths
+     with shared schema stage policy
    - OpenTitan FPV BMC final JSONL projection now uses shared
      `formal_results.write_results_jsonl_from_case_rows` plumbing with
      per-case metadata map, reducing local JSON row-shaping duplication

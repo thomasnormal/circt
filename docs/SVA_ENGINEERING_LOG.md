@@ -2,6 +2,28 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: FPV LEC setup/no-files stage classification parity):
+  - realization:
+    - shared JSONL stage inference in `formal_results.infer_stage(...)` already
+      classified `SETUP_ERROR`/`NO_FILES` as `frontend`.
+    - FPV LEC copied-runner fallback `_infer_stage(...)` in
+      `run_opentitan_fpv_circt_lec.py` did not, so copied-runner lit paths
+      still emitted `stage="result"` for setup-skip rows.
+  - implemented:
+    - `utils/run_opentitan_fpv_circt_lec.py`
+      - updated fallback `_infer_stage(...)` to classify:
+        - `SETUP_ERROR` and `NO_FILES` reasons as `frontend`
+        - `COMPILE_CONTRACT_*` reasons as `frontend` in timeout/error/fail lanes
+      - this aligns copied-runner fallback behavior with shared helper
+        classification policy.
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/formal_results.py utils/run_opentitan_fpv_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test`
+      - result: `1/1` pass.
+    - `build_test/bin/llvm-lit -sv $(git ls-files 'test/Tools/run-opentitan-fpv-circt-lec-*.test')`
+      - result: `9/9` pass.
+
 - Iteration update (WS1: FPV LEC JSONL projection dedup to shared case-row writer):
   - realization:
     - `run_opentitan_fpv_circt_lec.py` still used local JSON dict-row shaping
