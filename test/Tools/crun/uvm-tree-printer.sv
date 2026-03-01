@@ -27,7 +27,7 @@ module tb_top;
 
     function void do_print(uvm_printer printer);
       super.do_print(printer);
-      printer.print_field_int("count", count, 32);
+      printer.print_int("count", count, 32);
       printer.print_string("tag", tag);
     endfunction
   endclass

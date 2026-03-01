@@ -37,13 +37,11 @@ module tb_top;
     endfunction
 
     function void build_phase(uvm_phase phase);
-      uvm_coreservice_t cs;
       uvm_factory factory;
       uvm_component created_comp;
       super.build_phase(phase);
 
-      cs = uvm_coreservice_t::get();
-      factory = cs.get_factory();
+      factory = uvm_factory::get();
 
       // Component creation is legal in build_phase.
       created_comp =
@@ -55,14 +53,12 @@ module tb_top;
     endfunction
 
     task run_phase(uvm_phase phase);
-      uvm_coreservice_t cs;
       uvm_factory factory;
       uvm_object obj;
       edge_named_obj typed_obj;
       phase.raise_objection(this);
 
-      cs = uvm_coreservice_t::get();
-      factory = cs.get_factory();
+      factory = uvm_factory::get();
 
       // Test create_object_by_name
       obj = factory.create_object_by_name("edge_named_obj", "", "obj_inst");

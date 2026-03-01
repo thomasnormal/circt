@@ -15,12 +15,13 @@ module tb_top;
   import uvm_pkg::*;
 
   class array_obj extends uvm_object;
+    int arr[];
+    int q[$];
+
     `uvm_object_utils_begin(array_obj)
       `uvm_field_array_int(arr, UVM_ALL_ON)
       `uvm_field_queue_int(q, UVM_ALL_ON)
     `uvm_object_utils_end
-    int arr[];
-    int q[$];
     function new(string name = "array_obj");
       super.new(name);
     endfunction

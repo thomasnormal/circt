@@ -32,7 +32,7 @@ module tb_top;
       num_items = 2;
     endfunction
     task body();
-      uvm_phase phase = get_starting_phase();
+      uvm_phase phase = starting_phase;
       if (phase != null)
         phase.raise_objection(this, $sformatf("seq_%0d start", seq_id));
       for (int i = 0; i < num_items; i++) begin
@@ -55,15 +55,15 @@ module tb_top;
       seq0 = integ_obj_seq::type_id::create("seq0");
       seq0.seq_id = 0;
       seq0.num_items = 2;
-      seq0.set_starting_phase(phase);
+      seq0.starting_phase = phase;
       seq1 = integ_obj_seq::type_id::create("seq1");
       seq1.seq_id = 1;
       seq1.num_items = 3;
-      seq1.set_starting_phase(phase);
+      seq1.starting_phase = phase;
       seq2 = integ_obj_seq::type_id::create("seq2");
       seq2.seq_id = 2;
       seq2.num_items = 2;
-      seq2.set_starting_phase(phase);
+      seq2.starting_phase = phase;
       fork
         seq0.body();
         seq1.body();

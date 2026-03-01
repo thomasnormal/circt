@@ -31,11 +31,9 @@ module tb_top;
     task run_phase(uvm_phase phase);
       uvm_factory factory;
       uvm_object obj;
-      uvm_coreservice_t cs;
       phase.raise_objection(this);
 
-      cs = uvm_coreservice_t::get();
-      factory = cs.get_factory();
+      factory = uvm_factory::get();
 
       // Test 1: valid create
       obj = factory.create_object_by_name("known_obj", "", "inst1");

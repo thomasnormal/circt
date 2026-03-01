@@ -23,30 +23,28 @@ module tb_top;
     endfunction
 
     task run_phase(uvm_phase phase);
-      uvm_coreservice_t cs;
       uvm_factory f;
       uvm_report_server rs;
       uvm_root root;
       phase.raise_objection(this);
 
-      cs = uvm_coreservice_t::get();
-
+      // Use 1.1d-compatible singleton accessors
       // Test 1: factory
-      f = cs.get_factory();
+      f = uvm_factory::get();
       if (f != null)
         `uvm_info("TEST", "factory non-null: PASS", UVM_LOW)
       else
         `uvm_error("TEST", "factory non-null: FAIL")
 
       // Test 2: report server
-      rs = cs.get_report_server();
+      rs = uvm_report_server::get_server();
       if (rs != null)
         `uvm_info("TEST", "report_server non-null: PASS", UVM_LOW)
       else
         `uvm_error("TEST", "report_server non-null: FAIL")
 
       // Test 3: root
-      root = cs.get_root();
+      root = uvm_root::get();
       if (root != null)
         `uvm_info("TEST", "root non-null: PASS", UVM_LOW)
       else

@@ -25,7 +25,7 @@ module tb_top;
 
     function void do_print(uvm_printer printer);
       super.do_print(printer);
-      printer.print_field_int("value", value, 32);
+      printer.print_int("value", value, 32);
     endfunction
 
     function string convert2string();

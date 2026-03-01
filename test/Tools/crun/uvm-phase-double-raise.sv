@@ -24,7 +24,7 @@ module tb_top;
       phase.raise_objection(this);
       phase.raise_objection(this);
 
-      count = phase.get_objection_count(this);
+      count = phase.get_objection().get_objection_count(this);
       if (count == 2)
         `uvm_info("TEST", "double raise count correct: PASS", UVM_LOW)
       else
