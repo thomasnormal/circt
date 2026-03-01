@@ -3353,6 +3353,7 @@ private:
   void noteAotDirectYieldSkip(uint32_t fid);
   enum class DirectInterpretedFallbackReason : uint8_t {
     NoNativePtr = 0,
+    InterceptPolicy,
     ForcePhaseCanonicalization,
     CoverageRuntime,
     UnmappedPolicy,
@@ -3365,6 +3366,7 @@ private:
   struct DirectInterpretedFallbackCounters {
     uint64_t total = 0;
     uint64_t noNativePtr = 0;
+    uint64_t interceptPolicy = 0;
     uint64_t forcePhaseCanonicalization = 0;
     uint64_t coverageRuntime = 0;
     uint64_t unmappedPolicy = 0;
@@ -4524,6 +4526,9 @@ private:
   /// Keyed by callee symbol name.
   llvm::StringMap<DirectInterpretedFallbackCounters>
       directInterpretedFallbackByCallee;
+  /// Compiled function names intentionally excluded from direct native
+  /// func.call dispatch by intercept policy.
+  llvm::StringSet<> directNativeInterceptPolicyNames;
 
   /// Entry table for tagged-FuncId dispatch (Step 7C).
   /// Populated from CompiledModuleLoader during loadCompiledFunctions().

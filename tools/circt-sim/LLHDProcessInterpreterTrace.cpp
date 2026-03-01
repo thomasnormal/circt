@@ -3314,6 +3314,7 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
         printed = true;
       };
       emitReason("no-native", r.counters.noNativePtr);
+      emitReason("intercept-policy", r.counters.interceptPolicy);
       emitReason("phase-canon", r.counters.forcePhaseCanonicalization);
       emitReason("coverage", r.counters.coverageRuntime);
       emitReason("unmapped-policy", r.counters.unmappedPolicy);

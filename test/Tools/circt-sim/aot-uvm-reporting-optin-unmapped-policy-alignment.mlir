@@ -17,7 +17,7 @@
 // DEFAULT: direct_calls_native:              1
 // DEFAULT: direct_calls_interpreted:         0
 // DEFAULT: Top interpreted func.call fallback reasons (top 50):
-// DEFAULT: 1x uvm_pkg::uvm_report_handler::get_verbosity_level [no-native=1]
+// DEFAULT: 1x uvm_pkg::uvm_report_handler::get_verbosity_level [intercept-policy=1]
 // DEFAULT: out=47
 //
 // COMPILE-OPTIN: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable

@@ -44424,11 +44424,17 @@ void LLHDProcessInterpreter::noteInterpretedFuncCallFallback(
     llvm::StringRef calleeName, DirectInterpretedFallbackReason reason) {
   if (calleeName.empty())
     calleeName = "<unknown>";
+  if (reason == DirectInterpretedFallbackReason::NoNativePtr &&
+      directNativeInterceptPolicyNames.contains(calleeName))
+    reason = DirectInterpretedFallbackReason::InterceptPolicy;
   auto &row = directInterpretedFallbackByCallee[calleeName];
   ++row.total;
   switch (reason) {
   case DirectInterpretedFallbackReason::NoNativePtr:
     ++row.noNativePtr;
+    break;
+  case DirectInterpretedFallbackReason::InterceptPolicy:
+    ++row.interceptPolicy;
     break;
   case DirectInterpretedFallbackReason::ForcePhaseCanonicalization:
     ++row.forcePhaseCanonicalization;
@@ -44470,6 +44476,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     const CompiledModuleLoader &loader) {
   if (!rootModule)
     return;
+  directNativeInterceptPolicyNames.clear();
 
   // Safety valve: CIRCT_AOT_NO_FUNC_DISPATCH disables ALL native func dispatch.
   bool noFuncDispatch = std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr;
@@ -44746,6 +44753,21 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     return false;
   };
 
+  // Track functions intentionally excluded from direct native func.call
+  // dispatch by intercept policy, including cases demoted to trampolines.
+  if (!noFuncDispatch) {
+    rootModule.walk([&](mlir::func::FuncOp funcOp) {
+      if (funcOp.isExternal())
+        return;
+      llvm::StringRef name = funcOp.getSymName();
+      if (!isInterceptedFunc(name))
+        return;
+      if (!loader.lookupFunction(name) && loader.lookupTrampolineId(name) < 0)
+        return;
+      directNativeInterceptPolicyNames.insert(name);
+    });
+  }
+
   // func.call native dispatch: enabled by default with real calloc addresses.
   // Limit with CIRCT_AOT_MAX_NATIVE=N, disable with CIRCT_AOT_DISABLE_FUNC_DISPATCH=1.
   unsigned maxNative = UINT_MAX;
@@ -44768,6 +44790,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
         // All dispatch disabled — don't populate nativeFuncPtrs at all.
       } else if (isInterceptedFunc(funcOp.getSymName())) {
         ++intercepted;
+        directNativeInterceptPolicyNames.insert(
+            funcOp.getSymName().str());
         if (traceInterceptSelection)
           llvm::errs() << "[circt-sim] AOT intercept func.call: "
                        << funcOp.getSymName() << "\n";
