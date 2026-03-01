@@ -393,7 +393,8 @@ Current workstream status in this branch:
    - full aggregate legalization plan still incomplete
 7. WS6: in progress
    - JSONL schema emission landed in major runners
-   - schema docs + dashboards + strict schema validation tooling still pending
+   - strict schema validation tooling landed (`validate_formal_results_schema.py`)
+   - schema docs + dashboards still pending
 
 ## 17. Execution Backlog (Ticket-Level)
 

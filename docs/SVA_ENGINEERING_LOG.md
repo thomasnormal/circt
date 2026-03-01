@@ -11204,3 +11204,30 @@
   - WS0 toolchain slice:
     - `build_test/bin/llvm-lit -sv test/Tools/formal-baseline-manifest.test test/Tools/formal-audit-unsupported.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-capture-baseline.test test/Tools/formal-drift-compare.test`
     - `5 passed`
+
+## 2026-03-01 - WS6 strict schema validator CLI (T2)
+
+- realization:
+  - JSONL emission existed, but we still lacked a strict validator to enforce
+    required fields/enums and make schema drift gates actionable in CI.
+
+- implemented:
+  - Added:
+    - `utils/formal/validate_formal_results_schema.py`
+  - validates:
+    - required fields
+    - enum domains (`mode`, `status`, `stage`)
+    - timing field types (`null` or non-negative int)
+    - reason-code presence for non-pass/non-unknown statuses
+  - emits optional summary JSON with status/mode/stage counts.
+
+- tests added:
+  - `test/Tools/formal-validate-results-schema.test`
+    - validates passing schema rows and failing invalid rows.
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/validate_formal_results_schema.py`
+  - focused suite:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-validate-results-schema.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-capture-baseline.test test/Tools/formal-drift-compare.test`
+    - `4 passed`
