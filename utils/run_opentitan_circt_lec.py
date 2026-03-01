@@ -344,11 +344,17 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
     def _infer_stage(status: str, reason_code: str) -> str:
         status_norm = status.strip().upper()
         reason_norm = reason_code.strip().upper()
+        if "SETUP_ERROR" in reason_norm or "NO_FILES" in reason_norm:
+            return "frontend"
         if status_norm == "TIMEOUT":
+            if "COMPILE_CONTRACT" in reason_norm:
+                return "frontend"
             if "FRONTEND" in reason_norm:
                 return "frontend"
             return "solver"
         if status_norm in {"ERROR", "FAIL"}:
+            if "COMPILE_CONTRACT" in reason_norm:
+                return "frontend"
             if "FRONTEND" in reason_norm:
                 return "frontend"
             if "SMT" in reason_norm or "Z3" in reason_norm or "LEC" in reason_norm:

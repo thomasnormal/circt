@@ -456,6 +456,10 @@ Current workstream status in this branch:
    - FPV LEC copied-runner fallback stage inference now classifies
      `SETUP_ERROR`/`NO_FILES` as `frontend`, aligning copied-runner lit paths
      with shared schema stage policy
+   - copied-runner fallback stage inference parity now extended across
+     OpenTitan LEC, connectivity LEC, pairwise BMC, and FPV BMC wrappers so
+     fallback-lit paths match shared schema policy for
+     `SETUP_ERROR`/`NO_FILES` and `COMPILE_CONTRACT_*` staging
    - OpenTitan FPV BMC final JSONL projection now uses shared
      `formal_results.write_results_jsonl_from_case_rows` plumbing with
      per-case metadata map, reducing local JSON row-shaping duplication

@@ -2,6 +2,29 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: copied-runner stage inference parity across formal wrappers):
+  - realization:
+    - multiple copied-runner fallback `_infer_stage(...)` implementations
+      (OpenTitan LEC, connectivity LEC, pairwise BMC, FPV BMC) lagged the
+      shared `formal_results.infer_stage(...)` policy.
+    - this left drift risk where copied-runner lit paths could classify setup
+      and contract-precondition failures differently than normal shared-helper
+      paths.
+  - implemented:
+    - aligned fallback `_infer_stage(...)` in:
+      - `utils/run_opentitan_circt_lec.py`
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+      - `utils/run_pairwise_circt_bmc.py`
+      - `utils/run_opentitan_fpv_circt_bmc.py`
+    - parity rules now include:
+      - `SETUP_ERROR` / `NO_FILES` -> `frontend`
+      - `COMPILE_CONTRACT_*` -> `frontend` in timeout/error/fail lanes.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py utils/run_pairwise_circt_bmc.py utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS6: FPV LEC setup/no-files stage classification parity):
   - realization:
     - shared JSONL stage inference in `formal_results.infer_stage(...)` already

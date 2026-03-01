@@ -43,6 +43,8 @@ except Exception:
     def _infer_stage(status: str, reason_code: str) -> str:
         status_norm = status.strip().upper()
         reason_norm = reason_code.strip().upper()
+        if "SETUP_ERROR" in reason_norm or "NO_FILES" in reason_norm:
+            return "frontend"
         if status_norm == "TIMEOUT":
             if "COMPILE_CONTRACT" in reason_norm:
                 return "frontend"
