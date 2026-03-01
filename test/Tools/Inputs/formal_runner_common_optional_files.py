@@ -43,6 +43,18 @@ def main() -> int:
         "3, 7,0", "sample-list"
     ) == [3, 7, 0]
     assert runner_common.parse_exit_codes("126, 127", "sample-codes") == {126, 127}
+    assert (
+        runner_common.parse_lec_result("... LEC_RESULT=EQ ...") == "EQ"
+    ), "shared LEC result parser missed explicit EQ marker"
+    assert (
+        runner_common.parse_lec_result("trace: c1 == c2") == "EQ"
+    ), "shared LEC result parser missed legacy EQ output"
+    assert (
+        runner_common.parse_lec_result("trace: c1 != c2") == "NEQ"
+    ), "shared LEC result parser missed legacy NEQ output"
+    assert (
+        runner_common.parse_lec_result("no result marker") is None
+    ), "shared LEC result parser should return None for missing markers"
 
     allow_path = tmp_dir / "allow.tsv"
     allow_path.write_text(

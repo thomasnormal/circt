@@ -465,6 +465,8 @@ Current workstream status in this branch:
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
+   - shared LEC result parser landed in `runner_common` (`parse_lec_result`)
+     and adopted in OpenTitan AES/FPV/connectivity LEC runners (local fallback retained)
    - shared optional existing-file resolver and optional allowlist loader
      landed in `runner_common`
    - OpenTitan connectivity BMC/LEC status baseline+allowlist path validation

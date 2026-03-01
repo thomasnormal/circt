@@ -1,6 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test block find/search: get_block_by_name(), get_field_by_name().
 

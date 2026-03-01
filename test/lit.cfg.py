@@ -63,7 +63,7 @@ tools = [
     'circt-capi-ir-test', 'circt-capi-om-test', 'circt-capi-firrtl-test',
     'circt-capi-firtool-test', 'circt-capi-rtg-test', 'circt-capi-rtgtest-test',
     'circt-capi-support-test', 'circt-cov', 'circt-dis', 'circt-lec',
-    'circt-mut', 'circt-sim', 'circt-compile',
+    'circt-mut', 'circt-sim', 'circt-compile', 'crun',
     'circt-reduce', 'circt-synth', 'circt-test', 'circt-translate',
     'domaintool', 'firld', 'firtool', 'hlstool', 'om-linker', 'kanagawatool'
 ]
@@ -114,6 +114,8 @@ if slang_frontend_enabled:
 tool_search_path = os.pathsep.join(tool_dirs + [config.environment.get('PATH', '')])
 if shutil.which('circt-sim', path=tool_search_path):
   config.available_features.add('circt-sim')
+if shutil.which('crun', path=tool_search_path):
+  config.available_features.add('crun')
 
 # Enable UVM-gated tests when a usable UVM runtime source tree is available.
 repo_root = os.path.normpath(os.path.join(config.test_source_root, '..'))

@@ -589,6 +589,7 @@ def parse_args() -> argparse.Namespace:
 
 try:
     from runner_common import (
+        parse_lec_result as _shared_parse_lec_result,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
     )
@@ -598,6 +599,9 @@ else:
     _HAS_SHARED_FORMAL_HELPERS = True
 
 if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_lec_result(text: str) -> str | None:
+        return _shared_parse_lec_result(text)
 
     def parse_nonnegative_int(raw: str, name: str) -> int:
         return _shared_parse_nonnegative_int(raw, name, fail)

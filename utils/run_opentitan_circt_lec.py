@@ -319,6 +319,7 @@ try:
     from runner_common import (
         extract_drop_reasons as _shared_extract_drop_reasons,
         normalize_drop_reason as _shared_normalize_drop_reason,
+        parse_lec_result as _shared_parse_lec_result,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
         write_log as _shared_write_log,
@@ -393,6 +394,9 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
                 handle.write("\n")
 
 if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_lec_result(text: str) -> str | None:
+        return _shared_parse_lec_result(text)
 
     def parse_nonnegative_int(raw: str, name: str) -> int:
         return _shared_parse_nonnegative_int(raw, name, fail)

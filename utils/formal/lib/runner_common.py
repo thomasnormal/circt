@@ -133,6 +133,17 @@ def extract_drop_reasons(log_text: str, pattern: str) -> list[str]:
     return sorted(reasons)
 
 
+def parse_lec_result(text: str) -> str | None:
+    match = re.search(r"LEC_RESULT=(EQ|NEQ|UNKNOWN)", text)
+    if match:
+        return match.group(1)
+    if re.search(r"\bc1 == c2\b", text):
+        return "EQ"
+    if re.search(r"\bc1 != c2\b", text):
+        return "NEQ"
+    return None
+
+
 def load_allowlist(
     path: Path, fail_fn: Callable[[str], None] | None = None
 ) -> Allowlist:

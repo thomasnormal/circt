@@ -2,6 +2,35 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T2/WS1-T4: shared LEC result classifier dedup):
+  - realization:
+    - OpenTitan LEC runners still duplicated identical `parse_lec_result(...)`
+      logic (`LEC_RESULT=` marker + legacy `c1 == c2`/`c1 != c2` fallback):
+      - `utils/run_opentitan_circt_lec.py`
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+      - `utils/run_opentitan_fpv_circt_lec.py`
+    - shared helper coverage did not yet lock this classifier contract in
+      `runner_common`.
+  - implemented:
+    - added shared helper:
+      - `utils/formal/lib/runner_common.py::parse_lec_result`
+    - migrated all three OpenTitan LEC runners to consume shared
+      `parse_lec_result` in shared-helper mode (local fallback retained for
+      copied-script lit environments).
+    - extended helper regression input:
+      - `test/Tools/Inputs/formal_runner_common_optional_files.py`
+      - added positive/negative cases for `parse_lec_result`.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test`
+      - result: fail (`AttributeError`: missing
+        `runner_common.parse_lec_result`).
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_opentitan_fpv_circt_lec.py utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test test/Tools/run-opentitan-fpv-circt-lec-basic.test test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-shared.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-lec-log-max-bytes.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-opentitan-connectivity-circt-lec-log-max-bytes-shared.test`
+      - result: `7/7` pass.
+
 - Iteration update (WS1: pairwise BMC log budget invalid-env contract coverage):
   - realization:
     - after landing `BMC_LOG_MAX_BYTES`, invalid-env diagnostics for that knob
