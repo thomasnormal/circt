@@ -2,6 +2,29 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T1: FPV LEC runner migrated to shared env retry helper):
+  - realization:
+    - `run_opentitan_fpv_circt_lec.py` still duplicated env retry policy
+      parsing (`FORMAL_LAUNCH_RETRY_*`) around `runner_common.run_command_logged`.
+    - this kept WS1 retry-policy dedup incomplete for the FPV LEC lane.
+  - implemented:
+    - switched FPV LEC `run_with_log(...)` to
+      `runner_common.run_command_logged_with_env_retry(...)`, removing local
+      retry-attempt/backoff/exit-code/pattern parsing duplication.
+    - retained fallback local path when shared helpers are unavailable (copied
+      script lit environments).
+    - added shared-helper regression:
+      `test/Tools/run-opentitan-fpv-circt-lec-launch-retryable-pattern-shared.test`
+      to prove output-pattern retries in repo-mode execution.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-launch-retryable-pattern-shared.test test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-lec-basic.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-solver.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-preprocess.test test/Tools/run-opentitan-fpv-circt-lec-failing-status.test test/Tools/run-opentitan-fpv-circt-lec-eq-result-nonzero-exit.test`
+      - result: `7/7` pass.
+    - expanded formal subset:
+      - `build_test/bin/llvm-lit -sv ...` (35-test WS1/WS6 subset with BMC/LEC wrappers + schema tools)
+      - result: `35/35` pass.
+
 - Iteration update (WS1-T3/WS6: OpenTitan FPV LEC runner emits schema JSONL lane):
   - realization:
     - `run_opentitan_fpv_circt_lec.py` emitted case TSV plus objective TSVs,

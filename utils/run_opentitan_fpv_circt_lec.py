@@ -540,10 +540,8 @@ def parse_args() -> argparse.Namespace:
 
 try:
     from runner_common import (
-        parse_exit_codes as _shared_parse_exit_codes,
-        parse_nonnegative_float as _shared_parse_nonnegative_float,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
-        run_command_logged as _shared_run_command_logged,
+        run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
     )
 except Exception:
     _HAS_SHARED_FORMAL_HELPERS = False
@@ -562,39 +560,12 @@ if _HAS_SHARED_FORMAL_HELPERS:
         *,
         out_path: Path | None = None,
     ) -> str:
-        retry_attempts = _shared_parse_nonnegative_int(
-            os.environ.get("FORMAL_LAUNCH_RETRY_ATTEMPTS", "1"),
-            "FORMAL_LAUNCH_RETRY_ATTEMPTS",
-            fail,
-        )
-        retry_backoff_secs = _shared_parse_nonnegative_float(
-            os.environ.get("FORMAL_LAUNCH_RETRY_BACKOFF_SECS", "0.2"),
-            "FORMAL_LAUNCH_RETRY_BACKOFF_SECS",
-            fail,
-        )
-        retryable_exit_codes = _shared_parse_exit_codes(
-            os.environ.get("FORMAL_LAUNCH_RETRYABLE_EXIT_CODES", "126,127"),
-            "FORMAL_LAUNCH_RETRYABLE_EXIT_CODES",
-            fail,
-        )
-        retryable_patterns_raw = os.environ.get(
-            "FORMAL_LAUNCH_RETRYABLE_PATTERNS",
-            "text file busy,resource temporarily unavailable,stale file handle",
-        )
-        retryable_patterns = [
-            token.strip()
-            for token in retryable_patterns_raw.split(",")
-            if token.strip()
-        ]
-        return _shared_run_command_logged(
+        return _shared_run_command_logged_with_env_retry(
             cmd,
             log_path,
             timeout_secs=timeout_secs,
             out_path=out_path,
-            retry_attempts=retry_attempts,
-            retry_backoff_secs=retry_backoff_secs,
-            retryable_exit_codes=retryable_exit_codes,
-            retryable_output_patterns=retryable_patterns,
+            fail_fn=fail,
         )
 
 

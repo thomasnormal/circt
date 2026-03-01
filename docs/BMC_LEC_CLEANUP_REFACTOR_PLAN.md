@@ -425,6 +425,8 @@ Current workstream status in this branch:
      (`--results-jsonl-file`) from final wrapper-level merged rows
    - OpenTitan FPV LEC runner now emits schema JSONL output lane
      (`--results-jsonl-file`, env `FORMAL_RESULTS_JSONL_OUT`)
+   - OpenTitan FPV LEC runner now uses shared env retry helper
+     (`runner_common.run_command_logged_with_env_retry`)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
