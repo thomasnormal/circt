@@ -452,6 +452,55 @@ static bool hasPointerAbi(mlir::func::FuncOp funcOp) {
   return false;
 }
 
+static bool isPointerLikeUvmHelperName(llvm::StringRef calleeName) {
+  if (calleeName.starts_with("uvm_pkg::") && calleeName.contains("::"))
+    return true;
+  return calleeName.starts_with("get_") || calleeName.starts_with("set_") ||
+         calleeName.starts_with("create_") ||
+         calleeName.starts_with("m_initialize");
+}
+
+static bool shouldTreatArg0I64AsPointerLike(mlir::func::FuncOp funcOp,
+                                            unsigned argIndex) {
+  if (argIndex != 0)
+    return false;
+  if (funcOp.getNumArguments() == 0 || argIndex >= funcOp.getNumArguments())
+    return false;
+  auto intTy = mlir::dyn_cast<mlir::IntegerType>(funcOp.getArgumentTypes()[0]);
+  if (!intTy || intTy.getWidth() != 64)
+    return false;
+  return isPointerLikeUvmHelperName(funcOp.getName());
+}
+
+static bool shouldDemoteUnmappedNullThisPointerCall(mlir::func::FuncOp funcOp,
+                                                    unsigned argIndex,
+                                                    uint64_t argValue,
+                                                    bool isUnmappedCall) {
+  if (!isUnmappedCall || argIndex != 0 || argValue != 0)
+    return false;
+  if (funcOp.getNumArguments() == 0)
+    return false;
+  bool arg0PointerType =
+      mlir::isa<mlir::LLVM::LLVMPointerType>(funcOp.getArgumentTypes()[0]);
+  bool arg0PointerLikeI64 = shouldTreatArg0I64AsPointerLike(funcOp, 0);
+  if (!arg0PointerType && !arg0PointerLikeI64)
+    return false;
+  llvm::StringRef calleeName = funcOp.getName();
+  if (calleeName.starts_with("uvm_pkg::") && calleeName.contains("::"))
+    return true;
+  return isPointerLikeUvmHelperName(calleeName);
+}
+
+static bool shouldDenyUnmappedZeroArgUvmHelperCall(mlir::func::FuncOp funcOp) {
+  static bool allowUnsafeZeroArgHelpers =
+      std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_ZEROARG_HELPERS_UNSAFE") !=
+      nullptr;
+  if (allowUnsafeZeroArgHelpers)
+    return false;
+  return funcOp.getNumArguments() == 0 &&
+         isPointerLikeUvmHelperName(funcOp.getName());
+}
+
 static bool shouldDenyUnmappedNativeCallByDefault(mlir::func::FuncOp funcOp) {
   llvm::StringRef calleeName = funcOp.getName();
   // Package-qualified UVM helpers often depend on interpreter-side behavior
@@ -483,6 +532,12 @@ static bool shouldDenyUnmappedNativeCall(mlir::func::FuncOp funcOp) {
   for (const std::string &pattern : denyPatterns)
     if (matchesUnmappedNamePattern(calleeName, pattern))
       return true;
+
+  // Safety guard: unmapped zero-arg helper wrappers (get_/set_/create_/
+  // m_initialize*) have repeatedly dereferenced invalid payloads in native
+  // mode. Keep them interpreted unless explicitly opt-in overridden.
+  if (shouldDenyUnmappedZeroArgUvmHelperCall(funcOp))
+    return true;
 
   if (allowUnmappedNative)
     return false;
@@ -2090,26 +2145,46 @@ void LLHDProcessInterpreter::noteMallocBlockAllocated(uint64_t baseAddr,
 
 MemoryBlock *LLHDProcessInterpreter::findBlockByAddress(uint64_t addr,
                                                         uint64_t &offset) {
-  if (addrRangeIndexDirty)
-    rebuildAddrRangeIndex();
+  // Prefer robustness over index speed: stale/corrupted range-index state can
+  // crash deep in std::map iterator arithmetic during AVIP UVM stress runs.
+  // A direct scan avoids that failure mode and keeps behavior deterministic.
+  bool found = false;
+  uint64_t bestBase = 0;
+  uint64_t bestOffset = 0;
+  MemoryBlock *bestBlock = nullptr;
 
-  // Binary search: find the last entry with baseAddr <= addr
-  auto it = addrRangeIndex.upper_bound(addr);
-  if (it == addrRangeIndex.begin())
-    return nullptr;
-  --it;
-
-  if (addr < it->second.endAddr) {
-    offset = addr - it->first;
-    if (it->second.isMalloc) {
-      auto blockIt = mallocBlocks.find(it->first);
-      return (blockIt != mallocBlocks.end()) ? &blockIt->second : nullptr;
-    } else {
-      auto blockIt = globalMemoryBlocks.find(it->second.globalName);
-      return (blockIt != globalMemoryBlocks.end()) ? &blockIt->second : nullptr;
+  auto considerRange = [&](uint64_t baseAddr, MemoryBlock *block) {
+    if (!block)
+      return;
+    uint64_t endAddr = 0;
+    if (__builtin_add_overflow(baseAddr, static_cast<uint64_t>(block->size),
+                               &endAddr))
+      return;
+    if (addr < baseAddr || addr >= endAddr)
+      return;
+    uint64_t off = addr - baseAddr;
+    if (!found || off < bestOffset || (off == bestOffset && baseAddr > bestBase)) {
+      found = true;
+      bestBase = baseAddr;
+      bestOffset = off;
+      bestBlock = block;
     }
+  };
+
+  for (auto &entry : mallocBlocks)
+    considerRange(entry.first, &entry.second);
+
+  for (auto &entry : globalAddresses) {
+    auto blockIt = globalMemoryBlocks.find(entry.getKey());
+    if (blockIt == globalMemoryBlocks.end())
+      continue;
+    considerRange(entry.getValue(), &blockIt->second);
   }
-  return nullptr;
+
+  if (!found)
+    return nullptr;
+  offset = bestOffset;
+  return bestBlock;
 }
 
 uint64_t
@@ -18095,19 +18170,52 @@ LogicalResult LLHDProcessInterpreter::interpretDrive(ProcessId procId,
     return false;
   };
 
-  // Handle arith.select on ref types (e.g., !llhd.ref<!hw.struct<...>>)
-  // by evaluating the condition and selecting the appropriate ref.
+  // Handle ref-typed conditional values (e.g. arith.select / scf.if results)
+  // by evaluating the condition and selecting the concrete ref operand.
   Value signal = driveOp.getSignal();
   Value originalSignal = signal;
   remapRefBlockArgSource(signal);
-  while (auto selectOp = signal.getDefiningOp<arith::SelectOp>()) {
-    InterpretedValue cond = getValue(procId, selectOp.getCondition());
-    if (cond.isX()) {
-      LLVM_DEBUG(llvm::dbgs() << "  Warning: X condition in arith.select for drive\n");
-      return success(); // Cannot determine which signal to drive
+  while (true) {
+    if (auto selectOp = signal.getDefiningOp<arith::SelectOp>()) {
+      InterpretedValue cond = getValue(procId, selectOp.getCondition());
+      if (cond.isX()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Warning: X condition in arith.select for drive\n");
+        return success(); // Cannot determine which signal to drive
+      }
+      signal = cond.getUInt64() != 0 ? selectOp.getTrueValue()
+                                     : selectOp.getFalseValue();
+      remapRefBlockArgSource(signal);
+      continue;
     }
-    signal = cond.getUInt64() != 0 ? selectOp.getTrueValue() : selectOp.getFalseValue();
-    remapRefBlockArgSource(signal);
+
+    if (auto ifOp = signal.getDefiningOp<scf::IfOp>()) {
+      auto result = dyn_cast<OpResult>(signal);
+      if (!result)
+        break;
+      unsigned resultIndex = result.getResultNumber();
+      if (resultIndex >= ifOp.getNumResults())
+        break;
+
+      InterpretedValue cond = getValue(procId, ifOp.getCondition());
+      if (cond.isX()) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "  Warning: X condition in scf.if for drive\n");
+        return success();
+      }
+
+      auto &selectedRegion =
+          cond.getUInt64() != 0 ? ifOp.getThenRegion() : ifOp.getElseRegion();
+      if (selectedRegion.empty())
+        break;
+      auto yieldOp = dyn_cast<scf::YieldOp>(selectedRegion.front().getTerminator());
+      if (!yieldOp || resultIndex >= yieldOp.getNumOperands())
+        break;
+      signal = yieldOp.getOperand(resultIndex);
+      remapRefBlockArgSource(signal);
+      continue;
+    }
+    break;
   }
 
   maybeTraceArrayDriveRemap(procId, originalSignal, signal);
@@ -24824,13 +24932,78 @@ no_uvm_objection_intercept:
         if (compatibleNativeAbi) {
           uint64_t a[8] = {};
           bool canDispatch = true;
+          auto isPlausibleNativePointerValue = [](uint64_t addr) -> bool {
+            if (addr == 0)
+              return true;
+            constexpr uint64_t kVirtualLo = 0x10000000ULL;
+            constexpr uint64_t kVirtualHi = 0x20000000ULL;
+            constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+            constexpr uint64_t kTaggedHi = 0x100000000ULL;
+            constexpr uint64_t kMaxCanonicalUserPtr = 0x0000FFFFFFFFFFFFULL;
+            if (addr >= kVirtualLo && addr < kVirtualHi)
+              return true;
+            if (addr >= kTaggedLo && addr < kTaggedHi)
+              return true;
+            return addr <= kMaxCanonicalUserPtr;
+          };
+          auto isKnownPointerAddress = [&](uint64_t addr) -> bool {
+            if (addr == 0)
+              return true;
+            uint64_t off = 0;
+            if (findMemoryBlockByAddress(addr, procId, &off))
+              return true;
+            if (findBlockByAddress(addr, off))
+              return true;
+            size_t nativeSize = 0;
+            return findNativeMemoryBlockByAddress(addr, &off, &nativeSize);
+          };
+          static bool traceNativeCalls =
+              std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
           for (unsigned i = 0; i < numArgs; ++i) {
             if (args[i].getWidth() <= 64) {
               a[i] = args[i].getUInt64();
-              if (isa<mlir::LLVM::LLVMPointerType>(
-                      funcOp.getArgumentTypes()[i])) {
+              bool hasPointerType = isa<mlir::LLVM::LLVMPointerType>(
+                  funcOp.getArgumentTypes()[i]);
+              bool pointerLikeI64ThisArg =
+                  shouldTreatArg0I64AsPointerLike(funcOp, i);
+              if (hasPointerType || pointerLikeI64ThisArg) {
                 a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                      a[i]);
+                if (shouldDemoteUnmappedNullThisPointerCall(
+                        funcOp, i, a[i], fidIt == funcOpToFid.end())) {
+                  if (traceNativeCalls) {
+                    llvm::errs() << "[AOT TRACE] func.call skip null-this"
+                                 << " name=" << funcOp.getName() << " arg" << i
+                                 << "=" << llvm::format_hex(a[i], 16)
+                                 << " active_proc=" << activeProcessId << "\n";
+                  }
+                  canDispatch = false;
+                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  break;
+                }
+                if (pointerLikeI64ThisArg && a[i] != 0 &&
+                    !isKnownPointerAddress(a[i])) {
+                  if (traceNativeCalls) {
+                    llvm::errs() << "[AOT TRACE] func.call skip unknown-pointer"
+                                 << " name=" << funcOp.getName() << " arg" << i
+                                 << "=" << llvm::format_hex(a[i], 16)
+                                 << " active_proc=" << activeProcessId << "\n";
+                  }
+                  canDispatch = false;
+                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  break;
+                }
+                if (!isPlausibleNativePointerValue(a[i])) {
+                  if (traceNativeCalls) {
+                    llvm::errs() << "[AOT TRACE] func.call skip bad-pointer"
+                                 << " name=" << funcOp.getName() << " arg" << i
+                                 << "=" << llvm::format_hex(a[i], 16)
+                                 << " active_proc=" << activeProcessId << "\n";
+                  }
+                  canDispatch = false;
+                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  break;
+                }
               }
             } else {
               canDispatch = false;
@@ -24844,8 +25017,6 @@ no_uvm_objection_intercept:
           }
           if (canDispatch) {
             ++nativeFuncCallCount;
-            static bool traceNativeCalls =
-                std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
             static uint64_t traceNativeCallLimit = []() -> uint64_t {
               if (const char *s = std::getenv("CIRCT_AOT_TRACE_NATIVE_LIMIT"))
                 return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
@@ -24972,7 +25143,8 @@ no_uvm_objection_intercept:
             return success();
           }
         }
-        fallbackReason = DirectInterpretedFallbackReason::IncompatibleAbi;
+        if (fallbackReason == DirectInterpretedFallbackReason::NoNativePtr)
+          fallbackReason = DirectInterpretedFallbackReason::IncompatibleAbi;
       } else {
         ++nativeFuncSkippedDepth;
         fallbackReason = DirectInterpretedFallbackReason::Depth;
@@ -25229,13 +25401,78 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       if (compatibleNativeAbi) {
         uint64_t a[8] = {};
         bool canDispatch = true;
+        auto isPlausibleNativePointerValue = [](uint64_t addr) -> bool {
+          if (addr == 0)
+            return true;
+          constexpr uint64_t kVirtualLo = 0x10000000ULL;
+          constexpr uint64_t kVirtualHi = 0x20000000ULL;
+          constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+          constexpr uint64_t kTaggedHi = 0x100000000ULL;
+          constexpr uint64_t kMaxCanonicalUserPtr = 0x0000FFFFFFFFFFFFULL;
+          if (addr >= kVirtualLo && addr < kVirtualHi)
+            return true;
+          if (addr >= kTaggedLo && addr < kTaggedHi)
+            return true;
+          return addr <= kMaxCanonicalUserPtr;
+        };
+        auto isKnownPointerAddress = [&](uint64_t addr) -> bool {
+          if (addr == 0)
+            return true;
+          uint64_t off = 0;
+          if (findMemoryBlockByAddress(addr, procId, &off))
+            return true;
+          if (findBlockByAddress(addr, off))
+            return true;
+          size_t nativeSize = 0;
+          return findNativeMemoryBlockByAddress(addr, &off, &nativeSize);
+        };
+        static bool traceNativeCalls =
+            std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
         for (unsigned i = 0; i < numArgs; ++i) {
           if (args[i].getWidth() <= 64) {
             a[i] = args[i].getUInt64();
-            if (isa<mlir::LLVM::LLVMPointerType>(
-                    funcOp.getArgumentTypes()[i])) {
+            bool hasPointerType = isa<mlir::LLVM::LLVMPointerType>(
+                funcOp.getArgumentTypes()[i]);
+            bool pointerLikeI64ThisArg =
+                shouldTreatArg0I64AsPointerLike(funcOp, i);
+            if (hasPointerType || pointerLikeI64ThisArg) {
               a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                    a[i]);
+              if (shouldDemoteUnmappedNullThisPointerCall(
+                      funcOp, i, a[i], fidIt == funcOpToFid.end())) {
+                if (traceNativeCalls) {
+                  llvm::errs() << "[AOT TRACE] func.call skip null-this"
+                               << " name=" << funcOp.getName() << " arg" << i
+                               << "=" << llvm::format_hex(a[i], 16)
+                               << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              if (pointerLikeI64ThisArg && a[i] != 0 &&
+                  !isKnownPointerAddress(a[i])) {
+                if (traceNativeCalls) {
+                  llvm::errs() << "[AOT TRACE] func.call skip unknown-pointer"
+                               << " name=" << funcOp.getName() << " arg" << i
+                               << "=" << llvm::format_hex(a[i], 16)
+                               << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              if (!isPlausibleNativePointerValue(a[i])) {
+                if (traceNativeCalls) {
+                  llvm::errs() << "[AOT TRACE] func.call skip bad-pointer"
+                               << " name=" << funcOp.getName() << " arg" << i
+                               << "=" << llvm::format_hex(a[i], 16)
+                               << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
             }
           } else {
             canDispatch = false;
@@ -25249,8 +25486,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         }
         if (canDispatch) {
           ++nativeFuncCallCount;
-          static bool traceNativeCalls =
-              std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
           static uint64_t traceNativeCallLimit = []() -> uint64_t {
             if (const char *s = std::getenv("CIRCT_AOT_TRACE_NATIVE_LIMIT"))
               return static_cast<uint64_t>(std::strtoull(s, nullptr, 10));
@@ -30607,6 +30842,13 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
                                                               ProcessId procId,
                                                               uint64_t *outOffset) {
   // Walk the process -> parent chain looking for the memory block by address.
+  llvm::DenseMap<Value, InterpretedValue> *originValueMap = nullptr;
+  if (procId != static_cast<ProcessId>(-1)) {
+    auto originIt = processStates.find(procId);
+    if (originIt != processStates.end())
+      originValueMap = &originIt->second.valueMap;
+  }
+
   if (procId != static_cast<ProcessId>(-1)) {
     ProcessId cur = procId;
     while (cur != InvalidProcessId) {
@@ -30622,10 +30864,9 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
         // (would trigger epoch assertion in debug builds when cur != procId).
         uint64_t blockAddr = 0;
         bool foundAddr = false;
-        {
-          auto &procVM = processStates[procId].valueMap;
-          auto it = procVM.find(val);
-          if (it != procVM.end() && !it->second.isX()) {
+        if (originValueMap) {
+          auto it = originValueMap->find(val);
+          if (it != originValueMap->end() && !it->second.isX()) {
             blockAddr = it->second.getUInt64();
             foundAddr = true;
           }
@@ -30637,7 +30878,11 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
             foundAddr = true;
           }
         }
-        if (foundAddr && addr >= blockAddr && addr < blockAddr + block.size) {
+        uint64_t blockEnd = 0;
+        if (foundAddr &&
+            !__builtin_add_overflow(blockAddr, static_cast<uint64_t>(block.size),
+                                    &blockEnd) &&
+            addr >= blockAddr && addr < blockEnd) {
           if (outOffset) *outOffset = addr - blockAddr;
           return &block;
         }
@@ -30648,7 +30893,11 @@ MemoryBlock *LLHDProcessInterpreter::findMemoryBlockByAddress(uint64_t addr,
   // Check module-level allocas
   for (auto &[val, block] : moduleLevelAllocas) {
     uint64_t blockAddr = getModuleLevelAllocaBaseAddress(val);
-    if (blockAddr != 0 && addr >= blockAddr && addr < blockAddr + block.size) {
+    uint64_t blockEnd = 0;
+    if (blockAddr != 0 &&
+        !__builtin_add_overflow(blockAddr, static_cast<uint64_t>(block.size),
+                                &blockEnd) &&
+        addr >= blockAddr && addr < blockEnd) {
       if (outOffset) *outOffset = addr - blockAddr;
       return &block;
     }
@@ -43370,6 +43619,12 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   bool noFuncDispatch = std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr;
   if (std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE")) {
     llvm::errs() << "[circt-sim] Unmapped native func.call policy: allow-all";
+    if (std::getenv(
+            "CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_ZEROARG_HELPERS_UNSAFE") ==
+        nullptr) {
+      llvm::errs() << " (with zero-arg get_/set_/create_/m_initialize* "
+                      "safety deny)";
+    }
     if (const char *denyNames = std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES"))
       llvm::errs() << " with deny list '" << denyNames << "'";
     llvm::errs() << "\n";
