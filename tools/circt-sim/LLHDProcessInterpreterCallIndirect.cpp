@@ -2418,6 +2418,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (queueAddr == 0)
           queueAddr = sqrAddr;
         queueAddr = normalizeUvmSequencerAddress(procId, queueAddr);
+        if (itemAddr != 0 && seqAddr != 0)
+          recordUvmSequenceItemOwner(itemAddr, seqAddr);
         if (itemAddr != 0 && queueAddr != 0) {
           sequencerItemFifo[queueAddr].push_back(itemAddr);
           recordUvmSequencerItemOwner(itemAddr, queueAddr);
@@ -2493,6 +2495,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           itemDoneReceived.erase(itemAddr);
           finishItemWaiters.erase(itemAddr);
           (void)takeUvmSequencerItemOwner(itemAddr);
+          (void)takeUvmSequenceItemOwner(itemAddr);
           return success();
         }
 
@@ -4434,6 +4437,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (queueAddr == 0)
           queueAddr = sqrAddr;
         queueAddr = normalizeUvmSequencerAddress(procId, queueAddr);
+        if (itemAddr != 0 && seqAddr != 0)
+          recordUvmSequenceItemOwner(itemAddr, seqAddr);
         if (itemAddr != 0 && queueAddr != 0) {
           sequencerItemFifo[queueAddr].push_back(itemAddr);
           recordUvmSequencerItemOwner(itemAddr, queueAddr);
@@ -4509,6 +4514,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           itemDoneReceived.erase(itemAddr);
           finishItemWaiters.erase(itemAddr);
           (void)takeUvmSequencerItemOwner(itemAddr);
+          (void)takeUvmSequenceItemOwner(itemAddr);
           return success();
         }
 
@@ -4563,6 +4569,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         uint64_t queueAddr = normalizeUvmSequencerAddress(procId, sqrAddr);
         itemToSequencer[sequencerProcKey(procId)] = queueAddr;
         recordUvmSequencerItemOwner(itemAddr, queueAddr);
+        recordUvmSequenceItemOwner(itemAddr, seqAddr);
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: start_item intercepted: item 0x"
                    << llvm::format_hex(itemAddr, 16) << " → sequencer 0x"
@@ -4596,11 +4603,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // Args: (self, item, priority).
     if (calleeName.contains("::finish_item") && args.size() >= 2) {
       // [SEQ-DIRECT] finish_item diagnostic removed
+      uint64_t seqAddr = args[0].isX()
+                             ? 0
+                             : normalizeUvmObjectKey(procId,
+                                                     args[0].getUInt64());
       uint64_t itemAddr = args[1].isX() ? 0 : args[1].getUInt64();
       if (itemAddr != 0) {
+        recordUvmSequenceItemOwner(itemAddr, seqAddr);
         // Check if item_done was already received (re-poll after wake)
         if (itemDoneReceived.count(itemAddr)) {
           (void)takeUvmSequencerItemOwner(itemAddr);
+          (void)takeUvmSequenceItemOwner(itemAddr);
           itemDoneReceived.erase(itemAddr);
           finishItemWaiters.erase(itemAddr);
           LLVM_DEBUG(llvm::dbgs()
@@ -4813,6 +4826,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           procId, doneAddr, callIndirectOp.getOperation());
       if (itemAddr != 0) {
         itemDoneReceived.insert(itemAddr);
+        InterpretedValue responseVal =
+            args.size() > 1 ? args[1] : InterpretedValue::makeX(64);
+        deliverUvmSequenceResponse(procId, itemAddr, responseVal,
+                                   callIndirectOp.getOperation());
         LLVM_DEBUG(llvm::dbgs()
                    << "  call_indirect: item_done: item 0x"
                    << llvm::format_hex(itemAddr, 16)

@@ -1,0 +1,25 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin %t/src
+// RUN: cp %S/../../utils/run_opentitan_connectivity_circt_lec.py %t/run_opentitan_connectivity_circt_lec.py
+// RUN: printf 'target_name\tflow\tsub_flow\tfusesoc_core\trel_path\tbbox_cmd\tconn_csv_count\tconn_csvs\tcfg_file\nchip_earlgrey_asic\tformal\tconn\tlowrisc:systems:chip_earlgrey_asic:0.1\thw/top_earlgrey/formal\t\t1\t[]\t%t/chip_conn_cfg.hjson\n' > %t/target.tsv
+// RUN: printf 'rule_id\trule_type\tcsv_file\tcsv_row\trule_name\tsrc_block\tsrc_signal\tdest_block\tdest_signal\nchip.csv:RULE_A\tCONNECTION\t%t/chip.csv\t10\tRULE_A\ttop_earlgrey.u_src0\tclk_o\ttop_earlgrey.u_dst0\tclk_i\nchip.csv:RULE_B\tCONNECTION\t%t/chip.csv\t11\tRULE_B\ttop_earlgrey.u_src1\tclk_o\ttop_earlgrey.u_dst1\tclk_i\n' > %t/rules.tsv
+// RUN: printf 'module top_earlgrey;\n  u_src_t u_src0();\n  u_dst_t u_dst0();\n  u_src_t u_src1();\n  u_dst_t u_dst1();\nendmodule\nmodule u_src_t; logic clk_o; endmodule\nmodule u_dst_t; logic clk_i; endmodule\n' > %t/src/top.sv
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib\nout_dir = pathlib.Path.cwd() / \"build\" / \"fake\" / \"formal-lec\"\nout_dir.mkdir(parents=True, exist_ok=True)\n(out_dir / \"fake.eda.yml\").write_text(\"\"\"toplevel: top_earlgrey\\nfiles:\\n- name: %t/src/top.sv\\n  file_type: systemVerilogSource\\n\"\"\", encoding=\"utf-8\")\n' > %t/bin/fusesoc
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nfor req in [\"--top=__circt_connectivity_batch_precheck_0_ref\", \"--top=__circt_connectivity_batch_precheck_0_impl\"]:\n  if req not in args:\n    raise SystemExit(f\"missing expected batch-precheck top: {req}\")\nout = pathlib.Path(args[args.index(\"-o\") + 1])\nout.write_text(\"module {}\\n\", encoding=\"utf-8\")\n' > %t/bin/circt-verilog
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nout = pathlib.Path(args[args.index(\"-o\") + 1])\nout.write_text(pathlib.Path(args[0]).read_text(encoding=\"utf-8\"), encoding=\"utf-8\")\n' > %t/bin/circt-opt
+// RUN: printf '#!/usr/bin/env python3\nimport pathlib, sys\nargs = sys.argv[1:]\nlog = pathlib.Path(\"%t/lec_invocations.log\")\nlog.parent.mkdir(parents=True, exist_ok=True)\nlog.open(\"a\", encoding=\"utf-8\").write(\" \".join(args) + \"\\n\")\nc1 = next((arg.split(\"=\", 1)[1] for arg in args if arg.startswith(\"-c1=\")), \"\")\nif \"batch_precheck\" in c1:\n  print(\"LEC_RESULT=NEQ\")\n  print(\"LEC_DIAG=BATCH_NEQ\")\n  raise SystemExit(0)\nprint(\"LEC_RESULT=EQ\")\nprint(\"LEC_DIAG=EQ\")\n' > %t/bin/circt-lec
+// RUN: chmod +x %t/run_opentitan_connectivity_circt_lec.py %t/bin/fusesoc %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
+// RUN: LEC_RUN_SMTLIB=0 LEC_BATCH_PRECHECK_MODE=on LEC_BATCH_PRECHECK_MIN_CASES=2 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --workdir %t/work --fusesoc-bin %t/bin/fusesoc --results-file %t/results.tsv
+// RUN: wc -l < %t/lec_invocations.log > %t/invoke_count.txt
+// RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=INVOKE < %t/lec_invocations.log
+// RUN: FileCheck %s --check-prefix=COUNT < %t/invoke_count.txt
+//
+// RESULTS: PASS{{[[:space:]]+}}connectivity::chip.csv:RULE_A{{[[:space:]]+}}{{.*}}EQ
+// RESULTS: PASS{{[[:space:]]+}}connectivity::chip.csv:RULE_B{{[[:space:]]+}}{{.*}}EQ
+//
+// INVOKE: -c1=__circt_connectivity_batch_precheck_
+// INVOKE: -c1=__circt_conn_rule_0_RULE_A_ref
+// INVOKE: -c1=__circt_conn_rule_1_RULE_B_ref
+//
+// COUNT: 3

@@ -10485,3 +10485,38 @@
   - cross-check slice:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `27 passed`.
+
+## 2026-03-01 - UVM sequence response semantics: route item_done(rsp) into sequence queue
+
+- realization:
+  - `test/Tools/crun/uvm-sequence-response.sv` was semantic red and hung in `get_response`.
+  - Root cause: sequencer fast-path interception woke `finish_item` waiters on `item_done`, but dropped the response path (`item_done(rsp)` did not enqueue `rsp` to the issuing sequence), so `get_response` never observed queue growth.
+
+- implemented:
+  - Added native tracking for request item -> owning sequence object:
+    - `recordUvmSequenceItemOwner` / `takeUvmSequenceItemOwner`
+    - map: `itemToSequence`
+  - Recorded sequence ownership at sequence handshake points:
+    - `start_item`
+    - `finish_item`
+    - `send_request` (both early and main interception paths)
+  - Added `deliverUvmSequenceResponse(procId, itemAddr, responseVal, callSite)`:
+    - resolves owner sequence (tracked map, fallback via `uvm_sequence_item::get_parent_sequence`)
+    - dispatches `uvm_sequence_base::put_base_response(sequence, rsp)` through `interpretFuncBody`
+  - Wired response delivery into both `item_done` interception surfaces:
+    - `LLHDProcessInterpreter.cpp` (`func.call` path)
+    - `LLHDProcessInterpreterCallIndirect.cpp` (`func.call_indirect` path)
+  - Added cleanup of `itemToSequence` in stale-item cleanup paths alongside sequencer-owner cleanup.
+
+- validation:
+  - red:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-sequence-response.sv`
+    - failed (`[TEST] response matching: PASS` missing) and direct run timed out.
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test crun`
+  - green:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-sequence-response.sv` -> `1 passed`
+    - direct check: `build_test/bin/crun test/Tools/crun/uvm-sequence-response.sv --top tb_top -v 0` prints `[TEST] response matching: PASS`.
+  - cross-check:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-*.sv test/Tools/crun/uvm-sequencer-*.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `38 passed, 2 expectedly failed` (`uvm-sequence-library.sv`, `uvm-sequence-no-driver.sv`).

@@ -866,3 +866,64 @@
       `FAIL connectivity::clkmgr_cg_en.csv:CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN ... NEQ`
       with `circt-lec` log `LEC_RESULT=NEQ`.
     - importantly, this now reaches solver result (no `CIRCT_VERILOG_ERROR`).
+
+## 2026-03-01 - Add OpenTitan connectivity LEC batch precheck fast path
+
+- realization:
+  - real OpenTitan `ast_clkmgr` Z3 runs were spending most wall time before
+    solver invocation, repeatedly per rule.
+  - single-case profiling on
+    `__circt_conn_rule_0_AST_CLK_SYS_OUT_{ref,impl}` with `--emit-mlir`
+    showed `~111s` wall with dominant passes:
+    - `Canonicalizer`: `~67s`
+    - `FlattenModules`: `~24.8s`
+    - `Mem2RegPass`: `~22.5s`
+  - this means N per-rule LEC invocations multiply the same heavy lowering
+    cost, even when all rules eventually prove `EQ`.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_BATCH_PRECHECK_MODE` (`auto|on|off`, default `auto`)
+    - added `LEC_BATCH_PRECHECK_MIN_CASES` (default `4`)
+    - each shared batch can now synthesize aggregate wrappers:
+      - ref: vector `result='1`
+      - impl: one `result[i] = <rule_assertion_i>` per rule
+    - runner executes one aggregate `circt-lec` precheck before per-rule runs.
+      - if precheck proves `EQ` (or succeeds in smoke mode), all rules in that
+        batch are marked `PASS` immediately.
+      - otherwise (NEQ/UNKNOWN/error/timeout), runner falls back to existing
+        per-rule flow unchanged.
+    - refactored wrapper synthesis to keep/store per-rule assertion
+      expressions for aggregate wrapper generation.
+
+- regressions:
+  - added `test/Tools/run-opentitan-connectivity-circt-lec-batch-precheck-pass.test`
+    - proves aggregate PASS short-circuits per-rule invocations.
+  - added `test/Tools/run-opentitan-connectivity-circt-lec-batch-precheck-fallback.test`
+    - proves NEQ aggregate result falls back to per-rule checks.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+  - `llvm-lit -sv` on:
+    - `run-opentitan-connectivity-circt-lec-batch-precheck-pass.test`
+    - `run-opentitan-connectivity-circt-lec-batch-precheck-fallback.test`
+    - `run-opentitan-connectivity-circt-lec-verify-each-auto.test`
+    - `run-opentitan-connectivity-circt-lec-always-comb-auto-preenable.test`
+    - `run-opentitan-connectivity-circt-lec-resource-guard-auto-preenable.test`
+  - implementation surprise + fix:
+    - first real run failed batch precheck with
+      `error: circuit '__circt_connectivity_batch_precheck_..._ref' ... not found`.
+    - root cause: aggregate modules were emitted but not listed in
+      `circt-verilog --top`, so frontend top-pruning dropped them.
+    - fixed by adding aggregate precheck `--top=` entries in
+      `build_shared_verilog_cmd`.
+  - real OpenTitan repro after fix:
+    - command:
+      - `LEC_RUN_SMTLIB=1 LEC_SMOKE_ONLY=0 CIRCT_TIMEOUT_SECS=180`
+      - `CIRCT_LEC_ARGS='--verify-each=false'`
+      - filter: `ast_clkmgr.csv:` (`17` connectivity rules)
+    - result:
+      - aggregate precheck: `batch precheck PASS (batch=0, cases=17)`
+      - summary: `total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0`
+      - only one case directory emitted (`connectivity_batch_precheck_0`),
+        confirming no per-rule `circt-lec` fallback was needed.

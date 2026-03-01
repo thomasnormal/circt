@@ -70,6 +70,7 @@ class ConnectivityLECCase:
     checker_sv: Path
     ref_module: str
     impl_module: str
+    assertion_expr: str
     bind_top: str
 
 
@@ -845,6 +846,13 @@ def build_condition_guard_expr(
     return f"({true_expr})"
 
 
+def build_rule_assertion_expr(src_expr: str, dst_expr: str, guard_expr: str) -> str:
+    assertion_expr = f"(({src_expr}) === ({dst_expr}))"
+    if guard_expr:
+        assertion_expr = f"((!({guard_expr})) || {assertion_expr})"
+    return assertion_expr
+
+
 def synthesize_rule_wrappers(
     out_path: Path,
     ref_module: str,
@@ -854,10 +862,8 @@ def synthesize_rule_wrappers(
     dst_expr: str,
     rule_id: str,
     guard_expr: str,
-) -> None:
-    assertion_expr = f"(({src_expr}) === ({dst_expr}))"
-    if guard_expr:
-        assertion_expr = f"((!({guard_expr})) || {assertion_expr})"
+) -> str:
+    assertion_expr = build_rule_assertion_expr(src_expr, dst_expr, guard_expr)
     body = f"""// Auto-generated connectivity LEC wrappers for {rule_id}
 module {ref_module}(output logic result);
   // Keep the reference side trivial to avoid flattening the full DUT twice.
@@ -870,6 +876,36 @@ module {impl_module}(output logic result);
 endmodule
 """
     out_path.write_text(body, encoding="utf-8")
+    return assertion_expr
+
+
+def render_batch_rule_wrappers(
+    ref_module: str,
+    impl_module: str,
+    bind_top: str,
+    rule_ids: Sequence[str],
+    assertion_exprs: Sequence[str],
+) -> str:
+    width = len(assertion_exprs)
+    if width <= 1:
+        fail("internal error: batch wrapper requires at least 2 assertions")
+    sanitized_rule_ids = ", ".join(rule_ids)
+    result_decl = f"logic [{width - 1}:0] result"
+    impl_assigns = "\n".join(
+        f"  assign result[{index}] = {expr};"
+        for index, expr in enumerate(assertion_exprs)
+    )
+    return f"""// Auto-generated aggregate connectivity LEC wrappers for {sanitized_rule_ids}
+module {ref_module}(output {result_decl});
+  // Aggregate reference result stays trivially true for all batched rules.
+  assign result = '1;
+endmodule
+
+module {impl_module}(output {result_decl});
+  {bind_top} dut();
+{impl_assigns}
+endmodule
+"""
 
 
 def _coerce_text(payload: str | bytes | None) -> str:
@@ -1581,6 +1617,10 @@ def main() -> int:
             if value > 0
         }
     )
+    verilog_frontend_auto_preenable_cases = parse_nonnegative_int(
+        os.environ.get("LEC_VERILOG_FRONTEND_AUTO_PREENABLE_CASES", "8"),
+        "LEC_VERILOG_FRONTEND_AUTO_PREENABLE_CASES",
+    )
     temporal_approx_mode = os.environ.get(
         "LEC_TEMPORAL_APPROX_MODE", "auto"
     ).strip().lower()
@@ -1697,6 +1737,20 @@ def main() -> int:
                 f"{case_batch_mode} (expected csv|bind-top)"
             )
         )
+    batch_precheck_mode = os.environ.get(
+        "LEC_BATCH_PRECHECK_MODE", "auto"
+    ).strip().lower()
+    if batch_precheck_mode not in {"auto", "on", "off"}:
+        fail(
+            (
+                "invalid LEC_BATCH_PRECHECK_MODE: "
+                f"{batch_precheck_mode} (expected auto|on|off)"
+            )
+        )
+    batch_precheck_min_cases = parse_nonnegative_int(
+        os.environ.get("LEC_BATCH_PRECHECK_MIN_CASES", "4"),
+        "LEC_BATCH_PRECHECK_MIN_CASES",
+    )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -1827,7 +1881,7 @@ def main() -> int:
             ref_module = f"__circt_{module_token}_ref"
             impl_module = f"__circt_{module_token}_impl"
             checker_sv = checks_dir / f"__circt_{module_token}.sv"
-            synthesize_rule_wrappers(
+            assertion_expr = synthesize_rule_wrappers(
                 checker_sv,
                 ref_module,
                 impl_module,
@@ -1845,6 +1899,7 @@ def main() -> int:
                     checker_sv=checker_sv,
                     ref_module=ref_module,
                     impl_module=impl_module,
+                    assertion_expr=assertion_expr,
                     bind_top=case_top_module,
                 )
             )
@@ -1977,6 +2032,39 @@ def main() -> int:
         learned_verilog_timescale_override = verilog_timescale_override
         learned_verilog_allow_multi_driver = verilog_allow_multi_always_comb_drivers
         learned_verilog_max_rss_mb: int | None = None
+        auto_preenable_verilog_multi_driver = (
+            verilog_always_comb_multi_driver_mode == "auto"
+            and not has_explicit_multi_driver
+            and verilog_frontend_auto_preenable_cases > 0
+            and len(cases) >= verilog_frontend_auto_preenable_cases
+        )
+        auto_preenable_verilog_resource_guard = (
+            verilog_auto_relax_resource_guard
+            and not has_explicit_verilog_resource_guard_policy
+            and bool(verilog_auto_relax_resource_guard_rss_ladder_mb)
+            and verilog_frontend_auto_preenable_cases > 0
+            and len(cases) >= verilog_frontend_auto_preenable_cases
+        )
+        if auto_preenable_verilog_multi_driver:
+            learned_verilog_allow_multi_driver = True
+        if auto_preenable_verilog_resource_guard:
+            learned_verilog_max_rss_mb = verilog_auto_relax_resource_guard_rss_ladder_mb[
+                0
+            ]
+        if auto_preenable_verilog_multi_driver or auto_preenable_verilog_resource_guard:
+            preenabled_knobs: list[str] = []
+            if auto_preenable_verilog_multi_driver:
+                preenabled_knobs.append("--allow-multi-always-comb-drivers")
+            if auto_preenable_verilog_resource_guard and learned_verilog_max_rss_mb is not None:
+                preenabled_knobs.append(f"--max-rss-mb={learned_verilog_max_rss_mb}")
+            print(
+                "opentitan connectivity lec: pre-enabling frontend retry knobs "
+                f"for large case set (cases={len(cases)}>=auto-threshold="
+                f"{verilog_frontend_auto_preenable_cases}, knobs="
+                f"{', '.join(preenabled_knobs)})",
+                file=sys.stderr,
+                flush=True,
+            )
         # Learned per-run LEC retry state. Once a canonicalizer-timeout retry
         # proved necessary, start later cases with the bounded budget enabled
         # to avoid repeated timeout-first retries.
@@ -2125,6 +2213,26 @@ def main() -> int:
                 shared_opt_emit_bytecode_log = (
                     shared_dir / "circt-opt.emit-bytecode.log"
                 )
+                batch_precheck_enabled = (
+                    len(batch_cases) >= batch_precheck_min_cases
+                    and (
+                        batch_precheck_mode == "on"
+                        or (
+                            batch_precheck_mode == "auto"
+                            and lec_run_smtlib
+                            and not lec_smoke_only
+                        )
+                    )
+                )
+                batch_precheck_ref_module = ""
+                batch_precheck_impl_module = ""
+                if batch_precheck_enabled:
+                    batch_precheck_ref_module = (
+                        f"__circt_connectivity_batch_precheck_{batch_index}_ref"
+                    )
+                    batch_precheck_impl_module = (
+                        f"__circt_connectivity_batch_precheck_{batch_index}_impl"
+                    )
 
                 with shared_checker_sv.open("w", encoding="utf-8") as handle:
                     for case in batch_cases:
@@ -2132,6 +2240,16 @@ def main() -> int:
                         handle.write(text)
                         if text and not text.endswith("\n"):
                             handle.write("\n")
+                    if batch_precheck_enabled:
+                        handle.write(
+                            render_batch_rule_wrappers(
+                                batch_precheck_ref_module,
+                                batch_precheck_impl_module,
+                                batch_top,
+                                [case.rule_id for case in batch_cases],
+                                [case.assertion_expr for case in batch_cases],
+                            )
+                        )
 
                 batch_timescale_override = learned_verilog_timescale_override
                 batch_allow_multi_driver = learned_verilog_allow_multi_driver
@@ -2157,6 +2275,9 @@ def main() -> int:
                     for case in batch_cases:
                         cmd.append(f"--top={case.ref_module}")
                         cmd.append(f"--top={case.impl_module}")
+                    if batch_precheck_enabled:
+                        cmd.append(f"--top={batch_precheck_ref_module}")
+                        cmd.append(f"--top={batch_precheck_impl_module}")
                     for include_dir in include_dirs:
                         cmd += ["-I", include_dir]
                     if timescale_override is not None and not has_explicit_timescale:
@@ -2455,6 +2576,140 @@ def main() -> int:
 
                 if frontend_split or not frontend_ok:
                     continue
+
+                if (
+                    batch_precheck_enabled
+                    and batch_precheck_ref_module
+                    and batch_precheck_impl_module
+                ):
+                    batch_precheck_id = (
+                        f"connectivity::batch_precheck::{batch_index}"
+                    )
+                    batch_precheck_path = (
+                        f"batch={batch_index} "
+                        f"cases={len(batch_cases)} "
+                        f"mode={args.mode_label}"
+                    )
+                    batch_precheck_dir = (
+                        workdir / "cases" / sanitize_token(batch_precheck_id)
+                    )
+                    batch_precheck_dir.mkdir(parents=True, exist_ok=True)
+                    mirror_shared_frontend_logs(batch_precheck_dir)
+                    batch_precheck_log = batch_precheck_dir / "circt-lec.log"
+                    batch_precheck_out = batch_precheck_dir / "circt-lec.out"
+                    batch_precheck_cmd = [
+                        circt_lec,
+                        str(shared_core_input),
+                        f"-c1={batch_precheck_ref_module}",
+                        f"-c2={batch_precheck_impl_module}",
+                    ]
+                    if lec_smoke_only:
+                        batch_precheck_cmd.append("--emit-mlir")
+                    elif lec_run_smtlib:
+                        batch_precheck_cmd.append("--run-smtlib")
+                        batch_precheck_cmd.append(f"--z3-path={z3_bin}")
+                    batch_precheck_cmd += circt_lec_args
+                    if (
+                        verify_each_mode in {"auto", "off"}
+                        and not has_explicit_verify_each
+                    ):
+                        batch_precheck_cmd.append("--verify-each=false")
+
+                    batch_precheck_result: str | None = None
+                    batch_precheck_diag = ""
+                    batch_precheck_error = False
+                    batch_precheck_timeout = False
+                    try:
+                        batch_precheck_combined = run_and_log(
+                            batch_precheck_cmd,
+                            batch_precheck_log,
+                            timeout_secs,
+                            out_path=batch_precheck_out,
+                        )
+                        batch_precheck_result = parse_lec_result(
+                            batch_precheck_combined
+                        )
+                        batch_precheck_diag = (
+                            parse_lec_diag(batch_precheck_combined) or ""
+                        )
+                    except subprocess.TimeoutExpired:
+                        batch_precheck_timeout = True
+                    except subprocess.CalledProcessError:
+                        batch_precheck_error = True
+                        batch_precheck_combined = ""
+                        if batch_precheck_log.exists():
+                            batch_precheck_combined += batch_precheck_log.read_text(
+                                encoding="utf-8"
+                            )
+                        if batch_precheck_out.exists():
+                            batch_precheck_combined += (
+                                "\n"
+                                + batch_precheck_out.read_text(
+                                    encoding="utf-8"
+                                )
+                            )
+                        batch_precheck_result = parse_lec_result(
+                            batch_precheck_combined
+                        )
+                        batch_precheck_diag = (
+                            parse_lec_diag(batch_precheck_combined) or ""
+                        )
+
+                    batch_precheck_pass = (
+                        (batch_precheck_result == "EQ")
+                        or (
+                            lec_smoke_only
+                            and not batch_precheck_timeout
+                            and not batch_precheck_error
+                        )
+                    )
+                    if batch_precheck_pass:
+                        pass_diag = (
+                            batch_precheck_diag
+                            or (batch_precheck_result or "SMOKE_ONLY")
+                        )
+                        for case in batch_cases:
+                            rows.append(
+                                (
+                                    "PASS",
+                                    case.case_id,
+                                    case.case_path,
+                                    "opentitan",
+                                    args.mode_label,
+                                    pass_diag,
+                                )
+                            )
+                        print(
+                            "opentitan connectivity lec: batch precheck PASS "
+                            f"(batch={batch_index}, cases={len(batch_cases)})",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        continue
+                    fallback_reason = (
+                        "timeout"
+                        if batch_precheck_timeout
+                        else (
+                            "error"
+                            if batch_precheck_error
+                            else (batch_precheck_result or "inconclusive")
+                        )
+                    )
+                    print(
+                        "opentitan connectivity lec: batch precheck fallback "
+                        f"(batch={batch_index}, cases={len(batch_cases)}, "
+                        f"result={fallback_reason})",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    if batch_precheck_timeout:
+                        timeout_reason_rows.append(
+                            (
+                                batch_precheck_id,
+                                batch_precheck_path,
+                                "batch_precheck_timeout",
+                            )
+                        )
 
                 for case in batch_cases:
                     case_dir = workdir / "cases" / sanitize_token(case.case_id)
