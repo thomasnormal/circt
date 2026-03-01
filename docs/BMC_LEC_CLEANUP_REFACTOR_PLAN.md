@@ -514,6 +514,11 @@ Current workstream status in this branch:
      (`run-opentitan-lec-timeout-secs-invalid-shared.test`)
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
+   - pairwise BMC runner now supports bounded per-log artifact writes via
+     `BMC_LOG_MAX_BYTES` and consumes shared `runner_common.write_log` in
+     shared-helper mode (local fallback retained)
+   - pairwise log-truncation path is regression-covered
+     (`run-pairwise-circt-bmc-log-max-bytes.test`)
    - runner shared-library extraction still partial
 3. WS2: in progress
    - multiclock unsupported root causes identified

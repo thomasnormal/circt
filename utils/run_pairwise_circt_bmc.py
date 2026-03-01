@@ -55,6 +55,7 @@ General launch retry tuning:
 - BMC_LAUNCH_RETRY_ATTEMPTS (default: 4)
 - BMC_LAUNCH_RETRY_BACKOFF_SECS (default: 0.2)
 - BMC_LAUNCH_RETRYABLE_EXIT_CODES (default: 126,127)
+- BMC_LOG_MAX_BYTES (default: 0, unlimited)
 - BMC_LAUNCH_COPY_FALLBACK (default: 0)
 - BMC_LAUNCH_EVENTS_OUT (optional TSV output)
 - FORMAL_RESULTS_JSONL_OUT (optional unified schema JSONL output)
@@ -301,6 +302,7 @@ try:
         parse_exit_codes as _shared_parse_exit_codes,
         parse_nonnegative_float as _shared_parse_nonnegative_float,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
+        write_log as _shared_write_log,
     )
 except Exception:
     _HAS_SHARED_FORMAL_HELPERS = False
@@ -406,7 +408,26 @@ def normalize_subprocess_text(data: str | bytes | None) -> str:
     return data
 
 
-def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+def _truncate_log_bytes(encoded: bytes, max_log_bytes: int, truncation_label: str) -> bytes:
+    if max_log_bytes <= 0 or len(encoded) <= max_log_bytes:
+        return encoded
+    notice = (
+        f"\n[{truncation_label}] log truncated from "
+        f"{len(encoded)} to {max_log_bytes} bytes\n"
+    ).encode("utf-8")
+    if max_log_bytes <= len(notice):
+        return encoded[:max_log_bytes]
+    keep = max_log_bytes - len(notice)
+    return encoded[:keep] + notice
+
+
+def write_log(
+    path: Path,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    max_log_bytes: int = 0,
+) -> None:
     stdout_text = normalize_subprocess_text(stdout)
     stderr_text = normalize_subprocess_text(stderr)
     data = ""
@@ -416,7 +437,32 @@ def write_log(path: Path, stdout: str | bytes | None, stderr: str | bytes | None
             data += "\n"
     if stderr_text:
         data += stderr_text
-    path.write_text(data, encoding="utf-8")
+    encoded = data.encode("utf-8", errors="replace")
+    path.write_bytes(
+        _truncate_log_bytes(
+            encoded,
+            max_log_bytes,
+            "run_pairwise_circt_bmc",
+        )
+    )
+
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def write_log(
+        path: Path,
+        stdout: str | bytes | None,
+        stderr: str | bytes | None,
+        *,
+        max_log_bytes: int = 0,
+    ) -> None:
+        _shared_write_log(
+            path,
+            stdout,
+            stderr,
+            max_log_bytes=max_log_bytes,
+            truncation_label="run_pairwise_circt_bmc",
+        )
 
 
 def parse_bmc_result(text: str) -> str | None:
@@ -1036,6 +1082,7 @@ def run_and_log(
     log_path: Path,
     out_path: Path | None,
     timeout_secs: int,
+    log_max_bytes: int,
     etxtbsy_retries: int,
     etxtbsy_backoff_secs: float,
     launch_retry_attempts: int,
@@ -1093,7 +1140,7 @@ def run_and_log(
         except subprocess.TimeoutExpired as exc:
             stdout = normalize_subprocess_text(exc.stdout)
             stderr = normalize_subprocess_text(exc.stderr)
-            write_log(log_path, stdout, stderr)
+            write_log(log_path, stdout, stderr, max_log_bytes=log_max_bytes)
             if out_path is not None:
                 out_path.write_text(stdout, encoding="utf-8")
             raise
@@ -1272,7 +1319,12 @@ def run_and_log(
         break
     if result is None:
         raise RuntimeError("internal error: subprocess result missing")
-    write_log(log_path, result.stdout, result.stderr)
+    write_log(
+        log_path,
+        result.stdout,
+        result.stderr,
+        max_log_bytes=log_max_bytes,
+    )
     if retry_notes:
         with log_path.open("a", encoding="utf-8") as handle:
             if result.stdout or result.stderr:
@@ -1925,6 +1977,10 @@ def main() -> int:
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"
     )
+    log_max_bytes = parse_nonnegative_int(
+        os.environ.get("BMC_LOG_MAX_BYTES", "0"),
+        "BMC_LOG_MAX_BYTES",
+    )
     etxtbsy_retries = parse_nonnegative_int(
         os.environ.get("BMC_LAUNCH_ETXTBSY_RETRIES", "4"),
         "BMC_LAUNCH_ETXTBSY_RETRIES",
@@ -2342,6 +2398,7 @@ def main() -> int:
                     verilog_log_path,
                     None,
                     case_timeout_secs,
+                    log_max_bytes,
                     etxtbsy_retries,
                     etxtbsy_backoff_secs,
                     launch_retry_attempts,
@@ -2473,6 +2530,7 @@ def main() -> int:
                                     log_path,
                                     out_path,
                                     case_timeout_secs,
+                                    log_max_bytes,
                                     etxtbsy_retries,
                                     etxtbsy_backoff_secs,
                                     launch_retry_attempts,
@@ -2906,6 +2964,7 @@ def main() -> int:
                         opt_log_path,
                         None,
                         case_timeout_secs,
+                        log_max_bytes,
                         etxtbsy_retries,
                         etxtbsy_backoff_secs,
                         launch_retry_attempts,

@@ -2,6 +2,33 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS0: pairwise BMC bounded log artifacts with shared log writer):
+  - realization:
+    - `run_pairwise_circt_bmc.py` still wrote unbounded per-case tool logs and
+      used a local log-writer path, even though shared helper truncation support
+      already existed in `runner_common`.
+    - this made large per-case logs harder to bound in real frontier runs and
+      kept one more writer path duplicated.
+  - implemented:
+    - added `BMC_LOG_MAX_BYTES` (default `0`, unlimited) to pairwise BMC as a
+      per-log size cap.
+    - routed pairwise log writing through shared
+      `runner_common.write_log` in shared-helper mode, with a local fallback
+      truncation path retained for copied-script lit environments.
+    - wired bounded log writing into all pairwise `run_and_log(...)` call
+      sites (frontend, opt, solver stages).
+    - added regression:
+      - `test/Tools/run-pairwise-circt-bmc-log-max-bytes.test`
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-log-max-bytes.test`
+      - result: fail (expected truncation marker missing).
+    - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-log-max-bytes.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-pairwise-circt-bmc-timeout-bytes-handling.test test/Tools/run-pairwise-circt-bmc-etxtbsy-retry.test test/Tools/run-pairwise-circt-bmc-launch-retryable-exit-codes-invalid.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS1: OpenTitan AES BMC/LEC parse_nonnegative_int shared-path dedup):
   - realization:
     - both OpenTitan AES wrapper runners still carried local
