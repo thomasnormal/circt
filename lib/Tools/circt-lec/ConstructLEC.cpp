@@ -9,7 +9,6 @@
 #include "circt/Dialect/HW/HWOps.h"
 #include "circt/Dialect/Verif/VerifOps.h"
 #include "circt/Tools/circt-lec/Passes.h"
-#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/LLVMIR/FunctionCallUtils.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
@@ -29,6 +28,12 @@ namespace circt {
 //===----------------------------------------------------------------------===//
 
 namespace {
+static constexpr llvm::StringLiteral kBMCAbstractedLLHDInterfaceInputsAttr =
+    "circt.bmc_abstracted_llhd_interface_inputs";
+static constexpr llvm::StringLiteral
+    kLECSelectedAbstractedLLHDInterfaceInputsAttr =
+        "circt.lec_selected_abstracted_llhd_interface_inputs";
+
 struct ConstructLECPass
     : public circt::impl::ConstructLECBase<ConstructLECPass> {
   using circt::impl::ConstructLECBase<ConstructLECPass>::ConstructLECBase;
@@ -147,9 +152,6 @@ Value ConstructLECPass::constructMiter(OpBuilder builder, Location loc,
     term->erase();
   }
 
-  sortTopologically(&lecOp.getFirstCircuit().front());
-  sortTopologically(&lecOp.getSecondCircuit().front());
-
   return withResult ? lecOp.getIsProven() : Value{};
 }
 
@@ -165,6 +167,25 @@ void ConstructLECPass::runOnOperation() {
   auto moduleB = lookupModule(secondModule);
   if (!moduleB)
     return signalPassFailure();
+
+  // Track LLHD abstraction only for the compared circuits. The strip pass also
+  // records whole-module totals; using selected-module totals avoids
+  // misclassifying unrelated SAT mismatches as LLHD abstraction inconclusive.
+  auto getAbstractedInterfaceInputCount = [&](hw::HWModuleOp module) -> int64_t {
+    if (!module)
+      return 0;
+    if (auto countAttr = module->getAttrOfType<IntegerAttr>(
+            kBMCAbstractedLLHDInterfaceInputsAttr))
+      return countAttr.getInt();
+    return 0;
+  };
+  int64_t selectedAbstractedInputCount =
+      getAbstractedInterfaceInputCount(moduleA) +
+      getAbstractedInterfaceInputCount(moduleB);
+  getOperation()->setAttr(
+      kLECSelectedAbstractedLLHDInterfaceInputsAttr,
+      IntegerAttr::get(IntegerType::get(&getContext(), 32),
+                       selectedAbstractedInputCount));
 
   if (moduleA.getModuleType() != moduleB.getModuleType()) {
     if (allowIOAlignment) {

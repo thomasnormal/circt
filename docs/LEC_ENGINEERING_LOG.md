@@ -776,3 +776,45 @@
     `LEC_RESULT=UNKNOWN` with `LEC_DIAG=LLHD_ABSTRACTION`; this fix removes a
     concrete abstraction inflation class but does not yet eliminate the main
     timeout-frontier root cause on that case.
+
+## 2026-03-01 - Scope LLHD abstraction classification to selected LEC circuits
+
+- realization:
+  - `circt-lec` classified SAT mismatches as `LLHD_ABSTRACTION` by reading the
+    module-level total attr `circt.lec_abstracted_llhd_interface_inputs`.
+  - that total is global for the whole design and can include unrelated modules
+    not in the selected `-c1/-c2` comparison.
+  - consequence: real mismatches could be downgraded to `UNKNOWN` and accepted
+    by `--accept-llhd-abstraction` even when the compared circuits themselves
+    had no LLHD abstraction inputs.
+
+- implemented:
+  - `lib/Tools/circt-lec/ConstructLEC.cpp`:
+    - record selected-circuit abstraction count on the top module as
+      `circt.lec_selected_abstracted_llhd_interface_inputs`
+      (sum of `circt.bmc_abstracted_llhd_interface_inputs` on selected
+      `c1`/`c2` modules).
+  - `tools/circt-lec/circt-lec.cpp`:
+    - prefer selected-circuit attr for LLHD abstraction classification; only
+      fall back to the legacy global attr when selected metadata is absent.
+    - emit `LEC_DIAG_LLHD_ABSTRACTED_INPUTS=<N>` when LLHD abstraction diag is
+      reported (strict or accepted path).
+  - regressions added:
+    - `test/Tools/circt-lec/lec-run-smtlib-llhd-abstraction-scope-unrelated.mlir`
+      (global attr unrelated to selected modules must remain `NEQ`).
+    - `test/Tools/circt-lec/lec-run-smtlib-llhd-abstraction-selected-count.mlir`
+      (selected module abstraction drives `UNKNOWN/LLHD_ABSTRACTION` and count).
+  - updated:
+    - `test/Tools/circt-lec/lec-run-smtlib-llhd-abstraction-sat-unknown.mlir`
+      to encode selected-module abstraction via module attr instead of global
+      module total.
+
+- validation:
+  - `llvm-lit -sv test/Tools/circt-lec/lec-run-smtlib-llhd*.mlir`: `3/3` pass.
+  - `llvm-lit -sv test/Tools/circt-lec/*.mlir`: `155/155` pass.
+  - targeted repro:
+    - synthetic scope repro with only global attr now returns `LEC_RESULT=NEQ`
+      (previously misclassified as `UNKNOWN/LLHD_ABSTRACTION`).
+  - real OpenTitan repro (`CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN`) now returns
+    `LEC_RESULT=NEQ` (previously `UNKNOWN/LLHD_ABSTRACTION`), showing the prior
+    LLHD abstraction acceptance on this case was classification scope drift.

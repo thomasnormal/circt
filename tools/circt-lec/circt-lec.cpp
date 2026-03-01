@@ -927,10 +927,19 @@ static LogicalResult executeLEC(MLIRContext &context) {
   if (failed(pm.run(module.get())))
     return failure();
 
+  int64_t llhdAbstractedInputCount = 0;
   bool hasLLHDInterfaceAbstraction = false;
-  if (auto abstractedInputs = module->getOperation()->getAttrOfType<IntegerAttr>(
-          "circt.lec_abstracted_llhd_interface_inputs"))
-    hasLLHDInterfaceAbstraction = abstractedInputs.getInt() > 0;
+  if (auto selectedAbstractedInputs =
+          module->getOperation()->getAttrOfType<IntegerAttr>(
+              "circt.lec_selected_abstracted_llhd_interface_inputs")) {
+    llhdAbstractedInputCount = selectedAbstractedInputs.getInt();
+    hasLLHDInterfaceAbstraction = llhdAbstractedInputCount > 0;
+  } else if (auto abstractedInputs =
+                 module->getOperation()->getAttrOfType<IntegerAttr>(
+                     "circt.lec_abstracted_llhd_interface_inputs")) {
+    llhdAbstractedInputCount = abstractedInputs.getInt();
+    hasLLHDInterfaceAbstraction = llhdAbstractedInputCount > 0;
+  }
 
   if (outputFormat == OutputMLIR) {
     circt::setResourceGuardPhase("print mlir");
@@ -1320,6 +1329,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
           outputFile.value()->os() << "LEC_DIAG_ASSUME_KNOWN_RESULT="
                                    << *assumeKnownResultToken << "\n";
         outputFile.value()->os() << "LEC_DIAG=LLHD_ABSTRACTION\n";
+        if (llhdAbstractedInputCount > 0)
+          outputFile.value()->os() << "LEC_DIAG_LLHD_ABSTRACTED_INPUTS="
+                                   << llhdAbstractedInputCount << "\n";
         llvm::errs() << "note: accepting LLHD abstraction mismatch "
                         "(--accept-llhd-abstraction): unresolved LLHD "
                         "interface abstraction inputs are treated as "
@@ -1336,6 +1348,9 @@ static LogicalResult executeLEC(MLIRContext &context) {
                                    << *assumeKnownResultToken << "\n";
         if (llhdAbstractionInconclusive) {
           outputFile.value()->os() << "LEC_DIAG=LLHD_ABSTRACTION\n";
+          if (llhdAbstractedInputCount > 0)
+            outputFile.value()->os() << "LEC_DIAG_LLHD_ABSTRACTED_INPUTS="
+                                     << llhdAbstractedInputCount << "\n";
           llvm::errs()
               << "note: LEC mismatch is inconclusive because LLHD interface "
                  "abstraction introduced symbolic comb inputs.\n";
