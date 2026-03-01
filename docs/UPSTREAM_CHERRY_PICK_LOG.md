@@ -128,6 +128,8 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `d69ee847b` | `5ade31e47` | [FIRRTL] Support FInstanceLike operations in ModuleInliner (#9688) | Initially failed due missing prerequisite for multi-referred modules; resolved after picking `#9676`, then validated with `test/Dialect/FIRRTL/inliner.mlir`. |
 | `a78c655bc` | `15f3650af` | [FIRRTL] Change FInstanceLike to consider multiple referred modules (#9676) | Applied with one conflict in `test/Dialect/FIRRTL/dedup.mlir` (kept local `PublicModuleNoDedup` regression and upstream `InstanceChoice` checks); validated with `dedup`, `dedup-errors`, and `inliner` tests. |
 | `fffdc5ba8` | `debd22694` | [FIRRTL] Add conservative IMDCE handling for InstanceChoiceOp (#9710) | First attempt failed without `#9676`; after prerequisite landed, reapplied cleanly and validated with `test/Dialect/FIRRTL/imdce.mlir`. |
+| `ef7b00e14` | `52c919970` | [FIRRTL] Allow full reset module instances outside of reset domain (#9754) | Applied cleanly; validated with `test/Dialect/FIRRTL/infer-resets.mlir` and `test/Dialect/FIRRTL/infer-resets-errors.mlir`. |
+| `a23a5538a` | `70d66d7f4` | [FIRRTL][LowerToHW] Add InstanceChoiceOp lowering, Part 1 (#9742) | Applied cleanly; validated with `test/Conversion/FIRRTLToHW/lower-to-hw.mlir` and `test/Conversion/FIRRTLToHW/lower-to-hw-errors.mlir`. |
 
 ### Attempted But Deferred
 
