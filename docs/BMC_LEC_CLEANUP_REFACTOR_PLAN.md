@@ -397,6 +397,7 @@ Current workstream status in this branch:
 7. WS6: in progress
    - JSONL schema emission landed in major runners
    - strict schema validation tooling landed (`validate_formal_results_schema.py`)
+   - JSONL->TSV migration adapter landed (`formal_results_jsonl_to_tsv.py`)
    - schema docs + dashboards still pending
 
 ## 17. Execution Backlog (Ticket-Level)

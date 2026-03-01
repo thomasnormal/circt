@@ -1,0 +1,13 @@
+// RUN: mkdir -p %t
+// RUN: printf '{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"b_case","case_path":"/tmp/b.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver","solver":"z3","solver_time_ms":9,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"a_case","case_path":"/tmp/a.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":2,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n' > %t/in.jsonl
+// RUN: python3 %S/../../utils/formal/formal_results_jsonl_to_tsv.py --jsonl %t/in.jsonl --out-tsv %t/default.tsv --include-header
+// RUN: FileCheck %s --check-prefix=DEFAULT < %t/default.tsv
+// RUN: python3 %S/../../utils/formal/formal_results_jsonl_to_tsv.py --jsonl %t/in.jsonl --out-tsv %t/custom.tsv --fields case_id,status,solver_time_ms --sort-key status,case_id
+// RUN: FileCheck %s --check-prefix=CUSTOM < %t/custom.tsv
+//
+// DEFAULT: status{{[[:space:]]+}}case_id{{[[:space:]]+}}case_path{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}reason_code{{[[:space:]]+}}stage{{[[:space:]]+}}solver
+// DEFAULT: PASS{{[[:space:]]+}}a_case{{[[:space:]]+}}/tmp/a.sv{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}result{{[[:space:]]+}}z3
+// DEFAULT: TIMEOUT{{[[:space:]]+}}b_case{{[[:space:]]+}}/tmp/b.sv{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}SOLVER_COMMAND_TIMEOUT{{[[:space:]]+}}solver{{[[:space:]]+}}z3
+//
+// CUSTOM: a_case{{[[:space:]]+}}PASS{{[[:space:]]+}}2
+// CUSTOM-NEXT: b_case{{[[:space:]]+}}TIMEOUT{{[[:space:]]+}}9

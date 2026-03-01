@@ -11290,3 +11290,30 @@
   - focused tests:
     - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-drop-reasons.test test/Tools/formal-runner-common-retry.test test/Tools/run-opentitan-lec-launch-retry-transient.test test/Tools/run-opentitan-connectivity-circt-lec-timeout-reasons-preprocess.test test/Tools/run-opentitan-connectivity-circt-lec-tool-invoke-permission-error.test`
     - `5 passed`
+
+## 2026-03-01 - WS6 JSONL->TSV migration adapter (T3)
+
+- realization:
+  - WS6 needed an explicit compatibility adapter so downstream legacy TSV
+    consumers can move to schema JSONL without immediate breakage.
+
+- implemented:
+  - added:
+    - `utils/formal/formal_results_jsonl_to_tsv.py`
+  - supports:
+    - configurable projection fields (`--fields`)
+    - configurable sort key (`--sort-key`)
+    - optional header emission (`--include-header`)
+  - default projection fields:
+    - `status,case_id,case_path,suite,mode,reason_code,stage,solver`
+
+- tests added:
+  - `test/Tools/formal-jsonl-to-tsv.test`
+    - validates default projection + custom projection/sort behavior.
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/formal_results_jsonl_to_tsv.py`
+  - focused suite:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-validate-results-schema.test test/Tools/formal-drift-compare.test test/Tools/formal-capture-baseline.test`
+    - `4 passed`
