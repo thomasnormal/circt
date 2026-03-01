@@ -121,6 +121,7 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `4ee685039` | `7a25c970c` | [HWToLLVM] Take the correct data layout alignment for alloca (#9734) | Applied cleanly; added upstream regression `test/Conversion/HWToLLVM/spill_alignment.mlir` and validated HWToLLVM suite. |
 | `7418b8870` | `1f510c056` | [Arc] Add time operations for LLHD simulation support (#9747) | Applied cleanly; validated with `test/Dialect/Arc/allocate-state.mlir`. |
 | `020c44ba7` | `4cd8e5fe6` | [Arc] Lower llhd.current_time to Arc in LowerState (#9756) | Applied cleanly; validated with `test/Dialect/Arc/lower-state.mlir`. |
+| `104735656` | `b2ab3aff0` | [FIRRTL] Dedup: fix non-deduplicatable public module handling (#9702) | Applied with one conflict in `test/Dialect/FIRRTL/dedup.mlir` (kept upstream regression blocks `InstanceChoice` and `PublicModuleNoDedup`); validated with `test/Dialect/FIRRTL/dedup.mlir`. |
 
 ### Attempted But Deferred
 
