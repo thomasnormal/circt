@@ -623,6 +623,41 @@
     - `build_test/bin/llvm-lit -sv test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir test/Tools/circt-bmc/externalize-registers-errors.mlir test/Tools/circt-bmc/externalize-registers-initial-cast.mlir test/Tools/circt-bmc/externalize-registers-instance-initial.mlir`
       - result: `4/4` pass.
 
+- Iteration update (WS3-T2/T3: init normalization + unsupported-shape diagnostics):
+  - realization:
+    - `externalize-registers` failed to resolve immutable init chains when a
+      `seq.initial` yielded one of its body block arguments (passthrough form),
+      even though that argument maps to a constant immutable input.
+    - unsupported init diagnostics were too generic for triage and did not
+      reliably point to the failing source shape.
+  - implemented:
+    - `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`:
+      - `resolveCompRegInitialValue(...)` now rewrites
+        `seq.initial` passthrough yields (`seq.yield %argN`) to the mapped
+        immutable input operand and continues resolution.
+      - added structured failure-context plumbing for immutable init resolution
+        to preserve reason text and source location.
+      - compreg error path now emits:
+        - explicit unsupported init-shape reason text, and
+        - an attached source-location note:
+          `unsupported source for this register initial value`.
+    - tests:
+      - converted
+        `test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+        from expected-fail diagnostics to positive FileCheck.
+      - tightened diagnostics contract in
+        `test/Tools/circt-bmc/externalize-registers-errors.mlir`
+        for block-argument immutable init source.
+  - validation:
+    - targeted compile validation:
+      - `utils/ninja-with-lock.sh -C build_test obj.CIRCTBMCTransforms`
+      - result: pass (rebuild includes `ExternalizeRegisters.cpp`).
+    - full tool validation currently blocked by unrelated workspace breakage:
+      - `utils/ninja-with-lock.sh -C build_test circt-opt`
+      - `utils/ninja-with-lock.sh -C build_test circt-bmc`
+      - both fail on
+        `lib/Conversion/LTLToCore/LTLToCore.cpp` parse/scope errors outside WS3.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

@@ -33,6 +33,7 @@
 #include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/ADT/Twine.h"
 #include <optional>
+#include <string>
 
 using namespace mlir;
 using namespace circt;
@@ -131,58 +132,131 @@ foldValueToConstantAttr(Value value, DenseMap<Value, Attribute> &cache,
   return foldedAttr;
 }
 
+struct InitResolveFailureInfo {
+  std::string reason;
+  std::optional<Location> loc;
+};
+
 // Resolve an immutable register initial value to the yielded SSA value from a
 // seq.initial op, traversing through simple immutable passthrough wrappers.
 static FailureOr<Value>
 resolveCompRegInitialValue(TypedValue<seq::ImmutableType> initValue,
-                           SymbolTableCollection &symbolTables) {
+                           SymbolTableCollection &symbolTables,
+                           InitResolveFailureInfo *failureInfo = nullptr) {
+  auto getValueLocation = [&](Value value) -> Location {
+    if (auto result = dyn_cast<OpResult>(value))
+      return result.getOwner()->getLoc();
+    if (auto arg = dyn_cast<BlockArgument>(value))
+      if (auto *parent = arg.getOwner()->getParentOp())
+        return parent->getLoc();
+    return UnknownLoc::get(initValue.getContext());
+  };
+
+  auto recordFailure =
+      [&](Twine reason, std::optional<Location> loc = std::nullopt)
+      -> FailureOr<Value> {
+    if (failureInfo) {
+      failureInfo->reason = reason.str();
+      failureInfo->loc = loc;
+    }
+    return failure();
+  };
+
   DenseSet<Value> visited;
   Value current = initValue;
 
   constexpr unsigned kMaxResolveSteps = 1024;
   for (unsigned step = 0; step < kMaxResolveSteps; ++step) {
     if (!visited.insert(current).second)
-      return failure();
+      return recordFailure(
+          "detected cycle while resolving immutable initial value",
+          getValueLocation(current));
 
     if (auto initialOp = current.getDefiningOp<seq::InitialOp>()) {
       auto result = dyn_cast<OpResult>(current);
       if (!result)
-        return failure();
+        return recordFailure("seq.initial result is not an SSA op result",
+                             initialOp.getLoc());
       auto resultNum = result.getResultNumber();
-      auto yieldOp = dyn_cast<seq::YieldOp>(initialOp.getBodyBlock()->getTerminator());
+      auto yieldOp =
+          dyn_cast<seq::YieldOp>(initialOp.getBodyBlock()->getTerminator());
       if (!yieldOp || resultNum >= yieldOp.getNumOperands())
-        return failure();
-      return yieldOp.getOperand(resultNum);
+        return recordFailure(
+            "seq.initial does not yield a corresponding immutable value",
+            initialOp.getLoc());
+      Value yielded = yieldOp.getOperand(resultNum);
+      if (auto arg = dyn_cast<BlockArgument>(yielded)) {
+        if (arg.getOwner() != initialOp.getBodyBlock() ||
+            arg.getArgNumber() >= initialOp.getNumOperands())
+          return recordFailure(
+              "seq.initial yielded block argument does not map to immutable "
+              "input operand",
+              initialOp.getLoc());
+        current = initialOp.getOperand(arg.getArgNumber());
+        continue;
+      }
+      return yielded;
     }
 
     if (auto castOp = current.getDefiningOp<UnrealizedConversionCastOp>()) {
       if (castOp.getNumOperands() != 1)
-        return failure();
+        return recordFailure(
+            "unsupported unrealized_conversion_cast in immutable init path "
+            "(expected single operand)",
+            castOp.getLoc());
       current = castOp.getOperand(0);
       continue;
     }
 
     auto result = dyn_cast<OpResult>(current);
-    if (!result)
-      return failure();
+    if (!result) {
+      if (auto arg = dyn_cast<BlockArgument>(current))
+        return recordFailure(
+            Twine("encountered block argument #") + Twine(arg.getArgNumber()) +
+                " while resolving immutable initial value",
+            getValueLocation(current));
+      return recordFailure(
+          "encountered value without defining op while resolving immutable "
+          "initial value",
+          getValueLocation(current));
+    }
+
+    auto *definingOp = result.getDefiningOp();
+    if (!definingOp)
+      return recordFailure("encountered op result without defining operation",
+                           getValueLocation(current));
+
     auto instance = dyn_cast<hw::InstanceOp>(result.getDefiningOp());
     if (!instance)
-      return failure();
+      return recordFailure(
+          Twine("unsupported immutable initial source op '") +
+              definingOp->getName().getStringRef() + "'",
+          definingOp->getLoc());
 
     auto *target = symbolTables.lookupNearestSymbolFrom(
         instance, instance.getModuleNameAttr());
     auto callee = dyn_cast_or_null<HWModuleOp>(target);
     if (!callee || callee.getBody().empty())
-      return failure();
-    auto outputOp = dyn_cast<hw::OutputOp>(callee.getBodyBlock()->getTerminator());
+      return recordFailure(
+          Twine("unable to resolve immutable helper module '") +
+              instance.getModuleNameAttr().getValue() + "'",
+          instance.getLoc());
+    auto outputOp =
+        dyn_cast<hw::OutputOp>(callee.getBodyBlock()->getTerminator());
     if (!outputOp || result.getResultNumber() >= outputOp.getNumOperands())
-      return failure();
+      return recordFailure(
+          Twine("helper module '") + callee.getName() +
+              "' does not provide a matching immutable output",
+          callee.getLoc());
 
     Value calleeValue = outputOp.getOperand(result.getResultNumber());
     if (auto arg = dyn_cast<BlockArgument>(calleeValue)) {
       if (arg.getOwner() != callee.getBodyBlock() ||
           arg.getArgNumber() >= instance.getInputs().size())
-        return failure();
+        return recordFailure(
+            Twine("helper module '") + callee.getName() +
+                "' yielded block argument that does not map to instance input",
+            callee.getLoc());
       current = instance.getInputs()[arg.getArgNumber()];
       continue;
     }
@@ -190,7 +264,9 @@ resolveCompRegInitialValue(TypedValue<seq::ImmutableType> initValue,
     current = calleeValue;
   }
 
-  return failure();
+  return recordFailure(
+      "exceeded immutable initial-value resolution step limit (possible cycle)",
+      getValueLocation(current));
 }
 
 static bool traceClockRoot(Value value, Value &root);
@@ -703,11 +779,18 @@ void ExternalizeRegistersPass::runOnOperation() {
             // Resolve immutable initial values through simple wrappers (for
             // example, immutable values returned by helper instances) and fold
             // the resolved initial SSA value to a constant.
-            auto resolvedInitValue =
-                resolveCompRegInitialValue(initVal, symbolTables);
+            InitResolveFailureInfo resolveFailure;
+            auto resolvedInitValue = resolveCompRegInitialValue(
+                initVal, symbolTables, &resolveFailure);
             if (failed(resolvedInitValue)) {
-              regOp.emitError("registers with initial values not directly "
-                              "defined by a seq.initial op not yet supported");
+              auto diag =
+                  regOp.emitError("unsupported register initial-value shape: ")
+                  << (resolveFailure.reason.empty()
+                          ? "immutable initial value resolution failed"
+                          : resolveFailure.reason);
+              diag.attachNote(resolveFailure.loc.value_or(
+                                  UnknownLoc::get(&getContext())))
+                  << "unsupported source for this register initial value";
               return signalPassFailure();
             }
             DenseMap<Value, Attribute> foldedValues;

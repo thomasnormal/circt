@@ -160,7 +160,8 @@ Support real-world register initialization shapes that currently fail externaliz
 
 ### Current Gap
 
-Unsupported path remains for non-direct `seq.initial` init in:
+Remaining unsupported paths are now narrowed to non-normalizable immutable init
+sources in:
 
 1. `lib/Tools/circt-bmc/ExternalizeRegisters.cpp`
 
@@ -460,7 +461,11 @@ Current workstream status in this branch:
 4. WS3: in progress
    - register-init unsupported inventory now includes passthrough-initial
      shape coverage (`externalize-registers-initial-passthrough.mlir`)
-   - init normalization implementation still pending
+   - init normalization now handles `seq.initial` passthrough block-argument
+     forwarding in immutable init chains (`externalize-registers`)
+   - unsupported init diagnostics now report explicit shape reason and attach
+     source-location note for the failing init origin
+   - broader init-shape closure still pending
 5. WS4: in progress
    - several LLHD/ref compatibility rewrites exist in runner/tooling flow
    - systematic category burn-down matrix not completed

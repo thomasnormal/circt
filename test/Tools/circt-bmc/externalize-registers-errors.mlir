@@ -27,8 +27,9 @@ hw.module @reg_with_indirect_initial(in %clk: !seq.clock, in %in: i32, out out: 
 
 // -----
 
+// expected-note @+1 {{unsupported source for this register initial value}}
 hw.module @reg_with_argument_initial(in %clk: !seq.clock, in %in: i32, in %init: !seq.immutable<i32>, out out: i32) {
-  // expected-error @below {{registers with initial values not directly defined by a seq.initial op not yet supported}}
+  // expected-error @below {{unsupported register initial-value shape: encountered block argument #2 while resolving immutable initial value}}
   %1 = seq.compreg %in, %clk initial %init : i32
   hw.output %1 : i32
 }

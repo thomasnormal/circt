@@ -1,4 +1,4 @@
-// RUN: circt-opt --externalize-registers --verify-diagnostics %s
+// RUN: circt-opt --externalize-registers %s | FileCheck %s
 
 hw.module @top(in %clk: !seq.clock, in %in: i32, out out: i32) {
   %init0 = seq.initial () {
@@ -13,7 +13,11 @@ hw.module @top(in %clk: !seq.clock, in %in: i32, out out: i32) {
     seq.yield %arg0 : i32
   } : (!seq.immutable<i32>) -> !seq.immutable<i32>
 
-  // expected-error @below {{registers with initial values in a seq.initial op must fold to constants}}
   %r = seq.compreg %in, %clk initial %init1 : i32
   hw.output %r : i32
 }
+
+// CHECK-LABEL: hw.module @top
+// CHECK-SAME: in %r_state : i32
+// CHECK-SAME: out r_next : i32
+// CHECK-SAME: attributes {{{.*}}initial_values = [5 : i32], num_regs = 1 : i32}
