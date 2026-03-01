@@ -190,3 +190,44 @@ Given current dirty in-flight work in ImportVerilog/Moore files, prefer non-over
 1. `35e49085c` ([Synth] Add resource usage analysis (#9717))
 2. `6e3d168f6` is now complete in this branch.
 3. Revisit `d3ddbe121` / `17330f8a9` after `ImportVerilogInternals.h` + `Statements.cpp` are clean.
+
+## 2026-03-01 Mining Pass (Main, continued #2)
+
+- Open bug issues on `thomasnormal/circt`: still none (`gh issue list --state open --label bug` => `[]`).
+
+### Picked to `main`
+
+| Local commit | Upstream commit | Subject | Notes |
+| --- | --- | --- | --- |
+| `427c95919` | `e36f56957` | [FIRRTL] Fix canonicalizer crash on non-IntType inputs to cast patterns (#9550) | In this fork, the code-side fix was already present; cherry-pick produced the regression test delta in `test/Dialect/FIRRTL/canonicalization.mlir`. |
+| `095d4bf61` | _local follow-up_ | [FIRRTL][Test] Avoid duplicate symbol in AndOfAsSIntNoCrash regression | Local test-file reconciliation: renamed duplicated test module symbol introduced by applying `#9550` test block into a diverged local test file. |
+| `c111cc4fb` | `6434ee4c1` | [HW][circt-reduce] Add HW name sanitization (#9730) | Applied cleanly with staged deltas across `ReductionUtils`, HW reductions, FIRRTL pattern registration, and new HW reduction tests. |
+| `3e421f146` | `7d5a2036c` | [FIRRTL] tweak test to get 'true' from env, fix on NixOS. | Applied as a clean one-line test portability fix in `instance-stubber.mlir`. |
+
+### Attempted but already present/no-op in this fork
+
+| Upstream commit | Subject | Outcome |
+| --- | --- | --- |
+| `db50d3131` | [LLHD] Fix mem2reg to capture all live values across wait ops (#9552) | Repeated apply attempts reduced to no-op in this fork (patch content already present/diverged); no functional delta committed. |
+| `d3c93988f` | [circt-reduce] Fix connect-forwarder crash with layerblocks (#9581) | No-op on current local FIRRTL reduction implementation. |
+| `db9b1154c` | [circt-reduce] Fix firrtl-remove-unused-ports crash with probes | Conflict reduced to existing local behavior (`TieOffCache` + base-type guard); no new net delta. |
+| `7b673353c` | [circt-bmc] Add CombineAssertLike to pipeline (#9479) | Pipeline hook and integration coverage already present in local `HEAD`; conflict resolution yielded no net change. |
+
+### Attempted and reverted as incompatible with this fork
+
+| Local commit | Upstream reference | Subject | Why reverted |
+| --- | --- | --- | --- |
+| `bfe5c6f45` then `5270b4322` | `a159d2906` | [MooreToCore][Test] Add unsupported module port type regressions | This fork already lowers queue ports to hardware/LLVM-compatible forms, so upstream expected-error diagnostics are not emitted; test failed and was reverted. |
+
+### Validation
+
+- Rebuilt for this batch:
+  - `utils/ninja-with-lock.sh -C build_test circt-reduce circt-opt`
+- Focused tests:
+  - `test/Dialect/FIRRTL/canonicalization.mlir`
+  - `test/Dialect/FIRRTL/Reduction/instance-stubber.mlir`
+  - `test/Dialect/FIRRTL/Reduction/pattern-registration.mlir`
+  - `test/Dialect/HW/Reduction/hw-module-internal-name-sanitizer.mlir`
+  - `test/Dialect/HW/Reduction/hw-module-name-sanitizer.mlir`
+  - `test/Dialect/HW/Reduction/hw-sv-namehint-remover.mlir`
+- Result: all passed in `build_test`.
