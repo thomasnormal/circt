@@ -28,6 +28,24 @@ from typing import Any
 
 import yaml
 
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
+try:
+    from runner_common import (
+        is_allowlisted as _shared_is_allowlisted,
+        load_allowlist as _shared_load_allowlist,
+        read_status_summary as _shared_read_status_summary,
+        write_status_drift as _shared_write_status_drift,
+        write_status_summary as _shared_write_status_summary,
+    )
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
 
 @dataclass(frozen=True)
 class ConnectivityTarget:
@@ -279,6 +297,40 @@ def write_connectivity_status_drift(
         writer.writerow(["rule_id", "kind", "baseline", "current", "allowlisted"])
         for row in rows:
             writer.writerow(row)
+
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
+        return _shared_load_allowlist(path, fail)
+
+    def is_allowlisted(
+        token: str,
+        exact: set[str],
+        prefixes: list[str],
+        regex_rules: list[re.Pattern[str]],
+    ) -> bool:
+        return _shared_is_allowlisted(token, (exact, prefixes, regex_rules))
+
+    def write_connectivity_status_summary(
+        path: Path,
+        by_rule: dict[str, dict[str, int]],
+    ) -> None:
+        _shared_write_status_summary(path, CONNECTIVITY_STATUS_FIELDS, by_rule)
+
+    def read_connectivity_status_summary(path: Path) -> dict[str, dict[str, str]]:
+        return _shared_read_status_summary(
+            path,
+            CONNECTIVITY_STATUS_FIELDS,
+            "connectivity status summary",
+            fail,
+        )
+
+    def write_connectivity_status_drift(
+        path: Path,
+        rows: list[tuple[str, str, str, str, str]],
+    ) -> None:
+        _shared_write_status_drift(path, rows)
 
 
 def append_status_drift_error_row(

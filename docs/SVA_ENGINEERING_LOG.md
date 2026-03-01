@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T1/T2: connectivity BMC status-drift helpers migrated to shared library):
+  - realization:
+    - `run_opentitan_connectivity_circt_bmc.py` still duplicated allowlist
+      parsing/matching and status summary/drift TSV IO logic that already
+      existed in `runner_common`.
+    - this left WS1 dedup incomplete and increased policy drift risk for status
+      governance behavior.
+  - implemented:
+    - added `utils/formal/lib` import-path wiring and optional `runner_common`
+      shared helper imports in `run_opentitan_connectivity_circt_bmc.py`.
+    - when shared helpers are available, wrapper now routes:
+      - `load_allowlist` / `is_allowlisted`
+      - status summary write/read
+      - status drift write
+      through `runner_common` wrappers.
+    - preserved copied-script fallback behavior by retaining local
+      implementations when shared helper import is unavailable.
+    - added regression:
+      `test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-invalid-regex.test`.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-generated-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test test/Tools/run-opentitan-connectivity-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-condition-filter.test`
+      - result: `9/9` pass.
+    - expanded formal subset:
+      - `build_test/bin/llvm-lit -sv ...` (36-test WS1/WS6 subset with BMC/LEC wrappers + schema tools)
+      - result: `36/36` pass.
+
 - Iteration update (WS1-T1: FPV LEC runner migrated to shared env retry helper):
   - realization:
     - `run_opentitan_fpv_circt_lec.py` still duplicated env retry policy
