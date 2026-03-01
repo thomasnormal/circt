@@ -11317,3 +11317,61 @@
   - focused suite:
     - `build_test/bin/llvm-lit -sv test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-validate-results-schema.test test/Tools/formal-drift-compare.test test/Tools/formal-capture-baseline.test`
     - `4 passed`
+
+## 2026-03-01 - WS0 capture runner cwd contract + first real mini-baseline drift run
+
+- realization:
+  - baseline commands in generated manifests are repo-relative (`utils/...`), but
+    `capture_formal_baseline.py` originally executed commands in per-run
+    artifact directories, causing cwd mismatch risk for real runs.
+  - `write_ws0_baseline_manifest.py` also needed lane env controls to support
+    bounded baseline slices (`TEST_FILTER`, timeout caps).
+
+- implemented:
+  - `utils/formal/capture_formal_baseline.py`
+    - added per-command `cwd` support from manifest entries
+    - added global fallback `--command-cwd`
+    - execution report now records `command_cwd`
+  - `utils/formal/write_ws0_baseline_manifest.py`
+    - emits repo-root `cwd` on each lane command
+    - added lane env injection:
+      - `--aes-env`
+      - `--connectivity-env`
+      - `--bmc-env`
+  - updated tests:
+    - `test/Tools/formal-capture-baseline.test`
+    - `test/Tools/formal-ws0-baseline-manifest.test`
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py utils/formal/write_ws0_baseline_manifest.py`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-drift-compare.test`
+    - `3 passed`
+
+- first real mini-baseline run (3x drift gate):
+  - artifacts root:
+    - `out/ws0-baseline-live-20260301-153842/capture-aes-bmc`
+  - lanes:
+    - OpenTitan AES LEC (`--impl-filter canright`)
+    - sv-tests BMC (`TEST_FILTER=^sanity$`)
+  - execution:
+    - all 6 command invocations returned `0`
+  - drift:
+    - run01 vs run02 and run01 vs run03 both clean for both lanes:
+      - `STATUS_DRIFT=0`
+      - `REASON_DRIFT=0`
+      - `STAGE_DRIFT=0`
+      - `MISSING_CASE=0`
+      - `NEW_CASE=0`
+
+- connectivity frontier probe:
+  - timeboxed command:
+    - `timeout 120s ... run_opentitan_connectivity_circt_lec.py ... --rule-filter ALERT_HANDLER_PWRMGR_ESC_CLK`
+    - with `CIRCT_TIMEOUT_SECS=60`
+  - outcome:
+    - external timeout `RC=124`
+    - no final results rows emitted before timeout
+  - implication:
+    - connectivity Z3 lane remains WS0 timeout-frontier blocker and needs
+      dedicated frontier tuning before full 3-lane reproducibility gate.

@@ -36,6 +36,7 @@ class ManifestCommand:
     mode: str
     case_label: str
     command: str
+    cwd: str
 
 
 def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCommand]]:
@@ -74,6 +75,7 @@ def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCom
                 mode=mode,
                 case_label=slugify(label_seed),
                 command=command,
+                cwd=str(raw.get("cwd", "")).strip(),
             )
         )
     return payload, commands
@@ -84,6 +86,7 @@ def run_manifest_command(
     entry: ManifestCommand,
     run_index: int,
     command_dir: Path,
+    default_command_cwd: Path,
 ) -> tuple[int, Path, Path, Path]:
     command_dir.mkdir(parents=True, exist_ok=True)
     out_tsv = command_dir / "results.tsv"
@@ -97,11 +100,12 @@ def run_manifest_command(
     env["FORMAL_BASELINE_SUITE"] = entry.suite
     env["FORMAL_BASELINE_MODE"] = entry.mode
     env["FORMAL_BASELINE_CASE_LABEL"] = entry.case_label
+    command_cwd = Path(entry.cwd).resolve() if entry.cwd else default_command_cwd
     proc = subprocess.run(
         entry.command,
         shell=True,
         executable="/bin/bash",
-        cwd=str(command_dir),
+        cwd=str(command_cwd),
         env=env,
         check=False,
         capture_output=True,
@@ -157,6 +161,11 @@ def main() -> int:
     )
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument(
+        "--command-cwd",
+        default=".",
+        help="Default working directory for manifest commands (default: current directory).",
+    )
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--stop-on-command-failure", action="store_true")
     parser.add_argument("--fail-on-status-drift", action="store_true")
@@ -169,6 +178,9 @@ def main() -> int:
 
     manifest_path = Path(args.manifest).resolve()
     out_dir = Path(args.out_dir).resolve()
+    default_command_cwd = Path(args.command_cwd).resolve()
+    if not default_command_cwd.is_dir():
+        fail(f"default command cwd not found: {default_command_cwd}")
     drift_script = (Path(__file__).resolve().parent / "compare_formal_results_drift.py")
     if not drift_script.is_file():
         fail(f"drift comparator script not found: {drift_script}")
@@ -192,6 +204,7 @@ def main() -> int:
                 entry=entry,
                 run_index=run_index,
                 command_dir=command_dir,
+                default_command_cwd=default_command_cwd,
             )
             execution_rows.append(
                 (
@@ -201,6 +214,7 @@ def main() -> int:
                     entry.mode,
                     entry.case_label,
                     str(returncode),
+                    entry.cwd or str(default_command_cwd),
                     entry.command,
                     str(out_tsv),
                     str(out_jsonl),
@@ -218,7 +232,7 @@ def main() -> int:
     with execution_tsv.open("w", encoding="utf-8") as handle:
         handle.write(
             "run_index\tcommand_index\tsuite\tmode\tcase_label\treturncode\t"
-            "command\tresults_tsv\tresults_jsonl\tlog_path\n"
+            "command_cwd\tcommand\tresults_tsv\tresults_jsonl\tlog_path\n"
         )
         for row in execution_rows:
             handle.write("\t".join(row))

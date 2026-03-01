@@ -19,8 +19,31 @@ def quote(arg: str) -> str:
     return shlex.quote(arg)
 
 
-def build_command_with_extras(base: list[str], extras: list[str]) -> str:
+def parse_env_assignments(raw_entries: list[str], lane: str) -> list[str]:
+    assignments: list[str] = []
+    for raw in raw_entries:
+        token = raw.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise SystemExit(
+                f"invalid {lane} env entry (expected KEY=VALUE): {raw}"
+            )
+        key, _value = token.split("=", 1)
+        if not key.strip():
+            raise SystemExit(
+                f"invalid {lane} env entry (empty key): {raw}"
+            )
+        assignments.append(token)
+    return assignments
+
+
+def build_command_with_extras(
+    base: list[str], extras: list[str], env_assignments: list[str]
+) -> str:
     parts = [quote(token) for token in base]
+    if env_assignments:
+        parts = ["env", *[quote(token) for token in env_assignments], *parts]
     for extra in extras:
         token = extra.strip()
         if token:
@@ -64,16 +87,34 @@ def main() -> int:
         help="Extra shell tokens appended to the AES LEC command.",
     )
     parser.add_argument(
+        "--aes-env",
+        action="append",
+        default=[],
+        help="Environment assignment (KEY=VALUE) for AES LEC command.",
+    )
+    parser.add_argument(
         "--connectivity-extra",
         action="append",
         default=[],
         help="Extra shell tokens appended to the connectivity LEC command.",
     )
     parser.add_argument(
+        "--connectivity-env",
+        action="append",
+        default=[],
+        help="Environment assignment (KEY=VALUE) for connectivity LEC command.",
+    )
+    parser.add_argument(
         "--bmc-extra",
         action="append",
         default=[],
         help="Extra shell tokens appended to the sv-tests BMC command.",
+    )
+    parser.add_argument(
+        "--bmc-env",
+        action="append",
+        default=[],
+        help="Environment assignment (KEY=VALUE) for sv-tests BMC command.",
     )
     args = parser.parse_args()
 
@@ -88,6 +129,10 @@ def main() -> int:
             "connectivity manifest options must be provided together: "
             "--connectivity-target-manifest and --connectivity-rules-manifest"
         )
+    aes_env = parse_env_assignments(args.aes_env, "aes")
+    connectivity_env = parse_env_assignments(args.connectivity_env, "connectivity")
+    bmc_env = parse_env_assignments(args.bmc_env, "bmc")
+    repo_root = Path(__file__).resolve().parents[2]
 
     commands: list[dict[str, str]] = []
     commands.append(
@@ -95,6 +140,7 @@ def main() -> int:
             "id": "ws0_aes_lec",
             "suite": "opentitan",
             "mode": "LEC",
+            "cwd": str(repo_root),
             "command": build_command_with_extras(
                 [
                     "utils/run_opentitan_circt_lec.py",
@@ -102,6 +148,7 @@ def main() -> int:
                     str(Path(args.opentitan_root).expanduser()),
                 ],
                 args.aes_extra,
+                aes_env,
             ),
         }
     )
@@ -111,6 +158,7 @@ def main() -> int:
                 "id": "ws0_connectivity_lec",
                 "suite": "opentitan",
                 "mode": "CONNECTIVITY_LEC",
+                "cwd": str(repo_root),
                 "command": build_command_with_extras(
                     [
                         "utils/run_opentitan_connectivity_circt_lec.py",
@@ -122,6 +170,7 @@ def main() -> int:
                         str(Path(args.opentitan_root).expanduser()),
                     ],
                     args.connectivity_extra,
+                    connectivity_env,
                 ),
             }
         )
@@ -130,12 +179,14 @@ def main() -> int:
             "id": "ws0_sv_tests_bmc",
             "suite": "sv-tests",
             "mode": "BMC",
+            "cwd": str(repo_root),
             "command": build_command_with_extras(
                 [
                     "utils/run_sv_tests_circt_bmc.sh",
                     str(Path(args.sv_tests_root).expanduser()),
                 ],
                 args.bmc_extra,
+                bmc_env,
             ),
         }
     )

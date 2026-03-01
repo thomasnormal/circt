@@ -377,7 +377,8 @@ Current workstream status in this branch:
    - unsupported diagnostics audit scaffold landed
    - baseline capture runner landed (`capture_formal_baseline.py`)
    - schema drift comparator landed (`compare_formal_results_drift.py`)
-   - real OpenTitan baseline runs + first drift report still pending
+   - first 3-run real mini-baseline completed for AES LEC + sv-tests BMC with zero status/reason/stage drift
+   - OpenTitan connectivity LEC lane remains the timeout frontier blocker for full WS0 parity capture
 2. WS1: in progress
    - shared formal schema helper landed
    - shared env-driven retry launcher landed in `runner_common`
