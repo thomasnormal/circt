@@ -231,3 +231,31 @@ Given current dirty in-flight work in ImportVerilog/Moore files, prefer non-over
   - `test/Dialect/HW/Reduction/hw-module-name-sanitizer.mlir`
   - `test/Dialect/HW/Reduction/hw-sv-namehint-remover.mlir`
 - Result: all passed in `build_test`.
+
+## 2026-03-01 Mining Pass (Main, continued #3)
+
+- Local base at start of pass: `origin/main` @ `7723ebff3`
+- Open bug issues on `thomasnormal/circt`: none (`gh issue list --state open --label bug` => `[]`).
+
+### Picked to `main`
+
+| Local commit | Upstream commit | Subject | Notes |
+| --- | --- | --- | --- |
+| `586064869` | `274eeb55d` | [FIRRTL] Add domain create op (#9774) | Previously deferred because `#9776` required this op to compile in this fork; applied cleanly in this batch. |
+| `e54418803` | `6542026a9` | [FIRRTL] Improve error messages for domain symbol verification (#9776) | Applied cleanly immediately after `#9774`; updates diagnostics and tests in `test/Dialect/FIRRTL/errors.mlir`. |
+
+### Validation
+
+- Rebuilt in `build_test`:
+  - `utils/ninja-with-lock.sh -C build_test circt-opt`
+- Focused tests run (passed):
+  - `test/Dialect/FIRRTL/errors.mlir`
+  - `test/Dialect/FIRRTL/infer-domains-strip.mlir`
+
+### Blocker / Partial Validation Note
+
+- Full parser/emitter validation for this batch is currently blocked by unrelated in-flight local edits in `lib/Conversion/ImportVerilog/TimingControls.cpp` (Slang API mismatch in `ASTContext` construction) when rebuilding `circt-translate`.
+- Impact: these tests could not be revalidated until that concurrent ImportVerilog work stabilizes:
+  - `test/Dialect/FIRRTL/emit-basic.mlir`
+  - `test/Dialect/FIRRTL/parse-basic.fir`
+  - `test/Dialect/FIRRTL/round-trip.mlir`
