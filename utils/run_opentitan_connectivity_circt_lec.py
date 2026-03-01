@@ -1737,6 +1737,10 @@ def main() -> int:
                 f"{case_batch_mode} (expected csv|bind-top)"
             )
         )
+    frontend_max_cases_per_batch = parse_nonnegative_int(
+        os.environ.get("LEC_FRONTEND_MAX_CASES_PER_BATCH", "18"),
+        "LEC_FRONTEND_MAX_CASES_PER_BATCH",
+    )
     batch_precheck_mode = os.environ.get(
         "LEC_BATCH_PRECHECK_MODE", "auto"
     ).strip().lower()
@@ -2167,6 +2171,26 @@ def main() -> int:
                 batch_tops = {case.bind_top for case in batch_cases}
                 if len(batch_tops) > 1:
                     split_batches = split_batch_by_bind_top(batch_cases)
+                    for split_batch in reversed(split_batches):
+                        pending_batches.insert(0, split_batch)
+                    continue
+                if (
+                    frontend_max_cases_per_batch > 0
+                    and len(batch_cases) > frontend_max_cases_per_batch
+                ):
+                    split_batches = [
+                        batch_cases[index : index + frontend_max_cases_per_batch]
+                        for index in range(
+                            0, len(batch_cases), frontend_max_cases_per_batch
+                        )
+                    ]
+                    print(
+                        "opentitan connectivity lec: splitting large frontend batch "
+                        f"(size={len(batch_cases)} max="
+                        f"{frontend_max_cases_per_batch})",
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     for split_batch in reversed(split_batches):
                         pending_batches.insert(0, split_batch)
                     continue

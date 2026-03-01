@@ -927,3 +927,46 @@
       - summary: `total=17 pass=17 fail=0 xfail=0 xpass=0 error=0 skip=0`
       - only one case directory emitted (`connectivity_batch_precheck_0`),
         confirming no per-rule `circt-lec` fallback was needed.
+
+## 2026-03-01 - Cap frontend batch size to avoid large-top import stalls
+
+- realization:
+  - very large per-CSV frontend batches can still trigger heavyweight
+    `circt-verilog` behavior (high-RSS and intermittent disk-sleep pressure)
+    before batch precheck can run.
+  - concrete repro:
+    - `clkmgr_cg_en.csv` (`22` rules) in one frontend batch showed
+      pathological import pressure.
+  - singleton reruns for historical frontier rules now pass (`EQ`) under real
+    Z3:
+    - `clkmgr_cg_en.csv:CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN`
+    - `alert_handler_esc.csv:ALERT_HANDLER_LC_CTRL_ESC0_RST`
+    - `clkmgr_infra.csv:CLKMGR_INFRA_CLK_SRAM_CTRL_MAIN_OTP_CLK`
+    - this shifted focus to frontend scaling, not per-rule solver correctness.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_FRONTEND_MAX_CASES_PER_BATCH` (default `18`, `0` disables).
+    - proactive split of oversized same-top batches before frontend commands.
+    - emits diagnostic:
+      `splitting large frontend batch (size=... max=...)`.
+  - this composes with existing batch-precheck so each split shard can still
+    fast-pass via aggregate LEC.
+
+- regressions:
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-frontend-max-cases-per-batch.test`
+    to prove proactive split occurs and keeps per-frontend top count bounded.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`
+    (`53/53` pass).
+  - real OpenTitan Z3 repro:
+    - `clkmgr_cg_en.csv` full group (`22` rules) with default cap.
+    - observed:
+      - `splitting large frontend batch (size=22 max=18)`
+      - `batch precheck PASS (batch=0, cases=18)`
+      - `batch precheck PASS (batch=1, cases=4)`
+    - result:
+      `total=22 pass=22 fail=0 xfail=0 xpass=0 error=0 skip=0`.
