@@ -1033,3 +1033,10 @@
       - no precheck (per-case solver path)
       - wall time `ELAPSED=314s`
     - confirms ~2.15x speedup for this frontier by enabling two-case precheck.
+  - post-change historical-set rerun with default precheck minimum (`2`):
+    - `ELAPSED=585s` on current host load.
+    - batch precheck fast-pass observed on all three batches:
+      - `batch=0` (`11` cases)
+      - `batch=1` (`2` cases)
+      - `batch=2` (`6` cases)
+    - summary remains `total=19 pass=19 fail=0 xfail=0 xpass=0 error=0 skip=0`.
