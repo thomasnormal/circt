@@ -28,6 +28,13 @@ reduction must be staged and measurable.
   - `uvm_simple_test.sv`
   - `uvm-tlm-analysis-100.sv`
 - [x] Closed multi-agent sequencer semantic hang (`uvm-integ-multi-agent.sv`) by adding queue wake-affinity recovery for unresolved `get_next_item` retries in sim runtime.
+- [x] Closed unresolved-vtable-slot virtual dispatch fallback gap in call-indirect runtime:
+  - Added metadata-based fallback (`circt.vtable_entries` by slot index) when runtime vtable slot address is unmapped.
+  - Added regression: `test/Tools/circt-sim/vtable-fallback-corrupt-slot.mlir`.
+- [x] AVIP startup focus update:
+  - deterministic `axi4Lite` startup no longer reproduces the prior `FCTTYP` null-return mode in the captured repro after the vtable-slot fallback fix.
+- [ ] Remaining AVIP-critical semantic blocker:
+  - startup/liveness quality: occasional `$finish` grace-expiry / 0-fs completion with 0% activity coverage still needs core runtime closure (no retry dependence).
 - [ ] Continue Wave C reduction with parity gates for:
   - phase-hopper intercept family
   - factory/type-resolution intercept family

@@ -10889,3 +10889,39 @@
       - `1 passed`.
     - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-multi-agent.sv test/Tools/crun/uvm-tlm-analysis-100.sv test/Runtime/uvm/config_db_test.sv test/Tools/crun/uvm-config-db-*.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_callback_test.sv test/Runtime/uvm/uvm_comparator_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
       - `17 passed`.
+
+## 2026-03-01 - AVIP axi4Lite startup: call_indirect unmapped vtable-slot fallback via metadata
+
+- realization:
+  - Reproduced deterministic AVIP startup failure mode with `FCTTYP` in `create_6433` after unresolved virtual calls:
+    - warning: `virtual method call (func.call_indirect) failed: address 1007F150 ... not found in vtable map`
+    - subsequent fatal: `Factory did not return ... null`.
+  - Root cause: object-vtable static fallback in `func.call_indirect` still required `addressToFunction[resolvedFuncAddr]` to succeed.
+    If a runtime slot contains an unmapped pointer, fallback dropped to zero-return instead of dispatching by vtable metadata.
+
+- implemented (core runtime semantic fix):
+  - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+    - Added metadata fallback helper for object-vtable static resolution:
+      - resolve method symbol by `circt.vtable_entries` + method slot index when slot address is unmapped.
+    - Applied in both static fallback paths:
+      - `funcPtrVal.isX()` fallback path.
+      - non-X `addressToFunction` miss fallback path.
+
+- TDD regression:
+  - Added failing-then-green test:
+    - `test/Tools/circt-sim/vtable-fallback-corrupt-slot.mlir`
+    - reproduces unmapped runtime vtable slot by corrupting slot value to non-function global address.
+    - asserts dispatch still resolves to correct method (`slot_corrupt_result = 42`) and no unresolved-vtable warning.
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/vtable-fallback-corrupt-slot.mlir`
+      - failed with unresolved-vtable warning and `slot_corrupt_result = 0`.
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/vtable-fallback-corrupt-slot.mlir`
+      - `1 passed`.
+    - focused fallback/runtime slice:
+      - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/vtable-fallback-corrupt-slot.mlir test/Tools/circt-sim/vtable-fallback-corrupt-ptr.mlir test/Tools/circt-sim/vtable-fallback-dispatch.mlir test/Tools/circt-sim/call-indirect-resolution-cache-static-fallback.mlir test/Tools/circt-sim/call-indirect-runtime-vtable-slot-cache.mlir`
+      - `5 passed`.
+  - AVIP artifact spot-check:
+    - post-fix run on existing `axi4Lite.mlir` repro no longer emitted the prior `FCTTYP`/unmapped-vtable pair in observed completed run; remaining issue observed is 0-fs liveness/coverage quality.

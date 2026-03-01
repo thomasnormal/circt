@@ -113,6 +113,14 @@ static bool isNativeAnalysisWriteCalleeCI(llvm::StringRef calleeName) {
          calleeName.contains("uvm_tlm_if_base");
 }
 
+static bool isPointerLikeI64ThisCalleeNameCI(llvm::StringRef calleeName) {
+  if (calleeName.starts_with("uvm_pkg::") && calleeName.contains("::"))
+    return true;
+  return calleeName.starts_with("get_") || calleeName.starts_with("set_") ||
+         calleeName.starts_with("create_") ||
+         calleeName.starts_with("m_initialize");
+}
+
 static uint64_t sequencerProcKey(ProcessId procId) {
   return 0xF1F1000000000000ULL | static_cast<uint64_t>(procId);
 }
@@ -270,7 +278,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       const char *env =
           std::getenv("CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS");
       if (!env)
-        return false;
+        return true;
       return env[0] != '\0' && env[0] != '0';
     }();
     bool sawResolvedTarget = false;
@@ -371,6 +379,34 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       if (!addrOfOp)
         return std::nullopt;
       return addrOfOp.getGlobalName().str();
+    };
+    auto tryResolveVtableMethodNameFromMetadata =
+        [&](llvm::StringRef vtableGlobalName,
+            int64_t methodIndex) -> std::optional<std::string> {
+      if (methodIndex < 0)
+        return std::nullopt;
+      ModuleOp moduleOp = callSiteModule ? callSiteModule : rootModule;
+      if (!moduleOp)
+        return std::nullopt;
+      auto vtableGlobal = moduleOp.lookupSymbol<LLVM::GlobalOp>(vtableGlobalName);
+      if (!vtableGlobal)
+        return std::nullopt;
+      auto entriesAttr =
+          dyn_cast_or_null<ArrayAttr>(vtableGlobal->getAttr("circt.vtable_entries"));
+      if (!entriesAttr)
+        return std::nullopt;
+      for (Attribute entryAttr : entriesAttr) {
+        auto entryArray = dyn_cast<ArrayAttr>(entryAttr);
+        if (!entryArray || entryArray.size() < 2)
+          continue;
+        auto indexAttr = dyn_cast<IntegerAttr>(entryArray[0]);
+        auto symbolAttr = dyn_cast<FlatSymbolRefAttr>(entryArray[1]);
+        if (!indexAttr || !symbolAttr)
+          continue;
+        if (indexAttr.getInt() == methodIndex)
+          return symbolAttr.getValue().str();
+      }
+      return std::nullopt;
     };
     auto findDirectCoverageRuntimeCalleeInSymbol =
         [&](llvm::StringRef symbolName) -> std::optional<std::string> {
@@ -509,6 +545,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                      InterpretedValue(llvm::APInt(width, 0)));
         }
       };
+    auto &callState = processStates[procId];
+    constexpr size_t maxCallDepth = 1024;
+    if (callState.callDepth >= maxCallDepth) {
+      static bool warnedCallIndirectMaxDepth = false;
+      if (!warnedCallIndirectMaxDepth) {
+        warnedCallIndirectMaxDepth = true;
+        llvm::errs() << "[circt-sim] WARNING: call_indirect max call depth "
+                     << maxCallDepth << " exceeded, returning zero\n";
+      }
+      setCallIndirectResults({});
+      return success();
+    }
     auto isVtableGlobalSymbol = [&](llvm::StringRef globalName) -> bool {
       if (globalName.empty())
         return false;
@@ -579,16 +627,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         bool isLikelyI64ThisArg =
             i < argTypes.size() && isa<mlir::IntegerType>(argTypes[i]) &&
             cast<mlir::IntegerType>(argTypes[i]).getWidth() == 64;
-        bool isUvmMethodThisArg =
+        bool pointerLikeI64ThisArg =
             i == 0 && isLikelyI64ThisArg &&
-            calleeNameForNormalization.contains("uvm_pkg::") &&
-            calleeNameForNormalization.contains("::");
-        if (normalizePointerArgs && (hasPointerType || isUvmMethodThisArg)) {
+            isPointerLikeI64ThisCalleeNameCI(calleeNameForNormalization);
+        if (normalizePointerArgs && (hasPointerType || pointerLikeI64ThisArg)) {
           argVal = normalizeNativeCallPointerArg(procId,
                                                  calleeNameForNormalization,
                                                  argVal);
           bool strictUvmThisPointerCheck =
-              i == 0 && calleeNameForNormalization.contains("uvm_pkg::");
+              i == 0 && pointerLikeI64ThisArg;
           if (strictUvmThisPointerCheck && argVal != 0 &&
               !isKnownPointerAddress(argVal)) {
             static bool traceNativeCalls =
@@ -935,10 +982,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break; // Slot is empty (no function registered)
 
         auto funcIt = addressToFunction.find(resolvedFuncAddr);
-        if (funcIt == addressToFunction.end())
-          break;
+        std::string resolvedNameStorage;
+        if (funcIt == addressToFunction.end()) {
+          auto resolvedFromMetadata =
+              tryResolveVtableMethodNameFromMetadata(vtableGlobalName,
+                                                     methodIndex);
+          if (!resolvedFromMetadata)
+            break;
+          resolvedNameStorage = *resolvedFromMetadata;
+        }
 
-        StringRef resolvedName = funcIt->second;
+        StringRef resolvedName =
+            funcIt == addressToFunction.end() ? StringRef(resolvedNameStorage)
+                                              : StringRef(funcIt->second);
         noteResolvedTarget(resolvedName);
         // [CI-XFALLBACK] diagnostic removed
         LLVM_DEBUG(llvm::dbgs()
@@ -1413,9 +1469,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         if (resolvedFuncAddr == 0)
           break;
         auto funcIt2 = addressToFunction.find(resolvedFuncAddr);
-        if (funcIt2 == addressToFunction.end())
-          break;
-        StringRef resolvedName = funcIt2->second;
+        std::string resolvedNameStorage;
+        if (funcIt2 == addressToFunction.end()) {
+          auto resolvedFromMetadata =
+              tryResolveVtableMethodNameFromMetadata(vtableGlobalName,
+                                                     methodIndex);
+          if (!resolvedFromMetadata)
+            break;
+          resolvedNameStorage = *resolvedFromMetadata;
+        }
+        StringRef resolvedName =
+            funcIt2 == addressToFunction.end() ? StringRef(resolvedNameStorage)
+                                               : StringRef(funcIt2->second);
         noteResolvedTarget(resolvedName);
 
         LLVM_DEBUG(llvm::dbgs()
@@ -1905,6 +1970,31 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                    << llvm::format_hex(funcAddr, 16)
                    << " not in vtable map\n");
         auto directCallee = tryGetDirectAddressOfCalleeName();
+        SmallVector<InterpretedValue, 8> fallbackArgs;
+        fallbackArgs.reserve(callIndirectOp.getNumOperands());
+        for (Value arg : callIndirectOp.getArgOperands())
+          fallbackArgs.push_back(getValue(procId, arg));
+        // If call_indirect target lookup missed but the signature matches the
+        // config_db implementation ABI, fall back to signature-directed
+        // interception so UVM config_db state remains consistent.
+        if (looksLikeConfigDbSetSig()) {
+          if (tryInterceptConfigDbCallIndirect(
+                  procId, callIndirectOp,
+                  "uvm_pkg::uvm_config_db_default_implementation_t::set",
+                  fallbackArgs))
+            return success();
+        }
+        if (looksLikeConfigDbGetSig()) {
+          llvm::StringRef syntheticCallee =
+              (callIndirectOp.getNumOperands() >= 5 &&
+               isa<LLVM::LLVMPointerType>(
+                   callIndirectOp.getArgOperands()[4].getType()))
+                  ? "uvm_pkg::uvm_config_db_default_implementation_t::get"
+                  : "uvm_pkg::uvm_config_db_default_implementation_t::exists";
+          if (tryInterceptConfigDbCallIndirect(procId, callIndirectOp,
+                                               syntheticCallee, fallbackArgs))
+            return success();
+        }
         if (directCallee &&
             llvm::StringRef(*directCallee).contains("config_db") &&
             llvm::StringRef(*directCallee).contains("implementation")) {
@@ -3160,7 +3250,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         auto get0Func = rootModule.lookupSymbol<func::FuncOp>("get_0");
         if (get0Func && !get0Func.getBody().empty()) {
           auto &state = processStates[procId];
-          constexpr size_t maxCallDepth = 200;
+          constexpr size_t maxCallDepth = 1024;
           if (state.callDepth < maxCallDepth) {
             ++state.callDepth;
             SmallVector<InterpretedValue, 1> get0Results;
@@ -3188,7 +3278,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             "uvm_pkg::uvm_default_coreservice_t::get_factory");
         if (defaultGetFactoryFunc && !defaultGetFactoryFunc.getBody().empty()) {
           auto &state = processStates[procId];
-          constexpr size_t maxCallDepth = 200;
+          constexpr size_t maxCallDepth = 1024;
           if (state.callDepth < maxCallDepth) {
             ++state.callDepth;
             SmallVector<InterpretedValue, 1> invokeResults;
@@ -4276,8 +4366,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
       return success();
     }
-
-    auto &callState = processStates[procId];
 
     // Recursive DFS depth detection (same as func.call handler)
     Operation *indFuncKey = funcOp.getOperation();
