@@ -1,0 +1,20 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nimport json\nimport os\nfrom pathlib import Path\nrun = os.environ.get("FORMAL_BASELINE_RUN_INDEX", "1")\nstatus = "PASS"\nreason = ""\nif os.environ.get("FAKE_DRIFT", "0") == "1" and run != "1":\n  status = "FAIL"\n  reason = "NEQ"\nrow = {\n  "schema_version": 1,\n  "suite": "toy",\n  "mode": "LEC",\n  "case_id": "case0",\n  "case_path": "/tmp/case0.sv",\n  "status": status,\n  "reason_code": reason,\n  "stage": "result",\n  "solver": "z3",\n  "solver_time_ms": None,\n  "frontend_time_ms": None,\n  "log_path": "",\n  "artifact_dir": ""\n}\nPath(os.environ["FORMAL_RESULTS_JSONL_OUT"]).write_text(json.dumps(row) + "\\n", encoding="utf-8")\nPath(os.environ["OUT"]).write_text(f"{status}\\tcase0\\t/tmp/case0.sv\\n", encoding="utf-8")\n' > %t/bin/fake_runner.py
+// RUN: chmod +x %t/bin/fake_runner.py
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-smoke --command suite=toy --command mode=LEC --command id=toy_case --command command='python3 %t/bin/fake_runner.py'
+// RUN: python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out-ok --repeat 2 --fail-on-status-drift --fail-on-missing-case --fail-on-new-case
+// RUN: FileCheck %s --check-prefix=OKEXEC < %t/out-ok/execution.tsv
+// RUN: FileCheck %s --check-prefix=OKDRIFT < %t/out-ok/drift/toy_case.run01-vs-run02.summary.json
+// RUN: not env FAKE_DRIFT=1 python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out-drift --repeat 2 --fail-on-status-drift
+// RUN: FileCheck %s --check-prefix=FAILDRIFT < %t/out-drift/drift/toy_case.run01-vs-run02.summary.json
+//
+// OKEXEC: run_index{{[[:space:]]+}}command_index{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}case_label{{[[:space:]]+}}returncode
+// OKEXEC: 1{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}toy_case{{[[:space:]]+}}0
+// OKEXEC: 2{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}toy_case{{[[:space:]]+}}0
+//
+// OKDRIFT: "NO_DRIFT": 1
+// OKDRIFT: "STATUS_DRIFT": 0
+//
+// FAILDRIFT: "NO_DRIFT": 0
+// FAILDRIFT: "STATUS_DRIFT": 1

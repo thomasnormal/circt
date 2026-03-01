@@ -11126,3 +11126,45 @@
   - sanity regression slice:
     - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-resolved-contracts-file.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-sv-tests-circt-bmc-unknown-timeout.test`
     - `3 passed`.
+
+## 2026-03-01 - WS0 baseline capture + schema drift comparator (T2/T3)
+
+- realization:
+  - We had schema JSONL emission and manifest writing, but no canonical tool to:
+    - execute baseline commands repeatedly from a manifest
+    - compute structured drift across runs (`status/reason/stage`)
+  - Without this, WS0 reproducibility gates were still manual and brittle.
+
+- implemented:
+  - Added schema drift comparator:
+    - `utils/formal/compare_formal_results_drift.py`
+    - compares baseline vs candidate JSONL and emits:
+      - per-case drift TSV (`NO_DRIFT`, `STATUS_DRIFT`, `REASON_DRIFT`,
+        `STAGE_DRIFT`, `MISSING_CASE`, `NEW_CASE`)
+      - summary JSON with per-class counts
+      - optional failure gating (`--fail-on-status-drift`,
+        `--fail-on-missing-case`, `--fail-on-new-case`)
+  - Added baseline capture runner:
+    - `utils/formal/capture_formal_baseline.py`
+    - consumes manifest from `write_baseline_manifest.py`
+    - runs each command N times (`--repeat`)
+    - auto-wires `OUT` and `FORMAL_RESULTS_JSONL_OUT` per run
+    - writes execution index (`execution.tsv`)
+    - generates run-to-run drift artifacts (`drift.tsv` + per-command summary JSON)
+
+- tests added:
+  - `test/Tools/formal-results-drift-compare.test`
+    - validates all drift classes and fail-on-status behavior
+  - `test/Tools/formal-capture-baseline.test`
+    - validates repeated baseline capture
+    - validates no-drift pass and intentional-drift failure gating
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/compare_formal_results_drift.py utils/formal/capture_formal_baseline.py`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-results-drift-compare.test test/Tools/formal-capture-baseline.test`
+    - `2 passed`
+  - WS0 toolchain slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-baseline-manifest.test test/Tools/formal-audit-unsupported.test test/Tools/formal-results-drift-compare.test test/Tools/formal-capture-baseline.test`
+    - `4 passed`

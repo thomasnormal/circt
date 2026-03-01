@@ -1,0 +1,22 @@
+// RUN: mkdir -p %t
+// RUN: printf '{"suite":"sv-tests","mode":"BMC","case_id":"case_pass","case_path":"/tmp/case_pass.sv","status":"PASS","reason_code":"","stage":"result"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_status","case_path":"/tmp/case_status.sv","status":"PASS","reason_code":"","stage":"result"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_reason","case_path":"/tmp/case_reason.sv","status":"ERROR","reason_code":"FRONTEND_PARSE_ERROR","stage":"frontend"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_stage","case_path":"/tmp/case_stage.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_missing","case_path":"/tmp/case_missing.sv","status":"PASS","reason_code":"","stage":"result"}\n' > %t/reference.jsonl
+// RUN: printf '{"suite":"sv-tests","mode":"BMC","case_id":"case_pass","case_path":"/tmp/case_pass.sv","status":"PASS","reason_code":"","stage":"result"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_status","case_path":"/tmp/case_status.sv","status":"FAIL","reason_code":"ASSERTION_VIOLATION","stage":"result"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_reason","case_path":"/tmp/case_reason.sv","status":"ERROR","reason_code":"FRONTEND_RESOURCE_GUARD_RSS","stage":"frontend"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_stage","case_path":"/tmp/case_stage.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"frontend"}\n{"suite":"sv-tests","mode":"BMC","case_id":"case_new","case_path":"/tmp/case_new.sv","status":"PASS","reason_code":"","stage":"result"}\n' > %t/candidate.jsonl
+// RUN: python3 %S/../../utils/formal/compare_formal_results_drift.py --reference-jsonl %t/reference.jsonl --candidate-jsonl %t/candidate.jsonl --out-tsv %t/drift.tsv --summary-json %t/summary.json
+// RUN: FileCheck %s --check-prefix=TSV < %t/drift.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/summary.json
+// RUN: not python3 %S/../../utils/formal/compare_formal_results_drift.py --reference-jsonl %t/reference.jsonl --candidate-jsonl %t/candidate.jsonl --out-tsv %t/drift-fail.tsv --summary-json %t/summary-fail.json --fail-on-status-drift
+//
+// TSV: classification{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}case_id
+// TSV-DAG: NO_DRIFT{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_pass
+// TSV-DAG: STATUS_DRIFT{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_status
+// TSV-DAG: REASON_DRIFT{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_reason
+// TSV-DAG: STAGE_DRIFT{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_stage
+// TSV-DAG: MISSING_CASE{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_missing
+// TSV-DAG: NEW_CASE{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_new
+//
+// SUMMARY-DAG: "NO_DRIFT": 1
+// SUMMARY-DAG: "STATUS_DRIFT": 1
+// SUMMARY-DAG: "REASON_DRIFT": 1
+// SUMMARY-DAG: "STAGE_DRIFT": 1
+// SUMMARY-DAG: "MISSING_CASE": 1
+// SUMMARY-DAG: "NEW_CASE": 1

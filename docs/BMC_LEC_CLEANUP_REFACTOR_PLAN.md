@@ -375,7 +375,9 @@ Current workstream status in this branch:
 1. WS0: in progress
    - baseline manifest writer landed
    - unsupported diagnostics audit scaffold landed
-   - baseline freezing and three-run reproducibility gate still pending
+   - baseline capture runner landed (`capture_formal_baseline.py`)
+   - schema drift comparator landed (`compare_formal_results_drift.py`)
+   - real OpenTitan baseline runs + first drift report still pending
 2. WS1: in progress
    - shared formal schema helper landed
    - runner shared-library extraction still partial
@@ -626,8 +628,8 @@ These are explicit cleanup targets to avoid long-term code rot.
 Execute WS0-T2 plus WS0-T3 immediately:
 
 1. capture frozen baseline manifests for OpenTitan AES LEC, connectivity LEC, and sv-tests BMC
-2. run each baseline three times
-3. emit drift report from schema rows
+2. run each baseline three times using `capture_formal_baseline.py`
+3. emit drift report from schema rows via `compare_formal_results_drift.py`
 4. block further semantic refactors until baseline drift is understood
 
 ## 26. Formal Result Schema Contract v1 (Normative)
