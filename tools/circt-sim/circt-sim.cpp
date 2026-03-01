@@ -1053,6 +1053,8 @@ public:
     compiledLoader = std::move(loader);
     bool disableAllNative =
         std::getenv("CIRCT_AOT_DISABLE_ALL") != nullptr;
+    bool disableCompiledProcesses =
+        std::getenv("CIRCT_AOT_DISABLE_COMPILED_PROCESSES") != nullptr;
 
     // Wire up trampoline support: set the global compiled module descriptor
     // and the __circt_sim_ctx pointer so trampolines can call back into
@@ -1076,11 +1078,17 @@ public:
           llhdInterpreter->getGlobalMemoryBlocks());
 
       llhdInterpreter->loadCompiledFunctions(*compiledLoader);
-      if (!disableAllNative) {
+      if (!disableAllNative && !disableCompiledProcesses) {
         llhdInterpreter->loadCompiledProcesses(*compiledLoader);
       } else {
-        llvm::errs() << "[circt-sim] compiled process wiring disabled "
-                        "(CIRCT_AOT_DISABLE_ALL)\n";
+        llvm::errs() << "[circt-sim] compiled process wiring disabled (";
+        if (disableAllNative)
+          llvm::errs() << "CIRCT_AOT_DISABLE_ALL";
+        if (disableAllNative && disableCompiledProcesses)
+          llvm::errs() << ", ";
+        if (disableCompiledProcesses)
+          llvm::errs() << "CIRCT_AOT_DISABLE_COMPILED_PROCESSES";
+        llvm::errs() << ")\n";
       }
 
       // Wire up the trampoline dispatch callback so compiled trampolines
@@ -4102,12 +4110,26 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
                  << interp.getEntryTableSkippedDepthCount() << "\n";
     llvm::errs() << "[circt-sim] Entry-table skipped (yield):      "
                  << interp.getEntryTableSkippedYieldCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry MAY_YIELD skip (trampoline-default): "
+                 << interp.getEntryMayYieldSkipTrampolineDefaultCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry MAY_YIELD skip (native-default):     "
+                 << interp.getEntryMayYieldSkipNativeDefaultCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry MAY_YIELD skip (optin-no-proc):      "
+                 << interp.getEntryMayYieldSkipOptInNoProcCount() << "\n";
+    llvm::errs() << "[circt-sim] Entry MAY_YIELD skip (optin-non-coro):     "
+                 << interp.getEntryMayYieldSkipOptInNonCoroCount() << "\n";
     llvm::errs() << "[circt-sim] Max AOT depth:                    "
                  << interp.getMaxAotDepth() << "\n";
     llvm::errs() << "[circt-sim] func.call skipped (depth):        "
                  << interp.getNativeFuncSkippedDepth() << "\n";
     llvm::errs() << "[circt-sim] func.call skipped (yield):        "
                  << interp.getNativeFuncSkippedYield() << "\n";
+    llvm::errs() << "[circt-sim] func.call MAY_YIELD skip (default):        "
+                 << interp.getDirectMayYieldSkipDefaultCount() << "\n";
+    llvm::errs() << "[circt-sim] func.call MAY_YIELD skip (optin-no-proc):  "
+                 << interp.getDirectMayYieldSkipOptInNoProcCount() << "\n";
+    llvm::errs() << "[circt-sim] func.call MAY_YIELD skip (optin-non-coro): "
+                 << interp.getDirectMayYieldSkipOptInNonCoroCount() << "\n";
     // Phase 5.1 canonical counters for perf telemetry consumers.
     llvm::errs() << "[circt-sim] indirect_calls_total:             "
                  << indirectCallsTotal << "\n";
@@ -4128,6 +4150,20 @@ static LogicalResult runSimulationPipeline(MLIRContext &context,
                  << entryCallsNative << "\n";
     llvm::errs() << "[circt-sim] entry_calls_trampoline:           "
                  << entryCallsTrampoline << "\n";
+    llvm::errs() << "[circt-sim] entry_skipped_yield_trampoline_default: "
+                 << interp.getEntryMayYieldSkipTrampolineDefaultCount() << "\n";
+    llvm::errs() << "[circt-sim] entry_skipped_yield_native_default:     "
+                 << interp.getEntryMayYieldSkipNativeDefaultCount() << "\n";
+    llvm::errs() << "[circt-sim] entry_skipped_yield_optin_no_proc:      "
+                 << interp.getEntryMayYieldSkipOptInNoProcCount() << "\n";
+    llvm::errs() << "[circt-sim] entry_skipped_yield_optin_non_coro:     "
+                 << interp.getEntryMayYieldSkipOptInNonCoroCount() << "\n";
+    llvm::errs() << "[circt-sim] direct_skipped_yield_default:            "
+                 << interp.getDirectMayYieldSkipDefaultCount() << "\n";
+    llvm::errs() << "[circt-sim] direct_skipped_yield_optin_no_proc:      "
+                 << interp.getDirectMayYieldSkipOptInNoProcCount() << "\n";
+    llvm::errs() << "[circt-sim] direct_skipped_yield_optin_non_coro:     "
+                 << interp.getDirectMayYieldSkipOptInNonCoroCount() << "\n";
     llvm::errs() << "[circt-sim] wait_event_count:                 "
                  << interp.getMooreWaitEventCount() << "\n";
     llvm::errs() << "[circt-sim] wait_count:                       "

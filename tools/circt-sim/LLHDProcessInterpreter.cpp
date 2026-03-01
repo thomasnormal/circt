@@ -89,6 +89,74 @@ static bool isTruthyEnv(const char *value) {
 static bool isAotPtrTraceEnabled() {
   return isTruthyEnv(std::getenv("CIRCT_AOT_TRACE_PTR"));
 }
+
+static void parseAotFuncIdSetFromEnv(const char *envName,
+                                     llvm::StringRef summaryLabel,
+                                     std::unordered_set<uint32_t> &out) {
+  out.clear();
+  const char *raw = std::getenv(envName);
+  if (!raw)
+    return;
+
+  llvm::StringRef remaining(raw);
+  while (true) {
+    size_t comma = remaining.find(',');
+    llvm::StringRef token = comma == llvm::StringRef::npos
+                                ? remaining
+                                : remaining.take_front(comma);
+    token = token.trim();
+    if (!token.empty()) {
+      uint64_t value = 0;
+      if (token.getAsInteger(10, value)) {
+        llvm::errs() << "[circt-sim] WARNING: ignoring invalid FuncId token '"
+                     << token << "' in " << envName << "\n";
+      } else if (value > std::numeric_limits<uint32_t>::max()) {
+        llvm::errs() << "[circt-sim] WARNING: ignoring out-of-range FuncId "
+                        "token '"
+                     << token << "' in " << envName << "\n";
+      } else {
+        out.insert(static_cast<uint32_t>(value));
+      }
+    }
+
+    if (comma == llvm::StringRef::npos)
+      break;
+    remaining = remaining.drop_front(comma + 1);
+  }
+
+  llvm::errs() << "[circt-sim] " << summaryLabel << ": " << out.size()
+               << " fids\n";
+}
+
+static bool parseAotIntEnv(const char *envName, int &outValue) {
+  const char *raw = std::getenv(envName);
+  if (!raw)
+    return false;
+
+  llvm::StringRef token(raw);
+  token = token.trim();
+  if (token.empty()) {
+    llvm::errs() << "[circt-sim] WARNING: ignoring empty value in " << envName
+                 << "\n";
+    return false;
+  }
+
+  int64_t value = 0;
+  if (token.getAsInteger(10, value)) {
+    llvm::errs() << "[circt-sim] WARNING: ignoring invalid integer value '"
+                 << token << "' in " << envName << "\n";
+    return false;
+  }
+  if (value < std::numeric_limits<int>::min() ||
+      value > std::numeric_limits<int>::max()) {
+    llvm::errs() << "[circt-sim] WARNING: ignoring out-of-range integer value '"
+                 << token << "' in " << envName << "\n";
+    return false;
+  }
+
+  outValue = static_cast<int>(value);
+  return true;
+}
 }
 
 extern "C" uint64_t __circt_sim_module_init_probe_port_raw(uint64_t portIndex) {
@@ -24949,46 +25017,11 @@ no_uvm_objection_intercept:
           }
         }
       }
-      auto shouldSkipMayYieldNativeFunc = [&](uint32_t fid) {
-        if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
-          return false;
-        if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
-          return false;
-        static bool allowNativeMayYield =
-            std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
-        static bool traceNativeCalls =
-            std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
-        // Default safety: native func.call cannot suspend today. Keep
-        // MAY_YIELD FuncIds on interpreter dispatch unless explicitly opted in.
-        if (!allowNativeMayYield) {
-          if (traceNativeCalls) {
-            llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
-                         << " active_proc=" << activeProcessId
-                         << " mode=default\n";
-          }
-          return true;
-        }
-        // Opt-in mode: only allow inside a coroutine-classified process.
-        bool inCoroutineProcess = false;
-        if (activeProcessId != InvalidProcessId) {
-          auto modelIt = processExecModels.find(activeProcessId);
-          inCoroutineProcess = modelIt != processExecModels.end() &&
-                               modelIt->second == ExecModel::Coroutine;
-        }
-        bool skip = !inCoroutineProcess;
-        if (skip && traceNativeCalls) {
-          llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
-                       << " active_proc=" << activeProcessId << " mode="
-                       << (activeProcessId == InvalidProcessId
-                               ? "optin-no-proc"
-                               : "optin-non-coro")
-                       << "\n";
-        }
-        return skip;
-      };
       if (fidIt != funcOpToFid.end() &&
-          shouldSkipMayYieldNativeFunc(fidIt->second)) {
+          shouldSkipMayYieldDirectNativeFunc(fidIt->second, activeProcessId,
+                                             "func.call")) {
         ++nativeFuncSkippedYield;
+        noteAotDirectYieldSkip(fidIt->second);
         ++interpretedFuncCallCount;
         goto func_call_interpreted_fallback;
       }
@@ -25374,42 +25407,10 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
     }
   }
   if (nfp && fidIt != funcOpToFid.end()) {
-    auto shouldSkipMayYieldNativeFunc = [&](uint32_t fid) {
-      if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
-        return false;
-      if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
-        return false;
-      static bool allowNativeMayYield =
-          std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
-      static bool traceNativeCalls =
-          std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
-      if (!allowNativeMayYield) {
-        if (traceNativeCalls) {
-          llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
-                       << " active_proc=" << activeProcessId
-                       << " mode=default\n";
-        }
-        return true;
-      }
-      bool inCoroutineProcess = false;
-      if (activeProcessId != InvalidProcessId) {
-        auto modelIt = processExecModels.find(activeProcessId);
-        inCoroutineProcess = modelIt != processExecModels.end() &&
-                             modelIt->second == ExecModel::Coroutine;
-      }
-      bool skip = !inCoroutineProcess;
-      if (skip && traceNativeCalls) {
-        llvm::errs() << "[AOT TRACE] func.call skip may_yield fid=" << fid
-                     << " active_proc=" << activeProcessId << " mode="
-                     << (activeProcessId == InvalidProcessId
-                             ? "optin-no-proc"
-                             : "optin-non-coro")
-                     << "\n";
-      }
-      return skip;
-    };
-    if (shouldSkipMayYieldNativeFunc(fidIt->second)) {
+    if (shouldSkipMayYieldDirectNativeFunc(fidIt->second, activeProcessId,
+                                           "func.call.cached")) {
       ++nativeFuncSkippedYield;
+      noteAotDirectYieldSkip(fidIt->second);
       nfp = nullptr;
       forcedInterpreter = true;
     }
@@ -43218,6 +43219,152 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
   deferredChildModuleOps.clear();
 }
 
+bool LLHDProcessInterpreter::shouldSkipMayYieldDirectNativeFunc(
+    uint32_t fid, ProcessId contextProcId, llvm::StringRef dispatchKind) {
+  if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
+    return false;
+  if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
+    return false;
+  if (isUnsafeMayYieldFidBypassAllowed(fid, contextProcId, dispatchKind))
+    return false;
+
+  static bool allowNativeMayYield =
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
+  static bool traceNativeCalls =
+      std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+  if (!allowNativeMayYield) {
+    ++directMayYieldSkipDefaultCount;
+    if (traceNativeCalls) {
+      llvm::errs() << "[AOT TRACE] " << dispatchKind
+                   << " skip may_yield fid=" << fid
+                   << " active_proc=" << contextProcId
+                   << " mode=default\n";
+    }
+    return true;
+  }
+
+  bool inCoroutineProcess = false;
+  if (contextProcId != InvalidProcessId) {
+    auto modelIt = processExecModels.find(contextProcId);
+    inCoroutineProcess = modelIt != processExecModels.end() &&
+                         modelIt->second == ExecModel::Coroutine;
+  }
+  if (inCoroutineProcess)
+    return false;
+
+  bool noProcessContext = contextProcId == InvalidProcessId;
+  if (noProcessContext)
+    ++directMayYieldSkipOptInNoProcCount;
+  else
+    ++directMayYieldSkipOptInNonCoroCount;
+
+  if (traceNativeCalls) {
+    llvm::errs() << "[AOT TRACE] " << dispatchKind
+                 << " skip may_yield fid=" << fid
+                 << " active_proc=" << contextProcId << " mode="
+                 << (noProcessContext ? "optin-no-proc" : "optin-non-coro")
+                 << "\n";
+  }
+  return true;
+}
+
+bool LLHDProcessInterpreter::shouldSkipMayYieldEntryDispatch(
+    uint32_t fid, bool isNativeEntry, ProcessId contextProcId) {
+  if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
+    return false;
+  if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
+    return false;
+
+  static bool allowNativeMayYield =
+      std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
+  static bool traceNativeCalls =
+      std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+
+  if (!isNativeEntry) {
+    ++entryMayYieldSkipTrampolineDefaultCount;
+    if (traceNativeCalls) {
+      llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid
+                   << " active_proc=" << contextProcId
+                   << " mode=trampoline-default\n";
+    }
+    return true;
+  }
+
+  if (isUnsafeMayYieldFidBypassAllowed(fid, contextProcId, "call_indirect"))
+    return false;
+
+  if (!allowNativeMayYield) {
+    ++entryMayYieldSkipNativeDefaultCount;
+    if (traceNativeCalls) {
+      llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid
+                   << " active_proc=" << contextProcId
+                   << " mode=native-default\n";
+    }
+    return true;
+  }
+
+  bool inCoroutineProcess = false;
+  if (contextProcId != InvalidProcessId) {
+    auto modelIt = processExecModels.find(contextProcId);
+    inCoroutineProcess = modelIt != processExecModels.end() &&
+                         modelIt->second == ExecModel::Coroutine;
+  }
+  if (inCoroutineProcess)
+    return false;
+
+  bool noProcessContext = contextProcId == InvalidProcessId;
+  if (noProcessContext)
+    ++entryMayYieldSkipOptInNoProcCount;
+  else
+    ++entryMayYieldSkipOptInNonCoroCount;
+
+  if (traceNativeCalls) {
+    llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid
+                 << " active_proc=" << contextProcId << " mode="
+                 << (noProcessContext ? "optin-no-proc" : "optin-non-coro")
+                 << "\n";
+  }
+  return true;
+}
+
+bool LLHDProcessInterpreter::isUnsafeMayYieldFidBypassAllowed(
+    uint32_t fid, ProcessId contextProcId, llvm::StringRef dispatchKind) {
+  if (!aotAllowMayYieldFidsUnsafe.count(fid))
+    return false;
+
+  auto cacheIt = aotAllowMayYieldUnsafeDecisionCache.find(fid);
+  if (cacheIt != aotAllowMayYieldUnsafeDecisionCache.end())
+    return cacheIt->second;
+
+  bool allowBypass = false;
+  llvm::StringRef calleeName;
+  if (fid < aotFuncEntryNamesById.size())
+    calleeName = aotFuncEntryNamesById[fid];
+  if (!calleeName.empty() && rootModule) {
+    if (auto calleeFunc = rootModule.lookupSymbol<func::FuncOp>(calleeName))
+      allowBypass =
+          !maySuspendInFuncBodyForNativeThunkPolicy(calleeFunc, contextProcId);
+  }
+  aotAllowMayYieldUnsafeDecisionCache[fid] = allowBypass;
+
+  static bool traceNativeCalls =
+      std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+  if (!allowBypass && traceNativeCalls) {
+    llvm::errs() << "[AOT TRACE] ignore unsafe MAY_YIELD fid override fid="
+                 << fid << " callee=" << calleeName
+                 << " dispatch=" << dispatchKind
+                 << " reason=body-may-suspend\n";
+  }
+  if (!allowBypass) {
+    llvm::errs() << "[circt-sim] Ignoring unsafe MAY_YIELD fid override for "
+                 << "fid=" << fid;
+    if (!calleeName.empty())
+      llvm::errs() << " name=" << calleeName;
+    llvm::errs() << " (body may suspend)\n";
+  }
+  return allowBypass;
+}
+
 
 void LLHDProcessInterpreter::noteAotFuncIdCall(uint32_t fid) {
   if (!aotHotCalleeProfileEnabled)
@@ -43225,6 +43372,22 @@ void LLHDProcessInterpreter::noteAotFuncIdCall(uint32_t fid) {
   if (fid >= aotFuncIdCallCounts.size())
     return;
   ++aotFuncIdCallCounts[fid];
+}
+
+void LLHDProcessInterpreter::noteAotEntryYieldSkip(uint32_t fid) {
+  if (!aotHotCalleeProfileEnabled)
+    return;
+  if (fid >= aotEntryYieldSkipCounts.size())
+    return;
+  ++aotEntryYieldSkipCounts[fid];
+}
+
+void LLHDProcessInterpreter::noteAotDirectYieldSkip(uint32_t fid) {
+  if (!aotHotCalleeProfileEnabled)
+    return;
+  if (fid >= aotDirectYieldSkipCounts.size())
+    return;
+  ++aotDirectYieldSkipCounts[fid];
 }
 
 void LLHDProcessInterpreter::noteAotCalleeNameCall(llvm::StringRef calleeName) {
@@ -43258,28 +43421,25 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
 
   // Parse deny list: CIRCT_AOT_DENY_FID=123,456,789
   // Denied FuncIds fall back to the interpreter, useful for bisecting crashes.
-  aotDenyFids.clear();
-  if (auto *denyStr = std::getenv("CIRCT_AOT_DENY_FID")) {
-    std::string s(denyStr);
-    size_t pos = 0;
-    while (pos < s.size()) {
-      size_t end = s.find(',', pos);
-      if (end == std::string::npos)
-        end = s.size();
-      aotDenyFids.insert(
-          static_cast<uint32_t>(std::stoul(s.substr(pos, end - pos))));
-      pos = end + 1;
-    }
-    llvm::errs() << "[circt-sim] AOT deny list: " << aotDenyFids.size()
-                 << " fids\n";
-  }
+  parseAotFuncIdSetFromEnv("CIRCT_AOT_DENY_FID", "AOT deny list",
+                           aotDenyFids);
+
+  // Parse unsafe MAY_YIELD allow list:
+  // CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD_FIDS_UNSAFE=123,456,789
+  // These FuncIds bypass coroutine-context MAY_YIELD demotion for native
+  // dispatch paths. This is for controlled perf experiments only.
+  aotAllowMayYieldUnsafeDecisionCache.clear();
+  parseAotFuncIdSetFromEnv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD_FIDS_UNSAFE",
+                           "AOT unsafe MAY_YIELD allow list",
+                           aotAllowMayYieldFidsUnsafe);
 
   // Parse trap fid: CIRCT_AOT_TRAP_FID=123
   // Triggers __builtin_trap() just before native dispatch for this FuncId,
   // producing a core dump at the dispatch site.
   aotTrapFid = -1;
-  if (auto *trapStr = std::getenv("CIRCT_AOT_TRAP_FID")) {
-    aotTrapFid = std::stoi(trapStr);
+  int trapFid = -1;
+  if (parseAotIntEnv("CIRCT_AOT_TRAP_FID", trapFid)) {
+    aotTrapFid = trapFid;
     llvm::errs() << "[circt-sim] AOT trap on fid " << aotTrapFid << "\n";
   }
 
@@ -43598,6 +43758,8 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   numCompiledAllFuncs = loader.getNumAllFuncs();
   hasNativeEntryDispatch = false;
   aotFuncIdCallCounts.assign(numCompiledAllFuncs, 0);
+  aotEntryYieldSkipCounts.assign(numCompiledAllFuncs, 0);
+  aotDirectYieldSkipCounts.assign(numCompiledAllFuncs, 0);
   aotFuncEntryNamesById.assign(numCompiledAllFuncs, "");
   aotFuncNameToCanonicalId.clear();
   for (uint32_t fid = 0; fid < numCompiledAllFuncs; ++fid) {

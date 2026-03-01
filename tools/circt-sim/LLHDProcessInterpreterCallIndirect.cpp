@@ -656,49 +656,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       ++traceNativeCallCount;
     };
     auto shouldSkipMayYieldEntry = [&](uint32_t fid, bool isNativeEntry) {
-      if (!compiledFuncFlags || fid >= numCompiledAllFuncs)
-        return false;
-      if ((compiledFuncFlags[fid] & CIRCT_FUNC_FLAG_MAY_YIELD) == 0)
-        return false;
-      static bool allowNativeMayYield =
-          std::getenv("CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD") != nullptr;
-      static bool traceNativeCalls =
-          std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
-      // Default safety: neither native nor trampoline call_indirect entry
-      // dispatch can suspend/resume interpreter state. Keep MAY_YIELD FuncIds
-      // on interpreter dispatch unless native opt-in is explicitly requested.
-      if (!isNativeEntry) {
-        if (traceNativeCalls)
-          llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid="
-                       << fid << " active_proc=" << activeProcessId
-                       << " mode=trampoline-default\n";
-        return true;
-      }
-      if (!allowNativeMayYield) {
-        if (traceNativeCalls)
-          llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid="
-                       << fid << " active_proc=" << activeProcessId
-                       << " mode=native-default\n";
-        return true;
-      }
-      // Opt-in mode: only allow when the active process is coroutine-
-      // classified, since MAY_YIELD callees can suspend interpreter state.
-      bool inCoroutineProcess = false;
-      if (activeProcessId != InvalidProcessId) {
-        auto modelIt = processExecModels.find(activeProcessId);
-        inCoroutineProcess = modelIt != processExecModels.end() &&
-                             modelIt->second == ExecModel::Coroutine;
-      }
-      bool skip = !inCoroutineProcess;
-      if (skip && traceNativeCalls) {
-        llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid
-                     << " active_proc=" << activeProcessId << " mode="
-                     << (activeProcessId == InvalidProcessId
-                             ? "optin-no-proc"
-                             : "optin-non-coro")
-                     << "\n";
-      }
-      return skip;
+      return shouldSkipMayYieldEntryDispatch(fid, isNativeEntry,
+                                             activeProcessId);
     };
     auto shouldForceInterpretedFragileUvmCallee =
         [](llvm::StringRef calleeName) -> bool {
@@ -1184,6 +1143,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             // context.
             if (shouldSkipMayYieldEntry(fid, isNativeEntry)) {
               ++entryTableSkippedYieldCount;
+              noteAotEntryYieldSkip(fid);
               goto ci_xfallback_interpreted;
             }
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
@@ -1985,6 +1945,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             // Keep MAY_YIELD entries on interpreted dispatch.
             if (shouldSkipMayYieldEntry(fid, isNativeEntry)) {
               ++entryTableSkippedYieldCount;
+              noteAotEntryYieldSkip(fid);
               goto ci_static_interpreted;
             }
             void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);
@@ -2595,6 +2556,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           // Keep MAY_YIELD entries on interpreted dispatch.
           if (shouldSkipMayYieldEntry(entry.cachedFid, isNativeEntry)) {
             ++entryTableSkippedYieldCount;
+            noteAotEntryYieldSkip(entry.cachedFid);
             goto ci_cache_interpreted;
           }
           auto cachedFuncOp = entry.funcOp;
@@ -5011,6 +4973,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // context.
         if (shouldSkipMayYieldEntry(fid, isNativeEntry)) {
           ++entryTableSkippedYieldCount;
+          noteAotEntryYieldSkip(fid);
           goto ci_main_interpreted;
         }
         void *entryPtr = const_cast<void *>(compiledFuncEntries[fid]);

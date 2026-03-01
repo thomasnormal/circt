@@ -1255,6 +1255,15 @@ public:
   uint64_t getNativeFuncCallCount() const { return nativeFuncCallCount; }
   uint64_t getNativeFuncSkippedDepth() const { return nativeFuncSkippedDepth; }
   uint64_t getNativeFuncSkippedYield() const { return nativeFuncSkippedYield; }
+  uint64_t getDirectMayYieldSkipDefaultCount() const {
+    return directMayYieldSkipDefaultCount;
+  }
+  uint64_t getDirectMayYieldSkipOptInNoProcCount() const {
+    return directMayYieldSkipOptInNoProcCount;
+  }
+  uint64_t getDirectMayYieldSkipOptInNonCoroCount() const {
+    return directMayYieldSkipOptInNonCoroCount;
+  }
   uint64_t getInterpretedFuncCallCount() const {
     return interpretedFuncCallCount;
   }
@@ -1267,6 +1276,18 @@ public:
   }
   uint64_t getEntryTableSkippedYieldCount() const {
     return entryTableSkippedYieldCount;
+  }
+  uint64_t getEntryMayYieldSkipTrampolineDefaultCount() const {
+    return entryMayYieldSkipTrampolineDefaultCount;
+  }
+  uint64_t getEntryMayYieldSkipNativeDefaultCount() const {
+    return entryMayYieldSkipNativeDefaultCount;
+  }
+  uint64_t getEntryMayYieldSkipOptInNoProcCount() const {
+    return entryMayYieldSkipOptInNoProcCount;
+  }
+  uint64_t getEntryMayYieldSkipOptInNonCoroCount() const {
+    return entryMayYieldSkipOptInNonCoroCount;
   }
   uint64_t getLlhdWaitCount() const { return llhdWaitCount; }
   uint64_t getMooreWaitEventCount() const { return mooreWaitEventCount; }
@@ -1601,6 +1622,12 @@ private:
       ProcessId procId, const ProcessExecutionState &state,
       llvm::SmallVectorImpl<JitRuntimeIndirectSiteGuardSpec>
           *profileGuardSpecs = nullptr) const;
+
+  /// Return true if a function body is conservatively classified as possibly
+  /// suspending (wait/delay/fork/join/suspending callees). Used to keep unsafe
+  /// MAY_YIELD native-fid experiments from forcing known-suspending bodies.
+  bool maySuspendInFuncBodyForNativeThunkPolicy(mlir::func::FuncOp funcOp,
+                                                ProcessId procId) const;
 
   /// Return true when the process executes a one-block straight-line body
   /// ending in `llhd.halt` or `sim.fork.terminator`.
@@ -3304,12 +3331,22 @@ private:
   /// Enabled when CIRCT_AOT_STATS is set.
   bool aotHotCalleeProfileEnabled = false;
   llvm::SmallVector<uint64_t> aotFuncIdCallCounts;
+  llvm::SmallVector<uint64_t> aotEntryYieldSkipCounts;
+  llvm::SmallVector<uint64_t> aotDirectYieldSkipCounts;
   llvm::SmallVector<std::string> aotFuncEntryNamesById;
   llvm::StringMap<uint32_t> aotFuncNameToCanonicalId;
   const CompiledModuleLoader *compiledLoaderForModuleInit = nullptr;
   bool moduleInitTrampolinesPrepared = false;
   llvm::SmallVector<SignalId, 8> nativeModuleInitPortSignalIds;
   void noteAotFuncIdCall(uint32_t fid);
+  void noteAotEntryYieldSkip(uint32_t fid);
+  void noteAotDirectYieldSkip(uint32_t fid);
+  bool shouldSkipMayYieldDirectNativeFunc(uint32_t fid, ProcessId contextProcId,
+                                          llvm::StringRef dispatchKind);
+  bool shouldSkipMayYieldEntryDispatch(uint32_t fid, bool isNativeEntry,
+                                       ProcessId contextProcId);
+  bool isUnsafeMayYieldFidBypassAllowed(uint32_t fid, ProcessId contextProcId,
+                                        llvm::StringRef dispatchKind);
   void noteAotCalleeNameCall(llvm::StringRef calleeName);
 
   struct JitRuntimeIndirectSiteData {
@@ -4415,6 +4452,9 @@ private:
   uint64_t nativeFuncCallCount = 0;
   uint64_t nativeFuncSkippedDepth = 0;
   uint64_t nativeFuncSkippedYield = 0;
+  uint64_t directMayYieldSkipDefaultCount = 0;
+  uint64_t directMayYieldSkipOptInNoProcCount = 0;
+  uint64_t directMayYieldSkipOptInNonCoroCount = 0;
   uint64_t nativeCallIndirectDispatchCount = 0;
   uint64_t interpretedFuncCallCount = 0;
 
@@ -4431,6 +4471,10 @@ private:
   uint64_t trampolineEntryCallCount = 0;
   uint64_t entryTableSkippedDepthCount = 0;
   uint64_t entryTableSkippedYieldCount = 0;
+  uint64_t entryMayYieldSkipTrampolineDefaultCount = 0;
+  uint64_t entryMayYieldSkipNativeDefaultCount = 0;
+  uint64_t entryMayYieldSkipOptInNoProcCount = 0;
+  uint64_t entryMayYieldSkipOptInNonCoroCount = 0;
   uint64_t llhdWaitCount = 0;
   uint64_t mooreWaitEventCount = 0;
   uint64_t simForkCount = 0;
@@ -4452,6 +4496,16 @@ private:
   /// CIRCT_AOT_DENY_FID=123,456,789). Allows bisecting which compiled function
   /// causes a crash without recompiling.
   std::unordered_set<uint32_t> aotDenyFids;
+
+  /// Unsafe allow list: permit MAY_YIELD FuncIds to native-dispatch even
+  /// outside coroutine context (set via
+  /// CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD_FIDS_UNSAFE=123,456,789). Intended for
+  /// targeted performance experiments only.
+  std::unordered_set<uint32_t> aotAllowMayYieldFidsUnsafe;
+  /// Cache of per-FuncId unsafe MAY_YIELD override decisions.
+  /// true => allow unsafe bypass (classified non-suspending by policy scan)
+  /// false => keep normal MAY_YIELD demotion
+  llvm::DenseMap<uint32_t, bool> aotAllowMayYieldUnsafeDecisionCache;
 
   /// Trap FuncId: call __builtin_trap() just before native dispatch for this
   /// FuncId (set via CIRCT_AOT_TRAP_FID=123). Produces a core dump at the exact
