@@ -10520,3 +10520,55 @@
   - cross-check:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-*.sv test/Tools/crun/uvm-sequencer-*.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `38 passed, 2 expectedly failed` (`uvm-sequence-library.sv`, `uvm-sequence-no-driver.sv`).
+
+## 2026-03-01 - UVM sequence no-driver + sequence-library semantic closure
+
+- realization:
+  - `uvm-sequence-no-driver.sv` XFAIL was stale due a test-legality issue, not runtime behavior:
+    - class `run_phase` referenced module-scope `clk`, producing `unknown name 'clk'` at lowering.
+  - `uvm-sequence-library.sv` exposed two real semantic gaps when unmasked:
+    1. unsupported arbitrary symbol reference on named constraint handles
+       (`valid_rand_selection.constraint_mode(...)` etc.)
+    2. unsupported scope-randomize call shape (`randomize(select_rand)` on non-class object)
+
+- implemented:
+  - Test semanticization:
+    - `test/Tools/crun/uvm-sequence-no-driver.sv`
+      - removed `XFAIL`
+      - replaced `repeat(5) @(posedge clk);` with `#50ns;`
+      - removed unused module clock declarations.
+    - `test/Tools/crun/uvm-sequence-library.sv`
+      - removed `XFAIL`.
+  - UVM runtime compatibility hardening:
+    - `lib/Runtime/uvm-core/src/seq/uvm_sequence_library.svh`
+      - replaced named-constraint `constraint_mode` toggles with constraint-gating bits:
+        - `valid_rand_selection_enabled`
+        - `valid_randc_selection_enabled`
+        - `valid_sequence_count_enabled`
+      - updated constraints to be conditional on those bits.
+      - changed randomize calls to class-object form:
+        - `this.randomize(select_rand)`
+        - `this.randomize(select_randc)`
+
+- validation:
+  - red (no-driver):
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-sequence-no-driver.sv`
+    - failure: `unknown name 'clk'`.
+  - green (no-driver):
+    - after test fix: `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-sequence-no-driver.sv` -> `1 passed`.
+
+  - red #1 (sequence-library):
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-sequence-library.sv`
+    - failure: unsupported arbitrary symbol reference on `valid_rand_selection`.
+  - red #2 (sequence-library):
+    - after constraint-gating fix, same command
+    - failure: `randomize() requires a class object`.
+  - green (sequence-library):
+    - after `this.randomize(...)` fix: `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-sequence-library.sv` -> `1 passed`.
+
+  - sequence slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-sequence-*.sv`
+    - result: `14 passed`.
+  - broader UVM slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-*.sv test/Tools/crun/uvm-sequencer-*.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `40 passed`.

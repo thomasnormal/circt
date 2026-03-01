@@ -6289,3 +6289,12 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL
 
 ### [x] 2092. `test/Tools/crun/uvm-sequence-response.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. `uvm-sequence-response` now executes semantically under crun without hanging, and validates response matching (`response matching: PASS`). Root cause was sequencer fast-path interception completing `finish_item` on `item_done` without routing the optional response item into the issuing sequence response queue. Fixed by adding request-item -> sequence owner tracking and dispatching `uvm_sequence_base::put_base_response` from both `func.call` and `func.call_indirect` `item_done` interception paths (`tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`).
+
+### [x] 2093. `test/Tools/crun/uvm-sequence-no-driver.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL`; the prior failure was a test-legality issue (class `run_phase` referenced module-scope `clk`, which is illegal and failed in ImportVerilog name resolution). Replaced clock-event waiting with a fixed simulation delay (`#50ns`) so the negative scenario (driverless sequencer does not crash and simulation exits cleanly) is exercised semantically.
+
+### [x] 2094. `test/Tools/crun/uvm-sequence-library.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and fixed two real sequence-library semantic blockers in the UVM runtime source:
+1. Replaced named-constraint `constraint_mode` handle toggles with flag-gated constraints in `uvm_sequence_library` (`valid_rand_selection`, `valid_randc_selection`, `valid_sequence_count`) to avoid unsupported arbitrary symbol references during lowering.
+2. Replaced scope-randomize calls with class-object randomize calls (`this.randomize(select_rand)` / `this.randomize(select_randc)`) to satisfy current randomize lowering requirements.
+With these fixes, sequence-library creation now passes semantically under crun.

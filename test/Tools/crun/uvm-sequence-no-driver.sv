@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 --max-time 100000 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: class method references module-scope clk — slang reports "unknown name `clk`"
 
 // Negative test: start sequence on sequencer with no driver connected.
 // Should hit timeout rather than crash.
@@ -14,9 +12,6 @@
 
 module tb_top;
   import uvm_pkg::*;
-
-  bit clk;
-  always #5 clk = ~clk;
 
   class neg_item extends uvm_sequence_item;
     `uvm_object_utils(neg_item)
@@ -66,8 +61,8 @@ module tb_top;
         end
       join_none
 
-      // Wait a few clocks then drop objection to allow phase to end
-      repeat(5) @(posedge clk);
+      // Give the started sequence some simulation time, then allow phase end.
+      #50ns;
       phase.drop_objection(this);
     endtask
   endclass
