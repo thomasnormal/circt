@@ -2299,13 +2299,12 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       // Find the existing field signals and map this signal to them.
       auto body = ifaceStructTy.getBody();
       llvm::SmallVector<SignalId, 4> fieldSignals;
-      unsigned fieldOffset = 0;
       for (unsigned i = 0; i < body.size(); ++i) {
+        unsigned fieldOffset = getLLVMStructFieldOffset(ifaceStructTy, i);
         uint64_t fieldAddr = mallocAddr + fieldOffset;
         auto it = interfaceFieldSignals.find(fieldAddr);
         if (it != interfaceFieldSignals.end())
           fieldSignals.push_back(it->second);
-        fieldOffset += getLLVMTypeSizeForGEP(body[i]);
       }
       if (!fieldSignals.empty())
         interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
@@ -2317,11 +2316,11 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
     std::string sigName = signalIdToName.count(sigId)
                               ? signalIdToName[sigId]
                               : "iface";
-    unsigned fieldOffset = 0;
     llvm::SmallVector<SignalId, 4> fieldSignals;
 
     for (unsigned i = 0; i < body.size(); ++i) {
       Type fieldType = body[i];
+      unsigned fieldOffset = getLLVMStructFieldOffset(ifaceStructTy, i);
       unsigned fieldSize = getLLVMTypeSizeForGEP(fieldType);
       unsigned fieldBitWidth = getTypeWidth(fieldType);
 
@@ -2339,7 +2338,6 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
       seedShadowSignalFromMemory(fieldSigId, fieldAddr, fieldBitWidth,
                                  fieldSize);
 
-      fieldOffset += fieldSize;
     }
 
     interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
@@ -2397,11 +2395,11 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
 
       std::string sigName =
           signalIdToName.count(sigId) ? signalIdToName[sigId] : "child_iface";
-      unsigned fieldOffset = 0;
       llvm::SmallVector<SignalId, 4> fieldSignals;
 
       for (unsigned i = 0; i < body.size(); ++i) {
         Type fieldType = body[i];
+        unsigned fieldOffset = getLLVMStructFieldOffset(ifaceStructTy, i);
         unsigned fieldSize = getLLVMTypeSizeForGEP(fieldType);
         unsigned fieldBitWidth = getTypeWidth(fieldType);
 
@@ -2426,7 +2424,6 @@ void LLHDProcessInterpreter::createInterfaceFieldShadowSignals() {
         seedShadowSignalFromMemory(fieldSigId, fieldAddr, fieldBitWidth,
                                    fieldSize);
 
-        fieldOffset += fieldSize;
       }
 
       interfacePtrToFieldSignals[sigId] = std::move(fieldSignals);
@@ -12716,6 +12713,9 @@ bool LLHDProcessInterpreter::executeStep(ProcessId procId) {
     op->print(llvm::errs(), OpPrintingFlags().printGenericOpForm());
     llvm::errs() << "\n";
     llvm::errs() << "  Location: " << op->getLoc() << "\n";
+    executionFailure = true;
+    terminationRequested = true;
+    state.halted = true;
     return false;
   }
 
@@ -21938,23 +21938,58 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
             addCandidate(canonicalizeUvmObjectAddress(procId, masked));
           }
         };
+    auto isPlausibleRuntimePointer = [&](uint64_t addr) -> bool {
+      // CIRCT-sim object addresses live in the canonical low virtual range.
+      // Reject shifted/misaligned artifacts such as 0xXXXXXXXX00000000.
+      return addr >= 0x1000 && addr < (uint64_t(1) << 47);
+    };
+    auto isLikelyFactoryObject = [&](uint64_t factoryAddr) -> bool {
+      if (!isPlausibleRuntimePointer(factoryAddr))
+        return false;
+      uint64_t vtableAddr = 0;
+      if (!readObjectVTableAddress(factoryAddr, vtableAddr, procId))
+        return false;
+      auto globalIt = addressToGlobal.find(vtableAddr);
+      if (globalIt == addressToGlobal.end())
+        return false;
+      llvm::StringRef vtableName = globalIt->second;
+      return vtableName.contains("uvm_default_factory::__vtable__") ||
+             vtableName.contains("uvm_factory::__vtable__");
+    };
     auto tryReadFactoryFromCoreService = [&](uint64_t rawCoreServiceAddr,
                                              uint64_t &factoryPtr,
                                              uint64_t &coreServiceAddr) -> bool {
-      constexpr uint64_t kFactoryOff = 12;
+      // ABI-aligned layout places `factory` at offset 16 on 64-bit targets.
+      // Keep legacy packed offset 12 as a compatibility fallback.
+      constexpr uint64_t kFactoryOffsets[] = {16, 12};
       SmallVector<uint64_t, 8> candidates;
       gatherCoreServiceCandidates(rawCoreServiceAddr, candidates);
       for (uint64_t candidate : candidates) {
-        uint64_t candidateFactory = 0;
-        if (!readU64FromAddress(candidate + kFactoryOff, candidateFactory))
-          continue;
         if (coreServiceAddr == 0)
           coreServiceAddr = candidate;
-        if (candidateFactory == 0)
-          continue;
-        factoryPtr = candidateFactory;
-        coreServiceAddr = candidate;
-        return true;
+
+        uint64_t fallbackFactory = 0;
+        for (uint64_t offset : kFactoryOffsets) {
+          uint64_t candidateFactory = 0;
+          if (!readU64FromAddress(candidate + offset, candidateFactory) ||
+              candidateFactory == 0)
+            continue;
+          if (!isPlausibleRuntimePointer(candidateFactory))
+            continue;
+          if (fallbackFactory == 0)
+            fallbackFactory = candidateFactory;
+          if (isLikelyFactoryObject(candidateFactory)) {
+            factoryPtr = candidateFactory;
+            coreServiceAddr = candidate;
+            return true;
+          }
+        }
+
+        if (fallbackFactory != 0) {
+          factoryPtr = fallbackFactory;
+          coreServiceAddr = candidate;
+          return true;
+        }
       }
       return false;
     };
@@ -22125,6 +22160,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                      /*passNullThis=*/true);
       }
 
+      // When the requested type name is short (for example "simple_test"),
+      // accessor symbols can still be package-qualified
+      // ("simple_test_pkg::simple_test::get_object_type"). Add suffix-based
+      // matches so short-name resolution does not depend on one fixed package.
+      std::string getTypeSuffix = ("::" + typeName + "::get_type").str();
+      std::string getObjectTypeSuffix =
+          ("::" + typeName + "::get_object_type").str();
+      rootModule.walk([&](func::FuncOp funcOp) {
+        llvm::StringRef symbolName = funcOp.getSymName();
+        if (symbolName.ends_with(getTypeSuffix))
+          addCandidate(symbolName, /*passNullThis=*/false);
+        if (symbolName.ends_with(getObjectTypeSuffix))
+          addCandidate(symbolName, /*passNullThis=*/true);
+      });
+
       auto &state = processStates[procId];
       constexpr size_t maxCallDepth = 200;
       if (state.callDepth >= maxCallDepth)
@@ -22218,22 +22268,10 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       [&](uint64_t wrapperAddr, uint64_t slotIndex,
           llvm::ArrayRef<InterpretedValue> extraArgs,
           InterpretedValue &outResult) -> bool {
-    uint64_t off = 0;
-    MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-    if (!blk || !blk->initialized || off + 8 > blk->size) {
+    uint64_t vtableAddr = 0;
+    if (!readObjectVTableAddress(wrapperAddr, vtableAddr, procId)) {
       if (traceUvmFactoryByType)
         llvm::errs() << "[UVM-BYTYPE] invoke miss: wrapper-vtable ptr unreadable"
-                     << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
-                     << " slot=" << slotIndex << "\n";
-      return false;
-    }
-
-    uint64_t vtableAddr = 0;
-    for (unsigned i = 0; i < 8; ++i)
-      vtableAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-    if (vtableAddr == 0) {
-      if (traceUvmFactoryByType)
-        llvm::errs() << "[UVM-BYTYPE] invoke miss: wrapper vtable is null"
                      << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
                      << " slot=" << slotIndex << "\n";
       return false;
@@ -23205,194 +23243,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Intercept config_db wrapper functions at the func.call level.
-  // Config_db wrappers (get_NNNN/set_NNNN) have 4 args, return i1, and their
-  // body calls get_imp_NNNN() then call_indirect to the implementation.
-  // Some specializations' singletons fail to initialize (vtable null), so
-  // intercepting at the call_indirect level misses them. By intercepting here,
-  // we handle ALL config_db calls regardless of singleton state.
-  if (callOp.getNumResults() == 1 &&
-      callOp.getResult(0).getType().isSignlessInteger(1) &&
-      callOp.getNumOperands() == 4 &&
-      isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType())) {
-    Type arg3Type = callOp.getOperand(3).getType();
-    if (auto refType = dyn_cast<llhd::RefType>(arg3Type)) {
-      // Detect config_db wrapper by name: get_NNNN or set_NNNN where NNNN is
-      // all digits. This matches the slang-generated wrapper pattern.
-      StringRef callee = callOp.getCallee();
-      bool isConfigDbWrapper = false;
-      if ((callee.starts_with("get_") || callee.starts_with("set_")) &&
-          callee.size() > 4) {
-        bool allDigits = true;
-        for (char c : callee.drop_front(4))
-          if (!std::isdigit(c)) { allDigits = false; break; }
-        isConfigDbWrapper = allDigits;
-      }
-
-
-      if (isConfigDbWrapper) {
-        // This is a config_db::get wrapper. Extract string args and handle
-        // via our key-value store, bypassing the singleton dispatch.
-        auto readStr = [&](unsigned argIdx) -> std::string {
-          return readMooreStringStruct(procId, callOp.getOperand(argIdx));
-        };
-
-        // Build config_db key from context + inst_name + field_name.
-        // Wrapper calls pass raw inst_name; when context is non-null UVM
-        // resolves it relative to context.get_full_name().
-        InterpretedValue contextVal = getValue(procId, callOp.getOperand(0));
-        std::string rawInstName = readStr(1);
-        std::string instName =
-            normalizeConfigDbInstName(procId, contextVal, rawInstName);
-        std::string fieldName = readStr(2);
-        std::string key = instName + "." + fieldName;
-        if (traceConfigDbEnabled) {
-          maybeTraceConfigDbFuncCallGetBegin(callee, key, instName, fieldName,
-                                             configDbEntries.size());
-        }
-
-        const std::vector<uint8_t> *matchedValue = nullptr;
-        std::string matchedKey;
-        if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
-          Type innerType = refType.getNestedType();
-          unsigned innerBits = getTypeWidth(innerType);
-          unsigned innerBytes = (innerBits + 7) / 8;
-          if (innerBytes == 0 || matchedValue->size() != innerBytes) {
-            if (traceConfigDbEnabled) {
-              llvm::errs() << "[CFG-FC-GET] type-mismatch key=\"" << matchedKey
-                           << "\" payload_bytes=" << matchedValue->size()
-                           << " expected_bytes=" << innerBytes << "\n";
-            }
-            setValue(procId, callOp.getResult(0),
-                     InterpretedValue(llvm::APInt(1, 0)));
-            return success();
-          }
-          if (traceI3CConfigHandles &&
-              fieldName.find("i3c_") != std::string::npos) {
-            uint64_t ptrPayload = 0;
-            unsigned copyBytes =
-                std::min<unsigned>(8, static_cast<unsigned>(matchedValue->size()));
-            for (unsigned i = 0; i < copyBytes; ++i)
-              ptrPayload |= static_cast<uint64_t>((*matchedValue)[i]) << (i * 8);
-            InterpretedValue outRefVal = getValue(procId, callOp.getOperand(3));
-            uint64_t outRefAddr = outRefVal.isX() ? 0 : outRefVal.getUInt64();
-            maybeTraceI3CConfigHandleGet(callee, matchedKey, ptrPayload,
-                                         outRefAddr, fieldName);
-          }
-          if (traceConfigDbEnabled) {
-            maybeTraceConfigDbFuncCallGetHit(matchedKey, matchedValue->size());
-          }
-          Value outputRef = callOp.getOperand(3);
-          const std::vector<uint8_t> &valueData = *matchedValue;
-          llvm::APInt valueBits(innerBits, 0);
-          for (unsigned i = 0;
-               i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-            safeInsertBits(valueBits,llvm::APInt(8, valueData[i]), i * 8);
-          // Write value to output ref via signal or memory
-          SignalId sigId2 = resolveSignalId(outputRef);
-          if (sigId2 != 0)
-            pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits);
-          InterpretedValue refAddr = getValue(procId, outputRef);
-          if (!refAddr.isX()) {
-            uint64_t addr = refAddr.getUInt64();
-            uint64_t off3 = 0;
-            MemoryBlock *blk =
-                findMemoryBlockByAddress(addr, procId, &off3);
-            if (blk) {
-              writeConfigDbBytesToMemoryBlock(
-                  blk, off3, valueData, innerBytes,
-                  /*zeroFillMissing=*/true);
-            } else {
-              // Fallback: write directly to native memory (heap-allocated
-              // blocks from __moore_dyn_array_new, malloc, etc.)
-              uint64_t nativeOff = 0;
-              size_t nativeSize = 0;
-              if (findNativeMemoryBlockByAddress(addr, &nativeOff,
-                                                 &nativeSize)) {
-                writeConfigDbBytesToNativeMemory(
-                    addr, nativeOff, nativeSize, valueData, innerBytes,
-                    /*zeroFillMissing=*/true);
-              }
-            }
-          }
-          setValue(procId, callOp.getResult(0),
-                  InterpretedValue(llvm::APInt(1, 1)));
-          return success();
-        } else {
-          if (traceConfigDbEnabled)
-            maybeTraceConfigDbFuncCallGetMiss(key);
-          // Not found - return false
-          setValue(procId, callOp.getResult(0),
-                  InterpretedValue(llvm::APInt(1, 0)));
-          return success();
-        }
-      }
-    }
-  }
-
-  // Intercept config_db set_ wrappers at the func.call level.
-  // set_ wrappers return void and have !llvm.ptr arg3 (unlike get_ wrappers
-  // which return i1 and have !llhd.ref arg3). Without this intercept,
-  // set_ wrappers execute their full MLIR body which involves factory
-  // singleton initialization that can fail (vtable X) for some specializations,
-  // causing config_db entries to never be stored. This breaks I2S (and
-  // potentially other AVIPs) because the env/agent configs are never stored,
-  // so build_phase can't retrieve them and components are never created.
-  if (callOp.getNumResults() == 0 &&
-      callOp.getNumOperands() == 4 &&
-      isa<LLVM::LLVMPointerType>(callOp.getOperand(0).getType()) &&
-      isa<LLVM::LLVMPointerType>(callOp.getOperand(3).getType())) {
-    StringRef callee = callOp.getCallee();
-    bool isConfigDbSetWrapper = false;
-    if (callee.starts_with("set_") && callee.size() > 4) {
-      bool allDigits = true;
-      for (char c : callee.drop_front(4))
-        if (!std::isdigit(c)) { allDigits = false; break; }
-      isConfigDbSetWrapper = allDigits;
-    }
-    if (isConfigDbSetWrapper) {
-      // Read inst_name and field_name from struct<(ptr,i64)> args
-      auto readStr = [&](unsigned argIdx) -> std::string {
-        return readMooreStringStruct(procId, callOp.getOperand(argIdx));
-      };
-
-      InterpretedValue contextVal = getValue(procId, callOp.getOperand(0));
-      std::string rawInstName = readStr(1);
-      std::string instName =
-          normalizeConfigDbInstName(procId, contextVal, rawInstName);
-      std::string fieldName = readStr(2);
-      std::string key = instName + "." + fieldName;
-
-      // Store the value pointer as raw bytes in configDbEntries.
-      // arg3 is !llvm.ptr — the pointer IS the config value (object handle).
-      InterpretedValue valueArg = getValue(procId, callOp.getOperand(3));
-      unsigned valueBits = valueArg.getWidth();
-      unsigned valueBytes = (valueBits + 7) / 8;
-      std::vector<uint8_t> valueData(valueBytes, 0);
-      if (!valueArg.isX()) {
-        llvm::APInt valBits = valueArg.getAPInt();
-        for (unsigned i = 0; i < valueBytes; ++i)
-          valueData[i] = static_cast<uint8_t>(
-              valBits.extractBits(8, i * 8).getZExtValue());
-      }
-      storeConfigDbEntry(instName, fieldName, std::move(valueData));
-      if (traceConfigDbEnabled) {
-        maybeTraceConfigDbFuncCallSet(callee, key, valueBytes,
-                                      configDbEntries.size());
-      }
-      if (traceI3CConfigHandles &&
-          fieldName.find("i3c_") != std::string::npos) {
-        uint64_t ptrPayload = valueArg.isX() ? 0 : valueArg.getUInt64();
-        maybeTraceI3CConfigHandleSet(callee, key, ptrPayload, fieldName);
-      }
-      LLVM_DEBUG(llvm::dbgs()
-                 << "  func.call @" << callee
-                 << ": config_db set intercepted, key=\"" << key
-                 << "\" valueBytes=" << valueBytes << "\n");
-      return success();
-    }
-  }
-
   // Track UVM root construction for re-entrancy handling
   // When m_uvm_get_root is called, we need to mark root construction as started
   // so that re-entrant calls (via uvm_component::new -> get_root) can skip
@@ -23643,6 +23493,38 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   for (Value operand : callOp.getOperands()) {
     args.push_back(getValue(procId, operand));
   }
+
+  static bool traceUvmChildren = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_UVM_CHILDREN");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto isUvmChildrenTraceCall = [](llvm::StringRef name) {
+    return name == "uvm_pkg::uvm_component::m_add_child" ||
+           name == "uvm_pkg::uvm_root::m_add_child" ||
+           name == "uvm_pkg::uvm_component::get_first_child" ||
+           name == "uvm_pkg::uvm_component::get_next_child" ||
+           name == "uvm_pkg::uvm_task_phase::m_traverse" ||
+           name == "uvm_pkg::uvm_task_phase::execute" ||
+           name == "uvm_pkg::uvm_phase_hopper::traverse_on" ||
+           name == "uvm_pkg::uvm_phase_hopper::execute_on" ||
+           name == "uvm_pkg::uvm_run_phase::exec_task";
+  };
+  auto emitUvmChildrenTraceCall = [&](llvm::StringRef stage,
+                                      llvm::ArrayRef<InterpretedValue> values) {
+    if (!traceUvmChildren || !isUvmChildrenTraceCall(calleeName))
+      return;
+    llvm::errs() << "[UVM-CHILD] " << stage << " proc=" << procId
+                 << " callee=" << calleeName;
+    for (size_t i = 0; i < std::min<size_t>(values.size(), 4); ++i) {
+      llvm::errs() << " a" << i << "=";
+      if (values[i].isX())
+        llvm::errs() << "X";
+      else
+        llvm::errs() << llvm::format_hex(values[i].getUInt64(), 16);
+    }
+    llvm::errs() << "\n";
+  };
+  emitUvmChildrenTraceCall("enter", args);
 
   static bool tracePhasePtrs = []() {
     const char *env = std::getenv("CIRCT_SIM_TRACE_PHASE_PTRS");
@@ -24595,172 +24477,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   }
 no_uvm_objection_intercept:
 
-  // Intercept UVM config_db implementation set/get/exists methods.
-  // These are stub methods generated by MooreToCore for the UVM config_db class.
-  // We replace them with a real key-value store so config_db actually works.
-  // Note: class name may be "config_db_default_implementation_t", so we match
-  // on "config_db" + "implementation" separately.
-  if (calleeName.contains("config_db") && calleeName.contains("implementation") &&
-      (calleeName.contains("::set") || calleeName.contains("::get") ||
-       calleeName.contains("::exists"))) {
-
-    // Helper: read a string from a struct<(ptr, i64)> value argument.
-    auto readStringFromStructVal = [&](Value operand) -> std::string {
-      return readMooreStringStruct(procId, operand);
-    };
-    auto resolveContextInstName = [&](Value contextOperand,
-                                      llvm::StringRef rawInstName) {
-      if (!isa<LLVM::LLVMPointerType>(contextOperand.getType()))
-        return rawInstName.str();
-      InterpretedValue contextValue = getValue(procId, contextOperand);
-      return normalizeConfigDbInstName(procId, contextValue, rawInstName);
-    };
-
-    if (calleeName.contains("::set")) {
-      // Signature: (self, cntxt, inst_name, field_name, value, accessor, pool, cntxt_ptr)
-      if (callOp.getNumOperands() >= 5) {
-        std::string rawInstName = readStringFromStructVal(callOp.getOperand(2));
-        std::string instName =
-            resolveContextInstName(callOp.getOperand(1), rawInstName);
-        std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
-        std::string key = instName + "." + fieldName;
-
-        // Serialize the value (arg4) to bytes
-        InterpretedValue valueArg = getValue(procId, callOp.getOperand(4));
-        unsigned valueBits = valueArg.getWidth();
-        unsigned valueBytes = (valueBits + 7) / 8;
-        std::vector<uint8_t> valueData(valueBytes, 0);
-        if (!valueArg.isX()) {
-          llvm::APInt valBits = valueArg.getAPInt();
-          for (unsigned i = 0; i < valueBytes; ++i)
-            valueData[i] = static_cast<uint8_t>(
-                valBits.extractBits(8, i * 8).getZExtValue());
-        }
-
-        storeConfigDbEntry(instName, fieldName, std::move(valueData));
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  config_db::set(\"" << key << "\", "
-                   << valueBits << " bits)\n");
-      }
-      return success();
-    }
-
-    if (calleeName.contains("::get")) {
-      // Signature: (self, cntxt, inst_name, field_name, output_ref) -> i1
-      if (callOp.getNumOperands() >= 5 && callOp.getNumResults() >= 1) {
-        std::string rawInstName = readStringFromStructVal(callOp.getOperand(2));
-        std::string instName =
-            resolveContextInstName(callOp.getOperand(1), rawInstName);
-        std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
-        std::string key = instName + "." + fieldName;
-
-        const std::vector<uint8_t> *matchedValue = nullptr;
-        std::string matchedKey;
-        if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
-          // Found: write value to output ref (arg4)
-          Value outputRef = callOp.getOperand(4);
-          const std::vector<uint8_t> &valueData = *matchedValue;
-          InterpretedValue refVal = getValue(procId, outputRef);
-          Type refType = outputRef.getType();
-
-          if (auto refT = dyn_cast<llhd::RefType>(refType)) {
-            Type innerType = refT.getNestedType();
-            unsigned innerBits = getTypeWidth(innerType);
-            unsigned innerBytes = (innerBits + 7) / 8;
-
-            llvm::APInt valueBits(innerBits, 0);
-            for (unsigned i = 0;
-                 i < std::min(innerBytes, (unsigned)valueData.size()); ++i) {
-              if (valueData[i] != 0)
-                valueBits |= llvm::APInt(innerBits, valueData[i]) << (i * 8);
-            }
-            InterpretedValue value(valueBits);
-
-            unsigned sigId = resolveSignalId(outputRef);
-            if (sigId > 0)
-              pendingEpsilonDrives[sigId] = value;
-            uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
-            if (addr > 0) {
-              uint64_t offset = 0;
-              auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-              if (block) {
-                writeConfigDbBytesToMemoryBlock(
-                    block, offset, valueData, innerBytes,
-                    /*zeroFillMissing=*/true);
-              } else {
-                uint64_t nativeOffset = 0;
-                size_t nativeSize = 0;
-                if (findNativeMemoryBlockByAddress(addr, &nativeOffset,
-                                                   &nativeSize)) {
-                  writeConfigDbBytesToNativeMemory(
-                      addr, nativeOffset, nativeSize, valueData, innerBytes,
-                      /*zeroFillMissing=*/true);
-                }
-              }
-            }
-          } else if (isa<LLVM::LLVMPointerType>(refType)) {
-            uint64_t addr = refVal.isX() ? 0 : refVal.getUInt64();
-            if (addr > 0) {
-              uint64_t offset = 0;
-              auto *block = findMemoryBlockByAddress(addr, procId, &offset);
-              if (block) {
-                writeConfigDbBytesToMemoryBlock(
-                    block, offset, valueData,
-                    static_cast<unsigned>(valueData.size()),
-                    /*zeroFillMissing=*/false);
-              } else {
-                uint64_t nativeOffset = 0;
-                size_t nativeSize = 0;
-                if (findNativeMemoryBlockByAddress(addr, &nativeOffset,
-                                                   &nativeSize)) {
-                  writeConfigDbBytesToNativeMemory(
-                      addr, nativeOffset, nativeSize, valueData,
-                      static_cast<unsigned>(valueData.size()),
-                      /*zeroFillMissing=*/false);
-                }
-              }
-            }
-          }
-
-          setValue(procId, callOp.getResult(0),
-                  InterpretedValue(llvm::APInt(1, 1)));
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  config_db::get(\"" << key << "\") -> found key \""
-                     << matchedKey << "\" ("
-                     << valueData.size() << " bytes)\n");
-        } else {
-          setValue(procId, callOp.getResult(0),
-                  InterpretedValue(llvm::APInt(1, 0)));
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  config_db::get(\"" << key << "\") -> not found\n");
-        }
-        return success();
-      }
-    }
-
-    if (calleeName.contains("::exists")) {
-      if (callOp.getNumOperands() >= 5 && callOp.getNumResults() >= 1) {
-        std::string rawInstName = readStringFromStructVal(callOp.getOperand(2));
-        std::string instName =
-            resolveContextInstName(callOp.getOperand(1), rawInstName);
-        std::string fieldName = readStringFromStructVal(callOp.getOperand(3));
-        std::string key = instName + "." + fieldName;
-
-        const std::vector<uint8_t> *matchedValue = nullptr;
-        std::string matchedKey;
-        bool found = lookupConfigDbEntry(instName, fieldName, matchedValue,
-                                         &matchedKey);
-
-        setValue(procId, callOp.getResult(0),
-                InterpretedValue(llvm::APInt(1, found ? 1 : 0)));
-        LLVM_DEBUG(llvm::dbgs()
-                   << "  config_db::exists(\"" << key << "\") -> "
-                   << (found ? "true" : "false") << "\n");
-        return success();
-      }
-    }
-  }
-
   // Intercept UVM resource_db_implementation_t::set/read_by_name methods.
   // Like config_db_implementation, these are stub functions that need real
   // key-value store behavior. resource_db is used by the sv-tests UVM
@@ -25252,6 +24968,9 @@ func_call_interpreted_fallback:
   for (auto [result, retVal] : llvm::zip(callOp.getResults(), returnValues)) {
     setValue(procId, result, retVal);
   }
+  if (traceUvmChildren && isUvmChildrenTraceCall(calleeName) &&
+      !returnValues.empty())
+    emitUvmChildrenTraceCall("ret", returnValues);
 
   maybeCanonicalizeUvmPhasePredecessorSet(procId, calleeName, args);
   if (calleeName == "get_common_domain" && !returnValues.empty()) {
@@ -27355,51 +27074,7 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
 
     uint64_t baseAddr = baseVal.getUInt64();
     uint64_t offset = 0;
-
-    // Get the element type
-    Type elemType = gepOp.getElemType();
-
-    // Process indices using the GEPIndicesAdaptor
-    auto indices = gepOp.getIndices();
-    Type currentType = elemType;
-
-    size_t idx = 0;
-    bool hasUnknownIndex = false;
-    for (auto indexValue : indices) {
-      int64_t indexVal = 0;
-
-      // Check if this is a constant index (IntegerAttr) or dynamic (Value)
-      if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(indexValue)) {
-        indexVal = intAttr.getInt();
-      } else if (auto dynamicIdx = llvm::dyn_cast_if_present<Value>(indexValue)) {
-        InterpretedValue dynVal = getValue(procId, dynamicIdx);
-        if (dynVal.isX()) {
-          hasUnknownIndex = true;
-          break;
-        }
-        indexVal = static_cast<int64_t>(dynVal.getUInt64());
-      }
-
-      if (idx == 0) {
-        offset += indexVal * getLLVMTypeSizeForGEP(elemType);
-      } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
-        auto body = structType.getBody();
-        for (int64_t i = 0; i < indexVal && static_cast<size_t>(i) < body.size(); ++i) {
-          offset += getLLVMTypeSizeForGEP(body[i]);
-        }
-        if (static_cast<size_t>(indexVal) < body.size()) {
-          currentType = body[indexVal];
-        }
-      } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
-        offset += indexVal * getLLVMTypeSizeForGEP(arrayType.getElementType());
-        currentType = arrayType.getElementType();
-      } else {
-        offset += indexVal * getLLVMTypeSizeForGEP(currentType);
-      }
-      ++idx;
-    }
-
-    if (hasUnknownIndex) {
+    if (!computeLLVMGEPOffset(procId, gepOp, offset)) {
       InterpretedValue result = InterpretedValue::makeX(64);
       valueMap[value] = result;
       return result;
@@ -30315,12 +29990,18 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
                 offset += indexVal * getLLVMTypeSizeForGEP(elemType);
               } else if (auto structType =
                              dyn_cast<LLVM::LLVMStructType>(currentType)) {
+                if (indexVal < 0) {
+                  ok = false;
+                  break;
+                }
                 auto body = structType.getBody();
-                for (int64_t i = 0;
-                     i < indexVal && static_cast<size_t>(i) < body.size(); ++i)
-                  offset += getLLVMTypeSizeForGEP(body[i]);
-                if (static_cast<size_t>(indexVal) < body.size())
-                  currentType = body[indexVal];
+                size_t fieldIndex = static_cast<size_t>(indexVal);
+                if (fieldIndex >= body.size()) {
+                  ok = false;
+                  break;
+                }
+                offset += getLLVMStructFieldOffset(structType, fieldIndex);
+                currentType = body[fieldIndex];
               } else if (auto arrayType =
                              dyn_cast<LLVM::LLVMArrayType>(currentType)) {
                 offset +=
@@ -30573,9 +30254,6 @@ LogicalResult LLHDProcessInterpreter::interpretMooreWaitEvent(
 //===----------------------------------------------------------------------===//
 
 unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) const {
-  // Note: This function exists for future use. Currently the interpreter
-  // uses unaligned struct layout to match MooreToCore's sizeof computation
-  // (which sums field sizes without alignment padding).
   if (isa<LLVM::LLVMPointerType>(type))
     return 8;
   if (auto intType = dyn_cast<IntegerType>(type)) {
@@ -30583,6 +30261,17 @@ unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) const {
     if (bytes <= 1) return 1;
     if (bytes <= 2) return 2;
     if (bytes <= 4) return 4;
+    if (bytes <= 8) return 8;
+    if (bytes <= 16) return 16;
+    return 8;
+  }
+  if (auto floatType = dyn_cast<FloatType>(type)) {
+    unsigned bytes = (floatType.getWidth() + 7) / 8;
+    if (bytes <= 1) return 1;
+    if (bytes <= 2) return 2;
+    if (bytes <= 4) return 4;
+    if (bytes <= 8) return 8;
+    if (bytes <= 16) return 16;
     return 8;
   }
   if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
@@ -30598,13 +30287,26 @@ unsigned LLHDProcessInterpreter::getLLVMTypeAlignment(Type type) const {
 
 unsigned LLHDProcessInterpreter::getLLVMStructFieldOffset(
     LLVM::LLVMStructType structType, unsigned fieldIndex) const {
-  // Use GEP-aligned sizes: each sub-byte field occupies at least one byte,
-  // matching LLVM's data layout for GEP offset computation.
+  auto alignTo = [](uint64_t value, uint64_t align) -> uint64_t {
+    if (align <= 1)
+      return value;
+    uint64_t mask = align - 1;
+    return (value + mask) & ~mask;
+  };
+
   auto body = structType.getBody();
-  unsigned offset = 0;
-  for (unsigned i = 0; i < fieldIndex && i < body.size(); ++i)
+  uint64_t offset = 0;
+  unsigned limit = std::min<unsigned>(fieldIndex, body.size());
+  for (unsigned i = 0; i < limit; ++i) {
+    unsigned fieldAlign = getLLVMTypeAlignment(body[i]);
+    offset = alignTo(offset, fieldAlign);
     offset += getLLVMTypeSizeForGEP(body[i]);
-  return offset;
+  }
+  if (fieldIndex < body.size()) {
+    unsigned fieldAlign = getLLVMTypeAlignment(body[fieldIndex]);
+    offset = alignTo(offset, fieldAlign);
+  }
+  return static_cast<unsigned>(offset);
 }
 
 unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) const {
@@ -30639,36 +30341,104 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) const {
 }
 
 unsigned LLHDProcessInterpreter::getLLVMTypeSizeForGEP(Type type) const {
-  // Returns the byte size of a type as seen by GEP offset computation.
-  // For struct types, each field occupies at least one byte (matching LLVM's
-  // data layout where sub-byte fields like i1, i3 each occupy 1 byte in
-  // memory). This differs from getLLVMTypeSize which uses bit-packed sizes.
-  // The distinction matters for structs with sub-byte fields: e.g.
-  // struct<(i3, i3)> is 1 byte bit-packed but 2 bytes in GEP layout.
+  // Returns the ABI-aware byte size used by LLVM GEP offset computation.
+  auto alignTo = [](uint64_t value, uint64_t align) -> uint64_t {
+    if (align <= 1)
+      return value;
+    uint64_t mask = align - 1;
+    return (value + mask) & ~mask;
+  };
 
-  // Check cache first — this function is called repeatedly for the same types
-  // during GEP interpretation and struct layout computation.
+  // Check cache first.
   auto cacheIt = typeSizeForGEPCache.find(type);
   if (cacheIt != typeSizeForGEPCache.end())
     return cacheIt->second;
 
-  unsigned result;
+  uint64_t result = 0;
   if (isa<LLVM::LLVMPointerType>(type)) {
     result = 8;
   } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
-    result = 0;
-    for (Type elemType : structType.getBody())
-      result += getLLVMTypeSizeForGEP(elemType);
+    auto body = structType.getBody();
+    uint64_t offset = 0;
+    unsigned maxAlign = 1;
+    for (Type elemType : body) {
+      unsigned elemAlign = getLLVMTypeAlignment(elemType);
+      maxAlign = std::max(maxAlign, elemAlign);
+      offset = alignTo(offset, elemAlign);
+      offset += getLLVMTypeSizeForGEP(elemType);
+    }
+    result = alignTo(offset, maxAlign);
   } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
-    result = getLLVMTypeSizeForGEP(arrayType.getElementType()) *
-             arrayType.getNumElements();
+    unsigned elemSize = getLLVMTypeSizeForGEP(arrayType.getElementType());
+    unsigned elemAlign = getLLVMTypeAlignment(arrayType.getElementType());
+    uint64_t stride = alignTo(elemSize, elemAlign);
+    result = stride * arrayType.getNumElements();
   } else {
-    // For non-aggregate types, same as getLLVMTypeSize
+    // For non-aggregate types, same as getLLVMTypeSize.
     result = getLLVMTypeSize(type);
   }
 
-  typeSizeForGEPCache[type] = result;
-  return result;
+  typeSizeForGEPCache[type] = static_cast<unsigned>(result);
+  return static_cast<unsigned>(result);
+}
+
+bool LLHDProcessInterpreter::computeLLVMGEPOffset(ProcessId procId,
+                                                   LLVM::GEPOp gepOp,
+                                                   uint64_t &offset,
+                                                   Type *resultType) {
+  static bool traceGepOffsets =
+      std::getenv("CIRCT_SIM_TRACE_GEP_OFFSETS") != nullptr;
+  offset = 0;
+  Type elemType = gepOp.getElemType();
+  Type currentType = elemType;
+  SmallVector<int64_t, 4> resolvedIndices;
+  size_t idx = 0;
+
+  for (auto indexValue : gepOp.getIndices()) {
+    int64_t indexVal = 0;
+    if (auto intAttr = llvm::dyn_cast_if_present<IntegerAttr>(indexValue)) {
+      indexVal = intAttr.getInt();
+    } else if (auto dynamicIdx = llvm::dyn_cast_if_present<Value>(indexValue)) {
+      InterpretedValue dynVal = getValue(procId, dynamicIdx);
+      if (dynVal.isX())
+        return false;
+      indexVal = static_cast<int64_t>(dynVal.getUInt64());
+    }
+    resolvedIndices.push_back(indexVal);
+
+    if (idx == 0) {
+      offset += indexVal * getLLVMTypeSizeForGEP(elemType);
+    } else if (auto structType = dyn_cast<LLVM::LLVMStructType>(currentType)) {
+      if (indexVal < 0)
+        return false;
+      auto body = structType.getBody();
+      size_t fieldIndex = static_cast<size_t>(indexVal);
+      if (fieldIndex >= body.size())
+        return false;
+      offset += getLLVMStructFieldOffset(structType, fieldIndex);
+      currentType = body[fieldIndex];
+    } else if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(currentType)) {
+      offset += indexVal * getLLVMTypeSizeForGEP(arrayType.getElementType());
+      currentType = arrayType.getElementType();
+    } else {
+      offset += indexVal * getLLVMTypeSizeForGEP(currentType);
+    }
+    ++idx;
+  }
+
+  if (resultType)
+    *resultType = currentType;
+  if (traceGepOffsets) {
+    llvm::errs() << "[GEP-OFF] proc=" << procId << " elem=" << elemType
+                 << " indices=[";
+    for (size_t i = 0; i < resolvedIndices.size(); ++i) {
+      if (i)
+        llvm::errs() << ",";
+      llvm::errs() << resolvedIndices[i];
+    }
+    llvm::errs() << "] off=" << offset << " result=" << currentType << "\n";
+  }
+  return true;
 }
 
 unsigned LLHDProcessInterpreter::getMemoryLayoutBitWidth(Type type) const {
@@ -36239,13 +36009,13 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
               } else if (auto structType =
                              dyn_cast<LLVM::LLVMStructType>(currentType)) {
                 auto body = structType.getBody();
-                for (int64_t j = 0;
-                     j < indexVal &&
-                     static_cast<size_t>(j) < body.size();
-                     ++j)
-                  fieldOffset += getLLVMTypeSizeForGEP(body[j]);
-                if (static_cast<size_t>(indexVal) < body.size())
-                  currentType = body[indexVal];
+                if (indexVal < 0)
+                  break;
+                size_t fieldIndex = static_cast<size_t>(indexVal);
+                if (fieldIndex >= body.size())
+                  break;
+                fieldOffset += getLLVMStructFieldOffset(structType, fieldIndex);
+                currentType = body[fieldIndex];
               }
               ++idx;
             }
@@ -39590,24 +39360,31 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
 
       // MooreToCore lowers cross filters as:
       //   struct<(i32, ptr, i32, ptr, i32, ptr, i32, i1)>
-      // The interpreter models LLVM GEP with packed field layout (no ABI
-      // alignment padding), so decode using packed offsets/stride here.
-      constexpr uint64_t kFilterCpIndexOff = 0;
-      constexpr uint64_t kFilterBinIndicesOff =
-          kFilterCpIndexOff + sizeof(int32_t);
-      constexpr uint64_t kFilterNumBinsOff =
-          kFilterBinIndicesOff + sizeof(uint64_t);
-      constexpr uint64_t kFilterValuesOff =
-          kFilterNumBinsOff + sizeof(int32_t);
-      constexpr uint64_t kFilterNumValuesOff =
-          kFilterValuesOff + sizeof(uint64_t);
-      constexpr uint64_t kFilterRangesOff =
-          kFilterNumValuesOff + sizeof(int32_t);
-      constexpr uint64_t kFilterNumRangesOff =
-          kFilterRangesOff + sizeof(uint64_t);
-      constexpr uint64_t kFilterNegateOff =
-          kFilterNumRangesOff + sizeof(int32_t);
-      constexpr uint64_t kFilterStride = kFilterNegateOff + sizeof(uint8_t);
+      // Decode fields with ABI-aware struct offsets to match GEP layout.
+      MLIRContext *ctx = callOp.getContext();
+      Type i32Ty = IntegerType::get(ctx, 32);
+      Type i1Ty = IntegerType::get(ctx, 1);
+      Type ptrTy = LLVM::LLVMPointerType::get(ctx);
+      auto filterStructTy = LLVM::LLVMStructType::getLiteral(
+          ctx, {i32Ty, ptrTy, i32Ty, ptrTy, i32Ty, ptrTy, i32Ty, i1Ty},
+          /*isPacked=*/false);
+      const uint64_t kFilterCpIndexOff =
+          getLLVMStructFieldOffset(filterStructTy, 0);
+      const uint64_t kFilterBinIndicesOff =
+          getLLVMStructFieldOffset(filterStructTy, 1);
+      const uint64_t kFilterNumBinsOff =
+          getLLVMStructFieldOffset(filterStructTy, 2);
+      const uint64_t kFilterValuesOff =
+          getLLVMStructFieldOffset(filterStructTy, 3);
+      const uint64_t kFilterNumValuesOff =
+          getLLVMStructFieldOffset(filterStructTy, 4);
+      const uint64_t kFilterRangesOff =
+          getLLVMStructFieldOffset(filterStructTy, 5);
+      const uint64_t kFilterNumRangesOff =
+          getLLVMStructFieldOffset(filterStructTy, 6);
+      const uint64_t kFilterNegateOff =
+          getLLVMStructFieldOffset(filterStructTy, 7);
+      const uint64_t kFilterStride = getLLVMTypeSizeForGEP(filterStructTy);
 
       if (filtersAddr && numFilters > 0) {
         parsedFilters.reserve(numFilters);

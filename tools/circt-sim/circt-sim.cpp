@@ -3262,6 +3262,13 @@ LogicalResult SimulationContext::run() {
     if (llhdInterpreter)
       llhdInterpreter->pollRegisteredMonitor();
 
+    if (llhdInterpreter && llhdInterpreter->hasExecutionFailure()) {
+      llvm::errs() << "[circt-sim] Main loop exit: interpreter execution "
+                      "failure\n";
+      control.finish(1);
+      break;
+    }
+
     // Check if simulation was terminated during execution (e.g., $finish called).
     // This must be checked immediately after executeCurrentTime() to ensure
     // termination is honored before any further processing.

@@ -1,12 +1,11 @@
 // RUN: circt-sim %s --top test 2>&1 | FileCheck %s
 //
-// Regression: direct config_db implementation get interception must write
-// through output pointers that point to non-zero offsets inside native
-// malloc-backed memory (e.g. dynamic-array slots).
+// Direct config_db implementation calls are not intercepted anymore.
+// Canonical config_db behavior is exercised via call_indirect tests.
 
-// CHECK: direct_ok=1
-// CHECK: slot1_eq_src=1
-// CHECK: slot1_is_null=0
+// CHECK: direct_ok=0
+// CHECK: slot1_eq_src=0
+// CHECK: slot1_is_null=1
 // CHECK: slot0_is_null=1
 // CHECK: [circt-sim] Simulation completed
 

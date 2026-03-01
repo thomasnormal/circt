@@ -1144,6 +1144,9 @@ public:
   /// Check if termination has been requested.
   bool isTerminationRequested() const { return terminationRequested; }
 
+  /// Check if an operation-interpretation failure occurred during execution.
+  bool hasExecutionFailure() const { return executionFailure; }
+
   /// Check if the $finish grace period has expired. Call this from the main
   /// simulation loop periodically. Returns true if the grace period is active
   /// and has expired, meaning we should force termination.
@@ -2565,12 +2568,12 @@ private:
                         mlir::Block *resumeBlock = nullptr,
                         mlir::Block::iterator resumeOp = {});
 
-  /// Get the size in bytes for an LLVM type (sum of field sizes, no alignment
-  /// padding, matching MooreToCore's sizeof computation).
+  /// Get the size in bytes for an LLVM type using packed aggregate bit-width
+  /// semantics used for in-register aggregate values.
   unsigned getLLVMTypeSize(mlir::Type type) const;
 
-  /// Get the size in bytes for an LLVM type, matching GEP offset computation
-  /// (byte-addressable, no sub-byte packing).
+  /// Get the size in bytes for an LLVM type using ABI-aware layout semantics
+  /// used by LLVM GEP in memory.
   unsigned getLLVMTypeSizeForGEP(mlir::Type type) const;
 
   /// Get the bit width for memory-backed aggregate layout used by ref-addressed
@@ -2580,10 +2583,15 @@ private:
   /// Get the natural alignment in bytes for an LLVM type.
   unsigned getLLVMTypeAlignment(mlir::Type type) const;
 
-  /// Get the byte offset of a field within an LLVM struct type (unaligned,
-  /// matching MooreToCore's layout).
+  /// Get the byte offset of a field within an LLVM struct type using ABI-aware
+  /// layout semantics.
   unsigned getLLVMStructFieldOffset(mlir::LLVM::LLVMStructType structType,
                                    unsigned fieldIndex) const;
+
+  /// Compute the byte offset for an LLVM GEP operation using ABI-aware
+  /// layout semantics. Returns false if a dynamic index is unknown.
+  bool computeLLVMGEPOffset(ProcessId procId, mlir::LLVM::GEPOp gepOp,
+                            uint64_t &offset, mlir::Type *resultType = nullptr);
 
   /// Find the memory block for a pointer value.
   MemoryBlock *findMemoryBlock(ProcessId procId, mlir::Value ptr);
@@ -3252,6 +3260,8 @@ private:
 
   /// Flag indicating if termination has been requested.
   bool terminationRequested = false;
+  /// Sticky flag set when interpretOperation fails for any process.
+  bool executionFailure = false;
   /// Number of top modules initialized. In multi-top (dual-top) mode,
   /// sim.terminate success is deferred to let other modules continue.
   unsigned topModuleCount = 0;

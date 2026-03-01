@@ -1,11 +1,11 @@
 // RUN: circt-sim %s --top test 2>&1 | FileCheck %s
 //
-// Regression: direct config_db implementation get interception must write
-// through output pointers that point into native malloc-backed memory.
+// Direct config_db implementation calls are not intercepted anymore.
+// Canonical config_db behavior is exercised via call_indirect tests.
 
-// CHECK: direct_ok=1
-// CHECK: ptr_eq=1
-// CHECK: ptr_is_null=0
+// CHECK: direct_ok=0
+// CHECK: ptr_eq=0
+// CHECK: ptr_is_null=1
 // CHECK: [circt-sim] Simulation completed
 
 module {

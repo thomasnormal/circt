@@ -1121,28 +1121,7 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
 
   if (queueAddr != 0 && !sequencerItemFifo.contains(queueAddr)) {
     uint64_t vtableAddr = 0;
-    bool hasVtableAddr = false;
-    uint64_t portOff = 0;
-    MemoryBlock *portBlock =
-        findMemoryBlockByAddress(queueAddr, procId, &portOff);
-    if (!portBlock)
-      portBlock = findBlockByAddress(queueAddr, portOff);
-    if (portBlock && portBlock->initialized &&
-        portOff + 12 <= portBlock->size) {
-      for (unsigned i = 0; i < 8; ++i)
-        vtableAddr |=
-            static_cast<uint64_t>(portBlock->bytes()[portOff + 4 + i]) << (i * 8);
-      hasVtableAddr = true;
-    }
-    if (!hasVtableAddr) {
-      uint64_t nativeOff = 0;
-      size_t nativeSize = 0;
-      if (findNativeMemoryBlockByAddress(queueAddr, &nativeOff, &nativeSize) &&
-          nativeOff + 12 <= nativeSize) {
-        std::memcpy(&vtableAddr, reinterpret_cast<void *>(queueAddr + 4), 8);
-        hasVtableAddr = true;
-      }
-    }
+    bool hasVtableAddr = readObjectVTableAddress(queueAddr, vtableAddr, procId);
     if (hasVtableAddr) {
       auto globalIt = addressToGlobal.find(vtableAddr);
       if (globalIt != addressToGlobal.end()) {
@@ -1613,28 +1592,6 @@ bool LLHDProcessInterpreter::lookupConfigDbEntry(
   for (const auto &entry : configDbEntries)
     maybeSelect(entry.first, entry.second);
 
-  // Legacy fallback: for names ending in "_x", allow matching "_0", "_1", ...
-  if (!valueData && fieldName.size() > 2 && fieldName.back() == 'x' &&
-      fieldName[fieldName.size() - 2] == '_') {
-    llvm::StringRef baseName = fieldName.drop_back();
-    for (const auto &entry : configDbEntries) {
-      llvm::StringRef pattern;
-      llvm::StringRef storedField;
-      if (!splitConfigDbKey(entry.first, pattern, storedField))
-        continue;
-      if (!globMatchConfigDbPattern(pattern, instName))
-        continue;
-      if (storedField.size() <= baseName.size())
-        continue;
-      if (storedField.take_front(baseName.size()) != baseName)
-        continue;
-      if (!std::isdigit(
-              static_cast<unsigned char>(storedField[baseName.size()])))
-        continue;
-      maybeSelect(entry.first, entry.second);
-    }
-  }
-
   if (valueData && matchedKey)
     *matchedKey = bestKey;
   return valueData != nullptr;
@@ -1648,13 +1605,53 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
   if (!calleeName.contains("config_db") ||
       !calleeName.contains("implementation"))
     return false;
-  if (!calleeName.contains("::set") && !calleeName.contains("::get"))
+  if (!calleeName.contains("::set") && !calleeName.contains("::get") &&
+      !calleeName.contains("::exists"))
     return false;
 
   auto readStr = [&](unsigned argIdx) -> std::string {
     if (argIdx >= args.size())
       return "";
     return readMooreStringStruct(procId, args[argIdx]);
+  };
+  auto isMooreStringStructType = [](Type ty) -> bool {
+    auto structTy = dyn_cast<LLVM::LLVMStructType>(ty);
+    if (!structTy || structTy.isOpaque() || structTy.getBody().size() != 2)
+      return false;
+    Type t0 = structTy.getBody()[0];
+    Type t1 = structTy.getBody()[1];
+    return isa<LLVM::LLVMPointerType>(t0) && t1.isSignlessInteger(64);
+  };
+  auto hasCanonicalSetSignature = [&]() -> bool {
+    auto argOps = callIndirectOp.getArgOperands();
+    if (callIndirectOp.getNumResults() != 0 || argOps.size() < 5)
+      return false;
+    return isa<LLVM::LLVMPointerType>(argOps[0].getType()) &&
+           isMooreStringStructType(argOps[1].getType()) &&
+           isMooreStringStructType(argOps[2].getType()) &&
+           isMooreStringStructType(argOps[3].getType());
+  };
+  auto hasCanonicalGetSignature = [&]() -> bool {
+    auto argOps = callIndirectOp.getArgOperands();
+    if (callIndirectOp.getNumResults() != 1 || argOps.size() < 5)
+      return false;
+    if (!callIndirectOp.getResult(0).getType().isSignlessInteger(1))
+      return false;
+    return isa<LLVM::LLVMPointerType>(argOps[0].getType()) &&
+           isa<LLVM::LLVMPointerType>(argOps[1].getType()) &&
+           isMooreStringStructType(argOps[2].getType()) &&
+           isMooreStringStructType(argOps[3].getType());
+  };
+  auto hasCanonicalExistsSignature = [&]() -> bool {
+    auto argOps = callIndirectOp.getArgOperands();
+    if (callIndirectOp.getNumResults() != 1 || argOps.size() < 5)
+      return false;
+    if (!callIndirectOp.getResult(0).getType().isSignlessInteger(1))
+      return false;
+    return isa<LLVM::LLVMPointerType>(argOps[0].getType()) &&
+           isa<LLVM::LLVMPointerType>(argOps[1].getType()) &&
+           isMooreStringStructType(argOps[2].getType()) &&
+           isMooreStringStructType(argOps[3].getType());
   };
   auto canonicalizeInstName = [](std::string name) {
     while (!name.empty() && name.front() == '.')
@@ -1685,40 +1682,37 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
   if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
       !calleeName.contains("set_override") &&
       !calleeName.contains("set_anonymous")) {
-    if (args.size() >= 5) {
-      std::string str1 = readStr(1);
-      std::string str2 = readStr(2);
-      std::string str3 = readStr(3);
+    if (!hasCanonicalSetSignature())
+      return false;
+    std::string str1 = readStr(1);
+    std::string str2 = readStr(2);
+    std::string fieldName = readStr(3);
+    if (fieldName.empty())
+      return false;
 
-      std::string instName = composeInstNameForSet(str1, str2);
-      std::string fieldName = str3;
-      if (fieldName.empty()) {
-        instName = canonicalizeInstName(str1);
-        fieldName = str2;
-      }
-      std::string key = instName + "." + fieldName;
+    std::string instName = composeInstNameForSet(str1, str2);
+    std::string key = instName + "." + fieldName;
 
-      InterpretedValue valueArg = args[4];
-      unsigned valueBits = valueArg.getWidth();
-      bool truncatedValue = false;
-      std::vector<uint8_t> valueData =
-          serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
-                                         &truncatedValue);
-      if (traceConfigDbEnabled) {
-        llvm::errs() << "[CFG-CI-XFALLBACK-SET] callee=" << calleeName
-                     << " key=\"" << key << "\" s1=\"" << str1
-                     << "\" s2=\"" << str2 << "\" s3=\"" << str3
-                     << "\" entries_before=" << configDbEntries.size() << "\n";
-      }
-      storeConfigDbEntry(instName, fieldName, std::move(valueData));
-      if (traceConfigDbEnabled) {
-        llvm::errs() << "[CFG-CI-XFALLBACK-SET] stored key=\"" << key
-                     << "\" entries_after=" << configDbEntries.size() << "\n";
-        if (truncatedValue) {
-          llvm::errs() << "[CFG-CI-XFALLBACK-SET] truncated oversized value payload"
-                       << " key=\"" << key << "\" bitWidth=" << valueBits
-                       << "\n";
-        }
+    InterpretedValue valueArg = args[4];
+    unsigned valueBits = valueArg.getWidth();
+    bool truncatedValue = false;
+    std::vector<uint8_t> valueData =
+        serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
+                                       &truncatedValue);
+    if (traceConfigDbEnabled) {
+      llvm::errs() << "[CFG-CI-CANON-SET] callee=" << calleeName
+                   << " key=\"" << key << "\" s1=\"" << str1
+                   << "\" s2=\"" << str2 << "\" entries_before="
+                   << configDbEntries.size() << "\n";
+    }
+    storeConfigDbEntry(instName, fieldName, std::move(valueData));
+    if (traceConfigDbEnabled) {
+      llvm::errs() << "[CFG-CI-CANON-SET] stored key=\"" << key
+                   << "\" entries_after=" << configDbEntries.size() << "\n";
+      if (truncatedValue) {
+        llvm::errs() << "[CFG-CI-CANON-SET] truncated oversized value payload"
+                     << " key=\"" << key << "\" bitWidth=" << valueBits
+                     << "\n";
       }
     }
     return true;
@@ -1726,117 +1720,142 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
 
   // --- GET ---
   if (calleeName.contains("::get") && !calleeName.contains("get_default")) {
-    if (args.size() >= 5 && callIndirectOp.getNumResults() >= 1) {
-      std::string str1 = readStr(1);
-      std::string str2 = readStr(2);
-      std::string str3 = readStr(3);
+    if (!hasCanonicalGetSignature())
+      return false;
+    std::string str2 = readStr(2);
+    std::string fieldName = readStr(3);
+    if (fieldName.empty())
+      return false;
 
-      std::string instName = normalizeConfigDbInstName(procId, args[1], str2);
-      std::string fieldName = str3;
-      if (fieldName.empty()) {
-        instName = canonicalizeInstName(str1);
-        fieldName = str2;
-      }
-      std::string key = instName + "." + fieldName;
-      if (traceConfigDbEnabled) {
-        llvm::errs() << "[CFG-CI-XFALLBACK-GET] callee=" << calleeName
-                     << " key=\"" << key << "\" s1=\"" << str1
-                     << "\" s2=\"" << str2 << "\" s3=\"" << str3
-                     << "\" entries=" << configDbEntries.size() << "\n";
-      }
+    std::string instName = normalizeConfigDbInstName(procId, args[1], str2);
+    std::string key = instName + "." + fieldName;
+    if (traceConfigDbEnabled) {
+      llvm::errs() << "[CFG-CI-CANON-GET] callee=" << calleeName
+                   << " key=\"" << key << "\" s2=\"" << str2
+                   << "\" entries=" << configDbEntries.size() << "\n";
+    }
 
-      const std::vector<uint8_t> *matchedValue = nullptr;
-      std::string matchedKey;
-      if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
-        auto isPayloadCompatible = [&](Type outputType, size_t payloadBytes) {
-          if (auto refT = dyn_cast<llhd::RefType>(outputType)) {
-            Type innerType = refT.getNestedType();
-            unsigned innerBits = getTypeWidth(innerType);
-            unsigned innerBytes = (innerBits + 7) / 8;
-            // Moore/UVM strings are lowered as a ptr+len payload; allow
-            // writing that payload into wider backend string storage.
-            if (isa<moore::StringType>(innerType))
-              return payloadBytes == 16 && innerBytes >= 16;
-            return innerBytes != 0 && payloadBytes == innerBytes;
-          }
-          if (isa<LLVM::LLVMPointerType>(outputType)) {
-            unsigned ptrBits = getTypeWidth(outputType);
-            unsigned ptrBytes = (ptrBits + 7) / 8;
-            if (payloadBytes == 16)
-              return true;
-            return ptrBytes != 0 && payloadBytes == ptrBytes;
-          }
-          return false;
-        };
-        Value outputRef = callIndirectOp.getArgOperands()[4];
-        if (!isPayloadCompatible(outputRef.getType(), matchedValue->size())) {
-          if (traceConfigDbEnabled) {
-            std::string outputTypeStr;
-            llvm::raw_string_ostream outputTypeOs(outputTypeStr);
-            outputRef.getType().print(outputTypeOs);
-            outputTypeOs.flush();
-            llvm::errs() << "[CFG-CI-XFALLBACK-GET] type-mismatch key=\""
-                         << matchedKey << "\" payload_bytes="
-                         << matchedValue->size() << " output_type="
-                         << outputTypeStr << "\n";
-          }
-          setValue(procId, callIndirectOp.getResult(0),
-                   InterpretedValue(llvm::APInt(1, 0)));
-          return true;
-        }
-        if (traceConfigDbEnabled) {
-          llvm::errs() << "[CFG-CI-XFALLBACK-GET] hit key=\"" << matchedKey
-                       << "\" bytes=" << matchedValue->size() << "\n";
-        }
-        const std::vector<uint8_t> &valueData = *matchedValue;
-        Type refType = outputRef.getType();
-
-        if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+    const std::vector<uint8_t> *matchedValue = nullptr;
+    std::string matchedKey;
+    if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
+      auto isPayloadCompatible = [&](Type outputType, size_t payloadBytes) {
+        if (auto refT = dyn_cast<llhd::RefType>(outputType)) {
           Type innerType = refT.getNestedType();
           unsigned innerBits = getTypeWidth(innerType);
           unsigned innerBytes = (innerBits + 7) / 8;
-          llvm::APInt valueBits2(innerBits, 0);
-          for (unsigned i = 0;
-               i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-            valueBits2.insertBits(llvm::APInt(8, valueData[i]), i * 8);
-          SignalId sigId2 = resolveSignalId(outputRef);
-          if (sigId2 != 0)
-            pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits2);
-          InterpretedValue refAddr = getValue(procId, outputRef);
-          if (!refAddr.isX()) {
-            uint64_t addr = refAddr.getUInt64();
-            uint64_t off3 = 0;
-            MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off3);
-            if (blk) {
-              writeConfigDbBytesUvm(blk, off3, valueData, innerBytes, true);
-            }
-          }
-        } else if (isa<LLVM::LLVMPointerType>(refType)) {
-          if (!args[4].isX()) {
-            uint64_t outputAddr = args[4].getUInt64();
-            uint64_t outOff = 0;
-            MemoryBlock *outBlock =
-                findMemoryBlockByAddress(outputAddr, procId, &outOff);
-            if (outBlock) {
-              writeConfigDbBytesUvm(
-                  outBlock, outOff, valueData,
-                  static_cast<unsigned>(valueData.size()), false);
-            }
-          }
+          // Moore/UVM strings are lowered as a ptr+len payload; allow writing
+          // that payload into wider backend string storage.
+          if (isa<moore::StringType>(innerType))
+            return payloadBytes == 16 && innerBytes >= 16;
+          return innerBytes != 0 && payloadBytes == innerBytes;
         }
-
+        if (isa<LLVM::LLVMPointerType>(outputType)) {
+          unsigned ptrBits = getTypeWidth(outputType);
+          unsigned ptrBytes = (ptrBits + 7) / 8;
+          if (payloadBytes == 16)
+            return true;
+          return ptrBytes != 0 && payloadBytes == ptrBytes;
+        }
+        return false;
+      };
+      Value outputRef = callIndirectOp.getArgOperands()[4];
+      if (!isPayloadCompatible(outputRef.getType(), matchedValue->size())) {
+        if (traceConfigDbEnabled) {
+          std::string outputTypeStr;
+          llvm::raw_string_ostream outputTypeOs(outputTypeStr);
+          outputRef.getType().print(outputTypeOs);
+          outputTypeOs.flush();
+          llvm::errs() << "[CFG-CI-CANON-GET] type-mismatch key=\""
+                       << matchedKey << "\" payload_bytes="
+                       << matchedValue->size() << " output_type="
+                       << outputTypeStr << "\n";
+        }
         setValue(procId, callIndirectOp.getResult(0),
-                InterpretedValue(llvm::APInt(1, 1)));
+                 InterpretedValue(llvm::APInt(1, 0)));
         return true;
       }
+      if (traceConfigDbEnabled) {
+        llvm::errs() << "[CFG-CI-CANON-GET] hit key=\"" << matchedKey
+                     << "\" bytes=" << matchedValue->size() << "\n";
+      }
+      const std::vector<uint8_t> &valueData = *matchedValue;
+      Type refType = outputRef.getType();
 
-      // Miss — return 0 (not found)
+      if (auto refT = dyn_cast<llhd::RefType>(refType)) {
+        Type innerType = refT.getNestedType();
+        unsigned innerBits = getTypeWidth(innerType);
+        unsigned innerBytes = (innerBits + 7) / 8;
+        llvm::APInt valueBits2(innerBits, 0);
+        for (unsigned i = 0;
+             i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
+          valueBits2.insertBits(llvm::APInt(8, valueData[i]), i * 8);
+        SignalId sigId2 = resolveSignalId(outputRef);
+        if (sigId2 != 0)
+          pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits2);
+        InterpretedValue refAddr = getValue(procId, outputRef);
+        if (!refAddr.isX()) {
+          uint64_t addr = refAddr.getUInt64();
+          uint64_t off3 = 0;
+          MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off3);
+          if (blk) {
+            writeConfigDbBytesUvm(blk, off3, valueData, innerBytes, true);
+          }
+        }
+      } else if (isa<LLVM::LLVMPointerType>(refType)) {
+        if (!args[4].isX()) {
+          uint64_t outputAddr = args[4].getUInt64();
+          uint64_t outOff = 0;
+          MemoryBlock *outBlock =
+              findMemoryBlockByAddress(outputAddr, procId, &outOff);
+          if (outBlock) {
+            writeConfigDbBytesUvm(
+                outBlock, outOff, valueData,
+                static_cast<unsigned>(valueData.size()), false);
+          }
+        }
+      }
+
       setValue(procId, callIndirectOp.getResult(0),
-              InterpretedValue(llvm::APInt(1, 0)));
-      if (traceConfigDbEnabled)
-        llvm::errs() << "[CFG-CI-XFALLBACK-GET] miss key=\"" << key << "\"\n";
+               InterpretedValue(llvm::APInt(1, 1)));
       return true;
     }
+
+    // Miss — return 0 (not found)
+    setValue(procId, callIndirectOp.getResult(0),
+             InterpretedValue(llvm::APInt(1, 0)));
+    if (traceConfigDbEnabled)
+      llvm::errs() << "[CFG-CI-CANON-GET] miss key=\"" << key << "\"\n";
+    return true;
+  }
+
+  // --- EXISTS ---
+  if (calleeName.contains("::exists") && !calleeName.contains("exists_default")) {
+    if (!hasCanonicalExistsSignature())
+      return false;
+    std::string str2 = readStr(2);
+    std::string fieldName = readStr(3);
+    if (fieldName.empty()) {
+      setValue(procId, callIndirectOp.getResult(0),
+               InterpretedValue(llvm::APInt(1, 0)));
+      return true;
+    }
+
+    std::string instName = normalizeConfigDbInstName(procId, args[1], str2);
+    const std::vector<uint8_t> *matchedValue = nullptr;
+    std::string matchedKey;
+    bool hit = lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey);
+    if (traceConfigDbEnabled) {
+      llvm::errs() << "[CFG-CI-CANON-EXISTS] callee=" << calleeName
+                   << " key=\"" << (instName + "." + fieldName) << "\" "
+                   << (hit ? "hit" : "miss");
+      if (hit)
+        llvm::errs() << " matched=\"" << matchedKey << "\"";
+      llvm::errs() << "\n";
+    }
+
+    setValue(procId, callIndirectOp.getResult(0),
+             InterpretedValue(llvm::APInt(1, hit ? 1 : 0)));
+    return true;
   }
 
   return false;
@@ -1857,17 +1876,66 @@ bool LLHDProcessInterpreter::readObjectVTableAddress(uint64_t objectAddr,
 
   auto decodeVtableAt = [&](const uint8_t *bytes, size_t size,
                             uint64_t baseOffset) -> bool {
-    // Runtime object header layout: [i32 class_id][ptr vtable_ptr]...
-    constexpr uint64_t kHeaderSize = 12; // 4-byte class id + 8-byte ptr
-    if (baseOffset + kHeaderSize > size)
-      return false;
-    uint64_t decoded = 0;
-    for (unsigned i = 0; i < 8; ++i)
-      decoded |= static_cast<uint64_t>(bytes[baseOffset + 4 + i]) << (i * 8);
-    if (decoded == 0)
-      return false;
-    vtableAddr = decoded;
-    return true;
+    auto readAtOffset = [&](uint64_t vtableFieldOffset,
+                            uint64_t &decoded) -> bool {
+      decoded = 0;
+      if (baseOffset + vtableFieldOffset + 8 > size)
+        return false;
+      for (unsigned i = 0; i < 8; ++i)
+        decoded |=
+            static_cast<uint64_t>(bytes[baseOffset + vtableFieldOffset + i])
+            << (i * 8);
+      return decoded != 0;
+    };
+
+    auto isKnownVtableAddress = [&](uint64_t candidate) -> bool {
+      auto globalIt = addressToGlobal.find(candidate);
+      if (globalIt == addressToGlobal.end())
+        return false;
+      return StringRef(globalIt->second).contains("::__vtable__");
+    };
+
+    uint64_t candidate8 = 0;
+    uint64_t candidate4 = 0;
+    bool have8 = readAtOffset(/*vtableFieldOffset=*/8, candidate8);
+    bool have4 = readAtOffset(/*vtableFieldOffset=*/4, candidate4);
+
+    // Prefer whichever candidate is known to be a vtable symbol.
+    if (have8 && isKnownVtableAddress(candidate8)) {
+      vtableAddr = candidate8;
+      return true;
+    }
+    if (have4 && isKnownVtableAddress(candidate4)) {
+      vtableAddr = candidate4;
+      return true;
+    }
+
+    // If only one candidate decodes, accept it as a best-effort fallback.
+    if (have8 && !have4) {
+      vtableAddr = candidate8;
+      return true;
+    }
+    if (have4 && !have8) {
+      vtableAddr = candidate4;
+      return true;
+    }
+
+    if (have8 && have4) {
+      bool mapped8 = addressToGlobal.count(candidate8);
+      bool mapped4 = addressToGlobal.count(candidate4);
+      if (mapped8 && !mapped4) {
+        vtableAddr = candidate8;
+        return true;
+      }
+      if (mapped4 && !mapped8) {
+        vtableAddr = candidate4;
+        return true;
+      }
+      // Last resort: prefer aligned layout.
+      vtableAddr = candidate8;
+      return true;
+    }
+    return false;
   };
 
   auto tryDecodeAtAddress = [&](uint64_t addr) -> bool {
