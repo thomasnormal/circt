@@ -424,6 +424,11 @@ def main() -> int:
         help="Optional TSV output path for per-implementation case rows.",
     )
     parser.add_argument(
+        "--results-jsonl-file",
+        default=os.environ.get("FORMAL_RESULTS_JSONL_OUT", ""),
+        help="Optional JSONL output path for unified formal result schema rows.",
+    )
+    parser.add_argument(
         "--drop-remark-cases-file",
         default=os.environ.get("BMC_DROP_REMARK_CASES_OUT", ""),
         help="Optional TSV output path for dropped-syntax case IDs.",
@@ -623,6 +628,8 @@ def main() -> int:
         ]
         if args.results_file:
             cmd += ["--results-file", args.results_file]
+        if args.results_jsonl_file:
+            cmd += ["--results-jsonl-file", args.results_jsonl_file]
         if args.drop_remark_cases_file:
             cmd += ["--drop-remark-cases-file", args.drop_remark_cases_file]
         if args.drop_remark_reasons_file:

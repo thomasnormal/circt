@@ -415,6 +415,8 @@ Current workstream status in this branch:
      helpers (duplicated local writer logic removed from hot paths)
    - pairwise BMC runner now supports schema JSONL output lane
      (`--results-jsonl-file`, env `FORMAL_RESULTS_JSONL_OUT`)
+   - OpenTitan AES BMC wrapper now forwards schema JSONL output lane to the
+     pairwise backend (`--results-jsonl-file`)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
