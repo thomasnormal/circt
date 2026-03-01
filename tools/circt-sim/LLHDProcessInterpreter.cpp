@@ -24825,22 +24825,6 @@ no_uvm_objection_intercept:
   }
 
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
-  // Intercept uvm_wait_for_nba_region: this UVM synchronization primitive
-  // increments a counter and waits for it to change. In our interpreter,
-  // the memory event watcher never fires because no other process writes
-  // to the counter. Replace with a single delta cycle delay (schedule the
-  // process to resume in the next Active region at the same simulation time).
-  if (calleeName == "uvm_pkg::uvm_wait_for_nba_region") {
-    // Yield the current process so other processes (e.g. just-forked
-    // master_phase_process children) get a chance to run first.
-    // executeStep already advanced currentOp past this call, so when the
-    // process resumes it will continue from the next operation.
-    auto &nbaState = processStates[procId];
-    nbaState.waiting = true;
-    scheduler.scheduleProcess(procId, SchedulingRegion::Reactive);
-    return success();
-  }
-
   // No UVM interceptor matched this CallOp. Cache for future fast-path.
   if (!isUvmFactoryResolveCall && !funcCallCache.count(callOp.getOperation())) {
     FuncCallCacheEntry entry;

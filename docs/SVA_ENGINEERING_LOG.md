@@ -10059,3 +10059,39 @@
   - In this shared workspace, broad `test/Runtime/uvm` sweeps intermittently reported
     `Permission denied` on `build_test/bin/circt-verilog`/`circt-sim` due concurrent
     binary mutation by overlapping build jobs. Isolated/targeted reruns were stable.
+
+## 2026-03-01 - UVM wait_for_nba_region semantics (remove single-delta interceptor)
+
+- realization:
+  - Added semantic test `uvm_wait_for_nba_region_semantic_test` to verify that
+    `uvm_wait_for_nba_region()` waits through multi-delta (`#0; #0`) settling
+    and exposes NBA updates.
+  - Test failed red before fix:
+    - `FAIL: waits through multi-#0 settling chain`
+    - while NBA visibility check passed.
+  - Root cause: interpreter-level hardcoded interceptor in
+    `tools/circt-sim/LLHDProcessInterpreter.cpp` for
+    `uvm_pkg::uvm_wait_for_nba_region` only yielded one scheduling step
+    (`scheduleProcess(..., Reactive)`), which is weaker than intended UVM
+    semantics.
+
+- implemented:
+  - Removed the `uvm_wait_for_nba_region` special-case interceptor in
+    `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+  - Let lowered/core runtime semantics execute directly.
+  - Added semantic regression:
+    - `test/Runtime/uvm/uvm_wait_for_nba_region_semantic_test.sv`
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_wait_for_nba_region_semantic_test.sv`
+  - rebuild:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_wait_for_nba_region_semantic_test.sv`
+  - targeted UVM regression slice:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_wait_for_nba_region_semantic_test.sv test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_stress_test.sv test/Runtime/uvm/uvm_report_file_handle_precedence_semantic_test.sv`
+    - result: `6 passed`.
+  - compatibility check:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Tools/crun/uvm-globals-wait-nba.sv`
+    - result: `1 passed`.
