@@ -2,6 +2,26 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: pairwise BMC JSONL projection dedup to shared case-row writer):
+  - realization:
+    - `run_pairwise_circt_bmc.py` still manually built JSON dict rows in its
+      final JSONL projection path despite shared helper coverage in
+      `formal_results.write_results_jsonl_from_case_rows(...)`.
+  - implemented:
+    - `utils/run_pairwise_circt_bmc.py`
+      - imported and used shared
+        `_write_formal_results_jsonl_from_case_rows(...)` in shared-helper mode.
+      - retained copied-runner fallback implementation for lit copy flows.
+      - replaced local dict-row loop with:
+        - `json_case_rows` (`status/case_id/case_path/suite/mode/reason_code`)
+        - `jsonl_case_metadata_by_case_id` (timing/log/artifact fields)
+        - shared writer call with solver label + metadata map.
+  - validation:
+    - `python3 -m py_compile utils/run_pairwise_circt_bmc.py utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1: FPV BMC JSONL projection dedup to shared case-row writer):
   - realization:
     - `run_opentitan_fpv_circt_bmc.py` still carried a local final-loop JSON row
@@ -13564,4 +13584,40 @@
     - `Runtime/uvm/uvm_send_request_test.sv`
     - result: all passed.
   - re-ran the previously fixed UVM fast-path subset plus the new regression:
+    - result: all passed.
+
+## 2026-03-01 - config_db canonical get/set key hardening for overlong packed strings
+
+- realization:
+  - AVIP trace capture showed occasional malformed canonical config_db keys with
+    non-printable bytes in instance-name segments, producing nondeterministic
+    misses without a clear UVM fatal.
+  - root cause is runtime trust of packed Moore string payload length in
+    config_db key composition paths; overlong lengths can include trailing
+    `\0` + garbage bytes and poison key matching.
+
+- TDD repro:
+  - added regression:
+    - `test/Tools/circt-sim/config-db-canonical-instname-null-terminated.mlir`
+  - before fix:
+    - `build_test/bin/circt-sim .../config-db-canonical-instname-null-terminated.mlir --top test`
+    - observed `get_ok=0`, `dst_eq_src=0` (lookup miss).
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - added `sanitizeConfigDbNameFragment(...)`:
+      - treat first NUL as terminator,
+      - strip control bytes (`< 0x20` and `0x7f`),
+      - bound fragment length (`4096`) to avoid runaway malformed payloads,
+      - optionally strip leading `.` for canonical key semantics.
+    - applied sanitization to:
+      - `normalizeConfigDbInstName(...)` (context + instance-name composition),
+      - canonical config_db `set/get/exists` field-name/instance-name key paths.
+
+- validation:
+  - focused lit suite:
+    - `test/Tools/circt-sim/config-db-canonical-instname-null-terminated.mlir`
+    - `test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir`
+    - `test/Tools/circt-sim/config-db-native-call-indirect-writeback-offset.mlir`
+    - `test/Tools/circt-sim/config-db-no-fuzzy-field-fallback.mlir`
     - result: all passed.
