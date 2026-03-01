@@ -97,3 +97,29 @@ Command to inspect what is still staging-only (not yet on `main`):
 ```bash
 git log --oneline --no-merges main..staging-upstream-easy-picks
 ```
+
+## 2026-03-01 Mining Pass (Main)
+
+- Local base at start: `origin/main` @ `fd43fe5f2`
+- Upstream tip scanned: `upstream/main` @ `5f7d374a7`
+
+### Picked to `main`
+
+| Local commit | Upstream commit | Subject | Notes |
+| --- | --- | --- | --- |
+| `0cf5a81a3` | `a0b58ccce` | [CI] Cancel in-progress PR builds on new push (#9751) | Applied cleanly; enables PR concurrency cancellation across 4 workflows. |
+
+### Attempted But Deferred
+
+| Upstream commit | Subject | Outcome |
+| --- | --- | --- |
+| `d3ddbe121` | [ImportVerilog] Support `$` literal within queue indexing expressions (#9719) | Could not apply in this tree because `lib/Conversion/ImportVerilog/ImportVerilogInternals.h` has local unstaged changes from concurrent work. Retry when that file is clean or isolated. |
+| `17330f8a9` | [Moore][ImportVerilog] Add support for fork-join blocks (#9682) | Cherry-pick produced semantic conflict in `lib/Conversion/ImportVerilog/Statements.cpp`; local implementation is already substantially diverged/richer. Aborted pick to avoid regression. |
+
+### Resume Pointer
+
+For the next pass from `main`, start with ImportVerilog candidates that are not blocked
+by concurrent local edits:
+
+1. `79369384c` ([ImportVerilog] Make sampled value functions' results usable by Moore ops)
+2. `d3ddbe121` after `ImportVerilogInternals.h` is clean
