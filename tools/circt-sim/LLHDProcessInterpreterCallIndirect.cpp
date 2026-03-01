@@ -266,6 +266,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     ModuleOp callSiteModule = callIndirectOp->getParentOfType<ModuleOp>();
     InterpretedValue funcPtrVal = getValue(procId, calleeValue);
     bool traceSeq = traceSeqEnabled;
+    static bool enableUvmAnalysisNativeInterceptors = []() {
+      const char *env =
+          std::getenv("CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS");
+      return env && env[0] != '\0' && env[0] != '0';
+    }();
     bool sawResolvedTarget = false;
     std::string resolvedTargetName;
     auto noteResolvedTarget = [&](llvm::StringRef name) {
@@ -500,8 +505,24 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             unsigned width = getTypeWidth(opResults[i].getType());
             setValue(procId, opResults[i],
                      InterpretedValue(llvm::APInt(width, 0)));
-          }
-        };
+        }
+      };
+    auto isVtableGlobalSymbol = [&](llvm::StringRef globalName) -> bool {
+      if (globalName.empty())
+        return false;
+      if (globalName.ends_with("__vtable__"))
+        return true;
+      ModuleOp lookupModule = callSiteModule ? callSiteModule : rootModule;
+      if (!lookupModule)
+        return false;
+      if (auto globalOp = lookupModule.lookupSymbol<LLVM::GlobalOp>(globalName))
+        return globalOp->hasAttr("circt.vtable_entries");
+      if (lookupModule != rootModule && rootModule) {
+        if (auto globalOp = rootModule.lookupSymbol<LLVM::GlobalOp>(globalName))
+          return globalOp->hasAttr("circt.vtable_entries");
+      }
+      return false;
+    };
 
     auto isPlausibleNativePointerValue = [](uint64_t addr) -> bool {
       if (addr == 0)
@@ -676,41 +697,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     auto tryResolveAnalysisWriteTarget =
         [&](ModuleOp lookupModule, uint64_t selfAddr, llvm::StringRef traceTag)
         -> std::optional<std::pair<func::FuncOp, std::string>> {
-      uint64_t vtableOff = 0;
-      MemoryBlock *objBlock =
-          findMemoryBlockByAddress(selfAddr, procId, &vtableOff);
-      if (!objBlock)
-        objBlock = findBlockByAddress(selfAddr, vtableOff);
       uint64_t vtableAddr = 0;
-      bool haveVtableAddr = false;
-
-      // Runtime object layout: [i32 class_id][ptr vtable_ptr][...].
-      if (objBlock && vtableOff + 4 + 8 <= objBlock->size) {
-        for (unsigned i = 0; i < 8; ++i)
-          vtableAddr |=
-              static_cast<uint64_t>(objBlock->bytes()[vtableOff + 4 + i])
-              << (i * 8);
-        haveVtableAddr = true;
-      }
-
-      if (!haveVtableAddr) {
-        uint64_t nativeOff = 0;
-        size_t nativeSize = 0;
-        if (findNativeMemoryBlockByAddress(selfAddr, &nativeOff, &nativeSize) &&
-            nativeOff + 4 + 8 <= nativeSize) {
-          auto *raw = reinterpret_cast<const uint8_t *>(selfAddr + 4);
-          for (unsigned i = 0; i < 8; ++i)
-            vtableAddr |= static_cast<uint64_t>(raw[i]) << (i * 8);
-          haveVtableAddr = true;
-        }
-      }
+      bool haveVtableAddr =
+          readObjectVTableAddress(selfAddr, vtableAddr, procId);
 
       if (!haveVtableAddr) {
         if (traceAnalysisEnabled)
           llvm::errs() << "[" << traceTag << "] write-target lookup failed: "
                        << "object/self not found self=0x"
-                       << llvm::format_hex(selfAddr, 0)
-                       << " vtableOff=" << vtableOff << "\n";
+                       << llvm::format_hex(selfAddr, 0) << "\n";
         return std::nullopt;
       }
 
@@ -899,21 +894,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               getValue(procId, callIndirectOp.getArgOperands()[0]);
           if (!selfVal.isX()) {
             uint64_t objAddr = selfVal.getUInt64();
-            uint64_t vtableOff = 0;
-            MemoryBlock *objBlock = findBlockByAddress(objAddr, vtableOff);
-            // Vtable ptr is at byte offset 4 (after i32 class ID at offset 0)
-            if (objBlock && objBlock->initialized &&
-                objBlock->size >= vtableOff + 12) {
-              uint64_t runtimeVtableAddr = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                runtimeVtableAddr |= static_cast<uint64_t>(
-                                         objBlock->bytes()[vtableOff + 4 + i])
-                                     << (i * 8);
+            uint64_t runtimeVtableAddr = 0;
+            if (readObjectVTableAddress(objAddr, runtimeVtableAddr, procId)) {
               auto globalIt2 = addressToGlobal.find(runtimeVtableAddr);
               if (globalIt2 != addressToGlobal.end()) {
                 std::string runtimeVtableName = globalIt2->second;
                 if (runtimeVtableName != vtableGlobalName &&
-                    globalMemoryBlocks.count(runtimeVtableName)) {
+                    globalMemoryBlocks.count(runtimeVtableName) &&
+                    isVtableGlobalSymbol(runtimeVtableName)) {
                   LLVM_DEBUG(llvm::dbgs()
                              << "  call_indirect: runtime vtable override: "
                              << vtableGlobalName << " -> "
@@ -1046,7 +1034,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         // The UVM write() body iterates m_imp_list via get_if(i), but
         // m_if is empty because we skip resolve_bindings. Use our native
         // analysisPortConnections map to dispatch to terminal imps.
-        if (isNativeAnalysisWriteCalleeCI(resolvedName) && args.size() >= 2) {
+        if (enableUvmAnalysisNativeInterceptors &&
+            isNativeAnalysisWriteCalleeCI(resolvedName) && args.size() >= 2) {
           uint64_t rawPortAddr = args[0].isX() ? 0 : args[0].getUInt64();
           uint64_t portAddr = canonicalizeUvmObjectAddress(procId, rawPortAddr);
           if (traceAnalysisEnabled)
@@ -1392,21 +1381,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               getValue(procId, callIndirectOp.getArgOperands()[0]);
           if (!selfVal2.isX()) {
             uint64_t objAddr2 = selfVal2.getUInt64();
-            uint64_t vtableOff2 = 0;
-            MemoryBlock *objBlock2 = findBlockByAddress(objAddr2, vtableOff2);
-            if (objBlock2 && objBlock2->initialized &&
-                objBlock2->size >= vtableOff2 + 12) {
-              uint64_t runtimeVtableAddr2 = 0;
-              for (unsigned i = 0; i < 8; ++i)
-                runtimeVtableAddr2 |=
-                    static_cast<uint64_t>(
-                        objBlock2->bytes()[vtableOff2 + 4 + i])
-                    << (i * 8);
+            uint64_t runtimeVtableAddr2 = 0;
+            if (readObjectVTableAddress(objAddr2, runtimeVtableAddr2, procId)) {
               auto globalIt3 = addressToGlobal.find(runtimeVtableAddr2);
               if (globalIt3 != addressToGlobal.end()) {
                 std::string runtimeVtableName2 = globalIt3->second;
                 if (runtimeVtableName2 != vtableGlobalName &&
-                    globalMemoryBlocks.count(runtimeVtableName2)) {
+                    globalMemoryBlocks.count(runtimeVtableName2) &&
+                    isVtableGlobalSymbol(runtimeVtableName2)) {
                   vtableGlobalName = runtimeVtableName2;
                 }
               }
@@ -1454,6 +1436,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         SmallVector<InterpretedValue, 4> sArgs;
         for (Value arg : callIndirectOp.getArgOperands())
           sArgs.push_back(getValue(procId, arg));
+
+        // Keep config_db interception behavior identical across call_indirect
+        // dispatch paths, including static fallback resolution.
+        if (tryInterceptConfigDbCallIndirect(procId, callIndirectOp,
+                                             resolvedName, sArgs)) {
+          staticResolved = true;
+          break;
+        }
 
         // Intercept UVM phase/objection methods in non-X static fallback.
         if ((resolvedName.contains("uvm_phase::raise_objection") ||
@@ -1655,206 +1645,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           }
         }
 
-        // Intercept config_db implementation in static fallback path.
-        // This covers cases where call_indirect cannot resolve a runtime
-        // function pointer (e.g. null/uninitialized vtable slot), but the
-        // static vtable slot still identifies config_db::set/get.
-        if (resolvedName.contains("config_db") &&
-            resolvedName.contains("implementation") &&
-            (resolvedName.contains("::set") ||
-             resolvedName.contains("::get"))) {
-          auto readStr2 = [&](unsigned argIdx) -> std::string {
-            if (argIdx >= sArgs.size())
-              return "";
-            return readMooreStringStruct(procId, sArgs[argIdx]);
-          };
-
-          if (resolvedName.contains("::set") &&
-              !resolvedName.contains("set_default") &&
-              !resolvedName.contains("set_override") &&
-              !resolvedName.contains("set_anonymous")) {
-            if (sArgs.size() >= 5) {
-              std::string str1 = readStr2(1);
-              std::string str2 = readStr2(2);
-              std::string str3 = readStr2(3);
-
-              std::string instName = str2;
-              std::string fieldName = str3;
-              if (fieldName.empty()) {
-                instName = str1;
-                fieldName = str2;
-              }
-              std::string key = instName + "." + fieldName;
-
-              InterpretedValue &valueArg = sArgs[4];
-              unsigned valueBits = valueArg.getWidth();
-              bool truncatedValue = false;
-              std::vector<uint8_t> valueData =
-                  serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
-                                                 &truncatedValue);
-              unsigned valueBytes = static_cast<unsigned>(valueData.size());
-              if (traceConfigDbEnabled) {
-                llvm::errs() << "[CFG-CI-STATIC-SET] callee=" << resolvedName
-                             << " key=\"" << key << "\" s1=\"" << str1
-                             << "\" s2=\"" << str2 << "\" s3=\"" << str3
-                             << "\" entries_before=" << configDbEntries.size()
-                             << "\n";
-              }
-              configDbEntries[key] = std::move(valueData);
-              if (traceConfigDbEnabled) {
-                llvm::errs() << "[CFG-CI-STATIC-SET] stored key=\"" << key
-                             << "\" entries_after=" << configDbEntries.size()
-                             << "\n";
-                if (truncatedValue) {
-                  llvm::errs() << "[CFG-CI-STATIC-SET] truncated oversized value payload"
-                               << " key=\"" << key << "\" bitWidth=" << valueBits
-                               << "\n";
-                }
-              }
-            }
-            staticResolved = true;
-            break;
-          }
-
-          if (resolvedName.contains("::get") &&
-              !resolvedName.contains("get_default") &&
-              sArgs.size() >= 5 && callIndirectOp.getNumResults() >= 1) {
-            std::string str1 = readStr2(1);
-            std::string str2 = readStr2(2);
-            std::string str3 = readStr2(3);
-
-            std::string instName = str2;
-            std::string fieldName = str3;
-            if (fieldName.empty()) {
-              instName = str1;
-              fieldName = str2;
-            }
-            std::string key = instName + "." + fieldName;
-            if (traceConfigDbEnabled) {
-              llvm::errs() << "[CFG-CI-STATIC-GET] callee=" << resolvedName
-                           << " key=\"" << key << "\" s1=\"" << str1
-                           << "\" s2=\"" << str2 << "\" s3=\"" << str3
-                           << "\" entries=" << configDbEntries.size() << "\n";
-            }
-
-            auto it = configDbEntries.find(key);
-            if (it == configDbEntries.end()) {
-              for (auto &[k, v] : configDbEntries) {
-                size_t dotPos = k.rfind('.');
-                if (dotPos != std::string::npos &&
-                    k.substr(dotPos + 1) == fieldName) {
-                  it = configDbEntries.find(k);
-                  break;
-                }
-              }
-            }
-            if (it == configDbEntries.end() && fieldName.size() > 2 &&
-                fieldName.back() == 'x' &&
-                fieldName[fieldName.size() - 2] == '_') {
-              std::string baseName = fieldName.substr(0, fieldName.size() - 1);
-              for (auto &[k, v] : configDbEntries) {
-                size_t dotPos = k.rfind('.');
-                if (dotPos == std::string::npos)
-                  continue;
-                std::string storedField = k.substr(dotPos + 1);
-                if (storedField.size() > baseName.size() &&
-                    storedField.substr(0, baseName.size()) == baseName &&
-                    std::isdigit(storedField[baseName.size()])) {
-                  it = configDbEntries.find(k);
-                  break;
-                }
-              }
-            }
-
-            if (it != configDbEntries.end()) {
-              if (traceConfigDbEnabled) {
-                llvm::errs() << "[CFG-CI-STATIC-GET] hit key=\"" << it->first
-                             << "\" bytes=" << it->second.size() << "\n";
-              }
-              Value outputRef = callIndirectOp.getArgOperands()[4];
-              const std::vector<uint8_t> &valueData = it->second;
-              Type refType = outputRef.getType();
-
-              if (auto refT = dyn_cast<llhd::RefType>(refType)) {
-                Type innerType = refT.getNestedType();
-                unsigned innerBits = getTypeWidth(innerType);
-                unsigned innerBytes = (innerBits + 7) / 8;
-                llvm::APInt valueBits(innerBits, 0);
-                for (unsigned i = 0;
-                     i < std::min(innerBytes, (unsigned)valueData.size());
-                     ++i)
-                  safeInsertBits(valueBits, llvm::APInt(8, valueData[i]), i * 8);
-                SignalId sigId3 = resolveSignalId(outputRef);
-                if (sigId3 != 0)
-                  pendingEpsilonDrives[sigId3] = InterpretedValue(valueBits);
-                InterpretedValue refAddr3 = getValue(procId, outputRef);
-                if (!refAddr3.isX()) {
-                  uint64_t addr3 = refAddr3.getUInt64();
-                  uint64_t off4 = 0;
-                  MemoryBlock *blk3 =
-                      findMemoryBlockByAddress(addr3, procId, &off4);
-                  if (!blk3)
-                    blk3 = findBlockByAddress(addr3, off4);
-                  if (blk3) {
-                    writeConfigDbBytesToMemoryBlock(
-                        blk3, off4, valueData, innerBytes,
-                        /*zeroFillMissing=*/true);
-                  } else {
-                    uint64_t nativeOff = 0;
-                    size_t nativeSize = 0;
-                    if (findNativeMemoryBlockByAddress(addr3, &nativeOff,
-                                                       &nativeSize)) {
-                      writeConfigDbBytesToNativeMemory(
-                          addr3, nativeOff, nativeSize, valueData, innerBytes,
-                          /*zeroFillMissing=*/true);
-                    }
-                  }
-                }
-              } else if (isa<LLVM::LLVMPointerType>(refType)) {
-                if (!sArgs[4].isX()) {
-                  uint64_t outputAddr = sArgs[4].getUInt64();
-                  uint64_t outOff2 = 0;
-                  MemoryBlock *outBlock =
-                      findMemoryBlockByAddress(outputAddr, procId, &outOff2);
-                  if (!outBlock)
-                    outBlock = findBlockByAddress(outputAddr, outOff2);
-                  if (outBlock) {
-                    writeConfigDbBytesToMemoryBlock(
-                        outBlock, outOff2, valueData,
-                        static_cast<unsigned>(valueData.size()),
-                        /*zeroFillMissing=*/false);
-                  } else {
-                    uint64_t nativeOff = 0;
-                    size_t nativeSize = 0;
-                    if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
-                                                       &nativeSize)) {
-                      writeConfigDbBytesToNativeMemory(
-                          outputAddr, nativeOff, nativeSize, valueData,
-                          static_cast<unsigned>(valueData.size()),
-                          /*zeroFillMissing=*/false);
-                    }
-                  }
-                }
-              }
-
-              setValue(procId, callIndirectOp.getResult(0),
-                       InterpretedValue(llvm::APInt(1, 1)));
-              staticResolved = true;
-              break;
-            }
-
-            if (traceConfigDbEnabled)
-              llvm::errs() << "[CFG-CI-STATIC-GET] miss key=\"" << key
-                           << "\"\n";
-            setValue(procId, callIndirectOp.getResult(0),
-                     InterpretedValue(llvm::APInt(1, 0)));
-            staticResolved = true;
-            break;
-          }
-        }
-
         // Intercept analysis write entrypoints in non-X static fallback path.
-        if (isNativeAnalysisWriteCalleeCI(resolvedName) && sArgs.size() >= 2) {
+        if (enableUvmAnalysisNativeInterceptors &&
+            isNativeAnalysisWriteCalleeCI(resolvedName) && sArgs.size() >= 2) {
           uint64_t rawPortAddr3 = sArgs[0].isX() ? 0 : sArgs[0].getUInt64();
           uint64_t portAddr3 =
               canonicalizeUvmObjectAddress(procId, rawPortAddr3);
@@ -2080,212 +1873,50 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                  t1.isSignlessInteger(64);
         };
 
-        auto readUnresolvedStrArg = [&](unsigned argIdx,
-                                        llvm::ArrayRef<InterpretedValue> vals)
-            -> std::string {
-          if (argIdx >= vals.size())
-            return "";
-          return readMooreStringStruct(procId, vals[argIdx]);
+        auto looksLikeConfigDbSetSig = [&]() -> bool {
+          if (callIndirectOp.getNumResults() != 0)
+            return false;
+          if (callIndirectOp.getNumOperands() < 5)
+            return false;
+          auto argOps = callIndirectOp.getArgOperands();
+          return isa<LLVM::LLVMPointerType>(argOps[0].getType()) &&
+                 isMooreStringStructType(argOps[1].getType()) &&
+                 isMooreStringStructType(argOps[2].getType()) &&
+                 isMooreStringStructType(argOps[3].getType());
         };
-
-        auto writeConfigDbGetResult = [&](Value outputRef,
-                                          const std::vector<uint8_t> &valueData,
-                                          InterpretedValue outputArgVal) {
-          Type refType = outputRef.getType();
-          if (auto refT = dyn_cast<llhd::RefType>(refType)) {
-            Type innerType = refT.getNestedType();
-            unsigned innerBits = getTypeWidth(innerType);
-            unsigned innerBytes = (innerBits + 7) / 8;
-            llvm::APInt valueBits(innerBits, 0);
-            for (unsigned i = 0;
-                 i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-              safeInsertBits(valueBits, llvm::APInt(8, valueData[i]), i * 8);
-            SignalId sigId = resolveSignalId(outputRef);
-            if (sigId != 0)
-              pendingEpsilonDrives[sigId] = InterpretedValue(valueBits);
-            InterpretedValue refAddr = getValue(procId, outputRef);
-            if (!refAddr.isX()) {
-              uint64_t addr = refAddr.getUInt64();
-              uint64_t off = 0;
-              MemoryBlock *blk = findMemoryBlockByAddress(addr, procId, &off);
-              if (!blk)
-                blk = findBlockByAddress(addr, off);
-              if (blk) {
-                writeConfigDbBytesToMemoryBlock(
-                    blk, off, valueData, innerBytes,
-                    /*zeroFillMissing=*/true);
-              } else {
-                uint64_t nativeOff = 0;
-                size_t nativeSize = 0;
-                if (findNativeMemoryBlockByAddress(addr, &nativeOff,
-                                                   &nativeSize)) {
-                  writeConfigDbBytesToNativeMemory(
-                      addr, nativeOff, nativeSize, valueData, innerBytes,
-                      /*zeroFillMissing=*/true);
-                }
-              }
-            }
-          } else if (isa<LLVM::LLVMPointerType>(refType) && !outputArgVal.isX()) {
-            uint64_t outputAddr = outputArgVal.getUInt64();
-            uint64_t outOff = 0;
-            MemoryBlock *outBlock =
-                findMemoryBlockByAddress(outputAddr, procId, &outOff);
-            if (!outBlock)
-              outBlock = findBlockByAddress(outputAddr, outOff);
-            if (outBlock) {
-              writeConfigDbBytesToMemoryBlock(
-                  outBlock, outOff, valueData,
-                  static_cast<unsigned>(valueData.size()),
-                  /*zeroFillMissing=*/false);
-            } else {
-              uint64_t nativeOff = 0;
-              size_t nativeSize = 0;
-              if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
-                                                 &nativeSize)) {
-                writeConfigDbBytesToNativeMemory(
-                    outputAddr, nativeOff, nativeSize, valueData,
-                    static_cast<unsigned>(valueData.size()),
-                    /*zeroFillMissing=*/false);
-              }
-            }
-          }
+        auto looksLikeConfigDbGetSig = [&]() -> bool {
+          if (callIndirectOp.getNumResults() != 1)
+            return false;
+          if (!callIndirectOp.getResult(0).getType().isSignlessInteger(1))
+            return false;
+          if (callIndirectOp.getNumOperands() < 5)
+            return false;
+          auto argOps = callIndirectOp.getArgOperands();
+          return isa<LLVM::LLVMPointerType>(argOps[0].getType()) &&
+                 isa<LLVM::LLVMPointerType>(argOps[1].getType()) &&
+                 isMooreStringStructType(argOps[2].getType()) &&
+                 isMooreStringStructType(argOps[3].getType());
         };
-
-        // Final fallback: unresolved call_indirect heuristic for config_db
-        // implementation signatures. This is intentionally narrow and only
-        // triggers when vtable resolution failed.
-        {
-          SmallVector<InterpretedValue, 8> unresolvedArgs;
-          unresolvedArgs.reserve(callIndirectOp.getNumOperands());
-          for (Value arg : callIndirectOp.getArgOperands())
-            unresolvedArgs.push_back(getValue(procId, arg));
-
-          // Heuristic config_db::set
-          if (callIndirectOp.getNumResults() == 0 &&
-              callIndirectOp.getNumOperands() >= 5 &&
-              isa<LLVM::LLVMPointerType>(callIndirectOp.getArgOperands()[0].getType()) &&
-              isMooreStringStructType(callIndirectOp.getArgOperands()[1].getType()) &&
-              isMooreStringStructType(callIndirectOp.getArgOperands()[2].getType()) &&
-              isMooreStringStructType(callIndirectOp.getArgOperands()[3].getType())) {
-            std::string str1 = readUnresolvedStrArg(1, unresolvedArgs);
-            std::string str2 = readUnresolvedStrArg(2, unresolvedArgs);
-            std::string str3 = readUnresolvedStrArg(3, unresolvedArgs);
-            std::string instName = str2;
-            std::string fieldName = str3;
-            if (fieldName.empty()) {
-              instName = str1;
-              fieldName = str2;
-            }
-            std::string key = instName + "." + fieldName;
-
-            InterpretedValue &valueArg = unresolvedArgs[4];
-            unsigned valueBits = valueArg.getWidth();
-            bool truncatedValue = false;
-            std::vector<uint8_t> valueData =
-                serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
-                                               &truncatedValue);
-            unsigned valueBytes = static_cast<unsigned>(valueData.size());
-            if (traceConfigDbEnabled) {
-              llvm::errs() << "[CFG-CI-UNRES-SET] key=\"" << key
-                           << "\" s1=\"" << str1 << "\" s2=\"" << str2
-                           << "\" s3=\"" << str3
-                           << "\" entries_before=" << configDbEntries.size()
-                           << "\n";
-            }
-            configDbEntries[key] = std::move(valueData);
-            if (traceConfigDbEnabled) {
-              llvm::errs() << "[CFG-CI-UNRES-SET] stored key=\"" << key
-                           << "\" entries_after=" << configDbEntries.size()
-                           << "\n";
-              if (truncatedValue) {
-                llvm::errs() << "[CFG-CI-UNRES-SET] truncated oversized value payload"
-                             << " key=\"" << key << "\" bitWidth=" << valueBits
-                             << "\n";
-              }
-            }
-            return success();
-          }
-
-          // Heuristic config_db::get
-          if (callIndirectOp.getNumResults() == 1 &&
-              callIndirectOp.getResult(0).getType().isSignlessInteger(1) &&
-              callIndirectOp.getNumOperands() >= 5 &&
-              isa<LLVM::LLVMPointerType>(callIndirectOp.getArgOperands()[0].getType()) &&
-              isa<LLVM::LLVMPointerType>(callIndirectOp.getArgOperands()[1].getType()) &&
-              isMooreStringStructType(callIndirectOp.getArgOperands()[2].getType()) &&
-              isMooreStringStructType(callIndirectOp.getArgOperands()[3].getType())) {
-            std::string str1 = readUnresolvedStrArg(1, unresolvedArgs);
-            std::string str2 = readUnresolvedStrArg(2, unresolvedArgs);
-            std::string str3 = readUnresolvedStrArg(3, unresolvedArgs);
-            std::string instName = str2;
-            std::string fieldName = str3;
-            if (fieldName.empty()) {
-              instName = str1;
-              fieldName = str2;
-            }
-            std::string key = instName + "." + fieldName;
-            if (traceConfigDbEnabled) {
-              llvm::errs() << "[CFG-CI-UNRES-GET] key=\"" << key
-                           << "\" s1=\"" << str1 << "\" s2=\"" << str2
-                           << "\" s3=\"" << str3
-                           << "\" entries=" << configDbEntries.size() << "\n";
-            }
-
-            auto it = configDbEntries.find(key);
-            if (it == configDbEntries.end()) {
-              for (auto &[k, v] : configDbEntries) {
-                size_t dotPos = k.rfind('.');
-                if (dotPos != std::string::npos &&
-                    k.substr(dotPos + 1) == fieldName) {
-                  it = configDbEntries.find(k);
-                  break;
-                }
-              }
-            }
-            if (it == configDbEntries.end() && fieldName.size() > 2 &&
-                fieldName.back() == 'x' &&
-                fieldName[fieldName.size() - 2] == '_') {
-              std::string baseName = fieldName.substr(0, fieldName.size() - 1);
-              for (auto &[k, v] : configDbEntries) {
-                size_t dotPos = k.rfind('.');
-                if (dotPos == std::string::npos)
-                  continue;
-                std::string storedField = k.substr(dotPos + 1);
-                if (storedField.size() > baseName.size() &&
-                    storedField.substr(0, baseName.size()) == baseName &&
-                    std::isdigit(storedField[baseName.size()])) {
-                  it = configDbEntries.find(k);
-                  break;
-                }
-              }
-            }
-
-            if (it != configDbEntries.end()) {
-              if (traceConfigDbEnabled) {
-                llvm::errs() << "[CFG-CI-UNRES-GET] hit key=\"" << it->first
-                             << "\" bytes=" << it->second.size() << "\n";
-              }
-              writeConfigDbGetResult(callIndirectOp.getArgOperands()[4],
-                                     it->second, unresolvedArgs[4]);
-              setValue(procId, callIndirectOp.getResult(0),
-                       InterpretedValue(llvm::APInt(1, 1)));
-              return success();
-            }
-
-            if (traceConfigDbEnabled)
-              llvm::errs() << "[CFG-CI-UNRES-GET] miss key=\"" << key
-                           << "\"\n";
-            setValue(procId, callIndirectOp.getResult(0),
-                     InterpretedValue(llvm::APInt(1, 0)));
-            return success();
-          }
-        }
 
         LLVM_DEBUG(llvm::dbgs()
                    << "  func.call_indirect: address 0x"
                    << llvm::format_hex(funcAddr, 16)
                    << " not in vtable map\n");
-        if (auto directCallee = tryGetDirectAddressOfCalleeName()) {
+        auto directCallee = tryGetDirectAddressOfCalleeName();
+        if (directCallee &&
+            llvm::StringRef(*directCallee).contains("config_db") &&
+            llvm::StringRef(*directCallee).contains("implementation")) {
+          return callIndirectOp.emitError()
+                 << "CIRCTSIM-CFGDB-UNRESOLVED-DISPATCH: unresolved config_db "
+                    "call_indirect target (direct callee: "
+                 << *directCallee << ")";
+        }
+        if (looksLikeConfigDbSetSig() || looksLikeConfigDbGetSig()) {
+          return callIndirectOp.emitError()
+                 << "CIRCTSIM-CFGDB-UNRESOLVED-DISPATCH: unresolved config_db "
+                    "call_indirect target (signature match)";
+        }
+        if (directCallee) {
           if (isCoverageRuntimeCallee(*directCallee)) {
             processStates[procId].sawUnhandledCoverageRuntimeCall = true;
             return callIndirectOp.emitError()
@@ -2897,16 +2528,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           break;
         uint64_t wrapperAddr = wrapperVal.getUInt64();
 
-        // Read wrapper's vtable pointer: struct uvm_void { i32, ptr }
-        // vtable ptr is at offset 4 (after i32 __class_handle)
-        uint64_t off = 0;
-        MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-        if (!blk || !blk->initialized || off + 8 > blk->size)
-          break;
         uint64_t vtableAddr = 0;
-        for (unsigned i = 0; i < 8; ++i)
-          vtableAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-        if (vtableAddr == 0)
+        if (!readObjectVTableAddress(wrapperAddr, vtableAddr, procId))
           break;
 
         // Read vtable entry [2] = get_type_name
@@ -2970,16 +2593,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         [&](uint64_t wrapperAddr, uint64_t slotIndex,
             llvm::ArrayRef<InterpretedValue> extraArgs,
             InterpretedValue &outResult) -> bool {
-      // Wrapper layout: uvm_void { i32 class_handle, ptr vtable }.
-      uint64_t off = 0;
-      MemoryBlock *blk = findBlockByAddress(wrapperAddr + 4, off);
-      if (!blk || !blk->initialized || off + 8 > blk->size)
-        return false;
-
       uint64_t vtableAddr = 0;
-      for (unsigned i = 0; i < 8; ++i)
-        vtableAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-      if (vtableAddr == 0)
+      if (!readObjectVTableAddress(wrapperAddr, vtableAddr, procId))
         return false;
 
       uint64_t off2 = 0;
@@ -3435,23 +3050,58 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
               addCandidate(canonicalizeUvmObjectAddress(procId, masked));
             }
           };
+      auto isPlausibleRuntimePointer = [&](uint64_t addr) -> bool {
+        // CIRCT-sim object addresses live in the canonical low virtual range.
+        // Reject shifted/misaligned artifacts such as 0xXXXXXXXX00000000.
+        return addr >= 0x1000 && addr < (uint64_t(1) << 47);
+      };
+      auto isLikelyFactoryObject = [&](uint64_t factoryAddr) -> bool {
+        if (!isPlausibleRuntimePointer(factoryAddr))
+          return false;
+        uint64_t vtableAddr = 0;
+        if (!readObjectVTableAddress(factoryAddr, vtableAddr, procId))
+          return false;
+        auto globalIt = addressToGlobal.find(vtableAddr);
+        if (globalIt == addressToGlobal.end())
+          return false;
+        llvm::StringRef vtableName = globalIt->second;
+        return vtableName.contains("uvm_default_factory::__vtable__") ||
+               vtableName.contains("uvm_factory::__vtable__");
+      };
       auto tryReadFactoryFromCoreService = [&](uint64_t rawCoreServiceAddr,
                                                uint64_t &factoryPtr,
                                                uint64_t &coreServiceAddr) -> bool {
-        constexpr uint64_t kFactoryOff = 12;
+        // ABI-aligned layout places `factory` at offset 16 on 64-bit targets.
+        // Keep legacy packed offset 12 as a compatibility fallback.
+        constexpr uint64_t kFactoryOffsets[] = {16, 12};
         SmallVector<uint64_t, 8> candidates;
         gatherCoreServiceCandidates(rawCoreServiceAddr, candidates);
         for (uint64_t candidate : candidates) {
-          uint64_t candidateFactory = 0;
-          if (!readU64FromAddress(candidate + kFactoryOff, candidateFactory))
-            continue;
           if (coreServiceAddr == 0)
             coreServiceAddr = candidate;
-          if (candidateFactory == 0)
-            continue;
-          factoryPtr = candidateFactory;
-          coreServiceAddr = candidate;
-          return true;
+
+          uint64_t fallbackFactory = 0;
+          for (uint64_t offset : kFactoryOffsets) {
+            uint64_t candidateFactory = 0;
+            if (!readU64FromAddress(candidate + offset, candidateFactory) ||
+                candidateFactory == 0)
+              continue;
+            if (!isPlausibleRuntimePointer(candidateFactory))
+              continue;
+            if (fallbackFactory == 0)
+              fallbackFactory = candidateFactory;
+            if (isLikelyFactoryObject(candidateFactory)) {
+              factoryPtr = candidateFactory;
+              coreServiceAddr = candidate;
+              return true;
+            }
+          }
+
+          if (fallbackFactory != 0) {
+            factoryPtr = fallbackFactory;
+            coreServiceAddr = candidate;
+            return true;
+          }
         }
         return false;
       };
@@ -3849,7 +3499,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // Intercept uvm_port_base::size() only when the port is tracked in our
     // native graph. Otherwise, fall through to the UVM implementation so we do
     // not override valid m_imp_list bookkeeping for untracked ports.
-    if (calleeName.contains("uvm_port_base") &&
+    if (enableUvmAnalysisNativeInterceptors &&
+        calleeName.contains("uvm_port_base") &&
         calleeName.ends_with("::size") &&
         callIndirectOp.getNumResults() >= 1) {
       uint64_t rawSelfAddr =
@@ -4011,225 +3662,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
                                          args))
       return success();
 
-    // Intercept config_db implementation via call_indirect (vtable dispatch).
-    // config_db#(T) is parametric, so each specialization has its own vtable
-    // and calls go through call_indirect, not func.call. Without this
-    // interceptor, the stub functions (which just return false/void) execute
-    // instead of our key-value store, causing BFM handle lookup failures.
-    // Note: class name is "config_db_default_implementation_t", so we match
-    // on "config_db" + "implementation" separately (not as one substring).
-    if (calleeName.contains("config_db") && calleeName.contains("implementation") &&
-        (calleeName.contains("::set") || calleeName.contains("::get"))) {
-
-      auto readStr = [&](unsigned argIdx) -> std::string {
-        if (argIdx >= args.size())
-          return "";
-        return readMooreStringStruct(procId, args[argIdx]);
-      };
-
-      if (calleeName.contains("::set") && !calleeName.contains("set_default") &&
-          !calleeName.contains("set_override") &&
-          !calleeName.contains("set_anonymous")) {
-        // The implementation's set signature is:
-        //   (self, computed_inst, sv_inst_name, sv_field_name, value, ...)
-        // We want key = sv_inst_name + "." + sv_field_name
-        if (args.size() >= 5) {
-          // The implementation's set signature:
-          //   (self, computed_inst, sv_inst_name, sv_field_name, value, ...)
-          // Use sv_inst_name + "." + sv_field_name as key.
-          std::string str1 = readStr(1);
-          std::string str2 = readStr(2);
-          std::string str3 = readStr(3);
-
-          std::string instName = str2;
-          std::string fieldName = str3;
-          // Fallback: if str3 is empty, try old layout (str1=inst, str2=field)
-          if (fieldName.empty()) {
-            instName = str1;
-            fieldName = str2;
-          }
-          std::string key = instName + "." + fieldName;
-          if (traceConfigDbEnabled) {
-            llvm::errs() << "[CFG-CI-SET] callee=" << calleeName
-                         << " key=\"" << key << "\" s1=\"" << str1
-                         << "\" s2=\"" << str2 << "\" s3=\"" << str3
-                         << "\" entries_before=" << configDbEntries.size()
-                         << "\n";
-          }
-
-          InterpretedValue &valueArg = args[4];
-          unsigned valueBits = valueArg.getWidth();
-          bool truncatedValue = false;
-          std::vector<uint8_t> valueData =
-              serializeInterpretedValueBytes(valueArg, /*maxBytes=*/1ULL << 20,
-                                             &truncatedValue);
-          unsigned valueBytes = static_cast<unsigned>(valueData.size());
-          configDbEntries[key] = std::move(valueData);
-          if (traceConfigDbEnabled) {
-            llvm::errs() << "[CFG-CI-SET] stored key=\"" << key
-                         << "\" entries_after=" << configDbEntries.size()
-                         << "\n";
-            if (truncatedValue) {
-              llvm::errs() << "[CFG-CI-SET] truncated oversized value payload key=\""
-                           << key << "\" bitWidth=" << valueBits << "\n";
-            }
-          }
-        }
-        return success();
-      }
-
-      if (calleeName.contains("::get") && !calleeName.contains("get_default")) {
-        // get(self, context_ptr, sv_inst_name, sv_field_name, value_ref) -> i1
-        if (args.size() >= 5 && callIndirectOp.getNumResults() >= 1) {
-          // The implementation's get signature:
-          //   (self, context_ptr, sv_inst_name, sv_field_name, value_ref)
-          // Use sv_inst_name + "." + sv_field_name as key.
-          std::string str1 = readStr(1);
-          std::string str2 = readStr(2);
-          std::string str3 = readStr(3);
-
-          std::string instName = str2;
-          std::string fieldName = str3;
-          // Fallback: if str3 empty, try old layout
-          if (fieldName.empty()) {
-            instName = str1;
-            fieldName = str2;
-          }
-          std::string key = instName + "." + fieldName;
-          if (traceConfigDbEnabled) {
-            llvm::errs() << "[CFG-CI-GET] callee=" << calleeName
-                         << " key=\"" << key << "\" s1=\"" << str1
-                         << "\" s2=\"" << str2 << "\" s3=\"" << str3
-                         << "\" entries=" << configDbEntries.size() << "\n";
-          }
-
-          auto it = configDbEntries.find(key);
-          if (it == configDbEntries.end()) {
-            // Wildcard match: look for entries where field name matches
-            for (auto &[k, v] : configDbEntries) {
-              size_t dotPos = k.rfind('.');
-              if (dotPos != std::string::npos &&
-                  k.substr(dotPos + 1) == fieldName) {
-                it = configDbEntries.find(k);
-                break;
-              }
-            }
-          }
-          // Fuzzy match: if fieldName ends with "_x" (unresolved index),
-          // try matching entries where the base name matches with any
-          // numeric suffix (e.g., "bfm_x" matches "bfm_0").
-          if (it == configDbEntries.end() && fieldName.size() > 2 &&
-              fieldName.back() == 'x' &&
-              fieldName[fieldName.size() - 2] == '_') {
-            std::string baseName = fieldName.substr(0, fieldName.size() - 1);
-            for (auto &[k, v] : configDbEntries) {
-              size_t dotPos = k.rfind('.');
-              if (dotPos != std::string::npos) {
-                std::string storedField = k.substr(dotPos + 1);
-                if (storedField.size() > baseName.size() &&
-                    storedField.substr(0, baseName.size()) == baseName &&
-                    std::isdigit(storedField[baseName.size()])) {
-                  it = configDbEntries.find(k);
-                  LLVM_DEBUG(llvm::dbgs()
-                             << "  config_db fuzzy match: '" << fieldName
-                             << "' -> '" << storedField << "'\n");
-                  break;
-                }
-              }
-            }
-          }
-
-          if (it != configDbEntries.end()) {
-            if (traceConfigDbEnabled) {
-              llvm::errs() << "[CFG-CI-GET] hit key=\"" << it->first
-                           << "\" bytes=" << it->second.size() << "\n";
-            }
-            Value outputRef = callIndirectOp.getArgOperands()[4];
-            const std::vector<uint8_t> &valueData = it->second;
-            Type refType = outputRef.getType();
-
-
-            if (auto refT = dyn_cast<llhd::RefType>(refType)) {
-              Type innerType = refT.getNestedType();
-              unsigned innerBits = getTypeWidth(innerType);
-              unsigned innerBytes = (innerBits + 7) / 8;
-              llvm::APInt valueBits(innerBits, 0);
-              for (unsigned i = 0;
-                   i < std::min(innerBytes, (unsigned)valueData.size()); ++i)
-                safeInsertBits(valueBits,llvm::APInt(8, valueData[i]), i * 8);
-              SignalId sigId2 = resolveSignalId(outputRef);
-              if (sigId2 != 0)
-                pendingEpsilonDrives[sigId2] = InterpretedValue(valueBits);
-              // Also write directly to memory (use procId-aware lookup
-              // to find alloca-backed refs)
-              InterpretedValue refAddr = getValue(procId, outputRef);
-              if (!refAddr.isX()) {
-                uint64_t addr = refAddr.getUInt64();
-                uint64_t off3 = 0;
-                MemoryBlock *blk =
-                    findMemoryBlockByAddress(addr, procId, &off3);
-                if (blk) {
-                  writeConfigDbBytesToMemoryBlock(
-                      blk, off3, valueData, innerBytes,
-                      /*zeroFillMissing=*/true);
-                } else {
-                  // Fallback: write to native memory (heap-allocated blocks)
-                  uint64_t nativeOff = 0;
-                  size_t nativeSize = 0;
-                  if (findNativeMemoryBlockByAddress(addr, &nativeOff,
-                                                     &nativeSize)) {
-                    writeConfigDbBytesToNativeMemory(
-                        addr, nativeOff, nativeSize, valueData, innerBytes,
-                        /*zeroFillMissing=*/true);
-                  }
-                }
-              }
-            } else if (isa<LLVM::LLVMPointerType>(refType)) {
-              if (!args[4].isX()) {
-                uint64_t outputAddr = args[4].getUInt64();
-                uint64_t outOff = 0;
-                MemoryBlock *outBlock =
-                    findMemoryBlockByAddress(outputAddr, procId, &outOff);
-                if (outBlock) {
-                  writeConfigDbBytesToMemoryBlock(
-                      outBlock, outOff, valueData,
-                      static_cast<unsigned>(valueData.size()),
-                      /*zeroFillMissing=*/false);
-                } else {
-                  // Fallback: write to native memory
-                  uint64_t nativeOff = 0;
-                  size_t nativeSize = 0;
-                  if (findNativeMemoryBlockByAddress(outputAddr, &nativeOff,
-                                                     &nativeSize)) {
-                    writeConfigDbBytesToNativeMemory(
-                        outputAddr, nativeOff, nativeSize, valueData,
-                        static_cast<unsigned>(valueData.size()),
-                        /*zeroFillMissing=*/false);
-                  }
-                }
-              }
-            }
-
-            setValue(procId, callIndirectOp.getResult(0),
-                    InterpretedValue(llvm::APInt(1, 1)));
-            LLVM_DEBUG(llvm::dbgs()
-                       << "  config_db::get(\"" << key << "\") -> found ("
-                       << valueData.size() << " bytes) via call_indirect\n");
-            return success();
-          }
-
-          setValue(procId, callIndirectOp.getResult(0),
-                  InterpretedValue(llvm::APInt(1, 0)));
-          if (traceConfigDbEnabled)
-            llvm::errs() << "[CFG-CI-GET] miss key=\"" << key << "\"\n";
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  config_db::get(\"" << key
-                     << "\") -> not found via call_indirect\n");
-          return success();
-        }
-      }
-    }
-
     // Intercept UVM port connect() via call_indirect.
     // Record port→provider connections in the native map, but still execute the
     // original UVM connect() implementation so m_provided_by/m_provided_to and
@@ -4272,7 +3704,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     // the UVM write() loop finds 0 subscribers. We use our native connection
     // map to resolve the correct imp write function via vtable dispatch.
     // Supports multi-hop chains: port → port/export → imp.
-    if (isNativeAnalysisWriteCalleeCI(calleeName) && args.size() >= 2) {
+    if (enableUvmAnalysisNativeInterceptors &&
+        isNativeAnalysisWriteCalleeCI(calleeName) && args.size() >= 2) {
       uint64_t rawPortAddr = args[0].isX() ? 0 : args[0].getUInt64();
       uint64_t portAddr = canonicalizeUvmObjectAddress(procId, rawPortAddr);
       if (traceAnalysisEnabled)

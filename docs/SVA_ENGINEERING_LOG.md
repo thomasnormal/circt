@@ -10744,3 +10744,39 @@
       - result: `11 passed, 1 expectedly failed` (`uvm-integ-ral-config-env.sv`)
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-*.sv`
       - result: `153 passed, 15 expectedly failed`.
+
+## 2026-03-01 - UVM semantic parity: child iteration + analysis fanout by reducing fragile interceptors
+
+- realization:
+  - Two failing semantic UVM tests had a common pattern: interpreter-native interceptor paths were overriding canonical UVM behavior with partial state.
+    - `test/Runtime/uvm/uvm_simple_test.sv` terminated early at `57000000 fs` because only `uvm_root::run_phase` executed.
+    - `test/Tools/crun/uvm-tlm-analysis-100.sv` delivered only 10/100 analysis transactions.
+  - TDD repro for component traversal showed `uvm_component::get_first_child/get_next_child` could return an empty iteration under default runtime settings (`seen=0`) while `CIRCT_SIM_DISABLE_UVM_FASTPATHS=1` produced `seen=2`.
+  - Analysis tracing showed native analysis-write path used only one recorded terminal (`[ANALYSIS-WRITE] 1 terminal(s) found`), which explained 10 deliveries instead of 100.
+
+- implemented:
+  - Added semantic regression test:
+    - `test/Runtime/uvm/uvm_component_child_iteration_semantic_test.sv`
+    - validates runtime child iteration + lookup behavior (`seen=2`).
+  - Reduced interceptor surface for fragile component-child fastpaths:
+    - in `tools/circt-sim/UVMFastPaths.cpp`, `uvm_component::{get_num_children,has_child,get_child,get_first_child,get_next_child}` fastpaths are now opt-in via
+      `CIRCT_SIM_ENABLE_UVM_COMPONENT_CHILD_FASTPATHS`.
+    - default behavior now falls back to canonical interpreter/UVM semantics.
+  - Reduced interceptor surface for fragile analysis native graph shortcuts:
+    - in `tools/circt-sim/LLHDProcessInterpreter.cpp` and
+      `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`, native analysis interceptors are now opt-in via
+      `CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS`.
+    - this gates native overrides for `uvm_port_base::size` and analysis write dispatch; default behavior uses canonical UVM port/connect/write semantics.
+
+- validation:
+  - red (before fixes):
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_component_child_iteration_semantic_test.sv`
+      - failed with `[TEST] child iteration count = 0`.
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Tools/crun/uvm-tlm-analysis-100.sv`
+      - both failed.
+  - green (after fixes):
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_component_child_iteration_semantic_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Tools/crun/uvm-tlm-analysis-100.sv`
+      - `3 passed`.
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_callback_test.sv test/Runtime/uvm/uvm_comparator_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
+      - `3 passed`.
+

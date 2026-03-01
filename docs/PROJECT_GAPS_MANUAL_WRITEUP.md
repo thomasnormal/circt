@@ -892,7 +892,8 @@ Additional semantic closure (2026-02-28): port bookkeeping now uses stable fallb
 
 ### [x] 296. `lib/Runtime/uvm-core/src/base/uvm_port_base.svh:638`
 Status update (2026-02-28): same closure as entry 295. `debug_connected_to` now reuses the same shared phase-state helper.  
-Additional semantic closure (2026-02-28): validated with semantic runtime coverage (`uvm_port_connect_semantic_test.sv`, `uvm_tlm_port_test.sv`) so connect/resolve behavior is now exercised beyond parse/lowering checks.
+Additional semantic closure (2026-02-28): validated with semantic runtime coverage (`uvm_port_connect_semantic_test.sv`, `uvm_tlm_port_test.sv`) so connect/resolve behavior is now exercised beyond parse/lowering checks.  
+Additional semantic closure (2026-03-01): analysis fanout parity is now covered in active regression (`test/Tools/crun/uvm-tlm-analysis-100.sv`), and fragile native analysis interceptors in `circt-sim` were moved behind opt-in gates (`CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS`) so default behavior uses canonical UVM connect/size/write semantics.
 
 ### [ ] 297. `include/circt/Dialect/HW/HWOps.h:42`
 This TODO is an architectural gap: module helper functions are free functions instead of being surfaced through a `hw::ModuleLike` interface. What is missing is a uniform interface abstraction that makes module-like operations interchangeable across passes. The fix is to move these helpers into interface methods, migrate call sites, and keep compatibility shims only during transition.

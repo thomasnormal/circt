@@ -22895,6 +22895,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // Record the native connection graph, but do not bypass UVM connect()
   // bookkeeping. UVM must still populate m_provided_by/m_provided_to so
   // resolve_bindings builds m_imp_list for standard TLM port operations.
+  static bool enableUvmAnalysisNativeInterceptors = []() {
+    const char *env =
+        std::getenv("CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
   auto isNativeConnectCallee = [&](llvm::StringRef name) {
     if (!name.contains("::connect"))
       return false;
@@ -22921,7 +22926,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // Intercept uvm_port_base::size() only when the port is tracked in our
   // native graph. Otherwise, fall through to the UVM implementation so we do
   // not override valid m_imp_list bookkeeping for untracked ports.
-  if (calleeName.contains("uvm_port_base") &&
+  if (enableUvmAnalysisNativeInterceptors &&
+      calleeName.contains("uvm_port_base") &&
       calleeName.ends_with("::size") &&
       callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 1) {
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
@@ -22956,7 +22962,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   // Intercept analysis write entrypoints at func.call level.
   // uvm_analysis_port::write() is usually direct func.call, while
   // uvm_tlm_if_base::*::write may appear in virtualized forms.
-  if (isNativeAnalysisWriteCallee(calleeName) &&
+  if (enableUvmAnalysisNativeInterceptors &&
+      isNativeAnalysisWriteCallee(calleeName) &&
       callOp.getNumOperands() >= 2) {
     InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
     InterpretedValue txnVal = getValue(procId, callOp.getOperand(1));
@@ -23513,6 +23520,27 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
                                       llvm::ArrayRef<InterpretedValue> values) {
     if (!traceUvmChildren || !isUvmChildrenTraceCall(calleeName))
       return;
+    auto formatAddr = [](uint64_t addr) {
+      std::string addrStr;
+      llvm::raw_string_ostream os(addrStr);
+      os << llvm::format_hex(addr, 16);
+      return os.str();
+    };
+    auto describeObjectVtable = [&](const InterpretedValue &value) {
+      if (value.isX())
+        return std::string("X");
+      uint64_t objAddr = value.getUInt64();
+      if (objAddr == 0)
+        return std::string("null");
+      std::string objAddrStr = formatAddr(objAddr);
+      uint64_t vtableAddr = 0;
+      if (!readObjectVTableAddress(objAddr, vtableAddr, procId))
+        return objAddrStr + ":<no-vtable>";
+      auto it = addressToGlobal.find(vtableAddr);
+      if (it == addressToGlobal.end())
+        return objAddrStr + ":vtable=" + formatAddr(vtableAddr);
+      return objAddrStr + ":" + it->second;
+    };
     llvm::errs() << "[UVM-CHILD] " << stage << " proc=" << procId
                  << " callee=" << calleeName;
     for (size_t i = 0; i < std::min<size_t>(values.size(), 4); ++i) {
@@ -23522,6 +23550,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       else
         llvm::errs() << llvm::format_hex(values[i].getUInt64(), 16);
     }
+    if (calleeName == "uvm_pkg::uvm_component::m_add_child" &&
+        values.size() > 1)
+      llvm::errs() << " child_type=" << describeObjectVtable(values[1]);
+    if (calleeName == "uvm_pkg::uvm_phase_hopper::execute_on" &&
+        values.size() > 2) {
+      llvm::errs() << " imp_type=" << describeObjectVtable(values[1]);
+      llvm::errs() << " comp_type=" << describeObjectVtable(values[2]);
+    }
+    if (calleeName == "uvm_pkg::uvm_run_phase::exec_task" &&
+        values.size() > 1)
+      llvm::errs() << " comp_type=" << describeObjectVtable(values[1]);
     llvm::errs() << "\n";
   };
   emitUvmChildrenTraceCall("enter", args);
@@ -30314,21 +30353,16 @@ unsigned LLHDProcessInterpreter::getLLVMTypeSize(Type type) const {
   if (isa<LLVM::LLVMPointerType>(type))
     return 8;
 
-  // For LLVM struct/array types, use packed aggregate width in bits and
-  // round once to bytes. This matches the interpreter's aggregate bit-layout
-  // model used by llvm.insertvalue/extractvalue and avoids over-sizing nested
-  // sub-byte fields (e.g. struct<(i2, i2)> is 1 byte, not 2).
+  // For LLVM struct/array types, memory accesses must follow the same ABI
+  // layout as GEP offset computation (including padding/alignment).
+  // Using packed bit-width here can under-allocate alloca blocks and make
+  // valid GEP field offsets appear out-of-bounds.
   if (auto structType = dyn_cast<LLVM::LLVMStructType>(type)) {
-    unsigned bitWidth = 0;
-    for (Type elemType : structType.getBody())
-      bitWidth += getTypeWidth(elemType);
-    return (bitWidth + 7) / 8;
+    return getLLVMTypeSizeForGEP(structType);
   }
 
   if (auto arrayType = dyn_cast<LLVM::LLVMArrayType>(type)) {
-    unsigned bitWidth =
-        getTypeWidth(arrayType.getElementType()) * arrayType.getNumElements();
-    return (bitWidth + 7) / 8;
+    return getLLVMTypeSizeForGEP(arrayType);
   }
 
   // For integer types, round up to bytes

@@ -125,6 +125,12 @@ static bool disableAllUvmFastPaths() {
   const char *env = std::getenv("CIRCT_SIM_DISABLE_UVM_FASTPATHS");
   return env && env[0] != '\0' && env[0] != '0';
 }
+
+static bool enableUvmComponentChildFastPaths() {
+  const char *env =
+      std::getenv("CIRCT_SIM_ENABLE_UVM_COMPONENT_CHILD_FASTPATHS");
+  return env && env[0] != '\0' && env[0] != '0';
+}
 } // namespace
 
 bool LLHDProcessInterpreter::handleUvmWaitForSelfAndSiblingsToDrop(
@@ -914,161 +920,176 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     return validAssocArrayAddresses.contains(assocAddr);
   };
 
-  if (calleeName.contains("uvm_component::get_num_children") &&
-      callIndirectOp.getArgOperands().size() >= 1 &&
-      callIndirectOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX())
-      return false;
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
-      return false;
+  if (enableUvmComponentChildFastPaths()) {
+    if (calleeName.contains("uvm_component::get_num_children") &&
+        callIndirectOp.getArgOperands().size() >= 1 &&
+        callIndirectOp.getNumResults() >= 1) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (selfVal.isX())
+        return false;
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+        return false;
 
-    uint64_t count = 0;
-    if (assocAddr != 0)
-      count = static_cast<uint64_t>(
-          std::max<int64_t>(0, __moore_assoc_size(reinterpret_cast<void *>(assocAddr))));
-    setCallIndirectResultInt(callIndirectOp.getResult(0), count);
-    recordFastPathHit("call_indirect.component.get_num_children");
-    return true;
-  }
-
-  if (calleeName.contains("uvm_component::has_child") &&
-      callIndirectOp.getArgOperands().size() >= 2 &&
-      callIndirectOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX())
-      return false;
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
-      return false;
-    uint64_t keyPtr = 0;
-    int64_t keyLen = 0;
-    if (!readPackedStringParts(getValue(procId, callIndirectOp.getArgOperands()[1]),
-                               keyPtr, keyLen))
-      return false;
-
-    std::string keyStorage;
-    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
-      return false;
-
-    bool exists = false;
-    if (assocAddr != 0) {
-      MooreString key{const_cast<char *>(keyStorage.data()),
-                      static_cast<int64_t>(keyStorage.size())};
-      exists = __moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key) != 0;
+      uint64_t count = 0;
+      if (assocAddr != 0)
+        count = static_cast<uint64_t>(
+            std::max<int64_t>(
+                0, __moore_assoc_size(reinterpret_cast<void *>(assocAddr))));
+      setCallIndirectResultInt(callIndirectOp.getResult(0), count);
+      recordFastPathHit("call_indirect.component.get_num_children");
+      return true;
     }
-    setCallIndirectResultInt(callIndirectOp.getResult(0), exists ? 1 : 0);
-    recordFastPathHit("call_indirect.component.has_child");
-    return true;
-  }
 
-  if (calleeName.contains("uvm_component::get_child") &&
-      callIndirectOp.getArgOperands().size() >= 2 &&
-      callIndirectOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX())
-      return false;
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
-      return false;
-    uint64_t keyPtr = 0;
-    int64_t keyLen = 0;
-    if (!readPackedStringParts(getValue(procId, callIndirectOp.getArgOperands()[1]),
-                               keyPtr, keyLen))
-      return false;
+    if (calleeName.contains("uvm_component::has_child") &&
+        callIndirectOp.getArgOperands().size() >= 2 &&
+        callIndirectOp.getNumResults() >= 1) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (selfVal.isX())
+        return false;
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+        return false;
+      uint64_t keyPtr = 0;
+      int64_t keyLen = 0;
+      if (!readPackedStringParts(
+              getValue(procId, callIndirectOp.getArgOperands()[1]), keyPtr,
+              keyLen))
+        return false;
 
-    std::string keyStorage;
-    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
-      return false;
+      std::string keyStorage;
+      if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+        return false;
 
-    uint64_t childAddr = 0;
-    if (assocAddr != 0) {
-      MooreString key{const_cast<char *>(keyStorage.data()),
-                      static_cast<int64_t>(keyStorage.size())};
-      if (__moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key)) {
-        void *ref = __moore_assoc_get_ref(reinterpret_cast<void *>(assocAddr), &key,
-                                          /*value_size=*/8);
-        if (ref)
-          std::memcpy(&childAddr, ref, 8);
+      bool exists = false;
+      if (assocAddr != 0) {
+        MooreString key{const_cast<char *>(keyStorage.data()),
+                        static_cast<int64_t>(keyStorage.size())};
+        exists =
+            __moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key) != 0;
       }
-    }
-    setCallIndirectResultInt(callIndirectOp.getResult(0), childAddr);
-    recordFastPathHit("call_indirect.component.get_child");
-    return true;
-  }
-
-  if (calleeName.contains("uvm_component::get_first_child") &&
-      callIndirectOp.getArgOperands().size() >= 2 &&
-      callIndirectOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX())
-      return false;
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
-      return false;
-    if (assocAddr == 0) {
-      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
-      recordFastPathHit("call_indirect.component.get_first_child_empty");
+      setCallIndirectResultInt(callIndirectOp.getResult(0), exists ? 1 : 0);
+      recordFastPathHit("call_indirect.component.has_child");
       return true;
     }
 
-    MooreString keyOut{nullptr, 0};
-    bool ok = __moore_assoc_first(reinterpret_cast<void *>(assocAddr), &keyOut);
-    if (!ok) {
-      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
-      recordFastPathHit("call_indirect.component.get_first_child_empty");
+    if (calleeName.contains("uvm_component::get_child") &&
+        callIndirectOp.getArgOperands().size() >= 2 &&
+        callIndirectOp.getNumResults() >= 1) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (selfVal.isX())
+        return false;
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+        return false;
+      uint64_t keyPtr = 0;
+      int64_t keyLen = 0;
+      if (!readPackedStringParts(
+              getValue(procId, callIndirectOp.getArgOperands()[1]), keyPtr,
+              keyLen))
+        return false;
+
+      std::string keyStorage;
+      if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+        return false;
+
+      uint64_t childAddr = 0;
+      if (assocAddr != 0) {
+        MooreString key{const_cast<char *>(keyStorage.data()),
+                        static_cast<int64_t>(keyStorage.size())};
+        if (__moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key)) {
+          void *ref = __moore_assoc_get_ref(reinterpret_cast<void *>(assocAddr),
+                                            &key,
+                                            /*value_size=*/8);
+          if (ref)
+            std::memcpy(&childAddr, ref, 8);
+        }
+      }
+      setCallIndirectResultInt(callIndirectOp.getResult(0), childAddr);
+      recordFastPathHit("call_indirect.component.get_child");
       return true;
     }
-    if (keyOut.data && keyOut.len > 0)
-      dynamicStrings[reinterpret_cast<uint64_t>(keyOut.data)] = {keyOut.data, keyOut.len};
-    if (!writeStringStructToRef(callIndirectOp.getArgOperands()[1],
-                                reinterpret_cast<uint64_t>(keyOut.data),
-                                keyOut.len))
-      return false;
 
-    setCallIndirectResultInt(callIndirectOp.getResult(0), 1);
-    recordFastPathHit("call_indirect.component.get_first_child");
-    return true;
-  }
+    if (calleeName.contains("uvm_component::get_first_child") &&
+        callIndirectOp.getArgOperands().size() >= 2 &&
+        callIndirectOp.getNumResults() >= 1) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (selfVal.isX())
+        return false;
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+        return false;
+      if (assocAddr == 0) {
+        setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+        recordFastPathHit("call_indirect.component.get_first_child_empty");
+        return true;
+      }
 
-  if (calleeName.contains("uvm_component::get_next_child") &&
-      callIndirectOp.getArgOperands().size() >= 2 &&
-      callIndirectOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX())
-      return false;
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
-      return false;
-    if (assocAddr == 0) {
-      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
-      recordFastPathHit("call_indirect.component.get_next_child_end");
+      MooreString keyOut{nullptr, 0};
+      bool ok = __moore_assoc_first(reinterpret_cast<void *>(assocAddr), &keyOut);
+      if (!ok) {
+        setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+        recordFastPathHit("call_indirect.component.get_first_child_empty");
+        return true;
+      }
+      if (keyOut.data && keyOut.len > 0)
+        dynamicStrings[reinterpret_cast<uint64_t>(keyOut.data)] = {keyOut.data,
+                                                                   keyOut.len};
+      if (!writeStringStructToRef(callIndirectOp.getArgOperands()[1],
+                                  reinterpret_cast<uint64_t>(keyOut.data),
+                                  keyOut.len))
+        return false;
+
+      setCallIndirectResultInt(callIndirectOp.getResult(0), 1);
+      recordFastPathHit("call_indirect.component.get_first_child");
       return true;
     }
 
-    uint64_t curPtr = 0;
-    int64_t curLen = 0;
-    if (!readRefStringParts(callIndirectOp.getArgOperands()[1], curPtr, curLen))
-      return false;
+    if (calleeName.contains("uvm_component::get_next_child") &&
+        callIndirectOp.getArgOperands().size() >= 2 &&
+        callIndirectOp.getNumResults() >= 1) {
+      InterpretedValue selfVal =
+          getValue(procId, callIndirectOp.getArgOperands()[0]);
+      if (selfVal.isX())
+        return false;
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfVal.getUInt64(), assocAddr))
+        return false;
+      if (assocAddr == 0) {
+        setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+        recordFastPathHit("call_indirect.component.get_next_child_end");
+        return true;
+      }
 
-    MooreString keyRef{reinterpret_cast<char *>(curPtr), curLen};
-    bool ok = __moore_assoc_next(reinterpret_cast<void *>(assocAddr), &keyRef);
-    if (!ok) {
-      setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
-      recordFastPathHit("call_indirect.component.get_next_child_end");
+      uint64_t curPtr = 0;
+      int64_t curLen = 0;
+      if (!readRefStringParts(callIndirectOp.getArgOperands()[1], curPtr,
+                              curLen))
+        return false;
+
+      MooreString keyRef{reinterpret_cast<char *>(curPtr), curLen};
+      bool ok = __moore_assoc_next(reinterpret_cast<void *>(assocAddr), &keyRef);
+      if (!ok) {
+        setCallIndirectResultInt(callIndirectOp.getResult(0), 0);
+        recordFastPathHit("call_indirect.component.get_next_child_end");
+        return true;
+      }
+      if (keyRef.data && keyRef.len > 0)
+        dynamicStrings[reinterpret_cast<uint64_t>(keyRef.data)] = {keyRef.data,
+                                                                   keyRef.len};
+      if (!writeStringStructToRef(callIndirectOp.getArgOperands()[1],
+                                  reinterpret_cast<uint64_t>(keyRef.data),
+                                  keyRef.len))
+        return false;
+
+      setCallIndirectResultInt(callIndirectOp.getResult(0), 1);
+      recordFastPathHit("call_indirect.component.get_next_child");
       return true;
     }
-    if (keyRef.data && keyRef.len > 0)
-      dynamicStrings[reinterpret_cast<uint64_t>(keyRef.data)] = {keyRef.data, keyRef.len};
-    if (!writeStringStructToRef(callIndirectOp.getArgOperands()[1],
-                                reinterpret_cast<uint64_t>(keyRef.data),
-                                keyRef.len))
-      return false;
-
-    setCallIndirectResultInt(callIndirectOp.getResult(0), 1);
-    recordFastPathHit("call_indirect.component.get_next_child");
-    return true;
   }
 
   // First-tier registry dispatch keyed by (call form, exact symbol).
@@ -1326,163 +1347,170 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     return validAssocArrayAddresses.contains(assocAddr);
   };
 
-  if (calleeName.contains("uvm_component::get_num_children") &&
-      callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX())
-      return false;
-    uint64_t selfAddr = selfVal.getUInt64();
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
-      return false;
+  if (enableUvmComponentChildFastPaths()) {
+    if (calleeName.contains("uvm_component::get_num_children") &&
+        callOp.getNumOperands() >= 1 && callOp.getNumResults() >= 1) {
+      InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+      if (selfVal.isX())
+        return false;
+      uint64_t selfAddr = selfVal.getUInt64();
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+        return false;
 
-    uint64_t count = 0;
-    if (assocAddr != 0)
-      count = static_cast<uint64_t>(
-          std::max<int64_t>(0, __moore_assoc_size(reinterpret_cast<void *>(assocAddr))));
-    setCallResultInt(callOp.getResult(0), count);
-    recordFastPathHit("func.call.component.get_num_children");
-    return true;
-  }
-
-  if (calleeName.contains("uvm_component::has_child") &&
-      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX())
-      return false;
-    uint64_t selfAddr = selfVal.getUInt64();
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
-      return false;
-    uint64_t keyPtr = 0;
-    int64_t keyLen = 0;
-    if (!readPackedStringParts(getValue(procId, callOp.getOperand(1)), keyPtr,
-                               keyLen))
-      return false;
-
-    std::string keyStorage;
-    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
-      return false;
-
-    bool exists = false;
-    if (assocAddr != 0) {
-      MooreString key{const_cast<char *>(keyStorage.data()),
-                      static_cast<int64_t>(keyStorage.size())};
-      exists = __moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key) != 0;
+      uint64_t count = 0;
+      if (assocAddr != 0)
+        count = static_cast<uint64_t>(
+            std::max<int64_t>(
+                0, __moore_assoc_size(reinterpret_cast<void *>(assocAddr))));
+      setCallResultInt(callOp.getResult(0), count);
+      recordFastPathHit("func.call.component.get_num_children");
+      return true;
     }
-    setCallResultInt(callOp.getResult(0), exists ? 1 : 0);
-    recordFastPathHit("func.call.component.has_child");
-    return true;
-  }
 
-  if (calleeName.contains("uvm_component::get_child") &&
-      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX())
-      return false;
-    uint64_t selfAddr = selfVal.getUInt64();
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
-      return false;
-    uint64_t keyPtr = 0;
-    int64_t keyLen = 0;
-    if (!readPackedStringParts(getValue(procId, callOp.getOperand(1)), keyPtr,
-                               keyLen))
-      return false;
+    if (calleeName.contains("uvm_component::has_child") &&
+        callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+      InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+      if (selfVal.isX())
+        return false;
+      uint64_t selfAddr = selfVal.getUInt64();
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+        return false;
+      uint64_t keyPtr = 0;
+      int64_t keyLen = 0;
+      if (!readPackedStringParts(getValue(procId, callOp.getOperand(1)), keyPtr,
+                                 keyLen))
+        return false;
 
-    std::string keyStorage;
-    if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
-      return false;
+      std::string keyStorage;
+      if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+        return false;
 
-    uint64_t childAddr = 0;
-    if (assocAddr != 0) {
-      MooreString key{const_cast<char *>(keyStorage.data()),
-                      static_cast<int64_t>(keyStorage.size())};
-      if (__moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key)) {
-        void *ref = __moore_assoc_get_ref(reinterpret_cast<void *>(assocAddr), &key,
-                                          /*value_size=*/8);
-        if (ref)
-          std::memcpy(&childAddr, ref, 8);
+      bool exists = false;
+      if (assocAddr != 0) {
+        MooreString key{const_cast<char *>(keyStorage.data()),
+                        static_cast<int64_t>(keyStorage.size())};
+        exists =
+            __moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key) != 0;
       }
-    }
-
-    setCallResultInt(callOp.getResult(0), childAddr);
-    recordFastPathHit("func.call.component.get_child");
-    return true;
-  }
-
-  if (calleeName.contains("uvm_component::get_first_child") &&
-      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX())
-      return false;
-    uint64_t selfAddr = selfVal.getUInt64();
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
-      return false;
-
-    if (assocAddr == 0) {
-      setCallResultInt(callOp.getResult(0), 0);
-      recordFastPathHit("func.call.component.get_first_child_empty");
+      setCallResultInt(callOp.getResult(0), exists ? 1 : 0);
+      recordFastPathHit("func.call.component.has_child");
       return true;
     }
 
-    MooreString keyOut{nullptr, 0};
-    bool ok = __moore_assoc_first(reinterpret_cast<void *>(assocAddr), &keyOut);
-    if (!ok) {
-      setCallResultInt(callOp.getResult(0), 0);
-      recordFastPathHit("func.call.component.get_first_child_empty");
+    if (calleeName.contains("uvm_component::get_child") &&
+        callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+      InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+      if (selfVal.isX())
+        return false;
+      uint64_t selfAddr = selfVal.getUInt64();
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+        return false;
+      uint64_t keyPtr = 0;
+      int64_t keyLen = 0;
+      if (!readPackedStringParts(getValue(procId, callOp.getOperand(1)), keyPtr,
+                                 keyLen))
+        return false;
+
+      std::string keyStorage;
+      if (!tryReadStringKey(procId, keyPtr, keyLen, keyStorage))
+        return false;
+
+      uint64_t childAddr = 0;
+      if (assocAddr != 0) {
+        MooreString key{const_cast<char *>(keyStorage.data()),
+                        static_cast<int64_t>(keyStorage.size())};
+        if (__moore_assoc_exists(reinterpret_cast<void *>(assocAddr), &key)) {
+          void *ref = __moore_assoc_get_ref(reinterpret_cast<void *>(assocAddr),
+                                            &key,
+                                            /*value_size=*/8);
+          if (ref)
+            std::memcpy(&childAddr, ref, 8);
+        }
+      }
+
+      setCallResultInt(callOp.getResult(0), childAddr);
+      recordFastPathHit("func.call.component.get_child");
       return true;
     }
-    if (keyOut.data && keyOut.len > 0)
-      dynamicStrings[reinterpret_cast<uint64_t>(keyOut.data)] = {keyOut.data, keyOut.len};
-    if (!writeStringStructToRef(callOp.getOperand(1),
-                                reinterpret_cast<uint64_t>(keyOut.data),
-                                keyOut.len))
-      return false;
 
-    setCallResultInt(callOp.getResult(0), ok ? 1 : 0);
-    recordFastPathHit("func.call.component.get_first_child");
-    return true;
-  }
+    if (calleeName.contains("uvm_component::get_first_child") &&
+        callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+      InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+      if (selfVal.isX())
+        return false;
+      uint64_t selfAddr = selfVal.getUInt64();
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+        return false;
 
-  if (calleeName.contains("uvm_component::get_next_child") &&
-      callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX())
-      return false;
-    uint64_t selfAddr = selfVal.getUInt64();
-    uint64_t assocAddr = 0;
-    if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
-      return false;
-    if (assocAddr == 0) {
-      setCallResultInt(callOp.getResult(0), 0);
-      recordFastPathHit("func.call.component.get_next_child_end");
+      if (assocAddr == 0) {
+        setCallResultInt(callOp.getResult(0), 0);
+        recordFastPathHit("func.call.component.get_first_child_empty");
+        return true;
+      }
+
+      MooreString keyOut{nullptr, 0};
+      bool ok = __moore_assoc_first(reinterpret_cast<void *>(assocAddr), &keyOut);
+      if (!ok) {
+        setCallResultInt(callOp.getResult(0), 0);
+        recordFastPathHit("func.call.component.get_first_child_empty");
+        return true;
+      }
+      if (keyOut.data && keyOut.len > 0)
+        dynamicStrings[reinterpret_cast<uint64_t>(keyOut.data)] = {keyOut.data,
+                                                                   keyOut.len};
+      if (!writeStringStructToRef(callOp.getOperand(1),
+                                  reinterpret_cast<uint64_t>(keyOut.data),
+                                  keyOut.len))
+        return false;
+
+      setCallResultInt(callOp.getResult(0), ok ? 1 : 0);
+      recordFastPathHit("func.call.component.get_first_child");
       return true;
     }
 
-    uint64_t curPtr = 0;
-    int64_t curLen = 0;
-    if (!readRefStringParts(callOp.getOperand(1), curPtr, curLen))
-      return false;
+    if (calleeName.contains("uvm_component::get_next_child") &&
+        callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
+      InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
+      if (selfVal.isX())
+        return false;
+      uint64_t selfAddr = selfVal.getUInt64();
+      uint64_t assocAddr = 0;
+      if (!getComponentChildrenAssocAddr(selfAddr, assocAddr))
+        return false;
+      if (assocAddr == 0) {
+        setCallResultInt(callOp.getResult(0), 0);
+        recordFastPathHit("func.call.component.get_next_child_end");
+        return true;
+      }
 
-    MooreString keyRef{reinterpret_cast<char *>(curPtr), curLen};
-    bool ok = __moore_assoc_next(reinterpret_cast<void *>(assocAddr), &keyRef);
-    if (!ok) {
-      setCallResultInt(callOp.getResult(0), 0);
-      recordFastPathHit("func.call.component.get_next_child_end");
+      uint64_t curPtr = 0;
+      int64_t curLen = 0;
+      if (!readRefStringParts(callOp.getOperand(1), curPtr, curLen))
+        return false;
+
+      MooreString keyRef{reinterpret_cast<char *>(curPtr), curLen};
+      bool ok = __moore_assoc_next(reinterpret_cast<void *>(assocAddr), &keyRef);
+      if (!ok) {
+        setCallResultInt(callOp.getResult(0), 0);
+        recordFastPathHit("func.call.component.get_next_child_end");
+        return true;
+      }
+      if (keyRef.data && keyRef.len > 0)
+        dynamicStrings[reinterpret_cast<uint64_t>(keyRef.data)] = {keyRef.data,
+                                                                   keyRef.len};
+      if (!writeStringStructToRef(callOp.getOperand(1),
+                                  reinterpret_cast<uint64_t>(keyRef.data),
+                                  keyRef.len))
+        return false;
+
+      setCallResultInt(callOp.getResult(0), ok ? 1 : 0);
+      recordFastPathHit("func.call.component.get_next_child");
       return true;
     }
-    if (keyRef.data && keyRef.len > 0)
-      dynamicStrings[reinterpret_cast<uint64_t>(keyRef.data)] = {keyRef.data, keyRef.len};
-    if (!writeStringStructToRef(callOp.getOperand(1),
-                                reinterpret_cast<uint64_t>(keyRef.data),
-                                keyRef.len))
-      return false;
-
-    setCallResultInt(callOp.getResult(0), ok ? 1 : 0);
-    recordFastPathHit("func.call.component.get_next_child");
-    return true;
   }
 
   // First-tier registry dispatch keyed by (call form, exact symbol).
