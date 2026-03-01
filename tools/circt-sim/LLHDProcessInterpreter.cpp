@@ -43255,8 +43255,10 @@ bool LLHDProcessInterpreter::shouldSkipMayYieldDirectNativeFunc(
   bool noProcessContext = contextProcId == InvalidProcessId;
   if (noProcessContext)
     ++directMayYieldSkipOptInNoProcCount;
-  else
+  else {
     ++directMayYieldSkipOptInNonCoroCount;
+    ++directMayYieldSkipOptInNonCoroByProcess[contextProcId];
+  }
 
   if (traceNativeCalls) {
     llvm::errs() << "[AOT TRACE] " << dispatchKind
@@ -43315,8 +43317,10 @@ bool LLHDProcessInterpreter::shouldSkipMayYieldEntryDispatch(
   bool noProcessContext = contextProcId == InvalidProcessId;
   if (noProcessContext)
     ++entryMayYieldSkipOptInNoProcCount;
-  else
+  else {
     ++entryMayYieldSkipOptInNonCoroCount;
+    ++entryMayYieldSkipOptInNonCoroByProcess[contextProcId];
+  }
 
   if (traceNativeCalls) {
     llvm::errs() << "[AOT TRACE] call_indirect skip may_yield fid=" << fid

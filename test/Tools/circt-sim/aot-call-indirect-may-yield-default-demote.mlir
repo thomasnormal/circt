@@ -18,6 +18,8 @@
 // DEFAULT: [circt-sim] entry_skipped_yield_native_default:     1
 // DEFAULT: Hot entry-table MAY_YIELD skips (top 50):
 // DEFAULT: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::wrapper_may_yield
+// DEFAULT: Hot entry MAY_YIELD optin-non-coro skip processes (top 50):
+// DEFAULT: [circt-sim]   (none)
 // DEFAULT: out=42{{$}}
 //
 // OPTIN: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
@@ -27,6 +29,8 @@
 // OPTIN: [circt-sim] entry_skipped_yield_optin_non_coro:     1
 // OPTIN: Hot entry-table MAY_YIELD skips (top 50):
 // OPTIN: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::wrapper_may_yield
+// OPTIN: Hot entry MAY_YIELD optin-non-coro skip processes (top 50):
+// OPTIN: [circt-sim]{{[[:space:]]+}}1x pid=
 // OPTIN: out=42{{$}}
 //
 // FIDALLOW: [circt-sim] AOT unsafe MAY_YIELD allow list: 1 fids

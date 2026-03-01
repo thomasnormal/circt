@@ -3097,8 +3097,12 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
   };
   llvm::SmallVector<HotRow, 64> nativeRows;
   llvm::SmallVector<HotRow, 64> uncompiledRows;
+  llvm::SmallVector<HotRow, 64> entryYieldSkipRows;
+  llvm::SmallVector<HotRow, 64> directYieldSkipRows;
   nativeRows.reserve(aotFuncIdCallCounts.size());
   uncompiledRows.reserve(aotFuncIdCallCounts.size());
+  entryYieldSkipRows.reserve(aotEntryYieldSkipCounts.size());
+  directYieldSkipRows.reserve(aotDirectYieldSkipCounts.size());
 
   for (uint32_t fid = 0, e = aotFuncIdCallCounts.size(); fid < e; ++fid) {
     uint64_t calls = aotFuncIdCallCounts[fid];
@@ -3109,6 +3113,18 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
       continue;
     }
     uncompiledRows.push_back(HotRow{fid, calls});
+  }
+  for (uint32_t fid = 0, e = aotEntryYieldSkipCounts.size(); fid < e; ++fid) {
+    uint64_t skips = aotEntryYieldSkipCounts[fid];
+    if (skips == 0)
+      continue;
+    entryYieldSkipRows.push_back(HotRow{fid, skips});
+  }
+  for (uint32_t fid = 0, e = aotDirectYieldSkipCounts.size(); fid < e; ++fid) {
+    uint64_t skips = aotDirectYieldSkipCounts[fid];
+    if (skips == 0)
+      continue;
+    directYieldSkipRows.push_back(HotRow{fid, skips});
   }
 
   auto printRows = [&](llvm::StringRef title,
@@ -3138,6 +3154,48 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
 
   printRows("Hot native FuncIds", nativeRows);
   printRows("Hot uncompiled FuncIds", uncompiledRows);
+  printRows("Hot entry-table MAY_YIELD skips", entryYieldSkipRows);
+  printRows("Hot func.call MAY_YIELD skips", directYieldSkipRows);
+
+  struct HotProcRow {
+    ProcessId pid = InvalidProcessId;
+    uint64_t count = 0;
+  };
+  auto printProcRows = [&](llvm::StringRef title,
+                           const llvm::DenseMap<ProcessId, uint64_t> &counts) {
+    os << "[circt-sim] " << title << " (top " << topN << "):\n";
+    llvm::SmallVector<HotProcRow, 32> rows;
+    rows.reserve(counts.size());
+    for (const auto &entry : counts) {
+      if (entry.second == 0)
+        continue;
+      rows.push_back(HotProcRow{entry.first, entry.second});
+    }
+    if (rows.empty()) {
+      os << "[circt-sim]   (none)\n";
+      return;
+    }
+    llvm::sort(rows, [](const HotProcRow &lhs, const HotProcRow &rhs) {
+      if (lhs.count != rhs.count)
+        return lhs.count > rhs.count;
+      return lhs.pid < rhs.pid;
+    });
+    size_t limit = std::min(topN, rows.size());
+    for (size_t i = 0; i < limit; ++i) {
+      ProcessId pid = rows[i].pid;
+      os << "[circt-sim]   " << rows[i].count << "x pid=" << pid;
+      if (auto *process = scheduler.getProcess(pid)) {
+        llvm::StringRef name = process->getName();
+        if (!name.empty())
+          os << " " << name;
+      }
+      os << "\n";
+    }
+  };
+  printProcRows("Hot entry MAY_YIELD optin-non-coro skip processes",
+                entryMayYieldSkipOptInNonCoroByProcess);
+  printProcRows("Hot func.call MAY_YIELD optin-non-coro skip processes",
+                directMayYieldSkipOptInNonCoroByProcess);
 
   // Print top N hottest interpreted callees (per-Operation* counts).
   if (!interpretedCallCounts.empty()) {

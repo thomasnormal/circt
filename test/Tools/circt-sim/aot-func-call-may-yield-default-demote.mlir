@@ -17,6 +17,8 @@
 // DEFAULT: [circt-sim] direct_skipped_yield_default:            1
 // DEFAULT: Hot func.call MAY_YIELD skips (top 50):
 // DEFAULT: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::wrapper_may_yield
+// DEFAULT: Hot func.call MAY_YIELD optin-non-coro skip processes (top 50):
+// DEFAULT: [circt-sim]   (none)
 // DEFAULT: out=42{{$}}
 //
 // OPTIN: [circt-sim] func.call skipped (yield):        1
@@ -25,6 +27,8 @@
 // OPTIN: [circt-sim] direct_skipped_yield_optin_non_coro:     1
 // OPTIN: Hot func.call MAY_YIELD skips (top 50):
 // OPTIN: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::wrapper_may_yield
+// OPTIN: Hot func.call MAY_YIELD optin-non-coro skip processes (top 50):
+// OPTIN: [circt-sim]{{[[:space:]]+}}1x pid=
 // OPTIN: out=42{{$}}
 //
 // FIDALLOW: [circt-sim] AOT unsafe MAY_YIELD allow list: 1 fids

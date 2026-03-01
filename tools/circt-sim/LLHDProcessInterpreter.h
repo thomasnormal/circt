@@ -4475,6 +4475,8 @@ private:
   uint64_t entryMayYieldSkipNativeDefaultCount = 0;
   uint64_t entryMayYieldSkipOptInNoProcCount = 0;
   uint64_t entryMayYieldSkipOptInNonCoroCount = 0;
+  llvm::DenseMap<ProcessId, uint64_t> entryMayYieldSkipOptInNonCoroByProcess;
+  llvm::DenseMap<ProcessId, uint64_t> directMayYieldSkipOptInNonCoroByProcess;
   uint64_t llhdWaitCount = 0;
   uint64_t mooreWaitEventCount = 0;
   uint64_t simForkCount = 0;
