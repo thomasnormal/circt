@@ -440,21 +440,40 @@ circt-sim mydesign.mlir --top dut \
 
 <p>
   The fork can run real UVM testbenches &mdash; not toy examples, but full protocol verification IP.
-  We test against <a href="https://github.com/mbits-mirafra">Mirafra&rsquo;s open-source AVIPs</a> (Advanced Verification IP) &mdash; UVM testbenches for standard bus and communication protocols including APB, AHB, AXI4, SPI, JTAG, I2S, and I3C.
+  We test against <a href="https://github.com/mbits-mirafra">Mirafra&rsquo;s open-source AVIPs</a> (Advanced Verification IP) &mdash; UVM testbenches for standard bus and communication protocols including APB, AHB, AXI4, AXI4-Lite, SPI, JTAG, I2S, I3C, and UART.
   Each AVIP contains a complete UVM environment with drivers, monitors, scoreboards, coverage collectors, and constrained-random sequences.
   Here&rsquo;s how circt-sim performs on the AVIP suites (for licensing reasons, we cannot publish direct comparisons with commercial simulators like Cadence Xcelium):
 </p>
 
 <p>
-  Of the 7 AVIP protocols, circt-sim achieves <strong>55% coverage on APB</strong> and <strong>38% on SPI</strong>.
-  AHB stalls at 50% due to a monitor that never sees transactions advance past IDLE state.
-  AXI4 and JTAG fail at compile time (the frontend produces empty MLIR files for these particular testbenches).
+  Latest interpreted-mode sweep (March 1, 2026, <code>AVIP_SET=all9</code>, seed 1) shows:
+  <strong>5/9 protocols compile</strong>, <strong>3/9 complete simulation with UVM cleanly</strong>,
+  and <strong>no interpreter crash signatures</strong> in any executed simulation log.
+  Coverage values are emitted for every protocol that reaches simulation (5/9).
 </p>
 <p>
-  In the latest APB seed-1 run (March 1, 2026), both interpret and compile modes now complete the same functional endpoint:
-  <strong>168 ns simulated time</strong> with <strong>54.17% / 72.22%</strong> master/slave coverage.
-  Compile mode executes substantial native work on this workload (<strong>2517 native entry-table calls</strong> and <strong>16 compiled callback invocations</strong>), which confirms the AOT path is active and functionally convergent here.
+  APB remains the strongest AVIP signal in interpret mode at
+  <strong>54.17% / 72.22%</strong> (master/slave), while I2S reaches
+  <strong>37.50% / 36.14%</strong>. AHB and I3C run but terminate with
+  <code>UVM_FATAL</code> configuration errors (not process crashes), and AXI4/JTAG/SPI/UART still fail at frontend compilation (zero-byte MLIR output).
 </p>
+
+<table>
+  <thead>
+    <tr><th>Protocol</th><th>Compile</th><th>Interpret Sim</th><th>Coverage 1</th><th>Coverage 2</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>APB</td><td>OK</td><td>OK</td><td>54.17%</td><td>72.22%</td><td>Best functional coverage in current sweep.</td></tr>
+    <tr><td>AHB</td><td>OK</td><td>FAIL</td><td>0.00%</td><td>0.00%</td><td><code>UVM_FATAL</code> config_db lookup failure at runtime.</td></tr>
+    <tr><td>AXI4</td><td>FAIL</td><td>SKIP</td><td>-</td><td>-</td><td>Frontend compile produced empty MLIR.</td></tr>
+    <tr><td>AXI4-Lite</td><td>OK</td><td>OK</td><td>0.00%</td><td>0.00%</td><td>Runs to max-time without UVM errors.</td></tr>
+    <tr><td>I2S</td><td>OK</td><td>OK</td><td>37.50%</td><td>36.14%</td><td>Second strongest coverage signal.</td></tr>
+    <tr><td>I3C</td><td>OK</td><td>FAIL</td><td>0.00%</td><td>0.00%</td><td><code>UVM_FATAL</code> config_db lookup failure at runtime.</td></tr>
+    <tr><td>JTAG</td><td>FAIL</td><td>SKIP</td><td>-</td><td>-</td><td>Frontend compile produced empty MLIR.</td></tr>
+    <tr><td>SPI</td><td>FAIL</td><td>SKIP</td><td>-</td><td>-</td><td>Frontend compile produced empty MLIR.</td></tr>
+    <tr><td>UART</td><td>FAIL</td><td>SKIP</td><td>-</td><td>-</td><td>Frontend compile produced empty MLIR.</td></tr>
+  </tbody>
+</table>
 
 <h3>The Speed Gap (and How We&rsquo;re Closing It)</h3>
 
@@ -588,19 +607,24 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </p>
 
 <table>
-  <thead><tr><th>Suite</th><th>circt-bmc</th><th>circt-lec</th><th>sby bmc</th><th>sby lec</th></tr></thead>
+  <thead><tr><th>Suite / Task</th><th>circt-bmc</th><th>circt-lec</th><th>sby bmc</th><th>yosys/eqy lec</th></tr></thead>
   <tbody>
     <tr><td>verilator-verification</td><td>17/17 (100%)</td><td>17/17 (100%)</td><td>0/17 (0%)</td><td>&mdash;</td></tr>
     <tr><td>yosys SVA</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>&mdash;</td></tr>
     <tr><td>sv-tests (formal subset)</td><td>26/26 (100%)</td><td>23/23 (100%)</td><td>3/26 (12%)</td><td>&mdash;</td></tr>
+    <tr><td>spot check: toy BMC (immediate assert)</td><td>PASS (UNSAT)</td><td>&mdash;</td><td>PASS</td><td>&mdash;</td></tr>
+    <tr><td>spot check: toy BMC (concurrent <code>assert property</code>)</td><td>PASS (UNSAT)</td><td>&mdash;</td><td>ERROR (<code>unexpected '@'</code>)</td><td>&mdash;</td></tr>
+    <tr><td>spot check: toy LEC (<code>modA</code> vs <code>modB</code>)</td><td>&mdash;</td><td>EQ</td><td>&mdash;</td><td>PASS (yosys + eqy)</td></tr>
+    <tr><td>spot check: OpenTitan AES connectivity LEC (<code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code>)</td><td>&mdash;</td><td>PASS (EQ, real Z3)</td><td>&mdash;</td><td>ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
   </tbody>
 </table>
 
 <p>
-  The sby column uses the open-source yosys (without the commercial Verific frontend).
+  The sby and yosys/eqy columns use open-source yosys (without the commercial Verific frontend).
   The yosys SVA suite was designed for yosys&rsquo;s own parser, so sby passes it at 100%.
   But verilator-verification and the sv-tests formal subset use concurrent SVA assertions (<code>assert property @(posedge clk) ...</code>, sequences, deferred immediates) that yosys&rsquo;s built-in parser cannot handle &mdash; it only supports simple immediate assertions like <code>initial assert(expr)</code>.
   circt-bmc handles all of these because it uses <a href="https://github.com/MikePopoloski/slang">slang</a> as its frontend, which has complete IEEE 1800 SystemVerilog support.
+  The March 1, 2026 spot checks also show that open-source eqy can prove toy combinational LEC, but OpenTitan top-level parsing still blocks that flow on generated <code>top_earlgrey.sv</code> package syntax.
   The 3 sv-tests XFails in circt-bmc are due to SVA sequence operators not yet lowered to the Z3 backend.
 </p>
 
