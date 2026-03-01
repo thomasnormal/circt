@@ -42,6 +42,7 @@ def main() -> int:
     assert runner_common.parse_nonnegative_int_list(
         "3, 7,0", "sample-list"
     ) == [3, 7, 0]
+    assert runner_common.parse_exit_codes("126, 127", "sample-codes") == {126, 127}
 
     allow_path = tmp_dir / "allow.tsv"
     allow_path.write_text(
@@ -124,6 +125,16 @@ def main() -> int:
         assert exc.code == 1, f"unexpected invalid list exit code: {exc.code}"
         msg = bad_list_stderr.getvalue()
         assert "invalid sample-list: empty item at index 2" in msg, msg
+
+    bad_codes_stderr = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(bad_codes_stderr):
+            runner_common.parse_exit_codes("-1", "sample-codes")
+        raise AssertionError("expected invalid exit-codes failure")
+    except SystemExit as exc:
+        assert exc.code == 1, f"unexpected invalid exit-codes exit code: {exc.code}"
+        msg = bad_codes_stderr.getvalue()
+        assert "invalid sample-codes: -1" in msg, msg
 
     print("PASS: shared formal runner optional file helpers")
     return 0

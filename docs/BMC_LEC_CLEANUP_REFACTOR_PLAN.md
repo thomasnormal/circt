@@ -490,6 +490,11 @@ Current workstream status in this branch:
      rewrite/RSS ladder env parsing (local fallback retained)
    - connectivity LEC shared-path invalid rewrite-ladder diagnostics are now
      regression-covered (`run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder-invalid-shared.test`)
+   - pairwise BMC numeric/exit parser paths now consume shared
+     `runner_common` helpers (`parse_nonnegative_int`,
+     `parse_nonnegative_float`, `parse_exit_codes`) with local fallback
+   - shared/pairwise retryable-exit-code parsing now rejects negative exit
+     codes and is regression-covered (`run-pairwise-circt-bmc-launch-retryable-exit-codes-invalid.test`)
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial

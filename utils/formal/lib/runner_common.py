@@ -95,10 +95,14 @@ def parse_exit_codes(
         if not code_text:
             continue
         try:
-            out.add(int(code_text))
+            code = int(code_text)
         except ValueError:
             fail_fn(f"invalid {name}: {raw}")
             raise AssertionError("unreachable")
+        if code < 0:
+            fail_fn(f"invalid {name}: {raw}")
+            raise AssertionError("unreachable")
+        out.add(code)
     return out
 
 

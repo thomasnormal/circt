@@ -296,6 +296,23 @@ except Exception:
                 handle.write("\n")
 
 
+try:
+    from runner_common import (
+        parse_exit_codes as _shared_parse_exit_codes,
+        parse_nonnegative_float as _shared_parse_nonnegative_float,
+        parse_nonnegative_int as _shared_parse_nonnegative_int,
+    )
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
+
+def _parse_fail(msg: str) -> None:
+    print(msg, file=sys.stderr)
+    raise SystemExit(1)
+
+
 def parse_nonnegative_int(raw: str, name: str) -> int:
     try:
         value = int(raw)
@@ -339,6 +356,18 @@ def parse_exit_codes(raw: str, name: str) -> set[int]:
             raise SystemExit(1)
         out.add(code)
     return out
+
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_nonnegative_int(raw: str, name: str) -> int:
+        return _shared_parse_nonnegative_int(raw, name, _parse_fail)
+
+    def parse_nonnegative_float(raw: str, name: str) -> float:
+        return _shared_parse_nonnegative_float(raw, name, _parse_fail)
+
+    def parse_exit_codes(raw: str, name: str) -> set[int]:
+        return _shared_parse_exit_codes(raw, name, _parse_fail)
 
 
 def parse_nonnegative_int_list(raw: str, name: str) -> list[int]:

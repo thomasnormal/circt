@@ -2,6 +2,33 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: pairwise parser dedup to shared runner_common helpers):
+  - realization:
+    - `run_pairwise_circt_bmc.py` still duplicated scalar parsing helpers that
+      already existed in `runner_common`:
+      - `parse_nonnegative_int`
+      - `parse_nonnegative_float`
+      - `parse_exit_codes`
+    - shared `parse_exit_codes` also accepted negative values, while pairwise
+      rejected them; this was policy drift in retryable-exit-code parsing.
+  - implemented:
+    - tightened `utils/formal/lib/runner_common.py::parse_exit_codes` to reject
+      negative codes.
+    - added optional shared-helper wiring in
+      `utils/run_pairwise_circt_bmc.py` so repo-mode execution uses shared
+      parser helpers with local fallback retained for copied-script tests.
+    - expanded helper regression coverage in
+      `test/Tools/Inputs/formal_runner_common_optional_files.py`:
+      - valid `parse_exit_codes` case
+      - invalid negative `parse_exit_codes` case
+    - added pairwise regression:
+      - `test/Tools/run-pairwise-circt-bmc-launch-retryable-exit-codes-invalid.test`
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_pairwise_circt_bmc.py test/Tools/Inputs/formal_runner_common_optional_files.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test test/Tools/run-pairwise-circt-bmc-launch-retryable-exit-codes-invalid.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-pairwise-circt-bmc-etxtbsy-retry.test test/Tools/run-pairwise-circt-bmc-launch-retry-permission-denied.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS1: shared nonnegative int-list parser extraction):
   - realization:
     - connectivity LEC carried a local `parse_nonnegative_int_list(...)`
