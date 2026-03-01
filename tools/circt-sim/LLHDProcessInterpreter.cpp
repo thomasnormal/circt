@@ -38344,13 +38344,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // ---- __moore_is_rand_enabled ----
     // Signature: (classPtr: ptr, propertyName: ptr) -> i32
     if (calleeName == "__moore_is_rand_enabled") {
-      // Check per-field rand_mode state. Default is enabled (1).
       int32_t mode = 1;
-      if (!randModeState.empty() && callOp.getNumOperands() >= 2) {
-        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
-        auto it = randModeState.find(key);
-        if (it != randModeState.end())
-          mode = it->second;
+      if (callOp.getNumOperands() >= 2) {
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        if (auto allIt = randModeState.find(allKey);
+            allIt != randModeState.end() && allIt->second == 0) {
+          mode = 0;
+        } else {
+          std::string key =
+              makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+          if (auto it = randModeState.find(key); it != randModeState.end())
+            mode = it->second;
+        }
       }
       if (callOp.getNumResults() >= 1)
         setValue(procId, callOp.getResult(),
@@ -38428,9 +38434,19 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
     // Signature: (classPtr: ptr, constraintName: ptr) -> i32
     if (calleeName == "__moore_is_constraint_enabled") {
       if (callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
-        std::string key = makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
-        auto it = constraintModeState.find(key);
-        int32_t mode = (it != constraintModeState.end()) ? it->second : 1;
+        int32_t mode = 1;
+        uint64_t classAddr = getValue(procId, callOp.getOperand(0)).getUInt64();
+        std::string allKey = std::to_string(classAddr) + ":__all__";
+        if (auto allIt = constraintModeState.find(allKey);
+            allIt != constraintModeState.end() && allIt->second == 0) {
+          mode = 0;
+        } else {
+          std::string key =
+              makeStateKey(callOp.getOperand(0), callOp.getOperand(1));
+          if (auto it = constraintModeState.find(key);
+              it != constraintModeState.end())
+            mode = it->second;
+        }
         setValue(procId, callOp.getResult(),
                  InterpretedValue(static_cast<uint64_t>(mode), 32));
         LLVM_DEBUG(llvm::dbgs()

@@ -25521,6 +25521,9 @@ struct ClassDynConstraintInfo {
 /// Forward declaration: trace a value back through ReadOp/ClassPropertyRefOp/
 /// VariableOp to find the property name being constrained.
 static StringRef traceToPropertyName(Value variable);
+/// Forward declaration: same as traceToPropertyName, but peels common integer
+/// widening/narrowing casts first.
+static StringRef traceToPropertyNameThroughCasts(Value variable);
 
 /// Extract simple range constraints from a class declaration.
 /// Returns a list of range constraints found in ConstraintInsideOp operations.
@@ -25596,7 +25599,7 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         // Trace through ClassPropertyRefOp or VariableOp to get property name.
         // Non-static: class.property_ref %arg0[@x] -> "x"
         // Static: variable "x" -> "x"
-        StringRef propName = traceToPropertyName(variable);
+        StringRef propName = traceToPropertyNameThroughCasts(variable);
         if (propName.empty())
           continue;
 
@@ -25967,17 +25970,14 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         continue;
     }
 
-    // Also look for set membership patterns: or(eq(prop, c1), eq(prop, c2))
-    // These arise from `b inside {3, 10}` which Slang compiles to
-    // or(wildcard_eq(b, 3), wildcard_eq(b, 10)) wrapped in ConstraintExprOp.
+    // Also look for set membership patterns lowered as an OR tree of eq/weq:
+    //   x inside {3, 10, 20}
+    // -> or(eq(x,3), or(eq(x,10), eq(x,20))).
     for (auto &constraintOp : constraintBlock.getBody().getOps()) {
       auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp);
       if (!exprOp)
         continue;
       Value cond = exprOp.getCondition();
-      Operation *defOp = cond.getDefiningOp();
-      if (!defOp || !isa<OrOp>(defOp) || defOp->getNumOperands() != 2)
-        continue;
 
       // Helper to extract property name from eq/weq operand
       auto extractEqMember =
@@ -25998,15 +25998,33 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         return {name, val};
       };
 
-      auto [name1, val1] = extractEqMember(defOp->getOperand(0));
-      auto [name2, val2] = extractEqMember(defOp->getOperand(1));
-      if (name1.empty() || name2.empty() || name1 != name2 || !val1 || !val2)
+      StringRef setPropName;
+      SmallVector<int64_t, 4> setValues;
+      std::function<bool(Value)> collectEqOrTree = [&](Value v) -> bool {
+        Operation *node = v.getDefiningOp();
+        if (!node)
+          return false;
+        if (isa<OrOp>(node) && node->getNumOperands() == 2)
+          return collectEqOrTree(node->getOperand(0)) &&
+                 collectEqOrTree(node->getOperand(1));
+        auto [name, val] = extractEqMember(v);
+        if (name.empty() || !val)
+          return false;
+        if (setPropName.empty())
+          setPropName = name;
+        else if (setPropName != name)
+          return false;
+        setValues.push_back(*val);
+        return true;
+      };
+
+      if (!collectEqOrTree(cond) || setPropName.empty() || setValues.size() < 2)
         continue;
 
       // Skip if already covered by another constraint
       bool alreadyCovered = false;
       for (auto &existing : constraints) {
-        if (existing.propertyName == name1 &&
+        if (existing.propertyName == setPropName &&
             existing.constraintName == constraintName) {
           alreadyCovered = true;
           break;
@@ -26015,7 +26033,7 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
       if (alreadyCovered)
         continue;
 
-      auto it = propertyMap.find(name1);
+      auto it = propertyMap.find(setPropName);
       if (it == propertyMap.end())
         continue;
 
@@ -26026,16 +26044,16 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         bitWidth = intType.getWidth();
 
       RangeConstraintInfo info;
-      info.propertyName = name1;
+      info.propertyName = setPropName;
       info.constraintName = constraintName;
       info.fieldIndex = fieldIdx;
       info.bitWidth = bitWidth;
       info.isSoft = exprOp.getIsSoft();
       info.isMultiRange = true;
-      info.minValue = *val1;
-      info.maxValue = *val1;
-      info.ranges.push_back({*val1, *val1});
-      info.ranges.push_back({*val2, *val2});
+      info.minValue = setValues.front();
+      info.maxValue = setValues.front();
+      for (int64_t v : setValues)
+        info.ranges.push_back({v, v});
       constraints.push_back(info);
     }
 
@@ -26532,7 +26550,7 @@ extractClassDynamicConstraints(ClassDeclOp classDecl) {
 static std::pair<StringRef, std::optional<int64_t>>
 extractPredicate(Value condition) {
   Operation *defOp = condition.getDefiningOp();
-  if (!defOp || defOp->getNumOperands() != 2)
+  if (!defOp)
     return {"", std::nullopt};
 
   auto getPropertyName = [](Value v) -> StringRef {
@@ -26543,6 +26561,10 @@ extractPredicate(Value condition) {
       v = sextOp.getInput();
     else if (auto truncOp = v.getDefiningOp<TruncOp>())
       v = truncOp.getInput();
+    else if (auto boolCast = v.getDefiningOp<BoolCastOp>())
+      v = boolCast.getInput();
+    else if (auto toBool = v.getDefiningOp<ToBuiltinBoolOp>())
+      v = toBool.getInput();
     if (auto readOp = v.getDefiningOp<ReadOp>()) {
       if (auto propRef = readOp.getInput().getDefiningOp<ClassPropertyRefOp>())
         return propRef.getProperty();
@@ -26570,6 +26592,19 @@ extractPredicate(Value condition) {
       return {name, int64_t(0)};
     return {"", std::nullopt};
   }
+
+  // Bare boolean property antecedent:
+  //   constraint c { flag -> ...; }
+  // Treat as `flag == 1` for conditional extraction.
+  if (StringRef directProp = getPropertyName(condition); !directProp.empty()) {
+    if (auto intTy = dyn_cast<IntType>(condition.getType()))
+      if (intTy.getWidth() == 1)
+        return {directProp, int64_t(1)};
+  }
+
+  // Binary predicate forms below require exactly two operands.
+  if (defOp->getNumOperands() != 2)
+    return {"", std::nullopt};
 
   if (!isa<EqOp>(defOp) && !isa<WildcardEqOp>(defOp))
     return {"", std::nullopt};
@@ -26605,29 +26640,242 @@ extractConstraintsFromRegion(Region &region, StringRef constraintName,
   if (region.empty())
     return result;
 
-  for (auto &op : region.front().getOperations()) {
-    // Handle ConstraintExprOp with equality pattern
-    if (auto exprOp = dyn_cast<ConstraintExprOp>(op)) {
-      Value cond = exprOp.getCondition();
-      auto [name, val] = extractPredicate(cond);
-      if (!name.empty() && val) {
-        auto it = propertyMap.find(name);
-        if (it != propertyMap.end()) {
-          RangeConstraintInfo info;
-          info.propertyName = name;
-          info.constraintName = constraintName;
-          info.fieldIndex = it->second.first;
-          info.bitWidth = 32;
-          if (auto intType = dyn_cast<IntType>(it->second.second))
-            info.bitWidth = intType.getWidth();
-          info.isSoft = false;
-          info.isMultiRange = false;
-          info.minValue = *val;
-          info.maxValue = *val;
-          result.push_back(info);
-        }
+  struct BoundInfo {
+    std::optional<int64_t> lower, upper;
+    bool isSigned = false;
+  };
+  DenseMap<StringRef, BoundInfo> boundsByProp;
+
+  auto getPropertyName = [](Value v) -> StringRef {
+    return traceToPropertyNameThroughCasts(v);
+  };
+
+  auto getConstVal = [](Value v) -> std::optional<int64_t> {
+    if (auto zextOp = v.getDefiningOp<ZExtOp>())
+      v = zextOp.getInput();
+    else if (auto sextOp = v.getDefiningOp<SExtOp>())
+      v = sextOp.getInput();
+    else if (auto truncOp = v.getDefiningOp<TruncOp>())
+      v = truncOp.getInput();
+    if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+      FVInt fvVal = constOp.getValue();
+      if (fvVal.hasUnknown())
+        return std::nullopt;
+      return fvVal.getRawValue().getSExtValue();
+    }
+    if (auto negOp = v.getDefiningOp<NegOp>()) {
+      if (auto innerConst = negOp.getInput().getDefiningOp<ConstantOp>()) {
+        FVInt fvVal = innerConst.getValue();
+        if (fvVal.hasUnknown())
+          return std::nullopt;
+        return -fvVal.getRawValue().getSExtValue();
       }
     }
+    return std::nullopt;
+  };
+
+  auto tryExtractComparisonBounds = [&](Operation *defOp) -> bool {
+    if (!defOp || defOp->getNumOperands() != 2)
+      return false;
+    Value lhs = defOp->getOperand(0);
+    Value rhs = defOp->getOperand(1);
+
+    StringRef propName = getPropertyName(lhs);
+    auto constVal = getConstVal(rhs);
+    bool varOnLhs = true;
+    if (propName.empty() || !constVal) {
+      propName = getPropertyName(rhs);
+      constVal = getConstVal(lhs);
+      varOnLhs = false;
+    }
+    if (propName.empty() || !constVal)
+      return false;
+
+    auto &bounds = boundsByProp[propName];
+    int64_t cv = *constVal;
+    if (isa<SgeOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        if (!bounds.lower || cv > *bounds.lower)
+          bounds.lower = cv;
+      } else if (!bounds.upper || cv < *bounds.upper) {
+        bounds.upper = cv;
+      }
+    } else if (isa<SleOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        if (!bounds.upper || cv < *bounds.upper)
+          bounds.upper = cv;
+      } else if (!bounds.lower || cv > *bounds.lower) {
+        bounds.lower = cv;
+      }
+    } else if (isa<SgtOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      } else {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      }
+    } else if (isa<SltOp>(defOp)) {
+      bounds.isSigned = true;
+      if (varOnLhs) {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      } else {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      }
+    } else if (isa<UgeOp>(defOp)) {
+      if (varOnLhs) {
+        if (!bounds.lower || cv > *bounds.lower)
+          bounds.lower = cv;
+      } else if (!bounds.upper || cv < *bounds.upper) {
+        bounds.upper = cv;
+      }
+    } else if (isa<UleOp>(defOp)) {
+      if (varOnLhs) {
+        if (!bounds.upper || cv < *bounds.upper)
+          bounds.upper = cv;
+      } else if (!bounds.lower || cv > *bounds.lower) {
+        bounds.lower = cv;
+      }
+    } else if (isa<UgtOp>(defOp)) {
+      if (varOnLhs) {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      } else {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      }
+    } else if (isa<UltOp>(defOp)) {
+      if (varOnLhs) {
+        int64_t hi = cv - 1;
+        if (!bounds.upper || hi < *bounds.upper)
+          bounds.upper = hi;
+      } else {
+        int64_t lo = cv + 1;
+        if (!bounds.lower || lo > *bounds.lower)
+          bounds.lower = lo;
+      }
+    } else if (isa<EqOp>(defOp) || isa<WildcardEqOp>(defOp)) {
+      bounds.lower = cv;
+      bounds.upper = cv;
+    } else {
+      return false;
+    }
+    return true;
+  };
+
+  for (auto &op : region.front().getOperations()) {
+    if (auto insideOp = dyn_cast<ConstraintInsideOp>(op)) {
+      StringRef propName =
+          traceToPropertyNameThroughCasts(insideOp.getVariable());
+      if (propName.empty())
+        continue;
+      auto it = propertyMap.find(propName);
+      if (it == propertyMap.end())
+        continue;
+      ArrayRef<int64_t> rangesArr = insideOp.getRanges();
+      if (rangesArr.size() < 2 || (rangesArr.size() % 2) != 0)
+        continue;
+
+      RangeConstraintInfo info;
+      info.propertyName = propName;
+      info.constraintName = constraintName;
+      info.fieldIndex = it->second.first;
+      info.bitWidth = 32;
+      if (auto intType = dyn_cast<IntType>(it->second.second))
+        info.bitWidth = intType.getWidth();
+      info.isSoft = insideOp.getIsSoft();
+      if (rangesArr.size() == 2) {
+        info.isMultiRange = false;
+        info.minValue = rangesArr[0];
+        info.maxValue = rangesArr[1];
+      } else {
+        info.isMultiRange = true;
+        info.minValue = rangesArr[0];
+        info.maxValue = rangesArr[1];
+        for (size_t i = 0; i < rangesArr.size(); i += 2)
+          info.ranges.push_back({rangesArr[i], rangesArr[i + 1]});
+      }
+      result.push_back(info);
+      continue;
+    }
+
+    if (auto exprOp = dyn_cast<ConstraintExprOp>(op)) {
+      Value cond = exprOp.getCondition();
+      if (auto [name, val] = extractPredicate(cond); !name.empty() && val) {
+        auto &bounds = boundsByProp[name];
+        bounds.lower = *val;
+        bounds.upper = *val;
+        continue;
+      }
+      Operation *defOp = cond.getDefiningOp();
+      if (!defOp)
+        continue;
+      if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+        bool matched = false;
+        matched |= tryExtractComparisonBounds(defOp->getOperand(0).getDefiningOp());
+        matched |= tryExtractComparisonBounds(defOp->getOperand(1).getDefiningOp());
+        if (matched)
+          continue;
+      }
+      (void)tryExtractComparisonBounds(defOp);
+    }
+  }
+
+  for (auto &[propName, bounds] : boundsByProp) {
+    auto it = propertyMap.find(propName);
+    if (it == propertyMap.end())
+      continue;
+
+    bool alreadyCovered = false;
+    for (auto &existing : result) {
+      if (existing.propertyName == propName &&
+          existing.constraintName == constraintName) {
+        alreadyCovered = true;
+        break;
+      }
+    }
+    if (alreadyCovered)
+      continue;
+
+    RangeConstraintInfo info;
+    info.propertyName = propName;
+    info.constraintName = constraintName;
+    info.fieldIndex = it->second.first;
+    info.bitWidth = 32;
+    if (auto intType = dyn_cast<IntType>(it->second.second))
+      info.bitWidth = intType.getWidth();
+    info.isSoft = false;
+    info.isMultiRange = false;
+
+    int64_t typeMin = 0;
+    int64_t typeMax = std::numeric_limits<int64_t>::max();
+    if (bounds.isSigned) {
+      if (info.bitWidth >= 64) {
+        typeMin = std::numeric_limits<int64_t>::min();
+        typeMax = std::numeric_limits<int64_t>::max();
+      } else {
+        typeMin = -(1LL << (info.bitWidth - 1));
+        typeMax = (1LL << (info.bitWidth - 1)) - 1;
+      }
+    } else {
+      typeMin = 0;
+      if (info.bitWidth < 63)
+        typeMax = (1LL << info.bitWidth) - 1;
+    }
+    info.minValue = bounds.lower.value_or(typeMin);
+    info.maxValue = bounds.upper.value_or(typeMax);
+    result.push_back(info);
   }
   return result;
 }
@@ -26809,7 +27057,7 @@ extractSoftConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         // Trace through ClassPropertyRefOp or VariableOp to get property name.
         // Non-static: class.property_ref %arg0[@x] -> "x"
         // Static: variable "x" -> "x"
-        StringRef propName = traceToPropertyName(variable);
+        StringRef propName = traceToPropertyNameThroughCasts(variable);
         if (propName.empty())
           continue;
 
@@ -26895,7 +27143,7 @@ extractDistConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         // Trace through ClassPropertyRefOp or VariableOp to get property name.
         // Non-static: class.property_ref %arg0[@x] -> "x"
         // Static: variable "x" -> "x"
-        StringRef propName = traceToPropertyName(variable);
+        StringRef propName = traceToPropertyNameThroughCasts(variable);
         if (propName.empty())
           continue;
 
@@ -27154,6 +27402,16 @@ static StringRef traceToPropertyName(Value variable) {
   return StringRef();
 }
 
+static StringRef traceToPropertyNameThroughCasts(Value variable) {
+  if (auto zextOp = variable.getDefiningOp<ZExtOp>())
+    variable = zextOp.getInput();
+  else if (auto sextOp = variable.getDefiningOp<SExtOp>())
+    variable = sextOp.getInput();
+  else if (auto truncOp = variable.getDefiningOp<TruncOp>())
+    variable = truncOp.getInput();
+  return traceToPropertyName(variable);
+}
+
 /// Extract range constraints from an inline constraint region.
 /// In inline constraints, the variable operand traces back through ReadOp to
 /// ClassPropertyRefOp, rather than being a block argument.
@@ -27241,7 +27499,7 @@ extractInlineRangeConstraints(Region &inlineRegion,
       Value variable = insideOp.getVariable();
 
       // Trace back to find the property name
-      StringRef propName = traceToPropertyName(variable);
+      StringRef propName = traceToPropertyNameThroughCasts(variable);
       if (propName.empty())
         continue;
 
@@ -27466,16 +27724,14 @@ extractInlineRangeConstraints(Region &inlineRegion,
       continue;
   }
 
-  // Also look for set membership patterns: or(eq(prop, c1), eq(prop, c2))
-  // These arise from `x inside {3, 10}` in inline constraints.
+  // Also look for set membership patterns lowered as an OR tree of eq/weq:
+  //   x inside {3, 10, 20}
+  // -> or(eq(x,3), or(eq(x,10), eq(x,20))).
   for (auto &op : inlineRegion.front().getOperations()) {
     auto exprOp = dyn_cast<ConstraintExprOp>(op);
     if (!exprOp)
       continue;
     Value cond = exprOp.getCondition();
-    Operation *defOp = cond.getDefiningOp();
-    if (!defOp || !isa<OrOp>(defOp) || defOp->getNumOperands() != 2)
-      continue;
 
     // Helper to extract property name and constant from eq/weq operand
     auto extractEqMember =
@@ -27496,15 +27752,31 @@ extractInlineRangeConstraints(Region &inlineRegion,
       return {name, val};
     };
 
-    auto [name1, val1] = extractEqMember(defOp->getOperand(0));
-    auto [name2, val2] = extractEqMember(defOp->getOperand(1));
+    StringRef setPropName;
+    SmallVector<int64_t, 4> setValues;
+    std::function<bool(Value)> collectEqOrTree = [&](Value v) -> bool {
+      Operation *node = v.getDefiningOp();
+      if (!node)
+        return false;
+      if (isa<OrOp>(node) && node->getNumOperands() == 2)
+        return collectEqOrTree(node->getOperand(0)) &&
+               collectEqOrTree(node->getOperand(1));
+      auto [name, val] = extractEqMember(v);
+      if (name.empty() || !val)
+        return false;
+      if (setPropName.empty())
+        setPropName = name;
+      else if (setPropName != name)
+        return false;
+      setValues.push_back(*val);
+      return true;
+    };
 
-    // Both arms should reference the same property
-    if (name1.empty() || name2.empty() || name1 != name2 || !val1 || !val2)
+    if (!collectEqOrTree(cond) || setPropName.empty() || setValues.size() < 2)
       continue;
 
     // Check this property is in our map
-    auto it = propertyMap.find(name1);
+    auto it = propertyMap.find(setPropName);
     if (it == propertyMap.end())
       continue;
 
@@ -27515,16 +27787,16 @@ extractInlineRangeConstraints(Region &inlineRegion,
       bitWidth = intType.getWidth();
 
     RangeConstraintInfo info;
-    info.propertyName = name1;
+    info.propertyName = setPropName;
     info.constraintName = "";
     info.fieldIndex = fieldIdx;
     info.bitWidth = bitWidth;
     info.isSoft = exprOp.getIsSoft();
     info.isMultiRange = true;
-    info.minValue = *val1;
-    info.maxValue = *val1;
-    info.ranges.push_back({*val1, *val1});
-    info.ranges.push_back({*val2, *val2});
+    info.minValue = setValues.front();
+    info.maxValue = setValues.front();
+    for (int64_t v : setValues)
+      info.ranges.push_back({v, v});
     constraints.push_back(info);
   }
 
@@ -27634,7 +27906,7 @@ extractInlineDistConstraints(Region &inlineRegion,
       Value variable = distOp.getVariable();
 
       // Trace back to find the property name
-      StringRef propName = traceToPropertyName(variable);
+      StringRef propName = traceToPropertyNameThroughCasts(variable);
       if (propName.empty())
         continue;
 
@@ -27758,7 +28030,7 @@ extractInlineSoftConstraints(Region &inlineRegion,
       Value variable = insideOp.getVariable();
 
       // Trace back to find the property name
-      StringRef propName = traceToPropertyName(variable);
+      StringRef propName = traceToPropertyNameThroughCasts(variable);
       if (propName.empty())
         continue;
 
@@ -28966,10 +29238,17 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
     }
 
-    // For cross-variable sum constraints (a + b <= bound), add a range
-    // constraint for propA: [0, bound]. This ensures propA is bounded before
-    // propB's dynMax = bound - propA_loaded is computed at runtime.
+    // For cross-variable sum constraints (a + b <= bound), add a fallback
+    // range constraint for propA: [0, bound] only when propA has no existing
+    // hard range constraint. This avoids broad fallback ranges overriding
+    // tighter user constraints on propA.
     for (const auto &fix : crossVarSumFixups) {
+      bool hasHardRangeForPropA = llvm::any_of(
+          rangeConstraints, [&](const RangeConstraintInfo &rc) {
+            return !rc.isSoft && rc.propertyName == fix.propA;
+          });
+      if (hasHardRangeForPropA)
+        continue;
       RangeConstraintInfo rc;
       rc.propertyName = fix.propA;
       rc.constraintName = fix.constraintName;
@@ -29928,8 +30207,7 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
       }
 
       // Apply cross-variable sum fixups (a + b <= bound).
-      // propA was constrained to [0, bound] by hardConstraints above.
-      // Now constrain propB to [0, bound - propA_loaded].
+      // propB is randomized in [max(0, staticMinB), min(bound - a, staticMaxB)].
       if (!crossVarSumFixups.empty()) {
         auto sumRangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
         auto sumRangeFn = getOrCreateRuntimeFunc(mod, rewriter,
@@ -29959,20 +30237,44 @@ struct RandomizeOpConversion : public OpConversionPattern<RandomizeOp> {
           else
             valA64 = valA;
           // dynMaxB = max(0, bound - valA)
+          Value dynMinB = zero64;
           Value boundConst = LLVM::ConstantOp::create(rewriter, loc, i64Ty,
               rewriter.getI64IntegerAttr(fix.bound));
           Value diff = arith::SubIOp::create(rewriter, loc, boundConst, valA64);
           Value dynMaxB = arith::MaxSIOp::create(rewriter, loc, zero64, diff);
+
+          // Intersect with static hard bounds on propB, if any.
+          if (auto staticIt = staticBoundsForDynFixups.find(fix.propB);
+              staticIt != staticBoundsForDynFixups.end()) {
+            Value staticMin = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(staticIt->second.first));
+            Value staticMax = LLVM::ConstantOp::create(
+                rewriter, loc, i64Ty,
+                rewriter.getI64IntegerAttr(staticIt->second.second));
+            dynMinB = arith::MaxSIOp::create(rewriter, loc, dynMinB, staticMin);
+            dynMaxB = arith::MinSIOp::create(rewriter, loc, dynMaxB, staticMax);
+          }
+
           auto propBPathIt = structInfo->propertyPath.find(fix.propB);
           if (propBPathIt == structInfo->propertyPath.end()) continue;
           OpBuilder::InsertionGuard guard(rewriter);
           Value randEnabledB = createRandEnabledCheck(fix.propB);
-          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, randEnabledB,
+          Value applyCond = randEnabledB;
+          if (!fix.constraintName.empty()) {
+            Value enabled = createConstraintEnabledCheck(fix.constraintName);
+            applyCond = arith::AndIOp::create(rewriter, loc, applyCond, enabled);
+          }
+          Value rangeFeasible = arith::CmpIOp::create(
+              rewriter, loc, arith::CmpIPredicate::sle, dynMinB, dynMaxB);
+          applyCond =
+              arith::AndIOp::create(rewriter, loc, applyCond, rangeFeasible);
+          auto ifOp = scf::IfOp::create(rewriter, loc, TypeRange{}, applyCond,
                                         /*withElseRegion=*/false);
           rewriter.setInsertionPointToStart(&ifOp.getThenRegion().front());
           auto rangeResult = LLVM::CallOp::create(
               rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(sumRangeFn),
-              ValueRange{zero64, dynMaxB});
+              ValueRange{dynMinB, dynMaxB});
           unsigned bwB = fix.bitWidthB;
           Value resultB = rangeResult.getResult();
           if (bwB < 64) {
