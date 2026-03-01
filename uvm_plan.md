@@ -67,6 +67,12 @@ reduction must be staged and measurable.
   - polling backoff now advances real time at startup (`advanceTime(100ps)`), not `nextDelta()` at `0 fs`.
   - added regression:
     - `test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-time0-backoff.mlir`
+- [x] Closed UVM source-path skew causing false factory-override regressions:
+  - `circt-verilog` now prefers in-repo `lib/Runtime/uvm-core` auto-discovery
+    from build-tree binaries before falling back to `~/uvm-core`.
+  - semantic gates now green:
+    - `test/Tools/circt-sim/uvm-factory-type-override-by-type-runtime.sv`
+    - `test/Tools/circt-sim/uvm-factory-type-override-run-phase-randomize-runtime.sv`
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality still needs core runtime closure (no retry dependence).
   - `axi4Lite` interpreted run remains nondeterministic across two failure modes:

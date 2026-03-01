@@ -13241,3 +13241,33 @@
 - follow-up status:
   - FPV drift allowlist matching is now centralized at the script level, which
     narrows future behavior drift risk while preserving current semantics.
+
+## 2026-03-01 - UVM factory override regressions from stale auto-UVM path selection
+
+- realization:
+  - `test/Tools/circt-sim/uvm-factory-type-override-by-type-runtime.sv` and
+    `.../uvm-factory-type-override-run-phase-randomize-runtime.sv` failed with
+    `OVERRIDE_FAIL`/`TYPE_FAIL` under default invocations.
+  - focused probes showed overrides worked when `--uvm-path=lib/Runtime/uvm-core`
+    was passed explicitly, but failed under default auto-include.
+  - root cause: `circt-verilog` auto-UVM discovery used an install-style probe
+    (`<bin>/../lib/Runtime/uvm-core`) but missed the source-tree layout
+    (`<repo>/build*/bin -> ../../lib/Runtime/uvm-core`), so it fell back to
+    `~/uvm-core` and picked a stale external checkout.
+
+- implemented:
+  - `tools/circt-verilog/circt-verilog.cpp`
+    - fixed bundled UVM path discovery order:
+      - prefer source-tree layout (`../../lib/Runtime/uvm-core`)
+      - then install layout (`../lib/Runtime/uvm-core`)
+      - only then HOME fallback (`~/uvm-core`).
+
+- validation:
+  - rebuilt: `utils/ninja-with-lock.sh -C build_test circt-verilog`
+  - lit gates:
+    - `test/Tools/circt-sim/uvm-factory-type-override-by-type-runtime.sv`
+    - `test/Tools/circt-sim/uvm-factory-type-override-run-phase-randomize-runtime.sv`
+    - `test/Tools/circt-sim/uvm-component-get-child-bracket-runtime.sv`
+    - all passed.
+  - manual probe after fix confirmed default path now resolves to in-repo UVM
+    (`UVM_INFO lib/Runtime/uvm-core/...`) and by-name/by-type overrides resolve.

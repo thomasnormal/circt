@@ -669,32 +669,43 @@ static void addUvmSupportIfAvailable() {
   }
 
   // Auto-discover bundled UVM library relative to the binary location.
-  // The bundled copy lives at lib/Runtime/uvm-core/src/ in the source tree,
-  // which is <binary_dir>/../../lib/Runtime/uvm-core/ relative to bin/.
+  // Source-tree binaries usually live under <repo>/build*/bin, where the
+  // bundled UVM lives at <repo>/lib/Runtime/uvm-core.
+  // Installed binaries typically use <prefix>/bin with UVM at
+  // <prefix>/lib/Runtime/uvm-core.
   if (opts.uvmPath.empty()) {
     auto mainExe = llvm::sys::fs::getMainExecutable(
         "circt-verilog", (void *)&addUvmSupportIfAvailable);
     if (!mainExe.empty()) {
       llvm::SmallString<256> binDir(mainExe);
       llvm::sys::path::remove_filename(binDir); // remove binary name
-      // Try <bin>/../lib/Runtime/uvm-core/src/ (install layout)
-      llvm::SmallString<256> candidate(binDir);
-      llvm::sys::path::append(candidate, "..");
-      llvm::sys::path::append(candidate, "lib");
-      llvm::sys::path::append(candidate, "Runtime");
-      llvm::sys::path::append(candidate, "uvm-core");
-      llvm::sys::path::append(candidate, "src");
-      llvm::sys::path::append(candidate, "uvm_pkg.sv");
-      llvm::sys::fs::make_absolute(candidate);
-      if (llvm::sys::fs::exists(candidate)) {
-        candidate = binDir;
-        llvm::sys::path::append(candidate, "..");
-        llvm::sys::path::append(candidate, "lib");
-        llvm::sys::path::append(candidate, "Runtime");
-        llvm::sys::path::append(candidate, "uvm-core");
-        llvm::sys::fs::make_absolute(candidate);
-        opts.uvmPath = std::string(candidate);
-      }
+      auto tryBundledUvmAt = [&](llvm::StringRef upA,
+                                 llvm::StringRef upB) -> bool {
+        llvm::SmallString<256> root(binDir);
+        if (!upA.empty())
+          llvm::sys::path::append(root, upA);
+        if (!upB.empty())
+          llvm::sys::path::append(root, upB);
+        llvm::sys::path::append(root, "lib");
+        llvm::sys::path::append(root, "Runtime");
+        llvm::sys::path::append(root, "uvm-core");
+
+        llvm::SmallString<256> pkg(root);
+        llvm::sys::path::append(pkg, "src");
+        llvm::sys::path::append(pkg, "uvm_pkg.sv");
+        llvm::sys::fs::make_absolute(pkg);
+        if (!llvm::sys::fs::exists(pkg))
+          return false;
+
+        llvm::sys::fs::make_absolute(root);
+        opts.uvmPath = std::string(root);
+        return true;
+      };
+
+      // Prefer source-tree discovery first (<repo>/build*/bin).
+      if (!tryBundledUvmAt("..", ".."))
+        // Fall back to install-tree discovery (<prefix>/bin).
+        (void)tryBundledUvmAt("..", "");
     }
     // Also search ~/uvm-core as a fallback.
     if (opts.uvmPath.empty()) {
