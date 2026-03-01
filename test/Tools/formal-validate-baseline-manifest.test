@@ -6,10 +6,13 @@
 // RUN: not python3 %S/../../utils/formal/validate_baseline_manifest.py --manifest %t/invalid-schema.json 2>&1 | FileCheck %s --check-prefix=BADSCHEMA
 // RUN: printf '{"schema_version":1,"baseline_id":"dup","generated_at":"2026-03-01T00:00:00Z","metadata":{},"commands":[{"suite":"toy","mode":"LEC","id":"dup_case","command":"echo one"},{"suite":"toy","mode":"LEC","id":"dup_case","command":"echo two"}]}\n' > %t/dup.json
 // RUN: not python3 %S/../../utils/formal/validate_baseline_manifest.py --manifest %t/dup.json 2>&1 | FileCheck %s --check-prefix=DUP
+// RUN: printf '{"schema_version":1,"baseline_id":"badrc","generated_at":"2026-03-01T00:00:00Z","metadata":{},"commands":[{"suite":"toy","mode":"LEC","command":"echo one","expected_returncodes":"ok"}]}\n' > %t/bad-rc.json
+// RUN: not python3 %S/../../utils/formal/validate_baseline_manifest.py --manifest %t/bad-rc.json 2>&1 | FileCheck %s --check-prefix=BADRC
 //
 // VALID: "baseline_id": "ws0-contract"
 // VALID: "commands": 2
 // VALID: "commands_with_cwd": 1
+// VALID: "commands_with_nonzero_expected_rc": 0
 // VALID: "max_timeout_secs": 15
 // VALID: "mode_counts": {
 // VALID: "BMC": 1
@@ -20,3 +23,4 @@
 //
 // BADSCHEMA: manifest schema_version must be 1
 // DUP: duplicate command case label
+// BADRC: expected_returncodes contains non-integer value

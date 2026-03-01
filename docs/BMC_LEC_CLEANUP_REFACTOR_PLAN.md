@@ -388,6 +388,8 @@ Current workstream status in this branch:
      `--max-log-bytes` to bound artifact growth
    - baseline capture can now gate command outputs with strict JSONL schema
      validation (`--validate-results-schema`)
+   - baseline manifests now support per-command expected return-code contracts
+     (`expected_returncodes`) for bounded-timeout frontier lanes
    - latest real WS0 mini-baseline (`out/ws0-baseline-live-20260301-162812`)
      validates schema for AES LEC + sv-tests BMC lanes across 2 runs with zero
      status/reason/stage drift

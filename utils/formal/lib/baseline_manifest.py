@@ -28,6 +28,7 @@ class ManifestCommand:
     command: str
     cwd: str
     timeout_secs: int
+    expected_returncodes: tuple[int, ...]
 
 
 def slugify(token: str) -> str:
@@ -52,6 +53,43 @@ def parse_timeout_value(raw: object, field_name: str, index: int) -> int:
             f"(got: {raw!r})"
         )
     return value
+
+
+def parse_expected_returncodes(
+    raw: object, field_name: str, index: int
+) -> tuple[int, ...]:
+    tokens: list[object]
+    if raw is None or raw == "":
+        return (0,)
+    if isinstance(raw, int):
+        tokens = [raw]
+    elif isinstance(raw, str):
+        tokens = [part.strip() for part in raw.split(",") if part.strip()]
+    elif isinstance(raw, list):
+        tokens = raw
+    else:
+        raise ManifestValidationError(
+            f"manifest commands[{index}] {field_name} must be an integer, "
+            "comma-separated string, or list of integers"
+        )
+    if not tokens:
+        raise ManifestValidationError(
+            f"manifest commands[{index}] {field_name} must be non-empty"
+        )
+    out: list[int] = []
+    seen: set[int] = set()
+    for token in tokens:
+        try:
+            code = int(token)
+        except (TypeError, ValueError) as exc:
+            raise ManifestValidationError(
+                f"manifest commands[{index}] {field_name} contains "
+                f"non-integer value: {token!r}"
+            ) from exc
+        if code not in seen:
+            seen.add(code)
+            out.append(code)
+    return tuple(out)
 
 
 def _expect_nonempty_string(
@@ -152,6 +190,11 @@ def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCom
                 ),
                 timeout_secs=parse_timeout_value(
                     raw.get("timeout_secs", 0), "timeout_secs", index
+                ),
+                expected_returncodes=parse_expected_returncodes(
+                    raw.get("expected_returncodes", 0),
+                    "expected_returncodes",
+                    index,
                 ),
             )
         )

@@ -10,7 +10,7 @@
 // RUN: test -f %t/out/run-01/slow_case/results.jsonl
 //
 // EXEC: run_index{{[[:space:]]+}}command_index{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}case_label{{[[:space:]]+}}returncode
-// EXEC: 1{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}slow_case{{[[:space:]]+}}124{{[[:space:]]+}}{{.*}}formal-capture-baseline-timeout.test.tmp{{[[:space:]]+}}1{{[[:space:]]+}}python3 bin/slow_runner.py
+// EXEC: 1{{[[:space:]]+}}1{{[[:space:]]+}}toy{{[[:space:]]+}}LEC{{[[:space:]]+}}slow_case{{[[:space:]]+}}124{{[[:space:]]+}}{{.*}}formal-capture-baseline-timeout.test.tmp{{[[:space:]]+}}1{{[[:space:]]+}}0{{[[:space:]]+}}python3 bin/slow_runner.py
 // LOG: stdout-before-timeout
 // LOG: stderr-before-timeout
 // LOG: [capture_formal_baseline] command timeout after 1s

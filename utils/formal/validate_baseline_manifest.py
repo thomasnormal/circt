@@ -39,6 +39,7 @@ def main() -> int:
     mode_counts: Counter[str] = Counter()
     max_timeout_secs = 0
     with_cwd = 0
+    commands_with_nonzero_expected_rc = 0
     for command in commands:
         suite_counts[command.suite] += 1
         mode_counts[command.mode] += 1
@@ -46,6 +47,8 @@ def main() -> int:
             max_timeout_secs = command.timeout_secs
         if command.cwd:
             with_cwd += 1
+        if any(code != 0 for code in command.expected_returncodes):
+            commands_with_nonzero_expected_rc += 1
 
     if args.summary_json:
         summary_path = Path(args.summary_json).resolve()
@@ -58,6 +61,7 @@ def main() -> int:
             "suite_counts": dict(sorted(suite_counts.items())),
             "mode_counts": dict(sorted(mode_counts.items())),
             "commands_with_cwd": with_cwd,
+            "commands_with_nonzero_expected_rc": commands_with_nonzero_expected_rc,
             "max_timeout_secs": max_timeout_secs,
         }
         summary_path.write_text(

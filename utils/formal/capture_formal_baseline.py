@@ -236,9 +236,13 @@ def main() -> int:
                 default_command_timeout_secs=args.command_timeout_secs,
                 max_log_bytes=args.max_log_bytes,
             )
+            expected_returncodes = ",".join(
+                str(code) for code in entry.expected_returncodes
+            )
+            command_ok = returncode in entry.expected_returncodes
             schema_validation_rc = 0
             schema_summary_path = ""
-            if args.validate_results_schema and returncode == 0:
+            if args.validate_results_schema and command_ok and returncode == 0:
                 schema_summary = command_dir / "results_schema_summary.json"
                 schema_validation_rc = validate_results_schema(
                     validator_script=validator_script,
@@ -260,6 +264,7 @@ def main() -> int:
                         if entry.timeout_secs > 0
                         else args.command_timeout_secs
                     ),
+                    expected_returncodes,
                     entry.command,
                     str(out_tsv),
                     str(out_jsonl),
@@ -268,7 +273,7 @@ def main() -> int:
                     schema_summary_path,
                 )
             )
-            if returncode != 0 or schema_validation_rc != 0:
+            if not command_ok or schema_validation_rc != 0:
                 execution_rc = 1
                 if args.stop_on_command_failure:
                     break
@@ -279,7 +284,7 @@ def main() -> int:
     with execution_tsv.open("w", encoding="utf-8") as handle:
         handle.write(
             "run_index\tcommand_index\tsuite\tmode\tcase_label\treturncode\t"
-            "command_cwd\tcommand_timeout_secs\tcommand\tresults_tsv\t"
+            "command_cwd\tcommand_timeout_secs\texpected_returncodes\tcommand\tresults_tsv\t"
             "results_jsonl\tlog_path\tschema_validation_rc\t"
             "schema_summary_json\n"
         )

@@ -2,6 +2,38 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0: expected return-code contracts in baseline capture):
+  - realization:
+    - timeout-frontier lanes are often intentionally bounded and may return
+      non-zero outcomes (for example `124` timeout) that should be treated as
+      expected for baseline reproducibility capture.
+    - prior capture behavior treated any non-zero as hard failure, which made
+      bounded frontier baselines noisy and harder to automate.
+  - implemented:
+    - `utils/formal/lib/baseline_manifest.py`
+      - added per-command `expected_returncodes` parsing/validation.
+      - supported forms: integer, comma-separated string, or integer list
+        (default remains `0`).
+    - `utils/formal/capture_formal_baseline.py`
+      - command success now checks return code against
+        `expected_returncodes`.
+      - `execution.tsv` now records `expected_returncodes`.
+      - schema validation remains gated to successful zero-return commands.
+    - `utils/formal/validate_baseline_manifest.py`
+      - summary now reports `commands_with_nonzero_expected_rc`.
+    - tests:
+      - updated:
+        - `test/Tools/formal-capture-baseline.test`
+        - `test/Tools/formal-capture-baseline-timeout.test`
+        - `test/Tools/formal-validate-baseline-manifest.test`
+      - added:
+        - `test/Tools/formal-capture-baseline-expected-returncodes.test`
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/baseline_manifest.py utils/formal/validate_baseline_manifest.py utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-capture-baseline-log-cap.test test/Tools/formal-capture-baseline-invalid-timeout.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-runner-common-retry.test test/Tools/formal-runner-common-drop-reasons.test test/Tools/formal-validate-results-schema.test test/Tools/formal-drift-compare.test`
+      - result: `13/13` pass.
+
 - Iteration update (WS0 live mini-baseline with schema gate + timeout frontier):
   - realization:
     - first live run with schema validation used
@@ -11630,3 +11662,32 @@
 - follow-up status:
   - `uvm_sequence_test.sv` is now green with proper response progress.
   - remaining tracked UVM semantic failure in this lane: `uvm_phase_ordering_semantic_test.sv`.
+
+## 2026-03-01 - Fix static phase handle ordering semantics without fixed wrapper deltas
+
+- realization:
+  - `uvm_phase_ordering_semantic_test.sv` failed on `build.is_before(run)`, `run.is_after(build)`, and `run.is_before(extract)` while `run.find_by_name(build)` still passed.
+  - trace showed `is_before/is_after` receiving static singleton phase handles (IMP objects), but phase remap relied on a fragile fixed IMP->wrapper delta (`0xD0`).
+  - in current layout, that delta was not stable, so remap failed and ordering APIs executed on disconnected IMP nodes.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.h`
+    - added `phaseImpToWrapper` cache to track observed IMP->wrapper relationships.
+  - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - taught `mapUvmPhaseAddressToActiveGraph(...)` to:
+      - learn and reuse observed IMP->wrapper mappings from real phase graph traffic,
+      - bootstrap from objection-handle wrapper keys when available,
+      - retain fixed-delta probing only as fallback.
+    - added mapping updates on successful wrapper resolution paths.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - focused semantic regressions:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_sequence_test.sv test/Runtime/uvm/uvm_send_request_test.sv test/Runtime/uvm/config_db_test.sv test/Runtime/uvm/uvm_component_child_iteration_semantic_test.sv test/Tools/crun/uvm-phase-objection-timeout.sv test/Tools/crun/uvm-tlm-analysis-100.sv`
+    - all passed.
+
+- follow-up status:
+  - phase ordering semantic gate is green again.
+  - this removes one Wave C semantic blocker while keeping interceptor behavior scoped to phase remap/canonicalization paths.
