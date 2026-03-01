@@ -270,7 +270,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       const char *env =
           std::getenv("CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS");
       if (!env)
-        return true;
+        return false;
       return env[0] != '\0' && env[0] != '0';
     }();
     bool sawResolvedTarget = false;

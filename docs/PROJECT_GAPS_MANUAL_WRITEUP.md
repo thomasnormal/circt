@@ -894,6 +894,7 @@ Additional semantic closure (2026-02-28): port bookkeeping now uses stable fallb
 Status update (2026-02-28): same closure as entry 295. `debug_connected_to` now reuses the same shared phase-state helper.  
 Additional semantic closure (2026-02-28): validated with semantic runtime coverage (`uvm_port_connect_semantic_test.sv`, `uvm_tlm_port_test.sv`) so connect/resolve behavior is now exercised beyond parse/lowering checks.  
 Additional semantic closure (2026-03-01): analysis fanout parity is now covered in active regression (`test/Tools/crun/uvm-tlm-analysis-100.sv`), and fragile native analysis interceptors in `circt-sim` were moved behind opt-in gates (`CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS`) so default behavior uses canonical UVM connect/size/write semantics.
+Additional semantic closure (2026-03-01): after a local regression re-enabled native analysis interceptors by default, the default-off gate was restored in both `func.call` and `call_indirect` paths (`tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`), and `uvm-tlm-analysis-100.sv` is green again with semantic checks enabled (no `XFAIL`).
 
 ### [ ] 297. `include/circt/Dialect/HW/HWOps.h:42`
 This TODO is an architectural gap: module helper functions are free functions instead of being surfaced through a `hw::ModuleLike` interface. What is missing is a uniform interface abstraction that makes module-like operations interchangeable across passes. The fix is to move these helpers into interface methods, migrate call sites, and keep compatibility shims only during transition.
@@ -6260,6 +6261,7 @@ Status update (2026-03-01): this gap is closed in this workspace. Test intent wa
 
 ### [x] 2082. `test/Tools/crun/uvm-config-db-hierarchical.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Hierarchical config lookup now passes semantically (`ok=1 val=77`). Root cause was config_db call-indirect key composition that stored relative set keys (`mid.dc.deep_val`) while get resolved scoped keys (`uvm_test_top.mid.dc.deep_val`); fixed by normalizing call-indirect set/get scope composition in `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`.
+Additional semantic closure (2026-03-01): broader config_db failures (`object`, `precedence`, `multiple-keys`, `virtual-if`, `type-mismatch`, and `Runtime/uvm/config_db_test.sv`) were closed by replacing fragile fixed-offset context-name recovery with semantic context resolution through `uvm_component::get_full_name` in `normalizeConfigDbInstName` (`tools/circt-sim/LLHDProcessInterpreterUvm.cpp`).
 
 ### [x] 2083. `test/Tools/crun/uvm-integ-config-phase-report.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Integration semantics now pass under crun without `XFAIL`: config_db propagation through build/connect/run/report phases is validated with runtime checks (`verbose flag`, run-phase verbose message, and report-phase count checks).

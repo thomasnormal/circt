@@ -1506,6 +1506,36 @@ std::string LLHDProcessInterpreter::normalizeConfigDbInstName(
   uint64_t contextAddr = contextValue.getUInt64();
   if (contextAddr == 0)
     return resolvedInstName;
+  if (uint64_t canonicalContextAddr =
+          canonicalizeUvmObjectAddress(procId, contextAddr))
+    contextAddr = canonicalContextAddr;
+
+  auto readContextFullNameViaMethod = [&]() -> std::string {
+    if (!rootModule)
+      return {};
+    auto funcOp = rootModule.lookupSymbol<func::FuncOp>(
+        "uvm_pkg::uvm_component::get_full_name");
+    if (!funcOp)
+      return {};
+    auto stateIt = processStates.find(procId);
+    if (stateIt == processStates.end())
+      return {};
+
+    auto &state = stateIt->second;
+    constexpr size_t kMaxCallDepth = 200;
+    if (state.callDepth >= kMaxCallDepth)
+      return {};
+
+    SmallVector<InterpretedValue, 1> callResults;
+    ++state.callDepth;
+    LogicalResult callStatus =
+        interpretFuncBody(procId, funcOp, {InterpretedValue(contextAddr, 64)},
+                          callResults);
+    --state.callDepth;
+    if (failed(callStatus) || callResults.empty())
+      return {};
+    return readMooreStringStruct(procId, callResults.front());
+  };
 
   auto readU64At = [&](uint64_t addr, uint64_t &value) -> bool {
     uint64_t offset = 0;
@@ -1537,7 +1567,10 @@ std::string LLHDProcessInterpreter::normalizeConfigDbInstName(
   constexpr uint64_t kObjectInstNameOff = 12;
   constexpr uint64_t kComponentFullNameOff = 127;
 
-  std::string contextFullName = readStringStructAt(contextAddr + kComponentFullNameOff);
+  std::string contextFullName = readContextFullNameViaMethod();
+  if (contextFullName.empty())
+    contextFullName =
+        readStringStructAt(contextAddr + kComponentFullNameOff);
   if (contextFullName.empty())
     contextFullName = readStringStructAt(contextAddr + kObjectInstNameOff);
   while (!contextFullName.empty() && contextFullName.front() == '.')

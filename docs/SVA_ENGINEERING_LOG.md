@@ -10780,3 +10780,43 @@
     - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_callback_test.sv test/Runtime/uvm/uvm_comparator_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
       - `3 passed`.
 
+## 2026-03-01 - config_db context-name semantics + analysis interceptor default hardening
+
+- realization:
+  - A broad semantic config_db slice was still failing even after canonical call-indirect routing:
+    - `test/Runtime/uvm/config_db_test.sv`
+    - `test/Tools/crun/uvm-config-db-{object,precedence,multiple-keys,hierarchical,virtual-if,type-mismatch}.sv`
+  - Trace showed canonical set/get key mismatch:
+    - set stored `uvm_test_top.my_cfg`
+    - get queried `.my_cfg`
+  - Root cause was fragile fixed-offset context-name extraction in
+    `normalizeConfigDbInstName`, which failed to resolve `cntxt.get_full_name()`
+    for many component layouts.
+  - While re-running semantic smoke after this fix, `uvm-tlm-analysis-100.sv`
+    regressed to `10/100`; root cause was native analysis interceptors being
+    default-on again in both `func.call` and `call_indirect` paths.
+
+- implemented:
+  - Reworked config_db context normalization in
+    `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`:
+    - canonicalize context pointer first,
+    - resolve context name by invoking
+      `uvm_pkg::uvm_component::get_full_name` via `interpretFuncBody`,
+    - keep prior fixed-offset memory read as fallback only.
+  - Re-hardened interceptor policy in:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+    - `CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS` is now default-off
+      (opt-in) again when env var is unset.
+
+- validation:
+  - red baseline:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/config_db_test.sv test/Tools/crun/uvm-config-db-*.sv`
+      - `7 failed / 11` before fix.
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-tlm-analysis-100.sv`
+      - failed with total deliveries `10 != 100` before interceptor-default fix.
+  - green after fixes:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/config_db_test.sv test/Tools/crun/uvm-config-db-*.sv`
+      - `11 passed`.
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-tlm-analysis-100.sv test/Runtime/uvm/config_db_test.sv test/Tools/crun/uvm-config-db-*.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_callback_test.sv test/Runtime/uvm/uvm_comparator_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
+      - `16 passed`.

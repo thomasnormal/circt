@@ -1,6 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test analysis_port with 10 subscribers, 10 items = 100 deliveries.
 
@@ -62,9 +61,9 @@ module tb_top;
         total += subs[i].count;
 
       if (total == 100)
-        `uvm_info("TEST", "all 10 subscribers got 10 items each: PASS", UVM_LOW)
+        `uvm_info("TEST", "all 10 subscribers got 10 items each: PASS", UVM_NONE)
       else
-        `uvm_error("TEST", $sformatf("total deliveries %0d != 100: FAIL", total))
+        `uvm_fatal("TEST", $sformatf("total deliveries %0d != 100: FAIL", total))
 
       phase.drop_objection(this);
     endtask

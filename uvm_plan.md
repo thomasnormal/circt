@@ -16,6 +16,13 @@ reduction must be staged and measurable.
   - `CIRCT_SIM_ENABLE_UVM_COMPONENT_CHILD_FASTPATHS` now opt-in.
 - [x] Root-caused and fixed analysis fanout regression (`10/100` deliveries) by reducing fragile native analysis interceptors:
   - `CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS` now opt-in.
+- [x] Root-caused and fixed config_db scoped-lookup misses caused by fragile context-name reconstruction:
+  - `normalizeConfigDbInstName` now resolves context names semantically via `uvm_component::get_full_name` (with fixed-offset reads only as fallback).
+- [x] Closed current config_db semantic slice:
+  - `test/Runtime/uvm/config_db_test.sv`
+  - `test/Tools/crun/uvm-config-db-*.sv`
+- [x] Re-hardened analysis-interceptor policy after default-on drift:
+  - native analysis interceptors are default-off again in both `func.call` and `call_indirect` paths unless explicitly enabled by env.
 - [x] Semantic parity gate slice green:
   - `uvm_component_child_iteration_semantic_test.sv`
   - `uvm_simple_test.sv`
@@ -203,4 +210,3 @@ reduction must be staged and measurable.
                2. Default policy is semantic correctness over short-term throughput.
                3. Default is no edits in vendored uvm-core; if blocked by strict conformance conflict, document exception request explicitly before changing.
                4. Default CI requirement is parity on targeted UVM semantic suites with selected interceptor families disabled.
-
