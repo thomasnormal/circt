@@ -44051,6 +44051,27 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
                  << " not-native-dispatched, "
                  << intercepted << " intercepted\n";
   }
+  // func.call cache entries can be created during module-level init before
+  // AOT function pointers are loaded. Backfill native pointers now so repeated
+  // callsites after load don't stay stuck in interpreted no-native mode.
+  if (!nativeFuncPtrs.empty() && !funcCallCache.empty()) {
+    unsigned refreshed = 0;
+    for (auto &kv : funcCallCache) {
+      auto &entry = kv.second;
+      if (!entry.noInterception || !entry.funcOp)
+        continue;
+      auto nativeIt = nativeFuncPtrs.find(entry.funcOp.getOperation());
+      if (nativeIt == nativeFuncPtrs.end())
+        continue;
+      if (entry.nativeFuncPtr == nativeIt->second)
+        continue;
+      entry.nativeFuncPtr = nativeIt->second;
+      ++refreshed;
+    }
+    if (refreshed > 0)
+      llvm::errs() << "[circt-sim] Refreshed " << refreshed
+                   << " cached func.call native pointers after AOT load\n";
+  }
 
   // Build the trampoline func_id → FuncOp mapping for compiled→interpreted
   // dispatch. Each trampoline has a sequential func_id and a name that
