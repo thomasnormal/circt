@@ -446,9 +446,14 @@ circt-sim mydesign.mlir --top dut \
 </p>
 
 <p>
-  Of the 7 AVIP protocols, circt-sim achieves <strong>55% coverage on APB</strong> and <strong>38% on SPI</strong> &mdash; respectable numbers for a 43-day-old simulator.
+  Of the 7 AVIP protocols, circt-sim achieves <strong>55% coverage on APB</strong> and <strong>38% on SPI</strong>.
   AHB stalls at 50% due to a monitor that never sees transactions advance past IDLE state.
   AXI4 and JTAG fail at compile time (the frontend produces empty MLIR files for these particular testbenches).
+</p>
+<p>
+  In the latest APB seed-1 run (March 1, 2026), both interpret and compile modes now complete the same functional endpoint:
+  <strong>168 ns simulated time</strong> with <strong>54.17% / 72.22%</strong> master/slave coverage.
+  Compile mode executes substantial native work on this workload (<strong>2517 native entry-table calls</strong> and <strong>16 compiled callback invocations</strong>), which confirms the AOT path is active and functionally convergent here.
 </p>
 
 <h3>The Speed Gap (and How We&rsquo;re Closing It)</h3>
@@ -515,8 +520,11 @@ circt-sim mydesign.mlir --top dut \
 
 <p>
   The fork currently includes a <code>--mode=compile</code> flag that combines specialized thunks (for common patterns like clock toggles and wait loops) with a block-level JIT that compiles hot basic blocks to native code via LLVM ORC.
-  Today this produces a <strong>2.1x speedup</strong> on I2S and <strong>18% on simpler benchmarks</strong>, with most processes still falling back to the interpreter for unsupported patterns.
-  The real gains will come from expanding JIT coverage to eliminate interpreter dispatch from hot paths entirely.
+  In a fresh APB sim-only repeat (3 runs, same MLIR artifact, seed 1), interpret mode averages <strong>7.40s</strong> wall time, while compile mode averages <strong>7.57s</strong> (about <strong>2.3% slower</strong> in this slice).
+  So compile mode is now much closer on correctness for this UVM workload, but the throughput win is not there yet.
+</p>
+<p>
+  Current AOT regression status (March 1, 2026): <strong>152 PASS / 1 XFAIL</strong> in <code>test/Tools/circt-sim/aot*</code>, with the remaining XFAIL tracking a known fork-child coroutine inheritance corner case.
 </p>
 
 <p>
