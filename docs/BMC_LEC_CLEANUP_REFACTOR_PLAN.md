@@ -388,6 +388,8 @@ Current workstream status in this branch:
      `--max-log-bytes` to bound artifact growth
    - baseline capture can now gate command outputs with strict JSONL schema
      validation (`--validate-results-schema`)
+   - baseline capture now supports strict cross-row schema gating via
+     `--validate-results-schema-strict-contract`
    - baseline manifests now support per-command expected return-code contracts
      (`expected_returncodes`) for bounded-timeout frontier lanes
    - WS0 manifest writer now supports per-lane expected return-code flags
@@ -434,6 +436,8 @@ Current workstream status in this branch:
    - strict schema validation tooling landed (`validate_formal_results_schema.py`)
    - schema validator now supports `--strict-contract` for cross-row
      invariants (sorted row order and solver-stage non-empty solver enforcement)
+   - WS0 capture can now forward strict schema contract checks to the validator
+     (`--validate-results-schema-strict-contract`)
    - JSONL->TSV migration adapter landed (`formal_results_jsonl_to_tsv.py`)
    - WS0 capture integration now supports per-command schema validation gating
      and surfaces per-run schema validation rc in `execution.tsv`

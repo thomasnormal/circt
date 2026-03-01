@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0/WS6: strict-contract schema validation in baseline capture):
+  - realization:
+    - `capture_formal_baseline.py` could invoke schema validation, but it could
+      not propagate the new strict cross-row schema contract checks into
+      baseline lanes.
+    - this left WS0 capture unable to gate unsorted/malformed multi-row JSONL
+      payloads at capture time for lanes that require stricter contracts.
+  - implemented:
+    - added `--validate-results-schema-strict-contract` to
+      `utils/formal/capture_formal_baseline.py`.
+    - baseline capture now forwards `--strict-contract` to
+      `validate_formal_results_schema.py` when requested.
+    - added option-level contract guard:
+      `--validate-results-schema-strict-contract` now requires
+      `--validate-results-schema`.
+    - added
+      `test/Tools/formal-capture-baseline-schema-validate-strict-contract.test`
+      to lock behavior:
+      - loose schema mode accepts unsorted rows,
+      - strict-contract mode rejects the same rows via schema gate.
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline-schema-validate-strict-contract.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-capture-baseline.test`
+      - result: `4/4` pass.
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py utils/formal/validate_formal_results_schema.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-capture-baseline-schema-validate-strict-contract.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `18/18` pass.
+
 - Iteration update (WS6-T2: strict contract checks in schema validator CLI):
   - realization:
     - per-row schema validation was strict on fields/types/enums, but cross-row

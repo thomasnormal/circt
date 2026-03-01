@@ -131,7 +131,11 @@ def compare_drift(
 
 
 def validate_results_schema(
-    *, validator_script: Path, jsonl_path: Path, summary_json: Path
+    *,
+    validator_script: Path,
+    jsonl_path: Path,
+    summary_json: Path,
+    strict_contract: bool,
 ) -> int:
     cmd = [
         sys.executable,
@@ -141,6 +145,8 @@ def validate_results_schema(
         "--summary-json",
         str(summary_json),
     ]
+    if strict_contract:
+        cmd.append("--strict-contract")
     proc = subprocess.run(cmd, check=False)
     return proc.returncode
 
@@ -180,6 +186,14 @@ def main() -> int:
         help=(
             "Validate each successful command JSONL output with "
             "validate_formal_results_schema.py."
+        ),
+    )
+    parser.add_argument(
+        "--validate-results-schema-strict-contract",
+        action="store_true",
+        help=(
+            "When schema validation is enabled, also enforce strict "
+            "cross-row contract checks."
         ),
     )
     parser.add_argument("--repeat", type=int, default=3)
@@ -234,6 +248,11 @@ def main() -> int:
         fail("--command-timeout-secs must be >= 0")
     if args.max_log_bytes < 0:
         fail("--max-log-bytes must be >= 0")
+    if args.validate_results_schema_strict_contract and not args.validate_results_schema:
+        fail(
+            "--validate-results-schema-strict-contract requires "
+            "--validate-results-schema"
+        )
     if args.dashboard_top_timeout_cases_limit < 1:
         fail("--dashboard-top-timeout-cases-limit must be >= 1")
     if args.dashboard_top_timeout_reasons_limit < 1:
@@ -314,6 +333,7 @@ def main() -> int:
                     validator_script=validator_script,
                     jsonl_path=out_jsonl,
                     summary_json=schema_summary,
+                    strict_contract=args.validate_results_schema_strict_contract,
                 )
                 schema_summary_path = str(schema_summary)
             execution_rows.append(
