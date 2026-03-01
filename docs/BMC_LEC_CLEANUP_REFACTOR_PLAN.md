@@ -485,6 +485,11 @@ Current workstream status in this branch:
    - shared optional empty-output helper landed in `runner_common`
      (`write_optional_empty_file`) and connectivity BMC/LEC no-case JSONL
      artifact paths now consume it (local fallback retained)
+   - shared nonnegative int-list parser landed in `runner_common`
+     (`parse_nonnegative_int_list`) and connectivity LEC now consumes it for
+     rewrite/RSS ladder env parsing (local fallback retained)
+   - connectivity LEC shared-path invalid rewrite-ladder diagnostics are now
+     regression-covered (`run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder-invalid-shared.test`)
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial

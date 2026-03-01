@@ -2,6 +2,40 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: shared nonnegative int-list parser extraction):
+  - realization:
+    - connectivity LEC carried a local `parse_nonnegative_int_list(...)`
+      implementation for env-driven ladder parsing
+      (`LEC_*_LADDER_MB`, `LEC_CANONICALIZER_TIMEOUT_RETRY_REWRITE_LADDER`),
+      while `runner_common` only provided scalar int parsing.
+    - this kept basic CLI tokenization policy duplicated across runner and
+      shared helper layers.
+  - implemented:
+    - added `parse_nonnegative_int_list(raw, name, fail_fn=None)` to
+      `utils/formal/lib/runner_common.py`.
+    - updated shared-helper regression input
+      `test/Tools/Inputs/formal_runner_common_optional_files.py` to cover:
+      - empty list input
+      - valid CSV list input
+      - invalid empty-item diagnostics
+    - wired connectivity LEC to consume shared list parsing when shared helpers
+      are available:
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+    - added shared-path regression:
+      - `test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder-invalid-shared.test`
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test`
+      - result: fail (`AttributeError`: missing
+        `runner_common.parse_nonnegative_int_list`).
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_opentitan_connectivity_circt_lec.py test/Tools/Inputs/formal_runner_common_optional_files.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder-invalid-shared.test test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-rewrite-ladder.test test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-retry.test`
+      - result: `4/4` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-canonicalizer-timeout-*.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl*.test test/Tools/run-opentitan-connectivity-circt-lec-status-*.test test/Tools/formal-runner-common-optional-files.test`
+      - result: `16/16` pass.
+
 - Iteration update (WS1: shared optional empty-output helper extraction):
   - realization:
     - connectivity BMC and connectivity LEC wrappers both duplicated

@@ -38,6 +38,10 @@ def main() -> int:
     assert no_allow == (set(), [], []), "empty optional allowlist should be empty"
     no_empty_file = runner_common.write_optional_empty_file("")
     assert no_empty_file is None, "empty optional output path should return None"
+    assert runner_common.parse_nonnegative_int_list("", "sample-list") == []
+    assert runner_common.parse_nonnegative_int_list(
+        "3, 7,0", "sample-list"
+    ) == [3, 7, 0]
 
     allow_path = tmp_dir / "allow.tsv"
     allow_path.write_text(
@@ -110,6 +114,16 @@ def main() -> int:
         assert exc.code == 1, f"unexpected bad regex exit code: {exc.code}"
         msg = bad_regex_stderr.getvalue()
         assert "invalid allowlist row 1: bad regex" in msg, msg
+
+    bad_list_stderr = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(bad_list_stderr):
+            runner_common.parse_nonnegative_int_list("1,,3", "sample-list")
+        raise AssertionError("expected invalid list failure")
+    except SystemExit as exc:
+        assert exc.code == 1, f"unexpected invalid list exit code: {exc.code}"
+        msg = bad_list_stderr.getvalue()
+        assert "invalid sample-list: empty item at index 2" in msg, msg
 
     print("PASS: shared formal runner optional file helpers")
     return 0

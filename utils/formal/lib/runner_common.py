@@ -47,6 +47,24 @@ def parse_nonnegative_int(
     return value
 
 
+def parse_nonnegative_int_list(
+    raw: str, name: str, fail_fn: Callable[[str], None] | None = None
+) -> list[int]:
+    if fail_fn is None:
+        fail_fn = fail
+    tokenized = raw.strip()
+    if not tokenized:
+        return []
+    values: list[int] = []
+    for index, token in enumerate(tokenized.split(","), start=1):
+        item = token.strip()
+        if not item:
+            fail_fn(f"invalid {name}: empty item at index {index}")
+            raise AssertionError("unreachable")
+        values.append(parse_nonnegative_int(item, f"{name}[{index}]", fail_fn))
+    return values
+
+
 def parse_nonnegative_float(
     raw: str, name: str, fail_fn: Callable[[str], None] | None = None
 ) -> float:

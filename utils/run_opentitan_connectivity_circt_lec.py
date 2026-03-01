@@ -1371,6 +1371,7 @@ try:
         load_allowlist as _shared_load_allowlist,
         normalize_drop_reason as _shared_normalize_drop_reason,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
+        parse_nonnegative_int_list as _shared_parse_nonnegative_int_list,
         read_status_summary as _shared_read_status_summary,
         resolve_optional_existing_file as _shared_resolve_optional_existing_file,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
@@ -1458,6 +1459,9 @@ if _HAS_SHARED_FORMAL_HELPERS:
 
     def parse_nonnegative_int(raw: str, name: str) -> int:
         return _shared_parse_nonnegative_int(raw, name, fail)
+
+    def parse_nonnegative_int_list(raw: str, name: str) -> list[int]:
+        return _shared_parse_nonnegative_int_list(raw, name, fail)
 
     def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
         return _shared_load_allowlist(path, fail)
