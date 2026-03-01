@@ -40,7 +40,6 @@ enum class UvmFastPathAction : uint8_t {
   ReportInfoSuppress,
   ReportWarningSuppress,
   GetReportObject,
-  ReportHandlerGetVerbosityLevel,
   ReportHandlerSetSeverityFileNoOp,
 };
 
@@ -84,8 +83,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_handler::get_verbosity_level",
-              UvmFastPathAction::ReportHandlerGetVerbosityLevel)
         .Case("uvm_pkg::uvm_report_handler::set_severity_file",
               UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
@@ -123,8 +120,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_handler::get_verbosity_level",
-              UvmFastPathAction::ReportHandlerGetVerbosityLevel)
         .Case("uvm_pkg::uvm_report_handler::set_severity_file",
               UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
@@ -1179,24 +1174,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     recordFastPathHit("registry.call_indirect.get_report_object");
     return true;
   }
-  case UvmFastPathAction::ReportHandlerGetVerbosityLevel: {
-    if (callIndirectOp.getNumResults() < 1)
-      break;
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result, InterpretedValue(llvm::APInt(width, 200)));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra,
-               InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry report_handler::get_verbosity "
-               << "-> 200: " << calleeName << "\n");
-    recordFastPathHit("registry.call_indirect.report_handler_get_verbosity");
-    return true;
-  }
   case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
     LLVM_DEBUG(llvm::dbgs()
                << "  call_indirect: registry report_handler::set_severity_file "
@@ -1311,24 +1288,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     return true;
   }
 
-  // Mirror direct-call report-handler getter fast-paths in vtable dispatch.
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::get_verbosity_level") &&
-      callIndirectOp.getNumResults() >= 1) {
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result, InterpretedValue(llvm::APInt(width, 200)));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra, InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: report_handler::get_verbosity_level "
-               << "fast-path -> 200: " << calleeName << "\n");
-    return true;
-  }
-
   return false;
 }
 
@@ -1428,24 +1387,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
       return false;
     strLen = static_cast<int64_t>(strLenBits);
     return strLen >= 0 && strLen <= 4096;
-  };
-
-  auto readUvmRootSingletonAddr = [&](uint64_t &rootAddr) -> bool {
-    rootAddr = 0;
-    if (!rootModule)
-      return false;
-    auto *addressofOp =
-        rootModule.lookupSymbol("uvm_pkg::uvm_pkg::uvm_root::m_inst");
-    if (!addressofOp)
-      return false;
-    auto globalIt =
-        globalMemoryBlocks.find("uvm_pkg::uvm_pkg::uvm_root::m_inst");
-    if (globalIt == globalMemoryBlocks.end() || !globalIt->second.initialized ||
-        globalIt->second.size < 8)
-      return false;
-    for (unsigned i = 0; i < 8; ++i)
-      rootAddr |= static_cast<uint64_t>(globalIt->second[i]) << (i * 8);
-    return rootAddr != 0;
   };
 
   auto getComponentChildrenAssocAddr = [&](uint64_t selfAddr,
@@ -1676,11 +1617,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     recordFastPathHit("registry.func.call.get_report_object");
     return true;
   }
-  case UvmFastPathAction::ReportHandlerGetVerbosityLevel:
-    // Registry handles common direct-call report-handler symbols only.
-    // Fall through to existing generic report-handler logic below, which
-    // preserves all current memory-backed behavior.
-    break;
   case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: registry report_handler::set_severity_file "
@@ -1822,38 +1758,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
       calleeName.contains("::set_severity_file")) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
                             << " intercepted (no-op)\n");
-    return true;
-  }
-
-  // Intercept uvm_report_handler::get_verbosity_level to avoid failures when
-  // associative array fields are not fully initialized. In the default case
-  // (no per-id/per-severity overrides), this returns UVM_MEDIUM (200).
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::get_verbosity_level") &&
-      callOp.getNumResults() == 1) {
-    int32_t verbosity = 200; // UVM_MEDIUM default
-    InterpretedValue handlerVal = getValue(procId, callOp.getOperand(0));
-    if (!handlerVal.isX()) {
-      uint64_t handlerAddr = handlerVal.getUInt64();
-      uint64_t off = 0;
-      MemoryBlock *blk = findMemoryBlockByAddress(handlerAddr, procId, &off);
-      if (blk && blk->initialized) {
-        // uvm_object base size: uvm_void(i32=4, ptr=8) +
-        // string(ptr=8, i64=8) + i32=4 = 32.
-        // field 1 (m_max_verbosity_level) is at offset 32 from handler base.
-        size_t fieldOff = off + 32;
-        if (fieldOff + 4 <= blk->size) {
-          verbosity = 0;
-          for (int i = 0; i < 4; ++i)
-            verbosity |= static_cast<int32_t>(blk->bytes()[fieldOff + i])
-                         << (i * 8);
-        }
-      }
-    }
-    setValue(procId, callOp.getResult(0),
-             InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(verbosity))));
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted -> " << verbosity << "\n");
     return true;
   }
 

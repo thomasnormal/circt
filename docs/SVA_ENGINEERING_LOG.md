@@ -9996,3 +9996,33 @@
     - isolated rerun passed:
       - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_factory_test.sv`
 
+
+## 2026-03-01 - UVM report-handler verbosity precedence semantics (remove remaining getter interception)
+
+- realization:
+  - New semantic test `uvm_report_verbosity_precedence_semantic_test` failed red on precedence checks:
+    - id-specific verbosity did not override max verbosity,
+    - severity-id verbosity did not override id verbosity.
+  - Root cause was remaining report-handler getter interception returning hardcoded values in
+    `tools/circt-sim/UVMFastPaths.cpp` (`uvm_report_handler::get_verbosity_level`) across
+    registry and fallback call paths.
+
+- implemented:
+  - Added semantic regression:
+    - `test/Runtime/uvm/uvm_report_verbosity_precedence_semantic_test.sv`
+    - validates precedence order: default max -> id -> severity-id.
+  - Reduced interceptor surface in `tools/circt-sim/UVMFastPaths.cpp` by removing
+    remaining `uvm_report_handler::get_verbosity_level` fast-path interception in
+    `func.call` and `call_indirect` handling.
+  - Removed dead helper lambda `readUvmRootSingletonAddr` exposed by this cleanup.
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_report_verbosity_precedence_semantic_test.sv`
+  - rebuild:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_report_verbosity_precedence_semantic_test.sv`
+  - regression sweep:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - result: `30 passed`.
