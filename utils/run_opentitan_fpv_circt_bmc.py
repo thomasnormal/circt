@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -25,6 +26,71 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+_THIS_DIR = Path(__file__).resolve().parent
+_FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
+if _FORMAL_LIB_DIR.is_dir():
+    sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
+try:
+    from formal_results import make_result_row as _make_formal_result_row
+    from formal_results import write_results_jsonl as _write_formal_results_jsonl
+except Exception:
+
+    def _infer_stage(status: str, reason_code: str) -> str:
+        status_norm = status.strip().upper()
+        reason_norm = reason_code.strip().upper()
+        if status_norm == "TIMEOUT":
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            return "solver"
+        if status_norm in {"ERROR", "FAIL"}:
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            if "SMT" in reason_norm or "Z3" in reason_norm or "LEC" in reason_norm:
+                return "solver"
+        return "result"
+
+    def _make_formal_result_row(
+        *,
+        suite: str,
+        mode: str,
+        case_id: str,
+        case_path: str,
+        status: str,
+        reason_code: str = "",
+        stage: str = "",
+        solver: str = "",
+        solver_time_ms: int | None = None,
+        frontend_time_ms: int | None = None,
+        log_path: str = "",
+        artifact_dir: str = "",
+    ) -> dict[str, object]:
+        stage_value = stage.strip() if stage.strip() else _infer_stage(status, reason_code)
+        return {
+            "schema_version": 1,
+            "suite": suite,
+            "mode": mode,
+            "case_id": case_id,
+            "case_path": case_path,
+            "status": status.strip().upper(),
+            "reason_code": reason_code.strip().upper(),
+            "stage": stage_value,
+            "solver": solver.strip(),
+            "solver_time_ms": solver_time_ms,
+            "frontend_time_ms": frontend_time_ms,
+            "log_path": log_path,
+            "artifact_dir": artifact_dir,
+        }
+
+    def _write_formal_results_jsonl(
+        path: Path, rows: list[dict[str, object]]
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True))
+                handle.write("\n")
 
 
 SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
@@ -338,6 +404,14 @@ def summarize(
         else:
             errored += 1
     return total, passed, failed, xfailed, xpassed, errored, skipped, unknown, timeout
+
+
+def extract_result_reason_code(row: tuple[str, ...]) -> str:
+    if len(row) >= 7 and row[6].strip():
+        return row[6]
+    if len(row) >= 6 and row[5].strip():
+        return row[5]
+    return ""
 
 
 def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
@@ -1102,6 +1176,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional TSV output path for per-target/per-top rows.",
     )
     parser.add_argument(
+        "--results-jsonl-file",
+        default=os.environ.get("FORMAL_RESULTS_JSONL_OUT", ""),
+        help="Optional JSONL output path for unified formal result schema rows.",
+    )
+    parser.add_argument(
         "--drop-remark-cases-file",
         default=os.environ.get("BMC_DROP_REMARK_CASES_OUT", ""),
         help="Optional TSV output path for dropped-syntax case IDs.",
@@ -1506,6 +1585,8 @@ def main() -> int:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text("", encoding="utf-8")
             print(f"results: {out_path}", flush=True)
+        if args.results_jsonl_file:
+            _write_formal_results_jsonl(Path(args.results_jsonl_file), [])
         if args.fpv_summary_file:
             fpv_summary_path = Path(args.fpv_summary_file)
             write_fpv_summary([], [], [], fpv_summary_path)
@@ -1839,6 +1920,9 @@ def main() -> int:
                 )
                 group_cases_path = workdir / f"pairwise-cases-{group_index}.tsv"
                 group_results_path = workdir / f"pairwise-results-{group_index}.tsv"
+                group_results_jsonl_path = (
+                    workdir / f"pairwise-results-{group_index}.jsonl"
+                )
                 group_workdir = workdir / f"pairwise-work-{group_index}"
                 group_cases_path.write_text(
                     "\n".join(group_cases) + "\n", encoding="utf-8"
@@ -1876,6 +1960,11 @@ def main() -> int:
                     "--results-file",
                     str(group_results_path),
                 ]
+                if args.results_jsonl_file:
+                    cmd += [
+                        "--results-jsonl-file",
+                        str(group_results_jsonl_path),
+                    ]
 
                 if args.drop_remark_cases_file:
                     group_drop_cases = (
@@ -2439,6 +2528,29 @@ def main() -> int:
                 for row in merged_rows:
                     handle.write("\t".join(row) + "\n")
             print(f"results: {out_path}", flush=True)
+        if args.results_jsonl_file:
+            results_jsonl_path = Path(args.results_jsonl_file)
+            solver_label = (
+                "" if os.environ.get("BMC_SMOKE_ONLY", "0").strip() == "1" else "z3"
+            )
+            json_rows: list[dict[str, object]] = []
+            for row in merged_rows:
+                if len(row) < 5:
+                    continue
+                status, case_id, case_path, suite, mode = row[:5]
+                reason_code = extract_result_reason_code(row)
+                json_rows.append(
+                    _make_formal_result_row(
+                        suite=suite,
+                        mode=mode,
+                        case_id=case_id,
+                        case_path=case_path,
+                        status=status,
+                        reason_code=reason_code,
+                        solver=solver_label,
+                    )
+                )
+            _write_formal_results_jsonl(results_jsonl_path, json_rows)
 
         merged_assertion_rows: list[tuple[str, ...]] = []
         for assertion_path in assertion_result_files:

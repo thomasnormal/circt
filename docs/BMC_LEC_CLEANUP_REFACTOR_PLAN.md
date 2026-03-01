@@ -419,6 +419,8 @@ Current workstream status in this branch:
      pairwise backend (`--results-jsonl-file`)
    - OpenTitan connectivity BMC wrapper now forwards schema JSONL output lane
      to the pairwise backend (`--results-jsonl-file`)
+   - OpenTitan FPV BMC wrapper now emits merged schema JSONL output lane
+     (`--results-jsonl-file`) from final wrapper-level merged rows
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

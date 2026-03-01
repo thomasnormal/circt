@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T3/WS6: OpenTitan FPV BMC wrapper emits merged schema JSONL lane):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` forwarded `--results-jsonl-file` to
+      pairwise group runs, but never wrote the requested top-level merged JSONL
+      artifact after wrapper-level row merges.
+    - this caused missing wrapper JSONL outputs despite successful pairwise
+      forwarding.
+  - implemented:
+    - added merged schema JSONL emission in
+      `utils/run_opentitan_fpv_circt_bmc.py` from final `merged_rows`, using
+      existing per-row reason-code extraction policy.
+    - solver label now mirrors pairwise policy (`BMC_SMOKE_ONLY=1` -> empty,
+      otherwise `z3`) for wrapper-emitted JSONL rows.
+    - zero-selected-target fast path now emits an empty requested JSONL file.
+    - added regression
+      `test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-basic.test test/Tools/run-opentitan-fpv-circt-bmc-launch-events-forwarding.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test`
+      - result: `4/4` pass.
+    - expanded formal subset:
+      - initial 32-test invocation hit one infra miss (`circt-opt` absent in
+        `build_test`) on
+        `test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`.
+      - rerun without that tool-dependent test:
+        - result: `31/31` pass.
+
 - Iteration update (WS1-T3/WS6: connectivity BMC wrapper forwards schema JSONL lane):
   - realization:
     - `run_opentitan_connectivity_circt_bmc.py` delegated to pairwise BMC but
