@@ -236,6 +236,39 @@ firrtl.module @AndOfAsSIntNoCrash(
   firrtl.matchingconnect %out3, %5 : !firrtl.uint<4>
 }
 
+// AndOfAsSInt patterns should not crash on non-IntType inputs
+// CHECK-LABEL: firrtl.module @AndOfAsSIntNoCrash
+firrtl.module @AndOfAsSIntNoCrash(
+  in %clock: !firrtl.clock,
+  in %asyncreset: !firrtl.asyncreset,
+  in %sint: !firrtl.sint<4>,
+  in %y: !firrtl.sint<1>,
+  out %out1: !firrtl.uint<1>,
+  out %out2: !firrtl.uint<1>,
+  out %out3: !firrtl.uint<4>
+) {
+  // AndOfAsSIntL pattern should not crash on clock type
+  // CHECK: %[[ASSINT1:.+]] = firrtl.asSInt %clock
+  // CHECK: firrtl.and %[[ASSINT1]], %y
+  %0 = firrtl.asSInt %clock : (!firrtl.clock) -> !firrtl.sint<1>
+  %1 = firrtl.and %0, %y : (!firrtl.sint<1>, !firrtl.sint<1>) -> !firrtl.uint<1>
+  firrtl.matchingconnect %out1, %1 : !firrtl.uint<1>
+
+  // AndOfAsSIntR pattern should not crash on asyncreset type
+  // CHECK: %[[ASSINT2:.+]] = firrtl.asSInt %asyncreset
+  // CHECK: firrtl.and %y, %[[ASSINT2]]
+  %2 = firrtl.asSInt %asyncreset : (!firrtl.asyncreset) -> !firrtl.sint<1>
+  %3 = firrtl.and %y, %2 : (!firrtl.sint<1>, !firrtl.sint<1>) -> !firrtl.uint<1>
+  firrtl.matchingconnect %out2, %3 : !firrtl.uint<1>
+
+  // AndOfAsSIntL/R patterns should match on SInt.
+  // CHECK: %[[ASUINT:.+]] = firrtl.asUInt %sint
+  // CHECK: firrtl.matchingconnect %out3, %[[ASUINT]]
+  %4 = firrtl.asSInt %sint : (!firrtl.sint<4>) -> !firrtl.sint<4>
+  %5 = firrtl.and %4, %sint : (!firrtl.sint<4>, !firrtl.sint<4>) -> !firrtl.uint<4>
+  firrtl.matchingconnect %out3, %5 : !firrtl.uint<4>
+}
+
 // CHECK-LABEL: firrtl.module @Or
 firrtl.module @Or(in %in: !firrtl.uint<4>,
                   in %in6: !firrtl.uint<6>,
