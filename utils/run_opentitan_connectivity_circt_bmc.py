@@ -888,10 +888,15 @@ def main() -> int:
         fail("invalid --cover-shard-count: expected integer >= 1")
     if cover_shard_index >= cover_shard_count:
         fail("invalid --cover-shard-index: expected value < --cover-shard-count")
-    if args.fail_on_status_drift and not args.status_baseline_file:
-        fail("--fail-on-status-drift requires --status-baseline-file")
-    if args.status_drift_allowlist_file and not args.status_baseline_file:
-        fail("--status-drift-allowlist-file requires --status-baseline-file")
+    if (
+        args.status_drift_file
+        or args.status_drift_allowlist_file
+        or args.fail_on_status_drift
+    ) and not args.status_baseline_file:
+        fail(
+            "--status-drift-file/--status-drift-allowlist-file/"
+            "--fail-on-status-drift requires --status-baseline-file"
+        )
     bound = parse_nonnegative_int(args.bound, "bound")
     ignore_asserts_until = parse_nonnegative_int(
         args.ignore_asserts_until, "ignore-asserts-until"

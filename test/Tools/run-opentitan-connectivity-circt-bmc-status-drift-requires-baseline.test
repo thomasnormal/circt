@@ -1,0 +1,6 @@
+// RUN: mkdir -p %t/opentitan
+// RUN: not python3 %S/../../utils/run_opentitan_connectivity_circt_bmc.py --target-manifest %t/targets.tsv --rules-manifest %t/rules.tsv --opentitan-root %t/opentitan --results-file %t/results.tsv --status-drift-file %t/drift.tsv 2>&1 | FileCheck %s
+// RUN: not python3 %S/../../utils/run_opentitan_connectivity_circt_bmc.py --target-manifest %t/targets.tsv --rules-manifest %t/rules.tsv --opentitan-root %t/opentitan --results-file %t/results.tsv --status-drift-allowlist-file %t/allow.tsv 2>&1 | FileCheck %s
+// RUN: not python3 %S/../../utils/run_opentitan_connectivity_circt_bmc.py --target-manifest %t/targets.tsv --rules-manifest %t/rules.tsv --opentitan-root %t/opentitan --results-file %t/results.tsv --fail-on-status-drift 2>&1 | FileCheck %s
+
+// CHECK: --status-drift-file/--status-drift-allowlist-file/--fail-on-status-drift requires --status-baseline-file

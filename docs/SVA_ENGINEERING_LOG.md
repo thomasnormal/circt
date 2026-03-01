@@ -686,6 +686,29 @@
     - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-outputs-require-policy.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-auto-capture.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-requires-baseline.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-baseline.test`
       - result: `6/6` pass.
 
+- Iteration update (WS1: connectivity status-drift output precondition hardening):
+  - realization:
+    - connectivity BMC already required a baseline for
+      `--fail-on-status-drift` and `--status-drift-allowlist-file`, but
+      `--status-drift-file` could be supplied without baseline and silently
+      skip drift evaluation/output.
+  - implemented:
+    - `utils/run_opentitan_connectivity_circt_bmc.py`:
+      - unified precondition gate:
+        - `--status-drift-file`,
+        - `--status-drift-allowlist-file`,
+        - `--fail-on-status-drift`
+        now all require `--status-baseline-file`.
+    - tests:
+      - added
+        `test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-requires-baseline.test`
+        covering all three flag lanes.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no
