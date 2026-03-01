@@ -9956,3 +9956,43 @@
   - During one full-suite run, `build_test/bin/circt-verilog` briefly surfaced as
     non-executable (`Permission denied`) while another process updated build outputs.
     Retrying after the transient completed restored normal execution.
+
+## 2026-03-01 - UVM report action semantics (remove default-return/no-op action interceptors)
+
+- realization:
+  - New semantic test `uvm_report_action_semantic_test` failed red on all three checks:
+    - severity action override,
+    - id action precedence,
+    - severity-id action precedence.
+  - Root cause was remaining report-action interception outside the previous fast-path cleanup:
+    - legacy no-op mutators in `LLHDProcessInterpreter.cpp` (`set_*_action`/`set_*_verbosity`),
+    - legacy trampoline-level default-return hooks for `get_report_action`/`get_action`.
+
+- implemented:
+  - Added semantic regression:
+    - `test/Runtime/uvm/uvm_report_action_semantic_test.sv`
+    - validates `set_report_*_action` / `get_report_action` precedence semantics.
+  - Reduced report-action interceptor surface in:
+    - `tools/circt-sim/UVMFastPaths.cpp`
+      - removed `get_report_action`/`report_handler::get_action` fast-path handling,
+      - removed `report_handler::set_severity_action` no-op interception.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - removed legacy no-op interception for report action/verbosity mutators,
+      - removed trampoline default-return interception for report action getters,
+      - kept `set_severity_file` interception as non-semantic policy.
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_report_action_semantic_test.sv`
+  - rebuild:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_report_action_semantic_test.sv`
+  - broader sweep:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm`
+    - observed semantic pass on 28/29 tests; remaining intermittent failure was
+      `uvm_factory_test.sv` due transient `Permission denied` on `build_test/bin/circt-sim`
+      while lit executed multiple invocations in one script.
+    - isolated rerun passed:
+      - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_factory_test.sv`
+

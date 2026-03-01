@@ -1019,6 +1019,8 @@ public:
   /// nativeFuncPtrs map for native dispatch.
   void setCompiledModule(std::unique_ptr<CompiledModuleLoader> loader) {
     compiledLoader = std::move(loader);
+    bool disableAllNative =
+        std::getenv("CIRCT_AOT_DISABLE_ALL") != nullptr;
 
     // Wire up trampoline support: set the global compiled module descriptor
     // and the __circt_sim_ctx pointer so trampolines can call back into
@@ -1042,7 +1044,12 @@ public:
           llhdInterpreter->getGlobalMemoryBlocks());
 
       llhdInterpreter->loadCompiledFunctions(*compiledLoader);
-      llhdInterpreter->loadCompiledProcesses(*compiledLoader);
+      if (!disableAllNative) {
+        llhdInterpreter->loadCompiledProcesses(*compiledLoader);
+      } else {
+        llvm::errs() << "[circt-sim] compiled process wiring disabled "
+                        "(CIRCT_AOT_DISABLE_ALL)\n";
+      }
 
       // Wire up the trampoline dispatch callback so compiled trampolines
       // can call back into the interpreter for non-compiled functions.

@@ -2,6 +2,9 @@
 // RUN: env CIRCT_AOT_TRACE_COMPILED_PROCESSES=1 \
 // RUN:   circt-sim %s --compiled=%t.so --max-time=12000000 --aot-stats 2>&1 \
 // RUN:   | FileCheck %s --check-prefix=TRACE
+// RUN: env CIRCT_AOT_DISABLE_ALL=1 \
+// RUN:   circt-sim %s --compiled=%t.so --max-time=12000000 --aot-stats 2>&1 \
+// RUN:   | FileCheck %s --check-prefix=DISABLE-ALL
 //
 // Regression: child-module llhd.process registration must classify callback
 // models too. If instance processes skip classification, process traces show
@@ -12,6 +15,11 @@
 // TRACE: compiled-proc name=child.process_0
 // TRACE-SAME: kind=CALLBACK model=CallbackTimeOnly
 // TRACE: Compiled callback invocations: {{[2-9][0-9]*}}
+//
+// DISABLE-ALL: [circt-sim] CIRCT_AOT_DISABLE_ALL: all native dispatch disabled
+// DISABLE-ALL: [circt-sim] compiled process wiring disabled (CIRCT_AOT_DISABLE_ALL)
+// DISABLE-ALL: [circt-sim] Compiled callback invocations: {{[[:space:]]*}}0
+// DISABLE-ALL: [circt-sim] Interpreter process invocations: {{[[:space:]]*}}[[N:[1-9][0-9]*]]
 
 hw.module private @child(out out : i1) {
   %false = hw.constant false

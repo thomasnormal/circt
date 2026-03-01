@@ -24612,21 +24612,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  // Intercept UVM report handler configuration functions that use vtable
-  // dispatch through unrealized_conversion_cast. The pool vtable entries may
-  // be null or mismatched, causing insertBits assertion failures during
-  // call_indirect argument setup. These are non-critical configuration
-  // functions — safe to no-op.
+  // Intercept report file configuration mutators in interpreted mode.
+  // File routing is non-critical for simulation correctness here.
   if (calleeName.contains("uvm_report_handler") &&
-      (calleeName.contains("set_id_action") ||
-       calleeName.contains("set_severity_id_action") ||
-       calleeName.contains("set_id_verbosity") ||
-       calleeName.contains("set_severity_id_verbosity") ||
-       calleeName.contains("set_severity_action") ||
-       calleeName.contains("set_severity_file"))) {
+      calleeName.contains("set_severity_file")) {
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: " << calleeName
-               << " intercepted (no-op, avoids vtable dispatch crash)\n");
+               << " intercepted (no-op)\n");
     return success();
   }
 
@@ -43833,20 +43825,6 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
   };
   auto handleUvmTrampolineFastPath =
       [&](llvm::StringRef trampName) -> bool {
-    auto defaultUvmActionForSeverity = [](uint64_t sev) -> uint64_t {
-      switch (sev) {
-      case 0:
-        return 1; // UVM_INFO -> UVM_DISPLAY
-      case 1:
-        return 1; // UVM_WARNING -> UVM_DISPLAY
-      case 2:
-        return 41; // UVM_ERROR -> UVM_DISPLAY | UVM_COUNT | UVM_EXIT
-      case 3:
-        return 33; // UVM_FATAL -> UVM_DISPLAY | UVM_EXIT
-      default:
-        return 1;
-      }
-    };
     if (trampName.contains("uvm_printer::print_field_int") ||
         trampName.contains("uvm_printer::print_field") ||
         trampName.contains("uvm_printer::print_generic_element") ||
@@ -43869,37 +43847,8 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
       appendZeroTrampolineResults();
       return true;
     }
-    if (trampName.contains("uvm_report_object::get_report_verbosity_level")) {
-      appendZeroTrampolineResults();
-      setIntegerTrampolineResult(0, 200);
-      return true;
-    }
-    if (trampName.contains("uvm_report_object::get_report_action") &&
-        interpArgs.size() >= 2 && !interpArgs[1].isX()) {
-      appendZeroTrampolineResults();
-      setIntegerTrampolineResult(0,
-                                 defaultUvmActionForSeverity(
-                                     interpArgs[1].getUInt64()));
-      return true;
-    }
     if (trampName.contains("uvm_report_handler") &&
-        trampName.contains("::get_verbosity_level")) {
-      appendZeroTrampolineResults();
-      setIntegerTrampolineResult(0, 200);
-      return true;
-    }
-    if (trampName.contains("uvm_report_handler") &&
-        trampName.contains("::get_action") && interpArgs.size() >= 2 &&
-        !interpArgs[1].isX()) {
-      appendZeroTrampolineResults();
-      setIntegerTrampolineResult(0,
-                                 defaultUvmActionForSeverity(
-                                     interpArgs[1].getUInt64()));
-      return true;
-    }
-    if (trampName.contains("uvm_report_handler") &&
-        (trampName.contains("::set_severity_file") ||
-         trampName.contains("::set_severity_action"))) {
+        trampName.contains("::set_severity_file")) {
       appendZeroTrampolineResults();
       return true;
     }

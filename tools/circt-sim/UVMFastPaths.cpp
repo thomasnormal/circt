@@ -40,27 +40,9 @@ enum class UvmFastPathAction : uint8_t {
   ReportInfoSuppress,
   ReportWarningSuppress,
   GetReportObject,
-  GetReportAction,
   ReportHandlerGetVerbosityLevel,
-  ReportHandlerGetAction,
-  ReportHandlerSetSeverityActionNoOp,
   ReportHandlerSetSeverityFileNoOp,
 };
-
-static int32_t defaultUvmActionForSeverity(uint64_t sev) {
-  switch (sev) {
-  case 0:
-    return 1; // UVM_INFO -> UVM_DISPLAY
-  case 1:
-    return 1; // UVM_WARNING -> UVM_DISPLAY
-  case 2:
-    return 41; // UVM_ERROR -> UVM_DISPLAY | UVM_COUNT | UVM_EXIT
-  case 3:
-    return 33; // UVM_FATAL -> UVM_DISPLAY | UVM_EXIT
-  default:
-    return 1;
-  }
-}
 
 static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
                                            llvm::StringRef calleeName) {
@@ -102,14 +84,8 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_object::get_report_action",
-              UvmFastPathAction::GetReportAction)
         .Case("uvm_pkg::uvm_report_handler::get_verbosity_level",
               UvmFastPathAction::ReportHandlerGetVerbosityLevel)
-        .Case("uvm_pkg::uvm_report_handler::get_action",
-              UvmFastPathAction::ReportHandlerGetAction)
-        .Case("uvm_pkg::uvm_report_handler::set_severity_action",
-              UvmFastPathAction::ReportHandlerSetSeverityActionNoOp)
         .Case("uvm_pkg::uvm_report_handler::set_severity_file",
               UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
@@ -147,14 +123,8 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_object::get_report_action",
-              UvmFastPathAction::GetReportAction)
         .Case("uvm_pkg::uvm_report_handler::get_verbosity_level",
               UvmFastPathAction::ReportHandlerGetVerbosityLevel)
-        .Case("uvm_pkg::uvm_report_handler::get_action",
-              UvmFastPathAction::ReportHandlerGetAction)
-        .Case("uvm_pkg::uvm_report_handler::set_severity_action",
-              UvmFastPathAction::ReportHandlerSetSeverityActionNoOp)
         .Case("uvm_pkg::uvm_report_handler::set_severity_file",
               UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
@@ -1209,29 +1179,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     recordFastPathHit("registry.call_indirect.get_report_object");
     return true;
   }
-  case UvmFastPathAction::GetReportAction: {
-    if (callIndirectOp.getNumResults() < 1 ||
-        callIndirectOp.getArgOperands().size() < 2)
-      break;
-    InterpretedValue sevVal =
-        getValue(procId, callIndirectOp.getArgOperands()[1]);
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result, InterpretedValue(llvm::APInt(
-                                 width, defaultUvmActionForSeverity(sev))));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra,
-               InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry get_report_action (sev=" << sev
-               << "): " << calleeName << "\n");
-    recordFastPathHit("registry.call_indirect.get_report_action");
-    return true;
-  }
   case UvmFastPathAction::ReportHandlerGetVerbosityLevel: {
     if (callIndirectOp.getNumResults() < 1)
       break;
@@ -1250,37 +1197,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     recordFastPathHit("registry.call_indirect.report_handler_get_verbosity");
     return true;
   }
-  case UvmFastPathAction::ReportHandlerGetAction: {
-    if (callIndirectOp.getNumResults() < 1 ||
-        callIndirectOp.getArgOperands().size() < 2)
-      break;
-    InterpretedValue sevVal =
-        getValue(procId, callIndirectOp.getArgOperands()[1]);
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result, InterpretedValue(llvm::APInt(
-                                 width, defaultUvmActionForSeverity(sev))));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra,
-               InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry report_handler::get_action "
-               << "(sev=" << sev << "): " << calleeName << "\n");
-    recordFastPathHit("registry.call_indirect.report_handler_get_action");
-    return true;
-  }
-  case UvmFastPathAction::ReportHandlerSetSeverityActionNoOp:
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry report_handler::set_severity_action "
-                  "no-op: "
-               << calleeName << "\n");
-    recordFastPathHit(
-        "registry.call_indirect.report_handler_set_severity_action");
-    return true;
   case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
     LLVM_DEBUG(llvm::dbgs()
                << "  call_indirect: registry report_handler::set_severity_file "
@@ -1395,27 +1311,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     return true;
   }
 
-  if (calleeName.contains("uvm_report_object::get_report_action") &&
-      callIndirectOp.getNumResults() >= 1 &&
-      callIndirectOp.getArgOperands().size() >= 2) {
-    InterpretedValue sevVal =
-        getValue(procId, callIndirectOp.getArgOperands()[1]);
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result,
-             InterpretedValue(llvm::APInt(width, defaultUvmActionForSeverity(sev))));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra, InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: get_report_action fast-path (sev=" << sev
-               << "): " << calleeName << "\n");
-    return true;
-  }
-
   // Mirror direct-call report-handler getter fast-paths in vtable dispatch.
   if (calleeName.contains("uvm_report_handler") &&
       calleeName.contains("::get_verbosity_level") &&
@@ -1431,28 +1326,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     LLVM_DEBUG(llvm::dbgs()
                << "  call_indirect: report_handler::get_verbosity_level "
                << "fast-path -> 200: " << calleeName << "\n");
-    return true;
-  }
-
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::get_action") &&
-      callIndirectOp.getNumResults() >= 1 &&
-      callIndirectOp.getArgOperands().size() >= 2) {
-    InterpretedValue sevVal =
-        getValue(procId, callIndirectOp.getArgOperands()[1]);
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result,
-             InterpretedValue(llvm::APInt(width, defaultUvmActionForSeverity(sev))));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra, InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: report_handler::get_action fast-path "
-               << "(sev=" << sev << "): " << calleeName << "\n");
     return true;
   }
 
@@ -1803,33 +1676,11 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     recordFastPathHit("registry.func.call.get_report_object");
     return true;
   }
-  case UvmFastPathAction::GetReportAction: {
-    if (callOp.getNumResults() != 1 || callOp.getNumOperands() < 2)
-      break;
-    InterpretedValue sevVal = getValue(procId, callOp.getOperand(1));
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    int32_t action = defaultUvmActionForSeverity(sev);
-    setValue(procId, callOp.getResult(0),
-             InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(action))));
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: registry get_report_action (sev=" << sev
-               << ") -> " << action << ": " << calleeName << "\n");
-    recordFastPathHit("registry.func.call.get_report_action");
-    return true;
-  }
   case UvmFastPathAction::ReportHandlerGetVerbosityLevel:
-  case UvmFastPathAction::ReportHandlerGetAction:
     // Registry handles common direct-call report-handler symbols only.
     // Fall through to existing generic report-handler logic below, which
     // preserves all current memory-backed behavior.
     break;
-  case UvmFastPathAction::ReportHandlerSetSeverityActionNoOp:
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: registry report_handler::set_severity_action "
-                  "no-op: "
-               << calleeName << "\n");
-    recordFastPathHit("registry.func.call.report_handler_set_severity_action");
-    return true;
   case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: registry report_handler::set_severity_file "
@@ -1964,25 +1815,11 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     return true;
   }
 
-  if (calleeName.contains("uvm_report_object::get_report_action") &&
-      callOp.getNumResults() == 1 && callOp.getNumOperands() >= 2) {
-    InterpretedValue sevVal = getValue(procId, callOp.getOperand(1));
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    int32_t action = defaultUvmActionForSeverity(sev);
-    setValue(procId, callOp.getResult(0),
-             InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(action))));
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted (sev=" << sev << ") -> " << action
-                            << "\n");
-    return true;
-  }
-
   // Intercept report_handler severity-map mutators. These methods only affect
   // report formatting/routing policy and are safely bypassed by our default
   // report getter fast-path behavior.
   if (calleeName.contains("uvm_report_handler") &&
-      (calleeName.contains("::set_severity_file") ||
-       calleeName.contains("::set_severity_action"))) {
+      calleeName.contains("::set_severity_file")) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
                             << " intercepted (no-op)\n");
     return true;
@@ -2017,21 +1854,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
              InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(verbosity))));
     LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
                             << " intercepted -> " << verbosity << "\n");
-    return true;
-  }
-
-  // Intercept uvm_report_handler::get_action to return default severity actions.
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::get_action") &&
-      callOp.getNumResults() == 1 && callOp.getNumOperands() >= 2) {
-    InterpretedValue sevVal = getValue(procId, callOp.getOperand(1));
-    uint64_t sev = sevVal.isX() ? 0 : sevVal.getUInt64();
-    int32_t action = defaultUvmActionForSeverity(sev);
-    setValue(procId, callOp.getResult(0),
-             InterpretedValue(llvm::APInt(32, static_cast<uint64_t>(action))));
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted (sev=" << sev << ") -> " << action
-                            << "\n");
     return true;
   }
 
