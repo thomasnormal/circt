@@ -2,6 +2,19 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6-T1: schema contract doc extracted and de-duplicated):
+  - realization:
+    - the schema contract lived inline in
+      `docs/BMC_LEC_CLEANUP_REFACTOR_PLAN.md`, which mixed normative contract
+      details with execution planning and increased drift risk.
+  - implemented:
+    - added `docs/FormalResultsSchema.md` as the dedicated normative schema v1
+      and strict-contract policy document.
+    - reduced Section 26 in
+      `docs/BMC_LEC_CLEANUP_REFACTOR_PLAN.md` to a reference summary pointing
+      to the dedicated contract doc.
+    - updated WS6 status snapshot to mark schema docs as landed.
+
 - Iteration update (WS0/WS6: strict-contract schema validation in baseline capture):
   - realization:
     - `capture_formal_baseline.py` could invoke schema validation, but it could

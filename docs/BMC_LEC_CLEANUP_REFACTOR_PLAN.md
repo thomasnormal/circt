@@ -457,7 +457,7 @@ Current workstream status in this branch:
      (for example bounded timeout `124`) when JSONL outputs are present
    - schema validation now covers expected nonzero-return lanes when they emit
      JSONL payloads, preserving schema gates on bounded-timeout frontier data
-   - schema docs still pending
+   - schema contract/versioning doc landed (`docs/FormalResultsSchema.md`)
 
 ## 17. Execution Backlog (Ticket-Level)
 
@@ -699,60 +699,14 @@ Execute WS0-T2 plus WS0-T3 immediately:
 
 ## 26. Formal Result Schema Contract v1 (Normative)
 
-This section makes WS6 executable by defining strict field behavior.
+Normative schema/versioning details are now maintained in:
+`docs/FormalResultsSchema.md`
 
-### Required Fields
+This plan keeps only WS6 execution references:
 
-1. `schema_version`
-2. `suite`
-3. `mode`
-4. `case_id`
-5. `case_path`
-6. `status`
-7. `reason_code`
-8. `stage`
-9. `solver`
-10. `solver_time_ms`
-11. `frontend_time_ms`
-12. `log_path`
-13. `artifact_dir`
-
-### Allowed Enums
-
-1. `mode`
-   - `BMC`
-   - `LEC`
-   - `CONNECTIVITY_LEC` (temporary compatibility mode label)
-2. `status`
-   - `PASS`
-   - `FAIL`
-   - `ERROR`
-   - `TIMEOUT`
-   - `UNKNOWN`
-   - `SKIP`
-   - `XFAIL`
-   - `XPASS`
-3. `stage`
-   - `frontend`
-   - `lowering`
-   - `solver`
-   - `result`
-   - `postprocess`
-
-### Normalization Rules
-
-1. strings are trimmed and uppercased for enum-like fields
-2. empty `reason_code` is allowed only for `PASS` or `UNKNOWN`
-3. `solver` is empty only for smoke/non-solver paths
-4. timing fields are null if unavailable, otherwise non-negative integers
-5. JSONL rows must be deterministic by sort key:
-   - `(case_id, status, case_path)`
-
-### Versioning Rules
-
-1. additive fields: minor schema note only
-2. enum change or required-field change: increment `schema_version`
-3. keep one release of backward parser compatibility for each version bump
+1. required fields and enum contracts are versioned under schema v1
+2. strict-contract mode is opt-in and enforces cross-row invariants
+3. version bumps are required for enum/required-field contract changes
 
 ## 27. Reason Code Taxonomy v1
 
