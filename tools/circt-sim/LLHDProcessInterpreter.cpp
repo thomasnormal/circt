@@ -491,6 +491,31 @@ static bool shouldDemoteUnmappedNullThisPointerCall(mlir::func::FuncOp funcOp,
   return isPointerLikeUvmHelperName(calleeName);
 }
 
+static bool isPtrLenStructNativeAbiType(mlir::Type ty) {
+  auto structTy = mlir::dyn_cast<mlir::LLVM::LLVMStructType>(ty);
+  if (!structTy || structTy.isOpaque())
+    return false;
+  auto body = structTy.getBody();
+  if (body.size() != 2)
+    return false;
+  auto lenTy = mlir::dyn_cast<mlir::IntegerType>(body[1]);
+  return mlir::isa<mlir::LLVM::LLVMPointerType>(body[0]) && lenTy &&
+         lenTy.getWidth() == 64;
+}
+
+static bool decodePtrLenStructNativeAbiArg(const InterpretedValue &value,
+                                           uint64_t &ptrOut,
+                                           uint64_t &lenOut) {
+  if (value.isX())
+    return false;
+  llvm::APInt bits = value.getAPInt();
+  if (bits.getBitWidth() != 128)
+    bits = bits.zextOrTrunc(128);
+  ptrOut = bits.extractBitsAsZExtValue(64, 0);
+  lenOut = bits.extractBitsAsZExtValue(64, 64);
+  return true;
+}
+
 static bool shouldDenyUnmappedZeroArgUvmHelperCall(mlir::func::FuncOp funcOp) {
   static bool allowUnsafeZeroArgHelpers =
       std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_ZEROARG_HELPERS_UNSAFE") !=
@@ -24999,16 +25024,33 @@ no_uvm_objection_intercept:
             return intTy.getWidth() <= 64;
           return mlir::isa<mlir::IndexType, mlir::LLVM::LLVMPointerType>(ty);
         };
+        bool hasPtrLenTailArgAbi = false;
         bool compatibleNativeAbi = numArgs <= 8 && numResults <= 1;
         if (compatibleNativeAbi) {
+          compatibleNativeAbi &= numArgs == funcOp.getNumArguments();
           for (mlir::Type ty : funcOp.getArgumentTypes())
             compatibleNativeAbi &= isNativeScalarType(ty);
           if (numResults == 1)
             compatibleNativeAbi &=
                 isNativeScalarType(callOp.getResult(0).getType());
+          // Narrow ABI extension: permit common UVM reporting getter shape
+          // (..., iN, struct<(ptr, i64)>).
+          if (!compatibleNativeAbi && numArgs == 3 &&
+              funcOp.getNumArguments() == 3 &&
+              isNativeScalarType(funcOp.getArgumentTypes()[0]) &&
+              isNativeScalarType(funcOp.getArgumentTypes()[1]) &&
+              isPtrLenStructNativeAbiType(funcOp.getArgumentTypes()[2])) {
+            compatibleNativeAbi = true;
+            hasPtrLenTailArgAbi = true;
+          }
         }
         if (compatibleNativeAbi) {
           uint64_t a[8] = {};
+          struct PtrLenArgStorage {
+            uint64_t ptr;
+            uint64_t len;
+          };
+          PtrLenArgStorage ptrLenArgStorage[8] = {};
           bool canDispatch = true;
           auto isPlausibleNativePointerValue = [](uint64_t addr) -> bool {
             if (addr == 0)
@@ -25038,12 +25080,111 @@ no_uvm_objection_intercept:
           static bool traceNativeCalls =
               std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
           for (unsigned i = 0; i < numArgs; ++i) {
+            mlir::Type formalArgTy = i < funcOp.getNumArguments()
+                                         ? funcOp.getArgumentTypes()[i]
+                                         : mlir::Type();
+            mlir::Type actualArgTy = i < callOp.getNumOperands()
+                                         ? callOp.getOperand(i).getType()
+                                         : mlir::Type();
+            // Some lowered by-value ABI shapes pass a pointer formal while the
+            // call operand remains a packed struct<(ptr, i64)>. Materialize
+            // stable stack storage and pass its address to native code.
+            if (mlir::isa<mlir::LLVM::LLVMPointerType>(formalArgTy) &&
+                isPtrLenStructNativeAbiType(actualArgTy)) {
+              uint64_t ptrLenArgPtr = 0;
+              uint64_t ptrLenArgLen = 0;
+              if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
+                                                  ptrLenArgLen)) {
+                canDispatch = false;
+                break;
+              }
+              bool isUnmappedCall = fidIt == funcOpToFid.end();
+              bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
+              ptrLenArgPtr = normalizeNativeCallPointerArg(
+                  procId, funcOp.getName(), ptrLenArgPtr);
+              if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
+                  !isKnownPointerAddress(ptrLenArgPtr)) {
+                if (traceNativeCalls) {
+                  llvm::errs()
+                      << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
+                      << " name=" << funcOp.getName() << " arg" << i
+                      << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
+                      << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
+                if (traceNativeCalls) {
+                  llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
+                               << " name=" << funcOp.getName() << " arg" << i
+                               << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
+                               << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              ptrLenArgStorage[i].ptr = ptrLenArgPtr;
+              ptrLenArgStorage[i].len = ptrLenArgLen;
+              a[i] = reinterpret_cast<uint64_t>(&ptrLenArgStorage[i]);
+              continue;
+            }
+            if (hasPtrLenTailArgAbi && i == 2) {
+              uint64_t ptrLenArgPtr = 0;
+              uint64_t ptrLenArgLen = 0;
+              if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
+                                                  ptrLenArgLen)) {
+                canDispatch = false;
+                break;
+              }
+              bool isUnmappedCall = fidIt == funcOpToFid.end();
+              bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
+              ptrLenArgPtr = normalizeNativeCallPointerArg(
+                  procId, funcOp.getName(), ptrLenArgPtr);
+              if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
+                  !isKnownPointerAddress(ptrLenArgPtr)) {
+                if (traceNativeCalls) {
+                  llvm::errs()
+                      << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
+                      << " name=" << funcOp.getName() << " arg" << i
+                      << ".ptr="
+                      << llvm::format_hex(ptrLenArgPtr, 16)
+                      << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
+                if (traceNativeCalls) {
+                  llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
+                               << " name=" << funcOp.getName() << " arg" << i
+                               << ".ptr="
+                               << llvm::format_hex(ptrLenArgPtr, 16)
+                               << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              ptrLenArgStorage[i].ptr = ptrLenArgPtr;
+              ptrLenArgStorage[i].len = ptrLenArgLen;
+              a[i] = reinterpret_cast<uint64_t>(&ptrLenArgStorage[i]);
+              continue;
+            }
+            if (i >= funcOp.getNumArguments()) {
+              canDispatch = false;
+              break;
+            }
             if (args[i].getWidth() <= 64) {
               a[i] = args[i].getUInt64();
-              bool hasPointerType = isa<mlir::LLVM::LLVMPointerType>(
-                  funcOp.getArgumentTypes()[i]);
-              bool pointerLikeI64ThisArg =
-                  shouldTreatArg0I64AsPointerLike(funcOp, i);
+              bool hasPointerType =
+                  mlir::isa<mlir::LLVM::LLVMPointerType>(formalArgTy);
+              bool pointerLikeI64ThisArg = i < funcOp.getNumArguments() &&
+                                           shouldTreatArg0I64AsPointerLike(
+                                               funcOp, i);
               bool isUnmappedCall = fidIt == funcOpToFid.end();
               bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
               if (hasPointerType || pointerLikeI64ThisArg) {
@@ -25132,6 +25273,9 @@ no_uvm_objection_intercept:
               if (numArgs > 1)
                 llvm::errs() << "            a1="
                              << llvm::format_hex(a[1], 16) << "\n";
+              if (numArgs > 2)
+                llvm::errs() << "            a2="
+                             << llvm::format_hex(a[2], 16) << "\n";
               ++traceNativeCallCount;
             }
             ++state.callDepth;
@@ -25484,15 +25628,32 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
           return intTy.getWidth() <= 64;
         return mlir::isa<mlir::IndexType, mlir::LLVM::LLVMPointerType>(ty);
       };
+      bool hasPtrLenTailArgAbi = false;
       bool compatibleNativeAbi = numArgs <= 8 && numResults <= 1;
       if (compatibleNativeAbi) {
+        compatibleNativeAbi &= numArgs == funcOp.getNumArguments();
         for (mlir::Type ty : funcOp.getArgumentTypes())
           compatibleNativeAbi &= isNativeScalarType(ty);
         if (numResults == 1)
           compatibleNativeAbi &= isNativeScalarType(callOp.getResult(0).getType());
+        // Narrow ABI extension: permit common UVM reporting getter shape
+        // (..., iN, struct<(ptr, i64)>).
+        if (!compatibleNativeAbi && numArgs == 3 &&
+            funcOp.getNumArguments() == 3 &&
+            isNativeScalarType(funcOp.getArgumentTypes()[0]) &&
+            isNativeScalarType(funcOp.getArgumentTypes()[1]) &&
+            isPtrLenStructNativeAbiType(funcOp.getArgumentTypes()[2])) {
+          compatibleNativeAbi = true;
+          hasPtrLenTailArgAbi = true;
+        }
       }
       if (compatibleNativeAbi) {
         uint64_t a[8] = {};
+        struct PtrLenArgStorage {
+          uint64_t ptr;
+          uint64_t len;
+        };
+        PtrLenArgStorage ptrLenArgStorage[8] = {};
         bool canDispatch = true;
         auto isPlausibleNativePointerValue = [](uint64_t addr) -> bool {
           if (addr == 0)
@@ -25522,12 +25683,109 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         static bool traceNativeCalls =
             std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
         for (unsigned i = 0; i < numArgs; ++i) {
+          mlir::Type formalArgTy = i < funcOp.getNumArguments()
+                                       ? funcOp.getArgumentTypes()[i]
+                                       : mlir::Type();
+          mlir::Type actualArgTy = i < callOp.getNumOperands()
+                                       ? callOp.getOperand(i).getType()
+                                       : mlir::Type();
+          // Some lowered by-value ABI shapes pass a pointer formal while the
+          // call operand remains a packed struct<(ptr, i64)>. Materialize
+          // stable stack storage and pass its address to native code.
+          if (mlir::isa<mlir::LLVM::LLVMPointerType>(formalArgTy) &&
+              isPtrLenStructNativeAbiType(actualArgTy)) {
+            uint64_t ptrLenArgPtr = 0;
+            uint64_t ptrLenArgLen = 0;
+            if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
+                                                ptrLenArgLen)) {
+              canDispatch = false;
+              break;
+            }
+            bool isUnmappedCall = fidIt == funcOpToFid.end();
+            bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
+            ptrLenArgPtr =
+                normalizeNativeCallPointerArg(procId, funcOp.getName(), ptrLenArgPtr);
+            if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
+                !isKnownPointerAddress(ptrLenArgPtr)) {
+              if (traceNativeCalls) {
+                llvm::errs()
+                    << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
+                    << " name=" << funcOp.getName() << " arg" << i
+                    << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
+                    << " active_proc=" << activeProcessId << "\n";
+              }
+              canDispatch = false;
+              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+              break;
+            }
+            if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
+              if (traceNativeCalls) {
+                llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
+                             << " name=" << funcOp.getName() << " arg" << i
+                             << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
+                             << " active_proc=" << activeProcessId << "\n";
+              }
+              canDispatch = false;
+              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+              break;
+            }
+            ptrLenArgStorage[i].ptr = ptrLenArgPtr;
+            ptrLenArgStorage[i].len = ptrLenArgLen;
+            a[i] = reinterpret_cast<uint64_t>(&ptrLenArgStorage[i]);
+            continue;
+          }
+          if (hasPtrLenTailArgAbi && i == 2) {
+            uint64_t ptrLenArgPtr = 0;
+            uint64_t ptrLenArgLen = 0;
+            if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
+                                                ptrLenArgLen)) {
+              canDispatch = false;
+              break;
+            }
+            bool isUnmappedCall = fidIt == funcOpToFid.end();
+            bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
+            ptrLenArgPtr = normalizeNativeCallPointerArg(
+                procId, funcOp.getName(), ptrLenArgPtr);
+            if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
+                !isKnownPointerAddress(ptrLenArgPtr)) {
+              if (traceNativeCalls) {
+                llvm::errs()
+                    << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
+                    << " name=" << funcOp.getName() << " arg" << i << ".ptr="
+                    << llvm::format_hex(ptrLenArgPtr, 16)
+                    << " active_proc=" << activeProcessId << "\n";
+              }
+              canDispatch = false;
+              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+              break;
+            }
+            if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
+              if (traceNativeCalls) {
+                llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
+                             << " name=" << funcOp.getName() << " arg" << i
+                             << ".ptr="
+                             << llvm::format_hex(ptrLenArgPtr, 16)
+                             << " active_proc=" << activeProcessId << "\n";
+              }
+              canDispatch = false;
+              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+              break;
+            }
+            ptrLenArgStorage[i].ptr = ptrLenArgPtr;
+            ptrLenArgStorage[i].len = ptrLenArgLen;
+            a[i] = reinterpret_cast<uint64_t>(&ptrLenArgStorage[i]);
+            continue;
+          }
+          if (i >= funcOp.getNumArguments()) {
+            canDispatch = false;
+            break;
+          }
           if (args[i].getWidth() <= 64) {
             a[i] = args[i].getUInt64();
-            bool hasPointerType = isa<mlir::LLVM::LLVMPointerType>(
-                funcOp.getArgumentTypes()[i]);
-            bool pointerLikeI64ThisArg =
-                shouldTreatArg0I64AsPointerLike(funcOp, i);
+            bool hasPointerType =
+                mlir::isa<mlir::LLVM::LLVMPointerType>(formalArgTy);
+            bool pointerLikeI64ThisArg = i < funcOp.getNumArguments() &&
+                                         shouldTreatArg0I64AsPointerLike(funcOp, i);
             bool isUnmappedCall = fidIt == funcOpToFid.end();
             bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
             if (hasPointerType || pointerLikeI64ThisArg) {
@@ -25615,6 +25873,9 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
             if (numArgs > 1)
               llvm::errs() << "            a1="
                            << llvm::format_hex(a[1], 16) << "\n";
+            if (numArgs > 2)
+              llvm::errs() << "            a2="
+                           << llvm::format_hex(a[2], 16) << "\n";
             ++traceNativeCallCount;
           }
           ++state.callDepth;
