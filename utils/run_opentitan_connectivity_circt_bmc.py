@@ -770,6 +770,14 @@ def main() -> int:
         help="Output results TSV path (default: env OUT).",
     )
     parser.add_argument(
+        "--results-jsonl-file",
+        default=os.environ.get("FORMAL_RESULTS_JSONL_OUT", ""),
+        help=(
+            "Optional output JSONL path for unified formal result schema rows "
+            "(default: env FORMAL_RESULTS_JSONL_OUT)."
+        ),
+    )
+    parser.add_argument(
         "--status-summary-file",
         default=os.environ.get("BMC_CONNECTIVITY_STATUS_SUMMARY_OUT", ""),
         help=(
@@ -1107,6 +1115,8 @@ def main() -> int:
             "--workdir",
             str(workdir / "pairwise"),
         ]
+        if args.results_jsonl_file:
+            cmd.extend(["--results-jsonl-file", args.results_jsonl_file])
         resolved_contracts_out = os.environ.get("BMC_RESOLVED_CONTRACTS_OUT", "").strip()
         if resolved_contracts_out:
             cmd.extend(["--resolved-contracts-file", resolved_contracts_out])

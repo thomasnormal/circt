@@ -2,6 +2,26 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T3/WS6: connectivity BMC wrapper forwards schema JSONL lane):
+  - realization:
+    - `run_opentitan_connectivity_circt_bmc.py` delegated to pairwise BMC but
+      exposed only TSV output (`--results-file`), so schema JSONL output could
+      not be requested through the wrapper.
+  - implemented:
+    - added `--results-jsonl-file` to
+      `utils/run_opentitan_connectivity_circt_bmc.py` (env default:
+      `FORMAL_RESULTS_JSONL_OUT`).
+    - forwarded wrapper JSONL output option to pairwise backend command.
+    - added regression
+      `test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test`.
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-condition-filter.test test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test`
+      - result: `4/4` pass.
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-case-row-writer.test test/Tools/formal-results-schema.test test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-capture-baseline-schema-validate-strict-contract.test test/Tools/formal-capture-baseline-schema-validate-strict-contract-arg.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-mode-label.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test`
+      - result: `31/31` pass.
+
 - Iteration update (WS1-T3/WS6: OpenTitan BMC wrapper forwards schema JSONL lane):
   - realization:
     - `run_opentitan_circt_bmc.py` still only forwarded `--results-file` and
