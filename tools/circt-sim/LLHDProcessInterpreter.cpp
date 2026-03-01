@@ -525,28 +525,77 @@ static bool shouldDenyUnmappedNativeCall(mlir::func::FuncOp funcOp) {
       std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL") != nullptr;
   static bool allowUnmappedNative =
       std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE") != nullptr;
+  static bool allowUnsafeUvmChildIterNative =
+      std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_UVM_CHILD_ITER_UNSAFE") !=
+      nullptr;
   static llvm::SmallVector<std::string, 8> denyPatterns =
       parseCommaPatternEnv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES");
+  static llvm::SmallVector<std::string, 8> allowPatterns =
+      parseCommaPatternEnv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_NAMES");
+  static bool traceUnmappedPolicy = []() {
+    const char *env = std::getenv("CIRCT_SIM_TRACE_UNMAPPED_POLICY");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  auto traceDecision = [&](llvm::StringRef decision, llvm::StringRef reason,
+                           llvm::StringRef pattern = llvm::StringRef()) {
+    if (!traceUnmappedPolicy)
+      return;
+    llvm::errs() << "[AOT UNMAPPED POLICY] " << decision
+                 << " callee=" << calleeName << " reason=" << reason;
+    if (!pattern.empty())
+      llvm::errs() << " pattern=" << pattern;
+    llvm::errs() << "\n";
+  };
 
   // Optional name-level deny list takes precedence over global allow.
   for (const std::string &pattern : denyPatterns)
-    if (matchesUnmappedNamePattern(calleeName, pattern))
+    if (matchesUnmappedNamePattern(calleeName, pattern)) {
+      traceDecision("deny", "deny-pattern", pattern);
       return true;
+    }
 
   // Safety guard: unmapped zero-arg helper wrappers (get_/set_/create_/
   // m_initialize*) have repeatedly dereferenced invalid payloads in native
   // mode. Keep them interpreted unless explicitly opt-in overridden.
-  if (shouldDenyUnmappedZeroArgUvmHelperCall(funcOp))
+  if (shouldDenyUnmappedZeroArgUvmHelperCall(funcOp)) {
+    traceDecision("deny", "zeroarg-safety");
     return true;
+  }
 
-  if (allowUnmappedNative)
+  // Iterator-style UVM child traversal methods are not yet safe in unmapped
+  // native mode: they can recurse through callback-driven call_indirect chains
+  // and destabilize phase traversal. Keep interpreted unless explicitly
+  // force-enabled for experiments.
+  if (!allowUnsafeUvmChildIterNative &&
+      (calleeName == "uvm_pkg::uvm_component::get_first_child" ||
+       calleeName == "uvm_pkg::uvm_component::get_next_child")) {
+    traceDecision("deny", "uvm-child-iter-safety");
+    return true;
+  }
+
+  // Name-level allow list enables controlled hotspot experiments without
+  // broad allow-all policy changes. Zero-arg safety guard and deny list still
+  // take precedence.
+  for (const std::string &pattern : allowPatterns)
+    if (matchesUnmappedNamePattern(calleeName, pattern)) {
+      traceDecision("allow", "allow-pattern", pattern);
+      return false;
+    }
+
+  if (allowUnmappedNative) {
+    traceDecision("allow", "allow-all");
     return false;
+  }
 
   // Strict mode: deny all unmapped direct native calls.
-  if (denyAllUnmappedNative)
+  if (denyAllUnmappedNative) {
+    traceDecision("deny", "deny-all");
     return true;
+  }
 
-  return shouldDenyUnmappedNativeCallByDefault(funcOp);
+  bool denyByDefault = shouldDenyUnmappedNativeCallByDefault(funcOp);
+  traceDecision(denyByDefault ? "deny" : "allow", "default-policy");
+  return denyByDefault;
 }
 
 // circt-sim evaluates clocked assertions/assumptions through the LTL runtime
@@ -24966,16 +25015,31 @@ no_uvm_objection_intercept:
                   funcOp.getArgumentTypes()[i]);
               bool pointerLikeI64ThisArg =
                   shouldTreatArg0I64AsPointerLike(funcOp, i);
+              bool isUnmappedCall = fidIt == funcOpToFid.end();
+              bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
               if (hasPointerType || pointerLikeI64ThisArg) {
                 a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                      a[i]);
                 if (shouldDemoteUnmappedNullThisPointerCall(
-                        funcOp, i, a[i], fidIt == funcOpToFid.end())) {
+                        funcOp, i, a[i], isUnmappedCall)) {
                   if (traceNativeCalls) {
                     llvm::errs() << "[AOT TRACE] func.call skip null-this"
                                  << " name=" << funcOp.getName() << " arg" << i
                                  << "=" << llvm::format_hex(a[i], 16)
                                  << " active_proc=" << activeProcessId << "\n";
+                  }
+                  canDispatch = false;
+                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  break;
+                }
+                if (isUnmappedCall && isUvmMethodName && hasPointerType &&
+                    a[i] != 0 && !isKnownPointerAddress(a[i])) {
+                  if (traceNativeCalls) {
+                    llvm::errs()
+                        << "[AOT TRACE] func.call skip unknown-pointer-typed"
+                        << " name=" << funcOp.getName() << " arg" << i
+                        << "=" << llvm::format_hex(a[i], 16)
+                        << " active_proc=" << activeProcessId << "\n";
                   }
                   canDispatch = false;
                   fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
@@ -25435,16 +25499,31 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                 funcOp.getArgumentTypes()[i]);
             bool pointerLikeI64ThisArg =
                 shouldTreatArg0I64AsPointerLike(funcOp, i);
+            bool isUnmappedCall = fidIt == funcOpToFid.end();
+            bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
             if (hasPointerType || pointerLikeI64ThisArg) {
               a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                    a[i]);
               if (shouldDemoteUnmappedNullThisPointerCall(
-                      funcOp, i, a[i], fidIt == funcOpToFid.end())) {
+                      funcOp, i, a[i], isUnmappedCall)) {
                 if (traceNativeCalls) {
                   llvm::errs() << "[AOT TRACE] func.call skip null-this"
                                << " name=" << funcOp.getName() << " arg" << i
                                << "=" << llvm::format_hex(a[i], 16)
                                << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                break;
+              }
+              if (isUnmappedCall && isUvmMethodName && hasPointerType &&
+                  a[i] != 0 && !isKnownPointerAddress(a[i])) {
+                if (traceNativeCalls) {
+                  llvm::errs()
+                      << "[AOT TRACE] func.call skip unknown-pointer-typed"
+                      << " name=" << funcOp.getName() << " arg" << i
+                      << "=" << llvm::format_hex(a[i], 16)
+                      << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
                 fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
@@ -43617,6 +43696,12 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
 
   // Safety valve: CIRCT_AOT_NO_FUNC_DISPATCH disables ALL native func dispatch.
   bool noFuncDispatch = std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr;
+  const char *allowNames =
+      std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_NAMES");
+  const char *denyNames = std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES");
+  bool childIterSafetyDeny =
+      std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_UVM_CHILD_ITER_UNSAFE") ==
+      nullptr;
   if (std::getenv("CIRCT_AOT_ALLOW_UNMAPPED_NATIVE")) {
     llvm::errs() << "[circt-sim] Unmapped native func.call policy: allow-all";
     if (std::getenv(
@@ -43625,15 +43710,33 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
       llvm::errs() << " (with zero-arg get_/set_/create_/m_initialize* "
                       "safety deny)";
     }
-    if (const char *denyNames = std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_NAMES"))
+    if (denyNames)
       llvm::errs() << " with deny list '" << denyNames << "'";
+    if (allowNames)
+      llvm::errs() << " with allow list '" << allowNames << "'";
+    if (childIterSafetyDeny)
+      llvm::errs() << " (with UVM child iterator safety deny)";
     llvm::errs() << "\n";
   } else if (std::getenv("CIRCT_AOT_DENY_UNMAPPED_NATIVE_ALL")) {
-    llvm::errs() << "[circt-sim] Unmapped native func.call policy: deny-all\n";
+    llvm::errs() << "[circt-sim] Unmapped native func.call policy: deny-all";
+    if (allowNames)
+      llvm::errs() << " with allow list '" << allowNames << "'";
+    if (denyNames)
+      llvm::errs() << " with deny list '" << denyNames << "'";
+    if (childIterSafetyDeny)
+      llvm::errs() << " (with UVM child iterator safety deny)";
+    llvm::errs() << "\n";
   } else {
     llvm::errs() << "[circt-sim] Unmapped native func.call policy: default "
                     "deny uvm_pkg::* and pointer-typed "
-                    "get_/set_/create_/m_initialize* (allow others)\n";
+                    "get_/set_/create_/m_initialize* (allow others)";
+    if (allowNames)
+      llvm::errs() << " with allow list '" << allowNames << "'";
+    if (denyNames)
+      llvm::errs() << " with deny list '" << denyNames << "'";
+    if (childIterSafetyDeny)
+      llvm::errs() << " (with UVM child iterator safety deny)";
+    llvm::errs() << "\n";
   }
 
   // Runtime call_indirect target-set profiling is used by MAY_YIELD unsafe
