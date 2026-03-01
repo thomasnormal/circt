@@ -9,6 +9,10 @@
       schema helpers existing in `formal_results.py`.
     - this left policy drift risk between runners and blocked WS1-T3
       consolidation.
+    - surprise:
+      - lit runner tests copy these scripts into temporary directories; local
+        fallback helpers must remain so JSONL emission still works when the
+        `formal_results` module is unavailable at runtime.
   - implemented:
     - extended `utils/formal/lib/formal_results.py` with shared helpers:
       - `sort_case_rows`
