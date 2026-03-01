@@ -970,3 +970,7 @@
       - `batch precheck PASS (batch=1, cases=4)`
     - result:
       `total=22 pass=22 fail=0 xfail=0 xpass=0 error=0 skip=0`.
+  - additional historical singleton check:
+    - `rstmgr_rst_en.csv:RSTMGR_LC_IO_DIV4_D0_ALERT_0_RST_EN`
+    - result: `PASS ... EQ` under real Z3 (previously observed as
+      `CIRCT_LEC_ERROR`/`CIRCT_VERILOG_ERROR` in older artifacts).
