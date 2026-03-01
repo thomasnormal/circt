@@ -617,11 +617,6 @@ struct Context {
   std::optional<moore::ProcedureKind> currentProcedureKind;
   const slang::ast::ProceduralBlockSymbol *currentProceduralBlock = nullptr;
 
-  /// Variables for which an implicit covergroup sampling process has already
-  /// been synthesized. This prevents duplicate implicit `sample` handlers
-  /// when both declaration and assignment lowering paths encounter `new`.
-  DenseSet<const slang::ast::VariableSymbol *> covergroupImplicitSamplingVars;
-
   /// A table mapping iterator variables to their index values for use with
   /// the `item.index` property in array locator methods.
   /// This is populated when converting array locator predicates.

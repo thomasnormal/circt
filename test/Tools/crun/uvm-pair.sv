@@ -1,8 +1,9 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-
 // Test uvm_class_pair with uvm_object first/second.
+// NOTE: uvm_pair.svh instantiates virtual class uvm_object in a parameterized
+// context — this is technically illegal per IEEE 1800-2017 §8.21 but accepted
+// by Xcelium as a warning. circt-verilog downgrades NewVirtualClass to warning.
 
 // CHECK: [TEST] pair first name: obj_a
 // CHECK: [TEST] pair second name: obj_b
