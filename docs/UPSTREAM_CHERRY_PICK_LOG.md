@@ -110,7 +110,8 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `0cf5a81a3` | `a0b58ccce` | [CI] Cancel in-progress PR builds on new push (#9751) | Applied cleanly; enables PR concurrency cancellation across 4 workflows. |
 | `b0ecf17cd` | `8a3634d80` | [ImportVerilog] Add support for $swrite (#9782) | Applied with one test conflict in `test/Conversion/ImportVerilog/basic.sv`; kept both formatted and no-format `$swrite` coverage. |
 | `9a51e183f` | `f4e0bd1d3` | [ImportVerilog] Pass library files to slang (#9680) | Applied cleanly. Added local regression `test/Tools/circt-verilog/library-files.test` plus inputs to lock behavior. |
-| `559c7e278` | `11cc66244` | [Datapath] Bug Fix for Sign-Extension Logic when Lowering Partial Products to Booth Arrays (#9726) (#9744) | Applied cleanly in implementation; adjusted FORCE-BOOTH check order in local test to match canonicalization ordering, then validated `test/Conversion/DatapathToComb/datapath-to-comb.mlir`. |
+| `559c7e278` | `11cc66244` | [Datapath] Bug Fix for Sign-Extension Logic when Lowering Partial Products to Booth Arrays (#9726) (#9744) | Applied cleanly; validated with `test/Conversion/DatapathToComb/datapath-to-comb.mlir` after rebuilding `circt-opt`. |
+| `fe2fe29eb` | `73e28e09a` | [CalyxToHW] Fix missing i1-to-clock conversion in convertPipelineOp (#9715) | Applied cleanly; added upstream regression `test/Conversion/CalyxToHW/pipeline-clock.mlir`, required local `circt-opt` rebuild before test reflected source change. |
 
 ### Attempted But Deferred
 
