@@ -1,5 +1,5 @@
 // RUN: mkdir -p %t
-// RUN: python3 %S/../../utils/formal/write_ws0_baseline_manifest.py --out %t/with-connectivity.json --baseline-id ws0-demo --generated-at 2026-03-01T00:00:00Z --opentitan-root /tmp/opentitan --sv-tests-root /tmp/sv-tests --connectivity-target-manifest /tmp/target.tsv --connectivity-rules-manifest /tmp/rules.tsv --aes-command-timeout-secs 11 --connectivity-command-timeout-secs 22 --bmc-command-timeout-secs 33
+// RUN: python3 %S/../../utils/formal/write_ws0_baseline_manifest.py --out %t/with-connectivity.json --baseline-id ws0-demo --generated-at 2026-03-01T00:00:00Z --opentitan-root /tmp/opentitan --sv-tests-root /tmp/sv-tests --connectivity-target-manifest /tmp/target.tsv --connectivity-rules-manifest /tmp/rules.tsv --aes-command-timeout-secs 11 --connectivity-command-timeout-secs 22 --bmc-command-timeout-secs 33 --aes-expected-returncodes 0 --connectivity-expected-returncodes 0,124 --bmc-expected-returncodes 0,2
 // RUN: FileCheck %s --check-prefix=WITH < %t/with-connectivity.json
 // RUN: python3 %S/../../utils/formal/write_ws0_baseline_manifest.py --out %t/without-connectivity.json --baseline-id ws0-demo2 --generated-at 2026-03-01T00:00:00Z --opentitan-root /tmp/opentitan --sv-tests-root /tmp/sv-tests --aes-env LEC_RUN_SMTLIB=1 --bmc-env TEST_FILTER='^sanity$'
 // RUN: FileCheck %s --check-prefix=WITHOUT < %t/without-connectivity.json
@@ -9,23 +9,31 @@
 // WITH-DAG: "id": "ws0_aes_lec"
 // WITH-DAG: "cwd": "/home/thomas-ahle/circt"
 // WITH-DAG: "timeout_secs": 11
+// WITH-DAG: "expected_returncodes": [
+// WITH-DAG: 0
 // WITH-DAG: "command": "utils/run_opentitan_circt_lec.py --opentitan-root /tmp/opentitan"
 // WITH-DAG: "id": "ws0_connectivity_lec"
 // WITH-DAG: "cwd": "/home/thomas-ahle/circt"
 // WITH-DAG: "timeout_secs": 22
+// WITH-DAG: "expected_returncodes": [
+// WITH-DAG: 124
 // WITH-DAG: "command": "utils/run_opentitan_connectivity_circt_lec.py --target-manifest /tmp/target.tsv --rules-manifest /tmp/rules.tsv --opentitan-root /tmp/opentitan"
 // WITH-DAG: "id": "ws0_sv_tests_bmc"
 // WITH-DAG: "cwd": "/home/thomas-ahle/circt"
 // WITH-DAG: "timeout_secs": 33
+// WITH-DAG: "expected_returncodes": [
+// WITH-DAG: 2
 // WITH-DAG: "command": "utils/run_sv_tests_circt_bmc.sh /tmp/sv-tests"
 //
 // WITHOUT-DAG: "baseline_id": "ws0-demo2"
 // WITHOUT-DAG: "id": "ws0_aes_lec"
 // WITHOUT-DAG: "cwd": "/home/thomas-ahle/circt"
 // WITHOUT-DAG: "timeout_secs": 0
+// WITHOUT-DAG: "expected_returncodes": [
 // WITHOUT-DAG: "command": "env LEC_RUN_SMTLIB=1 utils/run_opentitan_circt_lec.py --opentitan-root /tmp/opentitan"
 // WITHOUT-DAG: "id": "ws0_sv_tests_bmc"
 // WITHOUT-DAG: "cwd": "/home/thomas-ahle/circt"
 // WITHOUT-DAG: "timeout_secs": 0
+// WITHOUT-DAG: "expected_returncodes": [
 // WITHOUT-DAG: "command": "env 'TEST_FILTER=^sanity$' utils/run_sv_tests_circt_bmc.sh /tmp/sv-tests"
 // WITHOUT-NOT: "id": "ws0_connectivity_lec"

@@ -38,6 +38,31 @@ def parse_env_assignments(raw_entries: list[str], lane: str) -> list[str]:
     return assignments
 
 
+def parse_expected_returncodes(raw: str, flag_name: str) -> list[int]:
+    token = raw.strip()
+    if not token:
+        raise SystemExit(f"{flag_name} must be a non-empty comma-separated list")
+    out: list[int] = []
+    seen: set[int] = set()
+    for part in token.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        try:
+            code = int(item)
+        except ValueError as exc:
+            raise SystemExit(
+                f"{flag_name} contains non-integer return code: {item!r}"
+            ) from exc
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+    if not out:
+        raise SystemExit(f"{flag_name} must contain at least one integer code")
+    return out
+
+
 def build_command_with_extras(
     base: list[str], extras: list[str], env_assignments: list[str]
 ) -> str:
@@ -99,6 +124,14 @@ def main() -> int:
         help="Optional per-command timeout (seconds) for AES LEC lane.",
     )
     parser.add_argument(
+        "--aes-expected-returncodes",
+        default="0",
+        help=(
+            "Comma-separated expected return codes for AES LEC lane "
+            "(default: 0)."
+        ),
+    )
+    parser.add_argument(
         "--connectivity-extra",
         action="append",
         default=[],
@@ -115,6 +148,14 @@ def main() -> int:
         type=int,
         default=0,
         help="Optional per-command timeout (seconds) for connectivity LEC lane.",
+    )
+    parser.add_argument(
+        "--connectivity-expected-returncodes",
+        default="0",
+        help=(
+            "Comma-separated expected return codes for connectivity LEC lane "
+            "(default: 0)."
+        ),
     )
     parser.add_argument(
         "--bmc-extra",
@@ -134,6 +175,14 @@ def main() -> int:
         default=0,
         help="Optional per-command timeout (seconds) for sv-tests BMC lane.",
     )
+    parser.add_argument(
+        "--bmc-expected-returncodes",
+        default="0",
+        help=(
+            "Comma-separated expected return codes for sv-tests BMC lane "
+            "(default: 0)."
+        ),
+    )
     args = parser.parse_args()
 
     generated_at = args.generated_at.strip()
@@ -150,6 +199,16 @@ def main() -> int:
     aes_env = parse_env_assignments(args.aes_env, "aes")
     connectivity_env = parse_env_assignments(args.connectivity_env, "connectivity")
     bmc_env = parse_env_assignments(args.bmc_env, "bmc")
+    aes_expected_returncodes = parse_expected_returncodes(
+        args.aes_expected_returncodes, "--aes-expected-returncodes"
+    )
+    connectivity_expected_returncodes = parse_expected_returncodes(
+        args.connectivity_expected_returncodes,
+        "--connectivity-expected-returncodes",
+    )
+    bmc_expected_returncodes = parse_expected_returncodes(
+        args.bmc_expected_returncodes, "--bmc-expected-returncodes"
+    )
     for name, value in (
         ("--aes-command-timeout-secs", args.aes_command_timeout_secs),
         (
@@ -179,6 +238,7 @@ def main() -> int:
                 aes_env,
             ),
             "timeout_secs": args.aes_command_timeout_secs,
+            "expected_returncodes": aes_expected_returncodes,
         }
     )
     if target_manifest and rules_manifest:
@@ -202,6 +262,7 @@ def main() -> int:
                     connectivity_env,
                 ),
                 "timeout_secs": args.connectivity_command_timeout_secs,
+                "expected_returncodes": connectivity_expected_returncodes,
             }
         )
     commands.append(
@@ -219,6 +280,7 @@ def main() -> int:
                 bmc_env,
             ),
             "timeout_secs": args.bmc_command_timeout_secs,
+            "expected_returncodes": bmc_expected_returncodes,
         }
     )
 

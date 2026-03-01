@@ -2,6 +2,36 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0 writer: expected-returncode lane flags + live proof):
+  - realization:
+    - baseline capture now understands `expected_returncodes`, but WS0 manifest
+      generation still required manual JSON edits to set non-zero expected codes
+      for timeout-frontier lanes.
+  - implemented:
+    - `utils/formal/write_ws0_baseline_manifest.py`
+      - added per-lane expected-returncode flags:
+        - `--aes-expected-returncodes`
+        - `--connectivity-expected-returncodes`
+        - `--bmc-expected-returncodes`
+      - manifest now emits `expected_returncodes` for each lane directly from
+        CLI inputs.
+    - tests:
+      - updated:
+        - `test/Tools/formal-ws0-baseline-manifest.test`
+      - added:
+        - `test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test`
+  - validation:
+    - `python3 -m py_compile utils/formal/write_ws0_baseline_manifest.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test`
+      - result: `7/7` pass.
+    - real run:
+      - `out/ws0-baseline-live-20260301-163604`
+      - connectivity lane configured with
+        `--connectivity-expected-returncodes 0,124` and returned `124`
+        under `timeout_secs=45` without failing capture.
+      - AES and sv-tests BMC lanes remained schema-valid PASS.
+
 - Iteration update (WS0: expected return-code contracts in baseline capture):
   - realization:
     - timeout-frontier lanes are often intentionally bounded and may return

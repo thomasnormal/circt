@@ -1,0 +1,4 @@
+// RUN: mkdir -p %t
+// RUN: not python3 %S/../../utils/formal/write_ws0_baseline_manifest.py --out %t/out.json --baseline-id ws0-invalid-rc --opentitan-root /tmp/opentitan --sv-tests-root /tmp/sv-tests --connectivity-expected-returncodes '0,abc' 2>&1 | FileCheck %s
+//
+// CHECK: --connectivity-expected-returncodes contains non-integer return code
