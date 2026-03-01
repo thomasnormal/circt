@@ -92,6 +92,16 @@ except Exception:
                 handle.write(json.dumps(row, sort_keys=True))
                 handle.write("\n")
 
+try:
+    from runner_common import (
+        is_allowlisted as _shared_is_allowlisted,
+        load_allowlist as _shared_load_allowlist,
+    )
+except Exception:
+    _HAS_SHARED_FORMAL_HELPERS = False
+else:
+    _HAS_SHARED_FORMAL_HELPERS = True
+
 
 SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
 
@@ -462,6 +472,20 @@ def is_allowlisted(
         if pattern.search(token):
             return True
     return False
+
+
+if _HAS_SHARED_FORMAL_HELPERS:
+
+    def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
+        return _shared_load_allowlist(path, fail)
+
+    def is_allowlisted(
+        token: str,
+        exact: set[str],
+        prefixes: list[str],
+        regex_rules: list[re.Pattern[str]],
+    ) -> bool:
+        return _shared_is_allowlisted(token, (exact, prefixes, regex_rules))
 
 
 def write_fpv_summary(

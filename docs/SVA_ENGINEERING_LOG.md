@@ -2,6 +2,28 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T1/T2: FPV BMC summary-drift allowlist parsing migrated to shared library):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` still carried local allowlist
+      parser/matcher logic for `--fpv-summary-drift-allowlist-file`, which
+      duplicated `runner_common` behavior already used by other formal runners.
+    - this left drift-governance policy at risk of wrapper-to-wrapper skew
+      (especially invalid-regex diagnostics and mode handling).
+  - implemented:
+    - added optional shared helper import wiring in
+      `utils/run_opentitan_fpv_circt_bmc.py` and switched allowlist loading +
+      matching to `runner_common.load_allowlist` /
+      `runner_common.is_allowlisted` when available.
+    - retained copied-script fallback behavior by preserving local helper
+      definitions when `utils/formal/lib` is unavailable.
+    - added regression:
+      `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-invalid-regex.test`.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-basic.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1-T1/T2: connectivity BMC status-drift helpers migrated to shared library):
   - realization:
     - `run_opentitan_connectivity_circt_bmc.py` still duplicated allowlist

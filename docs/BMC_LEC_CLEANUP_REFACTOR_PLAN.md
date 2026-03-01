@@ -429,6 +429,8 @@ Current workstream status in this branch:
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status
      helpers from `runner_common` with local fallback for copied-runner tests
+   - FPV BMC summary-drift allowlist parsing/matching now consumes shared
+     allowlist helpers from `runner_common` with local fallback for copied-runner tests
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
