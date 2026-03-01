@@ -112,6 +112,11 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `9a51e183f` | `f4e0bd1d3` | [ImportVerilog] Pass library files to slang (#9680) | Applied cleanly. Added local regression `test/Tools/circt-verilog/library-files.test` plus inputs to lock behavior. |
 | `559c7e278` | `11cc66244` | [Datapath] Bug Fix for Sign-Extension Logic when Lowering Partial Products to Booth Arrays (#9726) (#9744) | Applied cleanly; validated with `test/Conversion/DatapathToComb/datapath-to-comb.mlir` after rebuilding `circt-opt`. |
 | `fe2fe29eb` | `73e28e09a` | [CalyxToHW] Fix missing i1-to-clock conversion in convertPipelineOp (#9715) | Applied cleanly; added upstream regression `test/Conversion/CalyxToHW/pipeline-clock.mlir`, required local `circt-opt` rebuild before test reflected source change. |
+| `8b378e94e` | `36828e715` | Fix ambiguous call to ServiceImplRecordOp::create in ESIServices.cpp (#9707) | Applied cleanly; validated via incremental `circt-opt` rebuild including ESI. |
+| `ebc6568fd` | `0e9f82038` | [FIRRTL][LowerLayers] Fix instance input port capture | Applied cleanly; validated with `test/Dialect/FIRRTL/lower-layers.mlir` after rebuild. |
+| `0ba927a2d` | `10fbfc9b1` | [FIRRTL][Reduce] Fix module-port-pruner crash with probe ports (#9694) | Applied cleanly; validated with `test/Dialect/FIRRTL/Reduction/module-port-pruner-probe.mlir` after rebuilding `circt-reduce`. |
+| `a6db148dc` | `a0ddbccf0` | [FIRRTL] Fix domain info updates in cloneWithInsertedPorts (#9758) | Applied cleanly; validated with `test/Dialect/FIRRTL/lower-open-aggs.mlir`. |
+| `6ce0145a0` | `e5d5eb6b0` | [SCFToCalyx] Fix incorrect assert in setResultRegs for scf::IfOp (#9721) | Applied cleanly; validated with full `test/Conversion/SCFToCalyx` suite (8/8). |
 
 ### Attempted But Deferred
 
@@ -129,4 +134,4 @@ by concurrent local edits:
 
 1. `d3ddbe121` after `ImportVerilogInternals.h` is clean.
 2. `17330f8a9` only if we intentionally reconcile fork/join lowering semantics in `Statements.cpp`.
-3. non-ImportVerilog bug-fix candidates in clean files (e.g. Arc/FIRRTL/HW) when local frontend files remain actively edited.
+3. next clean bug-fix candidates in non-dirty subsystems (Arc/HW/FIRRTL) while ImportVerilog core internals remain actively edited locally.
