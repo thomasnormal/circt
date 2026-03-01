@@ -1959,3 +1959,19 @@
 - Realization:
   - A subset of remaining UVM entries are audit-tool artifacts rather than
     runtime gaps; pruning these keeps effort focused on semantic/runtime debt.
+
+### Blog formal evidence refresh: real-world BMC rows (OpenTitan + Ibex)
+- Repro/verification:
+  - OpenTitan AES S-Box BMC (real Z3):
+    - `BOUND=20 CIRCT_TIMEOUT_SECS=300 BMC_ASSUME_KNOWN_INPUTS=1 python3 utils/run_opentitan_circt_bmc.py --opentitan-root ~/opentitan --include-masked --results-file /tmp/opentitan_bmc_all_bound20_known.tsv`
+    - Result: `total=3 pass=3 fail=0 error=0 timeout=0`.
+  - Ibex formal BMC subset:
+    - `BMC_BOUND=20 TIMEOUT=180 utils/run_ibex_formal_circt_bmc.sh /tmp/ibex_formal_bmc_bound20_20260301`
+    - Result: `PASS=5 FAIL=0 ERROR=0 TOTAL=5`.
+- Fix/content update:
+  - Updated `blog_data/blog_post.html` Formal Verification section with a new
+    real-world BMC table and per-row "what it is" descriptions.
+  - Added matching callout bullet summarizing the new BMC results.
+- Realization:
+  - For blog-quality formal claims, publishing concrete result artifacts with
+    stable paths (`/tmp/...results.tsv`) keeps narrative claims auditable.

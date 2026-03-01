@@ -637,9 +637,21 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </table>
 
 <p>
+  Real-world BMC checks are summarized separately below (BMC-only; real RTL with real Z3):
+</p>
+
+<table>
+  <thead><tr><th>Real-World BMC Task</th><th>circt-bmc</th><th>What It Is</th></tr></thead>
+  <tbody>
+    <tr><td>OpenTitan AES S-Box family (<code>aes_sbox_canright*</code>)</td><td>3/3 PASS (UNSAT, bound 20)</td><td>Compares three production AES S-Box implementations (including masked variants) against OpenTitan&rsquo;s LUT reference using an automatically generated miter.</td></tr>
+    <tr><td>Ibex formal core subset</td><td>5/5 PASS (bound 20)</td><td>Runs embedded RTL assertions on five Ibex CPU modules: <code>ibex_decoder</code>, <code>ibex_compressed_decoder</code>, <code>ibex_alu</code>, <code>ibex_load_store_unit</code>, and <code>ibex_cs_registers</code>.</td></tr>
+  </tbody>
+</table>
+
+<p>
   Beyond test suites, the formal tools work on real-world SoC designs.
   We verify modules from Google&rsquo;s <a href="https://opentitan.org/">OpenTitan</a> project (an open-source silicon root of trust) and lowRISC&rsquo;s <a href="https://github.com/lowRISC/ibex">Ibex</a> RISC-V core.
-  For example, <code>circt-bmc</code> can prove that OpenTitan&rsquo;s <code>prim_count</code> (a counter primitive used throughout the SoC) has no assertion violations up to 20 cycles, and <code>circt-lec</code> can verify that Ibex&rsquo;s ALU matches a reference implementation.
+  Current BMC examples include OpenTitan AES S-Box checks (3/3 pass at bound 20) and an Ibex formal module subset (5/5 pass at bound 20), while LEC now closes multiple OpenTitan connectivity and clocking rules with real Z3.
   These aren&rsquo;t toy examples &mdash; OpenTitan is taped out silicon, and Ibex is deployed in production chips.
 </p>
 
@@ -647,6 +659,7 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
   <p><strong>Latest formal status (March 1, 2026):</strong></p>
   <ul>
     <li><strong>BMC:</strong> Third-party suite status remains at 100% on verilator-verification (17/17), yosys SVA (14/14), and sv-tests formal subset (26/26).</li>
+    <li><strong>Real-world BMC:</strong> OpenTitan AES S-Box family is <code>3/3 PASS</code> (UNSAT, bound 20), and Ibex formal core subset is <code>5/5 PASS</code> (bound 20).</li>
     <li><strong>LEC regression harness:</strong> <code>58/58</code> OpenTitan connectivity LEC lit tests are passing after timeout-frontier and batching upgrades.</li>
     <li><strong>OpenTitan real-Z3 frontier set:</strong> historical timeout subset now closes at <code>19/19 PASS</code> (EQ).</li>
     <li><strong>OpenTitan mixed-top fix:</strong> rule <code>analog_sigs.csv:FLASH_TEST_MODE_O</code> now reaches <code>PASS ... EQ</code> with real Z3 (previously a frontend hierarchical-path failure).</li>
