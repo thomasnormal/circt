@@ -2,6 +2,26 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: drift CLI precondition contracts tightened):
+  - realization:
+    - several FPV-BMC drift flags could be passed without prerequisite inputs,
+      then silently no-op:
+      - assertion drift flags without `--assertion-results-baseline-file`
+      - FPV summary drift/fail flags without `--fpv-summary-baseline-file`
+      - FPV summary baseline/drift/fail flags without `--fpv-summary-file`
+  - implemented:
+    - added explicit precondition checks in
+      `utils/run_opentitan_fpv_circt_bmc.py` for those flag groups.
+    - added regressions:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-requires-baseline.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-requires-baseline.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-baseline-requires-summary-file.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-requires-baseline.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-requires-baseline.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-baseline-requires-summary-file.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-auto-capture.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-auto-capture.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-none.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1: auto-capture assertion rows for drift/policy lanes):
   - realization:
     - pairwise `--assertion-results-file` forwarding in

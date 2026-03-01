@@ -1451,6 +1451,42 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     if (
+        args.assertion_results_drift_file
+        or args.assertion_results_drift_allowlist_file
+        or args.assertion_results_drift_row_allowlist_file
+        or args.fail_on_assertion_results_drift
+    ) and not args.assertion_results_baseline_file:
+        fail(
+            "--assertion-results-drift-file/--assertion-results-drift-allowlist-file/"
+            "--assertion-results-drift-row-allowlist-file/"
+            "--fail-on-assertion-results-drift requires "
+            "--assertion-results-baseline-file"
+        )
+    if (
+        args.fpv_summary_drift_file
+        or args.fpv_summary_drift_allowlist_file
+        or args.fpv_summary_drift_row_allowlist_file
+        or args.fail_on_fpv_summary_drift
+    ) and not args.fpv_summary_baseline_file:
+        fail(
+            "--fpv-summary-drift-file/--fpv-summary-drift-allowlist-file/"
+            "--fpv-summary-drift-row-allowlist-file/--fail-on-fpv-summary-drift "
+            "requires --fpv-summary-baseline-file"
+        )
+    if (
+        args.fpv_summary_baseline_file
+        or args.fpv_summary_drift_file
+        or args.fpv_summary_drift_allowlist_file
+        or args.fpv_summary_drift_row_allowlist_file
+        or args.fail_on_fpv_summary_drift
+    ) and not args.fpv_summary_file:
+        fail(
+            "--fpv-summary-baseline-file/--fpv-summary-drift-file/"
+            "--fpv-summary-drift-allowlist-file/"
+            "--fpv-summary-drift-row-allowlist-file/--fail-on-fpv-summary-drift "
+            "requires --fpv-summary-file"
+        )
+    if (
         args.fail_on_assertion_status_policy
         and not args.assertion_status_policy_file
         and not args.assertion_status_policy_task_profile_presets_file
