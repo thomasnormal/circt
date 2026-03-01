@@ -122,6 +122,12 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `7418b8870` | `1f510c056` | [Arc] Add time operations for LLHD simulation support (#9747) | Applied cleanly; validated with `test/Dialect/Arc/allocate-state.mlir`. |
 | `020c44ba7` | `4cd8e5fe6` | [Arc] Lower llhd.current_time to Arc in LowerState (#9756) | Applied cleanly; validated with `test/Dialect/Arc/lower-state.mlir`. |
 | `104735656` | `b2ab3aff0` | [FIRRTL] Dedup: fix non-deduplicatable public module handling (#9702) | Applied with one conflict in `test/Dialect/FIRRTL/dedup.mlir` (kept upstream regression blocks `InstanceChoice` and `PublicModuleNoDedup`); validated with `test/Dialect/FIRRTL/dedup.mlir`. |
+| `f2c10361b` | `0f99432e5` | [Arc] Lower time operations to LLVM IR (#9757) | Applied with repeat conflict in ArcToLLVM files (resolved as in prior attempt); validated with `test/Conversion/ArcToLLVM/lower-arc-to-llvm.mlir`. |
+| `f42b939be` | _local follow-up_ | [ArcToLLVM] Fix LLHD include paths for local layout | Post-pick adaptation for this fork: updated includes to `circt/Dialect/LLHD/IR/LLHDOps.h` and `.../LLHDTypes.h`; revalidated `lower-arc-to-llvm.mlir`. |
+| `a26072814` | `5f7d374a7` | [FIRRTL] Support merging layers in LinkCircuits (#9677) | Applied cleanly; validated with `test/Dialect/FIRRTL/link-layers-errors.mlir` and `test/Dialect/FIRRTL/link-layers.mlir`. |
+| `d69ee847b` | `5ade31e47` | [FIRRTL] Support FInstanceLike operations in ModuleInliner (#9688) | Initially failed due missing prerequisite for multi-referred modules; resolved after picking `#9676`, then validated with `test/Dialect/FIRRTL/inliner.mlir`. |
+| `a78c655bc` | `15f3650af` | [FIRRTL] Change FInstanceLike to consider multiple referred modules (#9676) | Applied with one conflict in `test/Dialect/FIRRTL/dedup.mlir` (kept local `PublicModuleNoDedup` regression and upstream `InstanceChoice` checks); validated with `dedup`, `dedup-errors`, and `inliner` tests. |
+| `fffdc5ba8` | `debd22694` | [FIRRTL] Add conservative IMDCE handling for InstanceChoiceOp (#9710) | First attempt failed without `#9676`; after prerequisite landed, reapplied cleanly and validated with `test/Dialect/FIRRTL/imdce.mlir`. |
 
 ### Attempted But Deferred
 
@@ -132,6 +138,8 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `3e24b7764` | [ImportVerilog] Fix $changed PastOp creation (#9652) | Cherry-pick conflicts with current assertion lowering architecture (`convertAssertionSystemCallArity1` fastpaths intentionally return `{}`; handling moved elsewhere). Aborted to avoid semantic regression; revisit only with full assertion-path audit. |
 | `79369384c` | [ImportVerilog] Make sampled value functions' results usable by Moore ops | Cherry-pick conflicts with current sampled-value lowering and updated `builtins.sv` expectations (our tree uses different lowering path with `moore.past` checks). Aborted pending a targeted semantic audit instead of mechanical porting. |
 | `2fdae8fcf` | [ArcRuntime][VCDTrace] Fix final time step on empty trace buffer (#9554) | Cherry-pick obsolete for this branch: touched `include/circt/Dialect/Arc/Runtime/TraceEncoder.h` and `lib/Dialect/Arc/Runtime/VCDTraceEncoder.cpp`, which are deleted in current `HEAD`. Aborted. |
+| `6542026a9` | [FIRRTL] Improve error messages for domain symbol verification (#9776) | Direct pick does not compile in this fork because it references `DomainCreateOp`, which is not present yet; reverted and deferred as a bundle with `#9774`. |
+| `274eeb55d` | [FIRRTL] Add domain create op (#9774) | Deferred intentionally: broader parser/emitter/infer-domains change set; pick together with `#9776` to avoid intermediate breakage. |
 
 ### Resume Pointer
 
