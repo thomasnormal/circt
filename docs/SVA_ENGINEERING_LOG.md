@@ -12728,3 +12728,42 @@
     semantic guard against regression.
   - interpreted `axi4Lite` still has a separate startup wall-time hotspot
     in repeated `uvm_phase::add` execution at `0 fs`; this remains open.
+
+## 2026-03-01 - FPV BMC drift allowlist dedup + invalid-regex regression closure
+
+- realization:
+  - FPV BMC drift code still repeated optional allowlist existence/load logic
+    in three lanes:
+    - assertion-results drift
+    - grouped assertion-status-policy drift
+    - FPV summary drift
+  - this duplication increases maintenance risk for missing-file/regex handling
+    drift across lanes.
+
+- implemented:
+  - `utils/run_opentitan_fpv_circt_bmc.py`
+    - added shared helper:
+      - `load_optional_allowlist(path_arg, missing_file_prefix)`
+    - migrated all three drift lanes to use this helper for:
+      - path resolution
+      - missing-file hard-fail behavior
+      - allowlist parse handoff.
+  - added missing invalid-regex regressions:
+    - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-allowlist-invalid-regex.test`
+    - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-invalid-regex.test`
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+  - focused lit:
+    - 9-test missing-file + invalid-regex allowlist suite for assertion/grouped/summary lanes
+    - 3-test drift behavior sanity suite:
+      - assertion-results drift auto-capture
+      - grouped-policy drift fail
+      - summary drift fail
+    - all passed.
+
+- follow-up status:
+  - FPV drift allowlist handling is now centralized in one helper.
+  - assertion/grouped lanes now match summary lane coverage for bad-regex
+    parsing failures.

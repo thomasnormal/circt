@@ -104,6 +104,7 @@ else:
 
 
 SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
+Allowlist = tuple[set[str], list[str], list[re.Pattern[str]]]
 
 
 @dataclass(frozen=True)
@@ -472,6 +473,17 @@ def is_allowlisted(
         if pattern.search(token):
             return True
     return False
+
+
+def load_optional_allowlist(
+    path_arg: str, *, missing_file_prefix: str
+) -> tuple[Path | None, Allowlist]:
+    if not path_arg:
+        return None, (set(), [], [])
+    path = Path(path_arg).resolve()
+    if not path.is_file():
+        fail(f"{missing_file_prefix}: {path}")
+    return path, load_allowlist(path)
 
 
 if _HAS_SHARED_FORMAL_HELPERS:
@@ -2667,35 +2679,21 @@ def main() -> int:
             allow_exact: set[str] = set()
             allow_prefix: list[str] = []
             allow_regex: list[re.Pattern[str]] = []
-            assertion_results_drift_allowlist_path: Path | None = None
-            if args.assertion_results_drift_allowlist_file:
-                assertion_results_drift_allowlist_path = Path(
-                    args.assertion_results_drift_allowlist_file
-                ).resolve()
-                if not assertion_results_drift_allowlist_path.is_file():
-                    fail(
-                        "assertion results drift allowlist file not found: "
-                        f"{assertion_results_drift_allowlist_path}"
-                    )
-                allow_exact, allow_prefix, allow_regex = load_allowlist(
-                    assertion_results_drift_allowlist_path
-                )
+            _, (allow_exact, allow_prefix, allow_regex) = load_optional_allowlist(
+                args.assertion_results_drift_allowlist_file,
+                missing_file_prefix="assertion results drift allowlist file not found",
+            )
             row_allow_exact: set[str] = set()
             row_allow_prefix: list[str] = []
             row_allow_regex: list[re.Pattern[str]] = []
-            assertion_results_drift_row_allowlist_path: Path | None = None
-            if args.assertion_results_drift_row_allowlist_file:
-                assertion_results_drift_row_allowlist_path = Path(
-                    args.assertion_results_drift_row_allowlist_file
-                ).resolve()
-                if not assertion_results_drift_row_allowlist_path.is_file():
-                    fail(
-                        "assertion results drift row allowlist file not found: "
-                        f"{assertion_results_drift_row_allowlist_path}"
-                    )
-                row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
-                    assertion_results_drift_row_allowlist_path
+            _, (row_allow_exact, row_allow_prefix, row_allow_regex) = (
+                load_optional_allowlist(
+                    args.assertion_results_drift_row_allowlist_file,
+                    missing_file_prefix=(
+                        "assertion results drift row allowlist file not found"
+                    ),
                 )
+            )
 
             drift_rows: list[tuple[str, str, str, str]] = []
             baseline_keys = set(baseline.keys())
@@ -2865,38 +2863,25 @@ def main() -> int:
                 allow_exact: set[str] = set()
                 allow_prefix: list[str] = []
                 allow_regex: list[re.Pattern[str]] = []
-                grouped_violations_drift_allowlist_path: Path | None = None
-                if args.assertion_status_policy_grouped_violations_drift_allowlist_file:
-                    grouped_violations_drift_allowlist_path = Path(
-                        args.assertion_status_policy_grouped_violations_drift_allowlist_file
-                    ).resolve()
-                    if not grouped_violations_drift_allowlist_path.is_file():
-                        fail(
-                            "assertion status policy grouped violations drift "
-                            f"allowlist file not found: {grouped_violations_drift_allowlist_path}"
-                        )
-                    allow_exact, allow_prefix, allow_regex = load_allowlist(
-                        grouped_violations_drift_allowlist_path
-                    )
+                _, (allow_exact, allow_prefix, allow_regex) = load_optional_allowlist(
+                    args.assertion_status_policy_grouped_violations_drift_allowlist_file,
+                    missing_file_prefix=(
+                        "assertion status policy grouped violations drift "
+                        "allowlist file not found"
+                    ),
+                )
                 row_allow_exact: set[str] = set()
                 row_allow_prefix: list[str] = []
                 row_allow_regex: list[re.Pattern[str]] = []
-                grouped_violations_drift_row_allowlist_path: Path | None = None
-                if (
-                    args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
-                ):
-                    grouped_violations_drift_row_allowlist_path = Path(
-                        args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
-                    ).resolve()
-                    if not grouped_violations_drift_row_allowlist_path.is_file():
-                        fail(
+                _, (row_allow_exact, row_allow_prefix, row_allow_regex) = (
+                    load_optional_allowlist(
+                        args.assertion_status_policy_grouped_violations_drift_row_allowlist_file,
+                        missing_file_prefix=(
                             "assertion status policy grouped violations drift "
-                            "row allowlist file not found: "
-                            f"{grouped_violations_drift_row_allowlist_path}"
-                        )
-                    row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
-                        grouped_violations_drift_row_allowlist_path
+                            "row allowlist file not found"
+                        ),
                     )
+                )
 
                 drift_rows: list[tuple[str, str, str, str, str, str]] = []
                 baseline_keys = set(baseline.keys())
@@ -3056,35 +3041,21 @@ def main() -> int:
                 allow_exact: set[str] = set()
                 allow_prefix: list[str] = []
                 allow_regex: list[re.Pattern[str]] = []
-                fpv_summary_drift_allowlist_path: Path | None = None
-                if args.fpv_summary_drift_allowlist_file:
-                    fpv_summary_drift_allowlist_path = Path(
-                        args.fpv_summary_drift_allowlist_file
-                    ).resolve()
-                    if not fpv_summary_drift_allowlist_path.is_file():
-                        fail(
-                            "fpv summary drift allowlist file not found: "
-                            f"{fpv_summary_drift_allowlist_path}"
-                        )
-                    allow_exact, allow_prefix, allow_regex = load_allowlist(
-                        fpv_summary_drift_allowlist_path
-                    )
+                _, (allow_exact, allow_prefix, allow_regex) = load_optional_allowlist(
+                    args.fpv_summary_drift_allowlist_file,
+                    missing_file_prefix="fpv summary drift allowlist file not found",
+                )
                 row_allow_exact: set[str] = set()
                 row_allow_prefix: list[str] = []
                 row_allow_regex: list[re.Pattern[str]] = []
-                fpv_summary_drift_row_allowlist_path: Path | None = None
-                if args.fpv_summary_drift_row_allowlist_file:
-                    fpv_summary_drift_row_allowlist_path = Path(
-                        args.fpv_summary_drift_row_allowlist_file
-                    ).resolve()
-                    if not fpv_summary_drift_row_allowlist_path.is_file():
-                        fail(
-                            "fpv summary drift row allowlist file not found: "
-                            f"{fpv_summary_drift_row_allowlist_path}"
-                        )
-                    row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
-                        fpv_summary_drift_row_allowlist_path
+                _, (row_allow_exact, row_allow_prefix, row_allow_regex) = (
+                    load_optional_allowlist(
+                        args.fpv_summary_drift_row_allowlist_file,
+                        missing_file_prefix=(
+                            "fpv summary drift row allowlist file not found"
+                        ),
                     )
+                )
 
                 drift_rows: list[tuple[str, str, str, str]] = []
                 baseline_targets = set(baseline.keys())
