@@ -2,6 +2,36 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: pairwise JSONL stage hints from diag context):
+  - realization:
+    - even after log-path routing used diag context, stage inference still
+      depended on `reason_code` text only.
+    - frontend errors with neutral reason text (for example `PARSE_EXPLODED`)
+      were emitted with `stage="result"` despite `CIRCT_VERILOG_ERROR` diag.
+  - TDD repro:
+    - tightened
+      `test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test` frontend
+      failing case to emit stderr `parse exploded` (no `frontend` token).
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test`
+      - result: fail (`error_case` stage assertion; observed `stage="result"`).
+  - implemented:
+    - `utils/formal/lib/formal_results.py`
+      - extended shared case-row JSONL writer with optional
+        `case_stage_by_case_id` override map.
+    - `utils/run_pairwise_circt_bmc.py`
+      - fallback writer gained `case_stage_by_case_id` parity support.
+      - JSONL projection now computes stage hints from diag+reason context:
+        - `CIRCT_VERILOG_*` / `CIRCT_OPT_*` diag -> `frontend`
+        - timeout reason `FRONTEND_COMMAND_TIMEOUT` -> `frontend`
+        - timeout reason `SOLVER_COMMAND_TIMEOUT` -> `solver`
+      - stage hints are passed through shared/fallback JSONL writer path.
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/formal_results.py utils/run_pairwise_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS6: pairwise BMC JSONL log-path routing uses diag+reason context):
   - realization:
     - pairwise JSONL metadata routing used `reason_code` alone to choose

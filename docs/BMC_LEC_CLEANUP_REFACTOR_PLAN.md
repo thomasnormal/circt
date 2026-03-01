@@ -444,6 +444,10 @@ Current workstream status in this branch:
    - pairwise BMC JSONL log-path routing now uses both diag and reason context
      so frontend failure rows with normalized non-stage reasons still point to
      frontend logs (`circt-verilog.log`/`circt-opt.log`) instead of solver logs
+   - shared case-row JSONL writer now supports optional per-case stage hints
+     (`case_stage_by_case_id`), and pairwise BMC now uses diag-derived stage
+     hints to keep frontend error staging correct even when normalized reason
+     text has no stage token
    - OpenTitan AES BMC schema JSONL lane now inherits pairwise metadata parity
      via delegated pairwise runner output
    - sv-tests BMC schema JSONL projection now emits non-null timing/artifact

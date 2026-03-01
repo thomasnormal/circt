@@ -95,6 +95,7 @@ def build_jsonl_rows_from_case_rows(
     *,
     solver: str = "",
     case_metadata_by_case_id: dict[str, FormalCaseMetadata] | None = None,
+    case_stage_by_case_id: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     result_rows: list[dict[str, object]] = []
     for status, case_id, case_path, suite, mode, reason_code in sort_case_rows(rows):
@@ -102,6 +103,7 @@ def build_jsonl_rows_from_case_rows(
         solver_time_ms: int | None = None
         log_path = ""
         artifact_dir = ""
+        stage = ""
         if case_metadata_by_case_id is not None:
             (
                 frontend_time_ms,
@@ -109,6 +111,8 @@ def build_jsonl_rows_from_case_rows(
                 log_path,
                 artifact_dir,
             ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
+        if case_stage_by_case_id is not None:
+            stage = case_stage_by_case_id.get(case_id, "")
         result_rows.append(
             make_result_row(
                 suite=suite,
@@ -117,6 +121,7 @@ def build_jsonl_rows_from_case_rows(
                 case_path=case_path,
                 status=status,
                 reason_code=reason_code,
+                stage=stage,
                 solver=solver,
                 solver_time_ms=solver_time_ms,
                 frontend_time_ms=frontend_time_ms,
@@ -133,6 +138,7 @@ def write_results_jsonl_from_case_rows(
     *,
     solver: str = "",
     case_metadata_by_case_id: dict[str, FormalCaseMetadata] | None = None,
+    case_stage_by_case_id: dict[str, str] | None = None,
 ) -> None:
     write_results_jsonl(
         path,
@@ -140,5 +146,6 @@ def write_results_jsonl_from_case_rows(
             rows,
             solver=solver,
             case_metadata_by_case_id=case_metadata_by_case_id,
+            case_stage_by_case_id=case_stage_by_case_id,
         ),
     )

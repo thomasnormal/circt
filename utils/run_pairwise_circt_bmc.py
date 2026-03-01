@@ -314,6 +314,7 @@ except Exception:
             str, tuple[int | None, int | None, str, str]
         ]
         | None = None,
+        case_stage_by_case_id: dict[str, str] | None = None,
     ) -> None:
         payload_rows: list[dict[str, object]] = []
         for status, case_id, case_path, suite, mode, reason_code in sorted(
@@ -323,6 +324,7 @@ except Exception:
             solver_time_ms: int | None = None
             log_path = ""
             artifact_dir = ""
+            stage = ""
             if case_metadata_by_case_id is not None:
                 (
                     frontend_time_ms,
@@ -330,6 +332,8 @@ except Exception:
                     log_path,
                     artifact_dir,
                 ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
+            if case_stage_by_case_id is not None:
+                stage = case_stage_by_case_id.get(case_id, "")
             payload_rows.append(
                 _make_formal_result_row(
                     suite=suite,
@@ -338,6 +342,7 @@ except Exception:
                     case_path=case_path,
                     status=status,
                     reason_code=reason_code,
+                    stage=stage,
                     solver=solver,
                     solver_time_ms=solver_time_ms,
                     frontend_time_ms=frontend_time_ms,
@@ -3756,6 +3761,7 @@ def main() -> int:
         jsonl_case_metadata_by_case_id: dict[
             str, tuple[int | None, int | None, str, str]
         ] = {}
+        jsonl_case_stage_by_case_id: dict[str, str] = {}
 
         def infer_jsonl_log_path(case_id: str, reason_code: str, diag_code: str) -> str:
             verilog_log, opt_log, solver_log = case_log_paths_by_case_id.get(
@@ -3769,6 +3775,21 @@ def main() -> int:
                 return opt_log
             return solver_log
 
+        def infer_jsonl_stage_hint(
+            status: str, reason_code: str, diag_code: str
+        ) -> str:
+            status_norm = status.strip().upper()
+            reason_norm = reason_code.strip().upper()
+            diag_norm = diag_code.strip().upper()
+            if "CIRCT_VERILOG" in diag_norm or "CIRCT_OPT" in diag_norm:
+                return "frontend"
+            if status_norm == "TIMEOUT":
+                if "FRONTEND_COMMAND_TIMEOUT" in reason_norm:
+                    return "frontend"
+                if "SOLVER_COMMAND_TIMEOUT" in reason_norm:
+                    return "solver"
+            return ""
+
         for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
             if len(row) < 5:
                 continue
@@ -3777,6 +3798,7 @@ def main() -> int:
             reason_code = extract_result_reason_code(row)
             artifact_dir = case_artifact_dir_by_case_id.get(case_id, "")
             log_path = infer_jsonl_log_path(case_id, reason_code, diag_code)
+            stage_hint = infer_jsonl_stage_hint(status, reason_code, diag_code)
             json_case_rows.append(
                 (status, case_id, case_path, suite, mode, reason_code)
             )
@@ -3786,11 +3808,14 @@ def main() -> int:
                 log_path,
                 artifact_dir,
             )
+            if stage_hint:
+                jsonl_case_stage_by_case_id[case_id] = stage_hint
         _write_formal_results_jsonl_from_case_rows(
             results_jsonl_path,
             json_case_rows,
             solver=solver_label,
             case_metadata_by_case_id=jsonl_case_metadata_by_case_id,
+            case_stage_by_case_id=jsonl_case_stage_by_case_id,
         )
 
     if args.drop_remark_cases_file:
