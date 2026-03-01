@@ -183,8 +183,12 @@ void LLHDProcessInterpreter::executeContinuousAssignment(
   // Get the signal being driven
   SignalId targetSigId = getSignalId(driveOp.getSignal());
   if (targetSigId == 0) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  Error: Unknown signal in continuous assignment\n");
+    // Fallback for sub-reference targets (sig.array_get / sig.struct_extract /
+    // sig.extract) that don't have direct signal IDs. Reuse interpretDrive's
+    // read-modify-write handling for these cases.
+    ProcessId evalProcId =
+        activeProcessId != InvalidProcessId ? activeProcessId : 0;
+    (void)interpretDrive(evalProcId, driveOp);
     return;
   }
 
