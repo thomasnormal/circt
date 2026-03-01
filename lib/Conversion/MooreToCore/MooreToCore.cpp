@@ -31284,12 +31284,195 @@ struct StdRandomizeOpConversion : public OpConversionPattern<StdRandomizeOp> {
     ModuleOp mod = op->getParentOfType<ModuleOp>();
 
     auto i32Ty = IntegerType::get(ctx, 32);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    struct StdVarBounds {
+      std::optional<int64_t> lower;
+      std::optional<int64_t> upper;
+      bool isSigned = false;
+    };
+    DenseMap<Value, StdVarBounds> boundsByVariable;
+
+    auto peelCasts = [](Value v) -> Value {
+      while (true) {
+        if (auto zextOp = v.getDefiningOp<ZExtOp>()) {
+          v = zextOp.getInput();
+          continue;
+        }
+        if (auto sextOp = v.getDefiningOp<SExtOp>()) {
+          v = sextOp.getInput();
+          continue;
+        }
+        if (auto truncOp = v.getDefiningOp<TruncOp>()) {
+          v = truncOp.getInput();
+          continue;
+        }
+        if (auto boolCast = v.getDefiningOp<BoolCastOp>()) {
+          v = boolCast.getInput();
+          continue;
+        }
+        if (auto toBool = v.getDefiningOp<ToBuiltinBoolOp>()) {
+          v = toBool.getInput();
+          continue;
+        }
+        break;
+      }
+      return v;
+    };
+
+    auto getRandomizedVar = [&](Value v) -> Value {
+      v = peelCasts(v);
+      if (auto readOp = v.getDefiningOp<ReadOp>())
+        return readOp.getInput();
+      return {};
+    };
+
+    auto getConstInt64 = [&](Value v) -> std::optional<int64_t> {
+      v = peelCasts(v);
+      if (auto constOp = v.getDefiningOp<ConstantOp>()) {
+        FVInt fvVal = constOp.getValue();
+        if (fvVal.hasUnknown())
+          return std::nullopt;
+        return fvVal.getRawValue().getSExtValue();
+      }
+      if (auto negOp = v.getDefiningOp<NegOp>()) {
+        if (auto innerConst = negOp.getInput().getDefiningOp<ConstantOp>()) {
+          FVInt fvVal = innerConst.getValue();
+          if (fvVal.hasUnknown())
+            return std::nullopt;
+          return -fvVal.getRawValue().getSExtValue();
+        }
+      }
+      return std::nullopt;
+    };
+
+    auto updateBounds = [&](Value var, Operation *cmpOp, bool varOnLhs,
+                            int64_t c) {
+      auto &bounds = boundsByVariable[var];
+      if (isa<SgeOp>(cmpOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          if (!bounds.lower || c > *bounds.lower)
+            bounds.lower = c;
+        } else if (!bounds.upper || c < *bounds.upper) {
+          bounds.upper = c;
+        }
+      } else if (isa<SleOp>(cmpOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          if (!bounds.upper || c < *bounds.upper)
+            bounds.upper = c;
+        } else if (!bounds.lower || c > *bounds.lower) {
+          bounds.lower = c;
+        }
+      } else if (isa<SgtOp>(cmpOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          int64_t lo = c + 1;
+          if (!bounds.lower || lo > *bounds.lower)
+            bounds.lower = lo;
+        } else {
+          int64_t hi = c - 1;
+          if (!bounds.upper || hi < *bounds.upper)
+            bounds.upper = hi;
+        }
+      } else if (isa<SltOp>(cmpOp)) {
+        bounds.isSigned = true;
+        if (varOnLhs) {
+          int64_t hi = c - 1;
+          if (!bounds.upper || hi < *bounds.upper)
+            bounds.upper = hi;
+        } else {
+          int64_t lo = c + 1;
+          if (!bounds.lower || lo > *bounds.lower)
+            bounds.lower = lo;
+        }
+      } else if (isa<UgeOp>(cmpOp)) {
+        if (varOnLhs) {
+          if (!bounds.lower || c > *bounds.lower)
+            bounds.lower = c;
+        } else if (!bounds.upper || c < *bounds.upper) {
+          bounds.upper = c;
+        }
+      } else if (isa<UleOp>(cmpOp)) {
+        if (varOnLhs) {
+          if (!bounds.upper || c < *bounds.upper)
+            bounds.upper = c;
+        } else if (!bounds.lower || c > *bounds.lower) {
+          bounds.lower = c;
+        }
+      } else if (isa<UgtOp>(cmpOp)) {
+        if (varOnLhs) {
+          int64_t lo = c + 1;
+          if (!bounds.lower || lo > *bounds.lower)
+            bounds.lower = lo;
+        } else {
+          int64_t hi = c - 1;
+          if (!bounds.upper || hi < *bounds.upper)
+            bounds.upper = hi;
+        }
+      } else if (isa<UltOp>(cmpOp)) {
+        if (varOnLhs) {
+          int64_t hi = c - 1;
+          if (!bounds.upper || hi < *bounds.upper)
+            bounds.upper = hi;
+        } else {
+          int64_t lo = c + 1;
+          if (!bounds.lower || lo > *bounds.lower)
+            bounds.lower = lo;
+        }
+      } else if (isa<EqOp>(cmpOp) || isa<WildcardEqOp>(cmpOp)) {
+        bounds.lower = c;
+        bounds.upper = c;
+      }
+    };
+
+    std::function<void(Value)> collectConstraintExpr;
+    collectConstraintExpr = [&](Value cond) {
+      Operation *defOp = cond.getDefiningOp();
+      if (!defOp)
+        return;
+
+      if (isa<AndOp>(defOp) && defOp->getNumOperands() == 2) {
+        collectConstraintExpr(defOp->getOperand(0));
+        collectConstraintExpr(defOp->getOperand(1));
+        return;
+      }
+
+      if (defOp->getNumOperands() != 2)
+        return;
+
+      Value lhs = defOp->getOperand(0);
+      Value rhs = defOp->getOperand(1);
+      Value var = getRandomizedVar(lhs);
+      auto constVal = getConstInt64(rhs);
+      bool varOnLhs = true;
+      if (!var || !constVal) {
+        var = getRandomizedVar(rhs);
+        constVal = getConstInt64(lhs);
+        varOnLhs = false;
+      }
+      if (!var || !constVal)
+        return;
+
+      updateBounds(var, defOp, varOnLhs, *constVal);
+    };
+
+    if (!op.getInlineConstraints().empty()) {
+      for (auto &constraintOp : op.getInlineConstraints().front().getOperations())
+        if (auto exprOp = dyn_cast<ConstraintExprOp>(constraintOp))
+          collectConstraintExpr(exprOp.getCondition());
+    }
 
     // Get or create runtime function: int __moore_random()
     // Returns a random 32-bit integer.
     auto randomFnTy = LLVM::LLVMFunctionType::get(i32Ty, {});
     auto randomFn =
         getOrCreateRuntimeFunc(mod, rewriter, "__moore_random", randomFnTy);
+    auto rangeFnTy = LLVM::LLVMFunctionType::get(i64Ty, {i64Ty, i64Ty});
+    auto rangeFn = getOrCreateRuntimeFunc(mod, rewriter,
+                                          "__moore_randomize_with_range",
+                                          rangeFnTy);
 
     // For each variable, generate a random value and drive it to the signal.
     for (auto [origVar, convertedVar] :
@@ -31311,33 +31494,74 @@ struct StdRandomizeOpConversion : public OpConversionPattern<StdRandomizeOp> {
       unsigned bitWidth = intTy.getWidth();
       Value randomVal;
 
-      if (bitWidth <= 32) {
-        // Single call is sufficient
-        auto callResult =
-            LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
-                                 SymbolRefAttr::get(randomFn), ValueRange{});
-        randomVal = callResult.getResult();
-        if (bitWidth < 32) {
-          randomVal = arith::TruncIOp::create(rewriter, loc, intTy, randomVal);
+      bool usedRangeConstraint = false;
+      if (auto boundsIt = boundsByVariable.find(origVar);
+          boundsIt != boundsByVariable.end()) {
+        int64_t typeMin = 0;
+        int64_t typeMax = std::numeric_limits<int64_t>::max();
+        if (boundsIt->second.isSigned) {
+          if (bitWidth >= 64) {
+            typeMin = std::numeric_limits<int64_t>::min();
+            typeMax = std::numeric_limits<int64_t>::max();
+          } else {
+            typeMin = -(1LL << (bitWidth - 1));
+            typeMax = (1LL << (bitWidth - 1)) - 1;
+          }
+        } else {
+          typeMin = 0;
+          if (bitWidth < 63)
+            typeMax = (1LL << bitWidth) - 1;
         }
-      } else {
-        // Need multiple calls to fill larger integers
-        unsigned numCalls = (bitWidth + 31) / 32;
-        randomVal = hw::ConstantOp::create(rewriter, loc, intTy, 0);
+        int64_t minValue = boundsIt->second.lower.value_or(typeMin);
+        int64_t maxValue = boundsIt->second.upper.value_or(typeMax);
+        if (minValue <= maxValue) {
+          Value minConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(minValue));
+          Value maxConst = LLVM::ConstantOp::create(
+              rewriter, loc, i64Ty, rewriter.getI64IntegerAttr(maxValue));
+          auto rangeResult = LLVM::CallOp::create(
+              rewriter, loc, TypeRange{i64Ty}, SymbolRefAttr::get(rangeFn),
+              ValueRange{minConst, maxConst});
+          randomVal = rangeResult.getResult();
+          usedRangeConstraint = true;
+        }
+      }
 
-        for (unsigned i = 0; i < numCalls; ++i) {
+      if (!usedRangeConstraint) {
+        if (bitWidth <= 32) {
+          // Single call is sufficient
           auto callResult =
               LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
                                    SymbolRefAttr::get(randomFn), ValueRange{});
-          Value chunk = arith::ExtUIOp::create(rewriter, loc, intTy,
-                                               callResult.getResult());
-          if (i > 0) {
-            auto shiftAmt =
-                hw::ConstantOp::create(rewriter, loc, intTy, i * 32);
-            chunk = comb::ShlOp::create(rewriter, loc, chunk, shiftAmt);
+          randomVal = callResult.getResult();
+          if (bitWidth < 32)
+            randomVal = arith::TruncIOp::create(rewriter, loc, intTy, randomVal);
+        } else {
+        // Need multiple calls to fill larger integers
+          unsigned numCalls = (bitWidth + 31) / 32;
+          randomVal = hw::ConstantOp::create(rewriter, loc, intTy, 0);
+
+          for (unsigned i = 0; i < numCalls; ++i) {
+            auto callResult =
+                LLVM::CallOp::create(rewriter, loc, TypeRange{i32Ty},
+                                     SymbolRefAttr::get(randomFn), ValueRange{});
+            Value chunk = arith::ExtUIOp::create(rewriter, loc, intTy,
+                                                 callResult.getResult());
+            if (i > 0) {
+              auto shiftAmt =
+                  hw::ConstantOp::create(rewriter, loc, intTy, i * 32);
+              chunk = comb::ShlOp::create(rewriter, loc, chunk, shiftAmt);
+            }
+            randomVal = comb::OrOp::create(rewriter, loc, randomVal, chunk);
           }
-          randomVal = comb::OrOp::create(rewriter, loc, randomVal, chunk);
         }
+      }
+
+      if (usedRangeConstraint) {
+        if (bitWidth < 64)
+          randomVal = arith::TruncIOp::create(rewriter, loc, intTy, randomVal);
+        else if (bitWidth > 64)
+          randomVal = arith::ExtUIOp::create(rewriter, loc, intTy, randomVal);
       }
 
       // Create a time delay (0 ns, 0 delta, 1 epsilon) for the drive
