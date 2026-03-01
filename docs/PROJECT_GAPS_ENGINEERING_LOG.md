@@ -1975,3 +1975,13 @@
 - Realization:
   - For blog-quality formal claims, publishing concrete result artifacts with
     stable paths (`/tmp/...results.tsv`) keeps narrative claims auditable.
+
+### Blog formal copy pass: add per-row "what it is" for real-world LEC
+- Update:
+  - Added a `What It Is` column to the OpenTitan real-world LEC table in
+    `blog_data/blog_post.html`.
+  - Added one-sentence descriptions for each listed LEC task, matching the
+    explanatory style already used by the real-world BMC table.
+- Realization:
+  - Parallel BMC/LEC table structure improves readability and avoids ambiguity
+    for non-EDA readers about what each rule/task actually represents.

@@ -628,11 +628,11 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </p>
 
 <table>
-  <thead><tr><th>OpenTitan LEC Task</th><th>circt-lec</th><th>eqy lec</th></tr></thead>
+  <thead><tr><th>OpenTitan LEC Task</th><th>circt-lec</th><th>eqy lec</th><th>What It Is</th></tr></thead>
   <tbody>
-    <tr><td><code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
-    <tr><td><code>analog_sigs.csv:FLASH_TEST_MODE_O</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
-    <tr><td>timeout-frontier triplet: <code>ALERT_HANDLER_LC_CTRL_ESC0_RST</code>, <code>AST_CLK_ES_IN</code>, <code>AST_HISPEED_SEL_IN</code></td><td>3/3 PASS (EQ, real Z3)</td><td>3/3 ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
+    <tr><td><code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td><td>Checks the AES clock-transition connectivity rule from OpenTitan&rsquo;s top-level connectivity spec and proves the compared cones are equivalent.</td></tr>
+    <tr><td><code>analog_sigs.csv:FLASH_TEST_MODE_O</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td><td>Checks the flash test-mode analog signal path rule in the OpenTitan top-level connectivity set and proves equivalence.</td></tr>
+    <tr><td>timeout-frontier triplet: <code>ALERT_HANDLER_LC_CTRL_ESC0_RST</code>, <code>AST_CLK_ES_IN</code>, <code>AST_HISPEED_SEL_IN</code></td><td>3/3 PASS (EQ, real Z3)</td><td>3/3 ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td><td>Three historically timeout-prone OpenTitan connectivity rules used as a stress frontier to track real-Z3 closure.</td></tr>
   </tbody>
 </table>
 
