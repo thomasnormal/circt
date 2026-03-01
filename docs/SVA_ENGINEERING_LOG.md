@@ -12801,3 +12801,23 @@
 - follow-up status:
   - malformed reason-code payloads are now blocked at schema boundaries before
     baseline drift/dashboard aggregation.
+
+## 2026-03-01 - Completed FPV drift row-allowlist invalid-regex regression coverage
+
+- realization:
+  - after adding invalid-regex allowlist tests for FPV target-level drift
+    allowlists, row-level allowlist invalid-regex paths were still uncovered.
+
+- implemented:
+  - added row-level invalid-regex regressions:
+    - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-row-allowlist-invalid-regex.test`
+    - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-invalid-regex.test`
+    - `test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-row-allowlist-invalid-regex.test`
+
+- validation:
+  - `build_test/bin/llvm-lit -sv` on all three new tests
+  - all passed.
+
+- follow-up status:
+  - FPV drift allowlist parsing now has invalid-regex coverage on both
+    target-level and row-level paths across assertion/grouped/summary lanes.

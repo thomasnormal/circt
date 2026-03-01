@@ -441,9 +441,9 @@ Current workstream status in this branch:
    - FPV BMC drift lanes now use shared optional allowlist loading logic to
      de-duplicate missing-file and invalid-regex handling across
      assertion-results, grouped-policy, and FPV-summary drift paths
-   - FPV BMC now has invalid-regex allowlist regressions for
-     assertion-results drift and grouped-policy drift lanes (in addition to the
-     pre-existing FPV-summary invalid-regex coverage)
+   - FPV BMC now has invalid-regex allowlist regressions for all three drift
+     lanes (assertion-results, grouped-policy, FPV-summary) across both
+     target-level and row-level allowlist paths
    - FPV BMC now auto-captures pairwise assertion rows whenever assertion
      drift/policy lanes are requested, avoiding empty-row policy/drift evaluations
    - FPV BMC drift CLI now hard-fails on missing prerequisite baseline/summary
