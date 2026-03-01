@@ -441,6 +441,8 @@ Current workstream status in this branch:
      drift/policy lanes are requested, avoiding empty-row policy/drift evaluations
    - FPV BMC drift CLI now hard-fails on missing prerequisite baseline/summary
      flags (no silent no-op drift lanes)
+   - grouped assertion-status policy drift CLI now enforces baseline
+     prerequisites for all grouped drift flag variants
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

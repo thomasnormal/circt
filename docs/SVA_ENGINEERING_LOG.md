@@ -2,6 +2,28 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: grouped policy-drift CLI baseline preconditions tightened):
+  - realization:
+    - grouped policy drift flags still allowed baseline-less invocations
+      without hard failure:
+      - `--assertion-status-policy-grouped-violations-drift-file`
+      - `--assertion-status-policy-grouped-violations-drift-allowlist-file`
+      - `--assertion-status-policy-grouped-violations-drift-row-allowlist-file`
+    - only `--fail-on-assertion-status-policy-grouped-violations-drift` was
+      guarded previously.
+  - implemented:
+    - expanded grouped drift precondition check in
+      `utils/run_opentitan_fpv_circt_bmc.py` so all grouped drift flags
+      require `--assertion-status-policy-grouped-violations-baseline-file`.
+    - added regressions:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-requires-baseline.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-baseline.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-requires-baseline.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-baseline.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-row-allowlist-missing-file.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS1/WS6: drift CLI precondition contracts tightened):
   - realization:
     - several FPV-BMC drift flags could be passed without prerequisite inputs,

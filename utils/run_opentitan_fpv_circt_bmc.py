@@ -1497,10 +1497,15 @@ def main() -> int:
             "--assertion-status-policy-task-profile-presets-file"
         )
     if (
-        args.fail_on_assertion_status_policy_grouped_violations_drift
-        and not args.assertion_status_policy_grouped_violations_baseline_file
-    ):
+        args.assertion_status_policy_grouped_violations_drift_file
+        or args.assertion_status_policy_grouped_violations_drift_allowlist_file
+        or args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
+        or args.fail_on_assertion_status_policy_grouped_violations_drift
+    ) and not args.assertion_status_policy_grouped_violations_baseline_file:
         fail(
+            "--assertion-status-policy-grouped-violations-drift-file/"
+            "--assertion-status-policy-grouped-violations-drift-allowlist-file/"
+            "--assertion-status-policy-grouped-violations-drift-row-allowlist-file/"
             "--fail-on-assertion-status-policy-grouped-violations-drift requires "
             "--assertion-status-policy-grouped-violations-baseline-file"
         )
