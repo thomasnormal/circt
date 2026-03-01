@@ -801,6 +801,32 @@
     - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-missing-file.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist-missing-file.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-fail.test`
       - result: `8/8` pass.
 
+- Iteration update (WS1-T4: connectivity drift computation dedup to shared helper):
+  - realization:
+    - connectivity BMC and connectivity LEC runners each carried local,
+      near-identical status-drift row computation loops (`missing/new/per-field`)
+      even when shared status summary/drift I/O helpers were already adopted.
+    - this duplicated drift semantics and increased maintenance risk for future
+      drift-kind changes.
+  - implemented:
+    - `utils/run_opentitan_connectivity_circt_bmc.py`:
+      - imported shared `runner_common.compute_status_drift` when available.
+      - added `compute_connectivity_status_drift(...)` adapter:
+        - shared path uses `compute_status_drift`.
+        - local fallback retains existing behavior.
+      - replaced inlined governance drift loops with adapter call.
+    - `utils/run_opentitan_connectivity_circt_lec.py`:
+      - mirrored the same adapter/shared import pattern via
+        `compute_connectivity_lec_status_drift(...)`.
+      - replaced inlined governance drift loops with adapter call.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+      - result: pass.
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-missing-file.test test/Tools/run-opentitan-connectivity-circt-lec-status-summary.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-fail.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist-missing-file.test`
+      - result: `11/11` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

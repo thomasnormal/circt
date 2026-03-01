@@ -452,6 +452,8 @@ Current workstream status in this branch:
      baseline prerequisite (aligns with connectivity BMC drift guardrails)
    - connectivity BMC/LEC status drift allowlist missing-file lanes are now
      explicitly regression-covered
+   - connectivity BMC/LEC drift row computation now consumes shared
+     `runner_common.compute_status_drift` helper (local fallback retained)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

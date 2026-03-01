@@ -35,6 +35,7 @@ if _FORMAL_LIB_DIR.is_dir():
 
 try:
     from runner_common import (
+        compute_status_drift as _shared_compute_status_drift,
         is_allowlisted as _shared_is_allowlisted,
         load_allowlist as _shared_load_allowlist,
         read_status_summary as _shared_read_status_summary,
@@ -299,6 +300,40 @@ def write_connectivity_status_drift(
             writer.writerow(row)
 
 
+def compute_connectivity_status_drift(
+    baseline: dict[str, dict[str, str]],
+    current: dict[str, dict[str, str]],
+    allowlist: tuple[set[str], list[str], list[re.Pattern[str]]],
+) -> tuple[list[tuple[str, str, str, str, str]], list[tuple[str, str, str, str, str]]]:
+    drift_rows: list[tuple[str, str, str, str, str]] = []
+    non_allowlisted_rows: list[tuple[str, str, str, str, str]] = []
+    baseline_rules = set(baseline.keys())
+    current_rules = set(current.keys())
+    allow_exact, allow_prefix, allow_regex = allowlist
+
+    def add_drift(rule_id: str, kind: str, before: str, after: str) -> None:
+        allowlisted = is_allowlisted(rule_id, allow_exact, allow_prefix, allow_regex)
+        row = (rule_id, kind, before, after, "1" if allowlisted else "0")
+        drift_rows.append(row)
+        if not allowlisted:
+            non_allowlisted_rows.append(row)
+
+    for rule_id in sorted(baseline_rules - current_rules):
+        add_drift(rule_id, "missing_in_current", "present", "absent")
+    for rule_id in sorted(current_rules - baseline_rules):
+        add_drift(rule_id, "new_in_current", "absent", "present")
+    for rule_id in sorted(baseline_rules.intersection(current_rules)):
+        before_row = baseline[rule_id]
+        after_row = current[rule_id]
+        for kind in CONNECTIVITY_STATUS_FIELDS:
+            before = before_row.get(kind, "")
+            after = after_row.get(kind, "")
+            if before != after:
+                add_drift(rule_id, kind, before, after)
+
+    return drift_rows, non_allowlisted_rows
+
+
 if _HAS_SHARED_FORMAL_HELPERS:
 
     def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
@@ -331,6 +366,18 @@ if _HAS_SHARED_FORMAL_HELPERS:
         rows: list[tuple[str, str, str, str, str]],
     ) -> None:
         _shared_write_status_drift(path, rows)
+
+    def compute_connectivity_status_drift(
+        baseline: dict[str, dict[str, str]],
+        current: dict[str, dict[str, str]],
+        allowlist: tuple[set[str], list[str], list[re.Pattern[str]]],
+    ) -> tuple[
+        list[tuple[str, str, str, str, str]],
+        list[tuple[str, str, str, str, str]],
+    ]:
+        return _shared_compute_status_drift(
+            baseline, current, CONNECTIVITY_STATUS_FIELDS, allowlist
+        )
 
 
 def append_status_drift_error_row(
@@ -972,30 +1019,11 @@ def main() -> int:
             for rule_id, counts in current_counts.items()
         }
 
-        drift_rows: list[tuple[str, str, str, str, str]] = []
-        non_allowlisted_rows: list[tuple[str, str, str, str, str]] = []
-        baseline_rules = set(baseline.keys())
-        current_rules = set(current.keys())
-
-        def add_drift(rule_id: str, kind: str, before: str, after: str) -> None:
-            allowlisted = is_allowlisted(rule_id, allow_exact, allow_prefix, allow_regex)
-            row = (rule_id, kind, before, after, "1" if allowlisted else "0")
-            drift_rows.append(row)
-            if not allowlisted:
-                non_allowlisted_rows.append(row)
-
-        for rule_id in sorted(baseline_rules - current_rules):
-            add_drift(rule_id, "missing_in_current", "present", "absent")
-        for rule_id in sorted(current_rules - baseline_rules):
-            add_drift(rule_id, "new_in_current", "absent", "present")
-        for rule_id in sorted(baseline_rules.intersection(current_rules)):
-            before_row = baseline[rule_id]
-            after_row = current[rule_id]
-            for kind in CONNECTIVITY_STATUS_FIELDS:
-                before = before_row.get(kind, "")
-                after = after_row.get(kind, "")
-                if before != after:
-                    add_drift(rule_id, kind, before, after)
+        drift_rows, non_allowlisted_rows = compute_connectivity_status_drift(
+            baseline,
+            current,
+            (allow_exact, allow_prefix, allow_regex),
+        )
 
         if status_drift_path is not None:
             write_connectivity_status_drift(status_drift_path, drift_rows)
