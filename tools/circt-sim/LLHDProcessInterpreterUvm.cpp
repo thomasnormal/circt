@@ -1564,11 +1564,34 @@ static bool splitConfigDbKey(llvm::StringRef key, llvm::StringRef &instPattern,
   return true;
 }
 
+static std::string sanitizeConfigDbNameFragment(llvm::StringRef raw,
+                                                bool stripLeadingDots) {
+  constexpr size_t kMaxConfigDbFragmentLen = 4096;
+  std::string sanitized;
+  sanitized.reserve(std::min(raw.size(), kMaxConfigDbFragmentLen));
+
+  for (char ch : raw) {
+    unsigned char byte = static_cast<unsigned char>(ch);
+    if (byte == 0)
+      break;
+    if (byte < 0x20 || byte == 0x7f)
+      continue;
+    sanitized.push_back(static_cast<char>(byte));
+    if (sanitized.size() >= kMaxConfigDbFragmentLen)
+      break;
+  }
+
+  if (stripLeadingDots) {
+    while (!sanitized.empty() && sanitized.front() == '.')
+      sanitized.erase(sanitized.begin());
+  }
+  return sanitized;
+}
+
 std::string LLHDProcessInterpreter::normalizeConfigDbInstName(
     ProcessId procId, InterpretedValue contextValue, llvm::StringRef instName) {
-  std::string resolvedInstName = instName.str();
-  while (!resolvedInstName.empty() && resolvedInstName.front() == '.')
-    resolvedInstName.erase(resolvedInstName.begin());
+  std::string resolvedInstName =
+      sanitizeConfigDbNameFragment(instName, /*stripLeadingDots=*/true);
 
   if (contextValue.isX())
     return resolvedInstName;
@@ -1642,8 +1665,8 @@ std::string LLHDProcessInterpreter::normalizeConfigDbInstName(
         readStringStructAt(contextAddr + kComponentFullNameOff);
   if (contextFullName.empty())
     contextFullName = readStringStructAt(contextAddr + kObjectInstNameOff);
-  while (!contextFullName.empty() && contextFullName.front() == '.')
-    contextFullName.erase(contextFullName.begin());
+  contextFullName =
+      sanitizeConfigDbNameFragment(contextFullName, /*stripLeadingDots=*/true);
 
   if (resolvedInstName.empty())
     return contextFullName;
@@ -1756,9 +1779,7 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
            isMooreStringStructType(argOps[3].getType());
   };
   auto canonicalizeInstName = [](std::string name) {
-    while (!name.empty() && name.front() == '.')
-      name.erase(name.begin());
-    return name;
+    return sanitizeConfigDbNameFragment(name, /*stripLeadingDots=*/true);
   };
   auto composeInstNameForSet = [&](llvm::StringRef cntxtNameRef,
                                    llvm::StringRef rawInstNameRef) {
@@ -1788,7 +1809,8 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       return false;
     std::string str1 = readStr(1);
     std::string str2 = readStr(2);
-    std::string fieldName = readStr(3);
+    std::string fieldName =
+        sanitizeConfigDbNameFragment(readStr(3), /*stripLeadingDots=*/false);
     if (fieldName.empty())
       return false;
 
@@ -1825,7 +1847,8 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
     if (!hasCanonicalGetSignature())
       return false;
     std::string str2 = readStr(2);
-    std::string fieldName = readStr(3);
+    std::string fieldName =
+        sanitizeConfigDbNameFragment(readStr(3), /*stripLeadingDots=*/false);
     if (fieldName.empty())
       return false;
 
@@ -1935,7 +1958,8 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
     if (!hasCanonicalExistsSignature())
       return false;
     std::string str2 = readStr(2);
-    std::string fieldName = readStr(3);
+    std::string fieldName =
+        sanitizeConfigDbNameFragment(readStr(3), /*stripLeadingDots=*/false);
     if (fieldName.empty()) {
       setValue(procId, callIndirectOp.getResult(0),
                InterpretedValue(llvm::APInt(1, 0)));

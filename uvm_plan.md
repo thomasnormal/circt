@@ -21,6 +21,12 @@ reduction must be staged and measurable.
 - [x] Closed current config_db semantic slice:
   - `test/Runtime/uvm/config_db_test.sv`
   - `test/Tools/crun/uvm-config-db-*.sv`
+- [x] Hardened canonical config_db key construction against malformed packed
+  string payload lengths:
+  - runtime now sanitizes config_db key fragments (NUL-terminated semantics +
+    control-byte stripping + bounded fragment length) before key composition.
+  - added regression:
+    - `test/Tools/circt-sim/config-db-canonical-instname-null-terminated.mlir`
 - [x] Re-hardened analysis-interceptor policy after default-on drift:
   - native analysis interceptors are default-off again in both `func.call` and `call_indirect` paths unless explicitly enabled by env.
 - [x] Semantic parity gate slice green:
