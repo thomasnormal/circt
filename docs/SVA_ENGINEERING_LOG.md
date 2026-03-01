@@ -2,6 +2,23 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: FPV BMC parse_nonnegative_int shared-path dedup):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` still used a local
+      `parse_nonnegative_int(...)` despite shared helper availability and broad
+      use of that parser across shard/budget CLI contracts.
+  - implemented:
+    - wired FPV BMC to consume shared
+      `runner_common.parse_nonnegative_int` when shared helpers are available
+      (local fallback retained for copied-script lit environments).
+    - added shared-path regression:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-max-targets-invalid-shared.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-max-targets-invalid-shared.test test/Tools/run-opentitan-fpv-circt-bmc-target-shard-invalid-index.test test/Tools/run-opentitan-fpv-circt-bmc-case-shard-invalid-index.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-shard-invalid-index.test test/Tools/run-opentitan-fpv-circt-bmc-cover-shard-invalid-index.test test/Tools/run-opentitan-fpv-circt-bmc-basic.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1: connectivity BMC parse_nonnegative_int shared-path dedup):
   - realization:
     - `run_opentitan_connectivity_circt_bmc.py` still carried local

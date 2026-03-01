@@ -97,6 +97,7 @@ try:
         is_allowlisted as _shared_is_allowlisted,
         load_allowlist as _shared_load_allowlist,
         load_optional_allowlist as _shared_load_optional_allowlist,
+        parse_nonnegative_int as _shared_parse_nonnegative_int,
     )
 except Exception:
     _HAS_SHARED_FORMAL_HELPERS = False
@@ -493,6 +494,9 @@ def is_allowlisted_token(token: str, allowlist: Allowlist) -> bool:
 
 
 if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_nonnegative_int(raw: str, name: str) -> int:
+        return _shared_parse_nonnegative_int(raw, name, fail)
 
     def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
         return _shared_load_allowlist(path, fail)
