@@ -603,6 +603,17 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
   These aren&rsquo;t toy examples &mdash; OpenTitan is taped out silicon, and Ibex is deployed in production chips.
 </p>
 
+<div class="callout">
+  <p><strong>Latest formal status (March 1, 2026):</strong></p>
+  <ul>
+    <li><strong>BMC:</strong> Third-party suite status remains at 100% on verilator-verification (17/17), yosys SVA (14/14), and sv-tests formal subset (26/26).</li>
+    <li><strong>LEC regression harness:</strong> <code>58/58</code> OpenTitan connectivity LEC lit tests are passing after timeout-frontier and batching upgrades.</li>
+    <li><strong>OpenTitan real-Z3 frontier set:</strong> historical timeout subset now closes at <code>19/19 PASS</code> (EQ).</li>
+    <li><strong>OpenTitan mixed-top fix:</strong> rule <code>analog_sigs.csv:FLASH_TEST_MODE_O</code> now reaches <code>PASS ... EQ</code> with real Z3 (previously a frontend hierarchical-path failure).</li>
+    <li><strong>AES LEC now works:</strong> OpenTitan rule <code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code> was rerun with real Z3 and returns <code>PASS ... EQ</code>.</li>
+  </ul>
+</div>
+
 <h3>sv-tests: How We Compare</h3>
 
 <p>
