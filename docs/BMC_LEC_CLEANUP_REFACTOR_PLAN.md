@@ -444,6 +444,8 @@ Current workstream status in this branch:
      flags (no silent no-op drift lanes)
    - grouped assertion-status policy drift CLI now enforces baseline
      prerequisites for all grouped drift flag variants
+   - assertion-status policy output/fail lanes now enforce policy-source
+     prerequisites (no silent no-op `--assertion-status-policy-*-file` usage)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

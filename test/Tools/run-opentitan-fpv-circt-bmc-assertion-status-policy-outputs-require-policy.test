@@ -1,0 +1,5 @@
+// RUN: not %S/../../utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --assertion-status-policy-violations-file %t/violations.tsv 2>&1 | FileCheck %s
+// RUN: not %S/../../utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --assertion-status-policy-grouped-violations-file %t/grouped.tsv 2>&1 | FileCheck %s
+// RUN: not %S/../../utils/run_opentitan_fpv_circt_bmc.py --compile-contracts %t/contracts.tsv --fail-on-assertion-status-policy 2>&1 | FileCheck %s
+
+// CHECK: --assertion-status-policy-violations-file/--assertion-status-policy-grouped-violations-file/--fail-on-assertion-status-policy requires --assertion-status-policy-file or --assertion-status-policy-task-profile-presets-file

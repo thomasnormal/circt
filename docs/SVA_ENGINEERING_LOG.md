@@ -661,6 +661,31 @@
       - both fail on
         `lib/Conversion/LTLToCore/LTLToCore.cpp` parse/scope errors outside WS3.
 
+- Iteration update (WS1: assertion-status policy output precondition hardening):
+  - realization:
+    - `run_opentitan_fpv_circt_bmc.py` only entered policy evaluation when a
+      policy source file was provided, but output flags
+      (`--assertion-status-policy-violations-file`,
+      `--assertion-status-policy-grouped-violations-file`) could be passed
+      without any policy input and silently no-op.
+  - implemented:
+    - `utils/run_opentitan_fpv_circt_bmc.py`:
+      - added precondition enforcement so:
+        - `--assertion-status-policy-violations-file`,
+        - `--assertion-status-policy-grouped-violations-file`, and
+        - `--fail-on-assertion-status-policy`
+        require `--assertion-status-policy-file` or
+        `--assertion-status-policy-task-profile-presets-file`.
+    - tests:
+      - added
+        `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-outputs-require-policy.test`
+        to lock all three flag lanes.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-outputs-require-policy.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-auto-capture.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-requires-baseline.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-requires-baseline.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

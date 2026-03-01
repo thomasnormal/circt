@@ -1487,11 +1487,13 @@ def main() -> int:
             "requires --fpv-summary-file"
         )
     if (
-        args.fail_on_assertion_status_policy
-        and not args.assertion_status_policy_file
-        and not args.assertion_status_policy_task_profile_presets_file
-    ):
+        args.assertion_status_policy_violations_file
+        or args.assertion_status_policy_grouped_violations_file
+        or args.fail_on_assertion_status_policy
+    ) and not args.assertion_status_policy_file and not args.assertion_status_policy_task_profile_presets_file:
         fail(
+            "--assertion-status-policy-violations-file/"
+            "--assertion-status-policy-grouped-violations-file/"
             "--fail-on-assertion-status-policy requires "
             "--assertion-status-policy-file or "
             "--assertion-status-policy-task-profile-presets-file"
