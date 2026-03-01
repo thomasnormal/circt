@@ -22880,13 +22880,21 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return hopperVal.isX() ? 0 : hopperVal.getUInt64();
   };
 
-  static bool disablePhaseHopperFastPath = []() {
-    const char *env = std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH");
-    return env && env[0] != '\0' && env[0] != '0';
+  static bool enablePhaseHopperFastPath = []() {
+    if (const char *env =
+            std::getenv("CIRCT_SIM_ENABLE_PHASE_HOPPER_FASTPATH"))
+      return env[0] != '\0' && env[0] != '0';
+    // Legacy compatibility: explicit disable knob overrides old default-on
+    // behavior when set.
+    if (const char *env =
+            std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH"))
+      return env[0] == '\0' || env[0] == '0';
+    // Default-off until parity with canonical MLIR path is proven.
+    return false;
   }();
 
   // Native queue fast path for phase hopper task queue operations.
-  if (!disablePhaseHopperFastPath &&
+  if (enablePhaseHopperFastPath &&
       calleeName.ends_with("uvm_phase_hopper::try_put") &&
       callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
     uint64_t hopperAddr = getHopperAddr();
@@ -22918,7 +22926,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  if (!disablePhaseHopperFastPath &&
+  if (enablePhaseHopperFastPath &&
       calleeName.ends_with("uvm_phase_hopper::try_get") &&
       callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
     uint64_t hopperAddr = getHopperAddr();
@@ -22941,7 +22949,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  if (!disablePhaseHopperFastPath &&
+  if (enablePhaseHopperFastPath &&
       calleeName.ends_with("uvm_phase_hopper::try_peek") &&
       callOp.getNumOperands() >= 2 && callOp.getNumResults() >= 1) {
     uint64_t hopperAddr = getHopperAddr();
@@ -22960,7 +22968,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  if (!disablePhaseHopperFastPath &&
+  if (enablePhaseHopperFastPath &&
       calleeName.ends_with("uvm_phase_hopper::peek") &&
       callOp.getNumOperands() >= 2) {
     uint64_t hopperAddr = getHopperAddr();
@@ -22976,7 +22984,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
   }
 
-  if (!disablePhaseHopperFastPath &&
+  if (enablePhaseHopperFastPath &&
       calleeName.ends_with("uvm_phase_hopper::get") &&
       callOp.getNumOperands() >= 2) {
     uint64_t hopperAddr = getHopperAddr();
@@ -24506,13 +24514,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return success();
   }
 
-  // Intercept uvm_phase::raise_objection and drop_objection (and their
-  // phase_hopper variants) to use native objection handles from the
-  // get_objection interceptor above.
+  // Intercept canonical uvm_phase::{raise,drop}_objection calls to use native
+  // objection handles from the get_objection interceptor above.
+  // Do not intercept uvm_phase_hopper wrapper variants here: they can forward
+  // into canonical phase objection calls, and native-counting both layers can
+  // double-account objections.
   if ((calleeName.contains("uvm_phase::raise_objection") ||
-       calleeName.contains("uvm_phase::drop_objection") ||
-       calleeName.contains("phase_hopper::raise_objection") ||
-       calleeName.contains("phase_hopper::drop_objection")) &&
+       calleeName.contains("uvm_phase::drop_objection")) &&
       !calleeName.contains("uvm_objection::")) {
     const bool traceUvmObjection =
         std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
@@ -25114,6 +25122,14 @@ no_uvm_objection_intercept:
               return true;
             return addr <= kMaxCanonicalUserPtr;
           };
+          auto isVirtualOrTaggedPointerValue = [](uint64_t addr) -> bool {
+            constexpr uint64_t kVirtualLo = 0x10000000ULL;
+            constexpr uint64_t kVirtualHi = 0x20000000ULL;
+            constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+            constexpr uint64_t kTaggedHi = 0x100000000ULL;
+            return (addr >= kVirtualLo && addr < kVirtualHi) ||
+                   (addr >= kTaggedLo && addr < kTaggedHi);
+          };
           auto isKnownPointerAddress = [&](uint64_t addr) -> bool {
             if (addr == 0)
               return true;
@@ -25144,6 +25160,19 @@ no_uvm_objection_intercept:
               bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
               ptrLenArgPtr = normalizeNativeCallPointerArg(
                   procId, funcOp.getName(), ptrLenArgPtr);
+              if (ptrLenArgPtr != 0 &&
+                  isVirtualOrTaggedPointerValue(ptrLenArgPtr)) {
+                if (traceNativeCalls) {
+                  llvm::errs()
+                      << "[AOT TRACE] func.call skip unresolved-virtual-ptrlen"
+                      << " name=" << funcOp.getName() << " arg" << i
+                      << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
+                      << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
+                break;
+              }
               bool allowUntrackedPtrLenReporting =
                   isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
                   !isKnownPointerAddress(ptrLenArgPtr) &&
@@ -25195,6 +25224,17 @@ no_uvm_objection_intercept:
               if (hasPointerType || pointerLikeI64ThisArg) {
                 a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                      a[i]);
+                if (a[i] != 0 && isVirtualOrTaggedPointerValue(a[i])) {
+                  if (traceNativeCalls) {
+                    llvm::errs() << "[AOT TRACE] func.call skip unresolved-virtual-pointer"
+                                 << " name=" << funcOp.getName() << " arg" << i
+                                 << "=" << llvm::format_hex(a[i], 16)
+                                 << " active_proc=" << activeProcessId << "\n";
+                  }
+                  canDispatch = false;
+                  fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
+                  break;
+                }
                 if (shouldDemoteUnmappedNullThisPointerCall(
                         funcOp, i, a[i], isUnmappedCall)) {
                   if (traceNativeCalls) {
@@ -25207,8 +25247,8 @@ no_uvm_objection_intercept:
                   fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                   break;
                 }
-                if (isUnmappedCall && isUvmMethodName && hasPointerType &&
-                    a[i] != 0 && !isKnownPointerAddress(a[i])) {
+                if (isUnmappedCall && hasPointerType && a[i] != 0 &&
+                    !isKnownPointerAddress(a[i])) {
                   if (traceNativeCalls) {
                     llvm::errs()
                         << "[AOT TRACE] func.call skip unknown-pointer-typed"
@@ -25686,6 +25726,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
             return true;
           return addr <= kMaxCanonicalUserPtr;
         };
+        auto isVirtualOrTaggedPointerValue = [](uint64_t addr) -> bool {
+          constexpr uint64_t kVirtualLo = 0x10000000ULL;
+          constexpr uint64_t kVirtualHi = 0x20000000ULL;
+          constexpr uint64_t kTaggedLo = 0xF0000000ULL;
+          constexpr uint64_t kTaggedHi = 0x100000000ULL;
+          return (addr >= kVirtualLo && addr < kVirtualHi) ||
+                 (addr >= kTaggedLo && addr < kTaggedHi);
+        };
         auto isKnownPointerAddress = [&](uint64_t addr) -> bool {
           if (addr == 0)
             return true;
@@ -25716,6 +25764,19 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
             bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
             ptrLenArgPtr =
                 normalizeNativeCallPointerArg(procId, funcOp.getName(), ptrLenArgPtr);
+            if (ptrLenArgPtr != 0 &&
+                isVirtualOrTaggedPointerValue(ptrLenArgPtr)) {
+              if (traceNativeCalls) {
+                llvm::errs()
+                    << "[AOT TRACE] func.call skip unresolved-virtual-ptrlen"
+                    << " name=" << funcOp.getName() << " arg" << i
+                    << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
+                    << " active_proc=" << activeProcessId << "\n";
+              }
+              canDispatch = false;
+              fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
+              break;
+            }
             bool allowUntrackedPtrLenReporting =
                 isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
                 !isKnownPointerAddress(ptrLenArgPtr) &&
@@ -25766,6 +25827,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
             if (hasPointerType || pointerLikeI64ThisArg) {
               a[i] = normalizeNativeCallPointerArg(procId, funcOp.getName(),
                                                    a[i]);
+              if (a[i] != 0 && isVirtualOrTaggedPointerValue(a[i])) {
+                if (traceNativeCalls) {
+                  llvm::errs() << "[AOT TRACE] func.call skip unresolved-virtual-pointer"
+                               << " name=" << funcOp.getName() << " arg" << i
+                               << "=" << llvm::format_hex(a[i], 16)
+                               << " active_proc=" << activeProcessId << "\n";
+                }
+                canDispatch = false;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
+                break;
+              }
               if (shouldDemoteUnmappedNullThisPointerCall(
                       funcOp, i, a[i], isUnmappedCall)) {
                 if (traceNativeCalls) {
@@ -25778,11 +25850,11 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                 fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
-              if (isUnmappedCall && isUvmMethodName && hasPointerType &&
-                  a[i] != 0 && !isKnownPointerAddress(a[i])) {
-                if (traceNativeCalls) {
-                  llvm::errs()
-                      << "[AOT TRACE] func.call skip unknown-pointer-typed"
+                if (isUnmappedCall && hasPointerType && a[i] != 0 &&
+                    !isKnownPointerAddress(a[i])) {
+                  if (traceNativeCalls) {
+                    llvm::errs()
+                        << "[AOT TRACE] func.call skip unknown-pointer-typed"
                       << " name=" << funcOp.getName() << " arg" << i
                       << "=" << llvm::format_hex(a[i], 16)
                       << " active_proc=" << activeProcessId << "\n";
@@ -26177,7 +26249,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
 
   if ((funcName.contains("raise_objection") ||
        funcName.contains("drop_objection")) &&
-      (funcName.contains("uvm_phase::") || funcName.contains("uvm_phase_hopper::")) &&
+      funcName.contains("uvm_phase::") &&
       !funcName.contains("uvm_objection::") &&
       !args.empty() && !args[0].isX()) {
     const bool traceUvmObjection =
@@ -31267,6 +31339,23 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
   constexpr uint64_t kVirtualHi = 0x20000000ULL;
 
   uint64_t addr = reinterpret_cast<uint64_t>(ptr);
+  auto isKnownAssocRuntimePointer = [&](uint64_t candidate) -> bool {
+    if (candidate == 0)
+      return false;
+    if (validAssocArrayAddresses.contains(candidate))
+      return true;
+    uint64_t candOffset = 0;
+    if (activeProcessId != 0 &&
+        findMemoryBlockByAddress(candidate, activeProcessId, &candOffset))
+      return true;
+    if (findMemoryBlockByAddress(candidate, static_cast<ProcessId>(-1),
+                                 &candOffset))
+      return true;
+    if (findBlockByAddress(candidate, candOffset))
+      return true;
+    size_t nativeSize = 0;
+    return findNativeMemoryBlockByAddress(candidate, &candOffset, &nativeSize);
+  };
   auto tryResolveAssocSlot = [&](const uint8_t *base, size_t size,
                                  uint64_t slotOffset,
                                  const char *slotClass) -> void * {
@@ -31347,7 +31436,7 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
         pointee >= 0x10000ULL &&
         !(pointee >= 0x10000000ULL && pointee < 0x20000000ULL) &&
         !(pointee >= 0xF0000000ULL && pointee < 0x100000000ULL);
-    if (looksHostPtr) {
+    if (looksHostPtr && isKnownAssocRuntimePointer(pointee)) {
       if (tracePtr) {
         llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
                      << "class=virtual-pointer-slot ptr=" << ptr
@@ -31355,6 +31444,12 @@ void *LLHDProcessInterpreter::normalizeAssocRuntimePointer(const void *ptr) {
                      << "\n";
       }
       return reinterpret_cast<void *>(pointee);
+    }
+    if (tracePtr && looksHostPtr) {
+      llvm::errs() << "[AOT PTR] normalizeAssocRuntimePointer: "
+                   << "class=virtual-pointer-slot-unresolved ptr=" << ptr
+                   << " payload=" << reinterpret_cast<void *>(pointee)
+                   << " (returning null)\n";
     }
   }
 

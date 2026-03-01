@@ -2,6 +2,38 @@
 
 ## 2026-03-01
 
+- Iteration update (UVM phase-hopper objection underflow):
+  - realization:
+    - `test/Runtime/uvm/uvm_simple_test.sv` and
+      `test/Tools/crun/uvm-phase-objection-timeout.sv` regressed with
+      `UVM_FATAL ... OBJTN_ZERO` at time 0.
+    - AVIP `axi4Lite` interpreted probe reproduced the same class first:
+      objection accounting around hopper wrappers was being double-counted in
+      native fast paths/interceptors.
+  - implemented:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - narrowed phase objection interception to canonical
+        `uvm_phase::{raise,drop}_objection` only (excluded
+        `uvm_phase_hopper::*` wrappers).
+      - switched phase-hopper queue fast path to default-off:
+        `CIRCT_SIM_ENABLE_PHASE_HOPPER_FASTPATH` is now opt-in
+        (legacy disable knob still honored).
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      - switched call_indirect phase-hopper queue fast path to default-off
+        with the same opt-in knob.
+  - validation:
+    - failing-first:
+      - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv`
+      - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-phase-objection-timeout.sv`
+      - both failed with `OBJTN_ZERO` before fix.
+    - after fix:
+      - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Tools/crun/uvm-phase-objection-timeout.sv test/Runtime/uvm/uvm_timeout_plusarg_test.sv test/Tools/circt-sim/call-indirect-timeout-cooperative-abort.mlir`
+      - result: pass.
+  - remaining:
+    - AVIP `axi4Lite` now proceeds past objection-underflow failure, but still
+      hits startup `FCTTYP` null-return with a preceding call-indirect depth
+      warning in factory/by-type creation (`create_8074` / `create_by_type`).
+
 - Iteration update (AVIP timeout hang: call_indirect path did not cooperatively
   honor abort):
   - realization:

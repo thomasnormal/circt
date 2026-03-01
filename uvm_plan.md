@@ -39,8 +39,15 @@ reduction must be staged and measurable.
 - [x] Closed call-indirect timeout non-cooperative hang in sim runtime:
   - `interpretFuncCallIndirect` now cooperatively honors abort requests and halts process execution on timeout-driven abort paths.
   - Added regression: `test/Tools/circt-sim/call-indirect-timeout-cooperative-abort.mlir`.
+- [x] Closed phase-hopper objection underflow (`OBJTN_ZERO`) regression:
+  - narrowed objection interception to canonical `uvm_phase::{raise,drop}_objection` paths and removed double-accounting from hopper wrappers.
+  - made phase-hopper queue fast paths opt-in via `CIRCT_SIM_ENABLE_PHASE_HOPPER_FASTPATH`.
+  - semantic gates now green again:
+    - `test/Runtime/uvm/uvm_simple_test.sv`
+    - `test/Tools/crun/uvm-phase-objection-timeout.sv`
 - [ ] Remaining AVIP-critical semantic blocker:
-  - startup/liveness quality: occasional `$finish` grace-expiry / 0-fs completion with 0% activity coverage still needs core runtime closure (no retry dependence).
+  - startup/liveness quality still needs core runtime closure (no retry dependence), with current highest-priority failure:
+    - `axi4Lite` interpreted startup `FCTTYP` null-return (`create_8074`/`create_by_type`) after call-indirect depth warning.
 - [ ] Continue Wave C reduction with parity gates for:
   - phase-hopper intercept family
   - factory/type-resolution intercept family

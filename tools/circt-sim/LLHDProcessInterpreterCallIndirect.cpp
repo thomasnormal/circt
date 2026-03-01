@@ -3431,9 +3431,17 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       dropPhaseObjection(handleIt->second, 1);
     };
 
-    static bool disablePhaseHopperFastPath = []() {
-      const char *env = std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH");
-      return env && env[0] != '\0' && env[0] != '0';
+    static bool enablePhaseHopperFastPath = []() {
+      if (const char *env =
+              std::getenv("CIRCT_SIM_ENABLE_PHASE_HOPPER_FASTPATH"))
+        return env[0] != '\0' && env[0] != '0';
+      // Legacy compatibility: explicit disable knob overrides old default-on
+      // behavior when set.
+      if (const char *env =
+              std::getenv("CIRCT_SIM_DISABLE_PHASE_HOPPER_FASTPATH"))
+        return env[0] == '\0' || env[0] == '0';
+      // Default-off until parity with canonical MLIR path is proven.
+      return false;
     }();
     const bool traceUvmObjection =
         std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION") != nullptr;
@@ -3488,7 +3496,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     }
 
     // Native queue fast path for phase hopper calls dispatched via vtable.
-    if (!disablePhaseHopperFastPath &&
+    if (enablePhaseHopperFastPath &&
         calleeName.ends_with("uvm_phase_hopper::try_put") &&
         args.size() >= 2 && callIndirectOp.getNumResults() >= 1) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
@@ -3526,7 +3534,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       return success();
     }
 
-    if (!disablePhaseHopperFastPath &&
+    if (enablePhaseHopperFastPath &&
         calleeName.ends_with("uvm_phase_hopper::try_get") &&
         args.size() >= 2 && callIndirectOp.getNumResults() >= 1) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
@@ -3549,7 +3557,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    if (!disablePhaseHopperFastPath &&
+    if (enablePhaseHopperFastPath &&
         calleeName.ends_with("uvm_phase_hopper::try_peek") &&
         args.size() >= 2 && callIndirectOp.getNumResults() >= 1) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
@@ -3568,7 +3576,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    if (!disablePhaseHopperFastPath &&
+    if (enablePhaseHopperFastPath &&
         calleeName.ends_with("uvm_phase_hopper::peek") && args.size() >= 2) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       auto it = phaseHopperQueue.find(hopperAddr);
@@ -3582,7 +3590,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    if (!disablePhaseHopperFastPath &&
+    if (enablePhaseHopperFastPath &&
         calleeName.ends_with("uvm_phase_hopper::get") && args.size() >= 2) {
       uint64_t hopperAddr = args[0].isX() ? 0 : args[0].getUInt64();
       auto it = phaseHopperQueue.find(hopperAddr);
