@@ -11457,3 +11457,36 @@
   - implication:
     - connectivity Z3 lane remains WS0 timeout-frontier blocker and needs
       dedicated frontier tuning before full 3-lane reproducibility gate.
+
+## 2026-03-01 - MooreToCore unsigned range extraction fix for randomize()
+
+- realization:
+  - unsigned range constraints that cross the sign bit (example: `bit[7:0] data inside {[8'h10:8'hF0]}`) were being extracted with sign-extended constants in MooreToCore.
+  - this produced bounds `[16, -16]` instead of `[16, 240]`, triggering static infeasible-constraint folding and forcing `randomize()` to return `0`.
+  - impact observed directly in UVM: `uvm_sequence_test.sv` emitted repeated `Randomization failed` before this fix.
+
+- implemented:
+  - `lib/Conversion/MooreToCore/MooreToCore.cpp`
+    - made constant extraction comparator-aware in class-level and inline constraint extraction paths:
+      - signed comparisons (`sge/sle/sgt/slt`) use signed decode.
+      - unsigned/equality paths preserve bit patterns using unsigned decode.
+    - updated helper callsites in:
+      - `extractRangeConstraints(...)`
+      - `extractInlineRangeConstraints(...)`
+
+- tests added:
+  - `test/Tools/circt-sim/constraint-unsigned-range-cross-sign.sv`
+    - proves `randomize()` succeeds and generated value stays in `[8'h10:8'hF0]`.
+    - this test fails on pre-fix builds (`FAIL randomize`) and passes with this patch.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-verilog circt-sim`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/constraint-unsigned-range-cross-sign.sv`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/constraint-compound-range.sv test/Tools/circt-sim/constraint-set-membership.sv test/Runtime/uvm/uvm_simple_test.sv`
+    - all passed
+
+- follow-up status:
+  - this fix removes the randomization failure mode in `test/Runtime/uvm/uvm_sequence_test.sv`.
+  - remaining UVM failures are now dominated by sequence response/progress semantics and independent phase-ordering semantics (`uvm_phase_ordering_semantic_test.sv`).

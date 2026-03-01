@@ -3680,17 +3680,21 @@ static uint64_t getTypeSizeSafe(Type type, ModuleOp mod) {
   if (isa<llhd::TimeType>(type))
     return 16;
 
-  // Handle LLVM struct types recursively to catch nested llhd::TimeType.
+  // Handle LLVM struct types with ABI-aware DataLayout sizing. Summing field
+  // sizes underestimates objects that require padding (e.g. {i32, ptr, ...}),
+  // which can under-allocate class storage and corrupt adjacent memory.
   if (auto structTy = dyn_cast<LLVM::LLVMStructType>(type)) {
-    uint64_t size = 0;
-    for (Type fieldTy : structTy.getBody())
-      size += getTypeSizeSafe(fieldTy, mod);
-    return size;
+    if (structTy.isOpaque())
+      return 0;
+    DataLayout dl(mod);
+    return dl.getTypeSize(type);
   }
 
-  // Handle LLVM array types.
-  if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(type))
-    return arrayTy.getNumElements() * getTypeSizeSafe(arrayTy.getElementType(), mod);
+  // Handle LLVM array types with DataLayout to preserve element alignment.
+  if (auto arrayTy = dyn_cast<LLVM::LLVMArrayType>(type)) {
+    DataLayout dl(mod);
+    return dl.getTypeSize(arrayTy);
+  }
 
   // Some packed HW/value types can still provide a bit width even when they
   // are not directly understood by DataLayout.
@@ -25627,8 +25631,10 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
       return {};
     };
 
-    // Helper: extract a constant int64_t value
-    auto getConstVal = [](Value v) -> std::optional<int64_t> {
+    // Helper: extract a constant int64_t value.
+    // For unsigned comparisons we must preserve the bit pattern (zext),
+    // otherwise values like 8'hF0 become -16 and can invert bounds.
+    auto getConstVal = [](Value v, bool useSigned) -> std::optional<int64_t> {
       // Look through zext/sext/trunc (slang may widen constants)
       if (auto zextOp = v.getDefiningOp<ZExtOp>())
         v = zextOp.getInput();
@@ -25640,7 +25646,10 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         FVInt fvVal = constOp.getValue();
         if (fvVal.hasUnknown())
           return std::nullopt;
-        return fvVal.getRawValue().getSExtValue();
+        APInt raw = fvVal.getRawValue();
+        if (useSigned)
+          return raw.sextOrTrunc(64).getSExtValue();
+        return static_cast<int64_t>(raw.zextOrTrunc(64).getZExtValue());
       }
       // Handle moore.neg(moore.constant N) → -N (slang emits neg for negatives)
       if (auto negOp = v.getDefiningOp<NegOp>()) {
@@ -25648,7 +25657,11 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
           FVInt fvVal = innerConst.getValue();
           if (fvVal.hasUnknown())
             return std::nullopt;
-          return -fvVal.getRawValue().getSExtValue();
+          APInt raw = fvVal.getRawValue();
+          int64_t val = useSigned ? raw.sextOrTrunc(64).getSExtValue()
+                                  : static_cast<int64_t>(
+                                        raw.zextOrTrunc(64).getZExtValue());
+          return -val;
         }
       }
       return std::nullopt;
@@ -25706,13 +25719,16 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         return false;
       Value lhs = defOp->getOperand(0);
       Value rhs = defOp->getOperand(1);
+      bool signedCmp =
+          isa<SgeOp>(defOp) || isa<SleOp>(defOp) || isa<SgtOp>(defOp) ||
+          isa<SltOp>(defOp);
 
       StringRef propName = getPropertyName(lhs);
-      auto constVal = getConstVal(rhs);
+      auto constVal = getConstVal(rhs, signedCmp);
       bool varOnLhs = true;
       if (propName.empty() || !constVal) {
         propName = getPropertyName(rhs);
-        constVal = getConstVal(lhs);
+        constVal = getConstVal(lhs, signedCmp);
         varOnLhs = false;
       }
       if (propName.empty() || !constVal)
@@ -25826,12 +25842,14 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
               return std::nullopt;
             Value lhsV = cmpOp->getOperand(0);
             Value rhsV = cmpOp->getOperand(1);
+            bool cmpSigned = isa<SgeOp>(cmpOp) || isa<SleOp>(cmpOp) ||
+                             isa<SgtOp>(cmpOp) || isa<SltOp>(cmpOp);
             StringRef pName = getPropertyName(lhsV);
-            auto cv = getConstVal(rhsV);
+            auto cv = getConstVal(rhsV, cmpSigned);
             bool varOnLhs = true;
             if (pName.empty() || !cv) {
               pName = getPropertyName(rhsV);
-              cv = getConstVal(lhsV);
+              cv = getConstVal(lhsV, cmpSigned);
               varOnLhs = false;
             }
             if (pName.empty() || !cv)
@@ -25930,10 +25948,10 @@ extractRangeConstraints(ClassDeclOp classDecl, ClassTypeCache &cache,
         Value mLhs = memberOp->getOperand(0);
         Value mRhs = memberOp->getOperand(1);
         StringRef name = getPropertyName(mLhs);
-        auto val = getConstVal(mRhs);
+        auto val = getConstVal(mRhs, /*useSigned=*/false);
         if (name.empty() || !val) {
           name = getPropertyName(mRhs);
-          val = getConstVal(mLhs);
+          val = getConstVal(mLhs, /*useSigned=*/false);
         }
         return {name, val};
       };
@@ -27421,13 +27439,17 @@ extractInlineRangeConstraints(Region &inlineRegion,
     return traceToPropertyName(v);
   };
 
-  // Helper: extract a constant int64_t value from a ConstantOp
-  auto getConstVal = [](Value v) -> std::optional<int64_t> {
+  // Helper: extract a constant int64_t value from a ConstantOp.
+  // Preserve unsigned bit patterns for unsigned comparisons.
+  auto getConstVal = [](Value v, bool useSigned) -> std::optional<int64_t> {
     if (auto constOp = v.getDefiningOp<ConstantOp>()) {
       FVInt fvVal = constOp.getValue();
       if (fvVal.hasUnknown())
         return std::nullopt;
-      return fvVal.getRawValue().getSExtValue();
+      APInt raw = fvVal.getRawValue();
+      if (useSigned)
+        return raw.sextOrTrunc(64).getSExtValue();
+      return static_cast<int64_t>(raw.zextOrTrunc(64).getZExtValue());
     }
     return std::nullopt;
   };
@@ -27548,13 +27570,15 @@ extractInlineRangeConstraints(Region &inlineRegion,
       return false;
     Value lhs = defOp->getOperand(0);
     Value rhs = defOp->getOperand(1);
+    bool signedCmp = isa<SgeOp>(defOp) || isa<SleOp>(defOp) ||
+                     isa<SgtOp>(defOp) || isa<SltOp>(defOp);
 
     StringRef propName = getPropertyName(lhs);
-    auto constVal = getConstVal(rhs);
+    auto constVal = getConstVal(rhs, signedCmp);
     bool varOnLhs = true;
     if (propName.empty() || !constVal) {
       propName = getPropertyName(rhs);
-      constVal = getConstVal(lhs);
+      constVal = getConstVal(lhs, signedCmp);
       varOnLhs = false;
     }
     if (propName.empty() || !constVal)
@@ -27684,10 +27708,10 @@ extractInlineRangeConstraints(Region &inlineRegion,
       Value mLhs = memberOp->getOperand(0);
       Value mRhs = memberOp->getOperand(1);
       StringRef name = getPropertyName(mLhs);
-      auto val = getConstVal(mRhs);
+      auto val = getConstVal(mRhs, /*useSigned=*/false);
       if (name.empty() || !val) {
         name = getPropertyName(mRhs);
-        val = getConstVal(mLhs);
+        val = getConstVal(mLhs, /*useSigned=*/false);
       }
       return {name, val};
     };
