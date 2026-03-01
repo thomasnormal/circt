@@ -3364,6 +3364,10 @@ private:
                  llvm::SmallVector<JitRuntimeIndirectSiteGuardSpec, 2>>
       jitProcessThunkIndirectSiteGuards;
   uint64_t jitRuntimeIndirectNextSiteId = 1;
+  /// Monotonic version for runtime call_indirect profile-shape changes.
+  /// Bumped when decision-relevant fields change (first call, first unresolved
+  /// call, or target-set expansion).
+  uint64_t jitRuntimeIndirectProfileEpoch = 0;
   bool jitRuntimeIndirectProfileEnabled = false;
 
   struct CallIndirectRuntimeOverrideSiteInfo {
@@ -4510,10 +4514,15 @@ private:
   /// CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD_FIDS_UNSAFE=123,456,789). Intended for
   /// targeted performance experiments only.
   std::unordered_set<uint32_t> aotAllowMayYieldFidsUnsafe;
+  struct AotMayYieldUnsafeDecision {
+    bool allowBypass = false;
+    uint64_t profileEpoch = 0;
+  };
   /// Cache of per-FuncId unsafe MAY_YIELD override decisions.
-  /// true => allow unsafe bypass (classified non-suspending by policy scan)
-  /// false => keep normal MAY_YIELD demotion
-  llvm::DenseMap<uint32_t, bool> aotAllowMayYieldUnsafeDecisionCache;
+  /// Entries are valid only while `profileEpoch` matches the current
+  /// `jitRuntimeIndirectProfileEpoch`.
+  llvm::DenseMap<uint32_t, AotMayYieldUnsafeDecision>
+      aotAllowMayYieldUnsafeDecisionCache;
 
   /// Trap FuncId: call __builtin_trap() just before native dispatch for this
   /// FuncId (set via CIRCT_AOT_TRAP_FID=123). Produces a core dump at the exact

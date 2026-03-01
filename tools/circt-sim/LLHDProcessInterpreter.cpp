@@ -43330,8 +43330,9 @@ bool LLHDProcessInterpreter::isUnsafeMayYieldFidBypassAllowed(
     return false;
 
   auto cacheIt = aotAllowMayYieldUnsafeDecisionCache.find(fid);
-  if (cacheIt != aotAllowMayYieldUnsafeDecisionCache.end())
-    return cacheIt->second;
+  if (cacheIt != aotAllowMayYieldUnsafeDecisionCache.end() &&
+      cacheIt->second.profileEpoch == jitRuntimeIndirectProfileEpoch)
+    return cacheIt->second.allowBypass;
 
   bool allowBypass = false;
   llvm::StringRef calleeName;
@@ -43342,7 +43343,8 @@ bool LLHDProcessInterpreter::isUnsafeMayYieldFidBypassAllowed(
       allowBypass =
           !maySuspendInFuncBodyForNativeThunkPolicy(calleeFunc, contextProcId);
   }
-  aotAllowMayYieldUnsafeDecisionCache[fid] = allowBypass;
+  aotAllowMayYieldUnsafeDecisionCache[fid] =
+      AotMayYieldUnsafeDecision{allowBypass, jitRuntimeIndirectProfileEpoch};
 
   static bool traceNativeCalls =
       std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
@@ -43415,6 +43417,22 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
                     "deny uvm_pkg::* and pointer-typed "
                     "get_/set_/create_/m_initialize* (allow others)\n";
   }
+
+  // Runtime call_indirect target-set profiling is used by MAY_YIELD unsafe
+  // override guards and native-thunk eligibility analysis.
+  bool enableRuntimeIndirectProfile =
+      std::getenv("CIRCT_AOT_DISABLE_RUNTIME_INDIRECT_PROFILE") == nullptr;
+  setJitRuntimeIndirectProfileEnabled(enableRuntimeIndirectProfile);
+  if (enableRuntimeIndirectProfile) {
+    llvm::errs() << "[circt-sim] Runtime call_indirect profiling: enabled\n";
+  } else {
+    llvm::errs() << "[circt-sim] Runtime call_indirect profiling: disabled"
+                 << " (CIRCT_AOT_DISABLE_RUNTIME_INDIRECT_PROFILE)\n";
+  }
+  jitRuntimeIndirectSiteProfiles.clear();
+  jitRuntimeIndirectNextSiteId = 1;
+  jitRuntimeIndirectProfileEpoch = 0;
+  jitProcessThunkIndirectSiteGuards.clear();
 
   // Parse deny list: CIRCT_AOT_DENY_FID=123,456,789
   // Denied FuncIds fall back to the interpreter, useful for bisecting crashes.

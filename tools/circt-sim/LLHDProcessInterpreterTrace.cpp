@@ -2178,18 +2178,26 @@ void LLHDProcessInterpreter::noteJitRuntimeIndirectResolvedTarget(
   if (calleeName.empty())
     return;
   auto &site = getOrCreateJitRuntimeIndirectSiteData(procId, callOp);
+  bool profileShapeChanged = site.callsTotal == 0;
   ++site.callsTotal;
   auto [it, inserted] = site.targetCalls.try_emplace(calleeName, 0);
   ++it->second;
-  if (inserted)
+  if (inserted) {
     ++site.targetSetVersion;
+    profileShapeChanged = true;
+  }
+  if (profileShapeChanged)
+    ++jitRuntimeIndirectProfileEpoch;
 }
 
 void LLHDProcessInterpreter::noteJitRuntimeIndirectUnresolved(
     ProcessId procId, mlir::func::CallIndirectOp callOp) {
   auto &site = getOrCreateJitRuntimeIndirectSiteData(procId, callOp);
+  bool profileShapeChanged = site.callsTotal == 0 || site.unresolvedCalls == 0;
   ++site.callsTotal;
   ++site.unresolvedCalls;
+  if (profileShapeChanged)
+    ++jitRuntimeIndirectProfileEpoch;
 }
 
 
