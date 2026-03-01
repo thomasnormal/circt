@@ -431,7 +431,10 @@ Current workstream status in this branch:
    - timeout frontier summary utility landed
      (`summarize_formal_timeout_frontier.py`) with percentile/reason/cumulative
      solver-time reporting from schema JSONL
-   - schema docs + dashboards still pending
+   - schema-only dashboard input aggregator landed
+     (`build_formal_dashboard_inputs.py`) with status/reason/timeout TSV+JSON
+     outputs over multi-file JSONL inputs
+   - schema docs still pending
 
 ## 17. Execution Backlog (Ticket-Level)
 

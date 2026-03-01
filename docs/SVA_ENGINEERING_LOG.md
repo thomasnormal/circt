@@ -2,6 +2,44 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6-T4: schema-only dashboard input builder):
+  - realization:
+    - we had schema validators, drift compare, and timeout summaries, but no
+      single schema-only aggregator that emits stable dashboard-ready tables
+      (status stacks, reason stacks, timeout-frontier case table) across
+      multiple JSONL inputs.
+  - implemented:
+    - added `utils/formal/build_formal_dashboard_inputs.py`:
+      - consumes one or more schema JSONL files via repeated `--jsonl`
+      - emits summary JSON with:
+        - global status/mode/stage counts
+        - suite/mode and suite/mode/status breakdowns
+        - reason-code counts
+        - timeout counts/rate (solver-stage only by default)
+        - solver-time totals and P50/P90/P99
+        - top timeout reasons
+        - top timeout frontier cases by case_id
+      - optional TSV exports:
+        - `--status-tsv`
+        - `--reason-tsv`
+        - `--top-timeout-cases-tsv`
+        - `--top-timeout-reasons-tsv`
+      - supports `--include-nonsolver-timeouts` for mixed-stage timeout
+        analysis.
+    - tests:
+      - added `test/Tools/formal-dashboard-inputs.test` covering:
+        - multi-file aggregation
+        - default solver-only timeout frontier mode
+        - include-nonsolver timeout mode
+        - TSV/JSON consistency checks.
+  - validation:
+    - `python3 -m py_compile utils/formal/build_formal_dashboard_inputs.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs.test`
+      - result: `1/1` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test`
+      - result: `11/11` pass.
+
 - Iteration update (WS6/Timeout Frontier: schema JSONL summarizer utility):
   - realization:
     - timeout frontier analysis in WS6 required repeatable quantification

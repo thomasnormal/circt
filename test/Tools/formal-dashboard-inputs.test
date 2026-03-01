@@ -1,0 +1,53 @@
+// RUN: mkdir -p %t
+// RUN: printf '{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"bmc_pass","case_path":"/tmp/bmc_pass.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":5,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"bmc_fail","case_path":"/tmp/bmc_fail.sv","status":"FAIL","reason_code":"ASSERTION_VIOLATION","stage":"result","solver":"z3","solver_time_ms":7,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"lec_frontier","case_path":"/tmp/lec_frontier.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver","solver":"z3","solver_time_ms":100,"frontend_time_ms":4,"log_path":"","artifact_dir":""}\n' > %t/in-a.jsonl
+// RUN: printf '{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"lec_frontier","case_path":"/tmp/lec_frontier.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":20,"frontend_time_ms":3,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"lec_error","case_path":"/tmp/lec_error.sv","status":"ERROR","reason_code":"LLHD_REF_UNSUPPORTED","stage":"lowering","solver":"z3","solver_time_ms":null,"frontend_time_ms":2,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"CONNECTIVITY_LEC","case_id":"conn_front_timeout","case_path":"/tmp/conn_front_timeout.sv","status":"TIMEOUT","reason_code":"FRONTEND_COMMAND_TIMEOUT","stage":"frontend","solver":"z3","solver_time_ms":0,"frontend_time_ms":200,"log_path":"","artifact_dir":""}\n' > %t/in-b.jsonl
+// RUN: python3 %S/../../utils/formal/build_formal_dashboard_inputs.py --jsonl %t/in-a.jsonl --jsonl %t/in-b.jsonl --summary-json %t/summary-default.json --status-tsv %t/status.tsv --reason-tsv %t/reasons.tsv --top-timeout-cases-tsv %t/timeout-cases-default.tsv --top-timeout-reasons-tsv %t/timeout-reasons-default.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY-DEFAULT < %t/summary-default.json
+// RUN: FileCheck %s --check-prefix=STATUS-TSV < %t/status.tsv
+// RUN: FileCheck %s --check-prefix=REASON-TSV < %t/reasons.tsv
+// RUN: FileCheck %s --check-prefix=TIMEOUT-CASES-DEFAULT < %t/timeout-cases-default.tsv
+// RUN: FileCheck %s --check-prefix=TIMEOUT-REASONS-DEFAULT < %t/timeout-reasons-default.tsv
+// RUN: python3 %S/../../utils/formal/build_formal_dashboard_inputs.py --jsonl %t/in-a.jsonl --jsonl %t/in-b.jsonl --summary-json %t/summary-include-front.json --top-timeout-reasons-tsv %t/timeout-reasons-include-front.tsv --include-nonsolver-timeouts
+// RUN: FileCheck %s --check-prefix=SUMMARY-INCLUDE < %t/summary-include-front.json
+// RUN: FileCheck %s --check-prefix=TIMEOUT-REASONS-INCLUDE < %t/timeout-reasons-include-front.tsv
+//
+// SUMMARY-DEFAULT-DAG: "rows": 6
+// SUMMARY-DEFAULT-DAG: "timeout_rows": 1
+// SUMMARY-DEFAULT-DAG: "solver_time_total_ms": 132
+// SUMMARY-DEFAULT-DAG: "status_counts": {
+// SUMMARY-DEFAULT-DAG: "ERROR": 1
+// SUMMARY-DEFAULT-DAG: "FAIL": 1
+// SUMMARY-DEFAULT-DAG: "PASS": 2
+// SUMMARY-DEFAULT-DAG: "TIMEOUT": 2
+// SUMMARY-DEFAULT-DAG: "mode_counts": {
+// SUMMARY-DEFAULT-DAG: "BMC": 2
+// SUMMARY-DEFAULT-DAG: "CONNECTIVITY_LEC": 1
+// SUMMARY-DEFAULT-DAG: "LEC": 3
+//
+// STATUS-TSV: suite{{[[:space:]]+}}mode{{[[:space:]]+}}status{{[[:space:]]+}}count
+// STATUS-TSV-DAG: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}PASS{{[[:space:]]+}}1
+// STATUS-TSV-DAG: sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}FAIL{{[[:space:]]+}}1
+// STATUS-TSV-DAG: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}PASS{{[[:space:]]+}}1
+// STATUS-TSV-DAG: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}TIMEOUT{{[[:space:]]+}}1
+// STATUS-TSV-DAG: opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}ERROR{{[[:space:]]+}}1
+// STATUS-TSV-DAG: opentitan{{[[:space:]]+}}CONNECTIVITY_LEC{{[[:space:]]+}}TIMEOUT{{[[:space:]]+}}1
+//
+// REASON-TSV: reason_code{{[[:space:]]+}}count
+// REASON-TSV-DAG: ASSERTION_VIOLATION{{[[:space:]]+}}1
+// REASON-TSV-DAG: FRONTEND_COMMAND_TIMEOUT{{[[:space:]]+}}1
+// REASON-TSV-DAG: LLHD_REF_UNSUPPORTED{{[[:space:]]+}}1
+// REASON-TSV-DAG: SOLVER_COMMAND_TIMEOUT{{[[:space:]]+}}1
+//
+// TIMEOUT-CASES-DEFAULT: case_id{{[[:space:]]+}}case_path{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}total_solver_time_ms{{[[:space:]]+}}rows{{[[:space:]]+}}timeout_rows
+// TIMEOUT-CASES-DEFAULT: lec_frontier{{[[:space:]]+}}/tmp/lec_frontier.sv{{[[:space:]]+}}opentitan{{[[:space:]]+}}LEC{{[[:space:]]+}}120{{[[:space:]]+}}2{{[[:space:]]+}}1
+//
+// TIMEOUT-REASONS-DEFAULT: reason_code{{[[:space:]]+}}count
+// TIMEOUT-REASONS-DEFAULT: SOLVER_COMMAND_TIMEOUT{{[[:space:]]+}}1
+//
+// SUMMARY-INCLUDE-DAG: "timeout_rows": 2
+// SUMMARY-INCLUDE-DAG: "reason_code": "FRONTEND_COMMAND_TIMEOUT"
+// SUMMARY-INCLUDE-DAG: "reason_code": "SOLVER_COMMAND_TIMEOUT"
+//
+// TIMEOUT-REASONS-INCLUDE: reason_code{{[[:space:]]+}}count
+// TIMEOUT-REASONS-INCLUDE-DAG: FRONTEND_COMMAND_TIMEOUT{{[[:space:]]+}}1
+// TIMEOUT-REASONS-INCLUDE-DAG: SOLVER_COMMAND_TIMEOUT{{[[:space:]]+}}1
