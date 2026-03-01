@@ -1,0 +1,12 @@
+// RUN: rm -rf %t/repo
+// RUN: mkdir -p %t/repo/lib/Tools/circt-bmc %t/repo/lib/Tools/circt-lec
+// RUN: printf 'void f() {\n  llvm::errs() << "multiple clocks are unsupported";\n  llvm::errs() << "register initial values are not yet supported";\n}\n' > %t/repo/lib/Tools/circt-bmc/Fake.cpp
+// RUN: printf 'void g() {\n  llvm::errs() << "LLHD signal ref path unsupported";\n  llvm::errs() << "aggregate conversion unsupported in lowerer";\n}\n' > %t/repo/lib/Tools/circt-lec/Fake.cpp
+// RUN: python3 %S/../../utils/formal/audit_formal_unsupported.py --repo-root %t/repo --out %t/audit.tsv
+// RUN: FileCheck %s < %t/audit.tsv
+//
+// CHECK: tool{{[[:space:]]+}}file{{[[:space:]]+}}line{{[[:space:]]+}}category{{[[:space:]]+}}workstream{{[[:space:]]+}}message
+// CHECK: bmc{{[[:space:]]+}}lib/Tools/circt-bmc/Fake.cpp{{[[:space:]]+}}2{{[[:space:]]+}}multiclock{{[[:space:]]+}}WS2
+// CHECK: bmc{{[[:space:]]+}}lib/Tools/circt-bmc/Fake.cpp{{[[:space:]]+}}3{{[[:space:]]+}}register_init{{[[:space:]]+}}WS3
+// CHECK: lec{{[[:space:]]+}}lib/Tools/circt-lec/Fake.cpp{{[[:space:]]+}}2{{[[:space:]]+}}llhd_ref_path{{[[:space:]]+}}WS4
+// CHECK: lec{{[[:space:]]+}}lib/Tools/circt-lec/Fake.cpp{{[[:space:]]+}}3{{[[:space:]]+}}llvm_aggregate_conversion{{[[:space:]]+}}WS5

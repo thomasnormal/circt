@@ -1,0 +1,13 @@
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-smoke --generated-at 2026-03-01T00:00:00Z --meta branch=main --meta owner=formal --command suite=sv-tests --command mode=BMC --command command='utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests' --command begin=1 --command suite=opentitan --command mode=LEC --command command='utils/run_opentitan_connectivity_circt_lec.py --results-file out.tsv'
+// RUN: FileCheck %s < %t/manifest.json
+//
+// CHECK-DAG: "baseline_id": "ws0-smoke"
+// CHECK-DAG: "generated_at": "2026-03-01T00:00:00Z"
+// CHECK-DAG: "schema_version": 1
+// CHECK-DAG: "metadata": {
+// CHECK-DAG: "branch": "main"
+// CHECK-DAG: "owner": "formal"
+// CHECK-DAG: "suite": "sv-tests"
+// CHECK-DAG: "mode": "BMC"
+// CHECK-DAG: "suite": "opentitan"
+// CHECK-DAG: "mode": "LEC"

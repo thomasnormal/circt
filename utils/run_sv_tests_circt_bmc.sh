@@ -152,6 +152,7 @@ TAG_REGEX="${TAG_REGEX:-}"
 TEST_FILTER="${TEST_FILTER:-}"
 OUT="${OUT:-$PWD/sv-tests-bmc-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
+FORMAL_RESULTS_JSONL_OUT="${FORMAL_RESULTS_JSONL_OUT:-}"
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
 BMC_ALLOW_EXIT_OUTSIDE_PROGRAM="${BMC_ALLOW_EXIT_OUTSIDE_PROGRAM:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
@@ -420,6 +421,11 @@ trap cleanup EXIT
 
 results_tmp="$tmpdir/results.txt"
 touch "$results_tmp"
+schema_tmp=""
+if [[ -n "$FORMAL_RESULTS_JSONL_OUT" ]]; then
+  schema_tmp="$tmpdir/formal-results-schema.tsv"
+  : > "$schema_tmp"
+fi
 if [[ -n "$BMC_LAUNCH_EVENTS_OUT" ]]; then
   mkdir -p "$(dirname "$BMC_LAUNCH_EVENTS_OUT")"
   : > "$BMC_LAUNCH_EVENTS_OUT"
@@ -477,12 +483,18 @@ emit_result_row() {
   local status="$1"
   local base="$2"
   local sv="$3"
+  local reason="${4:-}"
+  local stage="${5:-result}"
   local tags="${semantic_tags_by_case[$base]-}"
   if [[ -n "$tags" ]]; then
     printf "%s\t%s\t%s\tsv-tests\tBMC\tsemantic_buckets=%s\n" \
       "$status" "$base" "$sv" "$tags" >> "$results_tmp"
   else
     printf "%s\t%s\t%s\n" "$status" "$base" "$sv" >> "$results_tmp"
+  fi
+  if [[ -n "$schema_tmp" ]]; then
+    printf "%s\t%s\t%s\tsv-tests\tBMC\t%s\t%s\n" \
+      "$status" "$base" "$sv" "$reason" "$stage" >> "$schema_tmp"
   fi
 }
 
@@ -1004,7 +1016,16 @@ top_module=${top_module}
         frontend_error_reason="$(classify_frontend_error_reason "$verilog_status" "$verilog_log")"
         error=$((error + 1))
       fi
-      emit_result_row "$result" "$base" "$sv"
+      emit_reason=""
+      emit_stage="result"
+      if [[ "$result" == "TIMEOUT" ]]; then
+        emit_reason="$frontend_timeout_reason"
+        emit_stage="frontend"
+      elif [[ "$result" == "ERROR" ]]; then
+        emit_reason="$frontend_error_reason"
+        emit_stage="frontend"
+      fi
+      emit_result_row "$result" "$base" "$sv" "$emit_reason" "$emit_stage"
       if [[ "$result" == "TIMEOUT" ]]; then
         record_timeout_reason_case "$base" "$sv" "$frontend_timeout_reason"
       elif [[ "$result" == "ERROR" ]]; then
@@ -1387,7 +1408,13 @@ top_module=${top_module}
     esac
   fi
 
-  emit_result_row "$result" "$base" "$sv"
+  emit_reason=""
+  emit_stage="result"
+  if [[ "$result" == "TIMEOUT" ]]; then
+    emit_reason="$bmc_timeout_reason"
+    emit_stage="solver"
+  fi
+  emit_result_row "$result" "$base" "$sv" "$emit_reason" "$emit_stage"
   if [[ "$result" == "TIMEOUT" ]]; then
     record_timeout_reason_case "$base" "$sv" "$bmc_timeout_reason"
   fi
@@ -1402,6 +1429,52 @@ top_module=${top_module}
 done < <(find "$SV_TESTS_DIR/tests" -type f -name "*.sv" -print0)
 
 sort "$results_tmp" > "$OUT"
+if [[ -n "$schema_tmp" ]]; then
+  mkdir -p "$(dirname "$FORMAL_RESULTS_JSONL_OUT")"
+  solver_label=""
+  if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]]; then
+    solver_label="z3"
+  fi
+  python3 - "$schema_tmp" "$FORMAL_RESULTS_JSONL_OUT" "$solver_label" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+schema_tsv = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+solver_label = sys.argv[3].strip()
+rows = []
+for line in schema_tsv.read_text(encoding="utf-8").splitlines():
+    if not line.strip():
+        continue
+    parts = line.split("\t")
+    if len(parts) < 7:
+        continue
+    status, case_id, case_path, suite, mode, reason_code, stage = parts[:7]
+    rows.append(
+        {
+            "schema_version": 1,
+            "suite": suite,
+            "mode": mode,
+            "case_id": case_id,
+            "case_path": case_path,
+            "status": status.strip().upper(),
+            "reason_code": reason_code.strip().upper(),
+            "stage": stage.strip() or "result",
+            "solver": solver_label,
+            "solver_time_ms": None,
+            "frontend_time_ms": None,
+            "log_path": "",
+            "artifact_dir": "",
+        }
+    )
+rows.sort(key=lambda row: (str(row["case_id"]), str(row["status"]), str(row["case_path"])))
+with out_path.open("w", encoding="utf-8") as handle:
+    for row in rows:
+        handle.write(json.dumps(row, sort_keys=True))
+        handle.write("\n")
+PY
+fi
 if [[ -n "$BMC_ABSTRACTION_PROVENANCE_OUT" && -f "$BMC_ABSTRACTION_PROVENANCE_OUT" ]]; then
   sort -u -o "$BMC_ABSTRACTION_PROVENANCE_OUT" "$BMC_ABSTRACTION_PROVENANCE_OUT"
 fi

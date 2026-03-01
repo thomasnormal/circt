@@ -11056,3 +11056,41 @@
       - `[circt-sim] Simulating 2 top modules: Axi4LiteHdlTop, Axi4LiteHvlTop`
       - BFM startup banners from both HDL-side agent BFMs
       - no immediate `cannot get() ...DriverBFM` fatal in the prior time-0 startup window.
+
+## 2026-03-01 - WS0-6 formal schema plumbing + baseline/audit scaffolding
+
+- realization:
+  - We had partial unified-result-schema wiring but no end-to-end regression
+    coverage for JSONL outputs across the three active formal runners.
+  - `run_opentitan_circt_lec.py` had a latent variable-name bug in the JSONL
+    writer path (`run_smtlib`/`smoke_only` typo), and BMC JSONL rows were
+    missing solver attribution.
+
+- implemented:
+  - Shared schema helper module:
+    - `utils/formal/lib/formal_results.py`
+  - Baseline manifest writer:
+    - `utils/formal/write_baseline_manifest.py`
+  - Unsupported diagnostics audit scaffold:
+    - `utils/formal/audit_formal_unsupported.py`
+  - Runner JSONL support:
+    - `utils/run_opentitan_circt_lec.py`
+    - `utils/run_opentitan_connectivity_circt_lec.py`
+    - `utils/run_sv_tests_circt_bmc.sh`
+  - Fixed OpenTitan LEC JSONL solver-label bug and BMC solver labeling for
+    SMTLIB/Z3 runs.
+
+- tests added:
+  - `test/Tools/formal-results-schema.test`
+  - `test/Tools/formal-baseline-manifest.test`
+  - `test/Tools/formal-audit-unsupported.test`
+  - `test/Tools/run-opentitan-lec-results-jsonl-file.test`
+  - `test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+  - `test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+
+- validation:
+  - `build_test/bin/llvm-lit -sv test/Tools/formal-results-schema.test test/Tools/formal-baseline-manifest.test test/Tools/formal-audit-unsupported.test test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+    - `6 passed`.
+  - sanity regression slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-resolved-contracts-file.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-sv-tests-circt-bmc-unknown-timeout.test`
+    - `3 passed`.

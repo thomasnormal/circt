@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -1328,6 +1329,66 @@ except Exception:
 else:
     _HAS_SHARED_FORMAL_HELPERS = True
 
+try:
+    from formal_results import make_result_row as _make_formal_result_row
+    from formal_results import write_results_jsonl as _write_formal_results_jsonl
+except Exception:
+    _HAS_FORMAL_RESULT_SCHEMA = False
+else:
+    _HAS_FORMAL_RESULT_SCHEMA = True
+
+if not _HAS_FORMAL_RESULT_SCHEMA:
+
+    def _make_formal_result_row(
+        *,
+        suite: str,
+        mode: str,
+        case_id: str,
+        case_path: str,
+        status: str,
+        reason_code: str = "",
+        stage: str = "",
+        solver: str = "",
+        solver_time_ms: int | None = None,
+        frontend_time_ms: int | None = None,
+        log_path: str = "",
+        artifact_dir: str = "",
+    ) -> dict[str, object]:
+        status_norm = status.strip().upper()
+        reason_norm = reason_code.strip().upper()
+        if stage.strip():
+            stage_value = stage.strip()
+        elif status_norm == "TIMEOUT" and "FRONTEND" in reason_norm:
+            stage_value = "frontend"
+        elif status_norm == "TIMEOUT":
+            stage_value = "solver"
+        else:
+            stage_value = "result"
+        return {
+            "schema_version": 1,
+            "suite": suite,
+            "mode": mode,
+            "case_id": case_id,
+            "case_path": case_path,
+            "status": status_norm,
+            "reason_code": reason_norm,
+            "stage": stage_value,
+            "solver": solver.strip(),
+            "solver_time_ms": solver_time_ms,
+            "frontend_time_ms": frontend_time_ms,
+            "log_path": log_path,
+            "artifact_dir": artifact_dir,
+        }
+
+    def _write_formal_results_jsonl(
+        path: Path, rows: list[dict[str, object]]
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True))
+                handle.write("\n")
+
 if _HAS_SHARED_FORMAL_HELPERS:
 
     def parse_nonnegative_int(raw: str, name: str) -> int:
@@ -1453,6 +1514,11 @@ def main() -> int:
         "--results-file",
         default=os.environ.get("OUT", ""),
         help="Output results TSV path (default: env OUT).",
+    )
+    parser.add_argument(
+        "--results-jsonl-file",
+        default=os.environ.get("FORMAL_RESULTS_JSONL_OUT", ""),
+        help="Optional output JSONL path for unified formal result schema rows.",
     )
     parser.add_argument(
         "--status-summary-file",
@@ -3593,6 +3659,24 @@ def main() -> int:
         with results_file.open("w", encoding="utf-8") as handle:
             for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
                 handle.write("\t".join(row) + "\n")
+        if args.results_jsonl_file:
+            results_jsonl_path = Path(args.results_jsonl_file).resolve()
+            solver_label = "z3" if lec_run_smtlib and not lec_smoke_only else ""
+            json_rows: list[dict[str, object]] = []
+            for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
+                status, case_id, case_path, suite, mode, reason_code = row
+                json_rows.append(
+                    _make_formal_result_row(
+                        suite=suite,
+                        mode=mode,
+                        case_id=case_id,
+                        case_path=case_path,
+                        status=status,
+                        reason_code=reason_code,
+                        solver=solver_label,
+                    )
+                )
+            _write_formal_results_jsonl(results_jsonl_path, json_rows)
 
         governance_rc = evaluate_status_governance(rows)
 

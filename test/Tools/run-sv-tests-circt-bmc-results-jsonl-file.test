@@ -1,0 +1,24 @@
+// RUN: rm -rf %t/sv-tests
+// RUN: mkdir -p %t/sv-tests/tests %t/bin
+// RUN: printf ':tags: 16.9\n:type: simulation\n:top_module: top\nmodule top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/sv-tests/tests/unknown_case.sv
+// RUN: printf ':tags: 16.9\n:type: simulation\n:top_module: top\nmodule top;\n  logic clk;\n  assert property (@(posedge clk) 1);\nendmodule\n' > %t/sv-tests/tests/timeout_case.sv
+// RUN: printf '#!/bin/sh\necho "module @top {"\necho "  verif.assert %c0_i1"\necho "}"\n' > %t/bin/circt-verilog
+// RUN: chmod +x %t/bin/circt-verilog
+// RUN: printf '#!/bin/sh\nlast=\"\"\nfor a in \"$@\"; do last=\"$a\"; done\ncase \"$last\" in\n  *timeout_case*) exit 124 ;;\n  *) echo \"BMC_RESULT=UNKNOWN\"; exit 0 ;;\nesac\n' > %t/bin/circt-bmc
+// RUN: chmod +x %t/bin/circt-bmc
+// RUN: printf '#!/bin/sh\nexit 0\n' > %t/bin/z3
+// RUN: chmod +x %t/bin/z3
+// RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc Z3_BIN=%t/bin/z3 BMC_SMOKE_ONLY=0 BMC_RUN_SMTLIB=1 TEST_FILTER='unknown_case|timeout_case' OUT=%t/results.tsv FORMAL_RESULTS_JSONL_OUT=%t/results.jsonl %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests
+// RUN: FileCheck %s --check-prefix=JSON < %t/results.jsonl
+//
+// JSON-DAG: "case_id": "timeout_case"
+// JSON-DAG: "reason_code": "SOLVER_COMMAND_TIMEOUT"
+// JSON-DAG: "schema_version": 1
+// JSON-DAG: "solver": "z3"
+// JSON-DAG: "stage": "solver"
+// JSON-DAG: "status": "TIMEOUT"
+// JSON-DAG: "suite": "sv-tests"
+// JSON-DAG: "case_id": "unknown_case"
+// JSON-DAG: "reason_code": ""
+// JSON-DAG: "stage": "result"
+// JSON-DAG: "status": "UNKNOWN"
