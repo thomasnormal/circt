@@ -2,6 +2,26 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: shared formal schema constants de-dup):
+  - realization:
+    - schema enums and required-field lists were duplicated across
+      `validate_formal_results_schema.py` and
+      `build_formal_dashboard_inputs.py`, creating policy drift risk.
+  - implemented:
+    - added shared module
+      `utils/formal/lib/formal_results_schema.py` with:
+      - `REQUIRED_FIELDS`
+      - `ALLOWED_MODES`
+      - `ALLOWED_STATUS`
+      - `ALLOWED_STAGES`
+    - refactored both tools to consume shared constants via `utils/formal/lib`
+      imports.
+  - validation:
+    - `python3 -m py_compile utils/formal/lib/formal_results_schema.py utils/formal/validate_formal_results_schema.py utils/formal/build_formal_dashboard_inputs.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `16/16` pass.
+
 - Iteration update (WS0/WS6: schema validation for expected nonzero lanes):
   - realization:
     - `capture_formal_baseline.py` only ran schema validation for

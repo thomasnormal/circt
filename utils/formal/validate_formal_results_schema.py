@@ -10,39 +10,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, NoReturn
 
+FORMAL_LIB = Path(__file__).resolve().parent / "lib"
+if str(FORMAL_LIB) not in sys.path:
+    sys.path.insert(0, str(FORMAL_LIB))
 
-REQUIRED_FIELDS = (
-    "schema_version",
-    "suite",
-    "mode",
-    "case_id",
-    "case_path",
-    "status",
-    "reason_code",
-    "stage",
-    "solver",
-    "solver_time_ms",
-    "frontend_time_ms",
-    "log_path",
-    "artifact_dir",
+from formal_results_schema import (  # noqa: E402
+    ALLOWED_MODES,
+    ALLOWED_STAGES,
+    ALLOWED_STATUS,
+    REQUIRED_FIELDS,
 )
-
-ALLOWED_MODES = {"BMC", "LEC", "CONNECTIVITY_LEC"}
-ALLOWED_STATUS = {
-    "PASS",
-    "FAIL",
-    "ERROR",
-    "TIMEOUT",
-    "UNKNOWN",
-    "SKIP",
-    "XFAIL",
-    "XPASS",
-}
-ALLOWED_STAGES = {"frontend", "lowering", "solver", "result", "postprocess"}
 
 
 def fail(path: Path, line_no: int, msg: str) -> NoReturn:

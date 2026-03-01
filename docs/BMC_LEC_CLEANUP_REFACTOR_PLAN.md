@@ -400,6 +400,9 @@ Current workstream status in this branch:
    - OpenTitan connectivity LEC lane remains the timeout frontier blocker for full WS0 parity capture
 2. WS1: in progress
    - shared formal schema helper landed
+   - shared formal schema constants module landed for required-field + enum
+     policy (`formal_results_schema.py`) and adopted by schema validator and
+     dashboard aggregator
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
