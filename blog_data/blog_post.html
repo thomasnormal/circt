@@ -607,7 +607,7 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </p>
 
 <table>
-  <thead><tr><th>Suite</th><th>circt-bmc</th><th>circt-lec</th><th>sby bmc</th><th>yosys/eqy lec</th></tr></thead>
+  <thead><tr><th>Suite</th><th>circt-bmc</th><th>circt-lec</th><th>sby bmc</th><th>eqy lec</th></tr></thead>
   <tbody>
     <tr><td>verilator-verification</td><td>17/17 (100%)</td><td>17/17 (100%)</td><td>0/17 (0%)</td><td>&mdash;</td></tr>
     <tr><td>yosys SVA</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>&mdash;</td></tr>
@@ -616,7 +616,7 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </table>
 
 <p>
-  The sby and yosys/eqy columns use open-source yosys (without the commercial Verific frontend).
+  The sby and eqy columns use open-source yosys (without the commercial Verific frontend).
   The yosys SVA suite was designed for yosys&rsquo;s own parser, so sby passes it at 100%.
   But verilator-verification and the sv-tests formal subset use concurrent SVA assertions (<code>assert property @(posedge clk) ...</code>, sequences, deferred immediates) that yosys&rsquo;s built-in parser cannot handle &mdash; it only supports simple immediate assertions like <code>initial assert(expr)</code>.
   circt-bmc handles all of these because it uses <a href="https://github.com/MikePopoloski/slang">slang</a> as its frontend, which has complete IEEE 1800 SystemVerilog support.
@@ -628,11 +628,11 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
 </p>
 
 <table>
-  <thead><tr><th>OpenTitan LEC Task</th><th>circt-lec</th><th>yosys lec</th><th>eqy lec</th></tr></thead>
+  <thead><tr><th>OpenTitan LEC Task</th><th>circt-lec</th><th>eqy lec</th></tr></thead>
   <tbody>
-    <tr><td><code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td><td>ERROR (source read failed from same parse point)</td></tr>
-    <tr><td><code>analog_sigs.csv:FLASH_TEST_MODE_O</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td><td>ERROR (source read failed from same parse point)</td></tr>
-    <tr><td>timeout-frontier triplet: <code>ALERT_HANDLER_LC_CTRL_ESC0_RST</code>, <code>AST_CLK_ES_IN</code>, <code>AST_HISPEED_SEL_IN</code></td><td>3/3 PASS (EQ, real Z3)</td><td>3/3 ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td><td>3/3 ERROR (source read failed from same parse point)</td></tr>
+    <tr><td><code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
+    <tr><td><code>analog_sigs.csv:FLASH_TEST_MODE_O</code></td><td>PASS (EQ, real Z3)</td><td>ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
+    <tr><td>timeout-frontier triplet: <code>ALERT_HANDLER_LC_CTRL_ESC0_RST</code>, <code>AST_CLK_ES_IN</code>, <code>AST_HISPEED_SEL_IN</code></td><td>3/3 PASS (EQ, real Z3)</td><td>3/3 ERROR (source read failed; <code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
   </tbody>
 </table>
 
