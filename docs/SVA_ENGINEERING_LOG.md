@@ -11153,7 +11153,7 @@
     - generates run-to-run drift artifacts (`drift.tsv` + per-command summary JSON)
 
 - tests added:
-  - `test/Tools/formal-results-drift-compare.test`
+  - `test/Tools/formal-drift-compare.test`
     - validates all drift classes and fail-on-status behavior
   - `test/Tools/formal-capture-baseline.test`
     - validates repeated baseline capture
@@ -11163,8 +11163,44 @@
   - syntax:
     - `python3 -m py_compile utils/formal/compare_formal_results_drift.py utils/formal/capture_formal_baseline.py`
   - focused tests:
-    - `build_test/bin/llvm-lit -sv test/Tools/formal-results-drift-compare.test test/Tools/formal-capture-baseline.test`
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-drift-compare.test test/Tools/formal-capture-baseline.test`
     - `2 passed`
   - WS0 toolchain slice:
-    - `build_test/bin/llvm-lit -sv test/Tools/formal-baseline-manifest.test test/Tools/formal-audit-unsupported.test test/Tools/formal-results-drift-compare.test test/Tools/formal-capture-baseline.test`
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-baseline-manifest.test test/Tools/formal-audit-unsupported.test test/Tools/formal-drift-compare.test test/Tools/formal-capture-baseline.test`
     - `4 passed`
+
+## 2026-03-01 - WS0 baseline manifest preset generator
+
+- realization:
+  - We still needed a concrete WS0 command preset that emits all primary lanes
+    (AES LEC, connectivity LEC, sv-tests BMC) in one manifest artifact.
+  - Relying on manual `--command key=value` composition is error-prone when
+    repeatedly running baseline refreshes.
+
+- implemented:
+  - Added:
+    - `utils/formal/write_ws0_baseline_manifest.py`
+  - behavior:
+    - emits canonical WS0 commands for:
+      - `run_opentitan_circt_lec.py`
+      - `run_opentitan_connectivity_circt_lec.py` (when target/rules manifests provided)
+      - `run_sv_tests_circt_bmc.sh`
+    - supports per-lane extra flags:
+      - `--aes-extra`
+      - `--connectivity-extra`
+      - `--bmc-extra`
+    - enforces paired connectivity manifest arguments.
+
+- tests added:
+  - `test/Tools/formal-ws0-baseline-manifest.test`
+    - validates with/without connectivity command emission.
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/formal/write_ws0_baseline_manifest.py`
+  - focused tests:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-capture-baseline.test test/Tools/formal-drift-compare.test`
+    - `3 passed`
+  - WS0 toolchain slice:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-baseline-manifest.test test/Tools/formal-audit-unsupported.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-capture-baseline.test test/Tools/formal-drift-compare.test`
+    - `5 passed`

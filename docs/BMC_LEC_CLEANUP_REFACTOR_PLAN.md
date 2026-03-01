@@ -628,6 +628,7 @@ These are explicit cleanup targets to avoid long-term code rot.
 Execute WS0-T2 plus WS0-T3 immediately:
 
 1. capture frozen baseline manifests for OpenTitan AES LEC, connectivity LEC, and sv-tests BMC
+   - use `write_ws0_baseline_manifest.py` for canonical command presets
 2. run each baseline three times using `capture_formal_baseline.py`
 3. emit drift report from schema rows via `compare_formal_results_drift.py`
 4. block further semantic refactors until baseline drift is understood
