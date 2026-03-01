@@ -60,9 +60,14 @@ reduction must be staged and measurable.
   - sanity gates:
     - `test/Conversion/ImportVerilog/direct-interface-member-access.sv`
     - `test/Conversion/ImportVerilog/nested-interface-signal-access.sv`
+- [x] Added semantic multiqueue sequencer completion gate:
+  - `test/Tools/circt-sim/uvm-sequencer-parallel-multiqueue-item-done-runtime.sv`
+  - validates parallel `wait_for_grant -> send_request -> wait_for_item_done` completion across two sequencers/drivers.
 - [ ] Remaining AVIP-critical semantic blocker:
-  - startup/liveness quality still needs core runtime closure (no retry dependence), with current highest-priority failure:
-    - `axi4Lite` interpreted startup `FCTTYP` null-return (`create_8074`/`create_by_type`) after call-indirect depth warning.
+  - startup/liveness quality still needs core runtime closure (no retry dependence).
+  - `axi4Lite` interpreted run remains nondeterministic across two failure modes:
+    - early startup/liveness timeout at `0 fs` (observed in `uvm_port_base::m_check_relationship` path under wall guard),
+    - later no-event quiescence with live sequencer waiters and `sim_exit=1` despite no UVM fatal/error.
 - [ ] Continue Wave C reduction with parity gates for:
   - phase-hopper intercept family
   - factory/type-resolution intercept family

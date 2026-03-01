@@ -2,6 +2,29 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: auto-capture assertion rows for drift/policy lanes):
+  - realization:
+    - pairwise `--assertion-results-file` forwarding in
+      `run_opentitan_fpv_circt_bmc.py` was gated only by:
+      `--assertion-results-file`, `--fpv-summary-file`, or
+      `--assertion-granular`.
+    - assertion drift/policy flows (`--assertion-results-baseline-file`,
+      `--assertion-status-policy-*`, grouped drift flags, and fail-on drift
+      toggles) could therefore run against empty in-memory assertion rows when
+      users omitted explicit `--assertion-results-file`.
+  - implemented:
+    - introduced `needs_assertion_results` in
+      `utils/run_opentitan_fpv_circt_bmc.py` and now auto-capture pairwise
+      assertion rows whenever any assertion drift/policy lane is requested.
+    - added regressions:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-auto-capture.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-auto-capture.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-auto-capture.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-auto-capture.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-task-profile-presets-fail.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-fail.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-none.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1/WS6: row-allowlist missing-file regressions added for FPV drift lanes):
   - realization:
     - after adding missing-file guards for FPV assertion/grouped drift
@@ -12388,3 +12411,38 @@
   - focused objection/drain semantic runtime regressions are green again.
   - remaining AVIP-critical work stays on deterministic startup/liveness
     semantics (no retry dependence), especially interpreted `axi4Lite`.
+
+## 2026-03-01 - AVIP axi4Lite liveness triage and new multiqueue sequencer semantic gate
+
+- realization:
+  - current interpreted `axi4Lite` AVIP still fails without retries, but failure
+    signatures are now liveness-oriented rather than hard UVM fatal factory
+    startup (`FCTTYP` did not reproduce in this slice):
+    - mode A: global wall guard at `0 fs` during startup path
+      (`uvm_port_base::m_check_relationship` observed in interrupted state),
+    - mode B: later no-event quiescence (example around `1202280000000 fs`)
+      with non-empty sequencer waiter state and `sim_exit=1`.
+  - summary snapshots from failing run include:
+    - `UVM sequencer native state: ... waiters=2 get_waiters=2 ...`
+    - no UVM_FATAL/UVM_ERROR lines in final matrix row.
+
+- implemented (semantic depth):
+  - added a focused runtime semantic test for parallel multi-sequencer completion:
+    - `test/Tools/circt-sim/uvm-sequencer-parallel-multiqueue-item-done-runtime.sv`
+  - this test validates both branches complete:
+    - `wait_for_grant -> send_request -> wait_for_item_done`
+    - across two sequencers/drivers started in parallel.
+
+- validation:
+  - new + adjacent sequencer semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-sequencer-parallel-multiqueue-item-done-runtime.sv`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-sequencer-wait-for-grant-send-request-runtime.sv test/Tools/circt-sim/uvm-sequencer-parallel-multiqueue-item-done-runtime.sv`
+    - both passed.
+  - AVIP repro commands:
+    - `AVIPS=axi4Lite SEEDS=1 CIRCT_SIM_MODE=interpret SIM_RETRIES=0 utils/run_avip_circt_sim.sh`
+    - `AVIPS=axi4Lite SEEDS=1 CIRCT_SIM_MODE=interpret SIM_RETRIES=0 SIM_TIMEOUT=90 SIM_TIMEOUT_GRACE=20 CIRCT_SIM_TRACE_CALL_FILTER=... utils/run_avip_circt_sim.sh`
+    - both remained failing (different liveness modes as above).
+
+- follow-up status:
+  - this narrows the remaining AVIP blocker to deeper startup/liveness semantics
+    not yet covered by existing small sequencer gates.
