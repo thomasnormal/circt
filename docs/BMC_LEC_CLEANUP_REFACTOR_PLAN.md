@@ -437,6 +437,8 @@ Current workstream status in this branch:
      validate file existence before load, closing the same traceback class
    - FPV BMC drift allowlist guardrails are now regression-covered for both
      target-level and row-level allowlist flags across summary/assertion/grouped lanes
+   - FPV BMC now auto-captures pairwise assertion rows whenever assertion
+     drift/policy lanes are requested, avoiding empty-row policy/drift evaluations
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

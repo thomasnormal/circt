@@ -1772,6 +1772,26 @@ def main() -> int:
     drop_reason_files: list[Path] = []
     timeout_reason_files: list[Path] = []
     resolved_contract_files: list[Path] = []
+    needs_assertion_results = (
+        args.assertion_results_file
+        or args.fpv_summary_file
+        or args.assertion_granular
+        or args.assertion_results_baseline_file
+        or args.assertion_results_drift_file
+        or args.assertion_results_drift_allowlist_file
+        or args.assertion_results_drift_row_allowlist_file
+        or args.fail_on_assertion_results_drift
+        or args.assertion_status_policy_file
+        or args.assertion_status_policy_task_profile_presets_file
+        or args.assertion_status_policy_violations_file
+        or args.assertion_status_policy_grouped_violations_file
+        or args.assertion_status_policy_grouped_violations_baseline_file
+        or args.assertion_status_policy_grouped_violations_drift_file
+        or args.assertion_status_policy_grouped_violations_drift_allowlist_file
+        or args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
+        or args.fail_on_assertion_status_policy
+        or args.fail_on_assertion_status_policy_grouped_violations_drift
+    )
 
     def merge_plain_files(sources: list[Path], dest: str) -> None:
         if not dest:
@@ -2014,11 +2034,7 @@ def main() -> int:
                     )
                     resolved_contract_files.append(group_resolved_contracts)
                     cmd += ["--resolved-contracts-file", str(group_resolved_contracts)]
-                if (
-                    args.assertion_results_file
-                    or args.fpv_summary_file
-                    or args.assertion_granular
-                ):
+                if needs_assertion_results:
                     group_assertion_results = (
                         workdir / f"pairwise-assertion-results-{group_index}.tsv"
                     )
