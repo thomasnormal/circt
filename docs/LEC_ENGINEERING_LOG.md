@@ -994,17 +994,23 @@
     - hardened precheck gating to require at least two cases, avoiding invalid
       singleton aggregate wrapper generation even if
       `LEC_BATCH_PRECHECK_MIN_CASES` is set to `1`.
+    - lowered default `LEC_BATCH_PRECHECK_MIN_CASES` from `4` to `2` to enable
+      fast-pass precheck on common two-rule OpenTitan CSV groups.
 
 - regressions:
   - added
     `test/Tools/run-opentitan-connectivity-circt-lec-batch-precheck-timeout-split.test`
     - reproduces a first precheck timeout and verifies the runner splits and
       resolves via smaller prechecks without per-case `circt-lec` invocations.
+  - added
+    `test/Tools/run-opentitan-connectivity-circt-lec-batch-precheck-default-min-cases.test`
+    - proves default precheck minimum admits two-case batches (no explicit
+      `LEC_BATCH_PRECHECK_MIN_CASES` override).
 
 - validation:
   - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
   - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`
-    (`54/54` pass).
+    (`55/55` pass).
   - real OpenTitan Z3 rerun for historical failing set
     (`ast_mem_cfg`, selected `clkmgr_cg_en`, selected `rstmgr_rst_en`)
     with:
@@ -1019,3 +1025,11 @@
       - `batch=0` (`11` `ast_mem_cfg` rules)
       - `batch=2` (`6` `rstmgr_rst_en` rules)
     - previously problematic `clkmgr_cg_en` pair now both `PASS ... EQ`.
+  - targeted timing comparison for the `clkmgr_cg_en` two-rule pair:
+    - `LEC_BATCH_PRECHECK_MIN_CASES=2`:
+      - `batch precheck PASS (batch=0, cases=2)`
+      - wall time `ELAPSED=146s`
+    - `LEC_BATCH_PRECHECK_MIN_CASES=4`:
+      - no precheck (per-case solver path)
+      - wall time `ELAPSED=314s`
+    - confirms ~2.15x speedup for this frontier by enabling two-case precheck.

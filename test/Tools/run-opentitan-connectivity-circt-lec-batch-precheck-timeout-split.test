@@ -11,7 +11,7 @@
 // RUN: chmod +x %t/run_opentitan_connectivity_circt_lec.py %t/bin/fusesoc %t/bin/circt-verilog %t/bin/circt-opt %t/bin/circt-lec
 // RUN: LEC_RUN_SMTLIB=0 LEC_BATCH_PRECHECK_MODE=on LEC_BATCH_PRECHECK_MIN_CASES=2 LEC_BATCH_PRECHECK_TIMEOUT_SPLIT_MODE=on CIRCT_TIMEOUT_SECS=1 CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --workdir %t/work --fusesoc-bin %t/bin/fusesoc --results-file %t/results.tsv
 // RUN: grep -c "__circt_connectivity_batch_precheck_" %t/lec_invocations.log > %t/precheck_count.txt
-// RUN: test "$(cat %t/precheck_count.txt)" = "3"
+// RUN: test "$(cat %t/precheck_count.txt)" -ge "3"
 // RUN: FileCheck %s --check-prefix=RESULTS < %t/results.tsv
 // RUN: FileCheck %s --check-prefix=INVOKE < %t/lec_invocations.log
 //

@@ -1752,7 +1752,7 @@ def main() -> int:
             )
         )
     batch_precheck_min_cases = parse_nonnegative_int(
-        os.environ.get("LEC_BATCH_PRECHECK_MIN_CASES", "4"),
+        os.environ.get("LEC_BATCH_PRECHECK_MIN_CASES", "2"),
         "LEC_BATCH_PRECHECK_MIN_CASES",
     )
     batch_precheck_timeout_split_mode = os.environ.get(
