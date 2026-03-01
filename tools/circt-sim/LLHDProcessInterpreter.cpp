@@ -24756,6 +24756,11 @@ no_uvm_objection_intercept:
   const bool forceInterpretedForPhaseSetCanonicalization =
       calleeName == "uvm_pkg::uvm_phase::get_predecessors" ||
       calleeName == "uvm_pkg::uvm_phase::get_sync_relationships";
+  DirectInterpretedFallbackReason fallbackReason =
+      DirectInterpretedFallbackReason::NoNativePtr;
+  if (forceInterpretedForPhaseSetCanonicalization)
+    fallbackReason =
+        DirectInterpretedFallbackReason::ForcePhaseCanonicalization;
 
   // === Native dispatch (Phase F1) ===
   if (!forceInterpretedForPhaseSetCanonicalization && !nativeFuncPtrs.empty()) {
@@ -24763,11 +24768,13 @@ no_uvm_objection_intercept:
     if (nativeIt != nativeFuncPtrs.end()) {
       if (functionHasDirectCoverageRuntimeCall(funcOp)) {
         ++interpretedFuncCallCount;
+        fallbackReason = DirectInterpretedFallbackReason::CoverageRuntime;
         goto func_call_interpreted_fallback;
       }
       auto fidIt = funcOpToFid.find(funcKey);
       if (fidIt == funcOpToFid.end() && shouldDenyUnmappedNativeCall(funcOp)) {
         ++interpretedFuncCallCount;
+        fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
         goto func_call_interpreted_fallback;
       }
       // Deny/trap checks for func.call path (uses funcOpToFid reverse map).
@@ -24776,6 +24783,7 @@ no_uvm_objection_intercept:
           uint32_t fid = fidIt->second;
           if (aotDenyFids.count(fid)) {
             ++interpretedFuncCallCount;
+            fallbackReason = DirectInterpretedFallbackReason::DenyList;
             goto func_call_interpreted_fallback;
           }
           if (static_cast<int32_t>(fid) == aotTrapFid) {
@@ -24793,6 +24801,7 @@ no_uvm_objection_intercept:
         ++nativeFuncSkippedYield;
         noteAotDirectYieldSkip(fidIt->second);
         ++interpretedFuncCallCount;
+        fallbackReason = DirectInterpretedFallbackReason::MayYield;
         goto func_call_interpreted_fallback;
       }
       if (aotDepth == 0) {
@@ -24963,8 +24972,10 @@ no_uvm_objection_intercept:
             return success();
           }
         }
+        fallbackReason = DirectInterpretedFallbackReason::IncompatibleAbi;
       } else {
         ++nativeFuncSkippedDepth;
+        fallbackReason = DirectInterpretedFallbackReason::Depth;
       }
       // Fell through — can't native dispatch, use interpreter.
       ++interpretedFuncCallCount;
@@ -24972,6 +24983,7 @@ no_uvm_objection_intercept:
   }
 
 func_call_interpreted_fallback:
+  noteInterpretedFuncCallFallback(calleeName, fallbackReason);
   // Execute the function body with depth tracking
   ++interpretedCallCounts[funcOp.getOperation()];
   ++state.callDepth;
@@ -25148,20 +25160,26 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
   }
   auto fidIt = funcOpToFid.find(funcKey);
   bool forcedInterpreter = false;
+  DirectInterpretedFallbackReason fallbackReason =
+      DirectInterpretedFallbackReason::NoNativePtr;
   if (nfp &&
       (funcOp.getName() == "uvm_pkg::uvm_phase::get_predecessors" ||
        funcOp.getName() == "uvm_pkg::uvm_phase::get_sync_relationships")) {
     nfp = nullptr;
     forcedInterpreter = true;
+    fallbackReason =
+        DirectInterpretedFallbackReason::ForcePhaseCanonicalization;
   }
   if (nfp) {
     if (functionHasDirectCoverageRuntimeCall(funcOp)) {
       nfp = nullptr;
       forcedInterpreter = true;
+      fallbackReason = DirectInterpretedFallbackReason::CoverageRuntime;
     }
     if (fidIt == funcOpToFid.end() && shouldDenyUnmappedNativeCall(funcOp)) {
       nfp = nullptr;
       forcedInterpreter = true;
+      fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
     }
   }
   // Keep cached path deny/trap behavior consistent with the slow path.
@@ -25171,6 +25189,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
     if (aotDenyFids.count(fid)) {
       nfp = nullptr;
       forcedInterpreter = true;
+      fallbackReason = DirectInterpretedFallbackReason::DenyList;
     } else if (static_cast<int32_t>(fid) == aotTrapFid) {
       llvm::errs() << "[AOT TRAP] func.call fid=" << fid;
       if (fid < aotFuncEntryNamesById.size())
@@ -25186,6 +25205,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       noteAotDirectYieldSkip(fidIt->second);
       nfp = nullptr;
       forcedInterpreter = true;
+      fallbackReason = DirectInterpretedFallbackReason::MayYield;
     }
   }
   if (forcedInterpreter)
@@ -25353,12 +25373,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       }
     } else {
       ++nativeFuncSkippedDepth;
+      fallbackReason = DirectInterpretedFallbackReason::Depth;
     }
     // Fell through — can't native dispatch (wide args), use interpreter.
+    if (fallbackReason == DirectInterpretedFallbackReason::NoNativePtr)
+      fallbackReason = DirectInterpretedFallbackReason::IncompatibleAbi;
     ++interpretedFuncCallCount;
   }
 
   // Execute function body.
+  noteInterpretedFuncCallFallback(callOp.getCallee(), fallbackReason);
   ++interpretedCallCounts[funcOp.getOperation()];
   ++state.callDepth;
   llvm::SmallVector<InterpretedValue, 4> returnValues;
@@ -43220,6 +43244,40 @@ void LLHDProcessInterpreter::noteAotDirectYieldSkip(uint32_t fid) {
   if (fid >= aotDirectYieldSkipCounts.size())
     return;
   ++aotDirectYieldSkipCounts[fid];
+}
+
+void LLHDProcessInterpreter::noteInterpretedFuncCallFallback(
+    llvm::StringRef calleeName, DirectInterpretedFallbackReason reason) {
+  if (calleeName.empty())
+    calleeName = "<unknown>";
+  auto &row = directInterpretedFallbackByCallee[calleeName];
+  ++row.total;
+  switch (reason) {
+  case DirectInterpretedFallbackReason::NoNativePtr:
+    ++row.noNativePtr;
+    break;
+  case DirectInterpretedFallbackReason::ForcePhaseCanonicalization:
+    ++row.forcePhaseCanonicalization;
+    break;
+  case DirectInterpretedFallbackReason::CoverageRuntime:
+    ++row.coverageRuntime;
+    break;
+  case DirectInterpretedFallbackReason::UnmappedPolicy:
+    ++row.unmappedPolicy;
+    break;
+  case DirectInterpretedFallbackReason::DenyList:
+    ++row.denyList;
+    break;
+  case DirectInterpretedFallbackReason::MayYield:
+    ++row.mayYield;
+    break;
+  case DirectInterpretedFallbackReason::Depth:
+    ++row.depth;
+    break;
+  case DirectInterpretedFallbackReason::IncompatibleAbi:
+    ++row.incompatibleAbi;
+    break;
+  }
 }
 
 void LLHDProcessInterpreter::noteAotCalleeNameCall(llvm::StringRef calleeName) {

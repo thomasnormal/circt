@@ -3091,14 +3091,6 @@ void LLHDProcessInterpreter::maybeTraceDisableForkDeferredArm(
 
 void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
     llvm::raw_ostream &os, size_t topN) const {
-  if (aotFuncIdCallCounts.empty()) {
-    os << "[circt-sim] Hot native FuncIds (top " << topN
-       << "): none (no FuncIds)\n";
-    os << "[circt-sim] Hot uncompiled FuncIds (top " << topN
-       << "): none (no FuncIds)\n";
-    return;
-  }
-
   struct HotRow {
     uint32_t fid = 0;
     uint64_t calls = 0;
@@ -3289,6 +3281,49 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
       if (auto funcOp = llvm::dyn_cast<mlir::func::FuncOp>(op))
         os << "[circt-sim]   " << count << "x  " << funcOp.getName() << "\n";
       ++shown;
+    }
+  }
+
+  if (!directInterpretedFallbackByCallee.empty()) {
+    struct FallbackRow {
+      std::string callee;
+      DirectInterpretedFallbackCounters counters;
+    };
+    llvm::SmallVector<FallbackRow, 32> rows;
+    rows.reserve(directInterpretedFallbackByCallee.size());
+    for (const auto &entry : directInterpretedFallbackByCallee)
+      rows.push_back(FallbackRow{entry.getKey().str(), entry.getValue()});
+    llvm::sort(rows, [](const FallbackRow &lhs, const FallbackRow &rhs) {
+      if (lhs.counters.total != rhs.counters.total)
+        return lhs.counters.total > rhs.counters.total;
+      return lhs.callee < rhs.callee;
+    });
+    os << "[circt-sim] Top interpreted func.call fallback reasons (top " << topN
+       << "):\n";
+    size_t limit = std::min(topN, rows.size());
+    for (size_t i = 0; i < limit; ++i) {
+      const auto &r = rows[i];
+      os << "[circt-sim]   " << r.counters.total << "x " << r.callee << " [";
+      bool printed = false;
+      auto emitReason = [&](llvm::StringRef name, uint64_t value) {
+        if (value == 0)
+          return;
+        if (printed)
+          os << ", ";
+        os << name << "=" << value;
+        printed = true;
+      };
+      emitReason("no-native", r.counters.noNativePtr);
+      emitReason("phase-canon", r.counters.forcePhaseCanonicalization);
+      emitReason("coverage", r.counters.coverageRuntime);
+      emitReason("unmapped-policy", r.counters.unmappedPolicy);
+      emitReason("deny-list", r.counters.denyList);
+      emitReason("may-yield", r.counters.mayYield);
+      emitReason("depth", r.counters.depth);
+      emitReason("abi", r.counters.incompatibleAbi);
+      if (!printed)
+        os << "none";
+      os << "]\n";
     }
   }
 }

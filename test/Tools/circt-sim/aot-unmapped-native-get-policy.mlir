@@ -14,6 +14,8 @@
 // DEFAULT: Interpreted function calls:       1
 // DEFAULT: direct_calls_native:              1
 // DEFAULT: direct_calls_interpreted:         1
+// DEFAULT: Top interpreted func.call fallback reasons (top 50):
+// DEFAULT: 1x get_ptr_1 [unmapped-policy=1]
 // DEFAULT: out=47
 //
 // ALLOW: Unmapped native func.call policy: allow-all
@@ -28,6 +30,9 @@
 // ALLOWDENY: Interpreted function calls:       2
 // ALLOWDENY: direct_calls_native:              0
 // ALLOWDENY: direct_calls_interpreted:         2
+// ALLOWDENY: Top interpreted func.call fallback reasons (top 50):
+// ALLOWDENY: 1x get_2160 [unmapped-policy=1]
+// ALLOWDENY: 1x get_ptr_1 [unmapped-policy=1]
 // ALLOWDENY: out=47
 
 func.func @get_ptr_1() -> !llvm.ptr {

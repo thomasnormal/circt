@@ -3351,6 +3351,29 @@ private:
   void noteAotFuncIdCall(uint32_t fid);
   void noteAotEntryYieldSkip(uint32_t fid);
   void noteAotDirectYieldSkip(uint32_t fid);
+  enum class DirectInterpretedFallbackReason : uint8_t {
+    NoNativePtr = 0,
+    ForcePhaseCanonicalization,
+    CoverageRuntime,
+    UnmappedPolicy,
+    DenyList,
+    MayYield,
+    Depth,
+    IncompatibleAbi,
+  };
+  struct DirectInterpretedFallbackCounters {
+    uint64_t total = 0;
+    uint64_t noNativePtr = 0;
+    uint64_t forcePhaseCanonicalization = 0;
+    uint64_t coverageRuntime = 0;
+    uint64_t unmappedPolicy = 0;
+    uint64_t denyList = 0;
+    uint64_t mayYield = 0;
+    uint64_t depth = 0;
+    uint64_t incompatibleAbi = 0;
+  };
+  void noteInterpretedFuncCallFallback(llvm::StringRef calleeName,
+                                       DirectInterpretedFallbackReason reason);
   bool shouldSkipMayYieldDirectNativeFunc(uint32_t fid, ProcessId contextProcId,
                                           llvm::StringRef dispatchKind);
   bool shouldSkipMayYieldEntryDispatch(uint32_t fid, bool isNativeEntry,
@@ -4487,6 +4510,10 @@ private:
   /// Track how many times each function is interpreted (for hottest-callee
   /// reporting). Keyed by the func::FuncOp Operation*.
   llvm::DenseMap<mlir::Operation *, uint64_t> interpretedCallCounts;
+  /// Best-effort reason attribution for interpreted func.call fallbacks.
+  /// Keyed by callee symbol name.
+  llvm::StringMap<DirectInterpretedFallbackCounters>
+      directInterpretedFallbackByCallee;
 
   /// Entry table for tagged-FuncId dispatch (Step 7C).
   /// Populated from CompiledModuleLoader during loadCompiledFunctions().
