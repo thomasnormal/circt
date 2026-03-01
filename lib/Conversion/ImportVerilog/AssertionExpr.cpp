@@ -2553,6 +2553,13 @@ struct AssertionExprVisitor {
             break;
           }
           if (name == "$exit") {
+            if (context.options.allowExitOutsideProgram.value_or(false)) {
+              mlir::emitWarning(loc)
+                  << "$exit outside program block lowered as $finish due to "
+                     "--allow-exit-outside-program";
+              moore::FinishBIOp::create(builder, loc, 0);
+              break;
+            }
             mlir::emitError(loc) << "$exit is only valid in program blocks";
             return failure();
           }

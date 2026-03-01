@@ -406,6 +406,18 @@ struct CLOptions {
                "for strict SystemVerilog semantics."),
       cl::init(true), cl::cat(cat)};
 
+  cl::opt<bool> allowExitOutsideProgram{
+      "allow-exit-outside-program",
+      cl::desc("Allow `$exit` outside `program` blocks by lowering it as "
+               "`$finish` for compatibility"),
+      cl::init(false), cl::cat(cat)};
+
+  cl::opt<bool> allowMultiAlwaysCombDrivers{
+      "allow-multi-always-comb-drivers",
+      cl::desc("Allow variables to be assigned by multiple always_comb "
+               "procedures"),
+      cl::init(false), cl::cat(cat)};
+
   cl::opt<bool> continueOnUnsupportedSVA{
       "sva-continue-on-unsupported",
       cl::desc("Continue lowering when an unsupported SVA construct is "
@@ -878,7 +890,12 @@ static LogicalResult executeWithSources(MLIRContext *context,
   options.allowVirtualIfaceWithOverride = opts.allowVirtualIfaceWithOverride;
   options.ignoreTimingControls = opts.ignoreTimingControls;
   options.allowNonProceduralDynamic = opts.allowNonProceduralDynamic;
+  if (opts.allowExitOutsideProgram.getNumOccurrences() > 0)
+    options.allowExitOutsideProgram = opts.allowExitOutsideProgram;
+  if (opts.allowMultiAlwaysCombDrivers.getNumOccurrences() > 0)
+    options.allowMultiAlwaysCombDrivers = opts.allowMultiAlwaysCombDrivers;
   options.continueOnUnsupportedSVA = opts.continueOnUnsupportedSVA;
+  options.runSlangAnalysis = opts.verifyDiagnostics;
   if (opts.loweringMode != LoweringMode::OnlyLint)
     options.topModules = opts.topModules;
   options.paramOverrides = opts.paramOverrides;

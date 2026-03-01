@@ -228,9 +228,21 @@ struct ImportVerilogOptions {
   /// If true, allow dynamic type members in non-procedural contexts.
   std::optional<bool> allowNonProceduralDynamic;
 
+  /// If true, treat `$exit` outside a `program` block as a compatibility alias
+  /// for `$finish`.
+  std::optional<bool> allowExitOutsideProgram;
+
+  /// If true, allow variables to be assigned by multiple `always_comb`
+  /// procedures. This relaxes strict driver legality checks for compatibility
+  /// with some real-world codebases.
+  std::optional<bool> allowMultiAlwaysCombDrivers;
+
   /// If true, continue lowering when an unsupported SVA construct is
   /// encountered by dropping in a tagged placeholder assert-like op.
   bool continueOnUnsupportedSVA = false;
+
+  /// If set, explicitly control whether slang semantic analysis is run.
+  std::optional<bool> runSlangAnalysis;
 
 
   //===--------------------------------------------------------------------===//

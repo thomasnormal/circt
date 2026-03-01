@@ -153,6 +153,7 @@ TEST_FILTER="${TEST_FILTER:-}"
 OUT="${OUT:-$PWD/sv-tests-bmc-results.txt}"
 mkdir -p "$(dirname "$OUT")" 2>/dev/null || true
 DISABLE_UVM_AUTO_INCLUDE="${DISABLE_UVM_AUTO_INCLUDE:-1}"
+BMC_ALLOW_EXIT_OUTSIDE_PROGRAM="${BMC_ALLOW_EXIT_OUTSIDE_PROGRAM:-1}"
 CIRCT_VERILOG_ARGS="${CIRCT_VERILOG_ARGS:-}"
 BMC_LAUNCH_RETRY_ATTEMPTS="${BMC_LAUNCH_RETRY_ATTEMPTS:-4}"
 BMC_LAUNCH_RETRY_BACKOFF_SECS="${BMC_LAUNCH_RETRY_BACKOFF_SECS:-0.2}"
@@ -843,6 +844,9 @@ while IFS= read -r -d '' sv; do
 
   cmd=("$CIRCT_VERILOG" --ir-llhd --timescale=1ns/1ns --single-unit \
     -Wno-implicit-conv -Wno-index-oob -Wno-range-oob -Wno-range-width-oob)
+  if [[ "$BMC_ALLOW_EXIT_OUTSIDE_PROGRAM" == "1" ]]; then
+    cmd+=("--allow-exit-outside-program")
+  fi
   if [[ "$DISABLE_UVM_AUTO_INCLUDE" == "1" && "$use_uvm" == "0" ]]; then
     cmd+=("--no-uvm-auto-include")
   fi

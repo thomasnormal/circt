@@ -1,0 +1,16 @@
+// RUN: rm -rf %t && mkdir -p %t/sv-tests/tests/chapter-20 %t/bin
+// RUN: bash -eu -c $'cat > %t/sv-tests/tests/chapter-20/20.2--exit.sv <<\"EOF\"\n/*\n:name: exit_task\n:description: $exit test\n:type: simulation\n:tags: 20.2\n:unsynthesizable: 1\n*/\nmodule top();\n  initial $exit;\nendmodule\nEOF\n'
+// RUN: bash -eu -c $'cat > %t/bin/fake-verilog.sh <<\"EOF\"\n#!/usr/bin/env bash\nset -euo pipefail\nneed_flag=\"${NEED_EXIT_FLAG:-1}\"\nhas_flag=0\nfor arg in \"$@\"; do\n  if [[ \"$arg\" == \"--allow-exit-outside-program\" ]]; then\n    has_flag=1\n  fi\ndone\nif [[ \"$need_flag\" == \"1\" && \"$has_flag\" != \"1\" ]]; then\n  echo \"missing --allow-exit-outside-program\" >&2\n  exit 11\nfi\nif [[ \"$need_flag\" == \"0\" && \"$has_flag\" == \"1\" ]]; then\n  echo \"unexpected --allow-exit-outside-program\" >&2\n  exit 12\nfi\ncat <<\"MLIR\"\nmodule {\n  hw.module @top() {\n    %c1 = hw.constant true\n    verif.assert %c1 : i1\n    hw.output\n  }\n}\nMLIR\nEOF\nchmod +x %t/bin/fake-verilog.sh\n'
+// RUN: bash -eu -c $'cat > %t/bin/fake-bmc.sh <<\"EOF\"\n#!/usr/bin/env bash\nset -euo pipefail\nexit 0\nEOF\nchmod +x %t/bin/fake-bmc.sh\n'
+//
+// RUN: env OUT=%t/results-default.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/bin/fake-verilog.sh CIRCT_BMC=%t/bin/fake-bmc.sh Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 TAG_REGEX="(^| )20\\.2( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=DEFAULT
+// RUN: FileCheck %s --check-prefix=DEFAULT-OUT < %t/results-default.tsv
+//
+// RUN: env OUT=%t/results-disabled.tsv EXPECT_FILE=/dev/null CIRCT_VERILOG=%t/bin/fake-verilog.sh CIRCT_BMC=%t/bin/fake-bmc.sh Z3_LIB=/dev/null BMC_SMOKE_ONLY=1 DISABLE_UVM_AUTO_INCLUDE=1 BMC_ALLOW_EXIT_OUTSIDE_PROGRAM=0 NEED_EXIT_FLAG=0 TAG_REGEX="(^| )20\\.2( |$)" %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests | FileCheck %s --check-prefix=DISABLED
+// RUN: FileCheck %s --check-prefix=DISABLED-OUT < %t/results-disabled.tsv
+//
+// DEFAULT: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// DEFAULT-OUT: PASS{{[[:space:]]+}}20.2--exit{{[[:space:]]+}}
+//
+// DISABLED: sv-tests SVA summary: total=1 pass=1 fail=0 xfail=0 xpass=0 error=0 skip=0 unknown=0 timeout=0
+// DISABLED-OUT: PASS{{[[:space:]]+}}20.2--exit{{[[:space:]]+}}

@@ -3954,6 +3954,16 @@ struct StmtVisitor {
     }
 
     if (subroutine.name == "$exit") {
+      if (context.options.allowExitOutsideProgram.value_or(false)) {
+        mlir::emitWarning(loc)
+            << "$exit outside program block lowered as $finish due to "
+               "--allow-exit-outside-program";
+        createFinishMessage(args.size() >= 1 ? args[0] : nullptr);
+        moore::FinishBIOp::create(builder, loc, 0);
+        moore::UnreachableOp::create(builder, loc);
+        setTerminated();
+        return true;
+      }
       mlir::emitError(loc) << "$exit is only valid in program blocks";
       return failure();
     }
