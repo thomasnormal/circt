@@ -4423,6 +4423,9 @@ private:
   /// Bitmap indicating which FuncId names have an interpreter trampoline in
   /// the descriptor (name appears in trampoline_names).
   std::vector<bool> compiledFuncHasTrampoline;
+  /// True when the current compiled module has at least one FuncId that is
+  /// eligible for native entry-table dispatch.
+  bool hasNativeEntryDispatch = false;
 
   /// Deny list: skip native dispatch for these FuncIds (set via
   /// CIRCT_AOT_DENY_FID=123,456,789). Allows bisecting which compiled function

@@ -1,8 +1,13 @@
 // RUN: circt-sim --mode=interpret %s | FileCheck %s
+// RUN: circt-compile %s -o %t.so
+// RUN: env CIRCT_AOT_NO_FUNC_DISPATCH=1 CIRCT_AOT_DISABLE_COMPILED_PROCESSES=1 circt-sim %s --compiled=%t.so --aot-stats 2>&1 | FileCheck %s --check-prefix=AOT-NODISPATCH
 
 // In interpreted mode, malloc-backed class/object pointers must stay in the
 // interpreter virtual range. UVM phase/domain containers often store pointer
 // payloads in 32-bit slots, so host pointers can corrupt lookups.
+//
+// The same invariant must hold when a compiled module is loaded but function/
+// process dispatch is effectively interpreted-only (no native dispatch).
 
 module {
   llvm.func @malloc(i64) -> !llvm.ptr
@@ -39,3 +44,7 @@ module {
 }
 
 // CHECK: virtual_malloc_ok=1
+// AOT-NODISPATCH: Compiled function calls:          0
+// AOT-NODISPATCH: Entry-table native calls:         0
+// AOT-NODISPATCH: Entry-table trampoline calls:     0
+// AOT-NODISPATCH: virtual_malloc_ok=1

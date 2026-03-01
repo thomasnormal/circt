@@ -703,10 +703,12 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     auto shouldForceInterpretedFragileUvmCallee =
         [](llvm::StringRef calleeName) -> bool {
       // Keep known fragile UVM mutators/walkers interpreted even when
-      // native-eligible; native dispatch has shown startup crashes in real
-      // UVM topologies for these paths.
+      // entry-table-eligible. These paths have shown startup/liveness
+      // divergence under both native and trampoline entry dispatch.
       return calleeName.contains(
                  "uvm_pkg::uvm_phase::set_max_ready_to_end_iterations") ||
+             calleeName.contains(
+                 "uvm_pkg::uvm_phase_hopper::wait_for_waiters") ||
              calleeName.contains(
                  "uvm_pkg::uvm_sequence_base::clear_response_queue") ||
              calleeName.contains(
@@ -1206,8 +1208,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-                if (isNativeEntry &&
-                    shouldForceInterpretedFragileUvmCallee(resolvedName))
+                if (shouldForceInterpretedFragileUvmCallee(resolvedName))
                   goto ci_xfallback_interpreted;
                 bool forcePredicateFalse = false;
                 eligible = fillNativeCallArgs(args, funcOp.getArgumentTypes(),
@@ -2000,8 +2001,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-                if (isNativeEntry &&
-                    shouldForceInterpretedFragileUvmCallee(resolvedName))
+                if (shouldForceInterpretedFragileUvmCallee(resolvedName))
                   goto ci_static_interpreted;
                 bool forcePredicateFalse = false;
                 eligible = fillNativeCallArgs(sArgs, fOp.getArgumentTypes(),
@@ -2607,8 +2607,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-            if (isNativeEntry &&
-                shouldForceInterpretedFragileUvmCallee(
+            if (shouldForceInterpretedFragileUvmCallee(
                     cachedFuncOp.getSymName()))
               goto ci_cache_interpreted;
             bool forcePredicateFalse = false;
@@ -5354,8 +5353,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           if (eligible) {
             uint64_t a[8] = {};
             bool normalizePointerArgs = isNativeEntry;
-            if (isNativeEntry &&
-                shouldForceInterpretedFragileUvmCallee(calleeName))
+            if (shouldForceInterpretedFragileUvmCallee(calleeName))
               goto ci_main_interpreted;
             bool forcePredicateFalse = false;
             eligible = fillNativeCallArgs(args, funcOp.getArgumentTypes(),

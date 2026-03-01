@@ -31871,18 +31871,33 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
             !forceHostMalloc &&
             std::getenv("CIRCT_SIM_FORCE_VIRTUAL_MALLOC") != nullptr;
         // Only force host-backed malloc when native code may dereference the
-        // returned pointer. Merely loading a compiled module (e.g. with
-        // CIRCT_AOT_DISABLE_ALL active) must not switch interpreter malloc
-        // semantics, or compile/interpret parity drifts even with native
-        // dispatch disabled.
+        // returned pointer. Merely loading compiled metadata must not switch
+        // interpreter malloc semantics, or compile/interpret parity drifts
+        // even when function/process dispatch is effectively interpreted-only.
         bool nativeModuleInitActive = (tlsNativeModuleInitInterpreter == this);
         bool aotDisableAllActive =
             std::getenv("CIRCT_AOT_DISABLE_ALL") != nullptr;
+        auto isFuncDispatchDisabledByEnv = []() -> bool {
+          if (std::getenv("CIRCT_AOT_NO_FUNC_DISPATCH") != nullptr)
+            return true;
+          if (std::getenv("CIRCT_AOT_DISABLE_FUNC_DISPATCH") != nullptr)
+            return true;
+          if (const char *maxEnv = std::getenv("CIRCT_AOT_MAX_NATIVE"))
+            return std::atoi(maxEnv) == 0;
+          return false;
+        };
         bool compiledLoaderActive =
-            compiledLoaderForModuleInit != nullptr && !aotDisableAllActive;
+            compiledLoaderForModuleInit != nullptr && !aotDisableAllActive &&
+            !isFuncDispatchDisabledByEnv();
+        bool compiledProcessDispatchActive =
+            !compiledProcessNamesById.empty();
+        bool nativeEntryDispatchActive =
+            !aotDisableAllActive &&
+            (!nativeFuncPtrs.empty() || hasNativeEntryDispatch);
         bool compiledExecutionActive =
             nativeModuleInitActive || compiledLoaderActive ||
-            compiledFuncEntries != nullptr || !nativeFuncPtrs.empty() ||
+            nativeEntryDispatchActive ||
+            compiledProcessDispatchActive ||
             aotDepth != 0;
         bool useHostMalloc =
             forceHostMalloc || (!forceVirtualMalloc && compiledExecutionActive);
@@ -43521,6 +43536,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
   if (auto *mod = loader.getModule())
     compiledFuncFlags = mod->all_func_flags;
   numCompiledAllFuncs = loader.getNumAllFuncs();
+  hasNativeEntryDispatch = false;
   aotFuncIdCallCounts.assign(numCompiledAllFuncs, 0);
   aotFuncEntryNamesById.assign(numCompiledAllFuncs, "");
   aotFuncNameToCanonicalId.clear();
@@ -43575,6 +43591,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
                  << " entries for tagged-FuncId dispatch ("
                  << nativeCount << " native, "
                  << (numCompiledAllFuncs - nativeCount) << " non-native)\n";
+  hasNativeEntryDispatch = nativeCount > 0;
   // Safety valve: CIRCT_AOT_DISABLE_ALL disables ALL native dispatch while
   // keeping global pre-aliasing active. Used to isolate whether the bug is
   // in global aliasing vs function dispatch.
@@ -43582,6 +43599,7 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
     nativeFuncPtrs.clear();
     compiledFuncEntries = nullptr;
     numCompiledAllFuncs = 0;
+    hasNativeEntryDispatch = false;
     llvm::errs() << "[circt-sim] CIRCT_AOT_DISABLE_ALL: all native dispatch disabled\n";
   }
 }
@@ -44118,17 +44136,41 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
     // A deferred successful terminate is armed as soon as run_test() forks
     // phase execution. Do not suppress time-only callback rearm at that point,
     // or the design clock can stall before run/check/report phases complete.
-    //
-    // Only stop rearming once all tracked phase IMP nodes have completed and
-    // we are draining toward final shutdown.
-    if (!deferredSuccessTerminatePending || functionPhaseImpCompleted.empty())
+    if (!deferredSuccessTerminatePending)
       return false;
-    for (const auto &[impAddr, done] : functionPhaseImpCompleted) {
-      (void)impAddr;
-      if (!done)
+
+    // Safe terminal case: every tracked phase IMP has completed.
+    if (!functionPhaseImpCompleted.empty()) {
+      bool allTrackedPhasesComplete = true;
+      for (const auto &[impAddr, done] : functionPhaseImpCompleted) {
+        (void)impAddr;
+        if (!done) {
+          allTrackedPhasesComplete = false;
+          break;
+        }
+      }
+      if (allTrackedPhasesComplete)
+        return true;
+    }
+
+    // Practical drain case: run_phase IMP(s) have completed. For deferred
+    // success in dual-top UVM flows, this is the point where free-running HDL
+    // clocks should stop rearming; otherwise they can keep phase cleanup in a
+    // non-quiescent polling loop until grace-time expiry.
+    bool sawRunPhaseImp = false;
+    for (const auto &[impAddr, order] : functionPhaseImpOrder) {
+      if (order != 4)
+        continue;
+      sawRunPhaseImp = true;
+      auto doneIt = functionPhaseImpCompleted.find(impAddr);
+      if (doneIt == functionPhaseImpCompleted.end() || !doneIt->second)
         return false;
     }
-    return true;
+    if (sawRunPhaseImp)
+      return true;
+
+    // No reliable phase-completion signal yet; keep callback clocks running.
+    return false;
   };
   auto shouldRearmCompiledCallbackNow = [this, shouldRearmCompiledCallbackMinnow,
                                          shouldSkipRearmForDeferredSuccessCleanup,
