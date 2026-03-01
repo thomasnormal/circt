@@ -1,7 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
-// Reason: config_db interceptor does not enforce type checking across parameterized specializations
 
 // Test config_db type mismatch: set as int, get as string returns not-found.
 

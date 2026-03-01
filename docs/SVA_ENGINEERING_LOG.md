@@ -10287,3 +10287,38 @@
   - cross-check with factory semantic gates:
     - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create.sv test/Tools/crun/uvm-factory-override-priority.sv test/Tools/crun/uvm-factory-double-override.sv test/Tools/crun/uvm-factory-override-chain.sv test/Tools/crun/uvm-factory-override-inst-path.sv test/Tools/crun/uvm-config-db-hierarchical.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `9 passed`.
+
+## 2026-03-01 - UVM config_db type-mismatch semantics (typed specialization safety)
+
+- realization:
+  - Red semantic gate after unmasking XFAIL:
+    - `test/Tools/crun/uvm-config-db-type-mismatch.sv`
+    - observed mismatch get incorrectly succeeded (`FAIL (should not find)`).
+  - Trace showed an `int` payload being returned through
+    `uvm_config_db#(string)::get`, i.e. no effective type-shape guard in
+    config_db interception paths.
+
+- implemented:
+  - Added payload/type compatibility guards in config_db get interceptors:
+    - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+      - `tryInterceptConfigDbCallIndirect`: reject get hits when stored payload
+        byte-width does not match expected output type shape.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - `func.call` config_db wrapper get path now enforces the same width check
+        before writing through the output ref.
+  - Upgraded test to semantic gate by removing stale `XFAIL`:
+    - `test/Tools/crun/uvm-config-db-type-mismatch.sv`
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-config-db-type-mismatch.sv`
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test crun`
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-config-db-type-mismatch.sv`
+  - focused config/integration slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv`
+    - result: `11 passed, 1 expectedly failed` (`uvm-config-db-virtual-if.sv`).
+  - cross-check with factory + config semantic gates:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create.sv test/Tools/crun/uvm-factory-override-priority.sv test/Tools/crun/uvm-factory-double-override.sv test/Tools/crun/uvm-factory-override-chain.sv test/Tools/crun/uvm-factory-override-inst-path.sv test/Tools/crun/uvm-config-db-hierarchical.sv test/Tools/crun/uvm-config-db-type-mismatch.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `10 passed`.

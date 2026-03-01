@@ -352,6 +352,40 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
                              activePhaseRootAddr, normalized, phaseImpAddr);
         }
       }
+      // Host-backed stale wrappers can lose the root-key/wrapper-key relation.
+      // For wait-for-state style remaps, converge unknown m_imp==0 wrappers
+      // onto the active root to avoid deadlocking on stale phase objects.
+      if (normalized != activePhaseRootAddr) {
+        auto readPhaseName = [&](uint64_t addr) -> std::string {
+          if (addr == 0)
+            return {};
+          uint64_t nameOff = 0;
+          MemoryBlock *nameBlk = findBlockByAddress(addr + 12, nameOff);
+          if (!nameBlk || nameOff + 16 > nameBlk->size)
+            return {};
+          uint64_t namePtr = 0;
+          uint64_t nameLen = 0;
+          for (int i = 0; i < 8; ++i) {
+            namePtr |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + i])
+                       << (i * 8);
+            nameLen |= static_cast<uint64_t>(nameBlk->bytes()[nameOff + 8 + i])
+                       << (i * 8);
+          }
+          if (namePtr == 0 || nameLen == 0 || nameLen > 128)
+            return {};
+          uint64_t strOff = 0;
+          MemoryBlock *strBlk = findBlockByAddress(namePtr, strOff);
+          if (!strBlk || strOff + nameLen > strBlk->size)
+            return {};
+          return std::string(
+              reinterpret_cast<const char *>(strBlk->bytes() + strOff),
+              static_cast<size_t>(nameLen));
+        };
+        if (readPhaseName(normalized).empty()) {
+          return traceReturn("phase-imp-zero-unknown-to-active-root",
+                             activePhaseRootAddr, normalized, phaseImpAddr);
+        }
+      }
     }
     return traceReturn("phase-imp-zero", normalized, normalized, phaseImpAddr);
   }
@@ -1634,11 +1668,34 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       const std::vector<uint8_t> *matchedValue = nullptr;
       std::string matchedKey;
       if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
+        auto isPayloadCompatible = [&](Type outputType, size_t payloadBytes) {
+          if (auto refT = dyn_cast<llhd::RefType>(outputType)) {
+            unsigned innerBits = getTypeWidth(refT.getNestedType());
+            unsigned innerBytes = (innerBits + 7) / 8;
+            return innerBytes != 0 && payloadBytes == innerBytes;
+          }
+          if (isa<LLVM::LLVMPointerType>(outputType)) {
+            unsigned ptrBits = getTypeWidth(outputType);
+            unsigned ptrBytes = (ptrBits + 7) / 8;
+            return ptrBytes != 0 && payloadBytes == ptrBytes;
+          }
+          return false;
+        };
+        Value outputRef = callIndirectOp.getArgOperands()[4];
+        if (!isPayloadCompatible(outputRef.getType(), matchedValue->size())) {
+          if (traceConfigDbEnabled) {
+            llvm::errs() << "[CFG-CI-XFALLBACK-GET] type-mismatch key=\""
+                         << matchedKey << "\" payload_bytes="
+                         << matchedValue->size() << "\n";
+          }
+          setValue(procId, callIndirectOp.getResult(0),
+                   InterpretedValue(llvm::APInt(1, 0)));
+          return true;
+        }
         if (traceConfigDbEnabled) {
           llvm::errs() << "[CFG-CI-XFALLBACK-GET] hit key=\"" << matchedKey
                        << "\" bytes=" << matchedValue->size() << "\n";
         }
-        Value outputRef = callIndirectOp.getArgOperands()[4];
         const std::vector<uint8_t> &valueData = *matchedValue;
         Type refType = outputRef.getType();
 

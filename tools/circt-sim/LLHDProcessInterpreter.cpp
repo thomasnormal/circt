@@ -23014,6 +23014,19 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         const std::vector<uint8_t> *matchedValue = nullptr;
         std::string matchedKey;
         if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
+          Type innerType = refType.getNestedType();
+          unsigned innerBits = getTypeWidth(innerType);
+          unsigned innerBytes = (innerBits + 7) / 8;
+          if (innerBytes == 0 || matchedValue->size() != innerBytes) {
+            if (traceConfigDbEnabled) {
+              llvm::errs() << "[CFG-FC-GET] type-mismatch key=\"" << matchedKey
+                           << "\" payload_bytes=" << matchedValue->size()
+                           << " expected_bytes=" << innerBytes << "\n";
+            }
+            setValue(procId, callOp.getResult(0),
+                     InterpretedValue(llvm::APInt(1, 0)));
+            return success();
+          }
           if (traceI3CConfigHandles &&
               fieldName.find("i3c_") != std::string::npos) {
             uint64_t ptrPayload = 0;
@@ -23031,9 +23044,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           }
           Value outputRef = callOp.getOperand(3);
           const std::vector<uint8_t> &valueData = *matchedValue;
-          Type innerType = refType.getNestedType();
-          unsigned innerBits = getTypeWidth(innerType);
-          unsigned innerBytes = (innerBits + 7) / 8;
           llvm::APInt valueBits(innerBits, 0);
           for (unsigned i = 0;
                i < std::min(innerBytes, (unsigned)valueData.size()); ++i)

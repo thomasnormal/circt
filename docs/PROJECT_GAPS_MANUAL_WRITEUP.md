@@ -6265,3 +6265,6 @@ Status update (2026-03-01): this gap is closed in this workspace. Integration se
 
 ### [x] 2084. `test/Tools/crun/uvm-integ-env-config-factory.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Integration semantics now pass under crun without `XFAIL`: config_db timeout propagation and factory override behavior are both validated end-to-end (`agent got timeout=42`, `agent type is integ_custom_agent`).
+
+### [x] 2085. `test/Tools/crun/uvm-config-db-type-mismatch.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and restored semantic type safety: setting `typed_key` as `int` no longer satisfies `uvm_config_db#(string)::get`. Root cause was missing payload/type-shape guard in config_db get interception paths; fixed by enforcing payload-byte-size compatibility for the expected output type in `tools/circt-sim/LLHDProcessInterpreterUvm.cpp` and `tools/circt-sim/LLHDProcessInterpreter.cpp`.
