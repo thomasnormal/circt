@@ -204,8 +204,8 @@ firrtl.module @And(in %in: !firrtl.uint<4>,
 }
 
 // AndOfAsSInt patterns should not crash on non-IntType inputs
-// CHECK-LABEL: firrtl.module @AndOfAsSIntNoCrash
-firrtl.module @AndOfAsSIntNoCrash(
+// CHECK-LABEL: firrtl.module @AndOfAsSIntNoCrashNonInt
+firrtl.module @AndOfAsSIntNoCrashNonInt(
   in %clock: !firrtl.clock,
   in %asyncreset: !firrtl.asyncreset,
   in %sint: !firrtl.sint<4>,
