@@ -613,6 +613,8 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
     <tr><td>yosys SVA</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>14/14 (100%)</td><td>&mdash;</td></tr>
     <tr><td>sv-tests (formal subset)</td><td>26/26 (100%)</td><td>23/23 (100%)</td><td>3/26 (12%)</td><td>&mdash;</td></tr>
     <tr><td>OpenTitan AES connectivity LEC (<code>clkmgr_trans.csv:CLKMGR_TRANS_AES</code>)</td><td>&mdash;</td><td>PASS (EQ, real Z3)</td><td>&mdash;</td><td>ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
+    <tr><td>OpenTitan mixed-top connectivity LEC (<code>analog_sigs.csv:FLASH_TEST_MODE_O</code>)</td><td>&mdash;</td><td>PASS (EQ, real Z3)</td><td>&mdash;</td><td>ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
+    <tr><td>OpenTitan timeout-frontier triplet LEC (<code>ALERT_HANDLER_LC_CTRL_ESC0_RST</code>, <code>AST_CLK_ES_IN</code>, <code>AST_HISPEED_SEL_IN</code>)</td><td>&mdash;</td><td>3/3 PASS (EQ, real Z3)</td><td>&mdash;</td><td>3/3 ERROR (<code>TOK_PACKAGESEP</code> parse in <code>top_earlgrey.sv</code>)</td></tr>
   </tbody>
 </table>
 
@@ -621,7 +623,7 @@ circt-lec prim_count.mlir --first-module prim_count --second-module prim_count_o
   The yosys SVA suite was designed for yosys&rsquo;s own parser, so sby passes it at 100%.
   But verilator-verification and the sv-tests formal subset use concurrent SVA assertions (<code>assert property @(posedge clk) ...</code>, sequences, deferred immediates) that yosys&rsquo;s built-in parser cannot handle &mdash; it only supports simple immediate assertions like <code>initial assert(expr)</code>.
   circt-bmc handles all of these because it uses <a href="https://github.com/MikePopoloski/slang">slang</a> as its frontend, which has complete IEEE 1800 SystemVerilog support.
-  March 1, 2026 OpenTitan checks show that CIRCT closes AES connectivity LEC with real Z3, while open-source yosys/eqy is still blocked by top-level parsing on generated <code>top_earlgrey.sv</code> package syntax.
+  March 1, 2026 OpenTitan checks show that CIRCT closes AES, FLASH_TEST_MODE_O, and the three-case timeout-frontier triplet with real Z3, while open-source yosys/eqy is still blocked by top-level parsing on generated <code>top_earlgrey.sv</code> package syntax.
   The 3 sv-tests XFails in circt-bmc are due to SVA sequence operators not yet lowered to the Z3 backend.
 </p>
 

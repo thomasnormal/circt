@@ -1,0 +1,16 @@
+task	tool	rc	ms	result	note
+opentitan_aes	yosys_oss	1	92	ERROR: syntax error, unexpected TOK_PACKAGESEP, expecting ')' or ',' or '='	connectivity::clkmgr_trans.csv:CLKMGR_TRANS_AES
+opentitan_aes	eqy_oss	1	154	ERROR: Reading sources failed.	connectivity::clkmgr_trans.csv:CLKMGR_TRANS_AES
+opentitan_aes	circt	0	0	EQ	PASS (connectivity::clkmgr_trans.csv:CLKMGR_TRANS_AES) [real-z3]
+opentitan_flash_mode_o	yosys_oss	1	92	ERROR: syntax error, unexpected TOK_PACKAGESEP, expecting ')' or ',' or '='	connectivity::analog_sigs.csv:FLASH_TEST_MODE_O
+opentitan_flash_mode_o	eqy_oss	1	155	ERROR: Reading sources failed.	connectivity::analog_sigs.csv:FLASH_TEST_MODE_O
+opentitan_flash_mode_o	circt	0	0	EQ	PASS (connectivity::analog_sigs.csv:FLASH_TEST_MODE_O) [real-z3]
+opentitan_frontier_alert_handler_esc0	yosys_oss	1	92	ERROR: syntax error, unexpected TOK_PACKAGESEP, expecting ')' or ',' or '='	connectivity::alert_handler_esc.csv:ALERT_HANDLER_LC_CTRL_ESC0_RST
+opentitan_frontier_alert_handler_esc0	eqy_oss	1	157	ERROR: Reading sources failed.	connectivity::alert_handler_esc.csv:ALERT_HANDLER_LC_CTRL_ESC0_RST
+opentitan_frontier_alert_handler_esc0	circt	0	0	EQ	PASS (connectivity::alert_handler_esc.csv:ALERT_HANDLER_LC_CTRL_ESC0_RST) [real-z3]
+opentitan_frontier_ast_clk_es_in	yosys_oss	1	93	ERROR: syntax error, unexpected TOK_PACKAGESEP, expecting ')' or ',' or '='	connectivity::ast_clkmgr.csv:AST_CLK_ES_IN
+opentitan_frontier_ast_clk_es_in	eqy_oss	1	158	ERROR: Reading sources failed.	connectivity::ast_clkmgr.csv:AST_CLK_ES_IN
+opentitan_frontier_ast_clk_es_in	circt	0	0	EQ	PASS (connectivity::ast_clkmgr.csv:AST_CLK_ES_IN) [real-z3]
+opentitan_frontier_ast_hispeed_sel_in	yosys_oss	1	92	ERROR: syntax error, unexpected TOK_PACKAGESEP, expecting ')' or ',' or '='	connectivity::ast_clkmgr.csv:AST_HISPEED_SEL_IN
+opentitan_frontier_ast_hispeed_sel_in	eqy_oss	1	155	ERROR: Reading sources failed.	connectivity::ast_clkmgr.csv:AST_HISPEED_SEL_IN
+opentitan_frontier_ast_hispeed_sel_in	circt	0	0	EQ	PASS (connectivity::ast_clkmgr.csv:AST_HISPEED_SEL_IN) [real-z3]
