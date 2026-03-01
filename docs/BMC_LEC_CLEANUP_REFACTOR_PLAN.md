@@ -443,6 +443,9 @@ Current workstream status in this branch:
      `artifact_dir`) with stage-aware log-path inference
    - OpenTitan AES BMC schema JSONL lane now inherits pairwise metadata parity
      via delegated pairwise runner output
+   - sv-tests BMC schema JSONL projection now emits non-null timing/artifact
+     metadata (`frontend_time_ms`, `solver_time_ms`, `log_path`,
+     `artifact_dir`) for parity with pairwise/OpenTitan BMC lanes
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status

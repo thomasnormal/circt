@@ -10,6 +10,7 @@
 // RUN: chmod +x %t/bin/z3
 // RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_BMC=%t/bin/circt-bmc Z3_BIN=%t/bin/z3 BMC_SMOKE_ONLY=0 BMC_RUN_SMTLIB=1 TEST_FILTER='unknown_case|timeout_case' OUT=%t/results.tsv FORMAL_RESULTS_JSONL_OUT=%t/results.jsonl %S/../../utils/run_sv_tests_circt_bmc.sh %t/sv-tests
 // RUN: FileCheck %s --check-prefix=JSON < %t/results.jsonl
+// RUN: python3 -c "import json; rows=[json.loads(line) for line in open('%t/results.jsonl', encoding='utf-8') if line.strip()]; assert len(rows)==2; by={row['case_id']: row for row in rows}; assert by['timeout_case']['frontend_time_ms']==0; assert by['timeout_case']['solver_time_ms']==0; assert by['timeout_case']['artifact_dir']; assert by['timeout_case']['log_path'].endswith('/timeout_case.circt-bmc.log'); assert by['unknown_case']['frontend_time_ms']==0; assert by['unknown_case']['solver_time_ms']==0; assert by['unknown_case']['artifact_dir']; assert by['unknown_case']['log_path'].endswith('/unknown_case.circt-bmc.log')"
 //
 // JSON-DAG: "case_id": "timeout_case"
 // JSON-DAG: "reason_code": "SOLVER_COMMAND_TIMEOUT"

@@ -2,6 +2,33 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: sv-tests BMC JSONL metadata parity):
+  - realization:
+    - `run_sv_tests_circt_bmc.sh` schema JSONL projection still emitted
+      `null` timing metadata and empty `log_path`/`artifact_dir`, while
+      pairwise/OpenTitan BMC lanes had already moved to non-null metadata.
+  - implemented:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - extended JSONL projection shim to pass `tmpdir` into the Python writer.
+      - emitted per-row metadata values:
+        - `frontend_time_ms=0`
+        - `solver_time_ms=0`
+        - `log_path=<tmpdir>/<case_id>.circt-bmc.log`
+        - `artifact_dir=<tmpdir>`
+    - tightened regression:
+      - `test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - added explicit JSONL metadata assertions for `timeout_case` and
+        `unknown_case`.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: fail (new metadata assertions).
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `1/1` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS6: pairwise/OpenTitan BMC JSONL metadata parity):
   - realization:
     - pairwise BMC JSONL rows emitted schema keys but left

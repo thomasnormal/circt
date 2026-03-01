@@ -1435,7 +1435,7 @@ if [[ -n "$schema_tmp" ]]; then
   if [[ "$BMC_SMOKE_ONLY" != "1" && "$BMC_RUN_SMTLIB" == "1" ]]; then
     solver_label="z3"
   fi
-  python3 - "$schema_tmp" "$FORMAL_RESULTS_JSONL_OUT" "$solver_label" <<'PY'
+  python3 - "$schema_tmp" "$FORMAL_RESULTS_JSONL_OUT" "$solver_label" "$tmpdir" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -1443,6 +1443,7 @@ from pathlib import Path
 schema_tsv = Path(sys.argv[1])
 out_path = Path(sys.argv[2])
 solver_label = sys.argv[3].strip()
+tmpdir = Path(sys.argv[4])
 rows = []
 for line in schema_tsv.read_text(encoding="utf-8").splitlines():
     if not line.strip():
@@ -1451,6 +1452,7 @@ for line in schema_tsv.read_text(encoding="utf-8").splitlines():
     if len(parts) < 7:
         continue
     status, case_id, case_path, suite, mode, reason_code, stage = parts[:7]
+    log_path = str(tmpdir / f"{case_id}.circt-bmc.log")
     rows.append(
         {
             "schema_version": 1,
@@ -1462,10 +1464,10 @@ for line in schema_tsv.read_text(encoding="utf-8").splitlines():
             "reason_code": reason_code.strip().upper(),
             "stage": stage.strip() or "result",
             "solver": solver_label,
-            "solver_time_ms": None,
-            "frontend_time_ms": None,
-            "log_path": "",
-            "artifact_dir": "",
+            "solver_time_ms": 0,
+            "frontend_time_ms": 0,
+            "log_path": log_path,
+            "artifact_dir": str(tmpdir),
         }
     )
 rows.sort(key=lambda row: (str(row["case_id"]), str(row["status"]), str(row["case_path"])))
