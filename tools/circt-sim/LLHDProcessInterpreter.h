@@ -4573,6 +4573,10 @@ private:
   /// the current `jitRuntimeIndirectProfileEpoch`.
   llvm::DenseMap<uint64_t, AotMayYieldUnsafeDecision>
       aotMayYieldStaticNonCoroBypassDecisionCache;
+  /// Warn-once guard for rejected unsafe MAY_YIELD fid overrides. The decision
+  /// cache is epoch-scoped and can be invalidated frequently; this avoids
+  /// repeated per-call stderr spam for the same fid.
+  llvm::DenseSet<uint32_t> aotUnsafeMayYieldRejectWarnedFids;
 
   /// Trap FuncId: call __builtin_trap() just before native dispatch for this
   /// FuncId (set via CIRCT_AOT_TRAP_FID=123). Produces a core dump at the exact

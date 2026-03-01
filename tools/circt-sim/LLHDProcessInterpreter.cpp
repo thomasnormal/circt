@@ -43245,12 +43245,28 @@ bool LLHDProcessInterpreter::isUnsafeMayYieldFidBypassAllowed(
 
   bool allowBypass = false;
   llvm::StringRef calleeName;
+  const char *rejectReason = "body may suspend";
   if (fid < aotFuncEntryNamesById.size())
     calleeName = aotFuncEntryNamesById[fid];
   if (!calleeName.empty() && rootModule) {
-    if (auto calleeFunc = rootModule.lookupSymbol<func::FuncOp>(calleeName))
-      allowBypass =
-          !maySuspendInFuncBodyForNativeThunkPolicy(calleeFunc, contextProcId);
+    if (auto calleeFunc = rootModule.lookupSymbol<func::FuncOp>(calleeName)) {
+      // Unsafe MAY_YIELD overrides remain intentionally narrow: pointer-ABI
+      // callees are excluded because they can still require interpreter
+      // pointer/context semantics even when non-suspending.
+      if (hasPointerAbi(calleeFunc)) {
+        allowBypass = false;
+        rejectReason = "pointer ABI";
+      } else {
+        allowBypass =
+            !maySuspendInFuncBodyForNativeThunkPolicy(calleeFunc, contextProcId);
+        if (!allowBypass)
+          rejectReason = "body may suspend";
+      }
+    } else {
+      rejectReason = "unresolved callee";
+    }
+  } else {
+    rejectReason = "unresolved callee";
   }
   aotAllowMayYieldUnsafeDecisionCache[fid] =
       AotMayYieldUnsafeDecision{allowBypass, jitRuntimeIndirectProfileEpoch};
@@ -43261,14 +43277,18 @@ bool LLHDProcessInterpreter::isUnsafeMayYieldFidBypassAllowed(
     llvm::errs() << "[AOT TRACE] ignore unsafe MAY_YIELD fid override fid="
                  << fid << " callee=" << calleeName
                  << " dispatch=" << dispatchKind
-                 << " reason=body-may-suspend\n";
+                 << " reason=" << rejectReason << "\n";
   }
   if (!allowBypass) {
-    llvm::errs() << "[circt-sim] Ignoring unsafe MAY_YIELD fid override for "
-                 << "fid=" << fid;
-    if (!calleeName.empty())
-      llvm::errs() << " name=" << calleeName;
-    llvm::errs() << " (body may suspend)\n";
+    auto [it, inserted] = aotUnsafeMayYieldRejectWarnedFids.insert(fid);
+    (void)it;
+    if (inserted) {
+      llvm::errs() << "[circt-sim] Ignoring unsafe MAY_YIELD fid override for "
+                   << "fid=" << fid;
+      if (!calleeName.empty())
+        llvm::errs() << " name=" << calleeName;
+      llvm::errs() << " (" << rejectReason << ")\n";
+    }
   }
   return allowBypass;
 }
