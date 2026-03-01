@@ -4,4 +4,4 @@
 // RUN:   FORCE_LEC=1 LEC_SMOKE_ONLY=1 CIRCT_LEC_ARGS=--emit-mlir \
 // RUN:   %S/../../../utils/run_sv_tests_circt_lec.sh \
 // RUN:   %S/Inputs/sv-tests-mini || true) | FileCheck %s
-// CHECK: sv-tests LEC summary: total=2 pass=1 fail=0 error=1 skip={{[0-9]+}}
+// CHECK: sv-tests LEC summary: total=2 pass=2 fail=0 error=0 skip={{[0-9]+}}

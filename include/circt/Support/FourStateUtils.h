@@ -22,6 +22,7 @@
 namespace circt {
 
 inline bool isFourStateStructType(mlir::Type type) {
+  type = hw::getCanonicalType(type);
   auto structTy = llvm::dyn_cast<hw::StructType>(type);
   if (!structTy)
     return false;
@@ -38,6 +39,7 @@ inline bool isFourStateStructType(mlir::Type type) {
 }
 
 inline std::optional<unsigned> getFourStateValueWidth(mlir::Type type) {
+  type = hw::getCanonicalType(type);
   auto structTy = llvm::dyn_cast<hw::StructType>(type);
   if (!structTy)
     return std::nullopt;

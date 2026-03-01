@@ -741,3 +741,38 @@
     - `bind-top`: 1 shared frontend batch, but second case hit
       `CIRCT_LEC_TIMEOUT`.
   - conclusion: keep `csv` as default; use `bind-top` only as explicit tuning.
+
+## 2026-03-01 - Canonicalize alias-backed 4-state detection in LLHD stripping
+
+- realization:
+  - LLHD interface/signal stripping uses `isFourStateStructType` in multiple
+    resolution paths.
+  - that helper did not canonicalize `hw.typealias` types, so alias-backed
+    `!hw.struct<value,unknown>` signals were misclassified as non-4-state.
+  - consequence: the pass could spuriously inject `*_unknown` abstraction
+    inputs (`multi_driver_unknown_resolution`) even when 4-state resolution was
+    available, inflating `circt.lec_abstracted_llhd_interface_inputs` and
+    sometimes flipping expected status from error to pass/fail drift.
+
+- implemented:
+  - `include/circt/Support/FourStateUtils.h`:
+    - canonicalize type via `hw::getCanonicalType(type)` in:
+      - `isFourStateStructType`
+      - `getFourStateValueWidth`
+  - new regression:
+    - `test/Tools/circt-lec/lec-strip-llhd-signal-strength-resolve-typealias.mlir`
+      validates alias-backed 4-state signal strength resolution without
+      abstraction input insertion.
+  - updated expectation:
+    - `test/Tools/circt-lec/sv-tests-lec-smoke.mlir`
+      now expects `pass=2 error=0` (previously `pass=1 error=1`), matching the
+      resolved alias-backed 4-state handling.
+
+- validation:
+  - rebuilt `circt-opt` and `circt-lec` in `build_test`.
+  - `llvm-lit -sv test/Tools/circt-lec/lec-strip-llhd*.mlir`: `36/36` pass.
+  - `llvm-lit -sv test/Tools/circt-lec/*.mlir`: `153/153` pass.
+  - real OpenTitan direct repro (`CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN`) remains
+    `LEC_RESULT=UNKNOWN` with `LEC_DIAG=LLHD_ABSTRACTION`; this fix removes a
+    concrete abstraction inflation class but does not yet eliminate the main
+    timeout-frontier root cause on that case.
