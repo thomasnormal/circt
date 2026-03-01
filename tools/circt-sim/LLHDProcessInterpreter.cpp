@@ -497,17 +497,46 @@ static bool shouldDenyUnmappedZeroArgUvmHelperCall(mlir::func::FuncOp funcOp) {
       nullptr;
   if (allowUnsafeZeroArgHelpers)
     return false;
-  return funcOp.getNumArguments() == 0 &&
-         isPointerLikeUvmHelperName(funcOp.getName());
+  llvm::StringRef calleeName = funcOp.getName();
+  static bool allowNativeUvmReportingOptIn = []() {
+    return std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr ||
+           std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING") != nullptr;
+  }();
+  if (allowNativeUvmReportingOptIn &&
+      (calleeName == "uvm_pkg::uvm_get_report_object" ||
+       calleeName.ends_with("::uvm_get_report_object")))
+    return false;
+  return funcOp.getNumArguments() == 0 && isPointerLikeUvmHelperName(calleeName);
 }
 
 static bool shouldDenyUnmappedNativeCallByDefault(mlir::func::FuncOp funcOp) {
   llvm::StringRef calleeName = funcOp.getName();
+  auto isReportingOptInUnmappedAllowName = [&](llvm::StringRef name) -> bool {
+    if (name.contains("::uvm_printer_element::get_children") ||
+        name.contains("::uvm_printer_element_proxy::get_immediate_children"))
+      return false;
+    return name.contains("::uvm_report_handler::") ||
+           name.contains("::uvm_report_object::") ||
+           name.contains("process_report_message") ||
+           name == "uvm_pkg::uvm_get_report_object" ||
+           name.ends_with("::uvm_get_report_object");
+  };
+  static bool allowNativeUvmReportingOptIn = []() {
+    return std::getenv("CIRCT_AOT_AGGRESSIVE_UVM") != nullptr ||
+           std::getenv("CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING") != nullptr;
+  }();
   // Package-qualified UVM helpers often depend on interpreter-side behavior
   // (interceptors, pointer canonicalization, and scheduler integration). If a
   // direct func.call has no FuncId mapping, keep these interpreted by default.
-  if (calleeName.starts_with("uvm_pkg::"))
+  if (calleeName.starts_with("uvm_pkg::")) {
+    // Reporting opt-in should be compile/runtime-consistent: when reporting
+    // helpers are intentionally left native, do not demote them solely due to
+    // generic unmapped uvm_pkg::* policy.
+    if (allowNativeUvmReportingOptIn &&
+        isReportingOptInUnmappedAllowName(calleeName))
+      return false;
     return true;
+  }
 
   // Unqualified generated helper names for pointer-bearing UVM state are not
   // ABI-stable across interpreted/native boundaries. Keep these interpreted by
