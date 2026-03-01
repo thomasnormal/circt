@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nimport json\nimport os\nfrom pathlib import Path\nPath(os.environ[\"FORMAL_RESULTS_JSONL_OUT\"]).write_text(json.dumps({\"schema_version\": 1, \"suite\": \"toy\"}) + \"\\n\", encoding=\"utf-8\")\nPath(os.environ[\"OUT\"]).write_text(\"PASS\\tcase0\\t/tmp/case0.sv\\n\", encoding=\"utf-8\")\n' > %t/bin/fake_invalid_schema_runner.py
+// RUN: chmod +x %t/bin/fake_invalid_schema_runner.py
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-schema-validation --command suite=toy --command mode=LEC --command id=invalid_schema_case --command cwd=%t --command command='python3 bin/fake_invalid_schema_runner.py'
+// RUN: not python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out --repeat 1 --validate-results-schema --stop-on-command-failure
+// RUN: python3 -c "import csv; row = next(csv.DictReader(open('%t/out/execution.tsv', encoding='utf-8'), delimiter='\\t')); assert row['returncode'] == '0'; assert row['schema_validation_rc'] == '1'"

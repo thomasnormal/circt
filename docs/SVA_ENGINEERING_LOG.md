@@ -2,6 +2,32 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0/WS6 bridge: baseline schema-validation gate):
+  - realization:
+    - baseline capture reproducibility was checking drift only, but did not
+      gate malformed `results.jsonl` payloads from command lanes.
+    - this allowed command-level schema regressions to pass capture runs and
+      surface only later in downstream dashboards.
+  - implemented:
+    - `utils/formal/capture_formal_baseline.py`
+      - added `--validate-results-schema` to validate successful lane JSONL
+        outputs via `validate_formal_results_schema.py`.
+      - `execution.tsv` now records:
+        - `schema_validation_rc`
+        - `schema_summary_json`
+      - schema validation failures now fail the capture run (and obey
+        `--stop-on-command-failure`).
+    - tests:
+      - updated `test/Tools/formal-capture-baseline.test` to exercise schema
+        validation on the success path.
+      - added `test/Tools/formal-capture-baseline-schema-validate.test` to
+        assert invalid JSONL schema rows surface as capture failures.
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-log-cap.test test/Tools/formal-capture-baseline-invalid-timeout.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-drift-compare.test`
+      - result: `8/8` pass.
+
 - Iteration update (WS0 baseline artifact retention: log size cap):
   - realization:
     - repeated real formal captures can produce very large command logs and

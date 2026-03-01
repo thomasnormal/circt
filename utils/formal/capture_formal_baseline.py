@@ -231,6 +231,21 @@ def compare_drift(
     return proc.returncode
 
 
+def validate_results_schema(
+    *, validator_script: Path, jsonl_path: Path, summary_json: Path
+) -> int:
+    cmd = [
+        sys.executable,
+        str(validator_script),
+        "--jsonl",
+        str(jsonl_path),
+        "--summary-json",
+        str(summary_json),
+    ]
+    proc = subprocess.run(cmd, check=False)
+    return proc.returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Capture repeated formal baseline runs and report drift."
@@ -260,6 +275,14 @@ def main() -> int:
             "(0 disables truncation)."
         ),
     )
+    parser.add_argument(
+        "--validate-results-schema",
+        action="store_true",
+        help=(
+            "Validate each successful command JSONL output with "
+            "validate_formal_results_schema.py."
+        ),
+    )
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--stop-on-command-failure", action="store_true")
     parser.add_argument("--fail-on-status-drift", action="store_true")
@@ -282,6 +305,11 @@ def main() -> int:
     drift_script = (Path(__file__).resolve().parent / "compare_formal_results_drift.py")
     if not drift_script.is_file():
         fail(f"drift comparator script not found: {drift_script}")
+    validator_script = (
+        Path(__file__).resolve().parent / "validate_formal_results_schema.py"
+    )
+    if args.validate_results_schema and not validator_script.is_file():
+        fail(f"schema validator script not found: {validator_script}")
 
     manifest_payload, commands = load_manifest_commands(manifest_path)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -306,6 +334,16 @@ def main() -> int:
                 default_command_timeout_secs=args.command_timeout_secs,
                 max_log_bytes=args.max_log_bytes,
             )
+            schema_validation_rc = 0
+            schema_summary_path = ""
+            if args.validate_results_schema and returncode == 0:
+                schema_summary = command_dir / "results_schema_summary.json"
+                schema_validation_rc = validate_results_schema(
+                    validator_script=validator_script,
+                    jsonl_path=out_jsonl,
+                    summary_json=schema_summary,
+                )
+                schema_summary_path = str(schema_summary)
             execution_rows.append(
                 (
                     str(run_index),
@@ -324,9 +362,11 @@ def main() -> int:
                     str(out_tsv),
                     str(out_jsonl),
                     str(log_path),
+                    str(schema_validation_rc),
+                    schema_summary_path,
                 )
             )
-            if returncode != 0:
+            if returncode != 0 or schema_validation_rc != 0:
                 execution_rc = 1
                 if args.stop_on_command_failure:
                     break
@@ -338,7 +378,8 @@ def main() -> int:
         handle.write(
             "run_index\tcommand_index\tsuite\tmode\tcase_label\treturncode\t"
             "command_cwd\tcommand_timeout_secs\tcommand\tresults_tsv\t"
-            "results_jsonl\tlog_path\n"
+            "results_jsonl\tlog_path\tschema_validation_rc\t"
+            "schema_summary_json\n"
         )
         for row in execution_rows:
             handle.write("\t".join(row))

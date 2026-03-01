@@ -384,6 +384,8 @@ Current workstream status in this branch:
      stdout/stderr payloads (no Python type crash)
    - baseline capture now supports per-command log size caps via
      `--max-log-bytes` to bound artifact growth
+   - baseline capture can now gate command outputs with strict JSONL schema
+     validation (`--validate-results-schema`)
    - first 3-run real mini-baseline completed for AES LEC + sv-tests BMC with zero status/reason/stage drift
    - OpenTitan connectivity LEC lane remains the timeout frontier blocker for full WS0 parity capture
 2. WS1: in progress
@@ -406,6 +408,8 @@ Current workstream status in this branch:
    - JSONL schema emission landed in major runners
    - strict schema validation tooling landed (`validate_formal_results_schema.py`)
    - JSONL->TSV migration adapter landed (`formal_results_jsonl_to_tsv.py`)
+   - WS0 capture integration now supports per-command schema validation gating
+     and surfaces per-run schema validation rc in `execution.tsv`
    - schema docs + dashboards still pending
 
 ## 17. Execution Backlog (Ticket-Level)
