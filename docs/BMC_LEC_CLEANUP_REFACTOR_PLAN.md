@@ -438,6 +438,8 @@ Current workstream status in this branch:
      outputs over multi-file JSONL inputs
    - dashboard aggregator now enforces strict schema enums and reason-code
      invariants to prevent malformed rows from polluting trend reports
+   - dashboard aggregator now enforces full required-field presence for schema
+     rows before aggregation
    - baseline capture now supports optional schema-only dashboard emission via
      `--dashboard-*` outputs, closing WS0 capture -> WS6 dashboard handoff
    - dashboard aggregation now includes expected-returncode frontier lanes

@@ -27,6 +27,21 @@ ALLOWED_STATUS = {
     "XPASS",
 }
 ALLOWED_STAGES = {"frontend", "lowering", "solver", "result", "postprocess"}
+REQUIRED_FIELDS = (
+    "schema_version",
+    "suite",
+    "mode",
+    "case_id",
+    "case_path",
+    "status",
+    "reason_code",
+    "stage",
+    "solver",
+    "solver_time_ms",
+    "frontend_time_ms",
+    "log_path",
+    "artifact_dir",
+)
 
 
 def fail(path: Path, line_no: int, msg: str) -> NoReturn:
@@ -186,6 +201,9 @@ def main() -> int:
                 fail(path, line_no, f"invalid JSON: {exc}")
             if not isinstance(payload, dict):
                 fail(path, line_no, "row must be a JSON object")
+            for field in REQUIRED_FIELDS:
+                if field not in payload:
+                    fail(path, line_no, f"missing required field: {field}")
             schema_version = payload.get("schema_version")
             if schema_version != 1:
                 fail(path, line_no, "schema_version must be 1")

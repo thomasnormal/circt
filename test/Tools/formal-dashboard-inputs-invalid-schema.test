@@ -3,6 +3,12 @@
 // RUN: not python3 %S/../../utils/formal/build_formal_dashboard_inputs.py --jsonl %t/bad-status.jsonl --summary-json %t/out.json 2>&1 | FileCheck %s --check-prefix=BADSTATUS
 // RUN: printf '{"schema_version":1,"suite":"toy","mode":"LEC","case_id":"bad_reason","case_path":"/tmp/bad_reason.sv","status":"FAIL","reason_code":"","stage":"result","solver":"z3","solver_time_ms":1,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n' > %t/bad-reason.jsonl
 // RUN: not python3 %S/../../utils/formal/build_formal_dashboard_inputs.py --jsonl %t/bad-reason.jsonl --summary-json %t/out2.json 2>&1 | FileCheck %s --check-prefix=BADREASON
+// RUN: printf '{"schema_version":1,"suite":"toy","mode":"LEC","case_id":"missing_log","case_path":"/tmp/missing_log.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":1,"frontend_time_ms":1,"artifact_dir":""}\n' > %t/missing-log-path.jsonl
+// RUN: not python3 %S/../../utils/formal/build_formal_dashboard_inputs.py --jsonl %t/missing-log-path.jsonl --summary-json %t/out3.json 2>&1 | FileCheck %s --check-prefix=MISSINGLOG
+// RUN: printf '{"schema_version":1,"suite":"toy","mode":"LEC","case_id":"missing_solver_time","case_path":"/tmp/missing_solver_time.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","frontend_time_ms":1,"log_path":"","artifact_dir":""}\n' > %t/missing-solver-time.jsonl
+// RUN: not python3 %S/../../utils/formal/build_formal_dashboard_inputs.py --jsonl %t/missing-solver-time.jsonl --summary-json %t/out4.json 2>&1 | FileCheck %s --check-prefix=MISSINGSOLVERTIME
 //
 // BADSTATUS: invalid status: BAD_STATUS
 // BADREASON: reason_code must be non-empty for this status
+// MISSINGLOG: missing required field: log_path
+// MISSINGSOLVERTIME: missing required field: solver_time_ms

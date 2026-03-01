@@ -2,6 +2,26 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6-T4: required-field enforcement for dashboard schema):
+  - realization:
+    - dashboard aggregation still accepted rows missing required schema keys
+      (for example `log_path`, `solver_time_ms`) because missing fields were
+      implicitly defaulted during parsing.
+    - this weakened WS6 schema guarantees and could hide malformed runner
+      outputs in trend dashboards.
+  - implemented:
+    - `utils/formal/build_formal_dashboard_inputs.py` now enforces full
+      required-field presence for schema v1 rows before aggregation.
+    - extended `test/Tools/formal-dashboard-inputs-invalid-schema.test` with
+      missing-required-field cases (`log_path`, `solver_time_ms`).
+  - validation:
+    - `python3 -m py_compile utils/formal/build_formal_dashboard_inputs.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test`
+      - result: `4/4` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `15/15` pass.
+
 - Iteration update (WS6-T4: strict schema validation in dashboard aggregator):
   - realization:
     - `build_formal_dashboard_inputs.py` accepted malformed rows too loosely,
