@@ -2,6 +2,27 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0/WS6: schema validation for expected nonzero lanes):
+  - realization:
+    - `capture_formal_baseline.py` only ran schema validation for
+      `returncode == 0` commands, so expected-returncode frontier lanes (for
+      example `124`) with emitted JSONL payloads bypassed schema gates.
+  - implemented:
+    - updated `utils/formal/capture_formal_baseline.py` so schema validation
+      runs when:
+      - command return code is expected, and
+      - either return code is `0`, or nonzero with non-empty JSONL output.
+    - added
+      `test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test`
+      to lock nonzero-expected schema validation behavior.
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline.test`
+      - result: `4/4` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `16/16` pass.
+
 - Iteration update (WS6-T4: required-field enforcement for dashboard schema):
   - realization:
     - dashboard aggregation still accepted rows missing required schema keys

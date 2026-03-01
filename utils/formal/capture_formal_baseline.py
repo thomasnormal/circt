@@ -299,7 +299,16 @@ def main() -> int:
             command_ok = returncode in entry.expected_returncodes
             schema_validation_rc = 0
             schema_summary_path = ""
-            if args.validate_results_schema and command_ok and returncode == 0:
+            should_validate_schema = False
+            if args.validate_results_schema and command_ok:
+                if returncode == 0:
+                    should_validate_schema = True
+                elif out_jsonl.is_file() and out_jsonl.stat().st_size > 0:
+                    # For expected non-zero lanes (for example bounded timeout
+                    # frontier probes), validate schema when a JSONL payload is
+                    # present; keep empty timeout outputs as non-fatal.
+                    should_validate_schema = True
+            if should_validate_schema:
                 schema_summary = command_dir / "results_schema_summary.json"
                 schema_validation_rc = validate_results_schema(
                     validator_script=validator_script,

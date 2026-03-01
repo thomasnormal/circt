@@ -444,6 +444,8 @@ Current workstream status in this branch:
      `--dashboard-*` outputs, closing WS0 capture -> WS6 dashboard handoff
    - dashboard aggregation now includes expected-returncode frontier lanes
      (for example bounded timeout `124`) when JSONL outputs are present
+   - schema validation now covers expected nonzero-return lanes when they emit
+     JSONL payloads, preserving schema gates on bounded-timeout frontier data
    - schema docs still pending
 
 ## 17. Execution Backlog (Ticket-Level)
