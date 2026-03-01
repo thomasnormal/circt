@@ -147,6 +147,7 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `2fdae8fcf` | [ArcRuntime][VCDTrace] Fix final time step on empty trace buffer (#9554) | Cherry-pick obsolete for this branch: touched `include/circt/Dialect/Arc/Runtime/TraceEncoder.h` and `lib/Dialect/Arc/Runtime/VCDTraceEncoder.cpp`, which are deleted in current `HEAD`. Aborted. |
 | `6542026a9` | [FIRRTL] Improve error messages for domain symbol verification (#9776) | Direct pick does not compile in this fork because it references `DomainCreateOp`, which is not present yet; reverted and deferred as a bundle with `#9774`. |
 | `274eeb55d` | [FIRRTL] Add domain create op (#9774) | Deferred intentionally: broader parser/emitter/infer-domains change set; pick together with `#9776` to avoid intermediate breakage. |
+| `89778e1be` | [ImportVerilog] Fix silent failure on unsupported system calls (#9556) | Cherry-pick collapsed to a test-only delta in this fork and failed: local ImportVerilog already supports `$fwrite`, so the upstream expected-error no longer applies. Reverted. |
 
 ### Resume Pointer
 
