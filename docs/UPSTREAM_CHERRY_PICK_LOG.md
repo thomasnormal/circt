@@ -117,6 +117,10 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `0ba927a2d` | `10fbfc9b1` | [FIRRTL][Reduce] Fix module-port-pruner crash with probe ports (#9694) | Applied cleanly; validated with `test/Dialect/FIRRTL/Reduction/module-port-pruner-probe.mlir` after rebuilding `circt-reduce`. |
 | `a6db148dc` | `a0ddbccf0` | [FIRRTL] Fix domain info updates in cloneWithInsertedPorts (#9758) | Applied cleanly; validated with `test/Dialect/FIRRTL/lower-open-aggs.mlir`. |
 | `6ce0145a0` | `e5d5eb6b0` | [SCFToCalyx] Fix incorrect assert in setResultRegs for scf::IfOp (#9721) | Applied cleanly; validated with full `test/Conversion/SCFToCalyx` suite (8/8). |
+| `7dfcf7a2a` | `49e7f3af0` | [HW] Make sure the index type for arrays is at least i1 (#9733) | Applied cleanly; validated with `test/Dialect/HW/hw-convert-bitcasts.mlir`. |
+| `4ee685039` | `7a25c970c` | [HWToLLVM] Take the correct data layout alignment for alloca (#9734) | Applied cleanly; added upstream regression `test/Conversion/HWToLLVM/spill_alignment.mlir` and validated HWToLLVM suite. |
+| `7418b8870` | `1f510c056` | [Arc] Add time operations for LLHD simulation support (#9747) | Applied cleanly; validated with `test/Dialect/Arc/allocate-state.mlir`. |
+| `020c44ba7` | `4cd8e5fe6` | [Arc] Lower llhd.current_time to Arc in LowerState (#9756) | Applied cleanly; validated with `test/Dialect/Arc/lower-state.mlir`. |
 
 ### Attempted But Deferred
 
@@ -126,6 +130,7 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `17330f8a9` | [Moore][ImportVerilog] Add support for fork-join blocks (#9682) | Cherry-pick produced semantic conflict in `lib/Conversion/ImportVerilog/Statements.cpp`; local implementation is already substantially diverged/richer. Aborted pick to avoid regression. |
 | `3e24b7764` | [ImportVerilog] Fix $changed PastOp creation (#9652) | Cherry-pick conflicts with current assertion lowering architecture (`convertAssertionSystemCallArity1` fastpaths intentionally return `{}`; handling moved elsewhere). Aborted to avoid semantic regression; revisit only with full assertion-path audit. |
 | `79369384c` | [ImportVerilog] Make sampled value functions' results usable by Moore ops | Cherry-pick conflicts with current sampled-value lowering and updated `builtins.sv` expectations (our tree uses different lowering path with `moore.past` checks). Aborted pending a targeted semantic audit instead of mechanical porting. |
+| `2fdae8fcf` | [ArcRuntime][VCDTrace] Fix final time step on empty trace buffer (#9554) | Cherry-pick obsolete for this branch: touched `include/circt/Dialect/Arc/Runtime/TraceEncoder.h` and `lib/Dialect/Arc/Runtime/VCDTraceEncoder.cpp`, which are deleted in current `HEAD`. Aborted. |
 
 ### Resume Pointer
 
@@ -134,4 +139,4 @@ by concurrent local edits:
 
 1. `d3ddbe121` after `ImportVerilogInternals.h` is clean.
 2. `17330f8a9` only if we intentionally reconcile fork/join lowering semantics in `Statements.cpp`.
-3. next clean bug-fix candidates in non-dirty subsystems (Arc/HW/FIRRTL) while ImportVerilog core internals remain actively edited locally.
+3. remaining clean bug-fix candidates in non-dirty subsystems (Arc/HW/FIRRTL) while ImportVerilog core internals remain actively edited locally.
