@@ -1,0 +1,15 @@
+[options]
+
+[gold]
+read_verilog -sv lec_simple.sv
+prep -top modA
+rename modA top
+
+[gate]
+read_verilog -sv lec_simple.sv
+prep -top modB
+rename modB top
+
+[strategy simple]
+use sat
+depth 1
