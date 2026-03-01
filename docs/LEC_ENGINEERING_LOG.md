@@ -818,3 +818,51 @@
   - real OpenTitan repro (`CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN`) now returns
     `LEC_RESULT=NEQ` (previously `UNKNOWN/LLHD_ABSTRACTION`), showing the prior
     LLHD abstraction acceptance on this case was classification scope drift.
+
+## 2026-03-01 - Preserve indexed-element width without illegal `$bits(<hierarchical>)`
+
+- realization:
+  - the first width-preserving fix for `rewrite_const_indexed_bit` used
+    `$bits(base_expr)` and `$size(base_expr)` directly on hierarchical paths.
+  - real OpenTitan run on
+    `clkmgr_cg_en.csv:CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN` failed at frontend:
+    `error: hierarchical references are not allowed in calls to '$bits'`.
+  - this is parser-context sensitive: `$bits(dut.sig)` is rejected in these
+    wrapper expressions, while `$bits(dut.sig[0])` is accepted.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - rewrote constant index lowering to avoid `$bits(<hierarchical>)` in
+      constant-expression contexts.
+    - new form:
+      - `elem_width = $bits(base[0])`
+      - shift right by `index * elem_width`
+      - clear upper bits via left/right trim using
+        `($size(base) - 1) * elem_width`
+    - this preserves selected element width (e.g. packed `mubi4_t` arrays)
+      without illegal hierarchical `$bits(base)`.
+  - test updates:
+    - `test/Tools/run-opentitan-connectivity-circt-lec-bit-select-rewrite.test`
+    - `test/Tools/run-opentitan-connectivity-circt-lec-indexed-array-width-rewrite.test`
+    - both now assert:
+      - no raw `[index]` remains,
+      - no lossy `& 1'b1` pattern,
+      - width handling uses `$bits(base[0])` + `$size(base)`,
+      - illegal `$bits(base)` form is absent.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-bit-select-rewrite.test`
+    and
+    `test/Tools/run-opentitan-connectivity-circt-lec-indexed-array-width-rewrite.test`:
+    `2/2` pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `44/44` pass.
+  - real OpenTitan Z3 repro (no smoke):
+    - command uses `LEC_RUN_SMTLIB=1`, `LEC_SMOKE_ONLY=0`,
+      `LEC_ACCEPT_LLHD_ABSTRACTION=0`, `CIRCT_TIMEOUT_SECS=120`.
+    - result:
+      `FAIL connectivity::clkmgr_cg_en.csv:CLKMGR_IO_DIV4_PERI_ALERT_1_CG_EN ... NEQ`
+      with `circt-lec` log `LEC_RESULT=NEQ`.
+    - importantly, this now reaches solver result (no `CIRCT_VERILOG_ERROR`).

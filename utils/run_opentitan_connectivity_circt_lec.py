@@ -705,7 +705,8 @@ def rewrite_const_indexed_bit(expr: str) -> str:
     Some OpenTitan connectivity paths trigger `circt-verilog` crashes in
     SimplifyProcedures when directly using hierarchical constant bit-select
     syntax in generated wrappers. Rewrite the common constant-index case into
-    an equivalent `$unsigned` shift/mask form.
+    an equivalent `$unsigned` shift/mask form while preserving selected element
+    width for unpacked arrays (for example `mubi4_t [N-1:0]`).
     """
 
     match = CONST_INDEXED_BIT_RE.fullmatch(expr.strip())
@@ -713,7 +714,13 @@ def rewrite_const_indexed_bit(expr: str) -> str:
         return expr
     base_expr = match.group(1).strip()
     index = match.group(2)
-    return f"((($unsigned({base_expr})) >> {index}) & 1'b1)"
+    elem_width = f"$bits({base_expr}[0])"
+    shift_amount = f"(({index}) * ({elem_width}))"
+    trim_amount = f"(($size({base_expr}) - 1) * ({elem_width}))"
+    shifted = f"(($unsigned({base_expr})) >> {shift_amount})"
+    # Keep only the selected element bits without using `$bits(<hierarchical>)`
+    # in a constant-expression context (which many frontends reject).
+    return f"((({shifted}) << {trim_amount}) >> {trim_amount})"
 
 
 def build_condition_guard_expr(
