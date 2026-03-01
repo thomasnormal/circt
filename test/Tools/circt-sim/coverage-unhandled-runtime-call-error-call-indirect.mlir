@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: unhandled coverage runtime calls reached via func.call_indirect
 // must fail loudly instead of silently returning X/default values.

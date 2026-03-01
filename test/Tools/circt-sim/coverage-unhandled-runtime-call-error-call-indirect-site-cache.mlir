@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: if a cached func.call_indirect site falls back to interpreted
 // execution and the callee reports an unhandled coverage runtime call, the

@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: unresolved addressof in func.call_indirect must propagate
 // through wrappers that call coverage runtime indirectly via addressof.

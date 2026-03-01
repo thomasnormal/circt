@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: unresolved indirect llvm.call to a direct wrapper symbol must
 // still fail loudly when that wrapper directly calls a coverage runtime symbol.

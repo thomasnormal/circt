@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: unresolved direct addressof wrapper in func.call_indirect must
 // still fail loudly when the wrapper directly calls a coverage runtime symbol.

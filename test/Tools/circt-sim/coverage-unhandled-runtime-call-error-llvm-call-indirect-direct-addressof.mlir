@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: indirect llvm.call through a direct function pointer to a
 // coverage runtime symbol must fail loudly, not silently return X/defaults.

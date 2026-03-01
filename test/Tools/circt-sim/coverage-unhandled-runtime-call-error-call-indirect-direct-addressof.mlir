@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: direct function-pointer call_indirect to a coverage runtime
 // symbol must fail loudly instead of silently degrading to warning+zero.

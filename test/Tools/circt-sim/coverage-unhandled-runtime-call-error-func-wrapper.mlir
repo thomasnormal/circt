@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: when an inner llvm.call reports an unhandled coverage runtime
 // call, enclosing func.call frames must not absorb that failure and continue.

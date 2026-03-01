@@ -1,5 +1,5 @@
 // RUN: circt-compile %s -o %t.so
-// RUN: circt-sim %s --compiled=%t.so --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --compiled=%t.so --top top 2>&1 | FileCheck %s
 //
 // Regression: AOT/native func.call dispatch must not silently bypass unhandled
 // coverage runtime call errors in nested llvm.call sites.

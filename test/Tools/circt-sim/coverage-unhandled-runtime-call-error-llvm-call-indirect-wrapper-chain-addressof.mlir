@@ -1,4 +1,4 @@
-// RUN: circt-sim %s --top top 2>&1 | FileCheck %s
+// RUN: not circt-sim %s --top top 2>&1 | FileCheck %s
 //
 // Regression: unresolved direct addressof in llvm.call must propagate through
 // wrapper chains (wrapper1 -> wrapper2 -> coverage runtime).
