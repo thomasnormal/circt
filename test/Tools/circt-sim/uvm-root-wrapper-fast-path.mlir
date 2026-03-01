@@ -1,10 +1,8 @@
 // RUN: circt-sim %s | FileCheck %s
 //
-// Verify global-root wrapper interception:
-//   - m_uvm_get_root()
-//   - uvm_pkg::uvm_get_report_object()
-// Both should return uvm_root::m_inst once initialized, even if function
-// bodies would otherwise return null.
+// Verify global-root behavior:
+//   - m_uvm_get_root() still uses the root-wrapper fast-path.
+//   - uvm_pkg::uvm_get_report_object() follows canonical function execution.
 
 module {
   llvm.mlir.global internal @"uvm_pkg::uvm_pkg::uvm_root::m_inst"(#llvm.zero) {
@@ -57,4 +55,4 @@ module {
 }
 
 // CHECK: root fast-path = 1
-// CHECK: report-object fast-path = 1
+// CHECK: report-object fast-path = 0

@@ -1,7 +1,7 @@
 // RUN: circt-sim %s | FileCheck %s
 //
-// Verify report_handler::set_severity_action is suppressed as a no-op for both
-// func.call and call_indirect dispatch.
+// Verify report_handler::set_severity_action executes canonical function bodies
+// for both func.call and call_indirect dispatch.
 
 module {
   llvm.mlir.global internal @counter(0 : i32) : i32
@@ -62,4 +62,4 @@ module {
   }
 }
 
-// CHECK: counter = 0
+// CHECK: counter = 4

@@ -1,6 +1,6 @@
 // RUN: circt-sim %s | FileCheck %s
 
-// Verify targeted report getter fast-paths:
+// Verify canonical report getter execution without legacy native overrides:
 // 1) uvm_report_object::get_report_action/get_report_verbosity_level
 // 2) uvm_report_handler::get_action/get_verbosity_level via call_indirect
 
@@ -109,8 +109,8 @@ module {
   }
 }
 
-// CHECK: ro action info = 1
-// CHECK: ro action error = 41
-// CHECK: ro verbosity = 200
-// CHECK: rh action fatal = 33
-// CHECK: rh verbosity = 200
+// CHECK: ro action info = 77
+// CHECK: ro action error = 77
+// CHECK: ro verbosity = 123
+// CHECK: rh action fatal = 55
+// CHECK: rh verbosity = 66

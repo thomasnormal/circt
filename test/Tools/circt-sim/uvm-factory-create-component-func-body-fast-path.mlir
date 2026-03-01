@@ -1,4 +1,4 @@
-// RUN: circt-sim %s | FileCheck %s
+// RUN: CIRCT_SIM_ENABLE_UVM_FACTORY_FASTPATH=1 circt-sim %s | FileCheck %s
 
 // Verify function-body fast paths for:
 //   - uvm_component_registry_*::initialize (native registration cache)
@@ -52,11 +52,12 @@ module {
       %zero64 = arith.constant 0 : i64
       %zeroPtr = llvm.inttoptr %zero64 : i64 to !llvm.ptr
 
-      %wrapper = llvm.alloca %one x !llvm.struct<(i32, ptr)> : (i64) -> !llvm.ptr
-      %classIdAddr = llvm.getelementptr %wrapper[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, ptr)>
+      // Match fast-path wrapper layout assumptions: class-id at +0, vtable at +4.
+      %wrapper = llvm.alloca %one x !llvm.array<16 x i8> : (i64) -> !llvm.ptr
+      %classIdAddr = llvm.getelementptr %wrapper[0, 0] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<16 x i8>
       %classId = llvm.mlir.constant(1 : i32) : i32
       llvm.store %classId, %classIdAddr : i32, !llvm.ptr
-      %vtableAddr = llvm.getelementptr %wrapper[0, 1] : (!llvm.ptr) -> !llvm.ptr, !llvm.struct<(i32, ptr)>
+      %vtableAddr = llvm.getelementptr %wrapper[0, 4] : (!llvm.ptr) -> !llvm.ptr, !llvm.array<16 x i8>
       %vtable = llvm.mlir.addressof @"uvm_pkg::uvm_component_registry_1::__vtable__" : !llvm.ptr
       llvm.store %vtable, %vtableAddr : !llvm.ptr, !llvm.ptr
 

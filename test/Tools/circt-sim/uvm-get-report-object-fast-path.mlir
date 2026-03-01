@@ -1,8 +1,8 @@
-// RUN: env CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT=1 circt-sim %s | FileCheck %s
+// RUN: circt-sim %s | FileCheck %s
 // RUN: env CIRCT_UVM_ARGS='+UVM_TESTNAME=smoke' circt-sim %s | FileCheck %s
 
-// Verify that uvm_get_report_object fast-path returns `self` for both direct
-// and call_indirect dispatch, even when the callee body returns null.
+// Verify canonical uvm_get_report_object execution (no legacy self-return
+// override) for both direct and call_indirect dispatch.
 
 module {
   // If this body executes, it returns null. The fast-path must return %self.
@@ -57,5 +57,5 @@ module {
   }
 }
 
-// CHECK: direct self-match = 1
-// CHECK: indirect self-match = 1
+// CHECK: direct self-match = 0
+// CHECK: indirect self-match = 0

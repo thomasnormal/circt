@@ -1,4 +1,4 @@
-// RUN: circt-sim %s | FileCheck %s
+// RUN: CIRCT_SIM_ENABLE_UVM_COMPONENT_CHILD_FASTPATHS=1 circt-sim %s | FileCheck %s
 
 // Verify call_indirect fast paths for:
 //  - uvm_component::get_num_children

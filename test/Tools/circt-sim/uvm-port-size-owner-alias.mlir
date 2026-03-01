@@ -1,4 +1,4 @@
-// RUN: circt-sim %s 2>&1 | FileCheck %s
+// RUN: CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS=1 circt-sim %s 2>&1 | FileCheck %s
 //
 // Regression: uvm_port_base::size must resolve owner-alias pointers.
 // A connect() recorded on one subobject pointer should be visible when size()

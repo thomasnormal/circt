@@ -13303,3 +13303,42 @@
     - all passed.
   - manual probe after fix confirmed default path now resolves to in-repo UVM
     (`UVM_INFO lib/Runtime/uvm-core/...`) and by-name/by-type overrides resolve.
+
+## 2026-03-01 - UVM fast-path lit suite realignment after interceptor policy hardening
+
+- realization:
+  - a focused 9-test UVM lit subset under `test/Tools/circt-sim/` failed after
+    interceptor default-policy hardening.
+  - failures were split between:
+    - stale test assumptions (legacy always-on fast-path expectations),
+    - one fixture mismatch in the factory fast-path test (wrapper memory layout
+      did not match the fast-path vtable read convention at offset `+4`).
+  - `uvm-run-test-single-entry-guard.mlir` also drifted because runtime hard
+    failure propagation now returns non-zero on interpreter op failure.
+
+- implemented:
+  - updated opt-in fast-path tests to set required env gates explicitly:
+    - `CIRCT_SIM_ENABLE_UVM_COMPONENT_CHILD_FASTPATHS`
+    - `CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS`
+    - `CIRCT_SIM_ENABLE_UVM_FACTORY_FASTPATH`
+  - updated canonical-fallback tests to assert non-intercepted behavior for:
+    - report getters,
+    - `uvm_get_report_object`,
+    - report-handler severity-action body execution.
+  - fixed factory fast-path fixture layout:
+    - `uvm-factory-create-component-func-body-fast-path.mlir` now stores the
+      wrapper vtable pointer at byte offset `+4` in a raw byte buffer, matching
+      the fast-path test model.
+  - updated single-entry guard lit semantics:
+    - `uvm-run-test-single-entry-guard.mlir` now uses `not ... | FileCheck`.
+
+- validation:
+  - focused failing subset:
+    - `build_test/bin/llvm-lit -sv` on the 9 previously failing tests
+    - result: 9/9 passed.
+  - semantic sanity sweep:
+    - `test/Runtime/uvm/uvm_get_report_object_semantic_test.sv`
+    - `test/Runtime/uvm/uvm_simple_test.sv`
+    - `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
+    - `test/Tools/circt-sim/uvm-component-get-child-bracket-runtime.sv`
+    - result: 4/4 passed.

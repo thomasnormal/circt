@@ -73,6 +73,15 @@ reduction must be staged and measurable.
   - semantic gates now green:
     - `test/Tools/circt-sim/uvm-factory-type-override-by-type-runtime.sv`
     - `test/Tools/circt-sim/uvm-factory-type-override-run-phase-randomize-runtime.sv`
+- [x] Realigned legacy UVM fast-path lit gates to the current interceptor policy:
+  - opt-in fast-path tests now set the required env gates explicitly:
+    - `CIRCT_SIM_ENABLE_UVM_COMPONENT_CHILD_FASTPATHS`
+    - `CIRCT_SIM_ENABLE_UVM_ANALYSIS_NATIVE_INTERCEPTS`
+    - `CIRCT_SIM_ENABLE_UVM_FACTORY_FASTPATH`
+  - canonical-fallback tests now assert non-intercepted behavior for report
+    getters and `uvm_get_report_object` paths.
+  - `uvm-run-test-single-entry-guard.mlir` now expects hard failure propagation
+    (`not circt-sim ...`) under `CIRCT_SIM_ENFORCE_SINGLE_RUN_TEST=1`.
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality still needs core runtime closure (no retry dependence).
   - `axi4Lite` interpreted run remains nondeterministic across two failure modes:
