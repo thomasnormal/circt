@@ -22148,6 +22148,17 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     }
     outResult = results.front();
 
+    // Treat null wrapper-create results as interceptor misses so callers can
+    // fall back to alternate slots or canonical factory execution.
+    if (!outResult.isX() && outResult.getUInt64() == 0) {
+      if (traceUvmFactoryByType)
+        llvm::errs() << "[UVM-BYTYPE] invoke miss: wrapper returned null"
+                     << " wrapper=0x" << llvm::format_hex(wrapperAddr, 16)
+                     << " slot=" << slotIndex << " callee=" << funcIt->second
+                     << "\n";
+      return false;
+    }
+
     if (!outResult.isX()) {
       uint64_t objAddr = outResult.getUInt64();
       if (objAddr != 0) {

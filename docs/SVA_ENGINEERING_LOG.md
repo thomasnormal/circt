@@ -10449,3 +10449,39 @@
   - cross-check slice:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `26 passed, 1 expectedly failed` (remaining `uvm-factory-create-null-parent.sv`).
+
+## 2026-03-01 - UVM factory null-parent component create semantics
+
+- realization:
+  - `test/Tools/crun/uvm-factory-create-null-parent.sv` originally failed with
+    `UVM_FATAL [FCTTYP]` (factory returned null component for null-parent
+    create).
+  - Tracing showed wrapper-factory interception accepted null results as
+    success, which prematurely short-circuited alternate slot/canonical
+    execution in by-type helper fallback paths.
+  - After fixing null-result handling, the remaining failure mode became the
+    expected UVM lifecycle legality (`ILLCRT`) because the test created the
+    component in `run_phase`.
+
+- implemented:
+  - Runtime fix in `tools/circt-sim/LLHDProcessInterpreter.cpp`:
+    - `tryInvokeWrapperFactoryMethod` now treats null returned objects as
+      interceptor misses instead of success, allowing fallback paths to
+      continue.
+  - Test semanticization in
+    `test/Tools/crun/uvm-factory-create-null-parent.sv`:
+    - removed `XFAIL`.
+    - moved null-parent component creation into `build_phase`.
+
+- validation:
+  - red #1 before runtime fix:
+    - `build_test/bin/crun test/Tools/crun/uvm-factory-create-null-parent.sv --top tb_top -v 0`
+    - observed `UVM_FATAL [FCTTYP]`.
+  - red #2 after runtime fix, before test semanticization:
+    - observed `UVM_FATAL [ILLCRT]` due run-phase create.
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create-null-parent.sv`
+    - result: `1 passed`.
+  - cross-check slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `27 passed`.

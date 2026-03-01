@@ -1,7 +1,7 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
 
-// Negative test: create component with null parent. Should work (orphan component).
+// Test: create component with null parent in build_phase (orphan component).
 
 // CHECK: [TEST] null parent create: PASS
 // CHECK: [circt-sim] Simulation completed
@@ -21,29 +21,27 @@ module tb_top;
 
   class neg_factory_null_parent_test extends uvm_test;
     `uvm_component_utils(neg_factory_null_parent_test)
+    neg_child_comp comp;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
-    task run_phase(uvm_phase phase);
-      neg_child_comp comp;
+    function void build_phase(uvm_phase phase);
       uvm_report_server srv;
-      phase.raise_objection(this);
+      super.build_phase(phase);
 
       srv = uvm_report_server::get_server();
       srv.set_max_quit_count(100);
 
-      // Create component with null parent
+      // Create component with null parent during build_phase.
       comp = neg_child_comp::type_id::create("orphan", null);
 
       if (comp != null)
         `uvm_info("TEST", "null parent create: PASS", UVM_LOW)
       else
         `uvm_error("TEST", "null parent create: FAIL (got null)")
-
-      phase.drop_objection(this);
-    endtask
+    endfunction
   endclass
 
   initial run_test("neg_factory_null_parent_test");
