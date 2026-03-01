@@ -330,7 +330,7 @@ def main() -> int:
                     schema_summary_path,
                 )
             )
-            if command_ok and returncode == 0 and out_jsonl.is_file():
+            if command_ok and out_jsonl.is_file():
                 dashboard_jsonl_inputs.append(out_jsonl.resolve())
             if not command_ok or schema_validation_rc != 0:
                 execution_rc = 1
@@ -354,8 +354,8 @@ def main() -> int:
     if dashboard_requested:
         if not dashboard_jsonl_inputs:
             fail(
-                "dashboard outputs requested but no successful command JSONL "
-                "outputs were captured"
+                "dashboard outputs requested but no expected-returncode "
+                "command JSONL outputs were captured"
             )
         dashboard_cmd = [sys.executable, str(dashboard_script)]
         for jsonl_path in dashboard_jsonl_inputs:

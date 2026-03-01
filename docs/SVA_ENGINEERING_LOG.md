@@ -2,6 +2,30 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0/WS6: dashboard capture includes expected-returncode lanes):
+  - realization:
+    - baseline dashboard export path only consumed `returncode == 0` command
+      JSONLs, which excluded timeout-frontier lanes explicitly modeled with
+      nonzero `expected_returncodes` (for example `124`).
+    - this prevented schema-only dashboard summaries from reflecting real
+      expected timeout frontier outputs.
+  - implemented:
+    - updated `utils/formal/capture_formal_baseline.py` dashboard input
+      collection to include JSONL outputs from all commands whose return code
+      satisfies `expected_returncodes`, not only zero-return commands.
+    - updated dashboard empty-input diagnostic to match expected-returncode
+      semantics.
+    - added
+      `test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test`
+      to lock this behavior.
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test`
+      - result: `5/5` pass.
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `14/14` pass.
+
 - Iteration update (WS6-T4: baseline capture dashboard integration):
   - realization:
     - dashboard aggregation existed as a standalone utility, but WS0 baseline

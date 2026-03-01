@@ -1,0 +1,21 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nimport json\nimport os\nimport sys\nfrom pathlib import Path\nrow = {\n  "schema_version": 1,\n  "suite": "toy",\n  "mode": "LEC",\n  "case_id": "timeout_case",\n  "case_path": "/tmp/timeout_case.sv",\n  "status": "TIMEOUT",\n  "reason_code": "SOLVER_COMMAND_TIMEOUT",\n  "stage": "solver",\n  "solver": "z3",\n  "solver_time_ms": 50,\n  "frontend_time_ms": 3,\n  "log_path": "",\n  "artifact_dir": ""\n}\nPath(os.environ["FORMAL_RESULTS_JSONL_OUT"]).write_text(json.dumps(row) + "\\n", encoding="utf-8")\nPath(os.environ["OUT"]).write_text("TIMEOUT\\ttimeout_case\\t/tmp/timeout_case.sv\\n", encoding="utf-8")\nsys.exit(124)\n' > %t/bin/fake_timeout_runner.py
+// RUN: chmod +x %t/bin/fake_timeout_runner.py
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-dashboard-expected-rc --command suite=toy --command mode=LEC --command id=timeout_case --command cwd=%t --command expected_returncodes=124 --command command='python3 bin/fake_timeout_runner.py'
+// RUN: python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out --repeat 1 --dashboard-summary-json %t/out/dashboard/summary.json --dashboard-status-tsv %t/out/dashboard/status.tsv --dashboard-top-timeout-reasons-tsv %t/out/dashboard/timeout_reasons.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/dashboard/summary.json
+// RUN: FileCheck %s --check-prefix=STATUS < %t/out/dashboard/status.tsv
+// RUN: FileCheck %s --check-prefix=TIMEOUT-REASONS < %t/out/dashboard/timeout_reasons.tsv
+//
+// SUMMARY-DAG: "rows": 1
+// SUMMARY-DAG: "timeout_rows": 1
+// SUMMARY-DAG: "status_counts": {
+// SUMMARY-DAG: "TIMEOUT": 1
+// SUMMARY-DAG: "reason_code": "SOLVER_COMMAND_TIMEOUT"
+//
+// STATUS: suite{{[[:space:]]+}}mode{{[[:space:]]+}}status{{[[:space:]]+}}count
+// STATUS: toy{{[[:space:]]+}}LEC{{[[:space:]]+}}TIMEOUT{{[[:space:]]+}}1
+//
+// TIMEOUT-REASONS: reason_code{{[[:space:]]+}}count
+// TIMEOUT-REASONS: SOLVER_COMMAND_TIMEOUT{{[[:space:]]+}}1
