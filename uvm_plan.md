@@ -45,6 +45,10 @@ reduction must be staged and measurable.
   - semantic gates now green again:
     - `test/Runtime/uvm/uvm_simple_test.sv`
     - `test/Tools/crun/uvm-phase-objection-timeout.sv`
+- [x] Closed phase ordering semantic regression for static singleton handles:
+  - replaced fixed-delta IMP→wrapper remap reliance with observed IMP→wrapper mapping in runtime phase canonicalization.
+  - semantic gate now green:
+    - `test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv`
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality still needs core runtime closure (no retry dependence), with current highest-priority failure:
     - `axi4Lite` interpreted startup `FCTTYP` null-return (`create_8074`/`create_by_type`) after call-indirect depth warning.

@@ -4121,6 +4121,12 @@ private:
   llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 16>>
       phaseRootImpSequence;
 
+  /// Observed mapping from phase IMP object pointer to active graph wrapper.
+  /// Learned from concrete wrapper nodes (m_imp != null) and used to
+  /// canonicalize static singleton phase handles (uvm_*_phase::get()) without
+  /// relying on fragile fixed wrapper deltas.
+  llvm::DenseMap<uint64_t, uint64_t> phaseImpToWrapper;
+
   /// Active common-domain root phase pointer observed from get_common_domain().
   uint64_t activePhaseRootAddr = 0;
 

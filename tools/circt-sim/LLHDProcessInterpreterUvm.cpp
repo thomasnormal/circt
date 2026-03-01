@@ -317,16 +317,51 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
   if (normalized == 0)
     normalized = phaseAddr;
 
+  auto rememberImpToWrapper = [&](uint64_t impAddr, uint64_t wrapperAddr) {
+    if (impAddr == 0 || wrapperAddr == 0 || impAddr == wrapperAddr)
+      return;
+    phaseImpToWrapper[impAddr] = wrapperAddr;
+  };
+
   uint64_t phaseImpAddr = readUvmPhaseImpAddress(procId, normalized);
+  if (phaseImpAddr != 0)
+    rememberImpToWrapper(phaseImpAddr, normalized);
   // Static phase handles (e.g. uvm_build_phase::get()) can point at IMP
   // objects, while runtime traversal expects wrapper nodes whose m_imp points
   // back to that IMP. Canonicalize IMP addresses to wrapper addresses first.
   if (phaseImpAddr == 0) {
+    // Preferred path: use observed IMP->wrapper relationships from active
+    // phase graph operations instead of fixed layout-dependent deltas.
+    auto observedIt = phaseImpToWrapper.find(normalized);
+    if (observedIt != phaseImpToWrapper.end()) {
+      uint64_t observedWrapper = observedIt->second;
+      if (readUvmPhaseImpAddress(procId, observedWrapper) == normalized) {
+        normalized = observedWrapper;
+        phaseImpAddr = readUvmPhaseImpAddress(procId, normalized);
+      } else {
+        phaseImpToWrapper.erase(observedIt);
+      }
+    }
+  }
+  if (phaseImpAddr == 0) {
+    // Bootstrap IMP->wrapper mapping from objection handle keys when available.
+    for (const auto &[phaseKey, _] : phaseObjectionHandles) {
+      if (readUvmPhaseImpAddress(procId, phaseKey) != normalized)
+        continue;
+      rememberImpToWrapper(normalized, phaseKey);
+      normalized = phaseKey;
+      phaseImpAddr = readUvmPhaseImpAddress(procId, normalized);
+      break;
+    }
+  }
+  if (phaseImpAddr == 0) {
     constexpr uint64_t kCommonWrapperDelta = 0xD0;
-    if (normalized <= std::numeric_limits<uint64_t>::max() - kCommonWrapperDelta) {
+    if (normalized <=
+        std::numeric_limits<uint64_t>::max() - kCommonWrapperDelta) {
       uint64_t wrapperCandidate = normalized + kCommonWrapperDelta;
       uint64_t wrapperImpAddr = readUvmPhaseImpAddress(procId, wrapperCandidate);
       if (wrapperImpAddr == normalized) {
+        rememberImpToWrapper(normalized, wrapperCandidate);
         normalized = wrapperCandidate;
         phaseImpAddr = wrapperImpAddr;
       }
@@ -451,9 +486,11 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
                          activePhaseRootAddr, normalized, phaseImpAddr);
     }
   }
-  if (activePos != activeSeq.end())
+  if (activePos != activeSeq.end()) {
+    rememberImpToWrapper(phaseImpAddr, normalized);
     return traceReturn("already-in-active-seq", normalized, normalized,
                        phaseImpAddr, phaseImpAddr);
+  }
 
   uint64_t mappedImpAddr = 0;
   for (const auto &entry : phaseRootImpSequence) {
@@ -494,20 +531,27 @@ uint64_t LLHDProcessInterpreter::mapUvmPhaseAddressToActiveGraph(
 
   uint64_t delta = normalized > phaseImpAddr ? (normalized - phaseImpAddr) : 0;
   if (delta <= 0x1000) {
-    if (uint64_t candidate = tryCandidate(delta))
+    if (uint64_t candidate = tryCandidate(delta)) {
+      rememberImpToWrapper(mappedImpAddr, candidate);
       return traceReturn("candidate-from-delta", candidate, normalized,
                          phaseImpAddr, mappedImpAddr);
+    }
   }
-  if (uint64_t candidate = tryCandidate(/*common wrapper delta=*/0xD0))
+  if (uint64_t candidate = tryCandidate(/*common wrapper delta=*/0xD0)) {
+    rememberImpToWrapper(mappedImpAddr, candidate);
     return traceReturn("candidate-from-wrapper-delta", candidate, normalized,
                        phaseImpAddr, mappedImpAddr);
-
-  for (const auto &[phaseKey, _] : phaseObjectionHandles) {
-    if (readUvmPhaseImpAddress(procId, phaseKey) == mappedImpAddr)
-      return traceReturn("candidate-from-objection-map", phaseKey, normalized,
-                         phaseImpAddr, mappedImpAddr);
   }
 
+  for (const auto &[phaseKey, _] : phaseObjectionHandles) {
+    if (readUvmPhaseImpAddress(procId, phaseKey) == mappedImpAddr) {
+      rememberImpToWrapper(mappedImpAddr, phaseKey);
+      return traceReturn("candidate-from-objection-map", phaseKey, normalized,
+                         phaseImpAddr, mappedImpAddr);
+    }
+  }
+
+  rememberImpToWrapper(phaseImpAddr, normalized);
   return traceReturn("fallback-normalized", normalized, normalized,
                      phaseImpAddr, mappedImpAddr);
 }
