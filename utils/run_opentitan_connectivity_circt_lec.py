@@ -1562,6 +1562,15 @@ def main() -> int:
 
     if not args.results_file:
         fail("missing --results-file (or OUT environment)")
+    if (
+        args.status_drift_file
+        or args.status_drift_allowlist_file
+        or args.fail_on_status_drift
+    ) and not args.status_baseline_file:
+        fail(
+            "--status-drift-file/--status-drift-allowlist-file/"
+            "--fail-on-status-drift requires --status-baseline-file"
+        )
 
     target_manifest = Path(args.target_manifest).resolve()
     rules_manifest = Path(args.rules_manifest).resolve()
@@ -1597,11 +1606,6 @@ def main() -> int:
         fail("invalid --rule-shard-count: expected integer >= 1")
     if rule_shard_index >= rule_shard_count:
         fail("invalid --rule-shard-index: expected value < --rule-shard-count")
-    if args.fail_on_status_drift and not args.status_baseline_file:
-        fail("--fail-on-status-drift requires --status-baseline-file")
-    if args.status_drift_allowlist_file and not args.status_baseline_file:
-        fail("--status-drift-allowlist-file requires --status-baseline-file")
-
     allow_exact: set[str] = set()
     allow_prefix: list[str] = []
     allow_regex: list[re.Pattern[str]] = []

@@ -709,6 +709,31 @@
     - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test`
       - result: `5/5` pass.
 
+- Iteration update (WS1: connectivity LEC status-drift output precondition hardening):
+  - realization:
+    - connectivity LEC runner had the same no-op lane as connectivity BMC:
+      `--status-drift-file` could be passed without baseline and silently skip
+      drift evaluation, while only fail/allowlist lanes were guarded.
+  - implemented:
+    - `utils/run_opentitan_connectivity_circt_lec.py`:
+      - unified precondition gate so:
+        - `--status-drift-file`,
+        - `--status-drift-allowlist-file`,
+        - `--fail-on-status-drift`
+        all require `--status-baseline-file`.
+      - moved this guard to run immediately after argument parse, before
+        allowlist file existence checks, to avoid misleading missing-file
+        diagnostics when baseline is absent.
+    - tests:
+      - added
+        `test/Tools/run-opentitan-connectivity-circt-lec-status-drift-requires-baseline.test`
+        covering all three lanes.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-lec-status-summary.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-fail.test`
+      - result: `4/4` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

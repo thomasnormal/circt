@@ -448,6 +448,8 @@ Current workstream status in this branch:
      prerequisites (no silent no-op `--assertion-status-policy-*-file` usage)
    - connectivity status drift output/allowlist/fail lanes now enforce
      baseline prerequisite (no silent no-op drift output mode)
+   - connectivity LEC status drift output/allowlist/fail lanes now enforce
+     baseline prerequisite (aligns with connectivity BMC drift guardrails)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
