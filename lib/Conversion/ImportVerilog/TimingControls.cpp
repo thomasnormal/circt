@@ -20,7 +20,6 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "mlir/IR/IRMapping.h"
-#include <cstdlib>
 #include <limits>
 
 using namespace mlir;
@@ -110,6 +109,59 @@ struct EventControlVisitor {
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
+
+      auto savedInterfaceArg = context.currentInterfaceArg;
+      auto savedInterfaceBody = context.currentInterfaceBody;
+      auto savedSignalNames = context.interfaceSignalNames;
+      auto interfaceGuard = llvm::make_scope_exit([&] {
+        context.currentInterfaceArg = savedInterfaceArg;
+        context.currentInterfaceBody = savedInterfaceBody;
+        context.interfaceSignalNames = std::move(savedSignalNames);
+      });
+
+      // Preserve virtual-interface receiver context for clocking event lowering
+      // so unqualified clock-event signals (e.g. `aclk`) resolve through the
+      // same interface handle as `@(vif.cb)`.
+      auto resolveClockingReceiver = [&]() -> Value {
+        if (auto *memberExpr =
+                ctrl.expr.as_if<slang::ast::MemberAccessExpression>())
+          return context.convertRvalueExpression(memberExpr->value());
+        if (!ctrl.expr.syntax || !context.currentScope)
+          return {};
+        const slang::syntax::ExpressionSyntax *baseSyntax = nullptr;
+        if (auto *memberSyntax = ctrl.expr.syntax->as_if<
+                slang::syntax::MemberAccessExpressionSyntax>())
+          baseSyntax = memberSyntax->left;
+        else if (auto *scopedName =
+                     ctrl.expr.syntax->as_if<slang::syntax::ScopedNameSyntax>())
+          baseSyntax = scopedName->left;
+        if (baseSyntax) {
+          slang::ast::ASTContext astContext(*context.currentScope,
+                                            slang::ast::LookupLocation::max);
+          const auto &baseExpr =
+              slang::ast::Expression::bind(*baseSyntax, astContext);
+          if (!baseExpr.bad()) {
+            if (auto *baseMember =
+                    baseExpr.as_if<slang::ast::MemberAccessExpression>())
+              return context.convertRvalueExpression(baseMember->value());
+            return context.convertRvalueExpression(baseExpr);
+          }
+        }
+        return {};
+      };
+
+      if (Value ifaceArg = resolveClockingReceiver()) {
+        if (ifaceArg && isa<moore::VirtualInterfaceType>(ifaceArg.getType())) {
+          if (auto *ifaceScope = clockingBlock.getParentScope()
+                                     ->asSymbol()
+                                     .as_if<slang::ast::InstanceBodySymbol>()) {
+            context.currentInterfaceArg = ifaceArg;
+            context.currentInterfaceBody = ifaceScope;
+            context.populateInterfaceSignalNameMap(ifaceScope);
+          }
+        }
+      }
+
       auto *prevScope = context.currentScope;
       if (auto *parentScope = clockingBlock.getParentScope())
         context.currentScope = parentScope;
@@ -2045,6 +2097,58 @@ struct LTLClockControlVisitor {
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
+
+      auto savedInterfaceArg = context.currentInterfaceArg;
+      auto savedInterfaceBody = context.currentInterfaceBody;
+      auto savedSignalNames = context.interfaceSignalNames;
+      auto interfaceGuard = llvm::make_scope_exit([&] {
+        context.currentInterfaceArg = savedInterfaceArg;
+        context.currentInterfaceBody = savedInterfaceBody;
+        context.interfaceSignalNames = std::move(savedSignalNames);
+      });
+
+      // Preserve virtual-interface receiver context for clocking event lowering
+      // so unqualified clock-event signals resolve through `@(vif.cb)` handles.
+      auto resolveClockingReceiver = [&]() -> Value {
+        if (auto *memberExpr =
+                ctrl.expr.as_if<slang::ast::MemberAccessExpression>())
+          return context.convertRvalueExpression(memberExpr->value());
+        if (!ctrl.expr.syntax || !context.currentScope)
+          return {};
+        const slang::syntax::ExpressionSyntax *baseSyntax = nullptr;
+        if (auto *memberSyntax = ctrl.expr.syntax->as_if<
+                slang::syntax::MemberAccessExpressionSyntax>())
+          baseSyntax = memberSyntax->left;
+        else if (auto *scopedName =
+                     ctrl.expr.syntax->as_if<slang::syntax::ScopedNameSyntax>())
+          baseSyntax = scopedName->left;
+        if (baseSyntax) {
+          slang::ast::ASTContext astContext(*context.currentScope,
+                                            slang::ast::LookupLocation::max);
+          const auto &baseExpr =
+              slang::ast::Expression::bind(*baseSyntax, astContext);
+          if (!baseExpr.bad()) {
+            if (auto *baseMember =
+                    baseExpr.as_if<slang::ast::MemberAccessExpression>())
+              return context.convertRvalueExpression(baseMember->value());
+            return context.convertRvalueExpression(baseExpr);
+          }
+        }
+        return {};
+      };
+
+      if (Value ifaceArg = resolveClockingReceiver()) {
+        if (ifaceArg && isa<moore::VirtualInterfaceType>(ifaceArg.getType())) {
+          if (auto *ifaceScope = clockingBlock.getParentScope()
+                                     ->asSymbol()
+                                     .as_if<slang::ast::InstanceBodySymbol>()) {
+            context.currentInterfaceArg = ifaceArg;
+            context.currentInterfaceBody = ifaceScope;
+            context.populateInterfaceSignalNameMap(ifaceScope);
+          }
+        }
+      }
+
       auto *prevScope = context.currentScope;
       if (auto *parentScope = clockingBlock.getParentScope())
         context.currentScope = parentScope;
@@ -2473,6 +2577,37 @@ static LogicalResult handleRoot(Context &context,
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
 
+      // When lowering `@(vif.cb)`, slang may hand us only the clocking block
+      // symbol (`cb`). Recover the receiver from syntax while still in the
+      // caller scope and thread it through the recursive clock-event lowering.
+      Value explicitIfaceArg;
+      if (auto *memberExpr =
+              signalCtrl.expr.as_if<slang::ast::MemberAccessExpression>()) {
+        explicitIfaceArg = context.convertRvalueExpression(memberExpr->value());
+      } else if (signalCtrl.expr.syntax && context.currentScope) {
+        const slang::syntax::ExpressionSyntax *baseSyntax = nullptr;
+        if (auto *memberSyntax = signalCtrl.expr.syntax->as_if<
+                slang::syntax::MemberAccessExpressionSyntax>())
+          baseSyntax = memberSyntax->left;
+        else if (auto *scopedName = signalCtrl.expr.syntax->as_if<
+                     slang::syntax::ScopedNameSyntax>())
+          baseSyntax = scopedName->left;
+        if (baseSyntax) {
+          slang::ast::ASTContext astContext(*context.currentScope,
+                                            slang::ast::LookupLocation::max);
+          const auto &baseExpr =
+              slang::ast::Expression::bind(*baseSyntax, astContext);
+          if (!baseExpr.bad()) {
+            if (auto *baseMember =
+                    baseExpr.as_if<slang::ast::MemberAccessExpression>())
+              explicitIfaceArg =
+                  context.convertRvalueExpression(baseMember->value());
+            else
+              explicitIfaceArg = context.convertRvalueExpression(baseExpr);
+          }
+        }
+      }
+
       auto *prevScope = context.currentScope;
       if (auto *parentScope = clockingBlock.getParentScope())
         context.currentScope = parentScope;
@@ -2490,7 +2625,7 @@ static LogicalResult handleRoot(Context &context,
         context.currentInterfaceBody = prevInterfaceBody;
         context.interfaceSignalNames = std::move(prevSignalNames);
       });
-      context.currentInterfaceArg = nullptr;
+      context.currentInterfaceArg = explicitIfaceArg;
       context.currentInterfaceBody = nullptr;
       context.interfaceSignalNames.clear();
 
@@ -2498,35 +2633,14 @@ static LogicalResult handleRoot(Context &context,
         if (auto *ifaceBody =
                 parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
           context.currentInterfaceBody = ifaceBody;
-          if (ifaceBody->parentInstance)
+          if (!context.currentInterfaceArg && ifaceBody->parentInstance)
             context.currentInterfaceArg =
                 context.resolveInterfaceInstance(ifaceBody->parentInstance, loc);
           if (context.currentInterfaceArg &&
               isa<moore::RefType>(context.currentInterfaceArg.getType()))
             context.currentInterfaceArg = moore::ReadOp::create(
                 builder, loc, context.currentInterfaceArg);
-
-          for (auto *symbol : ifaceBody->getPortList()) {
-            if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
-              if (port->internalSymbol)
-                context.interfaceSignalNames[port->internalSymbol] = port->name;
-              context.interfaceSignalNames[port] = port->name;
-            } else if (const auto *multiPort =
-                           symbol->as_if<slang::ast::MultiPortSymbol>()) {
-              for (auto *port : multiPort->ports) {
-                if (port->internalSymbol)
-                  context.interfaceSignalNames[port->internalSymbol] =
-                      port->name;
-                context.interfaceSignalNames[port] = port->name;
-              }
-            }
-          }
-          for (auto &member : ifaceBody->members()) {
-            if (auto *var = member.as_if<slang::ast::VariableSymbol>())
-              context.interfaceSignalNames[var] = var->name;
-            if (auto *net = member.as_if<slang::ast::NetSymbol>())
-              context.interfaceSignalNames[net] = net->name;
-          }
+          context.populateInterfaceSignalNameMap(ifaceBody);
         }
 
       return handleRoot(context, clockEvent, implicitWaitOp);

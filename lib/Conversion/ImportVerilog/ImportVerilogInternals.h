@@ -211,6 +211,8 @@ struct Context {
   InterfaceLowering *
   convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface);
   LogicalResult convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface);
+  void populateInterfaceSignalNameMap(
+      const slang::ast::InstanceBodySymbol *ifaceBody);
   Value resolveInterfaceInstance(const slang::ast::InstanceSymbol *instSym,
                                  Location loc);
   Value resolveInterfaceInstance(const slang::ast::HierarchicalReference &ref,

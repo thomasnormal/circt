@@ -5138,6 +5138,41 @@ Context::convertInterfaceHeader(const slang::ast::InstanceBodySymbol *iface) {
   return &lowering;
 }
 
+void Context::populateInterfaceSignalNameMap(
+    const slang::ast::InstanceBodySymbol *ifaceBody) {
+  interfaceSignalNames.clear();
+  if (!ifaceBody)
+    return;
+
+  for (auto *symbol : ifaceBody->getPortList()) {
+    if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+      if (port->internalSymbol)
+        interfaceSignalNames[port->internalSymbol] = port->name;
+      interfaceSignalNames[port] = port->name;
+      continue;
+    }
+    if (const auto *multiPort = symbol->as_if<slang::ast::MultiPortSymbol>()) {
+      for (auto *port : multiPort->ports) {
+        if (port->internalSymbol)
+          interfaceSignalNames[port->internalSymbol] = port->name;
+        interfaceSignalNames[port] = port->name;
+      }
+    }
+  }
+
+  for (auto &member : ifaceBody->members()) {
+    if (auto *var = member.as_if<slang::ast::VariableSymbol>())
+      interfaceSignalNames[var] = var->name;
+    if (auto *net = member.as_if<slang::ast::NetSymbol>())
+      interfaceSignalNames[net] = net->name;
+    if (auto *inst = member.as_if<slang::ast::InstanceSymbol>()) {
+      if (inst->getDefinition().definitionKind ==
+          slang::ast::DefinitionKind::Interface)
+        interfaceSignalNames[inst] = inst->name;
+    }
+  }
+}
+
 /// Convert an interface body - signals, modports, ports, and procedural code.
 LogicalResult
 Context::convertInterfaceBody(const slang::ast::InstanceBodySymbol *iface) {
@@ -6295,31 +6330,9 @@ Context::convertFunction(const slang::ast::SubroutineSymbol &subroutine) {
     currentInterfaceBody = ifaceBody;
 
     // Build the signal name map for this interface.
-    // We always clear and rebuild the map because we may be processing a
-    // different interface than before (e.g., when converting virtual interface
-    // method calls from within a class, multiple interfaces may have methods
-    // called in sequence).
-    interfaceSignalNames.clear();
-    for (auto *symbol : ifaceBody->getPortList()) {
-      if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
-        if (port->internalSymbol)
-          interfaceSignalNames[port->internalSymbol] = port->name;
-        interfaceSignalNames[port] = port->name;
-      } else if (const auto *multiPort =
-                     symbol->as_if<slang::ast::MultiPortSymbol>()) {
-        for (auto *port : multiPort->ports) {
-          if (port->internalSymbol)
-            interfaceSignalNames[port->internalSymbol] = port->name;
-          interfaceSignalNames[port] = port->name;
-        }
-      }
-    }
-    for (auto &member : ifaceBody->members()) {
-      if (auto *var = member.as_if<slang::ast::VariableSymbol>())
-        interfaceSignalNames[var] = var->name;
-      if (auto *net = member.as_if<slang::ast::NetSymbol>())
-        interfaceSignalNames[net] = net->name;
-    }
+    // We always clear and rebuild because virtual interface method calls can
+    // switch between different interface definitions in one caller body.
+    populateInterfaceSignalNameMap(ifaceBody);
   }
 
   // Add user-defined block arguments

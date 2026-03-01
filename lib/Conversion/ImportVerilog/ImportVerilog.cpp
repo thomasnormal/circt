@@ -1569,6 +1569,343 @@ static std::string rewriteOpenRangeUnarySVACompat(StringRef text,
   return out;
 }
 
+static std::optional<size_t> findTopLevelDefaultEquals(StringRef text) {
+  unsigned parenDepth = 0;
+  unsigned bracketDepth = 0;
+  unsigned braceDepth = 0;
+  for (size_t i = 0; i < text.size(); ++i) {
+    char c = text[i];
+
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      continue;
+    }
+    if (c == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 >= text.size())
+        return std::nullopt;
+      ++i;
+      continue;
+    }
+    if (c == '"') {
+      ++i;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"')
+          break;
+        ++i;
+      }
+      if (i >= text.size())
+        return std::nullopt;
+      continue;
+    }
+
+    switch (c) {
+    case '(':
+      ++parenDepth;
+      continue;
+    case ')':
+      if (parenDepth == 0)
+        return std::nullopt;
+      --parenDepth;
+      continue;
+    case '[':
+      ++bracketDepth;
+      continue;
+    case ']':
+      if (bracketDepth == 0)
+        return std::nullopt;
+      --bracketDepth;
+      continue;
+    case '{':
+      ++braceDepth;
+      continue;
+    case '}':
+      if (braceDepth == 0)
+        return std::nullopt;
+      --braceDepth;
+      continue;
+    case '=':
+      break;
+    default:
+      continue;
+    }
+
+    if (parenDepth || bracketDepth || braceDepth)
+      continue;
+    auto prevPos = skipTrivia(text.slice(0, i), 0);
+    char prev = 0;
+    if (prevPos) {
+      StringRef prefix = text.slice(0, i).rtrim();
+      if (!prefix.empty())
+        prev = prefix.back();
+    }
+    auto maybeNext = skipTrivia(text, i + 1);
+    char next = 0;
+    if (maybeNext && *maybeNext < text.size())
+      next = text[*maybeNext];
+    if (prev == '=' || prev == '!' || prev == '<' || prev == '>')
+      continue;
+    if (next == '=' || next == '>')
+      continue;
+    return i;
+  }
+  return std::nullopt;
+}
+
+/// Compatibility rewrite: strip default value from `uvm_comparer` argument in
+/// `do_compare` declarations/definitions.
+///
+/// Some UVM AVIP code writes `do_compare(..., uvm_comparer comparer = null)`
+/// while the base method omits a default. Slang diagnoses this mismatch as an
+/// error; mainstream simulators commonly accept it.
+static std::string rewriteUvmDoCompareComparerDefaultCompat(StringRef text,
+                                                            bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  auto isDoCompareAt = [&](size_t idx) {
+    constexpr StringRef kName = "do_compare";
+    if (idx + kName.size() > text.size() ||
+        text.substr(idx, kName.size()) != kName)
+      return false;
+    if (idx > 0 && isIdentifierChar(text[idx - 1]))
+      return false;
+    size_t end = idx + kName.size();
+    return end == text.size() || !isIdentifierChar(text[end]);
+  };
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.slice(start, i));
+      continue;
+    }
+
+    if (!isDoCompareAt(i)) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    constexpr size_t kNameLen = sizeof("do_compare") - 1;
+    auto maybeOpenParen = skipTrivia(text, i + kNameLen);
+    if (!maybeOpenParen || *maybeOpenParen >= text.size() ||
+        text[*maybeOpenParen] != '(') {
+      out.append(text.slice(i, i + kNameLen));
+      i += kNameLen;
+      continue;
+    }
+    auto maybeCloseParen = scanBalanced(text, *maybeOpenParen, '(', ')');
+    if (!maybeCloseParen) {
+      out.append(text.drop_front(i));
+      break;
+    }
+
+    StringRef args = text.slice(*maybeOpenParen + 1, *maybeCloseParen);
+    SmallVector<std::pair<size_t, size_t>, 8> argRanges;
+    if (!splitTopLevelArgumentRanges(args, argRanges)) {
+      out.append(text.slice(i, *maybeCloseParen + 1));
+      i = *maybeCloseParen + 1;
+      continue;
+    }
+
+    bool rewrittenSignature = false;
+    std::string rewrittenArgs;
+    rewrittenArgs.reserve(args.size());
+    for (size_t argIdx = 0; argIdx < argRanges.size(); ++argIdx) {
+      StringRef arg = args.slice(argRanges[argIdx].first, argRanges[argIdx].second);
+      StringRef trimmed = arg.trim();
+      std::string argText = arg.str();
+      if (trimmed.contains("uvm_comparer")) {
+        if (auto eqPos = findTopLevelDefaultEquals(arg)) {
+          argText = StringRef(argText).slice(0, *eqPos).rtrim().str();
+          rewrittenSignature = true;
+        }
+      }
+      if (argIdx)
+        rewrittenArgs.append(", ");
+      rewrittenArgs.append(argText);
+    }
+
+    out.append(text.slice(i, *maybeOpenParen + 1));
+    if (rewrittenSignature) {
+      out.append(rewrittenArgs);
+      changed = true;
+    } else {
+      out.append(args);
+    }
+    out.push_back(')');
+    i = *maybeCloseParen + 1;
+  }
+
+  return out;
+}
+
+/// Compatibility rewrite: avoid name lookup collision in forms like
+/// `bins BAUD_4800 = {BAUD_4800};` where the bin identifier shadows the enum
+/// literal and slang rejects the RHS expression.
+static std::string rewriteCovergroupBinSelfNameCompat(StringRef text,
+                                                      bool &changed) {
+  std::string out;
+  out.reserve(text.size());
+
+  auto isBinsAt = [&](size_t idx) {
+    constexpr StringRef kBins = "bins";
+    if (idx + kBins.size() > text.size() ||
+        text.substr(idx, kBins.size()) != kBins)
+      return false;
+    if (idx > 0 && isIdentifierChar(text[idx - 1]))
+      return false;
+    size_t end = idx + kBins.size();
+    return end == text.size() || !isIdentifierChar(text[end]);
+  };
+
+  for (size_t i = 0; i < text.size();) {
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '/') {
+      size_t start = i;
+      i += 2;
+      while (i < text.size() && text[i] != '\n')
+        ++i;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '/' && i + 1 < text.size() && text[i + 1] == '*') {
+      size_t start = i;
+      i += 2;
+      while (i + 1 < text.size() && !(text[i] == '*' && text[i + 1] == '/'))
+        ++i;
+      if (i + 1 < text.size())
+        i += 2;
+      out.append(text.slice(start, i));
+      continue;
+    }
+    if (text[i] == '"') {
+      size_t start = i++;
+      while (i < text.size()) {
+        if (text[i] == '\\' && i + 1 < text.size()) {
+          i += 2;
+          continue;
+        }
+        if (text[i] == '"') {
+          ++i;
+          break;
+        }
+        ++i;
+      }
+      out.append(text.slice(start, i));
+      continue;
+    }
+
+    if (!isBinsAt(i)) {
+      out.push_back(text[i]);
+      ++i;
+      continue;
+    }
+
+    size_t binsEnd = i + 4;
+    auto maybeNameStart = skipTrivia(text, binsEnd);
+    if (!maybeNameStart || *maybeNameStart >= text.size() ||
+        !isIdentifierStartChar(text[*maybeNameStart])) {
+      out.append(text.slice(i, binsEnd));
+      i = binsEnd;
+      continue;
+    }
+
+    size_t nameStart = *maybeNameStart;
+    size_t nameEnd = nameStart + 1;
+    while (nameEnd < text.size() && isIdentifierChar(text[nameEnd]))
+      ++nameEnd;
+    StringRef binName = text.slice(nameStart, nameEnd);
+
+    size_t afterName = nameEnd;
+    auto maybeArrayOpen = skipTrivia(text, afterName);
+    if (maybeArrayOpen && *maybeArrayOpen < text.size() &&
+        text[*maybeArrayOpen] == '[') {
+      auto maybeArrayClose = scanBalanced(text, *maybeArrayOpen, '[', ']');
+      if (!maybeArrayClose) {
+        out.append(text.slice(i, binsEnd));
+        i = binsEnd;
+        continue;
+      }
+      afterName = *maybeArrayClose + 1;
+    }
+
+    auto maybeEq = skipTrivia(text, afterName);
+    if (!maybeEq || *maybeEq >= text.size() || text[*maybeEq] != '=') {
+      out.append(text.slice(i, binsEnd));
+      i = binsEnd;
+      continue;
+    }
+    auto maybeOpenBrace = skipTrivia(text, *maybeEq + 1);
+    if (!maybeOpenBrace || *maybeOpenBrace >= text.size() ||
+        text[*maybeOpenBrace] != '{') {
+      out.append(text.slice(i, binsEnd));
+      i = binsEnd;
+      continue;
+    }
+    auto maybeCloseBrace = scanBalanced(text, *maybeOpenBrace, '{', '}');
+    if (!maybeCloseBrace) {
+      out.append(text.slice(i, binsEnd));
+      i = binsEnd;
+      continue;
+    }
+
+    StringRef valueExpr =
+        text.slice(*maybeOpenBrace + 1, *maybeCloseBrace).trim();
+    if (valueExpr != binName) {
+      out.append(text.slice(i, binsEnd));
+      i = binsEnd;
+      continue;
+    }
+
+    out.append(text.slice(i, nameStart));
+    out.append("__circt_bin_");
+    out.append(binName);
+    out.append(text.slice(nameEnd, *maybeCloseBrace + 1));
+    changed = true;
+    i = *maybeCloseBrace + 1;
+  }
+
+  return out;
+}
+
 /// A converter that can be plugged into a slang `DiagnosticEngine` as a client
 /// that will map slang diagnostics to their MLIR counterpart and emit them.
 class MlirDiagnosticClient : public slang::DiagnosticClient {
@@ -1921,6 +2258,14 @@ LogicalResult ImportDriver::prepareDriver(SourceMgr &sourceMgr) {
     applyRewrite(rewriteGenericClassScopeCompat,
                  rewrittenText.contains("class") &&
                      rewrittenText.contains("::"));
+    applyRewrite(rewriteUvmDoCompareComparerDefaultCompat,
+                 rewrittenText.contains("do_compare") &&
+                     rewrittenText.contains("uvm_comparer") &&
+                     rewrittenText.contains('='));
+    applyRewrite(rewriteCovergroupBinSelfNameCompat,
+                 rewrittenText.contains("bins") &&
+                     rewrittenText.contains('{') &&
+                     rewrittenText.contains('='));
     applyRewrite(rewriteFormatWidthCompat,
                  rewrittenText.contains('"') && rewrittenText.contains('%'));
     applyRewrite(rewriteUDPZCompat,
