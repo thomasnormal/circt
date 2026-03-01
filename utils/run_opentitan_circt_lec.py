@@ -373,10 +373,25 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
         rows: list[tuple[str, str, str, str, str, str]],
         *,
         solver: str = "",
+        case_metadata_by_case_id: dict[
+            str, tuple[int | None, int | None, str, str]
+        ]
+        | None = None,
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             for status, case_id, case_path, suite, mode, reason_code in _sort_formal_case_rows(rows):
+                frontend_time_ms: int | None = None
+                solver_time_ms: int | None = None
+                log_path = ""
+                artifact_dir = ""
+                if case_metadata_by_case_id is not None:
+                    (
+                        frontend_time_ms,
+                        solver_time_ms,
+                        log_path,
+                        artifact_dir,
+                    ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
                 payload = {
                     "schema_version": 1,
                     "suite": suite,
@@ -387,10 +402,10 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
                     "reason_code": reason_code.strip().upper(),
                     "stage": _infer_stage(status, reason_code),
                     "solver": solver.strip(),
-                    "solver_time_ms": None,
-                    "frontend_time_ms": None,
-                    "log_path": "",
-                    "artifact_dir": "",
+                    "solver_time_ms": solver_time_ms,
+                    "frontend_time_ms": frontend_time_ms,
+                    "log_path": log_path,
+                    "artifact_dir": artifact_dir,
                 }
                 handle.write(json.dumps(payload, sort_keys=True))
                 handle.write("\n")
@@ -697,6 +712,7 @@ def main() -> int:
 
     failures = 0
     case_rows: list[tuple[str, str, str, str, str, str]] = []
+    case_jsonl_metadata: dict[str, tuple[int | None, int | None, str, str]] = {}
     xprop_rows: list[tuple[str, str, str, str, str, str, str, str]] = []
     drop_remark_case_rows: list[tuple[str, str]] = []
     drop_remark_reason_rows: list[tuple[str, str, str]] = []
@@ -818,6 +834,16 @@ def main() -> int:
             assume_known_result: str | None = None
             summary_counts: dict[str, int] = {}
             stage = "verilog"
+            frontend_time_ms = 0
+            solver_time_ms = 0
+
+            def record_case_metadata() -> None:
+                case_jsonl_metadata[impl] = (
+                    frontend_time_ms,
+                    solver_time_ms,
+                    str(impl_dir / "circt-lec.log"),
+                    str(impl_dir),
+                )
             try:
                 stage = "verilog"
                 run_and_log(
@@ -881,6 +907,7 @@ def main() -> int:
                                 f"{impl:24} XPROP_ONLY (accepted)",
                                 flush=True,
                             )
+                            record_case_metadata()
                             case_rows.append(
                                 (
                                     "XFAIL",
@@ -915,6 +942,7 @@ def main() -> int:
                     else:
                         diag = "PASS"
                 print(f"{impl:24} OK", flush=True)
+                record_case_metadata()
                 case_rows.append(
                     ("PASS", impl, str(impl_dir), "opentitan", lec_mode_label, diag)
                 )
@@ -959,6 +987,7 @@ def main() -> int:
                 else:
                     diag = "TIMEOUT"
                 print(f"{impl:24} TIMEOUT ({diag}) (logs in {impl_dir})", flush=True)
+                record_case_metadata()
                 case_rows.append(
                     (
                         "TIMEOUT",
@@ -995,6 +1024,7 @@ def main() -> int:
                     if not diag:
                         diag = "EQ"
                     print(f"{impl:24} OK", flush=True)
+                    record_case_metadata()
                     case_rows.append(
                         (
                             "PASS",
@@ -1017,6 +1047,7 @@ def main() -> int:
                         f"{impl:24} XPROP_ONLY (accepted)",
                         flush=True,
                     )
+                    record_case_metadata()
                     case_rows.append(
                         (
                             "XFAIL",
@@ -1060,6 +1091,7 @@ def main() -> int:
                 detail = str(impl_dir)
                 if diag:
                     detail = f"{detail}#{diag}"
+                record_case_metadata()
                 case_rows.append(
                     (
                         "FAIL",
@@ -1095,7 +1127,10 @@ def main() -> int:
         results_jsonl_path = Path(args.results_jsonl_file)
         solver_label = "z3" if lec_run_smtlib and not lec_smoke_only else ""
         _write_formal_results_jsonl_from_case_rows(
-            results_jsonl_path, case_rows, solver=solver_label
+            results_jsonl_path,
+            case_rows,
+            solver=solver_label,
+            case_metadata_by_case_id=case_jsonl_metadata,
         )
     if args.xprop_summary_file:
         xprop_summary_path = Path(args.xprop_summary_file)

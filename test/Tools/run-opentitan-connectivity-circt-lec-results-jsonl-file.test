@@ -13,11 +13,15 @@
 // RUN: CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec Z3_BIN=%t/bin/z3 LEC_RUN_SMTLIB=1 python3 %t/run_opentitan_connectivity_circt_lec.py --target-manifest %t/target.tsv --rules-manifest %t/rules.tsv --opentitan-root %t --workdir %t/work --rule-filter 'RULE_CLK' --fusesoc-bin %t/bin/fusesoc --results-file %t/results.tsv --results-jsonl-file %t/results.jsonl
 // RUN: FileCheck %s --check-prefix=JSON < %t/results.jsonl
 //
+// JSON: "artifact_dir": "{{[^\"]*}}/work/cases/connectivity_chip_csv_RULE_CLK"
 // JSON: "case_id": "connectivity::chip.csv:RULE_CLK"
+// JSON: "frontend_time_ms": 0
+// JSON: "log_path": "{{[^\"]*}}/circt-lec.log"
 // JSON: "mode": "CONNECTIVITY_LEC"
 // JSON: "reason_code": "EQ"
 // JSON: "schema_version": 1
 // JSON: "solver": "z3"
+// JSON: "solver_time_ms": 0
 // JSON: "stage": "result"
 // JSON: "status": "PASS"
 // JSON: "suite": "opentitan"

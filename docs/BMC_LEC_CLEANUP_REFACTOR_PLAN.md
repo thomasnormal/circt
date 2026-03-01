@@ -431,6 +431,13 @@ Current workstream status in this branch:
    - OpenTitan FPV LEC schema JSONL rows now include per-case timing and
      artifact metadata (`frontend_time_ms`, `solver_time_ms`, `log_path`,
      `artifact_dir`) for timeout-frontier observability
+   - shared formal result JSONL writer now supports optional per-case metadata
+     projection (`case_metadata_by_case_id`) in `formal_results.py`
+   - OpenTitan AES/connectivity LEC schema JSONL rows now include per-case
+     timing/artifact metadata (`frontend_time_ms`, `solver_time_ms`,
+     `log_path`, `artifact_dir`) with regression coverage in:
+     - `run-opentitan-lec-results-jsonl-file.test`
+     - `run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status

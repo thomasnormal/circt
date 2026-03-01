@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 FormalCaseRow = tuple[str, str, str, str, str, str]
+FormalCaseMetadata = tuple[int | None, int | None, str, str]
 
 
 def infer_stage(status: str, reason_code: str) -> str:
@@ -84,10 +85,24 @@ def write_results_tsv(path: Path, rows: Iterable[FormalCaseRow]) -> None:
 
 
 def build_jsonl_rows_from_case_rows(
-    rows: Iterable[FormalCaseRow], *, solver: str = ""
+    rows: Iterable[FormalCaseRow],
+    *,
+    solver: str = "",
+    case_metadata_by_case_id: dict[str, FormalCaseMetadata] | None = None,
 ) -> list[dict[str, object]]:
     result_rows: list[dict[str, object]] = []
     for status, case_id, case_path, suite, mode, reason_code in sort_case_rows(rows):
+        frontend_time_ms: int | None = None
+        solver_time_ms: int | None = None
+        log_path = ""
+        artifact_dir = ""
+        if case_metadata_by_case_id is not None:
+            (
+                frontend_time_ms,
+                solver_time_ms,
+                log_path,
+                artifact_dir,
+            ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
         result_rows.append(
             make_result_row(
                 suite=suite,
@@ -97,12 +112,27 @@ def build_jsonl_rows_from_case_rows(
                 status=status,
                 reason_code=reason_code,
                 solver=solver,
+                solver_time_ms=solver_time_ms,
+                frontend_time_ms=frontend_time_ms,
+                log_path=log_path,
+                artifact_dir=artifact_dir,
             )
         )
     return result_rows
 
 
 def write_results_jsonl_from_case_rows(
-    path: Path, rows: Iterable[FormalCaseRow], *, solver: str = ""
+    path: Path,
+    rows: Iterable[FormalCaseRow],
+    *,
+    solver: str = "",
+    case_metadata_by_case_id: dict[str, FormalCaseMetadata] | None = None,
 ) -> None:
-    write_results_jsonl(path, build_jsonl_rows_from_case_rows(rows, solver=solver))
+    write_results_jsonl(
+        path,
+        build_jsonl_rows_from_case_rows(
+            rows,
+            solver=solver,
+            case_metadata_by_case_id=case_metadata_by_case_id,
+        ),
+    )

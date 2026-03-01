@@ -14,11 +14,15 @@
 // RUN: env CIRCT_VERILOG=%t/bin/circt-verilog CIRCT_OPT=%t/bin/circt-opt CIRCT_LEC=%t/bin/circt-lec Z3_BIN=%t/bin/z3 LEC_SMOKE_ONLY=0 LEC_RUN_SMTLIB=1 OUT=%t/results.tsv %S/../../utils/run_opentitan_circt_lec.py --opentitan-root %t/ot --impl-filter canright --workdir %t/work --keep-workdir --results-jsonl-file %t/results.jsonl
 // RUN: FileCheck %s --check-prefix=JSON < %t/results.jsonl
 //
+// JSON: "artifact_dir": "{{[^\"]*}}/work/aes_sbox_canright"
 // JSON: "case_id": "aes_sbox_canright"
+// JSON: "frontend_time_ms": 0
+// JSON: "log_path": "{{[^\"]*}}/circt-lec.log"
 // JSON: "mode": "LEC"
 // JSON: "reason_code": "EQ"
 // JSON: "schema_version": 1
 // JSON: "solver": "z3"
+// JSON: "solver_time_ms": 0
 // JSON: "stage": "result"
 // JSON: "status": "PASS"
 // JSON: "suite": "opentitan"

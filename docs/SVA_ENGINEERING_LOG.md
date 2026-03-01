@@ -2,6 +2,41 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: OpenTitan AES/connectivity LEC JSONL metadata parity):
+  - realization:
+    - FPV LEC JSONL rows already emitted timing/artifact metadata, but OpenTitan
+      AES/connectivity LEC JSONL rows still left these fields as `null`/empty in
+      shared-writer paths.
+    - this created schema parity drift across real LEC runners and weakened
+      timeout-frontier observability for non-FPV lanes.
+  - implemented:
+    - `utils/formal/lib/formal_results.py`
+      - added optional per-case metadata projection for JSONL rows via
+        `case_metadata_by_case_id` (`frontend_time_ms`, `solver_time_ms`,
+        `log_path`, `artifact_dir`).
+    - `utils/run_opentitan_circt_lec.py`
+      - added per-case JSONL metadata map and propagated it into JSONL writer
+        calls (shared helper and local fallback paths).
+    - `utils/run_opentitan_connectivity_circt_lec.py`
+      - added per-case JSONL metadata map plumbing and centralized row append
+        helper to keep row + metadata updates in sync.
+    - tightened JSONL contract tests:
+      - `test/Tools/run-opentitan-lec-results-jsonl-file.test`
+      - `test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+      - now assert integer timing fields and non-empty `log_path` /
+        `artifact_dir` structure.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+      - result: fail (`artifact_dir` contract mismatch).
+    - `python3 -m py_compile utils/formal/lib/formal_results.py utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+      - result: `2/2` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-generated-no-cases.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS6/WS0: FPV LEC JSONL timing + artifact metadata):
   - realization:
     - FPV LEC JSONL rows were schema-compliant but emitted `null` timing

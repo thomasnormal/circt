@@ -1457,10 +1457,25 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
         rows: list[tuple[str, str, str, str, str, str]],
         *,
         solver: str = "",
+        case_metadata_by_case_id: dict[
+            str, tuple[int | None, int | None, str, str]
+        ]
+        | None = None,
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
             for status, case_id, case_path, suite, mode, reason_code in _sort_formal_case_rows(rows):
+                frontend_time_ms: int | None = None
+                solver_time_ms: int | None = None
+                log_path = ""
+                artifact_dir = ""
+                if case_metadata_by_case_id is not None:
+                    (
+                        frontend_time_ms,
+                        solver_time_ms,
+                        log_path,
+                        artifact_dir,
+                    ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
                 payload = {
                     "schema_version": 1,
                     "suite": suite,
@@ -1471,10 +1486,10 @@ if not _HAS_FORMAL_RESULT_SCHEMA:
                     "reason_code": reason_code.strip().upper(),
                     "stage": _infer_stage(status, reason_code),
                     "solver": solver.strip(),
-                    "solver_time_ms": None,
-                    "frontend_time_ms": None,
-                    "log_path": "",
-                    "artifact_dir": "",
+                    "solver_time_ms": solver_time_ms,
+                    "frontend_time_ms": frontend_time_ms,
+                    "log_path": log_path,
+                    "artifact_dir": artifact_dir,
                 }
                 handle.write(json.dumps(payload, sort_keys=True))
                 handle.write("\n")
@@ -2140,6 +2155,23 @@ def main() -> int:
     timeout_reason_seen: set[tuple[str, str]] = set()
     resolved_contract_rows: list[tuple[str, ...]] = []
     rows: list[tuple[str, str, str, str, str, str]] = []
+    case_jsonl_metadata: dict[str, tuple[int | None, int | None, str, str]] = {}
+
+    def append_case_row(
+        row: tuple[str, str, str, str, str, str],
+        *,
+        frontend_time_ms: int | None = 0,
+        solver_time_ms: int | None = 0,
+        log_path: str = "",
+        artifact_dir: str = "",
+    ) -> None:
+        rows.append(row)
+        case_jsonl_metadata[row[1]] = (
+            frontend_time_ms,
+            solver_time_ms,
+            log_path,
+            artifact_dir,
+        )
 
     try:
         fusesoc_dir = workdir / "fusesoc"
@@ -2921,7 +2953,7 @@ def main() -> int:
                             case_dir = workdir / "cases" / sanitize_token(case.case_id)
                             case_dir.mkdir(parents=True, exist_ok=True)
                             mirror_shared_frontend_logs(case_dir)
-                            rows.append(
+                            append_case_row(
                                 (
                                     "TIMEOUT",
                                     case.case_id,
@@ -2929,7 +2961,16 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     frontend_diag,
-                                )
+                                ),
+                                log_path=str(
+                                    case_dir
+                                    / (
+                                        "circt-verilog.log"
+                                        if stage == "verilog"
+                                        else "circt-opt.log"
+                                    )
+                                ),
+                                artifact_dir=str(case_dir),
                             )
                             append_timeout_reason(case, "frontend_command_timeout")
                 except subprocess.CalledProcessError:
@@ -2960,7 +3001,7 @@ def main() -> int:
                             case_dir = workdir / "cases" / sanitize_token(case.case_id)
                             case_dir.mkdir(parents=True, exist_ok=True)
                             mirror_shared_frontend_logs(case_dir)
-                            rows.append(
+                            append_case_row(
                                 (
                                     "ERROR",
                                     case.case_id,
@@ -2968,7 +3009,16 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     frontend_diag,
-                                )
+                                ),
+                                log_path=str(
+                                    case_dir
+                                    / (
+                                        "circt-verilog.log"
+                                        if stage == "verilog"
+                                        else "circt-opt.log"
+                                    )
+                                ),
+                                artifact_dir=str(case_dir),
                             )
 
                 if frontend_split or not frontend_ok:
@@ -3067,7 +3117,7 @@ def main() -> int:
                             or (batch_precheck_result or "SMOKE_ONLY")
                         )
                         for case in batch_cases:
-                            rows.append(
+                            append_case_row(
                                 (
                                     "PASS",
                                     case.case_id,
@@ -3075,7 +3125,9 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     pass_diag,
-                                )
+                                ),
+                                log_path=str(batch_precheck_log),
+                                artifact_dir=str(batch_precheck_dir),
                             )
                         print(
                             "opentitan connectivity lec: batch precheck PASS "
@@ -3626,7 +3678,7 @@ def main() -> int:
                         result = parse_lec_result(combined)
                         if result in {"NEQ", "UNKNOWN"}:
                             if diag == "XPROP_ONLY" and lec_accept_xprop_only:
-                                rows.append(
+                                append_case_row(
                                     (
                                         "XFAIL",
                                         case.case_id,
@@ -3634,10 +3686,12 @@ def main() -> int:
                                         "opentitan",
                                         args.mode_label,
                                         "XPROP_ONLY",
-                                    )
+                                    ),
+                                    log_path=str(lec_log),
+                                    artifact_dir=str(case_dir),
                                 )
                             else:
-                                rows.append(
+                                append_case_row(
                                     (
                                         "FAIL",
                                         case.case_id,
@@ -3645,10 +3699,12 @@ def main() -> int:
                                         "opentitan",
                                         args.mode_label,
                                         diag or result,
-                                    )
+                                    ),
+                                    log_path=str(lec_log),
+                                    artifact_dir=str(case_dir),
                                 )
                         elif result == "EQ":
-                            rows.append(
+                            append_case_row(
                                 (
                                     "PASS",
                                     case.case_id,
@@ -3656,10 +3712,12 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     diag or "EQ",
-                                )
+                                ),
+                                log_path=str(lec_log),
+                                artifact_dir=str(case_dir),
                             )
                         elif lec_smoke_only:
-                            rows.append(
+                            append_case_row(
                                 (
                                     "PASS",
                                     case.case_id,
@@ -3667,10 +3725,12 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     diag or "SMOKE_ONLY",
-                                )
+                                ),
+                                log_path=str(lec_log),
+                                artifact_dir=str(case_dir),
                             )
                         else:
-                            rows.append(
+                            append_case_row(
                                 (
                                     "ERROR",
                                     case.case_id,
@@ -3678,7 +3738,9 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     diag or "CIRCT_LEC_ERROR",
-                                )
+                                ),
+                                log_path=str(lec_log),
+                                artifact_dir=str(case_dir),
                             )
                     except subprocess.TimeoutExpired:
                         timeout_reason = "runner_timeout_unknown_stage"
@@ -3709,7 +3771,7 @@ def main() -> int:
                                 timeout_reason = "solver_command_timeout"
                         else:
                             timeout_reason = "solver_command_timeout"
-                        rows.append(
+                        append_case_row(
                             (
                                 "TIMEOUT",
                                 case.case_id,
@@ -3717,7 +3779,9 @@ def main() -> int:
                                 "opentitan",
                                 args.mode_label,
                                 diag,
-                            )
+                            ),
+                            log_path=str(lec_log),
+                            artifact_dir=str(case_dir),
                         )
                         append_timeout_reason(case, timeout_reason)
                     except subprocess.CalledProcessError:
@@ -3730,7 +3794,7 @@ def main() -> int:
                         result = parse_lec_result(combined)
                         if result in {"NEQ", "UNKNOWN"}:
                             if diag == "XPROP_ONLY" and lec_accept_xprop_only:
-                                rows.append(
+                                append_case_row(
                                     (
                                         "XFAIL",
                                         case.case_id,
@@ -3738,10 +3802,12 @@ def main() -> int:
                                         "opentitan",
                                         args.mode_label,
                                         "XPROP_ONLY",
-                                    )
+                                    ),
+                                    log_path=str(lec_log),
+                                    artifact_dir=str(case_dir),
                                 )
                             else:
-                                rows.append(
+                                append_case_row(
                                     (
                                         "FAIL",
                                         case.case_id,
@@ -3749,10 +3815,12 @@ def main() -> int:
                                         "opentitan",
                                         args.mode_label,
                                         diag or result,
-                                    )
+                                    ),
+                                    log_path=str(lec_log),
+                                    artifact_dir=str(case_dir),
                                 )
                         elif result == "EQ":
-                            rows.append(
+                            append_case_row(
                                 (
                                     "PASS",
                                     case.case_id,
@@ -3760,10 +3828,12 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     diag or "EQ",
-                                )
+                                ),
+                                log_path=str(lec_log),
+                                artifact_dir=str(case_dir),
                             )
                         else:
-                            rows.append(
+                            append_case_row(
                                 (
                                     "ERROR",
                                     case.case_id,
@@ -3771,7 +3841,9 @@ def main() -> int:
                                     "opentitan",
                                     args.mode_label,
                                     diag or "CIRCT_LEC_ERROR",
-                                )
+                                ),
+                                log_path=str(lec_log),
+                                artifact_dir=str(case_dir),
                             )
 
         _write_formal_results_tsv(results_file, rows)
@@ -3779,7 +3851,10 @@ def main() -> int:
             results_jsonl_path = Path(args.results_jsonl_file).resolve()
             solver_label = "z3" if lec_run_smtlib and not lec_smoke_only else ""
             _write_formal_results_jsonl_from_case_rows(
-                results_jsonl_path, rows, solver=solver_label
+                results_jsonl_path,
+                rows,
+                solver=solver_label,
+                case_metadata_by_case_id=case_jsonl_metadata,
             )
 
         governance_rc = evaluate_status_governance(rows)
