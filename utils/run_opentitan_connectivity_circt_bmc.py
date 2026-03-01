@@ -972,6 +972,10 @@ def main() -> int:
         return 0
 
     if not selected_groups:
+        if args.results_jsonl_file:
+            results_jsonl_path = Path(args.results_jsonl_file).resolve()
+            results_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+            results_jsonl_path.write_text("", encoding="utf-8")
         if status_summary_path is not None:
             write_connectivity_status_summary(status_summary_path, {})
             print(f"connectivity status summary: {status_summary_path}", flush=True)
@@ -1088,6 +1092,10 @@ def main() -> int:
             ignore_asserts_until,
         )
         if not cases_file.read_text(encoding="utf-8").strip():
+            if args.results_jsonl_file:
+                results_jsonl_path = Path(args.results_jsonl_file).resolve()
+                results_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+                results_jsonl_path.write_text("", encoding="utf-8")
             if status_summary_path is not None:
                 write_connectivity_status_summary(status_summary_path, {})
                 print(f"connectivity status summary: {status_summary_path}", flush=True)

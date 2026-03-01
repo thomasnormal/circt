@@ -2,6 +2,29 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T3/WS6: connectivity BMC wrapper emits empty JSONL in no-case paths):
+  - realization:
+    - `run_opentitan_connectivity_circt_bmc.py` already created an empty TSV
+      in no-case paths, but with `--results-jsonl-file` requested it could
+      return without writing any JSONL artifact.
+    - this broke schema-lane artifact presence for deterministic no-case
+      baseline/frontier runs.
+  - implemented:
+    - in both no-case return paths:
+      - no selected rule groups after filter/shard,
+      - selected rules but zero generated case rows,
+      the wrapper now writes an empty requested JSONL file.
+    - added regression:
+      `test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test`.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-condition-filter.test test/Tools/run-opentitan-connectivity-circt-bmc-status-summary.test`
+      - result: `5/5` pass.
+    - expanded formal subset:
+      - `build_test/bin/llvm-lit -sv ...` (32-test WS1/WS6 subset with BMC/LEC wrappers + schema tools)
+      - result: `32/32` pass.
+
 - Iteration update (WS1-T3/WS6: OpenTitan FPV BMC wrapper emits merged schema JSONL lane):
   - realization:
     - `run_opentitan_fpv_circt_bmc.py` forwarded `--results-jsonl-file` to

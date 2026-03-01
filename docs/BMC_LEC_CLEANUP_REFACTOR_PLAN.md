@@ -419,6 +419,8 @@ Current workstream status in this branch:
      pairwise backend (`--results-jsonl-file`)
    - OpenTitan connectivity BMC wrapper now forwards schema JSONL output lane
      to the pairwise backend (`--results-jsonl-file`)
+   - connectivity BMC wrapper no-case paths now emit empty requested schema
+     JSONL artifacts (selected-groups-empty and generated-cases-empty paths)
    - OpenTitan FPV BMC wrapper now emits merged schema JSONL output lane
      (`--results-jsonl-file`) from final wrapper-level merged rows
    - shared env-driven retry launcher landed in `runner_common`
