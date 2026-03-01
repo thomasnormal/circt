@@ -2009,3 +2009,22 @@
 - Realization:
   - The prior `TOK_PACKAGESEP` row was a harness artifact, not the true OSS
     frontier for these OpenTitan cases.
+
+### OSS OpenTitan LEC frontier shift: TOK_IMPORT -> TOK_ID (struct/array localparam)
+- Repro/verification:
+  - Added a Yosys-compat package sanitization step in
+    `toy_models/open_source_formal_compare_20260301/run_compare_opentitan_realworld_oss.sh`
+    that strips package `import ...::*;` lines in throwaway copies.
+  - Reran `run_compare_opentitan_realworld_oss.sh`.
+  - New `opentitan_realworld_oss.tsv` now reports Yosys failures as
+    `ERROR: syntax error, unexpected TOK_ID, expecting ',' or ';' or '='`.
+- Deeper blocker surfaced:
+  - Error anchors consistently at
+    `.tmp_pkg_sanitized/.../ibex_pmp_reset_pkg.sv:12`, i.e. package localparam
+    array/assignment-pattern declaration (`localparam pmp_cfg_t PmpCfgRst[16] = '{ ... };`).
+- Content update:
+  - Updated blog OpenTitan LEC table error text to reflect the deeper
+    `TOK_ID` parser failure location instead of `TOK_IMPORT`.
+- Realization:
+  - Once package-import syntax is bypassed, Yosys OSS parser still blocks on a
+    richer SystemVerilog package-constant construct used in real OpenTitan RTL.

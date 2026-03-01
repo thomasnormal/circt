@@ -10,6 +10,27 @@ OUT_TSV="$ROOT/opentitan_realworld_oss.tsv"
 mkdir -p "$LOG_DIR" "$EQY_DIR"
 export PATH="$TOOLS:$PATH"
 
+sanitize_pkg_files_for_yosys() {
+  local work="$1"
+  local case_id="$2"
+  local out_list_file="$3"
+  local sanitize_dir="$ROOT/.tmp_pkg_sanitized/${case_id}"
+
+  rm -rf "$sanitize_dir"
+  mkdir -p "$sanitize_dir"
+
+  while IFS= read -r pkg; do
+    local out
+    out="$sanitize_dir/$(echo "$pkg" | sed 's#^/##; s#/#__#g')"
+    # Yosys OSS parser currently rejects package-level import statements.
+    # Strip them in a throwaway copy so we can observe deeper parser frontiers.
+    sed -E \
+      's/^([[:space:]]*)import[[:space:]]+[A-Za-z_][A-Za-z0-9_]*::\*;/\1\/\/ yosys-compat: stripped package import/' \
+      "$pkg" > "$out"
+    echo "$out"
+  done < <(find "$work/fusesoc" -type f -name '*pkg.sv' | sort) > "$out_list_file"
+}
+
 run_case() {
   local task="$1"
   local tool="$2"
@@ -92,10 +113,9 @@ emit_circt_row() {
   for entry in "${CASES[@]}"; do
     IFS='|' read -r case_id work base rule <<< "$entry"
     check="$work/checks/${base}.sv"
-    # OpenTitan top-level parameters reference many external package symbols.
-    # Feed all package files so Yosys/EQY can resolve package-scoped types and
-    # values before parsing the autogen top.
-    pkg_files=$(find "$work/fusesoc" -type f -name '*pkg.sv' | sort | tr '\n' ' ')
+    pkg_list_file="$ROOT/.tmp_pkg_sanitized/${case_id}.list"
+    sanitize_pkg_files_for_yosys "$work" "$case_id" "$pkg_list_file"
+    pkg_files=$(tr '\n' ' ' < "$pkg_list_file")
     top=$(find "$work/fusesoc" -type f -name 'top_earlgrey.sv' | head -n 1)
     results_tsv="$(dirname "$work")/results.tsv"
     eqy_cfg="$EQY_DIR/${case_id}.eqy"
