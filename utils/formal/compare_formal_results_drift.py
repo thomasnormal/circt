@@ -97,6 +97,8 @@ def main() -> int:
     parser.add_argument("--out-tsv", required=True)
     parser.add_argument("--summary-json", default="")
     parser.add_argument("--fail-on-status-drift", action="store_true")
+    parser.add_argument("--fail-on-reason-drift", action="store_true")
+    parser.add_argument("--fail-on-stage-drift", action="store_true")
     parser.add_argument("--fail-on-missing-case", action="store_true")
     parser.add_argument("--fail-on-new-case", action="store_true")
     args = parser.parse_args()
@@ -171,6 +173,10 @@ def main() -> int:
 
     should_fail = False
     if args.fail_on_status_drift and counts["STATUS_DRIFT"] > 0:
+        should_fail = True
+    if args.fail_on_reason_drift and counts["REASON_DRIFT"] > 0:
+        should_fail = True
+    if args.fail_on_stage_drift and counts["STAGE_DRIFT"] > 0:
         should_fail = True
     if args.fail_on_missing_case and counts["MISSING_CASE"] > 0:
         should_fail = True

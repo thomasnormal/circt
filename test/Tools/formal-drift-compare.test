@@ -5,6 +5,8 @@
 // RUN: FileCheck %s --check-prefix=TSV < %t/drift.tsv
 // RUN: FileCheck %s --check-prefix=SUMMARY < %t/summary.json
 // RUN: not python3 %S/../../utils/formal/compare_formal_results_drift.py --reference-jsonl %t/reference.jsonl --candidate-jsonl %t/candidate.jsonl --out-tsv %t/drift-fail.tsv --summary-json %t/summary-fail.json --fail-on-status-drift
+// RUN: not python3 %S/../../utils/formal/compare_formal_results_drift.py --reference-jsonl %t/reference.jsonl --candidate-jsonl %t/candidate.jsonl --out-tsv %t/drift-fail-reason.tsv --fail-on-reason-drift
+// RUN: not python3 %S/../../utils/formal/compare_formal_results_drift.py --reference-jsonl %t/reference.jsonl --candidate-jsonl %t/candidate.jsonl --out-tsv %t/drift-fail-stage.tsv --fail-on-stage-drift
 //
 // TSV: classification{{[[:space:]]+}}suite{{[[:space:]]+}}mode{{[[:space:]]+}}case_id
 // TSV-DAG: NO_DRIFT{{[[:space:]]+}}sv-tests{{[[:space:]]+}}BMC{{[[:space:]]+}}case_pass

@@ -734,6 +734,29 @@
     - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-lec-status-summary.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-fail.test`
       - result: `4/4` pass.
 
+- Iteration update (WS6: drift comparator strict reason/stage gates):
+  - realization:
+    - `compare_formal_results_drift.py` already classified `REASON_DRIFT` and
+      `STAGE_DRIFT`, but CLI failure gates only covered `STATUS_DRIFT`,
+      `MISSING_CASE`, and `NEW_CASE`.
+    - this limited presubmit/nightly enforcement for schema-level regressions
+      where status stayed stable but reason/stage semantics drifted.
+  - implemented:
+    - `utils/formal/compare_formal_results_drift.py`:
+      - added:
+        - `--fail-on-reason-drift`
+        - `--fail-on-stage-drift`
+      - wired both into exit-status gating logic.
+    - tests:
+      - expanded `test/Tools/formal-drift-compare.test` with negative runs for:
+        - `--fail-on-reason-drift`
+        - `--fail-on-stage-drift`
+  - validation:
+    - `python3 -m py_compile utils/formal/compare_formal_results_drift.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-drift-compare.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-validate-results-schema.test`
+      - result: `4/4` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

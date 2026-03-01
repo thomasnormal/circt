@@ -505,6 +505,8 @@ Current workstream status in this branch:
    - schema validation now covers expected nonzero-return lanes when they emit
      JSONL payloads, preserving schema gates on bounded-timeout frontier data
    - schema contract/versioning doc landed (`docs/FormalResultsSchema.md`)
+   - schema drift comparator now supports strict fail gates for reason/stage
+     drift (`--fail-on-reason-drift`, `--fail-on-stage-drift`)
 
 ## 17. Execution Backlog (Ticket-Level)
 
