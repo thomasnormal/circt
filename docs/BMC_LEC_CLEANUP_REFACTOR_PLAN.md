@@ -450,6 +450,8 @@ Current workstream status in this branch:
      baseline prerequisite (no silent no-op drift output mode)
    - connectivity LEC status drift output/allowlist/fail lanes now enforce
      baseline prerequisite (aligns with connectivity BMC drift guardrails)
+   - connectivity BMC/LEC status drift allowlist missing-file lanes are now
+     explicitly regression-covered
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners

@@ -620,6 +620,21 @@ static bool isUvmChildIteratorCallee(llvm::StringRef calleeName) {
          calleeName == "uvm_pkg::uvm_component::get_next_child";
 }
 
+static bool
+shouldAllowTwoArgPtrLenMethodNativeAbi(mlir::func::FuncOp funcOp) {
+  // Keep two-arg ptr+len native ABI support to internal definitions only.
+  // External/unmapped helpers can have runtime-specific ABI/semantic contracts
+  // that diverge from direct native invocation.
+  if (funcOp.isExternal())
+    return false;
+  // UVM package helpers (notably hierarchy lookups) have additional runtime
+  // semantics beyond plain ABI marshalling; keep those on existing policy
+  // paths until they are validated end-to-end.
+  if (funcOp.getName().starts_with("uvm_pkg::"))
+    return false;
+  return true;
+}
+
 static bool shouldDenyUnmappedNativeCall(mlir::func::FuncOp funcOp) {
   llvm::StringRef calleeName = funcOp.getName();
   static bool denyAllUnmappedNative =
@@ -25266,20 +25281,26 @@ no_uvm_objection_intercept:
           // argument is struct<(ptr, i64)> lowered by-pointer.
           // Keep this constrained to avoid promoting unrelated global helpers
           // (e.g. run_test-style entry points) into native direct dispatch.
-          if (!compatibleNativeAbi && numArgs >= 3 &&
+          if (!compatibleNativeAbi && numArgs >= 2 &&
               numArgs == funcOp.getNumArguments()) {
             auto argTypes = funcOp.getArgumentTypes();
             unsigned tailIdx = numArgs - 1;
-            bool arg0PointerLike =
-                mlir::isa<mlir::LLVM::LLVMPointerType>(argTypes[0]) ||
-                shouldTreatArg0I64AsPointerLike(funcOp, 0);
-            bool prefixScalars = true;
-            for (unsigned i = 0; i < tailIdx; ++i)
-              prefixScalars &= isNativeScalarType(argTypes[i]);
-            if (arg0PointerLike && prefixScalars &&
-                isPtrLenStructNativeAbiType(argTypes[tailIdx])) {
-              compatibleNativeAbi = true;
-              hasPtrLenTailArgAbi = true;
+            bool allowPtrLenTailArity =
+                numArgs >= 3 ||
+                (numArgs == 2 &&
+                 shouldAllowTwoArgPtrLenMethodNativeAbi(funcOp));
+            if (allowPtrLenTailArity) {
+              bool arg0PointerLike =
+                  mlir::isa<mlir::LLVM::LLVMPointerType>(argTypes[0]) ||
+                  shouldTreatArg0I64AsPointerLike(funcOp, 0);
+              bool prefixScalars = true;
+              for (unsigned i = 0; i < tailIdx; ++i)
+                prefixScalars &= isNativeScalarType(argTypes[i]);
+              if (arg0PointerLike && prefixScalars &&
+                  isPtrLenStructNativeAbiType(argTypes[tailIdx])) {
+                compatibleNativeAbi = true;
+                hasPtrLenTailArgAbi = true;
+              }
             }
           }
           if (numResults == 1)
@@ -25897,20 +25918,26 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
         // argument is struct<(ptr, i64)> lowered by-pointer.
         // Keep this constrained to avoid promoting unrelated global helpers
         // (e.g. run_test-style entry points) into native direct dispatch.
-        if (!compatibleNativeAbi && numArgs >= 3 &&
+        if (!compatibleNativeAbi && numArgs >= 2 &&
             numArgs == funcOp.getNumArguments()) {
           auto argTypes = funcOp.getArgumentTypes();
           unsigned tailIdx = numArgs - 1;
-          bool arg0PointerLike =
-              mlir::isa<mlir::LLVM::LLVMPointerType>(argTypes[0]) ||
-              shouldTreatArg0I64AsPointerLike(funcOp, 0);
-          bool prefixScalars = true;
-          for (unsigned i = 0; i < tailIdx; ++i)
-            prefixScalars &= isNativeScalarType(argTypes[i]);
-          if (arg0PointerLike && prefixScalars &&
-              isPtrLenStructNativeAbiType(argTypes[tailIdx])) {
-            compatibleNativeAbi = true;
-            hasPtrLenTailArgAbi = true;
+          bool allowPtrLenTailArity =
+              numArgs >= 3 ||
+              (numArgs == 2 &&
+               shouldAllowTwoArgPtrLenMethodNativeAbi(funcOp));
+          if (allowPtrLenTailArity) {
+            bool arg0PointerLike =
+                mlir::isa<mlir::LLVM::LLVMPointerType>(argTypes[0]) ||
+                shouldTreatArg0I64AsPointerLike(funcOp, 0);
+            bool prefixScalars = true;
+            for (unsigned i = 0; i < tailIdx; ++i)
+              prefixScalars &= isNativeScalarType(argTypes[i]);
+            if (arg0PointerLike && prefixScalars &&
+                isPtrLenStructNativeAbiType(argTypes[tailIdx])) {
+              compatibleNativeAbi = true;
+              hasPtrLenTailArgAbi = true;
+            }
           }
         }
         if (numResults == 1)

@@ -783,6 +783,24 @@
     - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-drift-compare.test`
       - result: `4/4` pass.
 
+- Iteration update (WS1: connectivity status-drift allowlist missing-file coverage):
+  - realization:
+    - connectivity runners had strong baseline precondition coverage, but did
+      not explicitly lock missing allowlist file diagnostics in both BMC and
+      LEC lanes.
+    - this left a regression risk for file-check ordering/error-message drift
+      around `--status-drift-allowlist-file`.
+  - implemented:
+    - added:
+      - `test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-missing-file.test`
+      - `test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist-missing-file.test`
+    - both tests pass baseline preconditions and assert missing-file diagnostics:
+      - `connectivity status drift allowlist file not found: ...`
+      - `connectivity LEC status drift allowlist file not found: ...`
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist-missing-file.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-bmc-status-drift-fail.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist-missing-file.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-requires-baseline.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-allowlist.test test/Tools/run-opentitan-connectivity-circt-lec-status-drift-fail.test`
+      - result: `8/8` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

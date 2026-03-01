@@ -15,10 +15,13 @@
 // SAFE: sum=3
 //
 // UNSAFE: Unmapped native func.call policy: default deny uvm_pkg::* and pointer-typed get_/set_/create_/m_initialize* (allow others){{.*}}with allow list 'uvm_pkg::uvm_component::get_first_child,uvm_pkg::uvm_component::get_next_child'
-// UNSAFE: Compiled function calls:          2
-// UNSAFE: Interpreted function calls:       0
-// UNSAFE: direct_calls_native:              2
-// UNSAFE: direct_calls_interpreted:         0
+// UNSAFE: Compiled function calls:          0
+// UNSAFE: Interpreted function calls:       2
+// UNSAFE: direct_calls_native:              0
+// UNSAFE: direct_calls_interpreted:         2
+// UNSAFE: Top interpreted func.call fallback reasons (top 50):
+// UNSAFE: uvm_pkg::uvm_component::get_first_child [pointer-safety=1]
+// UNSAFE: uvm_pkg::uvm_component::get_next_child [pointer-safety=1]
 // UNSAFE: sum=3
 
 func.func private @"uvm_pkg::uvm_component::get_first_child"(%this: !llvm.ptr,
