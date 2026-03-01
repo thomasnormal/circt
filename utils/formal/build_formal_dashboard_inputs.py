@@ -15,6 +15,19 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, NoReturn
 
+ALLOWED_MODES = {"BMC", "LEC", "CONNECTIVITY_LEC"}
+ALLOWED_STATUS = {
+    "PASS",
+    "FAIL",
+    "ERROR",
+    "TIMEOUT",
+    "UNKNOWN",
+    "SKIP",
+    "XFAIL",
+    "XPASS",
+}
+ALLOWED_STAGES = {"frontend", "lowering", "solver", "result", "postprocess"}
+
 
 def fail(path: Path, line_no: int, msg: str) -> NoReturn:
     raise SystemExit(f"{path}:{line_no}: {msg}")
@@ -173,6 +186,9 @@ def main() -> int:
                 fail(path, line_no, f"invalid JSON: {exc}")
             if not isinstance(payload, dict):
                 fail(path, line_no, "row must be a JSON object")
+            schema_version = payload.get("schema_version")
+            if schema_version != 1:
+                fail(path, line_no, "schema_version must be 1")
 
             case_id = expect_string(path, line_no, "case_id", payload.get("case_id", ""))
             case_path = expect_string(
@@ -206,12 +222,20 @@ def main() -> int:
                 fail(path, line_no, "suite must be non-empty")
             if not mode:
                 fail(path, line_no, "mode must be non-empty")
+            if mode not in ALLOWED_MODES:
+                fail(path, line_no, f"invalid mode: {mode}")
             if not status:
                 fail(path, line_no, "status must be non-empty")
+            if status not in ALLOWED_STATUS:
+                fail(path, line_no, f"invalid status: {status}")
+            if stage not in ALLOWED_STAGES:
+                fail(path, line_no, f"invalid stage: {stage}")
             if not case_id:
                 fail(path, line_no, "case_id must be non-empty")
             if not case_path:
                 fail(path, line_no, "case_path must be non-empty")
+            if not reason_code and status not in {"PASS", "UNKNOWN"}:
+                fail(path, line_no, "reason_code must be non-empty for this status")
 
             total_rows += 1
             status_counts[status] += 1

@@ -2,6 +2,29 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6-T4: strict schema validation in dashboard aggregator):
+  - realization:
+    - `build_formal_dashboard_inputs.py` accepted malformed rows too loosely,
+      which could silently pollute dashboard aggregates with invalid
+      status/mode/stage values or missing reason-code semantics.
+  - implemented:
+    - tightened schema validation in
+      `utils/formal/build_formal_dashboard_inputs.py`:
+      - enforces `schema_version == 1`
+      - enforces allowed enum sets for `mode`, `status`, and `stage`
+      - enforces non-empty `reason_code` for statuses other than
+        `PASS`/`UNKNOWN`
+    - added `test/Tools/formal-dashboard-inputs-invalid-schema.test` covering:
+      - invalid status rejection
+      - empty reason-code rejection for `FAIL`
+  - validation:
+    - `python3 -m py_compile utils/formal/build_formal_dashboard_inputs.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test`
+      - result: `4/4` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `15/15` pass.
+
 - Iteration update (WS0/WS6: dashboard capture includes expected-returncode lanes):
   - realization:
     - baseline dashboard export path only consumed `returncode == 0` command

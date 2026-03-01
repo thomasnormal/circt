@@ -436,6 +436,8 @@ Current workstream status in this branch:
    - schema-only dashboard input aggregator landed
      (`build_formal_dashboard_inputs.py`) with status/reason/timeout TSV+JSON
      outputs over multi-file JSONL inputs
+   - dashboard aggregator now enforces strict schema enums and reason-code
+     invariants to prevent malformed rows from polluting trend reports
    - baseline capture now supports optional schema-only dashboard emission via
      `--dashboard-*` outputs, closing WS0 capture -> WS6 dashboard handoff
    - dashboard aggregation now includes expected-returncode frontier lanes
