@@ -2608,16 +2608,34 @@ def main() -> int:
             allow_exact: set[str] = set()
             allow_prefix: list[str] = []
             allow_regex: list[re.Pattern[str]] = []
+            assertion_results_drift_allowlist_path: Path | None = None
             if args.assertion_results_drift_allowlist_file:
+                assertion_results_drift_allowlist_path = Path(
+                    args.assertion_results_drift_allowlist_file
+                ).resolve()
+                if not assertion_results_drift_allowlist_path.is_file():
+                    fail(
+                        "assertion results drift allowlist file not found: "
+                        f"{assertion_results_drift_allowlist_path}"
+                    )
                 allow_exact, allow_prefix, allow_regex = load_allowlist(
-                    Path(args.assertion_results_drift_allowlist_file).resolve()
+                    assertion_results_drift_allowlist_path
                 )
             row_allow_exact: set[str] = set()
             row_allow_prefix: list[str] = []
             row_allow_regex: list[re.Pattern[str]] = []
+            assertion_results_drift_row_allowlist_path: Path | None = None
             if args.assertion_results_drift_row_allowlist_file:
+                assertion_results_drift_row_allowlist_path = Path(
+                    args.assertion_results_drift_row_allowlist_file
+                ).resolve()
+                if not assertion_results_drift_row_allowlist_path.is_file():
+                    fail(
+                        "assertion results drift row allowlist file not found: "
+                        f"{assertion_results_drift_row_allowlist_path}"
+                    )
                 row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
-                    Path(args.assertion_results_drift_row_allowlist_file).resolve()
+                    assertion_results_drift_row_allowlist_path
                 )
 
             drift_rows: list[tuple[str, str, str, str]] = []
@@ -2788,22 +2806,37 @@ def main() -> int:
                 allow_exact: set[str] = set()
                 allow_prefix: list[str] = []
                 allow_regex: list[re.Pattern[str]] = []
+                grouped_violations_drift_allowlist_path: Path | None = None
                 if args.assertion_status_policy_grouped_violations_drift_allowlist_file:
+                    grouped_violations_drift_allowlist_path = Path(
+                        args.assertion_status_policy_grouped_violations_drift_allowlist_file
+                    ).resolve()
+                    if not grouped_violations_drift_allowlist_path.is_file():
+                        fail(
+                            "assertion status policy grouped violations drift "
+                            f"allowlist file not found: {grouped_violations_drift_allowlist_path}"
+                        )
                     allow_exact, allow_prefix, allow_regex = load_allowlist(
-                        Path(
-                            args.assertion_status_policy_grouped_violations_drift_allowlist_file
-                        ).resolve()
+                        grouped_violations_drift_allowlist_path
                     )
                 row_allow_exact: set[str] = set()
                 row_allow_prefix: list[str] = []
                 row_allow_regex: list[re.Pattern[str]] = []
+                grouped_violations_drift_row_allowlist_path: Path | None = None
                 if (
                     args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
                 ):
+                    grouped_violations_drift_row_allowlist_path = Path(
+                        args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
+                    ).resolve()
+                    if not grouped_violations_drift_row_allowlist_path.is_file():
+                        fail(
+                            "assertion status policy grouped violations drift "
+                            "row allowlist file not found: "
+                            f"{grouped_violations_drift_row_allowlist_path}"
+                        )
                     row_allow_exact, row_allow_prefix, row_allow_regex = load_allowlist(
-                        Path(
-                            args.assertion_status_policy_grouped_violations_drift_row_allowlist_file
-                        ).resolve()
+                        grouped_violations_drift_row_allowlist_path
                     )
 
                 drift_rows: list[tuple[str, str, str, str, str, str]] = []

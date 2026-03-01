@@ -2,6 +2,28 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: assertion/grouped drift allowlist file validation hardened):
+  - realization:
+    - FPV-BMC assertion drift and grouped-policy drift paths also loaded
+      allowlists without `is_file()` checks:
+      - `--assertion-results-drift-allowlist-file`
+      - `--assertion-results-drift-row-allowlist-file`
+      - `--assertion-status-policy-grouped-violations-drift-allowlist-file`
+      - `--assertion-status-policy-grouped-violations-drift-row-allowlist-file`
+    - missing files could therefore trigger uncaught traceback paths instead of
+      stable CLI diagnostics.
+  - implemented:
+    - added explicit existence validation before loading all four allowlist
+      paths with deterministic fail messages.
+    - added regressions:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-allowlist-missing-file.test`
+      - `test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-missing-file.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-assertion-results-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-assertion-status-policy-grouped-violations-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-row-allowlist-missing-file.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist-invalid-regex.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-allowlist.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary-drift-fail.test test/Tools/run-opentitan-fpv-circt-bmc-fpv-summary.test`
+      - result: `8/8` pass.
+
 - Iteration update (WS1/WS6: FPV summary drift allowlist file validation hardened):
   - realization:
     - `run_opentitan_fpv_circt_bmc.py` loaded

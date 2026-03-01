@@ -433,6 +433,8 @@ Current workstream status in this branch:
      allowlist helpers from `runner_common` with local fallback for copied-runner tests
    - FPV BMC summary-drift allowlist/row-allowlist paths now validate file
      existence before load, eliminating traceback-prone missing-file paths
+   - FPV BMC assertion-drift and grouped-policy-drift allowlist paths now
+     validate file existence before load, closing the same traceback class
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
