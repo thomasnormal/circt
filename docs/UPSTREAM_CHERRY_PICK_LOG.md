@@ -130,6 +130,11 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `fffdc5ba8` | `debd22694` | [FIRRTL] Add conservative IMDCE handling for InstanceChoiceOp (#9710) | First attempt failed without `#9676`; after prerequisite landed, reapplied cleanly and validated with `test/Dialect/FIRRTL/imdce.mlir`. |
 | `ef7b00e14` | `52c919970` | [FIRRTL] Allow full reset module instances outside of reset domain (#9754) | Applied cleanly; validated with `test/Dialect/FIRRTL/infer-resets.mlir` and `test/Dialect/FIRRTL/infer-resets-errors.mlir`. |
 | `a23a5538a` | `70d66d7f4` | [FIRRTL][LowerToHW] Add InstanceChoiceOp lowering, Part 1 (#9742) | Applied cleanly; validated with `test/Conversion/FIRRTLToHW/lower-to-hw.mlir` and `test/Conversion/FIRRTLToHW/lower-to-hw-errors.mlir`. |
+| `652842ff6` | `def39e7c7` | [FIRRTL] Add CheckCombLoops handling for InstanceChoiceOp (#9711) | Applied cleanly; validated with `test/Dialect/FIRRTL/check-comb-loops.mlir`. |
+| `1d93ce251` | `ec285f538` | [firtool] Add --num-threads/-j option to control parallel compilation (#9551) | Applied with recurring local conflict in `tools/firtool/firtool.cpp` (resolved via rerere). Local `test/firtool/commandline.mlir` currently has an unrelated broad `Options:` check failure; validated feature directly via `firtool --help` showing `-j` and `--num-threads`. |
+| `75b155c87` | `52b012089` | [ConvertToLLVM] Add hw::ConstantOp conversion support and tests (#9709) | Applied cleanly; validated with `test/Conversion/CombToLLVM/comb-to-llvm.mlir`. |
+| `9e942d980` | `3d5455330` | [FIRRTL] Add instance macro attribute to InstanceChoice for Lowering (#9760) | Applied cleanly; validated with `test/Dialect/FIRRTL/populate-instance-choice-symbols.mlir`, `test/Dialect/FIRRTL/errors.mlir`, and `test/Conversion/FIRRTLToHW/lower-to-hw*.mlir`. |
+| `2eadea44e` | `61850d3c7` | [Moore] Add %m/%M hierarchical path format specifier (#9783) | Applied with conflicts in Moore/Sim ops, ImportVerilog format lowering, and MooreToCore tests. Merged by preserving local class/dynamic-string formatting support while adding hierarchical-path ops; validated with `test/Conversion/ImportVerilog/builtins.sv`, `test/Conversion/MooreToCore/basic.mlir`, `test/Dialect/Moore/basic.mlir`, and `test/Dialect/Sim/round-trip.mlir`. |
 
 ### Attempted But Deferred
 

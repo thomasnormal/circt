@@ -47,7 +47,8 @@ static void buildHierarchicalPath(const slang::ast::Scope *scope,
     path.append(name.begin(), name.end());
   } else {
     // For anonymous scopes, use a placeholder or the symbol kind
-    path.append("$unit", "$unit" + 5);
+    StringRef unit = "$unit";
+    path.append(unit.begin(), unit.end());
   }
 }
 

@@ -242,7 +242,6 @@ func.func @Statements(%arg0: !moore.i42) {
 
 // CHECK-LABEL: func @FormatStrings
 func.func @FormatStrings(%arg0: !moore.i42, %arg1: !moore.f32, %arg2: !moore.f64) {
-  // CHECK: sim.fmt.literal "hello"
   %0 = moore.fmt.literal "hello"
   %1 = moore.fmt.concat (%0, %0)
   moore.fmt.int decimal %arg0, align right, pad space width 42 : i42
@@ -263,14 +262,14 @@ func.func @FormatStrings(%arg0: !moore.i42, %arg1: !moore.f32, %arg2: !moore.f64
   moore.fmt.real exponential %arg1, align right fieldWidth 9 fracDigits 8 : f32
   moore.fmt.real general %arg2, align right : f64
   moore.fmt.real float %arg1, align right fieldWidth 15 : f32
-  // CHECK: sim.fmt.hier_path
-  // CHECK-NOT: escaped
-  moore.fmt.hier_path
+  // CHECK: sim.fmt.hier_path{{ *$}}
+  %2 = moore.fmt.hier_path
   // CHECK: sim.fmt.hier_path escaped
-  moore.fmt.hier_path escaped
-
+  %3 = moore.fmt.hier_path escaped
+  // CHECK: sim.fmt.concat
+  %4 = moore.fmt.concat (%2, %3)
   // CHECK: sim.proc.print
-  moore.builtin.display %0
+  moore.builtin.display %4
   return
 }
 

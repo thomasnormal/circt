@@ -554,14 +554,14 @@ endfunction
 // CHECK-LABEL: moore.module @HierarchicalNameModule
 module HierarchicalNameModule;
   int x;
-  // CHECK: moore.fmt.literal "HierarchicalNameModule"
+  // CHECK: moore.fmt.hier_path
   // CHECK: moore.fmt.literal "\0A"
   // CHECK: moore.fmt.concat
   // CHECK: moore.builtin.display
   initial $display("%m");
 
   // CHECK: moore.fmt.literal "Path: "
-  // CHECK: moore.fmt.literal "HierarchicalNameModule"
+  // CHECK: moore.fmt.hier_path
   // CHECK: moore.fmt.literal "\0A"
   // CHECK: moore.fmt.concat
   // CHECK: moore.builtin.display
