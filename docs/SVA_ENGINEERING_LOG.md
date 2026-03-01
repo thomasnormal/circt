@@ -10646,3 +10646,38 @@
   - regression sweep:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-*.sv`
       - result: `148 passed, 20 expectedly failed`.
+
+## 2026-03-01 - UVM TLM req/rsp channel lifecycle semanticization
+
+- realization:
+  - `uvm-tlm-req-rsp-channel.sv` and `uvm-tlm-transport-channel.sv` both
+    failed due `UVM_FATAL [ILLCRT]`.
+  - Root cause was test-side lifecycle misuse: each test constructed
+    `uvm_tlm_req_rsp_channel` as a component in `run_phase`, which is illegal
+    in UVM after build has ended.
+  - This was not a simulator runtime bug; these were stale `XFAIL`s masking
+    legal UVM semantics violations in test code.
+
+- implemented:
+  - Removed `XFAIL` in both tests.
+  - Promoted channel handles to class members and created them in `build_phase`:
+    - `test/Tools/crun/uvm-tlm-req-rsp-channel.sv`
+    - `test/Tools/crun/uvm-tlm-transport-channel.sv`
+  - Kept run-phase dataflow checks unchanged so tests remain semantic.
+
+- validation:
+  - red (before fixes):
+    - `build_test/bin/crun test/Tools/crun/uvm-tlm-req-rsp-channel.sv --top tb_top -v 0`
+      - observed `UVM_FATAL [ILLCRT]` at `chan` construction.
+    - `build_test/bin/crun test/Tools/crun/uvm-tlm-transport-channel.sv --top tb_top -v 0`
+      - observed `UVM_FATAL [ILLCRT]` at `chan` construction.
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-tlm-req-rsp-channel.sv` -> `1 passed`
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-tlm-transport-channel.sv` -> `1 passed`
+    - direct checks print:
+      - `req_rsp channel put/get: PASS`
+      - `request received: PASS`
+      - `response received: PASS`
+  - regression slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-tlm-*.sv`
+      - result: `15 passed, 1 expectedly failed` (`uvm-tlm-analysis-100.sv`).

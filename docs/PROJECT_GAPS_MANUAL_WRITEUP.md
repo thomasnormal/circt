@@ -6304,3 +6304,9 @@ Status update (2026-03-01): this gap is closed in this workspace. `uvm_config_db
 
 ### [x] 2096. `test/Tools/crun/uvm-transaction-timing.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and corrected semantic expectations for transaction IDs: plain `uvm_transaction` objects default to `transaction_id == -1` unless explicitly set. The test now validates timing APIs (`accept_tr`/`begin_tr`/`end_tr`) plus correct `transaction_id` default and `set_transaction_id`/`get_transaction_id` behavior.
+
+### [x] 2097. `test/Tools/crun/uvm-tlm-req-rsp-channel.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and corrected UVM lifecycle usage by constructing `uvm_tlm_req_rsp_channel` in `build_phase` instead of `run_phase`. The semantic request/peek flow now executes under crun and validates payload transfer (`req_rsp channel put/get: PASS`).
+
+### [x] 2098. `test/Tools/crun/uvm-tlm-transport-channel.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL` and fixed the same lifecycle legality issue as entry 2097 (component creation moved to `build_phase`). End-to-end request/response semantics now pass under crun (`request received: PASS`, `response received: PASS`).

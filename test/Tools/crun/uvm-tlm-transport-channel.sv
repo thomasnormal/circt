@@ -1,6 +1,5 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test uvm_tlm_req_rsp_channel for request-response pattern.
 // One process puts a request and gets a response; another handles it.
@@ -33,19 +32,22 @@ module tb_top;
 
   class transport_test extends uvm_test;
     `uvm_component_utils(transport_test)
+    uvm_tlm_req_rsp_channel #(req_txn, rsp_txn) chan;
 
     function new(string name, uvm_component parent);
       super.new(name, parent);
     endfunction
 
+    function void build_phase(uvm_phase phase);
+      super.build_phase(phase);
+      chan = new("chan", this);
+    endfunction
+
     task run_phase(uvm_phase phase);
-      uvm_tlm_req_rsp_channel #(req_txn, rsp_txn) chan;
       req_txn req, got_req;
       rsp_txn rsp, got_rsp;
 
       phase.raise_objection(this);
-
-      chan = new("chan", this);
 
       fork
         // Requester: put request, then get response
