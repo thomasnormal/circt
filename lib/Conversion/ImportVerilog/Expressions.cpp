@@ -6965,6 +6965,94 @@ struct RvalueExprVisitor : public ExprVisitor {
       }
     }
 
+    // Handle reduction methods with a with-clause.
+    // IEEE 1800-2017 Section 7.12.3 "Array reduction methods".
+    bool isReduceWithMethod =
+        llvm::StringSwitch<bool>(subroutine.name)
+            .Cases({"sum", "product", "and", "or", "xor"}, true)
+            .Default(false);
+    if (isReduceWithMethod) {
+      auto [iterExpr, iterVar] = info.getIteratorInfo();
+      if (iterExpr && iterVar) {
+        if (args.empty()) {
+          mlir::emitError(loc)
+              << "array reduction with-clause requires an array argument";
+          return {};
+        }
+
+        Value arrayVal = context.convertRvalueExpression(*args[0]);
+        if (!arrayVal)
+          return {};
+
+        auto resultType = context.convertType(*expr.type);
+        if (!resultType)
+          return {};
+        auto resultIntType = dyn_cast<moore::IntType>(resultType);
+        if (!resultIntType ||
+            resultIntType.getDomain() != moore::Domain::TwoValued) {
+          mlir::emitError(loc)
+              << "array reduction with-clause currently requires two-valued "
+                 "integer result type, got "
+              << resultType;
+          return {};
+        }
+
+        moore::QueueReduceKind kind;
+        if (subroutine.name == "sum")
+          kind = moore::QueueReduceKind::Sum;
+        else if (subroutine.name == "product")
+          kind = moore::QueueReduceKind::Product;
+        else if (subroutine.name == "and")
+          kind = moore::QueueReduceKind::And;
+        else if (subroutine.name == "or")
+          kind = moore::QueueReduceKind::Or;
+        else
+          kind = moore::QueueReduceKind::Xor;
+
+        auto kindAttr = moore::QueueReduceKindAttr::get(builder.getContext(),
+                                                        kind);
+        auto reduceWithOp = moore::QueueReduceWithOp::create(
+            builder, loc, resultType, kindAttr, arrayVal);
+
+        Type iterVarType = context.convertType(iterVar->getType());
+        if (!iterVarType)
+          return {};
+
+        Block *bodyBlock = &reduceWithOp.getBody().emplaceBlock();
+        bodyBlock->addArgument(iterVarType, loc);
+        auto indexType = moore::IntType::getInt(context.getContext(), 32);
+        bodyBlock->addArgument(indexType, loc);
+        Value iterArg = bodyBlock->getArgument(0);
+        Value indexArg = bodyBlock->getArgument(1);
+
+        OpBuilder::InsertionGuard guard(builder);
+        builder.setInsertionPointToStart(bodyBlock);
+
+        Context::ValueSymbolScope scope(context.valueSymbols);
+        context.valueSymbols.insert(iterVar, iterArg);
+
+        Context::IteratorIndexSymbolScope indexScope(
+            context.iteratorIndexSymbols);
+        context.iteratorIndexSymbols.insert(iterVar, indexArg);
+
+        Value savedIteratorIndex = context.currentIteratorIndex;
+        context.currentIteratorIndex = indexArg;
+        Value mappedValue = context.convertRvalueExpression(*iterExpr);
+        context.currentIteratorIndex = savedIteratorIndex;
+        if (!mappedValue)
+          return {};
+
+        mappedValue = context.materializeConversion(
+            cast<moore::UnpackedType>(resultType), mappedValue,
+            iterExpr->type->isSigned(), loc);
+        if (!mappedValue)
+          return {};
+
+        moore::QueueReduceYieldOp::create(builder, loc, mappedValue);
+        return reduceWithOp.getResult();
+      }
+    }
+
     // $sformatf() and $sformat look like system tasks, but we handle string
     // formatting differently from expression evaluation, so handle them
     // separately.

@@ -1883,6 +1883,7 @@ struct ModuleVisitor : public BaseVisitor {
             context.covergroupImplicitSamplingVars.insert(&varNode);
           }
         }
+        }
       }
     }
     return success();
@@ -3642,11 +3643,42 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
     auto handleInterfacePort = [&](const InterfacePortSymbol &port) {
       auto portLoc = convertLocation(port.location);
       const slang::ast::DefinitionSymbol *ifaceDef = port.interfaceDef;
+      const slang::ast::InstanceBodySymbol *connectedIfaceBody = nullptr;
+
+      // Prefer the concrete interface specialization from the connection site
+      // when this module body is elaborated from an instance. Without this,
+      // parameterized interface ports can be lowered against default parameter
+      // values, yielding mismatched field layouts at runtime.
+      auto [ifaceConn, modportSym] = port.getConnection();
+      (void)modportSym;
+      if (auto *instSym =
+              ifaceConn ? ifaceConn->as_if<slang::ast::InstanceSymbol>()
+                        : nullptr) {
+        connectedIfaceBody = &instSym->body;
+        if (!ifaceDef)
+          ifaceDef = &instSym->getDefinition();
+      }
+
+      // When getConnection() is unavailable on the port symbol, fall back to
+      // hierarchical interface threading data collected during instance
+      // traversal. This captures the concrete interface specialization
+      // connected at this module body.
+      if (!connectedIfaceBody) {
+        auto portName = llvm::StringRef(port.name.data(), port.name.size());
+        for (const auto &entry : hierInterfacePaths[module]) {
+          if (!entry.hierName || entry.hierName.getValue() != portName ||
+              !entry.ifaceInst)
+            continue;
+          connectedIfaceBody = &entry.ifaceInst->body;
+          if (!ifaceDef)
+            ifaceDef = &entry.ifaceInst->getDefinition();
+          break;
+        }
+      }
 
       // For generic interface ports (e.g., `module foo(interface bus)`),
       // resolve the concrete interface type from the connection site.
       if (!ifaceDef && port.isGeneric) {
-        auto [ifaceConn, modportSym] = port.getConnection();
         if (auto *instSym =
                 ifaceConn ? ifaceConn->as_if<slang::ast::InstanceSymbol>()
                           : nullptr) {
@@ -3692,10 +3724,13 @@ Context::convertModuleHeader(const slang::ast::InstanceBodySymbol *module) {
         return success();
       }
 
-      auto &ifaceBody = slang::ast::InstanceBodySymbol::fromDefinition(
-          compilation, *ifaceDef, port.location,
-          slang::ast::InstanceFlags::None, nullptr, nullptr, nullptr);
-      auto *ifaceLowering = convertInterfaceHeader(&ifaceBody);
+      const slang::ast::InstanceBodySymbol *ifaceBody = connectedIfaceBody;
+      if (!ifaceBody)
+        ifaceBody = &slang::ast::InstanceBodySymbol::fromDefinition(
+            compilation, *ifaceDef, port.location,
+            slang::ast::InstanceFlags::None, nullptr, nullptr, nullptr);
+
+      auto *ifaceLowering = convertInterfaceHeader(ifaceBody);
       if (!ifaceLowering)
         return failure();
 

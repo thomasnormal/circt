@@ -6685,6 +6685,45 @@ def QueueReduceOp : QueueBuiltin<"reduce", [Pure]> {
   let assemblyFormat = "$kind $array `:` type($array) `->` type($result) attr-dict";
 }
 
+def QueueReduceWithOp : QueueBuiltin<"reduce.with", [Pure]> {
+  let summary = "Reduce a queue or array with a custom per-element expression";
+  let description = [{
+    Reduces all elements of a queue or array into a single value using the
+    specified reduction kind (sum, product, and, or, xor) after first
+    evaluating a `with` expression for each element.
+
+    This corresponds to SystemVerilog reduction methods with a with-clause,
+    e.g. `arr.sum() with (item * 2)`.
+
+    The body region has block arguments:
+    - `%item`: the current element value
+    - `%index`: the current element index (i32)
+
+    The body must terminate with `moore.queue.reduce.yield` yielding the value
+    to be reduced for that element.
+  }];
+  let arguments = (ins QueueReduceKindAttr:$kind, UnpackedType:$array);
+  let results = (outs AnyType:$result);
+  let regions = (region SizedRegion<1>:$body);
+  let assemblyFormat = [{
+    $kind $array `:` type($array) `->` type($result) $body attr-dict
+  }];
+}
+
+def QueueReduceYieldOp : MooreOp<"queue.reduce.yield", [
+  Pure,
+  Terminator,
+  HasParent<"QueueReduceWithOp">,
+]> {
+  let summary = "Yield a reduced value from a queue.reduce.with body";
+  let description = [{
+    Terminates the body region of `moore.queue.reduce.with` and yields the
+    per-element value that is fed into the selected reduction operation.
+  }];
+  let arguments = (ins UnpackedType:$value);
+  let assemblyFormat = "$value `:` type($value) attr-dict";
+}
+
 def QueueConcatOp : QueueBuiltin<"concat", [Pure]> {
   let summary = "Concatenate queues";
   let description = [{
@@ -6900,7 +6939,7 @@ def AssocArrayExistsOp : AssocArrayBuiltin<"exists"> {
     %found = moore.assoc.exists %array, %key : !moore.assoc_array<i32, string>, i32
     ```
   }];
-  let arguments = (ins AssocArrayType:$array, UnpackedType:$key);
+  let arguments = (ins AnyAssocArrayType:$array, UnpackedType:$key);
   let results = (outs TwoValuedI1:$result);
   let assemblyFormat = "$array `,` $key `:` type($array) `,` type($key) attr-dict";
 }

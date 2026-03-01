@@ -651,76 +651,19 @@ static Value maskFourStateValue(OpBuilder &builder, Location loc, Value value,
 static Value buildFourStateAddSub(OpBuilder &builder, Location loc, Value lhsVal,
                                   Value lhsUnk, Value rhsVal, Value rhsUnk,
                                   bool isSub) {
-  auto intTy = cast<IntegerType>(lhsVal.getType());
-  unsigned width = intTy.getWidth();
-  auto i1Ty = builder.getI1Type();
-  Value one = hw::ConstantOp::create(builder, loc, i1Ty, 1);
-  Value zero = hw::ConstantOp::create(builder, loc, i1Ty, 0);
+  Value zero = hw::ConstantOp::create(builder, loc, lhsVal.getType(), 0);
   Value allOnes = hw::ConstantOp::create(builder, loc, lhsVal.getType(), -1);
 
+  Value resultVal;
   if (isSub)
-    rhsVal = comb::XorOp::create(builder, loc, rhsVal, allOnes, false);
+    resultVal = comb::SubOp::create(builder, loc, lhsVal, rhsVal, false);
+  else
+    resultVal = comb::AddOp::create(builder, loc, lhsVal, rhsVal, false);
 
-  Value carry0 = isSub ? zero : one;
-  Value carry1 = isSub ? one : zero;
-
-  auto and2 = [&](Value a, Value b) {
-    return comb::AndOp::create(builder, loc, a, b, false);
-  };
-  auto or2 = [&](Value a, Value b) {
-    return comb::OrOp::create(builder, loc, a, b, false);
-  };
-  auto xor2 = [&](Value a, Value b) {
-    return comb::XorOp::create(builder, loc, a, b, false);
-  };
-  auto and3 = [&](Value a, Value b, Value c) { return and2(and2(a, b), c); };
-  auto or3 = [&](Value a, Value b, Value c) { return or2(or2(a, b), c); };
-  auto or4 = [&](Value a, Value b, Value c, Value d) {
-    return or2(or2(a, b), or2(c, d));
-  };
-
-  SmallVector<Value, 8> valueBits;
-  SmallVector<Value, 8> unknownBits;
-  valueBits.reserve(width);
-  unknownBits.reserve(width);
-
-  for (unsigned bit = 0; bit < width; ++bit) {
-    Value aValBit = comb::ExtractOp::create(builder, loc, lhsVal, bit, 1);
-    Value aUnkBit = comb::ExtractOp::create(builder, loc, lhsUnk, bit, 1);
-    Value bValBit = comb::ExtractOp::create(builder, loc, rhsVal, bit, 1);
-    Value bUnkBit = comb::ExtractOp::create(builder, loc, rhsUnk, bit, 1);
-
-    Value aNotVal = xor2(aValBit, one);
-    Value bNotVal = xor2(bValBit, one);
-    Value a1 = or2(aUnkBit, aValBit);
-    Value a0 = or2(aUnkBit, aNotVal);
-    Value b1 = or2(bUnkBit, bValBit);
-    Value b0 = or2(bUnkBit, bNotVal);
-
-    Value sum1 = or4(and3(a0, b0, carry1), and3(a0, b1, carry0),
-                     and3(a1, b0, carry0), and3(a1, b1, carry1));
-    Value sum0 = or4(and3(a0, b0, carry0), and3(a0, b1, carry1),
-                     and3(a1, b0, carry1), and3(a1, b1, carry0));
-
-    Value resultValBit = and2(sum1, xor2(sum0, one));
-    Value resultUnkBit = and2(sum1, sum0);
-    valueBits.push_back(resultValBit);
-    unknownBits.push_back(resultUnkBit);
-
-    Value carry1Next = or3(and2(a1, b1), and2(a1, carry1), and2(b1, carry1));
-    Value carry0Next = or3(and2(a0, b0), and2(a0, carry0), and2(b0, carry0));
-    carry1 = carry1Next;
-    carry0 = carry0Next;
-  }
-
-  Value resultVal = valueBits.back();
-  Value resultUnk = unknownBits.back();
-  for (int bit = static_cast<int>(width) - 2; bit >= 0; --bit) {
-    resultVal =
-        comb::ConcatOp::create(builder, loc, ValueRange{resultVal, valueBits[bit]});
-    resultUnk =
-        comb::ConcatOp::create(builder, loc, ValueRange{resultUnk, unknownBits[bit]});
-  }
+  Value unknownMask = comb::OrOp::create(builder, loc, lhsUnk, rhsUnk, false);
+  Value hasUnknown = comb::ICmpOp::create(builder, loc, comb::ICmpPredicate::ne,
+                                          unknownMask, zero);
+  Value resultUnk = comb::MuxOp::create(builder, loc, hasUnknown, allOnes, zero);
 
   Value maskedVal = maskFourStateValue(builder, loc, resultVal, resultUnk);
   return createFourStateStruct(builder, loc, maskedVal, resultUnk);
@@ -7025,8 +6968,9 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       return success();
     }
 
-    // Handle wildcard associative array variables [*] - same as regular assoc
-    // arrays but with default key/value sizes since index type is unspecified.
+    // Handle wildcard associative array variables [*].
+    // Wildcard indices are integral in SystemVerilog, so use canonical
+    // 64-bit integer keys in the runtime map.
     if (auto wildcardType = dyn_cast<WildcardAssocArrayType>(nestedMooreType)) {
       auto *ctx = rewriter.getContext();
       ModuleOp mod = op->getParentOfType<ModuleOp>();
@@ -7039,9 +6983,7 @@ struct VariableOpConversion : public OpConversionPattern<VariableOp> {
       auto fn =
           getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
 
-      // Wildcard associative arrays can use any index type, so we use
-      // string key (keySize=0) as a sensible default that works with any type.
-      int32_t keySize = 0;
+      int32_t keySize = 8;
 
       // Determine value size
       auto valueType = wildcardType.getElementType();
@@ -7665,8 +7607,8 @@ struct GlobalVariableOpConversion
       return success();
     }
 
-    // Handle wildcard associative array globals [*] - same as regular assoc
-    // arrays but with default key/value sizes.
+    // Handle wildcard associative array globals [*].
+    // Wildcard indices are integral, so use canonical 64-bit integer keys.
     if (auto wildcardType = dyn_cast<WildcardAssocArrayType>(mooreType)) {
       auto *ctx = rewriter.getContext();
       ModuleOp mod = op->getParentOfType<ModuleOp>();
@@ -7679,8 +7621,7 @@ struct GlobalVariableOpConversion
       auto fn =
           getOrCreateRuntimeFunc(mod, rewriter, "__moore_assoc_create", fnTy);
 
-      // Wildcard associative arrays use string key (keySize=0) as default.
-      int32_t keySize = 0;
+      int32_t keySize = 8;
 
       // Determine value size
       auto valueType = wildcardType.getElementType();
@@ -10512,41 +10453,6 @@ struct NegRealOpConversion : public OpConversionPattern<NegRealOp> {
   }
 };
 
-/// 4-state aware subtraction special-case:
-/// Detect `-1 - x` (bitwise NOT) and preserve per-bit unknowns.
-struct FourStateSubNegOneOpConversion : public OpConversionPattern<SubOp> {
-  using OpConversionPattern::OpConversionPattern;
-
-  LogicalResult
-  matchAndRewrite(SubOp op, OpAdaptor adaptor,
-                  ConversionPatternRewriter &rewriter) const override {
-    auto loc = op.getLoc();
-    auto resultType =
-        this->getTypeConverter()->convertType(op.getResult().getType());
-
-    if (!isFourStateStructType(resultType))
-      return failure();
-
-    APInt lhsVal;
-    APInt lhsUnk;
-    if (!getFourStateConstant(adaptor.getLhs(), lhsVal, lhsUnk))
-      return failure();
-    if (!lhsUnk.isZero() || !lhsVal.isAllOnes())
-      return failure();
-
-    Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
-    Value rhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getRhs());
-    Value allOnes =
-        hw::ConstantOp::create(rewriter, loc, rhsVal.getType(), -1);
-    Value resultVal =
-        comb::XorOp::create(rewriter, loc, rhsVal, allOnes, false);
-    Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, rhsUnk);
-    auto result = createFourStateStruct(rewriter, loc, maskedVal, rhsUnk);
-    rewriter.replaceOp(op, result);
-    return success();
-  }
-};
-
 template <typename SourceOp, typename TargetOp>
 struct BinaryOpConversion : public OpConversionPattern<SourceOp> {
   using OpConversionPattern<SourceOp>::OpConversionPattern;
@@ -10584,8 +10490,8 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
       return success();
     }
 
-    // 4-state arithmetic: add/sub use per-bit unknown propagation, others
-    // remain conservative (any unknown bit => all-unknown result).
+    // 4-state arithmetic uses pessimistic unknown propagation:
+    // any unknown input bit forces an all-unknown result.
     Value lhsVal = extractFourStateValue(rewriter, loc, adaptor.getLhs());
     Value lhsUnk = extractFourStateUnknown(rewriter, loc, adaptor.getLhs());
     Value rhsVal = extractFourStateValue(rewriter, loc, adaptor.getRhs());
@@ -10600,232 +10506,7 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
       return success();
     }
 
-    if constexpr (std::is_same_v<SourceOp, MulOp>) {
-      APInt constVal;
-      APInt constUnk;
-      Value otherVal;
-      Value otherUnk;
-      Value passthrough;
-      bool hasConst = false;
-      if (getFourStateConstant(adaptor.getLhs(), constVal, constUnk) &&
-          constUnk.isZero()) {
-        otherVal = rhsVal;
-        otherUnk = rhsUnk;
-        passthrough = adaptor.getRhs();
-        hasConst = true;
-      } else if (getFourStateConstant(adaptor.getRhs(), constVal, constUnk) &&
-                 constUnk.isZero()) {
-        otherVal = lhsVal;
-        otherUnk = lhsUnk;
-        passthrough = adaptor.getLhs();
-        hasConst = true;
-      }
-
-      if (hasConst) {
-        if (constVal.isZero()) {
-          Value zeroVal =
-              hw::ConstantOp::create(rewriter, loc, otherVal.getType(), 0);
-          Value zeroUnk =
-              hw::ConstantOp::create(rewriter, loc, otherUnk.getType(), 0);
-          rewriter.replaceOp(op,
-                             createFourStateStruct(rewriter, loc, zeroVal,
-                                                   zeroUnk));
-          return success();
-        }
-        if (constVal.isOne()) {
-          rewriter.replaceOp(op, passthrough);
-          return success();
-        }
-
-        unsigned width = constVal.getBitWidth();
-        if (width <= 16) {
-          auto shiftConst = [&](unsigned shift) {
-            Value shiftVal = hw::ConstantOp::create(
-                rewriter, loc, otherVal.getType(), static_cast<int64_t>(shift));
-            Value shiftedVal =
-                comb::ShlOp::create(rewriter, loc, otherVal, shiftVal);
-            Value shiftedUnk =
-                comb::ShlOp::create(rewriter, loc, otherUnk, shiftVal);
-            Value masked =
-                maskFourStateValue(rewriter, loc, shiftedVal, shiftedUnk);
-            return createFourStateStruct(rewriter, loc, masked, shiftedUnk);
-          };
-
-          if (constVal.isPowerOf2()) {
-            unsigned shift = constVal.logBase2();
-            rewriter.replaceOp(op, shiftConst(shift));
-            return success();
-          }
-
-          bool initialized = false;
-          Value sumVal;
-          Value sumUnk;
-          for (unsigned bit = 0; bit < width; ++bit) {
-            if (!constVal[bit])
-              continue;
-            if (!initialized) {
-              Value partial = shiftConst(bit);
-              sumVal = extractFourStateValue(rewriter, loc, partial);
-              sumUnk = extractFourStateUnknown(rewriter, loc, partial);
-              initialized = true;
-            } else {
-              Value partial = shiftConst(bit);
-              Value partialVal =
-                  extractFourStateValue(rewriter, loc, partial);
-              Value partialUnk =
-                  extractFourStateUnknown(rewriter, loc, partial);
-              Value sum = buildFourStateAddSub(rewriter, loc, sumVal, sumUnk,
-                                               partialVal, partialUnk,
-                                               /*isSub=*/false);
-              sumVal = extractFourStateValue(rewriter, loc, sum);
-              sumUnk = extractFourStateUnknown(rewriter, loc, sum);
-            }
-          }
-          if (initialized) {
-            Value masked = maskFourStateValue(rewriter, loc, sumVal, sumUnk);
-            rewriter.replaceOp(
-                op, createFourStateStruct(rewriter, loc, masked, sumUnk));
-            return success();
-          }
-        }
-      }
-
-      // For small 4-state multiplies, compute a more precise unknown mask than
-      // "any X/Z => all-unknown result". This uses a shift-and-add expansion
-      // where each partial term is masked by the corresponding rhs bit's
-      // value/unknown, and the sum uses the existing per-bit add/sub logic.
-      //
-      // Note that this remains correlation-losing (4-state bits are modeled
-      // independently), but is still substantially more precise than the
-      // all-unknown fallback and helps avoid spurious LEC mismatches.
-      unsigned width = cast<IntegerType>(lhsVal.getType()).getWidth();
-      if (width <= 16) {
-        Value zeroVal =
-            hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
-        Value zeroUnk =
-            hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
-        Value allOnes =
-            hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), -1);
-        Value one = hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
-
-        Value lhsMaybe1 = comb::OrOp::create(rewriter, loc, lhsVal, lhsUnk, false);
-        Value lhsNotVal = comb::XorOp::create(rewriter, loc, lhsVal, allOnes, false);
-        Value lhsMaybe0 = comb::OrOp::create(rewriter, loc, lhsNotVal, lhsUnk, false);
-
-        Value sumVal = zeroVal;
-        Value sumUnk = zeroUnk;
-        for (unsigned bit = 0; bit < width; ++bit) {
-          Value rhsValBit = comb::ExtractOp::create(rewriter, loc, rhsVal, bit, 1);
-          Value rhsUnkBit = comb::ExtractOp::create(rewriter, loc, rhsUnk, bit, 1);
-          Value rhsKnown = comb::XorOp::create(rewriter, loc, rhsUnkBit, one, false);
-          Value rhsDefOne = comb::AndOp::create(rewriter, loc, rhsValBit, rhsKnown, false);
-
-          Value rhsNotVal = comb::XorOp::create(rewriter, loc, rhsValBit, one, false);
-          Value rhsMaybe1 = comb::OrOp::create(rewriter, loc, rhsValBit, rhsUnkBit, false);
-          Value rhsMaybe0 = comb::OrOp::create(rewriter, loc, rhsNotVal, rhsUnkBit, false);
-
-          Value rhsDefOneRep = comb::ReplicateOp::create(rewriter, loc, rhsDefOne, width);
-          Value rhsMaybe1Rep = comb::ReplicateOp::create(rewriter, loc, rhsMaybe1, width);
-          Value rhsMaybe0Rep = comb::ReplicateOp::create(rewriter, loc, rhsMaybe0, width);
-
-          Value termVal =
-              comb::AndOp::create(rewriter, loc, lhsVal, rhsDefOneRep, false);
-          Value termMaybe1 =
-              comb::AndOp::create(rewriter, loc, lhsMaybe1, rhsMaybe1Rep, false);
-          Value termMaybe0 =
-              comb::OrOp::create(rewriter, loc, lhsMaybe0, rhsMaybe0Rep, false);
-          Value termUnk =
-              comb::AndOp::create(rewriter, loc, termMaybe1, termMaybe0, false);
-
-          if (bit != 0) {
-            Value shiftVal = hw::ConstantOp::create(
-                rewriter, loc, lhsVal.getType(), static_cast<int64_t>(bit));
-            termVal = comb::ShlOp::create(rewriter, loc, termVal, shiftVal);
-            termUnk = comb::ShlOp::create(rewriter, loc, termUnk, shiftVal);
-          }
-
-          Value partialSum = buildFourStateAddSub(rewriter, loc, sumVal, sumUnk,
-                                                  termVal, termUnk,
-                                                  /*isSub=*/false);
-          sumVal = extractFourStateValue(rewriter, loc, partialSum);
-          sumUnk = extractFourStateUnknown(rewriter, loc, partialSum);
-        }
-
-        Value masked = maskFourStateValue(rewriter, loc, sumVal, sumUnk);
-        rewriter.replaceOp(op,
-                           createFourStateStruct(rewriter, loc, masked, sumUnk));
-        return success();
-      }
-    }
-
-    if constexpr (std::is_same_v<SourceOp, DivUOp> ||
-                  std::is_same_v<SourceOp, ModUOp>) {
-      // For unsigned div/mod by a known power-of-two constant, use shifting /
-      // masking to propagate per-bit unknowns rather than conservatively
-      // marking the entire result unknown.
-      APInt rhsConstVal;
-      APInt rhsConstUnk;
-      if (getFourStateConstant(adaptor.getRhs(), rhsConstVal, rhsConstUnk) &&
-          rhsConstUnk.isZero()) {
-        unsigned width = rhsConstVal.getBitWidth();
-        if (rhsConstVal.isZero()) {
-          Value zeroVal =
-              hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
-          Value allUnk =
-              hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), -1);
-          rewriter.replaceOp(op,
-                             createFourStateStruct(rewriter, loc, zeroVal,
-                                                   allUnk));
-          return success();
-        }
-        if (rhsConstVal.isOne()) {
-          if constexpr (std::is_same_v<SourceOp, DivUOp>) {
-            rewriter.replaceOp(op, adaptor.getLhs());
-            return success();
-          } else {
-            Value zeroVal =
-                hw::ConstantOp::create(rewriter, loc, lhsVal.getType(), 0);
-            Value zeroUnk =
-                hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
-            rewriter.replaceOp(op,
-                               createFourStateStruct(rewriter, loc, zeroVal,
-                                                     zeroUnk));
-            return success();
-          }
-        }
-
-        if (rhsConstVal.isPowerOf2()) {
-          unsigned shift = rhsConstVal.logBase2();
-          Value shiftVal = hw::ConstantOp::create(
-              rewriter, loc, lhsVal.getType(), static_cast<int64_t>(shift));
-          if constexpr (std::is_same_v<SourceOp, DivUOp>) {
-            Value qVal =
-                comb::ShrUOp::create(rewriter, loc, lhsVal, shiftVal, false);
-            Value qUnk =
-                comb::ShrUOp::create(rewriter, loc, lhsUnk, shiftVal, false);
-            Value masked = maskFourStateValue(rewriter, loc, qVal, qUnk);
-            rewriter.replaceOp(
-                op, createFourStateStruct(rewriter, loc, masked, qUnk));
-            return success();
-          } else {
-            APInt maskConst = APInt::getLowBitsSet(width, shift);
-            Value maskVal = hw::ConstantOp::create(
-                rewriter, loc, lhsVal.getType(),
-                rewriter.getIntegerAttr(lhsVal.getType(), maskConst));
-            Value rVal =
-                comb::AndOp::create(rewriter, loc, lhsVal, maskVal, false);
-            Value rUnk =
-                comb::AndOp::create(rewriter, loc, lhsUnk, maskVal, false);
-            Value masked = maskFourStateValue(rewriter, loc, rVal, rUnk);
-            rewriter.replaceOp(
-                op, createFourStateStruct(rewriter, loc, masked, rUnk));
-            return success();
-          }
-        }
-      }
-    }
-
-    // Conservative fallback for other ops.
+    // Conservative lowering for 4-state arithmetic.
     Value resultVal = TargetOp::create(rewriter, loc, lhsVal, rhsVal, false);
     auto width = resultVal.getType().getIntOrFloatBitWidth();
     Value zero = hw::ConstantOp::create(rewriter, loc, lhsUnk.getType(), 0);
@@ -10836,6 +10517,14 @@ struct FourStateArithOpConversion : public OpConversionPattern<SourceOp> {
     Value rhsHasUnk = comb::ICmpOp::create(rewriter, loc,
                                            comb::ICmpPredicate::ne, rhsUnk, zero);
     Value hasUnknown = comb::OrOp::create(rewriter, loc, lhsHasUnk, rhsHasUnk, false);
+    if constexpr (std::is_same_v<SourceOp, DivUOp> ||
+                  std::is_same_v<SourceOp, DivSOp> ||
+                  std::is_same_v<SourceOp, ModUOp> ||
+                  std::is_same_v<SourceOp, ModSOp>) {
+      Value rhsIsZero = comb::ICmpOp::create(rewriter, loc,
+                                             comb::ICmpPredicate::eq, rhsVal, zero);
+      hasUnknown = comb::OrOp::create(rewriter, loc, hasUnknown, rhsIsZero, false);
+    }
     Value resultUnk =
         comb::MuxOp::create(rewriter, loc, hasUnknown, allOnes, zero);
     Value maskedVal = maskFourStateValue(rewriter, loc, resultVal, resultUnk);
@@ -14346,31 +14035,18 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
                                             elemSizeI64);
         }
 
-        // Build temporary init queue struct with byte-length semantics.
-        Value initStruct = LLVM::UndefOp::create(rewriter, loc, dynArrayTy);
-        initStruct = LLVM::InsertValueOp::create(rewriter, loc, initStruct,
-                                                 srcPtr,
-                                                 ArrayRef<int64_t>{0});
-        initStruct = LLVM::InsertValueOp::create(rewriter, loc, initStruct,
-                                                 srcLenBytes,
-                                                 ArrayRef<int64_t>{1});
-        auto one = LLVM::ConstantOp::create(
-            rewriter, loc, rewriter.getI64IntegerAttr(1));
-        auto initAlloca =
-            LLVM::AllocaOp::create(rewriter, loc, ptrTy, dynArrayTy, one);
-        LLVM::StoreOp::create(rewriter, loc, initStruct, initAlloca);
-
-        // __moore_dyn_array_new_copy(size_bytes, &initStructBytes)
-        auto copyFnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy});
-        auto copyFn = getOrCreateRuntimeFunc(mod, rewriter,
-                                             "__moore_dyn_array_new_copy",
-                                             copyFnTy);
+        // __moore_dyn_array_new_copy_bytes(size_bytes, src_ptr, src_bytes)
+        auto copyFnTy =
+            LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy, i64Ty});
+        auto copyFn =
+            getOrCreateRuntimeFunc(mod, rewriter,
+                                   "__moore_dyn_array_new_copy_bytes", copyFnTy);
         auto sizeBytesI32 =
             arith::TruncIOp::create(rewriter, loc, i32Ty, srcLenBytes);
         Value copied = LLVM::CallOp::create(
                            rewriter, loc, TypeRange{dynArrayTy},
                            SymbolRefAttr::get(copyFn),
-                           ValueRange{sizeBytesI32, initAlloca})
+                           ValueRange{sizeBytesI32, srcPtr, srcLenBytes})
                            .getResult();
 
         // Restore element-count semantics for arr.size().
@@ -15079,6 +14755,37 @@ struct AssignOpConversion : public OpConversionPattern<OpTy> {
       }
     }
 
+    // Handle writes through union field references lowered as:
+    //   unrealized_conversion_cast !llhd.ref<!hw.union<...>> -> !llhd.ref<T>
+    // Driving the cast ref does not update the underlying signal; rebuild the
+    // union value and drive the original union reference instead.
+    if (auto castOp = dst.getDefiningOp<UnrealizedConversionCastOp>()) {
+      if (castOp.getInputs().size() == 1) {
+        Value baseRef = castOp.getInputs().front();
+        auto baseRefTy = dyn_cast<llhd::RefType>(baseRef.getType());
+        auto fieldRefTy = dyn_cast<llhd::RefType>(dst.getType());
+        if (baseRefTy && fieldRefTy) {
+          if (auto unionTy = dyn_cast<hw::UnionType>(baseRefTy.getNestedType())) {
+            Type fieldType = fieldRefTy.getNestedType();
+            if (srcValue.getType() == fieldType) {
+              StringAttr fieldName;
+              for (auto field : unionTy.getElements()) {
+                if (field.type == fieldType) {
+                  fieldName = field.name;
+                  break;
+                }
+              }
+              if (fieldName) {
+                srcValue = hw::UnionCreateOp::create(rewriter, loc, unionTy,
+                                                     fieldName, srcValue);
+                dst = baseRef;
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Handle function output parameters: when the destination is a block
     // argument (function parameter) with llhd.ref type, use llvm.store instead
     // of llhd.drv for immediate assignment kinds. Function ref parameters are
@@ -15333,7 +15040,8 @@ struct AssertLikeOpConversion : public OpConversionPattern<MooreOpTy> {
 /// directly (used in comparisons where the verification infrastructure handles
 /// the past semantics).
 struct PastOpConversion : public OpConversionPattern<PastOp> {
-  using OpConversionPattern::OpConversionPattern;
+  PastOpConversion(TypeConverter &typeConverter, MLIRContext *ctx)
+      : OpConversionPattern(typeConverter, ctx, /*benefit=*/10) {}
 
   static std::optional<std::pair<Value, verif::ClockEdge>>
   findUniqueClockInModule(Operation *anchor) {
@@ -18321,6 +18029,184 @@ struct QueueReduceOpConversion
     }
 
     rewriter.replaceOp(op, result);
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.reduce.with -> inline reduction loop.
+struct QueueReduceWithOpConversion
+    : public OpConversionPattern<QueueReduceWithOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  static LLVM::LLVMStructType getQueueStructType(MLIRContext *ctx) {
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+    return LLVM::LLVMStructType::getLiteral(ctx, {ptrTy, i64Ty});
+  }
+
+  LogicalResult
+  matchAndRewrite(QueueReduceWithOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    auto loc = op.getLoc();
+    auto *ctx = rewriter.getContext();
+
+    auto ptrTy = LLVM::LLVMPointerType::get(ctx);
+    auto i64Ty = IntegerType::get(ctx, 64);
+
+    auto inputType = op.getArray().getType();
+    Type mooreElemType;
+    if (auto queueType = dyn_cast<moore::QueueType>(inputType))
+      mooreElemType = queueType.getElementType();
+    else if (auto dynArrayType =
+                 dyn_cast<moore::OpenUnpackedArrayType>(inputType))
+      mooreElemType = dynArrayType.getElementType();
+    else if (auto fixedArrayType =
+                 dyn_cast<moore::UnpackedArrayType>(inputType))
+      mooreElemType = fixedArrayType.getElementType();
+    else
+      return rewriter.notifyMatchFailure(op, "unsupported reduce.with input");
+
+    Type elemType = typeConverter->convertType(mooreElemType);
+    Type resultType = typeConverter->convertType(op.getResult().getType());
+    auto intResultType = dyn_cast<IntegerType>(resultType);
+    if (!elemType || !intResultType)
+      return rewriter.notifyMatchFailure(
+          op, "reduce.with currently requires integer result type");
+
+    Block &body = op.getBody().front();
+    auto yieldOp = dyn_cast<QueueReduceYieldOp>(body.getTerminator());
+    if (!yieldOp)
+      return rewriter.notifyMatchFailure(op, "expected queue.reduce.yield");
+
+    Value queueLen;
+    Value dataPtr;
+    if (auto fixedArrayType = dyn_cast<moore::UnpackedArrayType>(inputType)) {
+      int64_t numElements = fixedArrayType.getSize();
+      auto one = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(1));
+      Type llvmArrayType = convertToLLVMType(adaptor.getArray().getType());
+
+      auto arrayAlloca =
+          LLVM::AllocaOp::create(rewriter, loc, ptrTy, llvmArrayType, one);
+      Value arrayVal = UnrealizedConversionCastOp::create(
+                           rewriter, loc, llvmArrayType, adaptor.getArray())
+                           .getResult(0);
+      LLVM::StoreOp::create(rewriter, loc, arrayVal, arrayAlloca);
+
+      dataPtr = arrayAlloca;
+      queueLen = LLVM::ConstantOp::create(
+          rewriter, loc, rewriter.getI64IntegerAttr(numElements));
+    } else {
+      auto queueTy = getQueueStructType(ctx);
+      Value queueVal =
+          typeConverter->materializeTargetConversion(rewriter, loc, queueTy,
+                                                     adaptor.getArray());
+      if (!queueVal)
+        return rewriter.notifyMatchFailure(op, "failed to convert queue value");
+      dataPtr = LLVM::ExtractValueOp::create(rewriter, loc, ptrTy, queueVal,
+                                             ArrayRef<int64_t>{0});
+      queueLen = LLVM::ExtractValueOp::create(rewriter, loc, i64Ty, queueVal,
+                                              ArrayRef<int64_t>{1});
+    }
+
+    APInt initValue(intResultType.getWidth(), 0);
+    switch (op.getKind()) {
+    case moore::QueueReduceKind::Sum:
+    case moore::QueueReduceKind::Or:
+    case moore::QueueReduceKind::Xor:
+      initValue = APInt(intResultType.getWidth(), 0);
+      break;
+    case moore::QueueReduceKind::Product:
+      initValue = APInt(intResultType.getWidth(), 1);
+      break;
+    case moore::QueueReduceKind::And:
+      initValue = APInt::getAllOnes(intResultType.getWidth());
+      break;
+    }
+    Value initAcc = LLVM::ConstantOp::create(
+        rewriter, loc, intResultType,
+        rewriter.getIntegerAttr(intResultType, initValue));
+
+    Value lb = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                         rewriter.getI64IntegerAttr(0));
+    Value step = arith::ConstantOp::create(rewriter, loc, i64Ty,
+                                           rewriter.getI64IntegerAttr(1));
+    auto loop = scf::ForOp::create(rewriter, loc, lb, queueLen, step,
+                                   ValueRange{initAcc});
+
+    rewriter.setInsertionPointToStart(loop.getBody());
+    Value iv = loop.getInductionVar();
+    Value acc = loop.getRegionIterArgs().front();
+
+    Value elemPtr = LLVM::GEPOp::create(rewriter, loc, ptrTy, elemType, dataPtr,
+                                        ValueRange{iv});
+    Value elemVal = LLVM::LoadOp::create(rewriter, loc, elemType, elemPtr);
+    Value elemMoore =
+        UnrealizedConversionCastOp::create(rewriter, loc,
+                                           body.getArgument(0).getType(), elemVal)
+            .getResult(0);
+
+    IRMapping mapping;
+    mapping.map(body.getArgument(0), elemMoore);
+    if (body.getNumArguments() > 1) {
+      auto i32Ty = rewriter.getI32Type();
+      Value ivI32 = arith::TruncIOp::create(rewriter, loc, i32Ty, iv);
+      Value indexMoore =
+          UnrealizedConversionCastOp::create(rewriter, loc,
+                                             body.getArgument(1).getType(), ivI32)
+              .getResult(0);
+      mapping.map(body.getArgument(1), indexMoore);
+    }
+
+    for (Operation &bodyOp : body.without_terminator()) {
+      Operation *cloned = rewriter.clone(bodyOp, mapping);
+      for (auto [oldResult, newResult] :
+           llvm::zip(bodyOp.getResults(), cloned->getResults()))
+        mapping.map(oldResult, newResult);
+    }
+
+    Value mappedMoore = mapping.lookupOrDefault(yieldOp.getValue());
+    Value mappedValue = typeConverter->materializeTargetConversion(
+        rewriter, loc, intResultType, mappedMoore);
+    if (!mappedValue)
+      return rewriter.notifyMatchFailure(op,
+                                         "failed to convert reduce.with value");
+
+    Value nextAcc;
+    switch (op.getKind()) {
+    case moore::QueueReduceKind::Sum:
+      nextAcc = arith::AddIOp::create(rewriter, loc, acc, mappedValue);
+      break;
+    case moore::QueueReduceKind::Product:
+      nextAcc = arith::MulIOp::create(rewriter, loc, acc, mappedValue);
+      break;
+    case moore::QueueReduceKind::And:
+      nextAcc = arith::AndIOp::create(rewriter, loc, acc, mappedValue);
+      break;
+    case moore::QueueReduceKind::Or:
+      nextAcc = arith::OrIOp::create(rewriter, loc, acc, mappedValue);
+      break;
+    case moore::QueueReduceKind::Xor:
+      nextAcc = arith::XOrIOp::create(rewriter, loc, acc, mappedValue);
+      break;
+    }
+    scf::YieldOp::create(rewriter, loc, nextAcc);
+
+    rewriter.setInsertionPointAfter(loop);
+    rewriter.replaceOp(op, loop.getResult(0));
+    return success();
+  }
+};
+
+/// Conversion for moore.queue.reduce.yield -> no-op (handled by parent).
+struct QueueReduceYieldOpConversion
+    : public OpConversionPattern<QueueReduceYieldOp> {
+  using OpConversionPattern::OpConversionPattern;
+
+  LogicalResult
+  matchAndRewrite(QueueReduceYieldOp op, OpAdaptor adaptor,
+                  ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
     return success();
   }
 };
@@ -22339,8 +22225,8 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
     } else if (auto wildcardAssocType =
                    dyn_cast<WildcardAssocArrayType>(op.getArray().getType())) {
       mooreElemType = wildcardAssocType.getElementType();
-      // Wildcard assoc arrays use string keys by default in our runtime
-      mooreKeyType = StringType::get(ctx);
+      // Keep mooreKeyType unset for wildcard assoc arrays. Lowering defaults
+      // to i64 key storage for integral wildcard indices.
       isAssocArray = true;
     } else {
       return rewriter.notifyMatchFailure(op, "unsupported array type");
@@ -23116,21 +23002,28 @@ struct DynArrayNewOpConversion
     // hold the element count (for arr.size()). We patch .len after the call.
     auto i64Ty = IntegerType::get(ctx, 64);
     if (adaptor.getInit()) {
-      // __moore_dyn_array_new_copy(size, init_ptr) -> {ptr, i64}
-      auto fnTy = LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy});
-      auto fn = getOrCreateRuntimeFunc(mod, rewriter,
-                                       "__moore_dyn_array_new_copy", fnTy);
+      // __moore_dyn_array_new_copy_bytes(size_bytes, src_ptr, src_bytes)
+      auto fnTy =
+          LLVM::LLVMFunctionType::get(dynArrayTy, {i32Ty, ptrTy, i64Ty});
+      auto fn =
+          getOrCreateRuntimeFunc(mod, rewriter,
+                                 "__moore_dyn_array_new_copy_bytes", fnTy);
 
-      // Store init array to alloca and pass pointer.
-      auto one = LLVM::ConstantOp::create(rewriter, loc,
-                                          rewriter.getI64IntegerAttr(1));
-      auto initAlloca =
-          LLVM::AllocaOp::create(rewriter, loc, ptrTy, dynArrayTy, one);
-      LLVM::StoreOp::create(rewriter, loc, adaptor.getInit(), initAlloca);
+      Value initPtr = LLVM::ExtractValueOp::create(
+          rewriter, loc, ptrTy, adaptor.getInit(), ArrayRef<int64_t>{0});
+      Value initLenElems = LLVM::ExtractValueOp::create(
+          rewriter, loc, i64Ty, adaptor.getInit(), ArrayRef<int64_t>{1});
+      Value initLenBytes = initLenElems;
+      if (elemByteSize > 1) {
+        auto elemSizeI64 = LLVM::ConstantOp::create(
+            rewriter, loc, rewriter.getI64IntegerAttr(elemByteSize));
+        initLenBytes = LLVM::MulOp::create(rewriter, loc, i64Ty, initLenElems,
+                                           elemSizeI64);
+      }
 
       auto call = LLVM::CallOp::create(
           rewriter, loc, TypeRange{dynArrayTy}, SymbolRefAttr::get(fn),
-          ValueRange{byteSize, initAlloca});
+          ValueRange{byteSize, initPtr, initLenBytes});
       // Patch .len to element count instead of byte count.
       auto elemCount = arith::ExtSIOp::create(rewriter, loc, i64Ty,
                                                adaptor.getSize());
@@ -23264,9 +23157,10 @@ struct AssocArrayCreateOpConversion
       auto convertedValueType = typeConverter->convertType(valueType);
       if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
         valueSize = (intTy.getWidth() + 7) / 8;
-    } else if (auto wildcardType = dyn_cast<WildcardAssocArrayType>(resultType)) {
-      // For WildcardAssocArrayType, use string key (keySize=0) and determine
-      // value size from the element type.
+    } else if (auto wildcardType =
+                   dyn_cast<WildcardAssocArrayType>(resultType)) {
+      // Wildcard associative arrays are indexed by integral values.
+      keySize = 8;
       auto valueType = wildcardType.getElementType();
       auto convertedValueType = typeConverter->convertType(valueType);
       if (auto intTy = dyn_cast<IntegerType>(convertedValueType))
@@ -25005,36 +24899,69 @@ struct CountBitsBIOpConversion : public OpConversionPattern<CountBitsBIOp> {
                   ConversionPatternRewriter &rewriter) const override {
     auto loc = op.getLoc();
     Value input = adaptor.getValue();
+    bool isFourState = isFourStateStructType(input.getType());
 
-    // Handle 4-state types which are lowered to {value, unknown} structs
-    if (isFourStateStructType(input.getType()))
-      input = extractFourStateValue(rewriter, loc, input);
+    Value valueBits = input;
+    Value unknownBits;
+    if (isFourState) {
+      valueBits = extractFourStateValue(rewriter, loc, input);
+      unknownBits = extractFourStateUnknown(rewriter, loc, input);
+    }
 
-    auto inputType = cast<IntegerType>(input.getType());
+    auto inputType = cast<IntegerType>(valueBits.getType());
     unsigned bitWidth = inputType.getWidth();
+    Value zero = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 0));
+    Value allOnes =
+        hw::ConstantOp::create(rewriter, loc, APInt::getAllOnes(bitWidth));
 
     int32_t controlBits = op.getControlBits();
     bool countZeros = (controlBits & 1) != 0;  // 0b0001
     bool countOnes = (controlBits & 2) != 0;   // 0b0010
-    // X and Z are always 0 in two-valued lowering (bits 0b0100 and 0b1000)
+    bool countXs = (controlBits & 4) != 0;     // 0b0100
+    bool countZs = (controlBits & 8) != 0;     // 0b1000
 
-    Value result;
-    if (countOnes && countZeros) {
-      // Counting both 0s and 1s = all bits = bitwidth
-      result = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, bitWidth));
-    } else if (countOnes) {
-      // Count 1 bits using ctpop
-      result = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
-    } else if (countZeros) {
-      // Count 0 bits = bitwidth - ctpop(x)
-      Value ctpop = LLVM::CtPopOp::create(rewriter, loc, inputType, input);
-      Value width =
-          hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, bitWidth));
-      result = comb::SubOp::create(rewriter, loc, width, ctpop);
-    } else {
-      // No 0s or 1s to count (only X/Z which are 0 in two-valued)
-      result = hw::ConstantOp::create(rewriter, loc, APInt(bitWidth, 0));
+    Value result = zero;
+    auto accumulate = [&](Value mask) {
+      Value pop = LLVM::CtPopOp::create(rewriter, loc, inputType, mask);
+      result = comb::AddOp::create(rewriter, loc, result, pop, false);
+    };
+
+    if (isFourState) {
+      // For 4-state values, partition by known/unknown and value bits:
+      // known 1: (~unknown) & value
+      // known 0: (~unknown) & (~value)
+      // x:       unknown & (~value)
+      // z:       unknown & value
+      Value notUnknown =
+          comb::XorOp::create(rewriter, loc, unknownBits, allOnes, false);
+      Value notValue =
+          comb::XorOp::create(rewriter, loc, valueBits, allOnes, false);
+
+      if (countOnes)
+        accumulate(
+            comb::AndOp::create(rewriter, loc, notUnknown, valueBits, false));
+      if (countZeros)
+        accumulate(
+            comb::AndOp::create(rewriter, loc, notUnknown, notValue, false));
+      if (countXs)
+        accumulate(
+            comb::AndOp::create(rewriter, loc, unknownBits, notValue, false));
+      if (countZs)
+        accumulate(
+            comb::AndOp::create(rewriter, loc, unknownBits, valueBits, false));
+
+      // Keep four-state shape when required by surrounding conversions.
+      auto wrapped = createFourStateStruct(rewriter, loc, result, zero);
+      rewriter.replaceOp(op, wrapped);
+      return success();
     }
+
+    // Two-state lowering: only 0/1 can match.
+    Value notValue = comb::XorOp::create(rewriter, loc, valueBits, allOnes, false);
+    if (countOnes)
+      accumulate(valueBits);
+    if (countZeros)
+      accumulate(notValue);
 
     rewriter.replaceOp(op, result);
     return success();
@@ -32627,7 +32554,6 @@ static void populateOpConversion(ConversionPatternSet &patterns,
 
     // Patterns of binary operations (4-state aware for arithmetic).
     FourStateArithOpConversion<AddOp, comb::AddOp>,
-    FourStateSubNegOneOpConversion,
     FourStateArithOpConversion<SubOp, comb::SubOp>,
     FourStateArithOpConversion<MulOp, comb::MulOp>,
     FourStateArithOpConversion<DivUOp, comb::DivUOp>,
@@ -32796,6 +32722,8 @@ static void populateOpConversion(ConversionPatternSet &patterns,
     QueueUniqueOpConversion,
     QueueUniqueIndexOpConversion,
     QueueReduceOpConversion,
+    QueueReduceWithOpConversion,
+    QueueReduceYieldOpConversion,
     QueueSortOpConversion,
     QueueRSortOpConversion,
     QueueSortWithOpConversion,
