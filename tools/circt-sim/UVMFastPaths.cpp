@@ -39,7 +39,6 @@ enum class UvmFastPathAction : uint8_t {
   PrinterNoOp,
   ReportInfoSuppress,
   ReportWarningSuppress,
-  GetReportObject,
 };
 
 static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
@@ -80,8 +79,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportInfoSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_report_warning",
               UvmFastPathAction::ReportWarningSuppress)
-        .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
-              UvmFastPathAction::GetReportObject)
         .Default(UvmFastPathAction::None);
   case UvmFastPathCallForm::FuncCall:
     return StringSwitch<UvmFastPathAction>(calleeName)
@@ -115,8 +112,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportInfoSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_report_warning",
               UvmFastPathAction::ReportWarningSuppress)
-        .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
-              UvmFastPathAction::GetReportObject)
         .Default(UvmFastPathAction::None);
   }
   return UvmFastPathAction::None;
@@ -635,16 +630,14 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     }
   }
 
-  // m_uvm_get_root / uvm_get_report_object fast-path is opt-in. Returning
+  // m_uvm_get_root fast-path is opt-in. Returning
   // m_inst too early can race root construction and leave phase/domain state
   // partially initialized for subsequent component::new calls.
   static bool enableUvmGetRootFastPath = []() {
     const char *env = std::getenv("CIRCT_SIM_ENABLE_UVM_GET_ROOT_FASTPATH");
     return env && env[0] != '\0' && env[0] != '0';
   }();
-  if (enableUvmGetRootFastPath &&
-      (matchesMethod("m_uvm_get_root") ||
-       matchesMethod("uvm_get_report_object")) &&
+  if (enableUvmGetRootFastPath && matchesMethod("m_uvm_get_root") &&
       funcOp.getNumResults() >= 1) {
     // Look up uvm_root::m_inst global for the root singleton pointer.
     uint64_t rootAddr = 0;
@@ -1141,34 +1134,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
                << calleeName << "\n");
     recordFastPathHit("registry.call_indirect.report_warning_suppress");
     return true;
-  case UvmFastPathAction::GetReportObject: {
-    if (!fastPathUvmGetReportObject || callIndirectOp.getNumResults() < 1 ||
-        callIndirectOp.getArgOperands().empty())
-      break;
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    InterpretedValue selfVal =
-        getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX()) {
-      setValue(procId, result, InterpretedValue::makeX(width));
-    } else if (selfVal.getWidth() != width) {
-      setValue(procId, result,
-               InterpretedValue(selfVal.getAPInt().zextOrTrunc(width)));
-    } else {
-      setValue(procId, result, selfVal);
-    }
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra,
-               InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry get_report_object return self: "
-               << calleeName << "\n");
-    recordFastPathHit("registry.call_indirect.get_report_object");
-    return true;
-  }
   case UvmFastPathAction::None:
     break;
   }
@@ -1242,36 +1207,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     zeroCallIndirectResults();
     LLVM_DEBUG(llvm::dbgs()
                << "  call_indirect: report traffic fast-path (suppressed): "
-               << calleeName << "\n");
-    return true;
-  }
-
-  // Fast-path report-object wrappers that otherwise call m_rh_init() and
-  // dispatch into report-handler getters on every report.
-  if (fastPathUvmGetReportObject &&
-      calleeName.contains("uvm_report_object::uvm_get_report_object") &&
-      callIndirectOp.getNumResults() >= 1 &&
-      callIndirectOp.getArgOperands().size() >= 1) {
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    InterpretedValue selfVal =
-        getValue(procId, callIndirectOp.getArgOperands()[0]);
-    if (selfVal.isX()) {
-      setValue(procId, result, InterpretedValue::makeX(width));
-    } else if (selfVal.getWidth() != width) {
-      setValue(procId, result,
-               InterpretedValue(selfVal.getAPInt().zextOrTrunc(width)));
-    } else {
-      setValue(procId, result, selfVal);
-    }
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra, InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: uvm_get_report_object fast-path (return "
-                  "self): "
                << calleeName << "\n");
     return true;
   }
@@ -1584,27 +1519,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
                << calleeName << "\n");
     recordFastPathHit("registry.func.call.report_warning_suppress");
     return true;
-  case UvmFastPathAction::GetReportObject: {
-    if (!fastPathUvmGetReportObject || callOp.getNumResults() != 1 ||
-        callOp.getNumOperands() < 1)
-      break;
-    Value result = callOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX()) {
-      setValue(procId, result, InterpretedValue::makeX(width));
-    } else if (selfVal.getWidth() != width) {
-      setValue(procId, result,
-               InterpretedValue(selfVal.getAPInt().zextOrTrunc(width)));
-    } else {
-      setValue(procId, result, selfVal);
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: registry get_report_object return self: "
-               << calleeName << "\n");
-    recordFastPathHit("registry.func.call.get_report_object");
-    return true;
-  }
   case UvmFastPathAction::PrinterNoOp:
     // Suppress printer body and zero all results.
     for (Value result : callOp.getResults()) {
@@ -1647,9 +1561,7 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
   };
 
   bool isRootWrapperGetter = (calleeName == "m_uvm_get_root" ||
-                              calleeName == "uvm_pkg::uvm_get_report_object" ||
-                              calleeName.ends_with("::m_uvm_get_root") ||
-                              calleeName.ends_with("::uvm_get_report_object"));
+                              calleeName.ends_with("::m_uvm_get_root"));
   if (isRootWrapperGetter && callOp.getNumResults() >= 1 &&
       callOp.getNumOperands() == 0) {
     uint64_t rootAddr = 0;
@@ -1707,28 +1619,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: report traffic fast-path (suppressed): "
                << calleeName << "\n");
-    return true;
-  }
-
-  // Intercept report-object wrappers that repeatedly call m_rh_init() and
-  // then delegate to report-handler getters.
-  if (fastPathUvmGetReportObject &&
-      calleeName.contains("uvm_report_object::uvm_get_report_object") &&
-      callOp.getNumResults() == 1 && callOp.getNumOperands() >= 1) {
-    Value result = callOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX()) {
-      setValue(procId, result, InterpretedValue::makeX(width));
-    } else if (selfVal.getWidth() != width) {
-      setValue(procId, result,
-               InterpretedValue(selfVal.getAPInt().zextOrTrunc(width)));
-    } else {
-      setValue(procId, result, selfVal);
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: " << calleeName
-               << " intercepted (return self)\n");
     return true;
   }
 

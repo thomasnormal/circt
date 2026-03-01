@@ -10095,3 +10095,74 @@
   - compatibility check:
     - `build_test/bin/llvm-lit -sv -j 1 test/Tools/crun/uvm-globals-wait-nba.sv`
     - result: `1 passed`.
+
+## 2026-03-01 - UVM get_report_object semantic gate and interceptor reduction
+
+- realization:
+  - The new `uvm_get_report_object` semantic test draft was invalid (it called
+    `uvm_get_report_object` on plain `uvm_object`).
+  - After correcting the test target to real UVM semantics (`uvm_report_object`
+    member-call returns self; global `uvm_get_report_object` returns root), the
+    runtime remained green with existing interception, so this became a pure
+    interceptor-surface reduction wave.
+
+- implemented:
+  - Added semantic regression:
+    - `test/Runtime/uvm/uvm_get_report_object_semantic_test.sv`
+    - checks:
+      - component member-call returns self,
+      - report-object member-call returns self,
+      - virtual dispatch preserves member-call semantics,
+      - global function returns `uvm_coreservice_t::get().get_root()`.
+  - Removed `uvm_get_report_object` interception paths from:
+    - `tools/circt-sim/UVMFastPaths.cpp`
+      - removed `GetReportObject` fast-path action and all registry/pattern
+        interception branches,
+      - narrowed root-wrapper fast path to `m_uvm_get_root` only.
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - removed direct `uvm_report_object::uvm_get_report_object` func.call
+        interception.
+    - `tools/circt-sim/LLHDProcessInterpreter.h/.cpp`
+      - removed `CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT` state flag.
+
+- validation:
+  - semantic gate:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_get_report_object_semantic_test.sv`
+  - targeted UVM semantic slice:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_get_report_object_semantic_test.sv test/Runtime/uvm/uvm_report_file_handle_precedence_semantic_test.sv test/Runtime/uvm/uvm_wait_for_nba_region_semantic_test.sv test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_stress_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
+    - result: `8 passed`.
+
+## 2026-03-01 - UVM factory override priority semantics (instance override over type override)
+
+- realization:
+  - Full UVM runtime sweep exposed a semantic regression in
+    `test/Runtime/uvm/uvm_factory_test.sv` (`test_override_priority`):
+    - expected: `comp1` uses instance override (`instance_component`),
+    - observed: `comp1` incorrectly used type override (`extended_component`).
+  - Root cause was in native by-type factory bypass logic:
+    - by-type fallback used wrapper-only type-override mapping and could bypass
+      interpreted factory resolution even when instance overrides were set,
+    - instance-override configuration was not tracked for `func.call_indirect`
+      setter paths (`uvm_default_factory::set_inst_override_by_type`).
+
+- implemented:
+  - Added explicit runtime state for instance-override presence:
+    - `nativeFactoryInstanceOverridesConfigured` in
+      `tools/circt-sim/LLHDProcessInterpreter.h`.
+  - Added helper `isUvmFactoryInstanceOverrideSetter(...)` and wired detection
+    in both dispatch forms:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp` (`func.call`),
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      (`func.call_indirect`, including `set_inst_override_*` helper names).
+  - Tightened by-type bypass condition in `LLHDProcessInterpreter.cpp`:
+    - allow wrapper-substitution bypass only when no instance overrides are
+      configured.
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv`
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_factory_test.sv`
+  - full semantic sweep:
+    - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
+    - result: `33 passed`.

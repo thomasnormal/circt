@@ -2337,6 +2337,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (!nativeFactoryOverridesConfigured &&
         isUvmFactoryOverrideSetter(calleeName))
       nativeFactoryOverridesConfigured = true;
+    if (!nativeFactoryOverridesConfigured &&
+        (calleeName.starts_with("set_type_override_") ||
+         calleeName.starts_with("set_inst_override_")))
+      nativeFactoryOverridesConfigured = true;
+    if (!nativeFactoryInstanceOverridesConfigured &&
+        isUvmFactoryInstanceOverrideSetter(calleeName))
+      nativeFactoryInstanceOverridesConfigured = true;
+    if (!nativeFactoryInstanceOverridesConfigured &&
+        calleeName.starts_with("set_inst_override_"))
+      nativeFactoryInstanceOverridesConfigured = true;
 
     // Intercept low-level sequencer handshake immediately after target
     // resolution, before any call-site caches or fast-dispatch paths.
@@ -2865,6 +2875,16 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
     if (!nativeFactoryOverridesConfigured &&
         isUvmFactoryOverrideSetter(calleeName))
       nativeFactoryOverridesConfigured = true;
+    if (!nativeFactoryOverridesConfigured &&
+        (calleeName.starts_with("set_type_override_") ||
+         calleeName.starts_with("set_inst_override_")))
+      nativeFactoryOverridesConfigured = true;
+    if (!nativeFactoryInstanceOverridesConfigured &&
+        isUvmFactoryInstanceOverrideSetter(calleeName))
+      nativeFactoryInstanceOverridesConfigured = true;
+    if (!nativeFactoryInstanceOverridesConfigured &&
+        calleeName.starts_with("set_inst_override_"))
+      nativeFactoryInstanceOverridesConfigured = true;
     SimTime now = scheduler.getCurrentTime();
     maybeTraceFilteredCall(procId, "func.call_indirect", calleeName,
                            now.realTime, now.deltaStep);

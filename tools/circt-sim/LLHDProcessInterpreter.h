@@ -1919,6 +1919,9 @@ private:
   /// Return true when the callee is a UVM factory override setter.
   /// Used to disable native by-type fast paths that bypass override lookup.
   static bool isUvmFactoryOverrideSetter(llvm::StringRef calleeName);
+  /// Return true when the callee is a UVM factory instance-override setter.
+  static bool
+  isUvmFactoryInstanceOverrideSetter(llvm::StringRef calleeName);
 
   /// Return true when the callee is a UVM analysis write entrypoint that
   /// should route through the native analysis connection map.
@@ -3431,10 +3434,8 @@ private:
   /// These are opt-in via env vars to avoid changing default behavior.
   /// CIRCT_SIM_FASTPATH_UVM_REPORT_INFO=1
   /// CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING=1
-  /// CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT=1
   bool fastPathUvmReportInfo = false;
   bool fastPathUvmReportWarning = false;
-  bool fastPathUvmGetReportObject = false;
 
   /// Cached env flag for sequencer tracing (CIRCT_SIM_TRACE_SEQ).
   /// Read once at construction to avoid std::getenv on every call_indirect.
@@ -4108,6 +4109,10 @@ private:
   /// When true, by-type native fast paths must be disabled to preserve
   /// override semantics.
   bool nativeFactoryOverridesConfigured = false;
+  /// Set once any UVM factory instance-override API is called.
+  /// Instance overrides depend on full-instance-path matching and cannot be
+  /// represented by wrapper-only by-type shortcuts.
+  bool nativeFactoryInstanceOverridesConfigured = false;
 
   /// Cache for resolved get_type_name packed-string results by callee symbol.
   /// This avoids repeatedly interpreting identical virtual type-name helpers.

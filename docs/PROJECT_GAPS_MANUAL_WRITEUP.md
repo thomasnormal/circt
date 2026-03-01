@@ -6231,3 +6231,9 @@ Status update (2026-02-28): this gap is closed in this workspace. The test was u
 
 ### [x] 2074. `test/Runtime/uvm/uvm_coverage_test.sv:11`
 Status update (2026-02-28): this gap is closed in this workspace. The test now runs semantically (`circt-verilog --ir-hw` + `circt-sim`) for both `mam_test` and `coverage_db_test`, with explicit pass markers (`UVM_COVERAGE_MAM_PASS`, `UVM_COVERAGE_DB_PASS`) and `UVM_ERROR` exclusion checks. During conversion, two silent semantic mismatches were fixed in test logic: `my_coverage` now derives from `uvm_object` (the runtime does not provide a concrete `uvm_coverage` base object), and MAM allocation checks now use deterministic `reserve_region` flows instead of policy-randomized `request_region`, which is not stable in this runtime path.
+
+### [x] 2075. `test/Runtime/uvm/uvm_get_report_object_semantic_test.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Added execution-backed semantic coverage for `uvm_get_report_object` (component/report-object self semantics plus global-root semantics), and removed corresponding `circt-sim` fast-path interception so behavior is exercised through normal SV execution (`tools/circt-sim/UVMFastPaths.cpp`, `tools/circt-sim/LLHDProcessInterpreter.cpp`).
+
+### [x] 2076. `test/Runtime/uvm/uvm_factory_test.sv:23`
+Status update (2026-03-01): this gap is closed in this workspace. `test_override_priority` now passes semantically with correct UVM precedence (instance override over type override). Root cause was wrapper-only by-type factory bypass in `circt-sim` that ignored instance-override state; fixed by tracking instance-override configuration across `func.call` and `func.call_indirect` and disabling wrapper-substitution bypass when instance overrides are present (`tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`).

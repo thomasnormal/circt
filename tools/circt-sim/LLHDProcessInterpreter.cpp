@@ -880,8 +880,6 @@ LLHDProcessInterpreter::LLHDProcessInterpreter(ProcessScheduler &scheduler)
   fastPathUvmReportInfo = envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_INFO");
   fastPathUvmReportWarning =
       envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_REPORT_WARNING");
-  fastPathUvmGetReportObject =
-      envFlagEnabled("CIRCT_SIM_FASTPATH_UVM_GET_REPORT_OBJECT");
   uvmJitHotThreshold = envUint64Value("CIRCT_SIM_UVM_JIT_HOT_THRESHOLD", 0);
   uvmJitPromotionBudget =
       envInt64Value("CIRCT_SIM_UVM_JIT_PROMOTION_BUDGET", 0);
@@ -21192,6 +21190,14 @@ bool LLHDProcessInterpreter::isUvmFactoryOverrideSetter(
          calleeName == "set_type_override";
 }
 
+bool LLHDProcessInterpreter::isUvmFactoryInstanceOverrideSetter(
+    llvm::StringRef calleeName) {
+  return calleeName.ends_with("::set_inst_override_by_type") ||
+         calleeName.ends_with("::set_inst_override_by_name") ||
+         calleeName == "set_inst_override_by_type" ||
+         calleeName == "set_inst_override_by_name";
+}
+
 bool LLHDProcessInterpreter::isNativeAnalysisWriteCallee(
     llvm::StringRef calleeName) {
   if (!calleeName.contains("::write") || calleeName.contains("write_m_"))
@@ -21269,6 +21275,16 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
   if (!nativeFactoryOverridesConfigured &&
       isUvmFactoryOverrideSetter(calleeName))
     nativeFactoryOverridesConfigured = true;
+  if (!nativeFactoryOverridesConfigured &&
+      (calleeName.starts_with("set_type_override_") ||
+       calleeName.starts_with("set_inst_override_")))
+    nativeFactoryOverridesConfigured = true;
+  if (!nativeFactoryInstanceOverridesConfigured &&
+      isUvmFactoryInstanceOverrideSetter(calleeName))
+    nativeFactoryInstanceOverridesConfigured = true;
+  if (!nativeFactoryInstanceOverridesConfigured &&
+      calleeName.starts_with("set_inst_override_"))
+    nativeFactoryInstanceOverridesConfigured = true;
   if (failed(checkUvmRunTestEntry(procId, calleeName)))
     return failure();
   SimTime now = scheduler.getCurrentTime();
@@ -22079,10 +22095,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     return true;
   };
 
-  const bool traceUvmFactoryByType = []() {
-    const char *env = std::getenv("CIRCT_SIM_TRACE_UVM_FACTORY_BY_TYPE");
-    return env && env[0] != '\0' && env[0] != '0';
-  }();
   auto recordByTypeOverride = [&](uint64_t requestedWrapperAddr,
                                   uint64_t overrideWrapperAddr,
                                   llvm::StringRef sourceTag) {
@@ -22194,7 +22206,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         dispatchWrapperAddr = overrideWrapperAddr;
       bool canBypassFactory =
           !nativeFactoryOverridesConfigured ||
-          dispatchWrapperAddr != requestedWrapperAddr;
+          (!nativeFactoryInstanceOverridesConfigured &&
+           dispatchWrapperAddr != requestedWrapperAddr);
       if (canBypassFactory) {
         auto tryComponentCreate = [&]() -> bool {
           if (parentArg.isX())
@@ -22243,7 +22256,8 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         dispatchWrapperAddr = overrideWrapperAddr;
       bool canBypassFactory =
           !nativeFactoryOverridesConfigured ||
-          dispatchWrapperAddr != requestedWrapperAddr;
+          (!nativeFactoryInstanceOverridesConfigured &&
+           dispatchWrapperAddr != requestedWrapperAddr);
       if (canBypassFactory) {
         InterpretedValue createdObj;
         if (tryInvokeWrapperFactoryMethod(dispatchWrapperAddr,
@@ -22331,102 +22345,6 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
         return success();
       }
     }
-  }
-
-  // Intercept uvm_get_report_object at func.call level - trivially returns self.
-  if (calleeName == "uvm_pkg::uvm_report_object::uvm_get_report_object" &&
-      callOp.getNumResults() >= 1 && callOp.getNumOperands() >= 1) {
-    setValue(procId, callOp.getResult(0),
-             getValue(procId, callOp.getOperand(0)));
-    return success();
-  }
-
-  auto readU64FromObjectField = [&](uint64_t fieldAddr) -> uint64_t {
-    uint64_t fieldOffset = 0;
-    if (auto *block = findMemoryBlockByAddress(fieldAddr, procId, &fieldOffset)) {
-      if (block->initialized && fieldOffset + 8 <= block->size) {
-        uint64_t value = 0;
-        for (unsigned i = 0; i < 8; ++i)
-          value |= static_cast<uint64_t>(block->bytes()[fieldOffset + i]) << (i * 8);
-        return value;
-      }
-    }
-    uint64_t nativeOffset = 0;
-    size_t nativeSize = 0;
-    if (findNativeMemoryBlockByAddress(fieldAddr, &nativeOffset, &nativeSize) &&
-        nativeOffset + 8 <= nativeSize) {
-      uint64_t value = 0;
-      std::memcpy(&value, reinterpret_cast<const void *>(fieldAddr), 8);
-      return value;
-    }
-    return 0;
-  };
-
-  // Intercept direct UVM name getters to avoid recursive string construction in
-  // startup paths. Apply this even when the return value is unused.
-  // Only match UVM-specific name getters (uvm_pkg:: or uvm_ prefix) to avoid
-  // intercepting user-defined functions like "base::get_name".
-  bool isUvmGetNameCall =
-      (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
-      calleeName.contains("get_name") &&
-      !calleeName.contains("get_name_constraint") &&
-      !calleeName.contains("get_name_enabled");
-  bool isUvmGetFullNameCall =
-      (calleeName.contains("uvm_pkg::") || calleeName.contains("uvm_")) &&
-      calleeName.contains("get_full_name");
-  bool isUvmPortNameGetter =
-      calleeName.contains("uvm_port_base") ||
-      calleeName.contains("uvm_port_component");
-  if ((isUvmGetNameCall || isUvmGetFullNameCall) && !isUvmPortNameGetter) {
-    if (callOp.getNumResults() < 1)
-      return success();
-
-    auto setPackedResult = [&](uint64_t strPtr, uint64_t strLen) {
-      uint64_t words[2] = {strPtr, strLen};
-      llvm::APInt resultVal(128, llvm::ArrayRef<uint64_t>(words, 2));
-      setValue(procId, callOp.getResult(0), InterpretedValue(resultVal));
-    };
-
-    if (callOp.getNumOperands() < 1) {
-      setPackedResult(0, 0);
-      return success();
-    }
-
-    InterpretedValue selfVal = getValue(procId, callOp.getOperand(0));
-    if (selfVal.isX() || selfVal.getUInt64() < 0x1000) {
-      setPackedResult(0, 0);
-      return success();
-    }
-
-    uint64_t selfAddr = selfVal.getUInt64();
-    constexpr uint64_t kInstNameOff = 12;
-    constexpr uint64_t kFullNameOff = 127;
-
-    uint64_t strPtr = 0;
-    uint64_t strLen = 0;
-    if (isUvmGetFullNameCall) {
-      strPtr = readU64FromObjectField(selfAddr + kFullNameOff);
-      strLen = readU64FromObjectField(selfAddr + kFullNameOff + 8);
-      if (strPtr == 0 || strLen == 0) {
-        strPtr = readU64FromObjectField(selfAddr + kInstNameOff);
-        strLen = readU64FromObjectField(selfAddr + kInstNameOff + 8);
-      }
-    } else {
-      strPtr = readU64FromObjectField(selfAddr + kInstNameOff);
-      strLen = readU64FromObjectField(selfAddr + kInstNameOff + 8);
-    }
-
-    if (strPtr != 0 && strLen != 0) {
-      std::string name;
-      if (tryReadStringKey(procId, strPtr, static_cast<int64_t>(strLen),
-                           name)) {
-        setPackedResult(strPtr, strLen);
-        return success();
-      }
-    }
-
-    setPackedResult(0, 0);
-    return success();
   }
 
   // Intercept uvm_phase_hopper::wait_for_waiters.
@@ -44196,6 +44114,59 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       return true;
     return plan.timeOnlyNeedsRearm;
   };
+  auto shouldSkipRearmForDeferredSuccessCleanup = [this]() -> bool {
+    // A deferred successful terminate is armed as soon as run_test() forks
+    // phase execution. Do not suppress time-only callback rearm at that point,
+    // or the design clock can stall before run/check/report phases complete.
+    //
+    // Only stop rearming once all tracked phase IMP nodes have completed and
+    // we are draining toward final shutdown.
+    if (!deferredSuccessTerminatePending || functionPhaseImpCompleted.empty())
+      return false;
+    for (const auto &[impAddr, done] : functionPhaseImpCompleted) {
+      (void)impAddr;
+      if (!done)
+        return false;
+    }
+    return true;
+  };
+  auto shouldRearmCompiledCallbackNow = [this, shouldRearmCompiledCallbackMinnow,
+                                         shouldSkipRearmForDeferredSuccessCleanup,
+                                         traceProcessWiring](
+                                            ProcessId procId) -> bool {
+    if (!shouldRearmCompiledCallbackMinnow(procId))
+      return false;
+
+    // Once hard termination is requested, callback minnows must not keep
+    // re-arming. Otherwise a time-only compiled callback (e.g. a free-running
+    // clock) can keep the scheduler non-quiescent and force shutdown expiry.
+    if (!inGlobalInit && terminationRequested) {
+      if (traceProcessWiring)
+        llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
+                     << " skip-rearm: termination requested\n";
+      return false;
+    }
+
+    // If a successful terminate was deferred and all phase IMPs are done, stop
+    // rearming free-running callback clocks while teardown drains.
+    if (!inGlobalInit && shouldSkipRearmForDeferredSuccessCleanup()) {
+      if (traceProcessWiring)
+        llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
+                     << " skip-rearm: deferred-success cleanup\n";
+      return false;
+    }
+
+    if (Process *proc = scheduler.getProcess(procId)) {
+      if (proc->getState() == ProcessState::Terminated) {
+        if (traceProcessWiring)
+          llvm::errs() << "[circt-sim] compiled-proc pid=" << procId
+                       << " skip-rearm: process terminated\n";
+        return false;
+      }
+    }
+
+    return true;
+  };
   for (uint32_t i = 0; i < mod->num_procs; i++) {
     llvm::StringRef procName(mod->proc_names[i]);
     auto it = processNameToId.find(procName);
@@ -44213,7 +44184,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
       if (kind == CIRCT_PROC_CALLBACK) {
         auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
         auto compiledCallback = [this, fptr, ctxPtr, procId,
-                                 shouldRearmCompiledCallbackMinnow]() {
+                                 shouldRearmCompiledCallbackNow]() {
           ProcessId savedCallbackProcId = activeAOTCompiledCallbackProcessId;
           activeAOTCompiledCallbackProcessId = procId;
           auto restoreCallbackProcId = llvm::make_scope_exit([&]() {
@@ -44226,7 +44197,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
           // Re-arm if the process is a minnow (time-based callback).
           // The AOT compiler currently marks all processes as CALLBACK,
           // but many are actually time-only (minnow) processes.
-          if (shouldRearmCompiledCallbackMinnow(procId))
+          if (shouldRearmCompiledCallbackNow(procId))
             scheduler.rearmMinnow(procId);
         };
         auto compiledCallbackWithTLS =
@@ -44286,7 +44257,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
         // bypasses that, so we re-arm explicitly here.
         auto fptr = reinterpret_cast<void (*)(void *, void *)>(entry);
         auto compiledMinnowCallback = [this, fptr, ctxPtr, procId,
-                                       shouldRearmCompiledCallbackMinnow]() {
+                                       shouldRearmCompiledCallbackNow]() {
           ProcessId savedCallbackProcId = activeAOTCompiledCallbackProcessId;
           activeAOTCompiledCallbackProcessId = procId;
           auto restoreCallbackProcId = llvm::make_scope_exit([&]() {
@@ -44296,7 +44267,7 @@ void LLHDProcessInterpreter::loadCompiledProcesses(
           ++compiledCallbackInvocations;
           ++compiledCallbackInvocationsByProcess[procId];
           fptr(*ctxPtr, nullptr);
-          if (shouldRearmCompiledCallbackMinnow(procId))
+          if (shouldRearmCompiledCallbackNow(procId))
             scheduler.rearmMinnow(procId);
         };
         pendingCompiledCallbacks[procId] =
