@@ -2,6 +2,26 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: FPV LEC JSONL projection dedup to shared case-row writer):
+  - realization:
+    - `run_opentitan_fpv_circt_lec.py` still used local JSON dict-row shaping
+      in its final results JSONL lane despite existing shared helper coverage in
+      `formal_results.write_results_jsonl_from_case_rows(...)`.
+  - implemented:
+    - `utils/run_opentitan_fpv_circt_lec.py`
+      - imported and used shared
+        `_write_formal_results_jsonl_from_case_rows(...)` in shared-helper mode.
+      - retained copied-runner fallback implementation for lit copy flows.
+      - replaced local dict-row loop with:
+        - `json_case_rows` (`status/case_id/case_path/suite/mode/reason_code`)
+        - `jsonl_case_metadata_by_case_id` (timing/log/artifact fields)
+        - shared writer call with solver label + metadata map.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv $(git ls-files 'test/Tools/run-opentitan-fpv-circt-lec-*.test')`
+      - result: `9/9` pass.
+
 - Iteration update (WS1: pairwise BMC JSONL projection dedup to shared case-row writer):
   - realization:
     - `run_pairwise_circt_bmc.py` still manually built JSON dict rows in its

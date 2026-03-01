@@ -36,8 +36,9 @@ if _FORMAL_LIB_DIR.is_dir():
     sys.path.insert(0, str(_FORMAL_LIB_DIR))
 
 try:
-    from formal_results import make_result_row as _make_formal_result_row
-    from formal_results import write_results_jsonl as _write_formal_results_jsonl
+    from formal_results import (
+        write_results_jsonl_from_case_rows as _write_formal_results_jsonl_from_case_rows,
+    )
 except Exception:
 
     def _infer_stage(status: str, reason_code: str) -> str:
@@ -54,44 +55,47 @@ except Exception:
                 return "solver"
         return "result"
 
-    def _make_formal_result_row(
+    def _write_formal_results_jsonl_from_case_rows(
+        path: Path,
+        rows: list[tuple[str, str, str, str, str, str]],
         *,
-        suite: str,
-        mode: str,
-        case_id: str,
-        case_path: str,
-        status: str,
-        reason_code: str = "",
-        stage: str = "",
         solver: str = "",
-        solver_time_ms: int | None = None,
-        frontend_time_ms: int | None = None,
-        log_path: str = "",
-        artifact_dir: str = "",
-    ) -> dict[str, object]:
-        stage_value = stage.strip() if stage.strip() else _infer_stage(status, reason_code)
-        return {
-            "schema_version": 1,
-            "suite": suite,
-            "mode": mode,
-            "case_id": case_id,
-            "case_path": case_path,
-            "status": status.strip().upper(),
-            "reason_code": reason_code.strip().upper(),
-            "stage": stage_value,
-            "solver": solver.strip(),
-            "solver_time_ms": solver_time_ms,
-            "frontend_time_ms": frontend_time_ms,
-            "log_path": log_path,
-            "artifact_dir": artifact_dir,
-        }
-
-    def _write_formal_results_jsonl(
-        path: Path, rows: list[dict[str, object]]
+        case_metadata_by_case_id: dict[
+            str, tuple[int | None, int | None, str, str]
+        ]
+        | None = None,
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
-            for row in rows:
+            for status, case_id, case_path, suite, mode, reason_code in sorted(
+                rows, key=lambda item: (item[1], item[0], item[2])
+            ):
+                frontend_time_ms: int | None = None
+                solver_time_ms: int | None = None
+                log_path = ""
+                artifact_dir = ""
+                if case_metadata_by_case_id is not None:
+                    (
+                        frontend_time_ms,
+                        solver_time_ms,
+                        log_path,
+                        artifact_dir,
+                    ) = case_metadata_by_case_id.get(case_id, (None, None, "", ""))
+                row = {
+                    "schema_version": 1,
+                    "suite": suite,
+                    "mode": mode,
+                    "case_id": case_id,
+                    "case_path": case_path,
+                    "status": status.strip().upper(),
+                    "reason_code": reason_code.strip().upper(),
+                    "stage": _infer_stage(status, reason_code),
+                    "solver": solver.strip(),
+                    "solver_time_ms": solver_time_ms,
+                    "frontend_time_ms": frontend_time_ms,
+                    "log_path": log_path,
+                    "artifact_dir": artifact_dir,
+                }
                 handle.write(json.dumps(row, sort_keys=True))
                 handle.write("\n")
 
@@ -974,29 +978,23 @@ def main() -> int:
     if args.results_jsonl_file:
         results_jsonl_path = Path(args.results_jsonl_file).resolve()
         solver_label = "z3" if lec_run_smtlib and not lec_smoke_only else ""
-        json_rows: list[dict[str, object]] = []
+        json_case_rows: list[tuple[str, str, str, str, str, str]] = []
+        jsonl_case_metadata_by_case_id: dict[
+            str, tuple[int | None, int | None, str, str]
+        ] = {}
         for row in sorted(case_rows, key=lambda item: (item[1], item[0], item[2])):
             status, case_id, case_path, suite, mode, _, _ = row
             reason_code = extract_result_reason_code(row)
-            frontend_time_ms, solver_time_ms, log_path, artifact_dir = (
-                case_metrics_by_case_id.get(case_id, (None, None, "", ""))
+            json_case_rows.append((status, case_id, case_path, suite, mode, reason_code))
+            jsonl_case_metadata_by_case_id[case_id] = case_metrics_by_case_id.get(
+                case_id, (None, None, "", "")
             )
-            json_rows.append(
-                _make_formal_result_row(
-                    suite=suite,
-                    mode=mode,
-                    case_id=case_id,
-                    case_path=case_path,
-                    status=status,
-                    reason_code=reason_code,
-                    solver=solver_label,
-                    solver_time_ms=solver_time_ms,
-                    frontend_time_ms=frontend_time_ms,
-                    log_path=log_path,
-                    artifact_dir=artifact_dir,
-                )
-            )
-        _write_formal_results_jsonl(results_jsonl_path, json_rows)
+        _write_formal_results_jsonl_from_case_rows(
+            results_jsonl_path,
+            json_case_rows,
+            solver=solver_label,
+            case_metadata_by_case_id=jsonl_case_metadata_by_case_id,
+        )
     with assertion_results_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         for row in out_assertion_rows:

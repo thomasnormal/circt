@@ -460,6 +460,10 @@ Current workstream status in this branch:
      `formal_results.write_results_jsonl_from_case_rows` plumbing with
      per-case metadata map, reducing local JSON row-shaping duplication in the
      common backend lane used by OpenTitan BMC wrappers
+   - OpenTitan FPV LEC final JSONL projection now uses shared
+     `formal_results.write_results_jsonl_from_case_rows` plumbing with
+     per-case metadata map, reducing local JSON row-shaping duplication in FPV
+     LEC wrapper paths
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status
