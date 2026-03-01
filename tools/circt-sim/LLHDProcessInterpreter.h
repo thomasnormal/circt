@@ -1858,6 +1858,12 @@ private:
   /// the handle reaching zero.
   void raisePhaseObjection(int64_t handle, int64_t count);
   void dropPhaseObjection(int64_t handle, int64_t count);
+  /// Best-effort dispatch of `uvm_component::{raised,dropped}` on a source
+  /// object when objection fast-paths bypass UVM objection object execution.
+  void maybeDispatchUvmComponentObjectionCallback(
+      ProcessId procId, uint64_t sourceObjAddr, int64_t objectionHandle,
+      bool isRaise, InterpretedValue descriptionVal, InterpretedValue countVal,
+      mlir::Operation *callSite);
 
   /// Register a process as waiting for an objection handle to reach zero.
   void enqueueObjectionZeroWaiter(int64_t handle, ProcessId procId,

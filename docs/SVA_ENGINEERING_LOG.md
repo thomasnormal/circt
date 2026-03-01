@@ -10375,3 +10375,45 @@
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-sequence-*.sv`
     - result: `11 passed, 3 expectedly failed` (`sequence-library`,
       `sequence-no-driver`, `sequence-response`), and no `XPASS`.
+
+## 2026-03-01 - UVM objection callback semantics under fast-path interception
+
+- realization:
+  - `test/Tools/crun/uvm-objection-callback.sv` ran but failed semantically:
+    - `raised callback fired: FAIL`
+    - `dropped callback fired: FAIL`
+  - Root cause: phase/objection fast-path interceptors updated native objection
+    counts directly and returned early, bypassing UVM objection object execution,
+    so `uvm_component::{raised,dropped}` callbacks were never dispatched.
+
+- implemented:
+  - Added shared helper in `LLHDProcessInterpreter` to dispatch
+    `uvm_component::raised` / `uvm_component::dropped` on the source object by
+    resolving the runtime vtable method and invoking it through
+    `interpretFuncBody`:
+    - declaration: `tools/circt-sim/LLHDProcessInterpreter.h`
+    - implementation: `tools/circt-sim/LLHDProcessInterpreter.cpp`
+  - Wired callback dispatch into objection fast-path interception sites while
+    keeping native objection counter semantics:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+      - `func.call` phase raise/drop interception
+      - `uvm_objection::raise_objection` / `drop_objection` interception
+      - function-body phase raise/drop fast-path interception
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+      - X-fallback/static-fallback/vtable-dispatch phase raise/drop paths
+
+- validation:
+  - red before fix (direct run):
+    - `build_test/bin/crun test/Tools/crun/uvm-objection-callback.sv --top tb_top -v 0`
+    - observed both callback checks fail.
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test crun`
+  - green after fix:
+    - `build_test/bin/crun test/Tools/crun/uvm-objection-callback.sv --top tb_top -v 0`
+    - observed both callback checks pass.
+  - objection slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-objection-*.sv`
+    - result: `4 passed`.
+  - cross-check slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-item-clone.sv test/Tools/crun/uvm-sequence-virtual.sv test/Runtime/uvm/uvm_factory_test.sv`
+    - result: `25 passed, 2 expectedly failed` (`uvm-factory-create-by-name`, `uvm-factory-create-null-parent`).

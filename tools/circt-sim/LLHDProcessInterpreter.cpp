@@ -1575,6 +1575,101 @@ void LLHDProcessInterpreter::dropPhaseObjection(int64_t handle, int64_t count) {
   wakeObjectionZeroWaitersIfReady(handle);
 }
 
+void LLHDProcessInterpreter::maybeDispatchUvmComponentObjectionCallback(
+    ProcessId procId, uint64_t sourceObjAddr, int64_t objectionHandle,
+    bool isRaise, InterpretedValue descriptionVal, InterpretedValue countVal,
+    Operation *callSite) {
+  if (!rootModule || sourceObjAddr == 0 ||
+      objectionHandle == MOORE_OBJECTION_INVALID_HANDLE)
+    return;
+
+  uint64_t callbackObjAddr = canonicalizeUvmObjectAddress(procId, sourceObjAddr);
+  if (callbackObjAddr == 0)
+    callbackObjAddr = sourceObjAddr;
+
+  uint64_t vtableAddr = 0;
+  if (!readObjectVTableAddress(callbackObjAddr, vtableAddr, procId))
+    return;
+
+  auto globalIt = addressToGlobal.find(vtableAddr);
+  if (globalIt == addressToGlobal.end())
+    return;
+  auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
+  if (vtableBlockIt == globalMemoryBlocks.end())
+    return;
+
+  llvm::StringRef methodSuffix = isRaise ? "::raised" : "::dropped";
+  func::FuncOp callbackFunc;
+  auto &vtableBlock = vtableBlockIt->second;
+  for (unsigned slotOffset = 0; slotOffset + 8 <= vtableBlock.size;
+       slotOffset += 8) {
+    uint64_t methodAddr = 0;
+    for (unsigned i = 0; i < 8; ++i)
+      methodAddr |= static_cast<uint64_t>(vtableBlock[slotOffset + i]) << (i * 8);
+    if (methodAddr == 0)
+      continue;
+
+    auto fnIt = addressToFunction.find(methodAddr);
+    if (fnIt == addressToFunction.end())
+      continue;
+    llvm::StringRef methodName = fnIt->second;
+    if (!methodName.ends_with(methodSuffix))
+      continue;
+
+    auto resolved = rootModule.lookupSymbol<func::FuncOp>(methodName);
+    if (!resolved || resolved.getNumArguments() < 5)
+      continue;
+    callbackFunc = resolved;
+    break;
+  }
+
+  if (!callbackFunc)
+    return;
+
+  unsigned descWidth = getTypeWidth(callbackFunc.getArgument(3).getType());
+  if (descWidth == 0)
+    descWidth = descriptionVal.getWidth();
+  if (descWidth == 0)
+    descWidth = 128;
+  if (descriptionVal.isX())
+    descriptionVal = InterpretedValue(llvm::APInt(descWidth, 0));
+  else if (descriptionVal.getWidth() != descWidth)
+    descriptionVal =
+        InterpretedValue(llvm::APInt(descWidth, descriptionVal.getUInt64()));
+
+  unsigned countWidth = getTypeWidth(callbackFunc.getArgument(4).getType());
+  if (countWidth == 0)
+    countWidth = countVal.getWidth();
+  if (countWidth == 0)
+    countWidth = 32;
+  if (countVal.isX())
+    countVal = InterpretedValue(llvm::APInt(countWidth, 1));
+  else if (countVal.getWidth() != countWidth)
+    countVal = InterpretedValue(llvm::APInt(countWidth, countVal.getUInt64()));
+
+  uint64_t syntheticObjectionPtr =
+      0xE0000000ULL + static_cast<uint64_t>(objectionHandle);
+  llvm::SmallVector<InterpretedValue, 5> callbackArgs;
+  callbackArgs.push_back(InterpretedValue(llvm::APInt(64, callbackObjAddr)));
+  callbackArgs.push_back(
+      InterpretedValue(llvm::APInt(64, syntheticObjectionPtr)));
+  callbackArgs.push_back(InterpretedValue(llvm::APInt(64, callbackObjAddr)));
+  callbackArgs.push_back(descriptionVal);
+  callbackArgs.push_back(countVal);
+
+  llvm::SmallVector<InterpretedValue, 1> callbackResults;
+  auto &callState = processStates[procId];
+  ++callState.callDepth;
+  auto callbackRes = interpretFuncBody(procId, callbackFunc, callbackArgs,
+                                       callbackResults, callSite);
+  --callState.callDepth;
+
+  if (failed(callbackRes) && std::getenv("CIRCT_SIM_TRACE_UVM_OBJECTION")) {
+    llvm::errs() << "[UVM-OBJ] callback dispatch failed fn="
+                 << callbackFunc.getSymName() << " proc=" << procId << "\n";
+  }
+}
+
 void LLHDProcessInterpreter::enqueueObjectionZeroWaiter(int64_t handle,
                                                         ProcessId procId,
                                                         Operation *retryOp) {
@@ -24135,6 +24230,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     } else {
       dropPhaseObjection(handle, count);
     }
+    if (!isPhaseHopperCall && args.size() > 1 && !args[1].isX()) {
+      InterpretedValue descVal =
+          args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
+      maybeDispatchUvmComponentObjectionCallback(
+          procId, args[1].getUInt64(), handle,
+          /*isRaise=*/calleeName.contains("raise_objection"), descVal, countVal,
+          callOp.getOperation());
+    }
     int64_t afterCount = __moore_objection_get_count(handle);
     if (beforeCount > 0 || afterCount > 0)
       executePhasePhaseSawPositiveObjection[handleKey] = true;
@@ -24215,6 +24318,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       int64_t count =
           countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
       raisePhaseObjection(handle, count);
+      if (args.size() > 1 && !args[1].isX()) {
+        InterpretedValue descVal =
+            args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
+        maybeDispatchUvmComponentObjectionCallback(
+            procId, args[1].getUInt64(), handle, /*isRaise=*/true, descVal,
+            countVal, callOp.getOperation());
+      }
       return success();
     }
 
@@ -24228,6 +24338,13 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       int64_t count =
           countVal.isX() ? 1 : static_cast<int64_t>(countVal.getUInt64());
       dropPhaseObjection(handle, count);
+      if (args.size() > 1 && !args[1].isX()) {
+        InterpretedValue descVal =
+            args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
+        maybeDispatchUvmComponentObjectionCallback(
+            procId, args[1].getUInt64(), handle, /*isRaise=*/false, descVal,
+            countVal, callOp.getOperation());
+      }
       return success();
     }
 
@@ -25648,6 +25765,15 @@ LogicalResult LLHDProcessInterpreter::interpretFuncBody(
       raisePhaseObjection(handle, count);
     } else {
       dropPhaseObjection(handle, count);
+    }
+    if (!funcName.contains("phase_hopper") && args.size() > 1 &&
+        !args[1].isX()) {
+      InterpretedValue descVal =
+          args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
+      maybeDispatchUvmComponentObjectionCallback(
+          procId, args[1].getUInt64(), handle,
+          /*isRaise=*/funcName.contains("raise_objection"), descVal, countVal,
+          callOp);
     }
     int64_t afterCount = __moore_objection_get_count(handle);
     if (beforeCount > 0 || afterCount > 0)

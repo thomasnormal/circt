@@ -6277,3 +6277,6 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed stale 
 
 ### [x] 2088. `test/Tools/crun/uvm-sequence-virtual.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Removed stale `XFAIL`; virtual sequence execution now passes semantically under crun (`sub_seq_a`, `sub_seq_b`, and virtual-sequence completion markers all observed), and no `XPASS` remains in the sequence suite.
+
+### [x] 2089. `test/Tools/crun/uvm-objection-callback.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Objection callback semantics now execute correctly without `XFAIL`: `uvm_component::raised` and `uvm_component::dropped` are observed in runtime (`raised callback fired: PASS`, `dropped callback fired: PASS`). Root cause was objection fast-path interception bypassing UVM objection object execution and therefore skipping component callback dispatch; fixed by dispatching component objection callbacks from the fast-path paths while preserving native objection-count tracking for scheduler/wait semantics (`tools/circt-sim/LLHDProcessInterpreter.cpp`, `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`, `tools/circt-sim/LLHDProcessInterpreter.h`).

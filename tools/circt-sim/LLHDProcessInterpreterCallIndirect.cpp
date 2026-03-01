@@ -1047,6 +1047,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           } else {
             dropPhaseObjection(handle, count);
           }
+          if (args.size() > 1 && !args[1].isX()) {
+            InterpretedValue descVal =
+                args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
+            maybeDispatchUvmComponentObjectionCallback(
+                procId, args[1].getUInt64(), handle,
+                /*isRaise=*/resolvedName.contains("raise_objection"), descVal,
+                countVal, callIndirectOp.getOperation());
+          }
           int64_t afterCount = __moore_objection_get_count(handle);
           if (beforeCount > 0 || afterCount > 0)
             executePhasePhaseSawPositiveObjection[phaseAddr] = true;
@@ -1515,6 +1523,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             raisePhaseObjection(handle, cnt);
           } else {
             dropPhaseObjection(handle, cnt);
+          }
+          if (sArgs.size() > 1 && !sArgs[1].isX()) {
+            InterpretedValue descVal =
+                sArgs.size() > 2 ? sArgs[2] : InterpretedValue(llvm::APInt(128, 0));
+            maybeDispatchUvmComponentObjectionCallback(
+                procId, sArgs[1].getUInt64(), handle,
+                /*isRaise=*/resolvedName.contains("raise_objection"), descVal,
+                countVal, callIndirectOp.getOperation());
           }
           int64_t afterCount = __moore_objection_get_count(handle);
           if (beforeCount > 0 || afterCount > 0)
@@ -4887,6 +4903,14 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           raisePhaseObjection(handle, count);
         } else {
           dropPhaseObjection(handle, count);
+        }
+        if (args.size() > 1 && !args[1].isX()) {
+          InterpretedValue descVal =
+              args.size() > 2 ? args[2] : InterpretedValue(llvm::APInt(128, 0));
+          maybeDispatchUvmComponentObjectionCallback(
+              procId, args[1].getUInt64(), handle,
+              /*isRaise=*/calleeName.contains("raise_objection"), descVal,
+              countVal, callIndirectOp.getOperation());
         }
         int64_t afterCount = __moore_objection_get_count(handle);
         if (beforeCount > 0 || afterCount > 0)
