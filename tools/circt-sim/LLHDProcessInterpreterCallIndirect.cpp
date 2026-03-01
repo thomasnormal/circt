@@ -3079,30 +3079,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       }
     }
 
-    // Intercept get_parent on uvm_component - returns field[9] at offset 87.
-    if (calleeName.contains("get_parent") &&
-        calleeName.contains("uvm_component") &&
-        callIndirectOp.getNumResults() >= 1 &&
-        !callIndirectOp.getArgOperands().empty()) {
-      InterpretedValue selfVal =
-          getValue(procId, callIndirectOp.getArgOperands()[0]);
-      if (!selfVal.isX() && selfVal.getUInt64() >= 0x1000) {
-        constexpr uint64_t kParentOff2 = 87;
-        uint64_t off = 0;
-        MemoryBlock *blk = findBlockByAddress(selfVal.getUInt64() + kParentOff2, off);
-        if (!blk)
-          blk = findMemoryBlockByAddress(selfVal.getUInt64() + kParentOff2, procId, &off);
-        if (blk && blk->initialized && off + 8 <= blk->size) {
-          uint64_t parentAddr = 0;
-          for (unsigned i = 0; i < 8; ++i)
-            parentAddr |= static_cast<uint64_t>(blk->bytes()[off + i]) << (i * 8);
-          setValue(procId, callIndirectOp.getResult(0),
-                   InterpretedValue(parentAddr, 64));
-          return success();
-        }
-      }
-    }
-
     // Intercept get_factory on core-service objects. Read the factory pointer
     // directly and fall back to the global core-service singleton if `this`
     // is transiently invalid during startup.
