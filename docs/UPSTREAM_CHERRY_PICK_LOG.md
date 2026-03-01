@@ -118,12 +118,13 @@ git log --oneline --no-merges main..staging-upstream-easy-picks
 | `d3ddbe121` | [ImportVerilog] Support `$` literal within queue indexing expressions (#9719) | Could not apply in this tree because `lib/Conversion/ImportVerilog/ImportVerilogInternals.h` has local unstaged changes from concurrent work. Retry when that file is clean or isolated. |
 | `17330f8a9` | [Moore][ImportVerilog] Add support for fork-join blocks (#9682) | Cherry-pick produced semantic conflict in `lib/Conversion/ImportVerilog/Statements.cpp`; local implementation is already substantially diverged/richer. Aborted pick to avoid regression. |
 | `3e24b7764` | [ImportVerilog] Fix $changed PastOp creation (#9652) | Cherry-pick conflicts with current assertion lowering architecture (`convertAssertionSystemCallArity1` fastpaths intentionally return `{}`; handling moved elsewhere). Aborted to avoid semantic regression; revisit only with full assertion-path audit. |
+| `79369384c` | [ImportVerilog] Make sampled value functions' results usable by Moore ops | Cherry-pick conflicts with current sampled-value lowering and updated `builtins.sv` expectations (our tree uses different lowering path with `moore.past` checks). Aborted pending a targeted semantic audit instead of mechanical porting. |
 
 ### Resume Pointer
 
 For the next pass from `main`, start with ImportVerilog candidates that are not blocked
 by concurrent local edits:
 
-1. `79369384c` ([ImportVerilog] Make sampled value functions' results usable by Moore ops) with `test/Conversion/ImportVerilog/builtins.sv` focused validation.
-2. `d3ddbe121` after `ImportVerilogInternals.h` is clean.
-3. `17330f8a9` only if we intentionally reconcile fork/join lowering semantics in `Statements.cpp`.
+1. `d3ddbe121` after `ImportVerilogInternals.h` is clean.
+2. `17330f8a9` only if we intentionally reconcile fork/join lowering semantics in `Statements.cpp`.
+3. non-ImportVerilog bug-fix candidates in clean files (e.g. Arc/FIRRTL/HW) when local frontend files remain actively edited.
