@@ -46,6 +46,7 @@
 #include <sstream>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <vector>
 
@@ -104,7 +105,6 @@ std::string convertGlobToRegex(const std::string &pattern, bool withBrackets) {
     case '(':
     case ')':
     case '[':
-    case ']':
     case '{':
     case '}':
     case '|':
@@ -882,20 +882,32 @@ extern "C" MooreQueue __moore_dyn_array_new(int32_t size) {
   return result;
 }
 
-extern "C" MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init) {
+extern "C" MooreQueue __moore_dyn_array_new_copy_bytes(int32_t size, void *src,
+                                                        int64_t srcBytes) {
   MooreQueue result = __moore_dyn_array_new(size);
-  if (result.data && init && size > 0) {
-    // init is a pointer to a MooreQueue struct {data_ptr, length}.
-    // Extract the data pointer and copy from there.
-    auto *initQ = static_cast<MooreQueue *>(init);
-    if (initQ->data) {
-      size_t copySize = std::min(static_cast<size_t>(size),
-                                 static_cast<size_t>(initQ->len));
-      if (copySize > 0)
-        std::memcpy(result.data, initQ->data, copySize);
-    }
-  }
+  if (!result.data || !src || size <= 0 || srcBytes <= 0)
+    return result;
+
+  void *hostSrc =
+      normalizeQueueDataPtr(src, "__moore_dyn_array_new_copy_bytes:src");
+  if (!hostSrc)
+    hostSrc = normalizeHostPtr(src, "__moore_dyn_array_new_copy_bytes:src");
+  if (!hostSrc)
+    return result;
+
+  size_t copySize = std::min(static_cast<size_t>(size),
+                             static_cast<size_t>(srcBytes));
+  if (copySize > 0)
+    std::memcpy(result.data, hostSrc, copySize);
   return result;
+}
+
+extern "C" MooreQueue __moore_dyn_array_new_copy(int32_t size, void *init) {
+  auto *initQ = normalizeQueuePtr(static_cast<MooreQueue *>(init),
+                                  "__moore_dyn_array_new_copy:init");
+  if (!initQ || !initQ->data || initQ->len <= 0)
+    return __moore_dyn_array_new(size);
+  return __moore_dyn_array_new_copy_bytes(size, initQ->data, initQ->len);
 }
 
 //===----------------------------------------------------------------------===//
@@ -1073,6 +1085,31 @@ static bool isInterpreterVirtualAddress(const void *ptr) {
 
 static MooreAssocPtrResolver assocPtrResolver = nullptr;
 static void *assocPtrResolverUserData = nullptr;
+static std::unordered_set<const void *> runtimeAssocHeaders;
+static std::unordered_map<uint64_t, void *> fallbackAssocByToken;
+
+static bool isRuntimeKnownAssocHeader(const void *ptr) {
+  return ptr && runtimeAssocHeaders.find(ptr) != runtimeAssocHeaders.end();
+}
+
+static uint64_t assocTokenFromPtr(const void *ptr) {
+  return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(ptr));
+}
+
+static void *lookupFallbackAssoc(const void *ptr) {
+  if (!ptr)
+    return nullptr;
+  auto it = fallbackAssocByToken.find(assocTokenFromPtr(ptr));
+  if (it == fallbackAssocByToken.end())
+    return nullptr;
+  return it->second;
+}
+
+static void rememberFallbackAssoc(const void *tokenPtr, void *assocPtr) {
+  if (!tokenPtr || !assocPtr)
+    return;
+  fallbackAssocByToken[assocTokenFromPtr(tokenPtr)] = assocPtr;
+}
 
 extern "C" void __moore_assoc_set_ptr_resolver(MooreAssocPtrResolver resolver,
                                                 void *userData) {
@@ -1083,9 +1120,22 @@ extern "C" void __moore_assoc_set_ptr_resolver(MooreAssocPtrResolver resolver,
 static void *assocNormalizePtr(void *ptr, const char *funcName) {
   if (!ptr)
     return nullptr;
+  if (void *fallback = lookupFallbackAssoc(ptr))
+    return fallback;
   if (assocPtrResolver) {
     if (void *resolved = assocPtrResolver(ptr, assocPtrResolverUserData))
       return resolved;
+    void *hostPtr = normalizeHostPtr(ptr, funcName);
+    if (void *fallback = lookupFallbackAssoc(hostPtr))
+      return fallback;
+    if (hostPtr && isRuntimeKnownAssocHeader(hostPtr))
+      return hostPtr;
+    if (isAotPtrTraceEnabled()) {
+      fprintf(stderr,
+              "[AOT PTR] %s: class=assoc-unresolved ptr=%p (returning null)\n",
+              funcName, ptr);
+    }
+    return nullptr;
   }
   return normalizeHostPtr(ptr, funcName);
 }
@@ -1106,6 +1156,7 @@ extern "C" void *__moore_assoc_create(int32_t key_size, int32_t value_size) {
     header->type = AssocArrayType_IntKey;
     header->array = arr;
   }
+  runtimeAssocHeaders.insert(header);
   return header;
 }
 
@@ -1360,29 +1411,78 @@ extern "C" int32_t __moore_assoc_exists(void *array, void *key) {
 
 extern "C" void *__moore_assoc_get_ref(void *array, void *key,
                                        int32_t value_size) {
+  void *rawArray = array;
+  void *rawKey = key;
   array = assocNormalizePtr(array, "__moore_assoc_get_ref");
-  if (!array || !key)
+  if (!array && rawArray) {
+    // Native paths can occasionally pass stable token/pointer-slot payloads
+    // instead of a direct assoc header. Create a fallback assoc header keyed
+    // by the raw token so repeated calls remain stable and non-crashing.
+    int32_t safeValueSize = std::max(value_size, static_cast<int32_t>(8));
+    array = __moore_assoc_create(/*key_size=*/8, safeValueSize);
+    rememberFallbackAssoc(rawArray, array);
+    if (isAotPtrTraceEnabled()) {
+      fprintf(stderr,
+              "[AOT PTR] __moore_assoc_get_ref: created fallback assoc "
+              "token=%p -> header=%p value_size=%d\n",
+              rawArray, array, safeValueSize);
+    }
+  }
+  // Some native callers may pass token-like/virtual key payloads. Normalize
+  // first, then fall back to stable token-derived keys to avoid crashes.
+  key = normalizeHostPtr(key, "__moore_assoc_get_ref:key");
+  if (!array)
     return nullptr;
+
+  int32_t safeValueSize = value_size;
+  if (safeValueSize <= 0 || safeValueSize > (1 << 20))
+    safeValueSize = 8;
+
   auto *header = static_cast<AssocArrayHeader *>(array);
   if (header->type == AssocArrayType_StringKey) {
     auto *arr = static_cast<StringKeyAssocArray *>(header->array);
-    auto *strKey = static_cast<MooreString *>(key);
     std::string keyStr;
-    if (strKey->data && strKey->len > 0)
-      keyStr = std::string(strKey->data, strKey->len);
+    if (key) {
+      auto *strKey = static_cast<MooreString *>(key);
+      if (strKey->data && strKey->len > 0)
+        keyStr = std::string(strKey->data, strKey->len);
+    } else if (rawKey) {
+      char tokenKey[32];
+      std::snprintf(tokenKey, sizeof(tokenKey), "tok_%016" PRIx64,
+                    assocTokenFromPtr(rawKey));
+      keyStr = tokenKey;
+      if (isAotPtrTraceEnabled()) {
+        fprintf(stderr,
+                "[AOT PTR] __moore_assoc_get_ref: fallback string key "
+                "token=%p key=\"%s\"\n",
+                rawKey, tokenKey);
+      }
+    }
     // Insert or find the element
     auto &valueVec = arr->data[keyStr];
     if (valueVec.empty()) {
       // Initialize with zeros
-      valueVec.resize(value_size, 0);
+      valueVec.resize(safeValueSize, 0);
     }
     return valueVec.data();
   } else {
     auto *arr = static_cast<IntKeyAssocArray *>(header->array);
-    int64_t intKey = readIntKey(key, arr->keySize);
+    int64_t intKey = 0;
+    if (key)
+      intKey = readIntKey(key, arr->keySize);
+    else if (rawKey)
+      intKey = static_cast<int64_t>(assocTokenFromPtr(rawKey));
+    else
+      return nullptr;
     auto &valueVec = arr->data[intKey];
     if (valueVec.empty()) {
-      valueVec.resize(value_size, 0);
+      valueVec.resize(safeValueSize, 0);
+      if (!key && isAotPtrTraceEnabled()) {
+        fprintf(stderr,
+                "[AOT PTR] __moore_assoc_get_ref: fallback int key token=%p "
+                "int=%" PRId64 " size=%d\n",
+                rawKey, intKey, safeValueSize);
+      }
     }
     return valueVec.data();
   }
@@ -13081,7 +13181,20 @@ extern "C" void *uvm_re_comp(MooreString *pattern, int32_t deglob) {
   std::string regexPattern(pattern->data, pattern->len);
   const bool useGlob = (deglob != 0);
   if (useGlob) {
-    regexPattern = convertGlobToRegex(regexPattern, true);
+    // Keep `/.../` patterns as explicit regexes (UVM convention).
+    if (regexPattern.size() >= 2 && regexPattern.front() == '/' &&
+        regexPattern.back() == '/') {
+      regexPattern = regexPattern.substr(1, regexPattern.size() - 2);
+    } else {
+      // Match UVM glob semantics against the full candidate string.
+      // UVM's non-DPI fallback treats '[' and ']' as literal characters in
+      // glob patterns, so use the same behavior here.
+      // Preserve legacy behavior where empty patterns match everything.
+      if (regexPattern.empty())
+        regexPattern = ".*";
+      else
+        regexPattern = "^" + convertGlobToRegex(regexPattern, false) + "$";
+    }
   }
 
   auto *handle = new UVMRegexHandle();
@@ -13210,17 +13323,19 @@ extern "C" MooreString uvm_re_deglobbed(MooreString *glob,
     MooreString result = {nullptr, 0};
     return result;
   }
+  (void)with_brackets;
 
+  // Keep glob text unchanged. uvm_is_match performs glob handling directly
+  // through uvm_re_match(..., deglob=1), which keeps behavior aligned with
+  // the non-DPI UVM implementation.
   std::string pattern(glob->data, glob->len);
-  std::string regex =
-      convertGlobToRegex(pattern, with_brackets != 0);
 
-  // Allocate and return result
+  // Allocate and return result.
   MooreString result;
-  result.len = static_cast<int64_t>(regex.size());
+  result.len = static_cast<int64_t>(pattern.size());
   result.data = static_cast<char *>(std::malloc(result.len));
   if (result.data) {
-    std::memcpy(result.data, regex.data(), result.len);
+    std::memcpy(result.data, pattern.data(), result.len);
   } else {
     result.len = 0;
   }
@@ -15975,6 +16090,14 @@ extern "C" void __moore_objection_raise(MooreObjectionHandle objection,
                  (long long)pool->totalCount);
 }
 
+// Forward declaration for UVM fatal reporting (defined later in this file).
+extern "C" void __moore_uvm_report_fatal(const char *id, int64_t idLen,
+                                         const char *message, int64_t messageLen,
+                                         int32_t verbosity, const char *filename,
+                                         int64_t filenameLen, int32_t line,
+                                         const char *context,
+                                         int64_t contextLen);
+
 extern "C" void __moore_objection_drop(MooreObjectionHandle objection,
                                         const char *context, int64_t contextLen,
                                         const char *description,
@@ -15991,21 +16114,36 @@ extern "C" void __moore_objection_drop(MooreObjectionHandle objection,
 
   std::unique_lock<std::mutex> lock(pool->mutex);
 
+  // UVM spec (uvm_objection.svh lines 625-634): if the context has no entry
+  // or the drop count exceeds the context's current count, issue UVM_FATAL.
   auto it = pool->entries.find(ctx);
-  if (it != pool->entries.end()) {
-    it->second.count -= count;
-    if (!desc.empty())
-      it->second.description = desc;
+  if (it == pool->entries.end() || count > it->second.count) {
+    int64_t currentCount = (it != pool->entries.end()) ? it->second.count : 0;
+    lock.unlock();
+    // Use the same UVM fatal reporting path as other UVM fatals.
+    std::string msg = "Object \"" + ctx + "\" attempted to drop objection '" +
+                      pool->phaseName +
+                      "' count below zero (current=" +
+                      std::to_string(currentCount) +
+                      ", drop=" + std::to_string(count) + ")";
+    __moore_uvm_report_fatal("OBJTN_ZERO", 10, msg.c_str(),
+                             static_cast<int64_t>(msg.size()), 0, "", 0, 0, "",
+                             0);
+    // If fatalExits is not set, __moore_uvm_report_fatal returns.
+    // Still prevent the underflow by returning early.
+    return;
+  }
 
-    // Remove entry if count drops to zero or below
-    if (it->second.count <= 0) {
-      pool->entries.erase(it);
-    }
+  it->second.count -= count;
+  if (!desc.empty())
+    it->second.description = desc;
+
+  // Remove entry if count drops to zero
+  if (it->second.count <= 0) {
+    pool->entries.erase(it);
   }
 
   pool->totalCount -= count;
-  if (pool->totalCount < 0)
-    pool->totalCount = 0;
 
   objectionTrace("drop_objection(phase='%s', context='%s', count=%lld) -> total=%lld",
                  pool->phaseName.c_str(), ctx.c_str(), (long long)count,
