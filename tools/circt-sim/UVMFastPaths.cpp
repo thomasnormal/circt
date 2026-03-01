@@ -40,7 +40,6 @@ enum class UvmFastPathAction : uint8_t {
   ReportInfoSuppress,
   ReportWarningSuppress,
   GetReportObject,
-  GetReportVerbosityLevel,
   GetReportAction,
   ReportHandlerGetVerbosityLevel,
   ReportHandlerGetAction,
@@ -103,8 +102,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_object::get_report_verbosity_level",
-              UvmFastPathAction::GetReportVerbosityLevel)
         .Case("uvm_pkg::uvm_report_object::get_report_action",
               UvmFastPathAction::GetReportAction)
         .Case("uvm_pkg::uvm_report_handler::get_verbosity_level",
@@ -150,8 +147,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_object::get_report_verbosity_level",
-              UvmFastPathAction::GetReportVerbosityLevel)
         .Case("uvm_pkg::uvm_report_object::get_report_action",
               UvmFastPathAction::GetReportAction)
         .Case("uvm_pkg::uvm_report_handler::get_verbosity_level",
@@ -831,24 +826,14 @@ bool LLHDProcessInterpreter::handleUvmFuncBodyFastPath(
     auto it = phaseObjectionHandles.find(hopperAddr);
     if (it != phaseObjectionHandles.end())
       objHandle = static_cast<uint64_t>(it->second);
-    unsigned width = std::max(1u, getTypeWidth(funcOp.getResultTypes()[0]));
-    results.push_back(InterpretedValue(llvm::APInt(width, objHandle)));
-    noteUvmFastPathActionHit("func.body.phase_hopper.get_objection");
-    return true;
-  }
-
-  // Return the total objection count for a handle.
-  if (matchesMethod("get_objection_total") && args.size() >= 1 &&
-      funcOp.getNumResults() >= 1) {
-    uint64_t objHandle = args[0].isX() ? 0 : args[0].getUInt64();
-    int64_t count = 0;
+    // Keep phase-hopper objection handles ABI-compatible with the normal
+    // call-site interception path by returning the synthetic pointer encoding.
+    uint64_t syntheticAddr = 0;
     if (objHandle != 0)
-      count = __moore_objection_get_count(
-          static_cast<MooreObjectionHandle>(objHandle));
+      syntheticAddr = 0xE0000000ULL + objHandle;
     unsigned width = std::max(1u, getTypeWidth(funcOp.getResultTypes()[0]));
-    results.push_back(InterpretedValue(
-        llvm::APInt(width, static_cast<uint64_t>(std::max<int64_t>(0, count)))));
-    noteUvmFastPathActionHit("func.body.objection.get_objection_total");
+    results.push_back(InterpretedValue(llvm::APInt(width, syntheticAddr)));
+    noteUvmFastPathActionHit("func.body.phase_hopper.get_objection");
     return true;
   }
 
@@ -1224,24 +1209,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     recordFastPathHit("registry.call_indirect.get_report_object");
     return true;
   }
-  case UvmFastPathAction::GetReportVerbosityLevel: {
-    if (callIndirectOp.getNumResults() < 1)
-      break;
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result, InterpretedValue(llvm::APInt(width, 200)));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra,
-               InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry get_report_verbosity_level -> "
-               << "200: " << calleeName << "\n");
-    recordFastPathHit("registry.call_indirect.get_report_verbosity");
-    return true;
-  }
   case UvmFastPathAction::GetReportAction: {
     if (callIndirectOp.getNumResults() < 1 ||
         callIndirectOp.getArgOperands().size() < 2)
@@ -1425,22 +1392,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
                << "  call_indirect: uvm_get_report_object fast-path (return "
                   "self): "
                << calleeName << "\n");
-    return true;
-  }
-
-  if (calleeName.contains("uvm_report_object::get_report_verbosity_level") &&
-      callIndirectOp.getNumResults() >= 1) {
-    Value result = callIndirectOp.getResult(0);
-    unsigned width = std::max(1u, getTypeWidth(result.getType()));
-    setValue(procId, result, InterpretedValue(llvm::APInt(width, 200)));
-    for (unsigned i = 1, e = callIndirectOp.getNumResults(); i < e; ++i) {
-      Value extra = callIndirectOp.getResult(i);
-      unsigned extraWidth = std::max(1u, getTypeWidth(extra.getType()));
-      setValue(procId, extra, InterpretedValue(llvm::APInt::getZero(extraWidth)));
-    }
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: get_report_verbosity_level fast-path -> "
-               << "200: " << calleeName << "\n");
     return true;
   }
 
@@ -1852,15 +1803,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     recordFastPathHit("registry.func.call.get_report_object");
     return true;
   }
-  case UvmFastPathAction::GetReportVerbosityLevel:
-    if (callOp.getNumResults() != 1)
-      break;
-    setValue(procId, callOp.getResult(0), InterpretedValue(llvm::APInt(32, 200)));
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: registry get_report_verbosity_level -> 200: "
-               << calleeName << "\n");
-    recordFastPathHit("registry.func.call.get_report_verbosity");
-    return true;
   case UvmFastPathAction::GetReportAction: {
     if (callOp.getNumResults() != 1 || callOp.getNumOperands() < 2)
       break;
@@ -2022,13 +1964,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     return true;
   }
 
-  if (calleeName.contains("uvm_report_object::get_report_verbosity_level") &&
-      callOp.getNumResults() == 1) {
-    setValue(procId, callOp.getResult(0), InterpretedValue(llvm::APInt(32, 200)));
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted -> 200\n");
-    return true;
-  }
   if (calleeName.contains("uvm_report_object::get_report_action") &&
       callOp.getNumResults() == 1 && callOp.getNumOperands() >= 2) {
     InterpretedValue sevVal = getValue(procId, callOp.getOperand(1));

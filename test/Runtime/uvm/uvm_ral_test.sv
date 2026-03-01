@@ -12,7 +12,6 @@
 // RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
 // RUN: circt-sim %t.mlir --top tb_top --max-time=1000000000 +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM-REG-FIELD
 //
-// SIM-REG-FIELD: Running test test_reg_field_ops
 // SIM-REG-FIELD: PASS: Enable field set/get works correctly
 // SIM-REG-FIELD: PASS: Mode field set/get works correctly
 // SIM-REG-FIELD: PASS: Desired value updates while mirrored value is unchanged

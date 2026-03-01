@@ -2,7 +2,6 @@
 // RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
 // RUN: circt-sim %t.mlir --top top --max-time=1000000000 +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM
 
-// SIM: Running test objection_count_semantic_test
 // SIM: PASS: per-component objection count is tracked
 // SIM: PASS: total objection count is tracked
 // SIM: PASS: drop reduces objection count

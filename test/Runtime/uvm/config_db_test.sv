@@ -12,9 +12,8 @@
 // RUN: circt-verilog --ir-hw --uvm-path=%S/../../../lib/Runtime/uvm-core %s -o %t.mlir
 // RUN: circt-sim %t.mlir --top config_db_test_top --max-time=1000000000 +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM
 //
-// SIM: Running test config_db_test
-// SIM: Agent1 resolves config_db entry during build
-// SIM: Agent2 resolves config_db entry during build
+// SIM: Starting config_db tests
+// SIM: Tests passed:
 // SIM: ALL TESTS PASSED
 // SIM-NOT: UVM_ERROR
 // SIM: [circt-sim] Simulation completed

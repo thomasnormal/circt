@@ -9916,3 +9916,43 @@
   - focused UVM regression sweep after fix:
     - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_phase_ordering_semantic_test.sv test/Runtime/uvm/uvm_phase_wait_for_state_test.sv test/Runtime/uvm/uvm_phase_set_jump_null_active_test.sv test/Runtime/uvm/uvm_phase_add_scope_validation_test.sv test/Runtime/uvm/config_db_test.sv test/Runtime/uvm/uvm_simple_test.sv`
 
+
+## 2026-03-01 - UVM report verbosity semantics via core runtime (remove hardcoded getter fast-paths)
+
+- realization:
+  - A new semantic runtime test for report verbosity round-trip failed red:
+    - `set_report_verbosity_level(UVM_DEBUG)` followed by `get_report_verbosity_level()` returned the wrong value.
+  - Root cause was hardcoded `circt-sim` UVM interceptors returning constant `200` (UVM_MEDIUM)
+    for `uvm_report_object::get_report_verbosity_level` in both `func.call` and
+    `call_indirect` paths.
+  - This was an interceptor-surface issue (semantic masking), not a `uvm-core` issue.
+
+- implemented:
+  - Added semantic regression:
+    - `test/Runtime/uvm/uvm_report_verbosity_semantic_test.sv`
+    - checks component-level and `uvm_report_handler` verbosity set/get round-trip.
+  - Reduced interceptor surface in `tools/circt-sim/UVMFastPaths.cpp` by removing
+    hardcoded `uvm_report_object::get_report_verbosity_level` interception paths.
+  - Updated several UVM runtime tests to avoid asserting verbosity-sensitive
+    `Running test ...` banners under `+UVM_VERBOSITY=UVM_NONE`; they now assert
+    semantic pass markers/outcomes instead.
+
+- validation:
+  - red test before fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_report_verbosity_semantic_test.sv`
+  - rebuild:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - green test after fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_report_verbosity_semantic_test.sv`
+  - full UVM runtime sweep:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm`
+    - final result: `28 passed`.
+  - spot-check of prior stress symptom (manual run):
+    - `build_test/bin/circt-verilog --ir-hw --uvm-path=test/Runtime/uvm/../../../lib/Runtime/uvm-core test/Runtime/uvm/uvm_stress_test.sv -o /tmp/uvm_stress_test.mlir`
+    - `build_test/bin/circt-sim /tmp/uvm_stress_test.mlir --top uvm_stress_test_top --max-time=1000000000 +UVM_VERBOSITY=UVM_LOW`
+    - observed pass marker: `[PASS] Verbosity set to DEBUG`.
+
+- note:
+  - During one full-suite run, `build_test/bin/circt-verilog` briefly surfaced as
+    non-executable (`Permission denied`) while another process updated build outputs.
+    Retrying after the transient completed restored normal execution.

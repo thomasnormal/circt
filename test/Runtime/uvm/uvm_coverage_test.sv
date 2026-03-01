@@ -12,12 +12,10 @@
 // RUN: circt-sim %t.mlir --top tb_coverage --max-time=1000000000 +UVM_TESTNAME=mam_test +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM-MAM
 // RUN: circt-sim %t.mlir --top tb_coverage --max-time=1000000000 +UVM_TESTNAME=coverage_db_test +UVM_VERBOSITY=UVM_NONE 2>&1 | FileCheck %s --check-prefix=SIM-COVDB
 //
-// SIM-MAM: Running test mam_test
 // SIM-MAM: UVM_COVERAGE_MAM_PASS
 // SIM-MAM-NOT: UVM_ERROR
 // SIM-MAM: [circt-sim] Simulation completed
 //
-// SIM-COVDB: Running test coverage_db_test
 // SIM-COVDB: UVM_COVERAGE_DB_PASS
 // SIM-COVDB-NOT: UVM_ERROR
 // SIM-COVDB: [circt-sim] Simulation completed
