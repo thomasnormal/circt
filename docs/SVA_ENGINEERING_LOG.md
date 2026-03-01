@@ -2,6 +2,33 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T3/WS6: OpenTitan FPV LEC runner emits schema JSONL lane):
+  - realization:
+    - `run_opentitan_fpv_circt_lec.py` emitted case TSV plus objective TSVs,
+      but lacked a `--results-jsonl-file` lane for unified formal schema rows.
+    - this left FPV LEC outside WS6 schema capture/dashboards and prevented
+      direct schema parity with other OpenTitan LEC/BMC wrappers.
+  - implemented:
+    - added `--results-jsonl-file` to
+      `utils/run_opentitan_fpv_circt_lec.py` (env default:
+      `FORMAL_RESULTS_JSONL_OUT`).
+    - added schema JSONL emission from case rows with deterministic sort and
+      reason-code extraction policy (`reason` column preferred, then `diag`).
+    - solver label now follows LEC mode policy:
+      `z3` when `LEC_RUN_SMTLIB=1 && LEC_SMOKE_ONLY=0`, else empty.
+    - added copied-runner-safe fallback schema writer helpers for lit tests
+      that copy only the script without `utils/formal/lib`.
+    - added regression
+      `test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test`.
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-lec-basic.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-solver.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-preprocess.test test/Tools/run-opentitan-fpv-circt-lec-failing-status.test test/Tools/run-opentitan-fpv-circt-lec-eq-result-nonzero-exit.test`
+      - result: `6/6` pass.
+    - expanded formal subset:
+      - `build_test/bin/llvm-lit -sv ...` (34-test WS1/WS6 subset with BMC/LEC wrappers + schema tools)
+      - result: `34/34` pass.
+
 - Iteration update (WS1-T3/WS6: connectivity BMC wrapper emits empty JSONL in no-case paths):
   - realization:
     - `run_opentitan_connectivity_circt_bmc.py` already created an empty TSV

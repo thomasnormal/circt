@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import shlex
@@ -32,6 +33,66 @@ _THIS_DIR = Path(__file__).resolve().parent
 _FORMAL_LIB_DIR = _THIS_DIR / "formal" / "lib"
 if _FORMAL_LIB_DIR.is_dir():
     sys.path.insert(0, str(_FORMAL_LIB_DIR))
+
+try:
+    from formal_results import make_result_row as _make_formal_result_row
+    from formal_results import write_results_jsonl as _write_formal_results_jsonl
+except Exception:
+
+    def _infer_stage(status: str, reason_code: str) -> str:
+        status_norm = status.strip().upper()
+        reason_norm = reason_code.strip().upper()
+        if status_norm == "TIMEOUT":
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            return "solver"
+        if status_norm in {"ERROR", "FAIL"}:
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            if "SMT" in reason_norm or "Z3" in reason_norm or "LEC" in reason_norm:
+                return "solver"
+        return "result"
+
+    def _make_formal_result_row(
+        *,
+        suite: str,
+        mode: str,
+        case_id: str,
+        case_path: str,
+        status: str,
+        reason_code: str = "",
+        stage: str = "",
+        solver: str = "",
+        solver_time_ms: int | None = None,
+        frontend_time_ms: int | None = None,
+        log_path: str = "",
+        artifact_dir: str = "",
+    ) -> dict[str, object]:
+        stage_value = stage.strip() if stage.strip() else _infer_stage(status, reason_code)
+        return {
+            "schema_version": 1,
+            "suite": suite,
+            "mode": mode,
+            "case_id": case_id,
+            "case_path": case_path,
+            "status": status.strip().upper(),
+            "reason_code": reason_code.strip().upper(),
+            "stage": stage_value,
+            "solver": solver.strip(),
+            "solver_time_ms": solver_time_ms,
+            "frontend_time_ms": frontend_time_ms,
+            "log_path": log_path,
+            "artifact_dir": artifact_dir,
+        }
+
+    def _write_formal_results_jsonl(
+        path: Path, rows: list[dict[str, object]]
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, sort_keys=True))
+                handle.write("\n")
 
 
 SCHEMA_MARKER = "#opentitan_compile_contract_schema_version=1"
@@ -264,6 +325,14 @@ def case_status_to_solver_result(case_status: str) -> str:
     }.get(case_status, "ERROR")
 
 
+def extract_result_reason_code(row: tuple[str, ...]) -> str:
+    if len(row) >= 7 and row[6].strip():
+        return row[6]
+    if len(row) >= 6 and row[5].strip():
+        return row[5]
+    return ""
+
+
 def project_objective_reason(case_reason: str) -> str:
     token = case_reason.strip()
     if not token:
@@ -433,6 +502,11 @@ def parse_args() -> argparse.Namespace:
         "--results-file",
         default=os.environ.get("OUT", ""),
         help="Optional per-case LEC results TSV path.",
+    )
+    parser.add_argument(
+        "--results-jsonl-file",
+        default=os.environ.get("FORMAL_RESULTS_JSONL_OUT", ""),
+        help="Optional JSONL output path for unified formal result schema rows.",
     )
     parser.add_argument(
         "--assertion-results-file",
@@ -729,6 +803,25 @@ def main() -> int:
             writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
             for row in case_rows:
                 writer.writerow(row)
+    if args.results_jsonl_file:
+        results_jsonl_path = Path(args.results_jsonl_file).resolve()
+        solver_label = "z3" if lec_run_smtlib and not lec_smoke_only else ""
+        json_rows: list[dict[str, object]] = []
+        for row in sorted(case_rows, key=lambda item: (item[1], item[0], item[2])):
+            status, case_id, case_path, suite, mode, _, _ = row
+            reason_code = extract_result_reason_code(row)
+            json_rows.append(
+                _make_formal_result_row(
+                    suite=suite,
+                    mode=mode,
+                    case_id=case_id,
+                    case_path=case_path,
+                    status=status,
+                    reason_code=reason_code,
+                    solver=solver_label,
+                )
+            )
+        _write_formal_results_jsonl(results_jsonl_path, json_rows)
     with assertion_results_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         for row in out_assertion_rows:

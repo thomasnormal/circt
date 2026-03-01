@@ -423,6 +423,8 @@ Current workstream status in this branch:
      JSONL artifacts (selected-groups-empty and generated-cases-empty paths)
    - OpenTitan FPV BMC wrapper now emits merged schema JSONL output lane
      (`--results-jsonl-file`) from final wrapper-level merged rows
+   - OpenTitan FPV LEC runner now emits schema JSONL output lane
+     (`--results-jsonl-file`, env `FORMAL_RESULTS_JSONL_OUT`)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
