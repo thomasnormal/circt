@@ -26,7 +26,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import yaml
 
@@ -110,6 +110,21 @@ def parse_nonnegative_int_list(raw: str, name: str) -> list[int]:
             fail(f"invalid {name}: empty item at index {index}")
         values.append(parse_nonnegative_int(item, f"{name}[{index}]"))
     return values
+
+
+def group_cases_by_key(
+    cases: Sequence[ConnectivityLECCase],
+    key_fn: Callable[[ConnectivityLECCase], str],
+) -> list[list[ConnectivityLECCase]]:
+    grouped: dict[str, list[ConnectivityLECCase]] = {}
+    ordered_keys: list[str] = []
+    for case in cases:
+        key = key_fn(case)
+        if key not in grouped:
+            grouped[key] = []
+            ordered_keys.append(key)
+        grouped[key].append(case)
+    return [grouped[key] for key in ordered_keys]
 
 
 def select_auto_preenable_rewrite_budget(
@@ -1584,6 +1599,14 @@ def main() -> int:
                 f"{no_flatten_timeout_retry_mode} (expected auto|on|off)"
             )
         )
+    case_batch_mode = os.environ.get("LEC_CASE_BATCH_MODE", "csv").strip().lower()
+    if case_batch_mode not in {"csv", "bind-top"}:
+        fail(
+            (
+                "invalid LEC_CASE_BATCH_MODE: "
+                f"{case_batch_mode} (expected csv|bind-top)"
+            )
+        )
     drop_remark_pattern = os.environ.get(
         "LEC_DROP_REMARK_PATTERN",
         os.environ.get("DROP_REMARK_PATTERN", "will be dropped during lowering"),
@@ -1772,7 +1795,8 @@ def main() -> int:
             f"target={target.target_name} selected_connections={len(selected_groups)} "
             f"selected_conditions={sum(len(group.conditions) for group in selected_groups)} "
             f"generated_cases={len(cases)} skipped_connections={skipped_connections} "
-            f"top={case_top_summary} shard={rule_shard_index}/{rule_shard_count}",
+            f"top={case_top_summary} shard={rule_shard_index}/{rule_shard_count} "
+            f"batch_mode={case_batch_mode}",
             file=sys.stderr,
             flush=True,
         )
@@ -1919,14 +1943,12 @@ def main() -> int:
         )
         learned_no_flatten = False
 
-        case_batches: list[list[ConnectivityLECCase]] = []
-        by_csv: dict[str, list[ConnectivityLECCase]] = {}
-        for case in cases:
-            csv_key = case.case_path.rsplit(":", 1)[0]
-            if csv_key not in by_csv:
-                by_csv[csv_key] = []
-                case_batches.append(by_csv[csv_key])
-            by_csv[csv_key].append(case)
+        case_batch_key_fn: Callable[[ConnectivityLECCase], str]
+        if case_batch_mode == "csv":
+            case_batch_key_fn = lambda case: case.case_path.rsplit(":", 1)[0]
+        else:
+            case_batch_key_fn = lambda case: case.bind_top
+        case_batches = group_cases_by_key(cases, case_batch_key_fn)
 
         def append_timeout_reason(case: ConnectivityLECCase, reason: str) -> None:
             reason_key = (case.case_id, reason)

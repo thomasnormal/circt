@@ -705,3 +705,39 @@
   - real OpenTitan check on
     `clkmgr_infra.csv:CLKMGR_INFRA_CLK_SRAM_CTRL_MAIN_OTP_CLK` now logs
     preenable at `max-num-rewrites=20000` and reaches `PASS` under Z3.
+
+## 2026-02-28 - Case batching mode knob (csv vs bind-top)
+
+- realization:
+  - connectivity frontend compilation was repeated per CSV batch, even when
+    cases shared the same bind top and could potentially reuse a single shared
+    frontend artifact.
+  - however, real OpenTitan A/B showed that aggressively merging batches by
+    bind top can inflate per-case LEC workload and introduce new timeouts.
+
+- implemented:
+  - `utils/run_opentitan_connectivity_circt_lec.py`:
+    - added `LEC_CASE_BATCH_MODE=csv|bind-top` (default `csv`).
+    - `csv` preserves current behavior and reliability baseline.
+    - `bind-top` is opt-in for experimentation with fewer frontend compiles.
+    - startup summary now prints `batch_mode=...`.
+    - refactored internal case-grouping via `group_cases_by_key`.
+  - added regressions:
+    - `test/Tools/run-opentitan-connectivity-circt-lec-batch-mode-csv.test`
+    - `test/Tools/run-opentitan-connectivity-circt-lec-batch-mode-bind-top.test`
+    - updated
+      `test/Tools/run-opentitan-connectivity-circt-lec-frontend-retry-propagation.test`
+      to pin `LEC_CASE_BATCH_MODE=csv` for deterministic multi-batch behavior.
+
+- validation:
+  - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+    passes.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-batch-mode-*.test`:
+    `2/2` pass.
+  - `llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-*.test`:
+    `43/43` pass.
+  - real OpenTitan smoke A/B on two rules:
+    - `csv`: 2 shared frontend batches, both cases pass.
+    - `bind-top`: 1 shared frontend batch, but second case hit
+      `CIRCT_LEC_TIMEOUT`.
+  - conclusion: keep `csv` as default; use `bind-top` only as explicit tuning.
