@@ -25028,21 +25028,33 @@ no_uvm_objection_intercept:
         bool compatibleNativeAbi = numArgs <= 8 && numResults <= 1;
         if (compatibleNativeAbi) {
           compatibleNativeAbi &= numArgs == funcOp.getNumArguments();
-          for (mlir::Type ty : funcOp.getArgumentTypes())
-            compatibleNativeAbi &= isNativeScalarType(ty);
+          if (compatibleNativeAbi) {
+            for (mlir::Type ty : funcOp.getArgumentTypes())
+              compatibleNativeAbi &= isNativeScalarType(ty);
+          }
+          // Narrow ABI extension: allow method-like signatures whose trailing
+          // argument is struct<(ptr, i64)> lowered by-pointer.
+          // Keep this constrained to avoid promoting unrelated global helpers
+          // (e.g. run_test-style entry points) into native direct dispatch.
+          if (!compatibleNativeAbi && numArgs >= 3 &&
+              numArgs == funcOp.getNumArguments()) {
+            auto argTypes = funcOp.getArgumentTypes();
+            unsigned tailIdx = numArgs - 1;
+            bool arg0PointerLike =
+                mlir::isa<mlir::LLVM::LLVMPointerType>(argTypes[0]) ||
+                shouldTreatArg0I64AsPointerLike(funcOp, 0);
+            bool prefixScalars = true;
+            for (unsigned i = 0; i < tailIdx; ++i)
+              prefixScalars &= isNativeScalarType(argTypes[i]);
+            if (arg0PointerLike && prefixScalars &&
+                isPtrLenStructNativeAbiType(argTypes[tailIdx])) {
+              compatibleNativeAbi = true;
+              hasPtrLenTailArgAbi = true;
+            }
+          }
           if (numResults == 1)
             compatibleNativeAbi &=
                 isNativeScalarType(callOp.getResult(0).getType());
-          // Narrow ABI extension: permit common UVM reporting getter shape
-          // (..., iN, struct<(ptr, i64)>).
-          if (!compatibleNativeAbi && numArgs == 3 &&
-              funcOp.getNumArguments() == 3 &&
-              isNativeScalarType(funcOp.getArgumentTypes()[0]) &&
-              isNativeScalarType(funcOp.getArgumentTypes()[1]) &&
-              isPtrLenStructNativeAbiType(funcOp.getArgumentTypes()[2])) {
-            compatibleNativeAbi = true;
-            hasPtrLenTailArgAbi = true;
-          }
         }
         if (compatibleNativeAbi) {
           uint64_t a[8] = {};
@@ -25083,14 +25095,8 @@ no_uvm_objection_intercept:
             mlir::Type formalArgTy = i < funcOp.getNumArguments()
                                          ? funcOp.getArgumentTypes()[i]
                                          : mlir::Type();
-            mlir::Type actualArgTy = i < callOp.getNumOperands()
-                                         ? callOp.getOperand(i).getType()
-                                         : mlir::Type();
-            // Some lowered by-value ABI shapes pass a pointer formal while the
-            // call operand remains a packed struct<(ptr, i64)>. Materialize
-            // stable stack storage and pass its address to native code.
-            if (mlir::isa<mlir::LLVM::LLVMPointerType>(formalArgTy) &&
-                isPtrLenStructNativeAbiType(actualArgTy)) {
+            if (hasPtrLenTailArgAbi && i + 1 == numArgs &&
+                isPtrLenStructNativeAbiType(formalArgTy)) {
               uint64_t ptrLenArgPtr = 0;
               uint64_t ptrLenArgLen = 0;
               if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
@@ -25120,49 +25126,6 @@ no_uvm_objection_intercept:
                   llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
                                << " name=" << funcOp.getName() << " arg" << i
                                << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
-                               << " active_proc=" << activeProcessId << "\n";
-                }
-                canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
-                break;
-              }
-              ptrLenArgStorage[i].ptr = ptrLenArgPtr;
-              ptrLenArgStorage[i].len = ptrLenArgLen;
-              a[i] = reinterpret_cast<uint64_t>(&ptrLenArgStorage[i]);
-              continue;
-            }
-            if (hasPtrLenTailArgAbi && i == 2) {
-              uint64_t ptrLenArgPtr = 0;
-              uint64_t ptrLenArgLen = 0;
-              if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
-                                                  ptrLenArgLen)) {
-                canDispatch = false;
-                break;
-              }
-              bool isUnmappedCall = fidIt == funcOpToFid.end();
-              bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
-              ptrLenArgPtr = normalizeNativeCallPointerArg(
-                  procId, funcOp.getName(), ptrLenArgPtr);
-              if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
-                  !isKnownPointerAddress(ptrLenArgPtr)) {
-                if (traceNativeCalls) {
-                  llvm::errs()
-                      << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
-                      << " name=" << funcOp.getName() << " arg" << i
-                      << ".ptr="
-                      << llvm::format_hex(ptrLenArgPtr, 16)
-                      << " active_proc=" << activeProcessId << "\n";
-                }
-                canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
-                break;
-              }
-              if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
-                if (traceNativeCalls) {
-                  llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
-                               << " name=" << funcOp.getName() << " arg" << i
-                               << ".ptr="
-                               << llvm::format_hex(ptrLenArgPtr, 16)
                                << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
@@ -25632,20 +25595,32 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
       bool compatibleNativeAbi = numArgs <= 8 && numResults <= 1;
       if (compatibleNativeAbi) {
         compatibleNativeAbi &= numArgs == funcOp.getNumArguments();
-        for (mlir::Type ty : funcOp.getArgumentTypes())
-          compatibleNativeAbi &= isNativeScalarType(ty);
+        if (compatibleNativeAbi) {
+          for (mlir::Type ty : funcOp.getArgumentTypes())
+            compatibleNativeAbi &= isNativeScalarType(ty);
+        }
+        // Narrow ABI extension: allow method-like signatures whose trailing
+        // argument is struct<(ptr, i64)> lowered by-pointer.
+        // Keep this constrained to avoid promoting unrelated global helpers
+        // (e.g. run_test-style entry points) into native direct dispatch.
+        if (!compatibleNativeAbi && numArgs >= 3 &&
+            numArgs == funcOp.getNumArguments()) {
+          auto argTypes = funcOp.getArgumentTypes();
+          unsigned tailIdx = numArgs - 1;
+          bool arg0PointerLike =
+              mlir::isa<mlir::LLVM::LLVMPointerType>(argTypes[0]) ||
+              shouldTreatArg0I64AsPointerLike(funcOp, 0);
+          bool prefixScalars = true;
+          for (unsigned i = 0; i < tailIdx; ++i)
+            prefixScalars &= isNativeScalarType(argTypes[i]);
+          if (arg0PointerLike && prefixScalars &&
+              isPtrLenStructNativeAbiType(argTypes[tailIdx])) {
+            compatibleNativeAbi = true;
+            hasPtrLenTailArgAbi = true;
+          }
+        }
         if (numResults == 1)
           compatibleNativeAbi &= isNativeScalarType(callOp.getResult(0).getType());
-        // Narrow ABI extension: permit common UVM reporting getter shape
-        // (..., iN, struct<(ptr, i64)>).
-        if (!compatibleNativeAbi && numArgs == 3 &&
-            funcOp.getNumArguments() == 3 &&
-            isNativeScalarType(funcOp.getArgumentTypes()[0]) &&
-            isNativeScalarType(funcOp.getArgumentTypes()[1]) &&
-            isPtrLenStructNativeAbiType(funcOp.getArgumentTypes()[2])) {
-          compatibleNativeAbi = true;
-          hasPtrLenTailArgAbi = true;
-        }
       }
       if (compatibleNativeAbi) {
         uint64_t a[8] = {};
@@ -25686,14 +25661,8 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
           mlir::Type formalArgTy = i < funcOp.getNumArguments()
                                        ? funcOp.getArgumentTypes()[i]
                                        : mlir::Type();
-          mlir::Type actualArgTy = i < callOp.getNumOperands()
-                                       ? callOp.getOperand(i).getType()
-                                       : mlir::Type();
-          // Some lowered by-value ABI shapes pass a pointer formal while the
-          // call operand remains a packed struct<(ptr, i64)>. Materialize
-          // stable stack storage and pass its address to native code.
-          if (mlir::isa<mlir::LLVM::LLVMPointerType>(formalArgTy) &&
-              isPtrLenStructNativeAbiType(actualArgTy)) {
+          if (hasPtrLenTailArgAbi && i + 1 == numArgs &&
+              isPtrLenStructNativeAbiType(formalArgTy)) {
             uint64_t ptrLenArgPtr = 0;
             uint64_t ptrLenArgLen = 0;
             if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
@@ -25723,48 +25692,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                 llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
                              << " name=" << funcOp.getName() << " arg" << i
                              << ".ptr=" << llvm::format_hex(ptrLenArgPtr, 16)
-                             << " active_proc=" << activeProcessId << "\n";
-              }
-              canDispatch = false;
-              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
-              break;
-            }
-            ptrLenArgStorage[i].ptr = ptrLenArgPtr;
-            ptrLenArgStorage[i].len = ptrLenArgLen;
-            a[i] = reinterpret_cast<uint64_t>(&ptrLenArgStorage[i]);
-            continue;
-          }
-          if (hasPtrLenTailArgAbi && i == 2) {
-            uint64_t ptrLenArgPtr = 0;
-            uint64_t ptrLenArgLen = 0;
-            if (!decodePtrLenStructNativeAbiArg(args[i], ptrLenArgPtr,
-                                                ptrLenArgLen)) {
-              canDispatch = false;
-              break;
-            }
-            bool isUnmappedCall = fidIt == funcOpToFid.end();
-            bool isUvmMethodName = funcOp.getName().starts_with("uvm_pkg::");
-            ptrLenArgPtr = normalizeNativeCallPointerArg(
-                procId, funcOp.getName(), ptrLenArgPtr);
-            if (isUnmappedCall && isUvmMethodName && ptrLenArgPtr != 0 &&
-                !isKnownPointerAddress(ptrLenArgPtr)) {
-              if (traceNativeCalls) {
-                llvm::errs()
-                    << "[AOT TRACE] func.call skip unknown-ptrlen-pointer"
-                    << " name=" << funcOp.getName() << " arg" << i << ".ptr="
-                    << llvm::format_hex(ptrLenArgPtr, 16)
-                    << " active_proc=" << activeProcessId << "\n";
-              }
-              canDispatch = false;
-              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
-              break;
-            }
-            if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
-              if (traceNativeCalls) {
-                llvm::errs() << "[AOT TRACE] func.call skip bad-ptrlen-pointer"
-                             << " name=" << funcOp.getName() << " arg" << i
-                             << ".ptr="
-                             << llvm::format_hex(ptrLenArgPtr, 16)
                              << " active_proc=" << activeProcessId << "\n";
               }
               canDispatch = false;
