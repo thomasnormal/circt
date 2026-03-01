@@ -1,0 +1,7 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/src
+// RUN: touch %t/src/a.sv
+// RUN: printf 'case0\ttop\t%t/src/a.sv\t%t/src\t%t/work/case0\n' > %t/cases.tsv
+// RUN: not env BMC_LOG_MAX_BYTES=-1 %S/../../utils/run_pairwise_circt_bmc.py --cases-file %t/cases.tsv --workdir %t/work 2>&1 | FileCheck %s
+//
+// CHECK: invalid BMC_LOG_MAX_BYTES: -1

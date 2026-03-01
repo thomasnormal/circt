@@ -2,6 +2,17 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: pairwise BMC log budget invalid-env contract coverage):
+  - realization:
+    - after landing `BMC_LOG_MAX_BYTES`, invalid-env diagnostics for that knob
+      were not explicitly regression-covered.
+  - implemented:
+    - added regression:
+      - `test/Tools/run-pairwise-circt-bmc-log-max-bytes-invalid.test`
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-log-max-bytes-invalid.test`
+      - result: `1/1` pass.
+
 - Iteration update (WS1/WS0: bounded OpenTitan FPV LEC log artifacts):
   - realization:
     - `utils/run_opentitan_fpv_circt_lec.py` still wrote unbounded per-case

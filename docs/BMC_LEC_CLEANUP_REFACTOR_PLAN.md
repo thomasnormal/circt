@@ -519,6 +519,9 @@ Current workstream status in this branch:
      shared-helper mode (local fallback retained)
    - pairwise log-truncation path is regression-covered
      (`run-pairwise-circt-bmc-log-max-bytes.test`)
+   - pairwise shared-path invalid `BMC_LOG_MAX_BYTES` diagnostics are now
+     regression-covered
+     (`run-pairwise-circt-bmc-log-max-bytes-invalid.test`)
    - OpenTitan AES LEC and connectivity LEC runners now support bounded
      per-log artifact writes via `LEC_LOG_MAX_BYTES` and both consume shared
      `runner_common.write_log` in shared-helper mode (local fallback retained)
