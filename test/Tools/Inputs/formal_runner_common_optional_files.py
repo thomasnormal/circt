@@ -55,6 +55,23 @@ def main() -> int:
     assert (
         runner_common.parse_lec_result("no result marker") is None
     ), "shared LEC result parser should return None for missing markers"
+    assert (
+        runner_common.parse_lec_diag("prefix LEC_DIAG=LLHD_ABSTRACTION suffix")
+        == "LLHD_ABSTRACTION"
+    ), "shared LEC diag parser missed marker"
+    assert (
+        runner_common.parse_lec_diag("no diag marker") is None
+    ), "shared LEC diag parser should return None for missing markers"
+    assert (
+        runner_common.parse_lec_diag_assume_known_result(
+            "LEC_DIAG_ASSUME_KNOWN_RESULT=UNSAT"
+        )
+        == "UNSAT"
+    ), "shared assume-known parser missed marker"
+    assert (
+        runner_common.parse_lec_diag_assume_known_result("no assume-known marker")
+        is None
+    ), "shared assume-known parser should return None for missing markers"
 
     allow_path = tmp_dir / "allow.tsv"
     allow_path.write_text(

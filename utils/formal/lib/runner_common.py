@@ -144,6 +144,20 @@ def parse_lec_result(text: str) -> str | None:
     return None
 
 
+def parse_lec_diag(text: str) -> str | None:
+    match = re.search(r"LEC_DIAG=([A-Z0-9_]+)", text)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def parse_lec_diag_assume_known_result(text: str) -> str | None:
+    match = re.search(r"LEC_DIAG_ASSUME_KNOWN_RESULT=(UNSAT|SAT|UNKNOWN)", text)
+    if not match:
+        return None
+    return match.group(1)
+
+
 def load_allowlist(
     path: Path, fail_fn: Callable[[str], None] | None = None
 ) -> Allowlist:

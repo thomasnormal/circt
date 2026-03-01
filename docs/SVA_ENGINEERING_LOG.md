@@ -2,6 +2,35 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T2/WS1-T4: shared LEC diag parser dedup):
+  - realization:
+    - OpenTitan AES/connectivity LEC runners still duplicated LEC diagnostics
+      parsers:
+      - `parse_lec_diag(...)`
+      - `parse_lec_diag_assume_known_result(...)` (AES lane)
+    - `runner_common` coverage did not lock these classifier contracts.
+  - implemented:
+    - added shared helpers:
+      - `utils/formal/lib/runner_common.py::parse_lec_diag`
+      - `utils/formal/lib/runner_common.py::parse_lec_diag_assume_known_result`
+    - migrated shared-helper mode consumption in:
+      - `utils/run_opentitan_circt_lec.py`
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+      (local fallback retained for copied-script lit environments).
+    - extended helper regression input:
+      - `test/Tools/Inputs/formal_runner_common_optional_files.py`
+      - added positive/negative cases for both diag parsers.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test`
+      - result: fail (`AttributeError`: missing
+        `runner_common.parse_lec_diag`).
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py test/Tools/Inputs/formal_runner_common_optional_files.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test test/Tools/run-opentitan-lec-llhd-abstraction-default-accept.test test/Tools/run-opentitan-lec-log-max-bytes.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-opentitan-connectivity-circt-lec-log-max-bytes-shared.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS1-T2/WS1-T4: shared LEC result classifier dedup):
   - realization:
     - OpenTitan LEC runners still duplicated identical `parse_lec_result(...)`

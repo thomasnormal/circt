@@ -1398,6 +1398,7 @@ try:
         is_allowlisted as _shared_is_allowlisted,
         load_allowlist as _shared_load_allowlist,
         normalize_drop_reason as _shared_normalize_drop_reason,
+        parse_lec_diag as _shared_parse_lec_diag,
         parse_lec_result as _shared_parse_lec_result,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
         parse_nonnegative_int_list as _shared_parse_nonnegative_int_list,
@@ -1482,6 +1483,9 @@ if _HAS_SHARED_FORMAL_HELPERS:
 
     def parse_lec_result(text: str) -> str | None:
         return _shared_parse_lec_result(text)
+
+    def parse_lec_diag(text: str) -> str | None:
+        return _shared_parse_lec_diag(text)
 
     def normalize_drop_reason(line: str) -> str:
         return _shared_normalize_drop_reason(line)
