@@ -6268,3 +6268,6 @@ Status update (2026-03-01): this gap is closed in this workspace. Integration se
 
 ### [x] 2085. `test/Tools/crun/uvm-config-db-type-mismatch.sv:1`
 Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and restored semantic type safety: setting `typed_key` as `int` no longer satisfies `uvm_config_db#(string)::get`. Root cause was missing payload/type-shape guard in config_db get interception paths; fixed by enforcing payload-byte-size compatibility for the expected output type in `tools/circt-sim/LLHDProcessInterpreterUvm.cpp` and `tools/circt-sim/LLHDProcessInterpreter.cpp`.
+
+### [x] 2086. `test/Tools/crun/uvm-config-db-virtual-if.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL` and converted to semantic runtime coverage (`config_db virtual interface: PASS`). The test now sets `uvm_config_db#(virtual simple_if)` from module scope using an absolute component path (`uvm_test_top.consumer`) before `run_test`, then validates retrieval in component build-phase. This preserves the virtual-interface config_db semantic objective while avoiding class-scope arbitrary module-symbol references.

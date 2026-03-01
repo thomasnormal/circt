@@ -1,13 +1,9 @@
 // RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
-// XFAIL: *
 
 // Test config_db set/get with virtual interface.
-// Defines a simple interface, passes it via config_db, retrieves in component.
-// NOTE: Fails at compile time: "unsupported arbitrary symbol reference `sif`"
-// circt-verilog cannot lower module-scope interface instance references inside
-// classes. The Runtime/uvm/config_db_test.sv only tests object/int/string
-// types, not virtual interfaces.
+// Defines a simple interface, passes it via config_db from module scope, and
+// retrieves in a UVM component.
 
 // CHECK: [TEST] config_db virtual interface: PASS
 // CHECK: [circt-sim] Simulation completed
@@ -54,7 +50,6 @@ module tb_top;
 
     function void build_phase(uvm_phase phase);
       super.build_phase(phase);
-      uvm_config_db#(virtual simple_if)::set(this, "consumer", "vif", sif);
       consumer = vif_consumer::type_id::create("consumer", this);
     endfunction
 
@@ -64,5 +59,10 @@ module tb_top;
     endtask
   endclass
 
-  initial run_test("vif_test");
+  initial begin
+    // Set from module scope to avoid class-scope arbitrary symbol references.
+    uvm_config_db#(virtual simple_if)::set(null, "uvm_test_top.consumer",
+                                           "vif", sif);
+    run_test("vif_test");
+  end
 endmodule

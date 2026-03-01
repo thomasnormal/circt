@@ -10322,3 +10322,27 @@
   - cross-check with factory + config semantic gates:
     - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-factory-create.sv test/Tools/crun/uvm-factory-override-priority.sv test/Tools/crun/uvm-factory-double-override.sv test/Tools/crun/uvm-factory-override-chain.sv test/Tools/crun/uvm-factory-override-inst-path.sv test/Tools/crun/uvm-config-db-hierarchical.sv test/Tools/crun/uvm-config-db-type-mismatch.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `10 passed`.
+
+## 2026-03-01 - UVM config_db virtual-interface semantics (runtime gate, remove stale XFAIL)
+
+- realization:
+  - `test/Tools/crun/uvm-config-db-virtual-if.sv` was still `XFAIL` and only
+    documented compile-time failure from class-scope reference to module
+    interface symbol `sif`.
+  - The core semantic objective is config_db transport of a virtual interface,
+    which can be validated without class-scope arbitrary symbol capture.
+
+- implemented:
+  - Upgraded test to semantic runtime coverage by removing `XFAIL` and setting
+    the virtual interface handle from module scope before `run_test`:
+    - `uvm_config_db#(virtual simple_if)::set(null, "uvm_test_top.consumer", "vif", sif);`
+  - Kept retrieval/assertion in component `build_phase` so the test still gates
+    UVM config_db virtual-interface behavior end-to-end.
+
+- validation:
+  - focused pair:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-config-db-type-mismatch.sv test/Tools/crun/uvm-config-db-virtual-if.sv`
+    - result: `2 passed`.
+  - focused config/integration slice:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-integ-config-phase-report.sv test/Tools/crun/uvm-integ-env-config-factory.sv`
+    - result: `12 passed`.
