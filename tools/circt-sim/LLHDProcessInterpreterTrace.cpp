@@ -3317,6 +3317,7 @@ void LLHDProcessInterpreter::dumpAotHotUncompiledFuncs(
       emitReason("phase-canon", r.counters.forcePhaseCanonicalization);
       emitReason("coverage", r.counters.coverageRuntime);
       emitReason("unmapped-policy", r.counters.unmappedPolicy);
+      emitReason("pointer-safety", r.counters.pointerSafety);
       emitReason("deny-list", r.counters.denyList);
       emitReason("may-yield", r.counters.mayYield);
       emitReason("depth", r.counters.depth);

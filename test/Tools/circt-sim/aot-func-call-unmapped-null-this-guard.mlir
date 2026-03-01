@@ -10,7 +10,7 @@
 // RUNTIME: direct_calls_native:              0
 // RUNTIME: direct_calls_interpreted:         1
 // RUNTIME: Top interpreted func.call fallback reasons (top 50):
-// RUNTIME: uvm_pkg::uvm_component::get_children [unmapped-policy=1]
+// RUNTIME: uvm_pkg::uvm_component::get_children [pointer-safety=1]
 // RUNTIME: safe=1
 
 llvm.mlir.global internal @dummy(0 : i8) : i8

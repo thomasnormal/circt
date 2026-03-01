@@ -25160,7 +25160,7 @@ no_uvm_objection_intercept:
                       << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
               if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
@@ -25171,7 +25171,7 @@ no_uvm_objection_intercept:
                                << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
               ptrLenArgStorage[i].ptr = ptrLenArgPtr;
@@ -25204,7 +25204,7 @@ no_uvm_objection_intercept:
                                  << " active_proc=" << activeProcessId << "\n";
                   }
                   canDispatch = false;
-                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                   break;
                 }
                 if (isUnmappedCall && isUvmMethodName && hasPointerType &&
@@ -25217,7 +25217,7 @@ no_uvm_objection_intercept:
                         << " active_proc=" << activeProcessId << "\n";
                   }
                   canDispatch = false;
-                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                   break;
                 }
                 if (pointerLikeI64ThisArg && a[i] != 0 &&
@@ -25229,7 +25229,7 @@ no_uvm_objection_intercept:
                                  << " active_proc=" << activeProcessId << "\n";
                   }
                   canDispatch = false;
-                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                   break;
                 }
                 if (!isPlausibleNativePointerValue(a[i])) {
@@ -25240,7 +25240,7 @@ no_uvm_objection_intercept:
                                  << " active_proc=" << activeProcessId << "\n";
                   }
                   canDispatch = false;
-                  fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                  fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                   break;
                 }
               }
@@ -25732,7 +25732,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                     << " active_proc=" << activeProcessId << "\n";
               }
               canDispatch = false;
-              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+              fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
               break;
             }
             if (!isPlausibleNativePointerValue(ptrLenArgPtr)) {
@@ -25743,7 +25743,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                              << " active_proc=" << activeProcessId << "\n";
               }
               canDispatch = false;
-              fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+              fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
               break;
             }
             ptrLenArgStorage[i].ptr = ptrLenArgPtr;
@@ -25775,7 +25775,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                                << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
               if (isUnmappedCall && isUvmMethodName && hasPointerType &&
@@ -25788,7 +25788,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                       << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
               if (pointerLikeI64ThisArg && a[i] != 0 &&
@@ -25800,7 +25800,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                                << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
               if (!isPlausibleNativePointerValue(a[i])) {
@@ -25811,7 +25811,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
                                << " active_proc=" << activeProcessId << "\n";
                 }
                 canDispatch = false;
-                fallbackReason = DirectInterpretedFallbackReason::UnmappedPolicy;
+                fallbackReason = DirectInterpretedFallbackReason::PointerSafety;
                 break;
               }
             }
@@ -43929,6 +43929,9 @@ void LLHDProcessInterpreter::noteInterpretedFuncCallFallback(
     break;
   case DirectInterpretedFallbackReason::UnmappedPolicy:
     ++row.unmappedPolicy;
+    break;
+  case DirectInterpretedFallbackReason::PointerSafety:
+    ++row.pointerSafety;
     break;
   case DirectInterpretedFallbackReason::DenyList:
     ++row.denyList;

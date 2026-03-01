@@ -1,5 +1,5 @@
 // RUN: circt-compile -v %s -o %t.so
-// RUN: env CIRCT_AOT_STATS=1 CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_NAMES=uvm_pkg::uvm_component::get_next_child circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
+// RUN: env CIRCT_AOT_STATS=1 CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_NAMES=uvm_pkg::uvm_component::get_next_child CIRCT_AOT_ALLOW_UNMAPPED_NATIVE_UVM_CHILD_ITER_UNSAFE=1 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=RUNTIME
 
 // Regression: even with unmapped-name allowlist, native direct func.call must
 // demote when pointer-typed UVM args are unknown/unmapped, instead of
@@ -10,7 +10,7 @@
 // RUNTIME: direct_calls_native:              0
 // RUNTIME: direct_calls_interpreted:         1
 // RUNTIME: Top interpreted func.call fallback reasons (top 50):
-// RUNTIME: uvm_pkg::uvm_component::get_next_child [unmapped-policy=1]
+// RUNTIME: uvm_pkg::uvm_component::get_next_child [pointer-safety=1]
 // RUNTIME: safe=1
 
 llvm.mlir.global internal @dummy_this(0 : i8) : i8

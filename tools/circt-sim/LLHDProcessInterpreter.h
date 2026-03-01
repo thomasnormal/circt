@@ -3356,6 +3356,7 @@ private:
     ForcePhaseCanonicalization,
     CoverageRuntime,
     UnmappedPolicy,
+    PointerSafety,
     DenyList,
     MayYield,
     Depth,
@@ -3367,6 +3368,7 @@ private:
     uint64_t forcePhaseCanonicalization = 0;
     uint64_t coverageRuntime = 0;
     uint64_t unmappedPolicy = 0;
+    uint64_t pointerSafety = 0;
     uint64_t denyList = 0;
     uint64_t mayYield = 0;
     uint64_t depth = 0;
