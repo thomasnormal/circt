@@ -2,6 +2,22 @@
 
 ## 2026-03-01
 
+- Iteration update (WS3-T1: register-init passthrough inventory test):
+  - realization:
+    - `externalize-registers` still rejects a real init shape where one
+      `seq.initial` result forwards another `seq.initial` input through a block
+      argument, even though the source init is constant.
+    - this specific shape was not locked as an explicit regression/inventory
+      test in the WS3 register-init bucket.
+  - implemented:
+    - added `test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      as a `--verify-diagnostics` inventory test.
+    - test captures current failure mode:
+      `registers with initial values in a seq.initial op must fold to constants`.
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir test/Tools/circt-bmc/externalize-registers-errors.mlir test/Tools/circt-bmc/externalize-registers-initial-cast.mlir test/Tools/circt-bmc/externalize-registers-instance-initial.mlir`
+      - result: `4/4` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no

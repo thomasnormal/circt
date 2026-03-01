@@ -414,8 +414,10 @@ Current workstream status in this branch:
    - externalize-registers unsupported clock-shape diagnostic inventory test
      landed (`seq.clock_div`-derived non-traceable clock case)
    - core multiclock semantic lowering changes still pending
-4. WS3: not started
-   - register-init unsupported inventory exists, implementation pending
+4. WS3: in progress
+   - register-init unsupported inventory now includes passthrough-initial
+     shape coverage (`externalize-registers-initial-passthrough.mlir`)
+   - init normalization implementation still pending
 5. WS4: in progress
    - several LLHD/ref compatibility rewrites exist in runner/tooling flow
    - systematic category burn-down matrix not completed
