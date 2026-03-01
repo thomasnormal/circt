@@ -187,6 +187,39 @@ def main() -> int:
     parser.add_argument("--fail-on-status-drift", action="store_true")
     parser.add_argument("--fail-on-missing-case", action="store_true")
     parser.add_argument("--fail-on-new-case", action="store_true")
+    parser.add_argument(
+        "--dashboard-summary-json",
+        default="",
+        help=(
+            "Optional schema-only dashboard summary JSON path. If set, "
+            "capture aggregates successful JSONL command outputs via "
+            "build_formal_dashboard_inputs.py."
+        ),
+    )
+    parser.add_argument("--dashboard-status-tsv", default="")
+    parser.add_argument("--dashboard-reason-tsv", default="")
+    parser.add_argument("--dashboard-top-timeout-cases-tsv", default="")
+    parser.add_argument("--dashboard-top-timeout-reasons-tsv", default="")
+    parser.add_argument(
+        "--dashboard-top-timeout-cases-limit",
+        type=int,
+        default=20,
+        help="Top timeout frontier case rows to keep in dashboard outputs.",
+    )
+    parser.add_argument(
+        "--dashboard-top-timeout-reasons-limit",
+        type=int,
+        default=20,
+        help="Top timeout reason rows to keep in dashboard outputs.",
+    )
+    parser.add_argument(
+        "--dashboard-include-nonsolver-timeouts",
+        action="store_true",
+        help=(
+            "Include non-solver timeout rows when building optional dashboard "
+            "summary outputs."
+        ),
+    )
     args = parser.parse_args()
 
     if args.repeat < 1:
@@ -201,12 +234,35 @@ def main() -> int:
         fail("--command-timeout-secs must be >= 0")
     if args.max_log_bytes < 0:
         fail("--max-log-bytes must be >= 0")
+    if args.dashboard_top_timeout_cases_limit < 1:
+        fail("--dashboard-top-timeout-cases-limit must be >= 1")
+    if args.dashboard_top_timeout_reasons_limit < 1:
+        fail("--dashboard-top-timeout-reasons-limit must be >= 1")
     drift_script = (Path(__file__).resolve().parent / "compare_formal_results_drift.py")
     if not drift_script.is_file():
         fail(f"drift comparator script not found: {drift_script}")
     validator_script = (
         Path(__file__).resolve().parent / "validate_formal_results_schema.py"
     )
+    dashboard_script = (
+        Path(__file__).resolve().parent / "build_formal_dashboard_inputs.py"
+    )
+    dashboard_requested = bool(
+        args.dashboard_summary_json
+        or args.dashboard_status_tsv
+        or args.dashboard_reason_tsv
+        or args.dashboard_top_timeout_cases_tsv
+        or args.dashboard_top_timeout_reasons_tsv
+        or args.dashboard_include_nonsolver_timeouts
+    )
+    if dashboard_requested:
+        if not args.dashboard_summary_json:
+            fail(
+                "--dashboard-summary-json is required when any dashboard "
+                "output option is set"
+            )
+        if not dashboard_script.is_file():
+            fail(f"dashboard builder script not found: {dashboard_script}")
     if args.validate_results_schema and not validator_script.is_file():
         fail(f"schema validator script not found: {validator_script}")
 
@@ -223,6 +279,7 @@ def main() -> int:
     )
 
     execution_rows: list[tuple[str, ...]] = []
+    dashboard_jsonl_inputs: list[Path] = []
     execution_rc = 0
     for run_index in range(1, args.repeat + 1):
         run_dir = out_dir / f"run-{run_index:02d}"
@@ -273,6 +330,8 @@ def main() -> int:
                     schema_summary_path,
                 )
             )
+            if command_ok and returncode == 0 and out_jsonl.is_file():
+                dashboard_jsonl_inputs.append(out_jsonl.resolve())
             if not command_ok or schema_validation_rc != 0:
                 execution_rc = 1
                 if args.stop_on_command_failure:
@@ -291,6 +350,53 @@ def main() -> int:
         for row in execution_rows:
             handle.write("\t".join(row))
             handle.write("\n")
+
+    if dashboard_requested:
+        if not dashboard_jsonl_inputs:
+            fail(
+                "dashboard outputs requested but no successful command JSONL "
+                "outputs were captured"
+            )
+        dashboard_cmd = [sys.executable, str(dashboard_script)]
+        for jsonl_path in dashboard_jsonl_inputs:
+            dashboard_cmd.extend(["--jsonl", str(jsonl_path)])
+        dashboard_cmd.extend(
+            [
+                "--summary-json",
+                str(Path(args.dashboard_summary_json).resolve()),
+                "--top-timeout-cases-limit",
+                str(args.dashboard_top_timeout_cases_limit),
+                "--top-timeout-reasons-limit",
+                str(args.dashboard_top_timeout_reasons_limit),
+            ]
+        )
+        if args.dashboard_status_tsv:
+            dashboard_cmd.extend(
+                ["--status-tsv", str(Path(args.dashboard_status_tsv).resolve())]
+            )
+        if args.dashboard_reason_tsv:
+            dashboard_cmd.extend(
+                ["--reason-tsv", str(Path(args.dashboard_reason_tsv).resolve())]
+            )
+        if args.dashboard_top_timeout_cases_tsv:
+            dashboard_cmd.extend(
+                [
+                    "--top-timeout-cases-tsv",
+                    str(Path(args.dashboard_top_timeout_cases_tsv).resolve()),
+                ]
+            )
+        if args.dashboard_top_timeout_reasons_tsv:
+            dashboard_cmd.extend(
+                [
+                    "--top-timeout-reasons-tsv",
+                    str(Path(args.dashboard_top_timeout_reasons_tsv).resolve()),
+                ]
+            )
+        if args.dashboard_include_nonsolver_timeouts:
+            dashboard_cmd.append("--include-nonsolver-timeouts")
+        dashboard_proc = subprocess.run(dashboard_cmd, check=False)
+        if dashboard_proc.returncode != 0:
+            execution_rc = 1
 
     drift_rows: list[tuple[str, ...]] = []
     drift_rc = 0

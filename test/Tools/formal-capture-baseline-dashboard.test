@@ -1,0 +1,19 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nimport json\nimport os\nfrom pathlib import Path\nrun = os.environ.get("FORMAL_BASELINE_RUN_INDEX", "1")\nrow = {\n  "schema_version": 1,\n  "suite": "toy",\n  "mode": "LEC",\n  "case_id": f"case{run}",\n  "case_path": f"/tmp/case{run}.sv",\n  "status": "PASS",\n  "reason_code": "",\n  "stage": "result",\n  "solver": "z3",\n  "solver_time_ms": 10,\n  "frontend_time_ms": 2,\n  "log_path": "",\n  "artifact_dir": ""\n}\nPath(os.environ["FORMAL_RESULTS_JSONL_OUT"]).write_text(json.dumps(row) + "\\n", encoding="utf-8")\nPath(os.environ["OUT"]).write_text(\"PASS\\\\t{}\\\\t{}\\\\n\".format(row[\"case_id\"], row[\"case_path\"]), encoding=\"utf-8\")\n' > %t/bin/fake_runner.py
+// RUN: chmod +x %t/bin/fake_runner.py
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-dashboard --command suite=toy --command mode=LEC --command id=toy_case --command cwd=%t --command command='python3 bin/fake_runner.py'
+// RUN: python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out --repeat 2 --dashboard-summary-json %t/out/dashboard/summary.json --dashboard-status-tsv %t/out/dashboard/status.tsv --dashboard-top-timeout-reasons-tsv %t/out/dashboard/timeout_reasons.tsv
+// RUN: FileCheck %s --check-prefix=SUMMARY < %t/out/dashboard/summary.json
+// RUN: FileCheck %s --check-prefix=STATUS < %t/out/dashboard/status.tsv
+// RUN: FileCheck %s --check-prefix=TIMEOUT-HEADER < %t/out/dashboard/timeout_reasons.tsv
+//
+// SUMMARY-DAG: "rows": 2
+// SUMMARY-DAG: "timeout_rows": 0
+// SUMMARY-DAG: "status_counts": {
+// SUMMARY-DAG: "PASS": 2
+//
+// STATUS: suite{{[[:space:]]+}}mode{{[[:space:]]+}}status{{[[:space:]]+}}count
+// STATUS: toy{{[[:space:]]+}}LEC{{[[:space:]]+}}PASS{{[[:space:]]+}}2
+//
+// TIMEOUT-HEADER: reason_code{{[[:space:]]+}}count

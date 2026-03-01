@@ -2,6 +2,35 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6-T4: baseline capture dashboard integration):
+  - realization:
+    - dashboard aggregation existed as a standalone utility, but WS0 baseline
+      capture did not expose an integrated path to emit schema-only dashboard
+      artifacts directly from captured run outputs.
+  - implemented:
+    - `utils/formal/capture_formal_baseline.py` now supports optional
+      dashboard emission over successful command JSONLs:
+      - `--dashboard-summary-json` (required when dashboard mode is enabled)
+      - `--dashboard-status-tsv`
+      - `--dashboard-reason-tsv`
+      - `--dashboard-top-timeout-cases-tsv`
+      - `--dashboard-top-timeout-reasons-tsv`
+      - `--dashboard-top-timeout-cases-limit`
+      - `--dashboard-top-timeout-reasons-limit`
+      - `--dashboard-include-nonsolver-timeouts`
+    - capture invokes `build_formal_dashboard_inputs.py` after command
+      execution and propagates aggregation failures into capture return status.
+    - added
+      `test/Tools/formal-capture-baseline-dashboard.test`
+      to lock end-to-end baseline->dashboard generation behavior.
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test`
+      - result: `4/4` pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir`
+      - result: `13/13` pass.
+
 - Iteration update (WS3-T1: register-init passthrough inventory test):
   - realization:
     - `externalize-registers` still rejects a real init shape where one
