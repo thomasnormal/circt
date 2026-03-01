@@ -1,12 +1,9 @@
 // RUN: circt-compile -v %s -o %t.so 2>&1 | FileCheck %s --check-prefix=COMPILE
 // RUN: env CIRCT_AOT_STATS=1 CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD=1 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=OPTIN
-// XFAIL: *
 
-// Regression tracker: sim.fork-created child processes currently do not have a
-// safe runtime exec-model classifier, so MAY_YIELD opt-in still demotes child
-// call_indirect dispatch as optin-non-coro. Naive model propagation in runtime
-// fork creation regresses APB (`uvm_root::m_do_verbosity_settings` at 0 ns) by
-// over-enabling MAY_YIELD native dispatch in dynamic fork trees.
+// Regression: when MAY_YIELD is set conservatively but static body analysis
+// proves the callee is non-suspending, opt-in mode should permit native
+// dispatch even in fork children that are not coroutine-classified.
 //
 // COMPILE: [circt-compile] Functions: 3 total, 0 external, 0 rejected, 3 compilable
 // COMPILE: [circt-compile] Collected 1 vtable FuncIds

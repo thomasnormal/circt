@@ -19,12 +19,14 @@ func.func private @"uvm_pkg::inner_add_one"(%x: i32) -> i32 {
 }
 
 func.func private @"uvm_pkg::wrapper_may_yield"(%x: i32) -> i32 {
-  // Conservative MAY_YIELD trigger.
-  %never = hw.constant false
-  cf.cond_br %never, ^do_indirect, ^ret
+  // Potentially suspending shape that static analysis cannot prove dead.
+  // Runtime takes ^ret (x=41), but ^do_indirect remains reachable in CFG.
+  %zero = hw.constant 0 : i32
+  %maybe = arith.cmpi sgt, %x, %zero : i32
+  cf.cond_br %maybe, ^ret, ^do_indirect
 ^do_indirect:
-  %zero = llvm.mlir.constant(0 : i64) : i64
-  %null = llvm.inttoptr %zero : i64 to !llvm.ptr
+  %zero64 = llvm.mlir.constant(0 : i64) : i64
+  %null = llvm.inttoptr %zero64 : i64 to !llvm.ptr
   %fn = builtin.unrealized_conversion_cast %null : !llvm.ptr to (i32) -> i32
   %dead = func.call_indirect %fn(%x) : (i32) -> i32
   cf.br ^ret

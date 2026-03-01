@@ -43102,6 +43102,10 @@ bool LLHDProcessInterpreter::shouldSkipMayYieldDirectNativeFunc(
   if (inCoroutineProcess)
     return false;
 
+  if (canBypassMayYieldNonCoroutineByStaticAnalysis(fid, contextProcId,
+                                                    dispatchKind))
+    return false;
+
   bool noProcessContext = contextProcId == InvalidProcessId;
   if (noProcessContext)
     ++directMayYieldSkipOptInNoProcCount;
@@ -43164,6 +43168,10 @@ bool LLHDProcessInterpreter::shouldSkipMayYieldEntryDispatch(
   if (inCoroutineProcess)
     return false;
 
+  if (canBypassMayYieldNonCoroutineByStaticAnalysis(fid, contextProcId,
+                                                    "call_indirect"))
+    return false;
+
   bool noProcessContext = contextProcId == InvalidProcessId;
   if (noProcessContext)
     ++entryMayYieldSkipOptInNoProcCount;
@@ -43179,6 +43187,50 @@ bool LLHDProcessInterpreter::shouldSkipMayYieldEntryDispatch(
                  << "\n";
   }
   return true;
+}
+
+bool LLHDProcessInterpreter::canBypassMayYieldNonCoroutineByStaticAnalysis(
+    uint32_t fid, ProcessId contextProcId, llvm::StringRef dispatchKind) {
+  if (contextProcId == InvalidProcessId)
+    return false;
+
+  uint64_t cacheKey =
+      (static_cast<uint64_t>(fid) << 32) | static_cast<uint64_t>(contextProcId);
+  auto cacheIt = aotMayYieldStaticNonCoroBypassDecisionCache.find(cacheKey);
+  if (cacheIt != aotMayYieldStaticNonCoroBypassDecisionCache.end() &&
+      cacheIt->second.profileEpoch == jitRuntimeIndirectProfileEpoch)
+    return cacheIt->second.allowBypass;
+
+  bool allowBypass = false;
+  llvm::StringRef calleeName;
+  if (fid < aotFuncEntryNamesById.size())
+    calleeName = aotFuncEntryNamesById[fid];
+  if (!calleeName.empty() && rootModule) {
+    if (auto calleeFunc = rootModule.lookupSymbol<func::FuncOp>(calleeName)) {
+      // Non-coroutine MAY_YIELD bypass is intentionally narrow: only scalar
+      // ABI functions can use the static non-suspending fast-path. Pointer-ABI
+      // UVM helpers can still depend on interpreter-only pointer/context
+      // semantics even when they do not suspend.
+      if (!hasPointerAbi(calleeFunc))
+        allowBypass =
+            !maySuspendInFuncBodyForNativeThunkPolicy(calleeFunc, contextProcId);
+    }
+  }
+
+  aotMayYieldStaticNonCoroBypassDecisionCache[cacheKey] =
+      AotMayYieldUnsafeDecision{allowBypass, jitRuntimeIndirectProfileEpoch};
+
+  static bool traceNativeCalls =
+      std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+  if (allowBypass && traceNativeCalls) {
+    llvm::errs() << "[AOT TRACE] " << dispatchKind
+                 << " allow may_yield non-coro static-safe fid=" << fid
+                 << " active_proc=" << contextProcId;
+    if (!calleeName.empty())
+      llvm::errs() << " callee=" << calleeName;
+    llvm::errs() << "\n";
+  }
+  return allowBypass;
 }
 
 bool LLHDProcessInterpreter::isUnsafeMayYieldFidBypassAllowed(

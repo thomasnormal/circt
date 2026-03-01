@@ -5,8 +5,9 @@
 // RUN: env CIRCT_AOT_ALLOW_UNMAPPED_NATIVE=1 CIRCT_AOT_DENY_FID=',bad,4294967296,1' CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD_FIDS_UNSAFE=',foo,4294967296,0' CIRCT_AOT_TRAP_FID=invalid circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=BADENV
 
 // Regression: direct func.call should honor MAY_YIELD policy the same way as
-// call_indirect. By default, MAY_YIELD FuncIds stay interpreted; opt-in still
-// keeps them interpreted unless the active process is coroutine-classified.
+// call_indirect. By default, MAY_YIELD FuncIds stay interpreted. In opt-in
+// mode, non-coroutine contexts can still native-dispatch when static body
+// analysis proves the callee is non-suspending.
 //
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Collected 1 vtable FuncIds
@@ -21,14 +22,14 @@
 // DEFAULT: [circt-sim]   (none)
 // DEFAULT: out=42{{$}}
 //
-// OPTIN: [circt-sim] func.call skipped (yield):        1
+// OPTIN: [circt-sim] func.call skipped (yield):        0
 // OPTIN: [circt-sim] direct_calls_native:              1
-// OPTIN: [circt-sim] direct_calls_interpreted:         1
-// OPTIN: [circt-sim] direct_skipped_yield_optin_non_coro:     1
+// OPTIN: [circt-sim] direct_calls_interpreted:         0
+// OPTIN: [circt-sim] direct_skipped_yield_optin_non_coro:     0
 // OPTIN: Hot func.call MAY_YIELD skips (top 50):
-// OPTIN: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::wrapper_may_yield
+// OPTIN: [circt-sim]   (none)
 // OPTIN: Hot func.call MAY_YIELD optin-non-coro skip processes (top 50):
-// OPTIN: [circt-sim]{{[[:space:]]+}}1x pid=
+// OPTIN: [circt-sim]   (none)
 // OPTIN: out=42{{$}}
 //
 // FIDALLOW: [circt-sim] AOT unsafe MAY_YIELD allow list: 1 fids

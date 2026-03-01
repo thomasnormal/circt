@@ -3378,6 +3378,8 @@ private:
                                           llvm::StringRef dispatchKind);
   bool shouldSkipMayYieldEntryDispatch(uint32_t fid, bool isNativeEntry,
                                        ProcessId contextProcId);
+  bool canBypassMayYieldNonCoroutineByStaticAnalysis(
+      uint32_t fid, ProcessId contextProcId, llvm::StringRef dispatchKind);
   bool isUnsafeMayYieldFidBypassAllowed(uint32_t fid, ProcessId contextProcId,
                                         llvm::StringRef dispatchKind);
   void noteAotCalleeNameCall(llvm::StringRef calleeName);
@@ -4566,6 +4568,11 @@ private:
   /// `jitRuntimeIndirectProfileEpoch`.
   llvm::DenseMap<uint32_t, AotMayYieldUnsafeDecision>
       aotAllowMayYieldUnsafeDecisionCache;
+  /// Cache of static MAY_YIELD non-coroutine bypass decisions keyed by
+  /// (FuncId, ProcessId). Entries are valid only while `profileEpoch` matches
+  /// the current `jitRuntimeIndirectProfileEpoch`.
+  llvm::DenseMap<uint64_t, AotMayYieldUnsafeDecision>
+      aotMayYieldStaticNonCoroBypassDecisionCache;
 
   /// Trap FuncId: call __builtin_trap() just before native dispatch for this
   /// FuncId (set via CIRCT_AOT_TRAP_FID=123). Produces a core dump at the exact

@@ -3,10 +3,9 @@
 // RUN: env CIRCT_AOT_STATS=1 CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD=1 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=OPTIN
 // RUN: env CIRCT_AOT_STATS=1 CIRCT_AOT_ALLOW_NATIVE_MAY_YIELD_FIDS_UNSAFE=0 circt-sim %s --top top --compiled=%t.so 2>&1 | FileCheck %s --check-prefix=FIDALLOW
 
-// Regression: call_indirect should not native-dispatch MAY_YIELD FuncIds by
-// default. Until native coroutine dispatch is enabled, those entries must stay
-// on interpreter fallback. Opt-in only enables native dispatch inside
-// coroutine-classified process context.
+// Regression: call_indirect should keep MAY_YIELD FuncIds interpreted by
+// default. In opt-in mode, non-coroutine contexts can still native-dispatch
+// only when static body analysis proves the callee is non-suspending.
 //
 // COMPILE: [circt-compile] Functions: 2 total, 0 external, 0 rejected, 2 compilable
 // COMPILE: [circt-compile] Collected 1 vtable FuncIds
@@ -23,14 +22,14 @@
 // DEFAULT: out=42{{$}}
 //
 // OPTIN: Entry table: 1 entries for tagged-FuncId dispatch (1 native, 0 non-native)
-// OPTIN: Entry-table native calls:         0
+// OPTIN: Entry-table native calls:         1
 // OPTIN: Entry-table trampoline calls:     0
-// OPTIN: Entry-table skipped (yield):      1
-// OPTIN: [circt-sim] entry_skipped_yield_optin_non_coro:     1
+// OPTIN: Entry-table skipped (yield):      0
+// OPTIN: [circt-sim] entry_skipped_yield_optin_non_coro:     0
 // OPTIN: Hot entry-table MAY_YIELD skips (top 50):
-// OPTIN: [circt-sim]{{[[:space:]]+}}1x fid=0 uvm_pkg::wrapper_may_yield
+// OPTIN: [circt-sim]   (none)
 // OPTIN: Hot entry MAY_YIELD optin-non-coro skip processes (top 50):
-// OPTIN: [circt-sim]{{[[:space:]]+}}1x pid=
+// OPTIN: [circt-sim]   (none)
 // OPTIN: out=42{{$}}
 //
 // FIDALLOW: [circt-sim] AOT unsafe MAY_YIELD allow list: 1 fids
