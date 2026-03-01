@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: compile-contract stage classification to frontend):
+  - realization:
+    - FPV wrapper-generated compile-contract errors (for example
+      `COMPILE_CONTRACT_SETUP_ERROR`) were emitted with JSONL `stage="result"`,
+      which misclassified pre-solver contract/setup failures.
+  - implemented:
+    - `utils/formal/lib/formal_results.py`
+      - updated shared `infer_stage(...)` to classify
+        `COMPILE_CONTRACT*` reasons as `frontend`.
+    - `utils/run_opentitan_fpv_circt_bmc.py`
+      - updated copied-runner fallback `_infer_stage(...)` with the same
+        classification rule for lit environments that run without shared
+        helper imports.
+    - tightened regression:
+      - `test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - now asserts `bar_fpv` stage is `frontend`.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - result: fail (`stage` assertion for compile-contract error).
+    - `python3 -m py_compile utils/formal/lib/formal_results.py utils/run_opentitan_fpv_circt_bmc.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test`
+      - result: `1/1` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-generated-no-cases.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `8/8` pass.
+
 - Iteration update (WS6: FPV/connectivity BMC JSONL metadata propagation parity):
   - realization:
     - `run_opentitan_fpv_circt_bmc.py` rebuilt final JSONL rows from merged TSV

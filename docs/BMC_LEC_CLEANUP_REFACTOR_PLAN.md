@@ -451,6 +451,8 @@ Current workstream status in this branch:
      assertion-sharded fallback overwrite paths
    - OpenTitan connectivity BMC JSONL metadata passthrough from pairwise is now
      regression-locked (non-null timing/artifact fields)
+   - schema stage inference now classifies `COMPILE_CONTRACT_*` reason codes as
+     `frontend` (shared + FPV copied-runner fallback parity)
    - OpenTitan FPV LEC runner now uses shared env retry helper
      (`runner_common.run_command_logged_with_env_retry`)
    - connectivity BMC status governance now consumes shared allowlist/status
