@@ -495,6 +495,10 @@ Current workstream status in this branch:
      `parse_nonnegative_float`, `parse_exit_codes`) with local fallback
    - shared/pairwise retryable-exit-code parsing now rejects negative exit
      codes and is regression-covered (`run-pairwise-circt-bmc-launch-retryable-exit-codes-invalid.test`)
+   - connectivity BMC nonnegative-int parsing now consumes shared
+     `runner_common.parse_nonnegative_int` with local fallback retained
+   - connectivity BMC shared-path invalid shard-count diagnostics are now
+     regression-covered (`run-opentitan-connectivity-circt-bmc-invalid-shard-count-shared.test`)
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial

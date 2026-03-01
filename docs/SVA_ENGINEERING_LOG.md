@@ -2,6 +2,24 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: connectivity BMC parse_nonnegative_int shared-path dedup):
+  - realization:
+    - `run_opentitan_connectivity_circt_bmc.py` still carried local
+      `parse_nonnegative_int(...)` despite already importing other shared
+      helpers from `runner_common`.
+    - this left one more low-level parser policy duplicated between wrappers.
+  - implemented:
+    - wired connectivity BMC to consume shared
+      `runner_common.parse_nonnegative_int` when shared helpers are available
+      (local fallback retained for copied-script lit flows).
+    - added shared-path regression:
+      - `test/Tools/run-opentitan-connectivity-circt-bmc-invalid-shard-count-shared.test`
+  - validation:
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_bmc.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-invalid-shard-index.test test/Tools/run-opentitan-connectivity-circt-bmc-invalid-shard-count-shared.test test/Tools/run-opentitan-connectivity-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-generated-no-cases.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS1: pairwise parser dedup to shared runner_common helpers):
   - realization:
     - `run_pairwise_circt_bmc.py` still duplicated scalar parsing helpers that

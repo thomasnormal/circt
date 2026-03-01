@@ -38,6 +38,7 @@ try:
         compute_status_drift as _shared_compute_status_drift,
         is_allowlisted as _shared_is_allowlisted,
         load_allowlist as _shared_load_allowlist,
+        parse_nonnegative_int as _shared_parse_nonnegative_int,
         read_status_summary as _shared_read_status_summary,
         resolve_optional_existing_file as _shared_resolve_optional_existing_file,
         write_optional_empty_file as _shared_write_optional_empty_file,
@@ -355,6 +356,9 @@ def compute_connectivity_status_drift(
 
 
 if _HAS_SHARED_FORMAL_HELPERS:
+
+    def parse_nonnegative_int(raw: str, name: str) -> int:
+        return _shared_parse_nonnegative_int(raw, name, fail)
 
     def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
         return _shared_load_allowlist(path, fail)
