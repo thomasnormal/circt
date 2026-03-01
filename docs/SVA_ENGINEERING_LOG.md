@@ -10572,3 +10572,42 @@
   - broader UVM slice:
     - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db-*.sv test/Tools/crun/uvm-factory-*.sv test/Tools/crun/uvm-objection-*.sv test/Tools/crun/uvm-sequence-*.sv test/Tools/crun/uvm-sequencer-*.sv test/Runtime/uvm/uvm_factory_test.sv`
     - result: `40 passed`.
+
+## 2026-03-01 - UVM config_db string GET: call_indirect payload compatibility
+
+- realization:
+  - `test/Tools/crun/uvm-config-db.sv` failed semantically on string get while int get passed.
+  - Tracing showed the call-indirect fallback set path stored `my_str` with a
+    16-byte payload (Moore string struct `{ptr,len}`), but get path rejected
+    it as a type mismatch and returned not-found semantics.
+  - Root cause: `tryInterceptConfigDbCallIndirect` payload compatibility in
+    `tools/circt-sim/LLHDProcessInterpreterUvm.cpp` treated
+    `LLVM::LLVMPointerType` outputs as pointer-width payloads (typically 8
+    bytes), rejecting valid 16-byte string payloads.
+
+- implemented:
+  - Updated call-indirect config_db get payload compatibility:
+    - accept 16-byte payloads for pointer-typed outputs in the fallback path,
+      matching lowered string storage shape.
+  - Augmented trace mismatch logging to include output type text for future
+    payload-shape diagnostics.
+
+- validation:
+  - red:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-config-db.sv`
+    - failure: `[TEST] config_db string set/get: PASS` missing.
+  - trace confirmation:
+    - `CIRCT_SIM_TRACE_CONFIG_DB=1 build_test/bin/crun test/Tools/crun/uvm-config-db.sv --top tb_top -v 0`
+    - observed `stored key="uvm_test_top.my_str"` followed by
+      `[CFG-CI-XFALLBACK-GET] type-mismatch ... payload_bytes=16`.
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test crun`
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-config-db.sv` -> `1 passed`
+    - trace now reports `[CFG-CI-XFALLBACK-GET] hit key="uvm_test_top.my_str" bytes=16`
+      and runtime emits `config_db string set/get: PASS`.
+  - regression sweep:
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-config-db*.sv test/Tools/crun/uvm-sequence-*.sv`
+      - result: `25 passed`
+    - `build_test/bin/llvm-lit -sv --show-xfail test/Tools/crun/uvm-*.sv`
+      - result: `147 passed, 21 expectedly failed`.

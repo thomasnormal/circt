@@ -6298,3 +6298,6 @@ Status update (2026-03-01): this gap is closed in this workspace. Removed `XFAIL
 1. Replaced named-constraint `constraint_mode` handle toggles with flag-gated constraints in `uvm_sequence_library` (`valid_rand_selection`, `valid_randc_selection`, `valid_sequence_count`) to avoid unsupported arbitrary symbol references during lowering.
 2. Replaced scope-randomize calls with class-object randomize calls (`this.randomize(select_rand)` / `this.randomize(select_randc)`) to satisfy current randomize lowering requirements.
 With these fixes, sequence-library creation now passes semantically under crun.
+
+### [x] 2095. `test/Tools/crun/uvm-config-db.sv:1`
+Status update (2026-03-01): this gap is closed in this workspace. `uvm_config_db#(string)::get` now passes semantically under crun (`config_db string set/get: PASS`). Root cause was call-indirect config_db fallback payload compatibility in `tools/circt-sim/LLHDProcessInterpreterUvm.cpp` rejecting valid 16-byte Moore string payloads (`{ptr,len}`) when output operands were pointer-typed. Fixed by accepting 16-byte payloads for pointer-typed outputs in that fallback path and retaining strict matching for other payload shapes.

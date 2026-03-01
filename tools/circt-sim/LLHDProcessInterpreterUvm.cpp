@@ -1676,13 +1676,20 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
       if (lookupConfigDbEntry(instName, fieldName, matchedValue, &matchedKey)) {
         auto isPayloadCompatible = [&](Type outputType, size_t payloadBytes) {
           if (auto refT = dyn_cast<llhd::RefType>(outputType)) {
-            unsigned innerBits = getTypeWidth(refT.getNestedType());
+            Type innerType = refT.getNestedType();
+            unsigned innerBits = getTypeWidth(innerType);
             unsigned innerBytes = (innerBits + 7) / 8;
+            // Moore/UVM strings are lowered as a ptr+len payload; allow
+            // writing that payload into wider backend string storage.
+            if (isa<moore::StringType>(innerType))
+              return payloadBytes == 16 && innerBytes >= 16;
             return innerBytes != 0 && payloadBytes == innerBytes;
           }
           if (isa<LLVM::LLVMPointerType>(outputType)) {
             unsigned ptrBits = getTypeWidth(outputType);
             unsigned ptrBytes = (ptrBits + 7) / 8;
+            if (payloadBytes == 16)
+              return true;
             return ptrBytes != 0 && payloadBytes == ptrBytes;
           }
           return false;
@@ -1690,9 +1697,14 @@ bool LLHDProcessInterpreter::tryInterceptConfigDbCallIndirect(
         Value outputRef = callIndirectOp.getArgOperands()[4];
         if (!isPayloadCompatible(outputRef.getType(), matchedValue->size())) {
           if (traceConfigDbEnabled) {
+            std::string outputTypeStr;
+            llvm::raw_string_ostream outputTypeOs(outputTypeStr);
+            outputRef.getType().print(outputTypeOs);
+            outputTypeOs.flush();
             llvm::errs() << "[CFG-CI-XFALLBACK-GET] type-mismatch key=\""
                          << matchedKey << "\" payload_bytes="
-                         << matchedValue->size() << "\n";
+                         << matchedValue->size() << " output_type="
+                         << outputTypeStr << "\n";
           }
           setValue(procId, callIndirectOp.getResult(0),
                    InterpretedValue(llvm::APInt(1, 0)));
