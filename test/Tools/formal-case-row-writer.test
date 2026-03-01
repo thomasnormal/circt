@@ -1,0 +1,14 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t
+// RUN: printf 'import sys\nfrom pathlib import Path\nsys.path.insert(0, sys.argv[1])\nfrom formal_results import write_results_tsv, write_results_jsonl_from_case_rows\nrows = [\n  ("PASS", "z_case", "/tmp/z_case.sv", "sv-tests", "BMC", ""),\n  ("TIMEOUT", "a_case", "/tmp/a_case.sv", "opentitan", "LEC", "SOLVER_COMMAND_TIMEOUT")\n]\nwrite_results_tsv(Path(sys.argv[2]), rows)\nwrite_results_jsonl_from_case_rows(Path(sys.argv[3]), rows, solver="z3")\n' > %t/gen.py
+// RUN: python3 %t/gen.py %S/../../utils/formal/lib %t/results.tsv %t/results.jsonl
+// RUN: FileCheck %s --check-prefix=TSV < %t/results.tsv
+// RUN: FileCheck %s --check-prefix=JSONL < %t/results.jsonl
+//
+// TSV: TIMEOUT{{[ \t]+}}a_case{{[ \t]+}}/tmp/a_case.sv{{[ \t]+}}opentitan{{[ \t]+}}LEC{{[ \t]+}}SOLVER_COMMAND_TIMEOUT
+// TSV: PASS{{[ \t]+}}z_case{{[ \t]+}}/tmp/z_case.sv{{[ \t]+}}sv-tests{{[ \t]+}}BMC{{[ \t]*}}
+// JSONL: "case_id": "a_case"
+// JSONL: "solver": "z3"
+// JSONL: "stage": "solver"
+// JSONL: "case_id": "z_case"
+// JSONL: "stage": "result"

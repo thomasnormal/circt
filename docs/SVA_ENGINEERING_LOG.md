@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1-T3/WS6: shared case-row formal result writer adoption):
+  - realization:
+    - OpenTitan LEC runners still duplicated case-row sorting and
+      TSV->schema-JSONL projection logic in local code paths, despite shared
+      schema helpers existing in `formal_results.py`.
+    - this left policy drift risk between runners and blocked WS1-T3
+      consolidation.
+  - implemented:
+    - extended `utils/formal/lib/formal_results.py` with shared helpers:
+      - `sort_case_rows`
+      - `write_results_tsv`
+      - `build_jsonl_rows_from_case_rows`
+      - `write_results_jsonl_from_case_rows`
+    - migrated runners:
+      - `utils/run_opentitan_circt_lec.py`
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+      to use shared case-row writer helpers for both TSV and schema JSONL
+      emission.
+    - added `test/Tools/formal-case-row-writer.test` to lock deterministic
+      sort order and TSV/JSONL projection behavior from shared helpers.
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-case-row-writer.test test/Tools/formal-results-schema.test test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+      - result: `4/4` pass.
+    - `python3 -m py_compile utils/formal/lib/formal_results.py utils/run_opentitan_circt_lec.py utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-case-row-writer.test test/Tools/formal-results-schema.test test/Tools/formal-dashboard-inputs-invalid-schema.test test/Tools/formal-dashboard-inputs.test test/Tools/formal-capture-baseline-dashboard-expected-returncodes.test test/Tools/formal-capture-baseline-dashboard.test test/Tools/formal-capture-baseline-expected-returncodes-schema-validate.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-capture-baseline-schema-validate-strict-contract.test test/Tools/formal-capture-baseline-schema-validate-strict-contract-arg.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-drift-compare.test test/Tools/formal-validate-results-schema.test test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-expected-returncodes.test test/Tools/circt-bmc/externalize-registers-initial-passthrough.mlir test/Tools/run-opentitan-lec-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test test/Tools/run-opentitan-lec-mode-label.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test`
+      - result: `25/25` pass.
+
 - Iteration update (WS6-T1: schema contract doc extracted and de-duplicated):
   - realization:
     - the schema contract lived inline in

@@ -1330,8 +1330,8 @@ else:
     _HAS_SHARED_FORMAL_HELPERS = True
 
 try:
-    from formal_results import make_result_row as _make_formal_result_row
-    from formal_results import write_results_jsonl as _write_formal_results_jsonl
+    from formal_results import write_results_jsonl_from_case_rows as _write_formal_results_jsonl_from_case_rows
+    from formal_results import write_results_tsv as _write_formal_results_tsv
 except Exception:
     _HAS_FORMAL_RESULT_SCHEMA = False
 else:
@@ -1339,54 +1339,58 @@ else:
 
 if not _HAS_FORMAL_RESULT_SCHEMA:
 
-    def _make_formal_result_row(
-        *,
-        suite: str,
-        mode: str,
-        case_id: str,
-        case_path: str,
-        status: str,
-        reason_code: str = "",
-        stage: str = "",
-        solver: str = "",
-        solver_time_ms: int | None = None,
-        frontend_time_ms: int | None = None,
-        log_path: str = "",
-        artifact_dir: str = "",
-    ) -> dict[str, object]:
+    def _infer_stage(status: str, reason_code: str) -> str:
         status_norm = status.strip().upper()
         reason_norm = reason_code.strip().upper()
-        if stage.strip():
-            stage_value = stage.strip()
-        elif status_norm == "TIMEOUT" and "FRONTEND" in reason_norm:
-            stage_value = "frontend"
-        elif status_norm == "TIMEOUT":
-            stage_value = "solver"
-        else:
-            stage_value = "result"
-        return {
-            "schema_version": 1,
-            "suite": suite,
-            "mode": mode,
-            "case_id": case_id,
-            "case_path": case_path,
-            "status": status_norm,
-            "reason_code": reason_norm,
-            "stage": stage_value,
-            "solver": solver.strip(),
-            "solver_time_ms": solver_time_ms,
-            "frontend_time_ms": frontend_time_ms,
-            "log_path": log_path,
-            "artifact_dir": artifact_dir,
-        }
+        if status_norm == "TIMEOUT":
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            return "solver"
+        if status_norm in {"ERROR", "FAIL"}:
+            if "FRONTEND" in reason_norm:
+                return "frontend"
+            if "SMT" in reason_norm or "Z3" in reason_norm or "LEC" in reason_norm:
+                return "solver"
+        return "result"
 
-    def _write_formal_results_jsonl(
-        path: Path, rows: list[dict[str, object]]
+    def _sort_formal_case_rows(
+        rows: list[tuple[str, str, str, str, str, str]]
+    ) -> list[tuple[str, str, str, str, str, str]]:
+        return sorted(rows, key=lambda item: (item[1], item[0], item[2]))
+
+    def _write_formal_results_tsv(
+        path: Path, rows: list[tuple[str, str, str, str, str, str]]
     ) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as handle:
-            for row in rows:
-                handle.write(json.dumps(row, sort_keys=True))
+            for row in _sort_formal_case_rows(rows):
+                handle.write("\t".join(row) + "\n")
+
+    def _write_formal_results_jsonl_from_case_rows(
+        path: Path,
+        rows: list[tuple[str, str, str, str, str, str]],
+        *,
+        solver: str = "",
+    ) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as handle:
+            for status, case_id, case_path, suite, mode, reason_code in _sort_formal_case_rows(rows):
+                payload = {
+                    "schema_version": 1,
+                    "suite": suite,
+                    "mode": mode,
+                    "case_id": case_id,
+                    "case_path": case_path,
+                    "status": status.strip().upper(),
+                    "reason_code": reason_code.strip().upper(),
+                    "stage": _infer_stage(status, reason_code),
+                    "solver": solver.strip(),
+                    "solver_time_ms": None,
+                    "frontend_time_ms": None,
+                    "log_path": "",
+                    "artifact_dir": "",
+                }
+                handle.write(json.dumps(payload, sort_keys=True))
                 handle.write("\n")
 
 if _HAS_SHARED_FORMAL_HELPERS:
@@ -3635,27 +3639,13 @@ def main() -> int:
                                 )
                             )
 
-        with results_file.open("w", encoding="utf-8") as handle:
-            for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
-                handle.write("\t".join(row) + "\n")
+        _write_formal_results_tsv(results_file, rows)
         if args.results_jsonl_file:
             results_jsonl_path = Path(args.results_jsonl_file).resolve()
             solver_label = "z3" if lec_run_smtlib and not lec_smoke_only else ""
-            json_rows: list[dict[str, object]] = []
-            for row in sorted(rows, key=lambda item: (item[1], item[0], item[2])):
-                status, case_id, case_path, suite, mode, reason_code = row
-                json_rows.append(
-                    _make_formal_result_row(
-                        suite=suite,
-                        mode=mode,
-                        case_id=case_id,
-                        case_path=case_path,
-                        status=status,
-                        reason_code=reason_code,
-                        solver=solver_label,
-                    )
-                )
-            _write_formal_results_jsonl(results_jsonl_path, json_rows)
+            _write_formal_results_jsonl_from_case_rows(
+                results_jsonl_path, rows, solver=solver_label
+            )
 
         governance_rc = evaluate_status_governance(rows)
 

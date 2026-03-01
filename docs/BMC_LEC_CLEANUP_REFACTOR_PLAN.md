@@ -409,6 +409,10 @@ Current workstream status in this branch:
      dashboard aggregator
    - shared schema v1 row-validation helper now adopted by schema validator and
      dashboard aggregator (type/enum/required-field checks de-duplicated)
+   - shared case-row result writer helpers landed in `formal_results.py`
+     (`write_results_tsv`, `write_results_jsonl_from_case_rows`)
+   - OpenTitan LEC runners now use shared case-row TSV/JSONL projection
+     helpers (duplicated local writer logic removed from hot paths)
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
