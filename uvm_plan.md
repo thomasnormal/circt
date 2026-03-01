@@ -27,6 +27,13 @@ reduction must be staged and measurable.
     control-byte stripping + bounded fragment length) before key composition.
   - added regression:
     - `test/Tools/circt-sim/config-db-canonical-instname-null-terminated.mlir`
+- [x] Closed config_db context-name reentrancy blowup in sim runtime:
+  - `normalizeConfigDbInstName` now blocks reentrant
+    `get_full_name()->config_db::get()` recursion on the same process.
+  - added regression:
+    - `test/Tools/circt-sim/config-db-get-full-name-reentrant-guard.mlir`
+  - result: repro dropped from `402` canonical GET traces to `4` with
+    semantic lookup still succeeding.
 - [x] Re-hardened analysis-interceptor policy after default-on drift:
   - native analysis interceptors are default-off again in both `func.call` and `call_indirect` paths unless explicitly enabled by env.
 - [x] Semantic parity gate slice green:

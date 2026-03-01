@@ -1614,16 +1614,23 @@ std::string LLHDProcessInterpreter::normalizeConfigDbInstName(
       return {};
 
     auto &state = stateIt->second;
+    static llvm::DenseMap<ProcessId, unsigned> resolveDepthByProc;
+    unsigned &resolveDepth = resolveDepthByProc[procId];
+    if (resolveDepth != 0)
+      return {};
     constexpr size_t kMaxCallDepth = 200;
     if (state.callDepth >= kMaxCallDepth)
       return {};
 
     SmallVector<InterpretedValue, 1> callResults;
+    ++resolveDepth;
     ++state.callDepth;
     LogicalResult callStatus =
         interpretFuncBody(procId, funcOp, {InterpretedValue(contextAddr, 64)},
                           callResults);
     --state.callDepth;
+    if (--resolveDepth == 0)
+      resolveDepthByProc.erase(procId);
     if (failed(callStatus) || callResults.empty())
       return {};
     return readMooreStringStruct(procId, callResults.front());

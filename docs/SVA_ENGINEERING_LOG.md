@@ -13686,3 +13686,42 @@
     - `test/Tools/circt-sim/config-db-native-call-indirect-writeback-offset.mlir`
     - `test/Tools/circt-sim/config-db-no-fuzzy-field-fallback.mlir`
     - result: all passed.
+
+## 2026-03-01 - config_db context-name reentrancy guard for get_full_name recursion
+
+- realization:
+  - a single canonical `config_db::get` can recurse through
+    `normalizeConfigDbInstName -> uvm_component::get_full_name -> config_db::get`
+    on the same process, exploding work and increasing startup instability.
+  - minimal MLIR repro showed `402` traced canonical GET interceptions for one
+    logical lookup.
+
+- TDD repro:
+  - added regression:
+    - `test/Tools/circt-sim/config-db-get-full-name-reentrant-guard.mlir`
+  - pre-fix behavior:
+    - semantic result still passed (`get_ok=1`) but trace count exploded
+      (`CFG-CI-CANON-GET` count `402`), violating bounded recursion intent.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.h`
+    - added per-process state:
+      - `configDbContextResolveDepth`
+  - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+    - in `normalizeConfigDbInstName` context-name helper:
+      - block reentrant `get_full_name` resolution when already resolving
+        config_db context on the same process.
+      - preserve existing semantic fallback path (fixed-offset reads) for the
+        reentrant case.
+
+- validation:
+  - focused lit:
+    - `test/Tools/circt-sim/config-db-get-full-name-reentrant-guard.mlir`
+    - `test/Tools/circt-sim/config-db-canonical-instname-null-terminated.mlir`
+    - `test/Tools/circt-sim/config-db-native-call-indirect-writeback.mlir`
+    - `test/Tools/circt-sim/config-db-native-call-indirect-writeback-offset.mlir`
+    - `test/Tools/circt-sim/config-db-no-fuzzy-field-fallback.mlir`
+    - `test/Tools/circt-sim/uvm-config-db-seq-full-name.sv`
+    - result: all passed.
+  - repro trace count after fix:
+    - `CFG-CI-CANON-GET` count dropped from `402` to `4`.
