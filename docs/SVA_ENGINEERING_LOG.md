@@ -29,6 +29,9 @@
   - validation:
     - `python3 -m py_compile utils/formal/lib/formal_results.py utils/run_pairwise_circt_bmc.py`
       - result: pass.
+    - copied-runner fallback parity:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file-copied-runner.test`
+      - result: `1/1` pass.
     - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
       - result: `6/6` pass.
 

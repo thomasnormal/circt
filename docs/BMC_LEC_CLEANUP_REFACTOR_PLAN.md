@@ -448,6 +448,9 @@ Current workstream status in this branch:
      (`case_stage_by_case_id`), and pairwise BMC now uses diag-derived stage
      hints to keep frontend error staging correct even when normalized reason
      text has no stage token
+   - pairwise copied-runner fallback path now has explicit regression coverage
+     for frontend-stage + frontend-log JSONL metadata in
+     `run-pairwise-circt-bmc-results-jsonl-file-copied-runner.test`
    - OpenTitan AES BMC schema JSONL lane now inherits pairwise metadata parity
      via delegated pairwise runner output
    - sv-tests BMC schema JSONL projection now emits non-null timing/artifact
