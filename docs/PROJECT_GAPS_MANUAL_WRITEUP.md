@@ -1792,10 +1792,6 @@ Additional semantic closure (2026-03-01): `crun` now resolves bundled
 UVM explicitly in semantic tests (`--uvm-path=%S/../../../lib/Runtime/uvm-core`)
 to avoid environment-dependent runtime drift, and component hierarchy semantics
 were tightened to require no leading-dot full names under crun.
-Additional semantic closure (2026-03-01): stale component lookup XFAILs were
-retired by aligning tests to bundled UVM `find_all` semantics
-(`uvm-component-find-all`, `uvm-component-lookup-regex`) with full-name match
-counts validated in crun semantic runs.
 
 ### [x] 594. `lib/Runtime/uvm-core/src/base/uvm_component.svh:3542`
 Status update (2026-02-28): this entry is stale. `m_unsupported_set_local` is identifier-level naming in override plumbing, not an unresolved feature gap.

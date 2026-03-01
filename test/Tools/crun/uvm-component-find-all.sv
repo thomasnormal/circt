@@ -1,4 +1,4 @@
-// RUN: crun %s --uvm-path=%S/../../../lib/Runtime/uvm-core --top tb_top -v 0 2>&1 | FileCheck %s
+// RUN: crun %s --top tb_top -v 0 2>&1 | FileCheck %s
 // REQUIRES: crun, uvm
 
 // Test find_all("*agent*", comps) returns correct matches.
@@ -61,9 +61,8 @@ module tb_top;
       phase.raise_objection(this);
 
       uvm_root::get().find_all("*agent*", comps);
-      // find_all() matches full hierarchical names, so "*agent*" also matches
-      // descendants under agent components (driver children): 4 total.
-      if (comps.size() == 4)
+      // Should find agent0 and agent1
+      if (comps.size() == 2)
         `uvm_info("TEST", "find_all agent count: PASS", UVM_LOW)
       else
         `uvm_error("TEST", $sformatf("find_all agent count: FAIL (got %0d)", comps.size()))
