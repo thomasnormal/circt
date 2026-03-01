@@ -411,6 +411,8 @@ Current workstream status in this branch:
    - diagnostic inventory coverage added for lower-to-bmc single-clock
      rejection paths, including explicit clock-name and unresolved-expression
      diagnostics
+   - externalize-registers unsupported clock-shape diagnostic inventory test
+     landed (`seq.clock_div`-derived non-traceable clock case)
    - core multiclock semantic lowering changes still pending
 4. WS3: not started
    - register-init unsupported inventory exists, implementation pending

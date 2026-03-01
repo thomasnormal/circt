@@ -2,6 +2,21 @@
 
 ## 2026-03-01
 
+- Iteration update (WS2-T1: externalize-registers unsupported clock-shape inventory):
+  - realization:
+    - we had multiclock diagnostic inventory coverage in lower-to-bmc, but no
+      focused regression that locks the current unsupported clock-shape
+      diagnostic in `externalize-registers`.
+  - implemented:
+    - added `test/Tools/circt-bmc/externalize-registers-clock-shape-diagnostics.mlir`
+      for a non-traceable `seq.clock_div`-derived register clock in
+      single-clock mode.
+    - test locks current diagnostic:
+      `only clocks derived from block arguments, constants, process results, or keyable i1 expressions are supported`.
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-bmc/externalize-registers-clock-shape-diagnostics.mlir test/Tools/circt-bmc/externalize-registers-errors.mlir test/Tools/circt-bmc/lower-to-bmc-multiclock-diagnostics.mlir`
+      - result: `3/3` pass.
+
 - Iteration update (WS0 writer: expected-returncode lane flags + live proof):
   - realization:
     - baseline capture now understands `expected_returncodes`, but WS0 manifest
