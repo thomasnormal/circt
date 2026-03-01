@@ -63,11 +63,16 @@ reduction must be staged and measurable.
 - [x] Added semantic multiqueue sequencer completion gate:
   - `test/Tools/circt-sim/uvm-sequencer-parallel-multiqueue-item-done-runtime.sv`
   - validates parallel `wait_for_grant -> send_request -> wait_for_item_done` completion across two sequencers/drivers.
+- [x] Closed time-0 `uvm_phase_hopper::wait_for_waiters` delta-churn gap in sim runtime:
+  - polling backoff now advances real time at startup (`advanceTime(100ps)`), not `nextDelta()` at `0 fs`.
+  - added regression:
+    - `test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-time0-backoff.mlir`
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality still needs core runtime closure (no retry dependence).
   - `axi4Lite` interpreted run remains nondeterministic across two failure modes:
     - early startup/liveness timeout at `0 fs` (observed in `uvm_port_base::m_check_relationship` path under wall guard),
     - later no-event quiescence with live sequencer waiters and `sim_exit=1` despite no UVM fatal/error.
+  - current primary startup hotspot is still heavy `uvm_phase::add` execution at `0 fs` in interpreted mode.
 - [ ] Continue Wave C reduction with parity gates for:
   - phase-hopper intercept family
   - factory/type-resolution intercept family

@@ -12692,3 +12692,39 @@
 - follow-up status:
   - this narrows the remaining AVIP blocker to deeper startup/liveness semantics
     not yet covered by existing small sequencer gates.
+
+## 2026-03-01 - Fix time-0 phase-hopper wait_for_waiters delta-churn in runtime
+
+- realization:
+  - `uvm_phase_hopper::wait_for_waiters` func.call interception used
+    `nextDelta()` when simulation time was `0 fs`.
+  - that behavior allows zero-time polling churn and can strand delayed events
+    behind endless t=0 wakeups in startup-heavy UVM paths.
+
+- proof before fix (TDD):
+  - added `test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-time0-backoff.mlir`
+    as a time-0 semantic regression.
+  - pre-fix behavior failed this test: simulation did not advance to `100000 fs`
+    and exited at `0 fs`.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - in `uvm_phase_hopper::wait_for_waiters` interception, changed polling
+      scheduling to always use real-time backoff (`advanceTime(100ps)`),
+      including at `0 fs`.
+    - removed the special-case `nextDelta()` schedule at `0 fs`.
+
+- validation:
+  - build:
+    - `utils/ninja-with-lock.sh -C build_test circt-sim`
+  - focused regressions:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-time0-backoff.mlir`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-phase-hopper-wait-for-waiters-backoff.mlir`
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-run-phase-objection-runtime.sv test/Tools/circt-sim/uvm-test-done-drain-time-runtime.sv`
+    - all passed.
+
+- follow-up status:
+  - this removes one concrete zero-time polling failure class and adds a
+    semantic guard against regression.
+  - interpreted `axi4Lite` still has a separate startup wall-time hotspot
+    in repeated `uvm_phase::add` execution at `0 fs`; this remains open.

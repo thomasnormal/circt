@@ -22894,13 +22894,11 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       proc->setState(ProcessState::Waiting);
 
     SimTime currentTime = scheduler.getCurrentTime();
-    // Avoid excessive polling churn in long-running UVM phase loops.
+    // Avoid zero-time delta churn at startup: always poll in real time.
+    // UVM startup can call wait_for_waiters from t=0; scheduling on nextDelta
+    // can strand delayed events behind an unbounded t=0 poll loop.
     constexpr int64_t kFallbackPollDelayFs = 100000; // 100 ps
-    SimTime targetTime;
-    if (currentTime.realTime == 0)
-      targetTime = currentTime.nextDelta();
-    else
-      targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
+    SimTime targetTime = currentTime.advanceTime(kFallbackPollDelayFs);
 
     scheduler.getEventScheduler().schedule(
         targetTime, SchedulingRegion::Active, Event([this, procId]() {
@@ -32549,8 +32547,12 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
       llvm::StringRef fn = stIt->second.currentFuncName;
       // Only match UVM-specific name getter patterns to avoid breaking
       // user-defined functions like "base::get_name" or "derived::get_name".
+      //
+      // Restrict this guard to get_name-only recursion. Returning empty strings
+      // in get_full_name contexts breaks hierarchical instance paths used by
+      // config_db lookups (for example sequence get_full_name()).
       return (fn.contains("uvm_") || fn.contains("uvm_pkg::")) &&
-             (fn.contains("get_name") || fn.contains("get_full_name"));
+             fn.contains("get_name") && !fn.contains("get_full_name");
     };
 
     // Handle known runtime library functions
