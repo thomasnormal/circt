@@ -2,6 +2,35 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS0: bounded OpenTitan FPV LEC log artifacts):
+  - realization:
+    - `utils/run_opentitan_fpv_circt_lec.py` still wrote unbounded per-case
+      frontend/opt/solver logs and did not expose a log-size budget knob.
+    - this left FPV LEC as the remaining primary LEC runner without bounded
+      artifact support.
+  - implemented:
+    - added `LEC_LOG_MAX_BYTES` (default `0`, unlimited) in FPV LEC runner.
+    - wired `log_max_bytes` through `evaluate_case(...)` and all
+      `run_with_log(...)` call sites (frontend/opt/solver/timeout-frontier
+      probe).
+    - updated shared-helper path to pass truncation controls through
+      `runner_common.run_command_logged_with_env_retry(...)` with
+      truncation label `run_opentitan_fpv_circt_lec`.
+    - added regressions:
+      - `test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-shared.test`
+      - `test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-invalid-shared.test`
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-shared.test test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-invalid-shared.test`
+      - result: `2/2` fail (missing truncation marker and missing invalid-env diagnostic).
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_lec.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-shared.test test/Tools/run-opentitan-fpv-circt-lec-log-max-bytes-invalid-shared.test test/Tools/run-opentitan-fpv-circt-lec-basic.test test/Tools/run-opentitan-fpv-circt-lec-launch-retryable-pattern-shared.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-preprocess.test test/Tools/run-opentitan-fpv-circt-lec-timeout-frontier-solver.test`
+      - result: `6/6` pass.
+      - `build_test/bin/llvm-lit -sv $(git ls-files 'test/Tools/run-opentitan-fpv-circt-lec-*.test')`
+      - result: `7/7` pass.
+
 - Iteration update (WS1/WS0: bounded OpenTitan LEC log artifacts with shared log writer):
   - realization:
     - both OpenTitan LEC wrapper runners still wrote unbounded per-case tool

@@ -249,15 +249,51 @@ def parse_lec_result(text: str) -> str | None:
     return None
 
 
-def write_log(path: Path, stdout: str, stderr: str) -> None:
+def _coerce_text(payload: str | bytes | None) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, bytes):
+        return payload.decode("utf-8", errors="replace")
+    return payload
+
+
+def _truncate_log_bytes(encoded: bytes, max_log_bytes: int, truncation_label: str) -> bytes:
+    if max_log_bytes <= 0 or len(encoded) <= max_log_bytes:
+        return encoded
+    notice = (
+        f"\n[{truncation_label}] log truncated from "
+        f"{len(encoded)} to {max_log_bytes} bytes\n"
+    ).encode("utf-8")
+    if max_log_bytes <= len(notice):
+        return encoded[:max_log_bytes]
+    keep = max_log_bytes - len(notice)
+    return encoded[:keep] + notice
+
+
+def write_log(
+    path: Path,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    *,
+    max_log_bytes: int = 0,
+) -> None:
+    stdout_text = _coerce_text(stdout)
+    stderr_text = _coerce_text(stderr)
     payload = ""
-    if stdout:
-        payload += stdout
+    if stdout_text:
+        payload += stdout_text
         if not payload.endswith("\n"):
             payload += "\n"
-    if stderr:
-        payload += stderr
-    path.write_text(payload, encoding="utf-8")
+    if stderr_text:
+        payload += stderr_text
+    encoded = payload.encode("utf-8", errors="replace")
+    path.write_bytes(
+        _truncate_log_bytes(
+            encoded,
+            max_log_bytes,
+            "run_opentitan_fpv_circt_lec",
+        )
+    )
 
 
 def run_with_log(
@@ -266,6 +302,7 @@ def run_with_log(
     timeout_secs: int,
     *,
     out_path: Path | None = None,
+    log_max_bytes: int = 0,
 ) -> str:
     try:
         result = subprocess.run(
@@ -278,13 +315,13 @@ def run_with_log(
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout or ""
         stderr = exc.stderr or ""
-        write_log(log_path, stdout, stderr)
+        write_log(log_path, stdout, stderr, max_log_bytes=log_max_bytes)
         if out_path is not None:
             out_path.write_text(stdout, encoding="utf-8")
         raise
     stdout = result.stdout or ""
     stderr = result.stderr or ""
-    write_log(log_path, stdout, stderr)
+    write_log(log_path, stdout, stderr, max_log_bytes=log_max_bytes)
     if out_path is not None:
         out_path.write_text(stdout, encoding="utf-8")
     if result.returncode != 0:
@@ -357,6 +394,7 @@ def evaluate_case(
     lec_run_smtlib: bool,
     lec_smoke_only: bool,
     lec_timeout_frontier_probe: bool,
+    log_max_bytes: int,
     z3_bin: str,
 ) -> CaseStatus:
     case_dir.mkdir(parents=True, exist_ok=True)
@@ -381,6 +419,7 @@ def evaluate_case(
             case_dir / "circt-verilog.log",
             timeout_secs,
             out_path=hw_mlir,
+            log_max_bytes=log_max_bytes,
         )
     except subprocess.TimeoutExpired:
         return CaseStatus(
@@ -393,7 +432,12 @@ def evaluate_case(
 
     o_cmd = [circt_opt, *circt_opt_args, str(hw_mlir), "-o", str(opt_mlir)]
     try:
-        run_with_log(o_cmd, case_dir / "circt-opt.log", timeout_secs)
+        run_with_log(
+            o_cmd,
+            case_dir / "circt-opt.log",
+            timeout_secs,
+            log_max_bytes=log_max_bytes,
+        )
     except subprocess.TimeoutExpired:
         return CaseStatus(
             status="TIMEOUT", diag="CIRCT_OPT_TIMEOUT", reason="circt_opt_timeout"
@@ -437,6 +481,7 @@ def evaluate_case(
                 case_dir / "circt-lec.timeout-frontier.log",
                 timeout_secs,
                 out_path=case_dir / "lec.timeout-frontier.out",
+                log_max_bytes=log_max_bytes,
             )
         except subprocess.TimeoutExpired:
             return "frontend_command_timeout"
@@ -446,7 +491,11 @@ def evaluate_case(
 
     try:
         lec_text = run_with_log(
-            l_cmd, case_dir / "circt-lec.log", timeout_secs, out_path=lec_out
+            l_cmd,
+            case_dir / "circt-lec.log",
+            timeout_secs,
+            out_path=lec_out,
+            log_max_bytes=log_max_bytes,
         )
     except subprocess.TimeoutExpired:
         return CaseStatus(
@@ -559,6 +608,7 @@ if _HAS_SHARED_FORMAL_HELPERS:
         timeout_secs: int,
         *,
         out_path: Path | None = None,
+        log_max_bytes: int = 0,
     ) -> str:
         return _shared_run_command_logged_with_env_retry(
             cmd,
@@ -566,6 +616,8 @@ if _HAS_SHARED_FORMAL_HELPERS:
             timeout_secs=timeout_secs,
             out_path=out_path,
             fail_fn=fail,
+            max_log_bytes=log_max_bytes,
+            truncation_label="run_opentitan_fpv_circt_lec",
         )
 
 
@@ -664,6 +716,10 @@ def main() -> int:
     timeout_secs = parse_nonnegative_int(
         os.environ.get("CIRCT_TIMEOUT_SECS", "300"), "CIRCT_TIMEOUT_SECS"
     )
+    log_max_bytes = parse_nonnegative_int(
+        os.environ.get("LEC_LOG_MAX_BYTES", "0"),
+        "LEC_LOG_MAX_BYTES",
+    )
 
     lec_run_smtlib = os.environ.get("LEC_RUN_SMTLIB", "1") == "1"
     lec_smoke_only = os.environ.get("LEC_SMOKE_ONLY", "0") == "1"
@@ -720,6 +776,7 @@ def main() -> int:
                 lec_run_smtlib=lec_run_smtlib and not lec_smoke_only,
                 lec_smoke_only=lec_smoke_only,
                 lec_timeout_frontier_probe=lec_timeout_frontier_probe,
+                log_max_bytes=log_max_bytes,
                 z3_bin=z3_bin,
             )
         counts["total"] += 1

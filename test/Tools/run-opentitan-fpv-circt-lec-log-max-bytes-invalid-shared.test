@@ -1,0 +1,8 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/src
+// RUN: printf '#opentitan_compile_contract_schema_version=1\ntarget_name\tsetup_status\ttoplevel\tfiles\tinclude_dirs\tdefines\nfoo_fpv\tok\tfoo_tb\t%t/src/foo.sv\t%t/src\tFORMAL=1\n' > %t/contracts.tsv
+// RUN: printf 'PROVEN\tfoo_fpv::foo_tb\t%t/work/foo_tb\ta0000\tline_10\tUNSAT\tunsat\n' > %t/bmc-assertions.tsv
+// RUN: printf 'module foo_tb; endmodule\n' > %t/src/foo.sv
+// RUN: not env LEC_LOG_MAX_BYTES=-1 python3 %S/../../utils/run_opentitan_fpv_circt_lec.py --compile-contracts %t/contracts.tsv --bmc-assertion-results %t/bmc-assertions.tsv --assertion-results-file %t/lec-assertions.tsv --workdir %t/workdir 2>&1 | FileCheck %s
+//
+// CHECK: invalid LEC_LOG_MAX_BYTES: -1

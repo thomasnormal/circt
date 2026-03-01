@@ -530,6 +530,14 @@ Current workstream status in this branch:
      covered for both AES and connectivity LEC runners
      (`run-opentitan-lec-log-max-bytes-invalid.test`,
      `run-opentitan-connectivity-circt-lec-log-max-bytes-invalid-shared.test`)
+   - OpenTitan FPV LEC runner now supports bounded per-log artifact writes via
+     `LEC_LOG_MAX_BYTES` and consumes shared `runner_common` launch/log helper
+     truncation controls in shared-helper mode (local fallback retained)
+   - FPV LEC log-truncation path is regression-covered
+     (`run-opentitan-fpv-circt-lec-log-max-bytes-shared.test`)
+   - FPV LEC shared-path invalid `LEC_LOG_MAX_BYTES` diagnostics are now
+     regression-covered
+     (`run-opentitan-fpv-circt-lec-log-max-bytes-invalid-shared.test`)
    - runner shared-library extraction still partial
 3. WS2: in progress
    - multiclock unsupported root causes identified
