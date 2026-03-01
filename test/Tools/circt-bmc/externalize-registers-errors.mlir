@@ -36,6 +36,17 @@ hw.module @reg_with_argument_initial(in %clk: !seq.clock, in %in: i32, in %init:
 
 // -----
 
+hw.module @reg_with_casted_constant_initial(in %clk: !seq.clock, in %in: i32, out out: i32) {
+  // expected-note @+1 {{unsupported source for this register initial value}}
+  %c0_i32 = hw.constant 0 : i32
+  %init = builtin.unrealized_conversion_cast %c0_i32 : i32 to !seq.immutable<i32>
+  // expected-error @below {{unsupported register initial-value shape: unsupported immutable initial source op 'hw.constant'}}
+  %1 = seq.compreg %in, %clk initial %init : i32
+  hw.output %1 : i32
+}
+
+// -----
+
 hw.module @init_emitter(out out: !seq.immutable<i32>) {
   %init = seq.initial () {
     %c0_i32 = hw.constant 0 : i32

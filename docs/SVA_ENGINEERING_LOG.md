@@ -647,7 +647,10 @@
         from expected-fail diagnostics to positive FileCheck.
       - tightened diagnostics contract in
         `test/Tools/circt-bmc/externalize-registers-errors.mlir`
-        for block-argument immutable init source.
+        for:
+        - block-argument immutable init source, and
+        - casted-non-immutable-source shape
+          (`unsupported immutable initial source op 'hw.constant'`).
   - validation:
     - targeted compile validation:
       - `utils/ninja-with-lock.sh -C build_test obj.CIRCTBMCTransforms`
