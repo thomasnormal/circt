@@ -630,6 +630,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       forcePredicateFalse = false;
       for (unsigned i = 0; i < numArgs; ++i) {
         uint64_t argVal = (i < callArgs.size()) ? callArgs[i].getUInt64() : 0;
+        uint64_t rawArgVal = argVal;
         bool hasPointerType =
             i < argTypes.size() && isa<mlir::LLVM::LLVMPointerType>(argTypes[i]);
         // Some UVM call_indirect lowers carry `this` as i64 instead of ptr.
@@ -645,6 +646,37 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
           argVal = normalizeNativeCallPointerArg(procId,
                                                  calleeNameForNormalization,
                                                  argVal);
+          bool normalizedNullThisArg0 =
+              i == 0 && (hasPointerType || pointerLikeI64ThisArg) &&
+              rawArgVal != 0 && argVal == 0;
+          if (normalizedNullThisArg0) {
+            static bool traceNativeCalls =
+                std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+            if (traceNativeCalls) {
+              llvm::errs() << "[AOT TRACE] call_indirect skip normalized-null-pointer"
+                           << " callee=" << calleeNameForNormalization
+                           << " arg" << i
+                           << "(raw)=" << llvm::format_hex(rawArgVal, 16)
+                           << " active_proc=" << activeProcessId << "\n";
+            }
+            return false;
+          }
+          bool unsafeUvmPredicateArg1 =
+              i == 1 &&
+              isFastFalseUnsafeUvmPredicateCallee(calleeNameForNormalization);
+          if (unsafeUvmPredicateArg1 && rawArgVal != 0 && argVal == 0) {
+            static bool traceNativeCalls =
+                std::getenv("CIRCT_AOT_TRACE_NATIVE_CALLS") != nullptr;
+            if (traceNativeCalls) {
+              llvm::errs()
+                  << "[AOT TRACE] call_indirect fast-false normalized-null-pointer"
+                  << " callee=" << calleeNameForNormalization << " arg" << i
+                  << "(raw)=" << llvm::format_hex(rawArgVal, 16)
+                  << " active_proc=" << activeProcessId << "\n";
+            }
+            forcePredicateFalse = true;
+            return true;
+          }
           bool strictUvmThisPointerCheck =
               i == 0 && pointerLikeI64ThisArg;
           if (strictUvmThisPointerCheck && argVal != 0 &&
@@ -660,9 +692,6 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
             }
             return false;
           }
-          bool unsafeUvmPredicateArg1 =
-              i == 1 &&
-              isFastFalseUnsafeUvmPredicateCallee(calleeNameForNormalization);
           if (unsafeUvmPredicateArg1 && argVal != 0) {
             bool knownAddr = isKnownPointerAddress(argVal);
             bool badPointerShape = !isPlausibleNativePointerValue(argVal);
