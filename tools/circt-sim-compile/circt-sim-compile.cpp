@@ -6489,8 +6489,14 @@ static unsigned addAlwaysInlineToSmallFunctions(llvm::Module &llvmModule) {
 }
 
 //===----------------------------------------------------------------------===//
-// Packed struct layout: rewrite GEPs for interpreter-compatible layout
+// Legacy packed struct layout compatibility (opt-in)
 //===----------------------------------------------------------------------===//
+
+/// Keep legacy packed-layout rewriting as an explicit opt-in escape hatch.
+/// Default AOT codegen follows the target ABI data layout.
+static bool useLegacyPackedLayoutCompatibility() {
+  return std::getenv("CIRCT_AOT_FORCE_PACKED_LAYOUT") != nullptr;
+}
 
 /// Compute the allocation size of a type using packed (no-padding) layout.
 /// For struct types, this sums the packed sizes of all fields without any
@@ -6520,14 +6526,12 @@ static uint64_t computePackedFieldOffset(llvm::StructType *st,
   return offset;
 }
 
-/// Rewrite GEP instructions that index into struct types so they use the
-/// packed (no-padding) field offsets instead of the host DataLayout offsets.
+/// Legacy helper: rewrite struct-indexed GEPs to packed (no-padding) field
+/// offsets instead of host ABI DataLayout offsets.
 ///
-/// The interpreter uses UNALIGNED struct layout (no padding between fields).
-/// When the AOT compiler produces LLVM IR, struct GEPs use the host
-/// DataLayout which inserts alignment padding. This function rewrites every
-/// struct-indexed GEP to an i8-based byte-offset GEP with the correct
-/// packed offset, eliminating the mismatch.
+/// This exists only for compatibility experiments behind
+/// CIRCT_AOT_FORCE_PACKED_LAYOUT. Default AOT codegen should keep ABI-layout
+/// GEP semantics.
 ///
 /// Returns the number of GEPs rewritten.
 static unsigned rewriteGEPsForPackedLayout(llvm::Module &M) {
@@ -6683,7 +6687,8 @@ static unsigned rewriteGEPsForPackedLayout(llvm::Module &M) {
 }
 
 /// Replace each mutable global variable's type with a flat [N x i8] array
-/// where N is the packed (unpadded) size computed by computePackedTypeAllocSize.
+/// where N is the packed (unpadded) size computed by
+/// computePackedTypeAllocSize.
 ///
 /// This ensures:
 /// 1. LLVM allocates exactly N bytes for the global (no alignment padding)
@@ -6878,9 +6883,9 @@ createHostTargetMachine(llvm::Module &llvmModule, int optLvl) {
   return targetMachine;
 }
 
-/// Emit an already-optimized module to an object file.  The caller must have
-/// already run optimization passes and any post-optimization transforms (e.g.
-/// rewriteGEPsForPackedLayout).  Does NOT run optimization passes internally.
+/// Emit an already-optimized module to an object file. The caller must have
+/// already run optimization passes and any desired post-optimization
+/// transforms. Does NOT run optimization passes internally.
 static LogicalResult emitObjectFileNoOpt(llvm::Module &llvmModule,
                                          llvm::TargetMachine *targetMachine,
                                          llvm::StringRef outputPath) {
@@ -7840,25 +7845,18 @@ static LogicalResult compileModuleImpl(MLIRContext &mlirContext, ModuleOp module
     return failure();
   }
 
-  // Flatten mutable global variable types to [N x i8] byte arrays using the
-  // packed (unpadded) size.  This prevents LLVM from re-introducing alignment
-  // padding and keeps the layout consistent with the i8-based GEP rewrites
-  // performed below.
-  {
+  // Legacy packed-layout rewrite mode is available for compatibility
+  // experiments, but default AOT follows host ABI DataLayout.
+  if (useLegacyPackedLayoutCompatibility()) {
     unsigned flatCount = flattenGlobalTypesToByteArrays(*llvmModule);
     if (flatCount > 0)
       llvm::errs() << "[circt-compile] Flattened " << flatCount
-                   << " globals to byte arrays\n";
-  }
+                   << " globals to byte arrays (legacy packed mode)\n";
 
-  // Rewrite struct-indexed GEPs to use packed (unaligned) byte offsets matching
-  // the interpreter's struct layout.  Must run BEFORE the optimizer so all 994+
-  // GEPs are caught before LLVM converts them to raw pointer arithmetic.
-  {
     unsigned gepCount = rewriteGEPsForPackedLayout(*llvmModule);
     if (gepCount > 0)
       llvm::errs() << "[circt-compile] Rewrote " << gepCount
-                   << " struct GEPs for packed layout\n";
+                   << " struct GEPs for packed layout (legacy mode)\n";
   }
 
   // Collect mutable globals for the patch table (including vtable globals).
@@ -7877,8 +7875,8 @@ static LogicalResult compileModuleImpl(MLIRContext &mlirContext, ModuleOp module
     globalPatchNames.push_back(global.getName().str());
     globalPatchVars.push_back(&global);
     auto *type = global.getValueType();
-    // Use packed (no-padding) size to match the interpreter's unaligned layout.
-    uint64_t size = computePackedTypeAllocSize(type, llvmModule->getDataLayout());
+    // Use ABI allocation size for native .so storage and patch-table aliasing.
+    uint64_t size = llvmModule->getDataLayout().getTypeAllocSize(type);
     globalPatchSizes.push_back(static_cast<uint32_t>(size));
   }
   size_t totalMutableGlobals = globalPatchNames.size();
