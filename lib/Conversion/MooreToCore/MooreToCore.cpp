@@ -3051,6 +3051,17 @@ struct WaitDelayOpConversion : public OpConversionPattern<WaitDelayOp> {
 // moore.unreachable -> llhd.halt (in process/final) or llvm.unreachable (in func)
 static LogicalResult convert(UnreachableOp op, UnreachableOp::Adaptor adaptor,
                              ConversionPatternRewriter &rewriter) {
+  // Fork branch regions require fork terminators. Emitting llhd.halt here is
+  // invalid because llhd.halt must be directly under llhd.process/llhd.final.
+  if (op->getParentOfType<sim::SimForkOp>()) {
+    rewriter.replaceOpWithNewOp<sim::SimForkTerminatorOp>(op);
+    return success();
+  }
+  if (op->getParentOfType<ForkOp>()) {
+    rewriter.replaceOpWithNewOp<ForkTerminatorOp>(op);
+    return success();
+  }
+
   // Check if we're inside an llhd.process or llhd.final
   Operation *parent = op->getParentOp();
   while (parent) {
@@ -15399,6 +15410,79 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
     return std::nullopt;
   }
 
+  static std::optional<std::pair<Value, verif::ClockEdge>>
+  findClockFromEnclosingProcedure(PastOp op) {
+    auto proc = op->getParentOfType<ProcedureOp>();
+    if (!proc)
+      return std::nullopt;
+    if (proc.getKind() != ProcedureKind::AlwaysFF)
+      return std::nullopt;
+
+    SmallVector<std::pair<Value, verif::ClockEdge>, 4> candidates;
+    auto addCandidate = [&](Value clock, verif::ClockEdge edge) {
+      clock = stripUnrealizedCast(clock);
+      for (auto &candidate : candidates)
+        if (candidate.first == clock && candidate.second == edge)
+          return;
+      candidates.emplace_back(clock, edge);
+    };
+
+    proc.walk([&](WaitEventOp waitOp) {
+      for (auto detectOp : waitOp.getBody().getOps<DetectEventOp>()) {
+        // Change-triggered waits and conditional detect events do not define
+        // a stable sampled-value clock for $past/$rose/$fell.
+        if (detectOp.getEdge() == Edge::AnyChange || detectOp.getCondition())
+          continue;
+
+        verif::ClockEdge edge = verif::ClockEdge::Both;
+        switch (detectOp.getEdge()) {
+        case Edge::PosEdge:
+          edge = verif::ClockEdge::Pos;
+          break;
+        case Edge::NegEdge:
+          edge = verif::ClockEdge::Neg;
+          break;
+        case Edge::BothEdges:
+          edge = verif::ClockEdge::Both;
+          break;
+        case Edge::AnyChange:
+          continue;
+        }
+        addCandidate(detectOp.getInput(), edge);
+      }
+    });
+
+    if (candidates.size() == 1)
+      return candidates.front();
+    return std::nullopt;
+  }
+
+  static std::optional<std::pair<Value, verif::ClockEdge>>
+  findClockFromEnclosingProcess(PastOp op) {
+    auto process = op->getParentOfType<llhd::ProcessOp>();
+    if (!process)
+      return std::nullopt;
+
+    SmallVector<Value, 4> observedSignals;
+    auto addObserved = [&](Value signal) {
+      signal = stripUnrealizedCast(signal);
+      if (llvm::is_contained(observedSignals, signal))
+        return;
+      observedSignals.push_back(signal);
+    };
+
+    process.walk([&](llhd::WaitOp waitOp) {
+      for (Value observed : waitOp.getObserved())
+        addObserved(observed);
+    });
+
+    // At this stage edge direction information has been lowered away from
+    // wait_event; default to posedge when there is a single observed clock.
+    if (observedSignals.size() == 1)
+      return std::make_pair(observedSignals.front(), verif::ClockEdge::Pos);
+    return std::nullopt;
+  }
+
   LogicalResult
   matchAndRewrite(PastOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
@@ -15420,10 +15504,32 @@ struct PastOpConversion : public OpConversionPattern<PastOp> {
     }
     auto clockInfo = findClockFromUsers(op.getResult());
     if (!clockInfo)
+      clockInfo = findClockFromEnclosingProcedure(op);
+    if (!clockInfo)
+      clockInfo = findClockFromEnclosingProcess(op);
+    if (!clockInfo)
       clockInfo = findUniqueClockInModule(op);
     if (clockInfo) {
       Value clockSignal = clockInfo->first;
       auto edge = clockInfo->second;
+
+      if (Value remapped = rewriter.getRemappedValue(clockSignal))
+        clockSignal = remapped;
+
+      if (Type convertedClockType = typeConverter->convertType(clockSignal.getType());
+          convertedClockType && convertedClockType != clockSignal.getType()) {
+        Value convertedClock = typeConverter->materializeTargetConversion(
+            rewriter, loc, convertedClockType, clockSignal);
+        if (!convertedClock) {
+          op.emitError("failed to convert inferred clock for moore.past");
+          return failure();
+        }
+        clockSignal = convertedClock;
+      }
+
+      if (isFourStateStructType(clockSignal.getType()))
+        clockSignal = extractFourStateValue(rewriter, loc, clockSignal);
+
       if (edge == verif::ClockEdge::Neg) {
         auto one = hw::ConstantOp::create(rewriter, loc,
                                           rewriter.getI1Type(), 1);
@@ -20690,8 +20796,8 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
       if (Operation *definingOp = mooreVal.getDefiningOp()) {
         // Check if this is a Moore operation that we can convert inline
         if (isa<ClassPropertyRefOp, ReadOp, ConstantOp, DynExtractOp,
-                ArraySizeOp, EqOp, NeOp, SubOp, AddOp, AndOp, OrOp, NotOp,
-                ConversionOp, StructExtractOp, StringCmpOp,
+                ArraySizeOp, EqOp, NeOp, CaseEqOp, CaseNeOp, SubOp, AddOp,
+                AndOp, OrOp, NotOp, ConversionOp, StructExtractOp, StringCmpOp,
                 ClassHandleCmpOp, WildcardEqOp, WildcardNeOp,
                 IntToLogicOp, ClassNullOp, StringToLowerOp, StringToUpperOp,
                 VTableLoadMethodOp>(definingOp) ||
@@ -21039,6 +21145,57 @@ struct ArrayLocatorOpConversion : public OpConversionPattern<ArrayLocatorOp> {
 
       return comb::ICmpOp::create(rewriter, loc, resultType,
                                   comb::ICmpPredicate::ne, lhs, rhs);
+    }
+
+    // Handle moore.case_eq (===)
+    if (auto caseEqOp = dyn_cast<CaseEqOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(caseEqOp.getLhs());
+      Value rhs = getConvertedOperand(caseEqOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      // Case equality compares value and unknown bits exactly.
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+        Value valEq = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq,
+                                           lhsVal, rhsVal);
+        Value unkEq = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq,
+                                           lhsUnk, rhsUnk);
+        return comb::AndOp::create(rewriter, loc, valEq, unkEq, false);
+      }
+
+      return comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::ceq, lhs,
+                                  rhs);
+    }
+
+    // Handle moore.case_ne (!==)
+    if (auto caseNeOp = dyn_cast<CaseNeOp>(mooreOp)) {
+      Value lhs = getConvertedOperand(caseNeOp.getLhs());
+      Value rhs = getConvertedOperand(caseNeOp.getRhs());
+      if (!lhs || !rhs)
+        return nullptr;
+
+      // Case inequality compares value and unknown bits exactly.
+      if (isFourStateStructType(lhs.getType())) {
+        Value lhsVal = extractFourStateValue(rewriter, loc, lhs);
+        Value lhsUnk = extractFourStateUnknown(rewriter, loc, lhs);
+        Value rhsVal = extractFourStateValue(rewriter, loc, rhs);
+        Value rhsUnk = extractFourStateUnknown(rewriter, loc, rhs);
+        Value valEq = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq,
+                                           lhsVal, rhsVal);
+        Value unkEq = comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::eq,
+                                           lhsUnk, rhsUnk);
+        Value eqAll = comb::AndOp::create(rewriter, loc, valEq, unkEq, false);
+        Value one =
+            hw::ConstantOp::create(rewriter, loc, rewriter.getI1Type(), 1);
+        return comb::XorOp::create(rewriter, loc, eqAll, one, false);
+      }
+
+      return comb::ICmpOp::create(rewriter, loc, comb::ICmpPredicate::cne, lhs,
+                                  rhs);
     }
 
     // Handle moore.sgt (signed greater than)

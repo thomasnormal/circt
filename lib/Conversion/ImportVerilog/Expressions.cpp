@@ -2730,6 +2730,36 @@ struct RvalueExprVisitor : public ExprVisitor {
     if (auto value = context.materializeConstant(
             context.evaluateConstant(expr), *expr.type, hierLoc))
       return value;
+
+    // Handle hierarchical clocking block signal access (e.g., ifc.cb.data).
+    // ClockVar symbols reference an underlying interface signal via their
+    // initializer expression. Resolve through the hierarchical interface path
+    // to preserve instance binding.
+    if (auto *clockVar = expr.symbol.as_if<slang::ast::ClockVarSymbol>()) {
+      auto *initExpr = clockVar->getInitializer();
+      if (!initExpr) {
+        mlir::emitError(loc)
+            << "clocking block signal '" << clockVar->name
+            << "' has no underlying signal reference";
+        return {};
+      }
+
+      StringRef signalName = clockVar->name;
+      if (auto *namedInit = initExpr->as_if<slang::ast::NamedValueExpression>())
+        signalName = namedInit->symbol.name;
+      else if (auto *symRef = initExpr->getSymbolReference())
+        signalName = symRef->name;
+
+      if (auto value = resolveHierarchicalInterfaceSignalRef(expr, signalName)) {
+        if (context.rvalueReadCallback)
+          if (auto readOp = value.getDefiningOp<moore::ReadOp>())
+            context.rvalueReadCallback(readOp);
+        return value;
+      }
+
+      return context.convertRvalueExpression(*initExpr);
+    }
+
     // Handle direct interface member access (e.g., intf.clk where intf is a
     // direct interface instance, not a virtual interface). Check if the
     // symbol's parent is an interface body. This applies to both VariableSymbol

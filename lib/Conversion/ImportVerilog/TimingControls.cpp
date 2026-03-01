@@ -110,6 +110,11 @@ struct EventControlVisitor {
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
+      auto *prevScope = context.currentScope;
+      if (auto *parentScope = clockingBlock.getParentScope())
+        context.currentScope = parentScope;
+      auto scopeGuard =
+          llvm::make_scope_exit([&] { context.currentScope = prevScope; });
       // Recursively convert the clocking block's clock event
       auto visitor = *this;
       visitor.loc = context.convertLocation(clockEvent.sourceRange);
@@ -137,6 +142,11 @@ struct EventControlVisitor {
                   .template as_if<slang::ast::SignalEventControl>();
           if (!clockSignalEvent) {
             auto &clockEvent = clockBlock->getEvent();
+            auto *prevScope = context.currentScope;
+            if (auto *parentScope = clockBlock->getParentScope())
+              context.currentScope = parentScope;
+            auto scopeGuard =
+                llvm::make_scope_exit([&] { context.currentScope = prevScope; });
             auto visitor = *this;
             visitor.loc = context.convertLocation(clockEvent.sourceRange);
             return clockEvent.visit(visitor);
@@ -2035,6 +2045,11 @@ struct LTLClockControlVisitor {
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
+      auto *prevScope = context.currentScope;
+      if (auto *parentScope = clockingBlock.getParentScope())
+        context.currentScope = parentScope;
+      auto scopeGuard =
+          llvm::make_scope_exit([&] { context.currentScope = prevScope; });
       // Recursively convert the clocking block's clock event
       auto visitor = *this;
       visitor.loc = context.convertLocation(clockEvent.sourceRange);
@@ -2062,6 +2077,11 @@ struct LTLClockControlVisitor {
         if (auto *clockBlock =
                 globalClocking->as_if<slang::ast::ClockingBlockSymbol>()) {
           auto &clockEvent = clockBlock->getEvent();
+          auto *prevScope = context.currentScope;
+          if (auto *parentScope = clockBlock->getParentScope())
+            context.currentScope = parentScope;
+          auto scopeGuard =
+              llvm::make_scope_exit([&] { context.currentScope = prevScope; });
           Value gatedSeq = seqOrPro;
           if (ctrl.iffCondition) {
             auto condition = context.convertRvalueExpression(*ctrl.iffCondition);
@@ -2452,6 +2472,63 @@ static LogicalResult handleRoot(Context &context,
     if (symRef && symRef->kind == slang::ast::SymbolKind::ClockingBlock) {
       auto &clockingBlock = symRef->as<slang::ast::ClockingBlockSymbol>();
       auto &clockEvent = clockingBlock.getEvent();
+
+      auto *prevScope = context.currentScope;
+      if (auto *parentScope = clockingBlock.getParentScope())
+        context.currentScope = parentScope;
+      auto scopeGuard =
+          llvm::make_scope_exit([&] { context.currentScope = prevScope; });
+
+      // Resolve event expressions like `@(ifc.cb)` in the context of the
+      // concrete interface instance so identifiers inside the clocking block
+      // event (for example `clk`) map to `ifc.clk`.
+      auto prevInterfaceArg = context.currentInterfaceArg;
+      auto prevInterfaceBody = context.currentInterfaceBody;
+      auto prevSignalNames = std::move(context.interfaceSignalNames);
+      auto interfaceGuard = llvm::make_scope_exit([&] {
+        context.currentInterfaceArg = prevInterfaceArg;
+        context.currentInterfaceBody = prevInterfaceBody;
+        context.interfaceSignalNames = std::move(prevSignalNames);
+      });
+      context.currentInterfaceArg = nullptr;
+      context.currentInterfaceBody = nullptr;
+      context.interfaceSignalNames.clear();
+
+      if (auto *parentScope = clockingBlock.getParentScope())
+        if (auto *ifaceBody =
+                parentScope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
+          context.currentInterfaceBody = ifaceBody;
+          if (ifaceBody->parentInstance)
+            context.currentInterfaceArg =
+                context.resolveInterfaceInstance(ifaceBody->parentInstance, loc);
+          if (context.currentInterfaceArg &&
+              isa<moore::RefType>(context.currentInterfaceArg.getType()))
+            context.currentInterfaceArg = moore::ReadOp::create(
+                builder, loc, context.currentInterfaceArg);
+
+          for (auto *symbol : ifaceBody->getPortList()) {
+            if (const auto *port = symbol->as_if<slang::ast::PortSymbol>()) {
+              if (port->internalSymbol)
+                context.interfaceSignalNames[port->internalSymbol] = port->name;
+              context.interfaceSignalNames[port] = port->name;
+            } else if (const auto *multiPort =
+                           symbol->as_if<slang::ast::MultiPortSymbol>()) {
+              for (auto *port : multiPort->ports) {
+                if (port->internalSymbol)
+                  context.interfaceSignalNames[port->internalSymbol] =
+                      port->name;
+                context.interfaceSignalNames[port] = port->name;
+              }
+            }
+          }
+          for (auto &member : ifaceBody->members()) {
+            if (auto *var = member.as_if<slang::ast::VariableSymbol>())
+              context.interfaceSignalNames[var] = var->name;
+            if (auto *net = member.as_if<slang::ast::NetSymbol>())
+              context.interfaceSignalNames[net] = net->name;
+          }
+        }
+
       return handleRoot(context, clockEvent, implicitWaitOp);
     }
 
