@@ -2647,6 +2647,18 @@ struct RvalueExprVisitor : public ExprVisitor {
             signalName = expr.symbol.name;
         }
       }
+      // Some interface port forms (`input bit`, implicit net ports) can surface
+      // a distinct Slang symbol at use sites. If we are in an interface method
+      // and the symbol name matches a known interface signal, fall back to
+      // name-based resolution.
+      if (signalName.empty() && context.currentInterfaceBody) {
+        for (const auto &entry : context.interfaceSignalNames) {
+          if (entry.second == StringRef(expr.symbol.name)) {
+            signalName = expr.symbol.name;
+            break;
+          }
+        }
+      }
 
       if (!signalName.empty()) {
         // This is an interface signal access from within an interface context.
@@ -10314,6 +10326,18 @@ struct LvalueExprVisitor : public ExprVisitor {
                 scope->asSymbol().as_if<slang::ast::InstanceBodySymbol>()) {
           if (body == context.currentInterfaceBody)
             signalName = expr.symbol.name;
+        }
+      }
+      // Some interface port forms (`input bit`, implicit net ports) can surface
+      // a distinct Slang symbol at use sites. If we are in an interface method
+      // and the symbol name matches a known interface signal, fall back to
+      // name-based resolution.
+      if (signalName.empty() && context.currentInterfaceBody) {
+        for (const auto &entry : context.interfaceSignalNames) {
+          if (entry.second == StringRef(expr.symbol.name)) {
+            signalName = expr.symbol.name;
+            break;
+          }
         }
       }
 
