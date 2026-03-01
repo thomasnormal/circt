@@ -1695,6 +1695,13 @@ def main() -> int:
     results_file.parent.mkdir(parents=True, exist_ok=True)
     results_file.write_text("", encoding="utf-8")
 
+    def write_empty_requested_results_jsonl() -> None:
+        if not args.results_jsonl_file:
+            return
+        results_jsonl_path = Path(args.results_jsonl_file).resolve()
+        results_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        results_jsonl_path.write_text("", encoding="utf-8")
+
     def evaluate_status_governance(case_rows: list[tuple[str, ...]]) -> int:
         current_counts = collect_connectivity_lec_status_counts(case_rows)
         if status_summary_path is not None:
@@ -1748,6 +1755,7 @@ def main() -> int:
         return 0
 
     if not selected_groups:
+        write_empty_requested_results_jsonl()
         if status_summary_path is not None:
             write_connectivity_lec_status_summary(status_summary_path, {})
             print(f"connectivity LEC status summary: {status_summary_path}", flush=True)
@@ -2174,6 +2182,7 @@ def main() -> int:
             )
 
         if not cases:
+            write_empty_requested_results_jsonl()
             if status_summary_path is not None:
                 write_connectivity_lec_status_summary(status_summary_path, {})
                 print(f"connectivity LEC status summary: {status_summary_path}", flush=True)

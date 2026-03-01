@@ -422,6 +422,8 @@ Current workstream status in this branch:
      to the pairwise backend (`--results-jsonl-file`)
    - connectivity BMC wrapper no-case paths now emit empty requested schema
      JSONL artifacts (selected-groups-empty and generated-cases-empty paths)
+   - connectivity LEC wrapper no-case paths now emit empty requested schema
+     JSONL artifacts (selected-groups-empty and generated-cases-empty paths)
    - OpenTitan FPV BMC wrapper now emits merged schema JSONL output lane
      (`--results-jsonl-file`) from final wrapper-level merged rows
    - OpenTitan FPV LEC runner now emits schema JSONL output lane

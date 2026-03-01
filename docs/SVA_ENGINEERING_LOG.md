@@ -2,6 +2,34 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1/WS6: connectivity LEC no-case JSONL artifact parity):
+  - realization:
+    - `run_opentitan_connectivity_circt_lec.py` accepted
+      `--results-jsonl-file` but did not emit empty JSONL artifacts in its two
+      no-case return paths:
+      - selected-groups-empty
+      - generated-cases-empty
+    - this diverged from connectivity BMC behavior and left schema lanes
+      missing deterministic artifacts for baseline/frontier no-case runs.
+  - implemented:
+    - added helper `write_empty_requested_results_jsonl()` in
+      `utils/run_opentitan_connectivity_circt_lec.py`.
+    - wired both no-case return paths to emit empty requested JSONL files.
+    - added regressions:
+      - `test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-no-cases.test`
+      - `test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-generated-no-cases.test`
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-generated-no-cases.test`
+      - result: `2/2` fail (`results.jsonl` missing in both no-case lanes).
+    - `python3 -m py_compile utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-generated-no-cases.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+      - result: `3/3` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl*.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test test/Tools/run-opentitan-connectivity-circt-lec-status-summary.test`
+      - result: `5/5` pass.
+
 - Iteration update (WS1/WS6: grouped policy-drift CLI baseline preconditions tightened):
   - realization:
     - grouped policy drift flags still allowed baseline-less invocations
