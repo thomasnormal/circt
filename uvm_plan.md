@@ -33,6 +33,9 @@ reduction must be staged and measurable.
   - Added regression: `test/Tools/circt-sim/vtable-fallback-corrupt-slot.mlir`.
 - [x] AVIP startup focus update:
   - deterministic `axi4Lite` startup no longer reproduces the prior `FCTTYP` null-return mode in the captured repro after the vtable-slot fallback fix.
+- [x] Closed AVIP dual-top autodetect gap for non-canonical top names:
+  - `circt-sim` now auto-detects split tops for suffix-based names (e.g. `Axi4LiteHdlTop` + `Axi4LiteHvlTop`), not just exact `hdl_top`/`hvl_top`.
+  - Added regression: `test/Tools/circt-sim/auto-dual-top-suffix-hdltop-hvltop.mlir`.
 - [ ] Remaining AVIP-critical semantic blocker:
   - startup/liveness quality: occasional `$finish` grace-expiry / 0-fs completion with 0% activity coverage still needs core runtime closure (no retry dependence).
 - [ ] Continue Wave C reduction with parity gates for:

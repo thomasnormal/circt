@@ -10992,3 +10992,35 @@
     - current blocker in this run moved to startup functional failure at `0 ns`:
       - `UVM_FATAL ... cannot get() axi4LiteMasterReadDriverBFM`.
     - with `CIRCT_MAX_RSS_MB=16384`, run exits deterministically at `0 fs` with the same config/driver-BFM get failure.
+
+## 2026-03-01 - AVIP dual-top autodetect generalized beyond exact hdl_top/hvl_top
+
+- realization:
+  - The current AVIP `axi4Lite` repro (`testbenches/avip_axi4lite_focus_20260301-134929/axi4Lite/axi4Lite.mlir`) was being launched without explicit `--top` args.
+  - `circt-sim` auto-dual-top logic only matched exact module names `hdl_top` + `hvl_top`.
+  - This AVIP uses `Axi4LiteHdlTop` + `Axi4LiteHvlTop`, so only `Axi4LiteHvlTop` was selected:
+    - startup log showed `Using module 'Axi4LiteHvlTop' as top module`
+    - only 1 LLHD process registered from HVL side
+    - deterministic `config_db::get` miss for `...Axi4LiteMasterReadDriverBFM`.
+
+- implemented:
+  - `tools/circt-sim/circt-sim.cpp`
+    - generalized split-top autodetection:
+      - keep exact-name preference (`hdl_top` / `hvl_top`),
+      - add suffix fallback matching for names ending in `hdl_top`/`hdltop` and `hvl_top`/`hvltop` (case-insensitive).
+  - Added regression:
+    - `test/Tools/circt-sim/auto-dual-top-suffix-hdltop-hvltop.mlir`
+    - proves suffix-based dual-top autodetect with `Axi4LiteHdlTop` + `Axi4LiteHvlTop`.
+
+- validation:
+  - red baseline (before runtime fix):
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/auto-dual-top-suffix-hdltop-hvltop.mlir`
+      - failed; log showed single-top fallback to `Axi4LiteHvlTop`.
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/auto-dual-top-hdl-hvl.mlir test/Tools/circt-sim/auto-dual-top-suffix-hdltop-hvltop.mlir test/Tools/circt-sim/config-db-dual-top.sv`
+      - `3 passed`.
+  - focused AVIP startup repro (post-fix runtime):
+    - startup log now shows:
+      - `[circt-sim] Simulating 2 top modules: Axi4LiteHdlTop, Axi4LiteHvlTop`
+      - BFM startup banners from both HDL-side agent BFMs
+      - no immediate `cannot get() ...DriverBFM` fatal in the prior time-0 startup window.

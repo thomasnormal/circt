@@ -1282,31 +1282,68 @@ LogicalResult SimulationContext::initialize(
   llvm::SmallVector<hw::HWModuleOp, 4> hwModules;
 
   if (tops.empty()) {
-    // Auto-detect split UVM tops when both hdl_top and hvl_top are present.
-    // This lets hdl_top interface/config_db setup run alongside hvl_top
-    // run_test() without requiring explicit --top flags.
-    auto findModuleByName = [&](llvm::StringRef target) -> hw::HWModuleOp {
+    // Auto-detect split UVM tops when both HDL and HVL tops are present.
+    // This lets HDL interface/config_db setup run alongside HVL run_test()
+    // without requiring explicit --top flags.
+    auto findSplitTopCandidate = [&](bool wantHdl,
+                                     bool preferExact) -> hw::HWModuleOp {
       hw::HWModuleOp found;
       module.walk([&](hw::HWModuleOp hwModule) {
-        if (!found && hwModule.getName() == target)
+        if (found)
+          return;
+        std::string lowered = hwModule.getName().lower();
+        llvm::StringRef name = lowered;
+
+        auto isExactMatch = [&](llvm::StringRef expectedUnderscore,
+                                llvm::StringRef expectedCamel) {
+          return name == expectedUnderscore || name == expectedCamel;
+        };
+        auto isSuffixMatch = [&](llvm::StringRef expectedUnderscore,
+                                 llvm::StringRef expectedCamel) {
+          return name.ends_with(expectedUnderscore) ||
+                 name.ends_with(expectedCamel);
+        };
+
+        bool match = false;
+        if (wantHdl) {
+          if (preferExact)
+            match = isExactMatch("hdl_top", "hdltop");
+          else
+            match = isSuffixMatch("hdl_top", "hdltop");
+        } else {
+          if (preferExact)
+            match = isExactMatch("hvl_top", "hvltop");
+          else
+            match = isSuffixMatch("hvl_top", "hvltop");
+        }
+        if (match)
           found = hwModule;
       });
       return found;
     };
 
-    auto hdlTop = findModuleByName("hdl_top");
-    auto hvlTop = findModuleByName("hvl_top");
-    if (hdlTop && hvlTop) {
+    // First prefer canonical exact names, then fall back to suffix-based names
+    // (e.g. Axi4LiteHdlTop / Axi4LiteHvlTop).
+    auto hdlTop = findSplitTopCandidate(/*wantHdl=*/true, /*preferExact=*/true);
+    auto hvlTop =
+        findSplitTopCandidate(/*wantHdl=*/false, /*preferExact=*/true);
+    if (!hdlTop || !hvlTop) {
+      hdlTop =
+          findSplitTopCandidate(/*wantHdl=*/true, /*preferExact=*/false);
+      hvlTop =
+          findSplitTopCandidate(/*wantHdl=*/false, /*preferExact=*/false);
+    }
+
+    if (hdlTop && hvlTop && hdlTop != hvlTop) {
       hwModules.push_back(hdlTop);
       topModuleNames.push_back(hdlTop.getName().str());
       hwModules.push_back(hvlTop);
       topModuleNames.push_back(hvlTop.getName().str());
     } else {
-      // No top modules specified - find the last module (typically the top)
+      // No top modules specified - find the last module (typically the top).
       auto hwModule = findTopModule(module, "");
-      if (!hwModule) {
+      if (!hwModule)
         return failure();
-      }
       hwModules.push_back(hwModule);
       topModuleNames.push_back(hwModule.getName().str());
     }
