@@ -22281,7 +22281,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       auto get0Func = rootModule.lookupSymbol<func::FuncOp>("get_0");
       if (get0Func && !get0Func.getBody().empty()) {
         auto &state = processStates[procId];
-        constexpr size_t maxCallDepth = 200;
+        constexpr size_t maxCallDepth = 1024;
         if (state.callDepth < maxCallDepth) {
           ++state.callDepth;
           SmallVector<InterpretedValue, 1> get0Results;
@@ -22308,7 +22308,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
           "uvm_pkg::uvm_default_coreservice_t::get_factory");
       if (defaultGetFactoryFunc && !defaultGetFactoryFunc.getBody().empty()) {
         auto &state = processStates[procId];
-        constexpr size_t maxCallDepth = 200;
+        constexpr size_t maxCallDepth = 1024;
         if (state.callDepth < maxCallDepth) {
           ++state.callDepth;
           SmallVector<InterpretedValue, 1> invokeResults;
@@ -22432,7 +22432,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       });
 
       auto &state = processStates[procId];
-      constexpr size_t maxCallDepth = 200;
+      constexpr size_t maxCallDepth = 1024;
       if (state.callDepth >= maxCallDepth)
         return false;
 
@@ -22716,7 +22716,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
       auto get21Func = rootModule.lookupSymbol<func::FuncOp>("get_21");
       if (get21Func && !get21Func.getBody().empty()) {
         auto &state = processStates[procId];
-        constexpr size_t maxCallDepth = 200;
+        constexpr size_t maxCallDepth = 1024;
         if (state.callDepth < maxCallDepth) {
           ++state.callDepth;
           SmallVector<InterpretedValue, 1> wrapperResults;
@@ -24950,7 +24950,7 @@ no_uvm_objection_intercept:
   }
 
   auto &state = processStates[procId];
-  constexpr size_t maxCallDepth = 200;
+  constexpr size_t maxCallDepth = 1024;
   if (state.callDepth >= maxCallDepth) {
     LLVM_DEBUG(llvm::dbgs() << "  func.call: max call depth (" << maxCallDepth
                             << ") exceeded, returning zero\n");
@@ -25528,7 +25528,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallCachedPath(
 
   // Call depth check.
   auto &state = processStates[procId];
-  constexpr size_t maxCallDepth = 200;
+  constexpr size_t maxCallDepth = 1024;
   if (state.callDepth >= maxCallDepth) {
     for (Value result : callOp.getResults()) {
       unsigned width = getTypeWidth(result.getType());
@@ -27930,7 +27930,7 @@ InterpretedValue LLHDProcessInterpreter::getValue(ProcessId procId,
     // This path can recurse: getValue -> interpretLLVMCall -> interpretLLVMFuncBody
     // -> interpretOperation -> getValue
     auto &state = processStates[procId];
-    constexpr size_t maxCallDepth = 200;
+    constexpr size_t maxCallDepth = 1024;
     if (state.callDepth >= maxCallDepth) {
       LLVM_DEBUG(llvm::dbgs() << "  getValue: max call depth (" << maxCallDepth
                               << ") exceeded for LLVM call, returning zero\n");
@@ -31940,7 +31940,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         callOperands.push_back(arg);
       }
 
-      constexpr size_t maxCallDepth = 200;
+      constexpr size_t maxCallDepth = 1024;
       if (state.callDepth >= maxCallDepth) {
         for (Value result : callOp.getResults()) {
           setValue(procId, result,
@@ -32052,7 +32052,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
         callOperands.push_back(arg);
       }
 
-      constexpr size_t maxCallDepth = 200;
+      constexpr size_t maxCallDepth = 1024;
       if (state.callDepth >= maxCallDepth) {
         for (Value result : callOp.getResults()) {
           setValue(procId, result,
@@ -42041,7 +42041,7 @@ LogicalResult LLHDProcessInterpreter::interpretLLVMCall(ProcessId procId,
   // Using 100 as the limit since each recursive call uses significant C++ stack
   // space due to the deep call chain: interpretLLVMFuncBody -> interpretOperation
   // -> interpretLLVMCall -> interpretLLVMFuncBody.
-  constexpr size_t maxCallDepth = 200;
+  constexpr size_t maxCallDepth = 1024;
   if (state.callDepth >= maxCallDepth) {
     LLVM_DEBUG(llvm::dbgs() << "  llvm.call: max call depth (" << maxCallDepth
                             << ") exceeded for '" << calleeName << "'\n");
@@ -43431,6 +43431,112 @@ void LLHDProcessInterpreter::executeChildModuleLevelOps() {
             return 0;
           };
           uint64_t srcAddr = traceSrcLoadAddr(storeOp.getValue());
+          // Nested interface port pattern:
+          //   load child_if.field_N (through parent_if.field_ptr)
+          // then copy into a BFM interface field. Canonicalize the child field
+          // address back to parent_if.field_N so runtime propagation follows
+          // top-level signal updates.
+          auto resolveNestedInterfaceParentFieldAddr = [&](Value v) -> uint64_t {
+            std::function<LLVM::LoadOp(Value)> findFieldLoad =
+                [&](Value value) -> LLVM::LoadOp {
+              if (!value)
+                return {};
+              if (auto loadOp = value.getDefiningOp<LLVM::LoadOp>())
+                return loadOp;
+              if (auto extractOp = value.getDefiningOp<LLVM::ExtractValueOp>())
+                return findFieldLoad(extractOp.getContainer());
+              if (auto insertOp = value.getDefiningOp<LLVM::InsertValueOp>()) {
+                if (LLVM::LoadOp valueLoad = findFieldLoad(insertOp.getValue()))
+                  return valueLoad;
+                return findFieldLoad(insertOp.getContainer());
+              }
+              if (auto castOp =
+                      value.getDefiningOp<mlir::UnrealizedConversionCastOp>()) {
+                if (castOp.getInputs().size() != 1)
+                  return {};
+                return findFieldLoad(castOp.getInputs().front());
+              }
+              return {};
+            };
+
+            LLVM::LoadOp fieldLoad = findFieldLoad(v);
+            if (!fieldLoad)
+              return 0;
+
+            auto fieldGep = fieldLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+            if (!fieldGep || !fieldGep.getDynamicIndices().empty())
+              return 0;
+            auto childStructTy =
+                dyn_cast<LLVM::LLVMStructType>(fieldGep.getElemType());
+            if (!childStructTy || !childStructTy.getName().starts_with("interface."))
+              return 0;
+
+            auto childIndices = fieldGep.getRawConstantIndices();
+            if (childIndices.size() != 2 || childIndices[0] != 0 ||
+                childIndices[0] == LLVM::GEPOp::kDynamicIndex ||
+                childIndices[1] == LLVM::GEPOp::kDynamicIndex)
+              return 0;
+            if (childIndices[1] < 0)
+              return 0;
+            unsigned childFieldIndex = static_cast<unsigned>(childIndices[1]);
+
+            auto childIfacePtrLoad =
+                fieldGep.getBase().getDefiningOp<LLVM::LoadOp>();
+            if (!childIfacePtrLoad)
+              return 0;
+            auto parentPtrGep =
+                childIfacePtrLoad.getAddr().getDefiningOp<LLVM::GEPOp>();
+            if (!parentPtrGep || !parentPtrGep.getDynamicIndices().empty())
+              return 0;
+            auto parentStructTy =
+                dyn_cast<LLVM::LLVMStructType>(parentPtrGep.getElemType());
+            if (!parentStructTy ||
+                !parentStructTy.getName().starts_with("interface."))
+              return 0;
+
+            auto parentPtrIndices = parentPtrGep.getRawConstantIndices();
+            if (parentPtrIndices.size() != 2 || parentPtrIndices[0] != 0 ||
+                parentPtrIndices[0] == LLVM::GEPOp::kDynamicIndex ||
+                parentPtrIndices[1] == LLVM::GEPOp::kDynamicIndex)
+              return 0;
+            if (parentPtrIndices[1] < 0)
+              return 0;
+            unsigned parentPtrFieldIndex =
+                static_cast<unsigned>(parentPtrIndices[1]);
+
+            auto parentBody = parentStructTy.getBody();
+            auto childBody = childStructTy.getBody();
+            if (parentPtrFieldIndex >= parentBody.size() ||
+                childFieldIndex >= childBody.size() ||
+                childFieldIndex >= parentBody.size())
+              return 0;
+            if (!isa<LLVM::LLVMPointerType>(parentBody[parentPtrFieldIndex]))
+              return 0;
+
+            Type parentFieldTy = parentBody[childFieldIndex];
+            Type childFieldTy = childBody[childFieldIndex];
+            if (isa<LLVM::LLVMPointerType>(parentFieldTy))
+              return 0;
+            if (getLLVMTypeSizeForGEP(parentFieldTy) !=
+                getLLVMTypeSizeForGEP(childFieldTy))
+              return 0;
+
+            uint64_t parentBaseAddr = getChildOrParentValue(parentPtrGep.getBase());
+            if (parentBaseAddr == 0)
+              return 0;
+
+            return parentBaseAddr +
+                   getLLVMStructFieldOffset(parentStructTy, childFieldIndex);
+          };
+          if (uint64_t parentFieldAddr =
+                  resolveNestedInterfaceParentFieldAddr(storeOp.getValue());
+              parentFieldAddr != 0) {
+            LLVM_DEBUG(llvm::dbgs()
+                       << "child store: canonicalized nested-iface srcAddr 0x"
+                       << llvm::format_hex(srcAddr, 10) << " -> 0x"
+                       << llvm::format_hex(parentFieldAddr, 10) << "\n");
+            srcAddr = parentFieldAddr;
+          }
           LLVM_DEBUG({
             llvm::dbgs() << "child store: destAddr=0x"
                          << llvm::format_hex(destAddr.getUInt64(), 10)

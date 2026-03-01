@@ -1,5 +1,37 @@
 # SVA Engineering Log
 
+## 2026-03-01
+
+- Iteration update (AVIP sequencer liveness: unresolved multi-queue
+  get_next_item stall):
+  - realization:
+    - `axi4Lite` interpreted AVIP runs repeatedly showed sequence-side
+      `start_item/finish_item` pushes, but driver-side `get_next_item`
+      stalled with unresolved queue hints (`seqr=0`) and no `pop/item_done`.
+    - this produced graceful completion with `0.00%` coverage/activity even
+      when there were queued items.
+  - implemented:
+    - `tools/circt-sim/LLHDProcessInterpreterUvm.cpp`
+      - in `resolveUvmSequencerQueueAddress`, added a deterministic
+        unresolved multi-queue fallback:
+        - when structural queue resolution fails but active FIFOs exist,
+          choose the nearest active queue by address-distance to observed
+          port/terminal anchors.
+      - dropped weak non-FIFO unresolved queue candidates before final
+        selection so unresolved pulls can reach fallback routing.
+    - tests:
+      - added failing-first regression:
+        `test/Tools/circt-sim/uvm-sequencer-unresolved-multiqueue-nearest-fallback.mlir`
+      - test now verifies we do not deadlock on unresolved multi-queue pulls
+        and deterministically select a queue (`picked_nearest=1`).
+  - validation:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/uvm-sequencer-unresolved-multiqueue-nearest-fallback.mlir`
+      - result: pass (was failing before fix).
+    - smoke regressions:
+      - `build_test/bin/llvm-lit -sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_component_child_iteration_semantic_test.sv test/Tools/crun/uvm-tlm-analysis-100.sv`
+      - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/config-db-*.mlir`
+      - result: pass.
+
 ## 2026-02-24
 
 - Iteration update (tagged union invalid-member runtime failure):
@@ -10925,3 +10957,38 @@
       - `5 passed`.
   - AVIP artifact spot-check:
     - post-fix run on existing `axi4Lite.mlir` repro no longer emitted the prior `FCTTYP`/unmapped-vtable pair in observed completed run; remaining issue observed is 0-fs liveness/coverage quality.
+
+## 2026-03-01 - nested interface virtual-BFM reset wait: parent-field canonicalization
+
+- realization:
+  - Added a semantic regression for nested interface wiring through module ports into a virtual BFM handle:
+    - `test/Tools/circt-sim/nested-interface-virtual-bfm-reset-wait.sv`
+  - Red baseline: test hung waiting in `bfm_if::wait_for_reset_cycle` (never observed `@(negedge/posedge aresetn)`).
+  - Root cause: child module init store-copy tracing recorded source addresses from nested child-interface memory (`leaf_if`) that were not canonicalized to parent interface field addresses (`mid_if`). As a result, runtime propagation links updated parent fields (`sig_0.field_1`) but not the BFM field that wait_event sensitivity used.
+
+- implemented:
+  - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - In `executeChildModuleLevelOps`, canonicalize nested interface source field load addresses back to parent interface field addresses when the pattern is:
+      - load `child_if.field_N` via `load(parent_if.field_ptr)`
+      - copied into another interface field.
+    - This makes child-module copy-pair propagation point at live parent field signals.
+  - semantic tests:
+    - `test/Tools/circt-sim/nested-interface-virtual-bfm-reset-wait.sv` (new)
+    - `test/Tools/circt-sim/virtual-interface-wait-for-reset-task.sv` (control)
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/nested-interface-virtual-bfm-reset-wait.sv`
+      - hung / timed out.
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/nested-interface-virtual-bfm-reset-wait.sv`
+      - `1 passed`.
+    - `build_test/bin/llvm-lit -sv test/Tools/circt-sim/virtual-interface-wait-for-reset-task.sv`
+      - `1 passed`.
+
+- AVIP status after this fix (focused rerun):
+  - `AVIPS=axi4Lite SEEDS=1 SIM_RETRIES=0 FAIL_ON_ACTIVITY_LIVENESS=1 CIRCT_SIM_MODE=interpret utils/run_avip_circt_sim.sh ...`
+    - no longer hit the prior activity-gate symptom first.
+    - current blocker in this run moved to startup functional failure at `0 ns`:
+      - `UVM_FATAL ... cannot get() axi4LiteMasterReadDriverBFM`.
+    - with `CIRCT_MAX_RSS_MB=16384`, run exits deterministically at `0 fs` with the same config/driver-BFM get failure.
