@@ -2,6 +2,36 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0-T1: baseline manifest contract validator + shared parser):
+  - realization:
+    - baseline manifest validation logic was duplicated in
+      `capture_formal_baseline.py` and not available as a standalone contract
+      checker.
+    - missing a dedicated validator made it easy to carry malformed manifests
+      into long-running baseline captures.
+  - implemented:
+    - added shared parser/validator module:
+      - `utils/formal/lib/baseline_manifest.py`
+      - enforces manifest root contract (`schema_version`, `baseline_id`,
+        `generated_at`, non-empty `commands`).
+      - validates per-command fields and timeout typing.
+      - rejects duplicate command case labels after slugify to avoid artifact
+        directory collisions.
+    - added standalone validator CLI:
+      - `utils/formal/validate_baseline_manifest.py`
+      - optional `--summary-json` report for command/mode/suite counts.
+    - refactored:
+      - `utils/formal/capture_formal_baseline.py` now reuses shared manifest
+        parser instead of local duplicated parsing logic.
+    - tests:
+      - added `test/Tools/formal-validate-baseline-manifest.test`
+        (valid manifest summary + invalid schema + duplicate-case checks).
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py utils/formal/validate_baseline_manifest.py utils/formal/lib/baseline_manifest.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-log-cap.test test/Tools/formal-capture-baseline-invalid-timeout.test test/Tools/formal-capture-baseline-schema-validate.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-validate-baseline-manifest.test test/Tools/formal-validate-results-schema.test test/Tools/formal-drift-compare.test`
+      - result: `10/10` pass.
+
 - Iteration update (WS0/WS6 bridge: baseline schema-validation gate):
   - realization:
     - baseline capture reproducibility was checking drift only, but did not

@@ -1,0 +1,22 @@
+// RUN: mkdir -p %t
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/valid.json --baseline-id ws0-contract --generated-at 2026-03-01T00:00:00Z --command suite=opentitan --command mode=LEC --command id=aes_case --command timeout_secs=15 --command cwd=/tmp --command command='echo one' --command begin=1 --command suite=sv-tests --command mode=BMC --command id=bmc_case --command command='echo two'
+// RUN: python3 %S/../../utils/formal/validate_baseline_manifest.py --manifest %t/valid.json --summary-json %t/summary.json
+// RUN: FileCheck %s --check-prefix=VALID < %t/summary.json
+// RUN: printf '{"schema_version":2,"baseline_id":"bad","generated_at":"2026-03-01T00:00:00Z","metadata":{},"commands":[{"suite":"toy","mode":"LEC","command":"echo"}]}\n' > %t/invalid-schema.json
+// RUN: not python3 %S/../../utils/formal/validate_baseline_manifest.py --manifest %t/invalid-schema.json 2>&1 | FileCheck %s --check-prefix=BADSCHEMA
+// RUN: printf '{"schema_version":1,"baseline_id":"dup","generated_at":"2026-03-01T00:00:00Z","metadata":{},"commands":[{"suite":"toy","mode":"LEC","id":"dup_case","command":"echo one"},{"suite":"toy","mode":"LEC","id":"dup_case","command":"echo two"}]}\n' > %t/dup.json
+// RUN: not python3 %S/../../utils/formal/validate_baseline_manifest.py --manifest %t/dup.json 2>&1 | FileCheck %s --check-prefix=DUP
+//
+// VALID: "baseline_id": "ws0-contract"
+// VALID: "commands": 2
+// VALID: "commands_with_cwd": 1
+// VALID: "max_timeout_secs": 15
+// VALID: "mode_counts": {
+// VALID: "BMC": 1
+// VALID: "LEC": 1
+// VALID: "suite_counts": {
+// VALID: "opentitan": 1
+// VALID: "sv-tests": 1
+//
+// BADSCHEMA: manifest schema_version must be 1
+// DUP: duplicate command case label

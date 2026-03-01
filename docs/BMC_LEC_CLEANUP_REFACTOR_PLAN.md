@@ -374,6 +374,8 @@ Current workstream status in this branch:
 
 1. WS0: in progress
    - baseline manifest writer landed
+   - baseline manifest contract validator landed
+     (`validate_baseline_manifest.py`)
    - unsupported diagnostics audit scaffold landed
    - baseline capture runner landed (`capture_formal_baseline.py`)
    - schema drift comparator landed (`compare_formal_results_drift.py`)

@@ -11,51 +11,24 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
+
+FORMAL_LIB = Path(__file__).resolve().parent / "lib"
+if str(FORMAL_LIB) not in sys.path:
+    sys.path.insert(0, str(FORMAL_LIB))
+
+from baseline_manifest import (  # noqa: E402
+    ManifestCommand,
+    ManifestValidationError,
+    load_manifest_commands,
+)
 
 
 def fail(msg: str) -> NoReturn:
     raise SystemExit(msg)
-
-
-def slugify(token: str) -> str:
-    compact = re.sub(r"[^A-Za-z0-9._-]+", "_", token.strip())
-    compact = compact.strip("._-")
-    return compact or "command"
-
-
-@dataclass(frozen=True)
-class ManifestCommand:
-    command_index: int
-    suite: str
-    mode: str
-    case_label: str
-    command: str
-    cwd: str
-    timeout_secs: int
-
-
-def parse_timeout_value(raw: object, field_name: str, index: int) -> int:
-    if raw is None or raw == "":
-        return 0
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        fail(
-            f"manifest commands[{index}] {field_name} must be an integer "
-            f"(got: {raw!r})"
-        )
-    if value < 0:
-        fail(
-            f"manifest commands[{index}] {field_name} must be non-negative "
-            f"(got: {raw!r})"
-        )
-    return value
 
 
 def coerce_text_output(raw: str | bytes | None) -> str:
@@ -83,51 +56,6 @@ def write_log_text(log_path: Path, log_data: str, max_log_bytes: int) -> None:
         return
     keep = max_log_bytes - len(notice)
     log_path.write_bytes(encoded[:keep] + notice)
-
-
-def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCommand]]:
-    if not path.is_file():
-        fail(f"manifest not found: {path}")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        fail(f"invalid manifest JSON ({path}): {exc}")
-    if not isinstance(payload, dict):
-        fail(f"invalid manifest root (expected object): {path}")
-    raw_commands = payload.get("commands", [])
-    if not isinstance(raw_commands, list) or not raw_commands:
-        fail("manifest missing non-empty commands list")
-    commands: list[ManifestCommand] = []
-    for index, raw in enumerate(raw_commands, start=1):
-        if not isinstance(raw, dict):
-            fail(f"manifest commands[{index}] must be an object")
-        suite = str(raw.get("suite", "")).strip()
-        mode = str(raw.get("mode", "")).strip()
-        command = str(raw.get("command", "")).strip()
-        if not suite or not mode or not command:
-            fail(
-                "manifest command missing required keys "
-                f"(suite/mode/command) at index {index}"
-            )
-        label_seed = (
-            str(raw.get("id", "")).strip()
-            or str(raw.get("label", "")).strip()
-            or f"{suite}_{mode}_{index}"
-        )
-        commands.append(
-            ManifestCommand(
-                command_index=index,
-                suite=suite,
-                mode=mode,
-                case_label=slugify(label_seed),
-                command=command,
-                cwd=str(raw.get("cwd", "")).strip(),
-                timeout_secs=parse_timeout_value(
-                    raw.get("timeout_secs", 0), "timeout_secs", index
-                ),
-            )
-        )
-    return payload, commands
 
 
 def run_manifest_command(
@@ -311,7 +239,10 @@ def main() -> int:
     if args.validate_results_schema and not validator_script.is_file():
         fail(f"schema validator script not found: {validator_script}")
 
-    manifest_payload, commands = load_manifest_commands(manifest_path)
+    try:
+        manifest_payload, commands = load_manifest_commands(manifest_path)
+    except ManifestValidationError as exc:
+        fail(str(exc))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     copied_manifest_path = out_dir / "manifest.json"
