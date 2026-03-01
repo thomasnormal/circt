@@ -171,6 +171,15 @@ def resolve_optional_existing_file(
     return path
 
 
+def write_optional_empty_file(path_arg: str) -> Path | None:
+    if not path_arg:
+        return None
+    path = Path(path_arg).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+    return path
+
+
 def load_optional_allowlist(
     path_arg: str,
     *,

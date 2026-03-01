@@ -36,6 +36,8 @@ def main() -> int:
     )
     assert no_allow_path is None, "empty optional allowlist path should return None path"
     assert no_allow == (set(), [], []), "empty optional allowlist should be empty"
+    no_empty_file = runner_common.write_optional_empty_file("")
+    assert no_empty_file is None, "empty optional output path should return None"
 
     allow_path = tmp_dir / "allow.tsv"
     allow_path.write_text(
@@ -69,6 +71,14 @@ def main() -> int:
     assert not runner_common.is_allowlisted(
         "other_token", allowlist
     ), "unexpected allowlist hit"
+
+    empty_out = tmp_dir / "nested" / "empty.jsonl"
+    written_empty_out = runner_common.write_optional_empty_file(str(empty_out))
+    assert (
+        written_empty_out == empty_out.resolve()
+    ), "optional empty output path mismatch"
+    assert empty_out.is_file(), "optional empty output file missing"
+    assert empty_out.read_text(encoding="utf-8") == "", "optional empty output not empty"
 
     missing_prefix = "missing optional helper file"
     missing_path = tmp_dir / "missing.tsv"

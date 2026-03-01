@@ -482,6 +482,9 @@ Current workstream status in this branch:
      FPV summary drift lanes
    - shared optional file/allowlist helper behavior is now regression-covered
      in `formal-runner-common-optional-files.test`
+   - shared optional empty-output helper landed in `runner_common`
+     (`write_optional_empty_file`) and connectivity BMC/LEC no-case JSONL
+     artifact paths now consume it (local fallback retained)
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial

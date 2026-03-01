@@ -40,6 +40,7 @@ try:
         load_allowlist as _shared_load_allowlist,
         read_status_summary as _shared_read_status_summary,
         resolve_optional_existing_file as _shared_resolve_optional_existing_file,
+        write_optional_empty_file as _shared_write_optional_empty_file,
         write_status_drift as _shared_write_status_drift,
         write_status_summary as _shared_write_status_summary,
     )
@@ -163,6 +164,15 @@ def resolve_optional_existing_file(path_arg: str, *, missing_file_prefix: str) -
     path = Path(path_arg).resolve()
     if not path.is_file():
         fail(f"{missing_file_prefix}: {path}")
+    return path
+
+
+def write_optional_empty_file(path_arg: str) -> Path | None:
+    if not path_arg:
+        return None
+    path = Path(path_arg).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
     return path
 
 
@@ -365,6 +375,9 @@ if _HAS_SHARED_FORMAL_HELPERS:
             missing_file_prefix=missing_file_prefix,
             fail_fn=fail,
         )
+
+    def write_optional_empty_file(path_arg: str) -> Path | None:
+        return _shared_write_optional_empty_file(path_arg)
 
     def write_connectivity_status_summary(
         path: Path,
@@ -1069,10 +1082,7 @@ def main() -> int:
         return 0
 
     if not selected_groups:
-        if args.results_jsonl_file:
-            results_jsonl_path = Path(args.results_jsonl_file).resolve()
-            results_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-            results_jsonl_path.write_text("", encoding="utf-8")
+        write_optional_empty_file(args.results_jsonl_file)
         if status_summary_path is not None:
             write_connectivity_status_summary(status_summary_path, {})
             print(f"connectivity status summary: {status_summary_path}", flush=True)
@@ -1189,10 +1199,7 @@ def main() -> int:
             ignore_asserts_until,
         )
         if not cases_file.read_text(encoding="utf-8").strip():
-            if args.results_jsonl_file:
-                results_jsonl_path = Path(args.results_jsonl_file).resolve()
-                results_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-                results_jsonl_path.write_text("", encoding="utf-8")
+            write_optional_empty_file(args.results_jsonl_file)
             if status_summary_path is not None:
                 write_connectivity_status_summary(status_summary_path, {})
                 print(f"connectivity status summary: {status_summary_path}", flush=True)

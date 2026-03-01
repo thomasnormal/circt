@@ -208,6 +208,15 @@ def resolve_optional_existing_file(path_arg: str, *, missing_file_prefix: str) -
     return path
 
 
+def write_optional_empty_file(path_arg: str) -> Path | None:
+    if not path_arg:
+        return None
+    path = Path(path_arg).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("", encoding="utf-8")
+    return path
+
+
 def normalize_connectivity_rule_id(case_id: str) -> str:
     token = case_id.strip()
     prefix = "connectivity::"
@@ -1366,6 +1375,7 @@ try:
         resolve_optional_existing_file as _shared_resolve_optional_existing_file,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
         write_log as _shared_write_log,
+        write_optional_empty_file as _shared_write_optional_empty_file,
         write_status_drift as _shared_write_status_drift,
         write_status_summary as _shared_write_status_summary,
     )
@@ -1465,6 +1475,9 @@ if _HAS_SHARED_FORMAL_HELPERS:
             missing_file_prefix=missing_file_prefix,
             fail_fn=fail,
         )
+
+    def write_optional_empty_file(path_arg: str) -> Path | None:
+        return _shared_write_optional_empty_file(path_arg)
 
     def write_connectivity_lec_status_summary(
         path: Path,
@@ -1695,13 +1708,6 @@ def main() -> int:
     results_file.parent.mkdir(parents=True, exist_ok=True)
     results_file.write_text("", encoding="utf-8")
 
-    def write_empty_requested_results_jsonl() -> None:
-        if not args.results_jsonl_file:
-            return
-        results_jsonl_path = Path(args.results_jsonl_file).resolve()
-        results_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
-        results_jsonl_path.write_text("", encoding="utf-8")
-
     def evaluate_status_governance(case_rows: list[tuple[str, ...]]) -> int:
         current_counts = collect_connectivity_lec_status_counts(case_rows)
         if status_summary_path is not None:
@@ -1755,7 +1761,7 @@ def main() -> int:
         return 0
 
     if not selected_groups:
-        write_empty_requested_results_jsonl()
+        write_optional_empty_file(args.results_jsonl_file)
         if status_summary_path is not None:
             write_connectivity_lec_status_summary(status_summary_path, {})
             print(f"connectivity LEC status summary: {status_summary_path}", flush=True)
@@ -2182,7 +2188,7 @@ def main() -> int:
             )
 
         if not cases:
-            write_empty_requested_results_jsonl()
+            write_optional_empty_file(args.results_jsonl_file)
             if status_summary_path is not None:
                 write_connectivity_lec_status_summary(status_summary_path, {})
                 print(f"connectivity LEC status summary: {status_summary_path}", flush=True)

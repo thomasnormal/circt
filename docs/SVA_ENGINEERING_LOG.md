@@ -2,6 +2,35 @@
 
 ## 2026-03-01
 
+- Iteration update (WS1: shared optional empty-output helper extraction):
+  - realization:
+    - connectivity BMC and connectivity LEC wrappers both duplicated
+      no-case JSONL artifact writes for `--results-jsonl-file`.
+    - this logic was not in `runner_common`, leaving identical
+      path-resolve/create/write-empty behavior duplicated across wrappers.
+  - implemented:
+    - added `write_optional_empty_file(path_arg)` to
+      `utils/formal/lib/runner_common.py`.
+    - migrated no-case JSONL emission in:
+      - `utils/run_opentitan_connectivity_circt_bmc.py`
+      - `utils/run_opentitan_connectivity_circt_lec.py`
+      to consume the shared helper (with copied-script local fallback intact).
+    - expanded shared helper regression:
+      - `test/Tools/Inputs/formal_runner_common_optional_files.py`
+      now covers `write_optional_empty_file` for empty and concrete paths.
+  - validation:
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test`
+      - result: fail (`AttributeError`: missing
+        `runner_common.write_optional_empty_file`).
+    - `python3 -m py_compile utils/formal/lib/runner_common.py utils/run_opentitan_connectivity_circt_bmc.py utils/run_opentitan_connectivity_circt_lec.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/formal-runner-common-optional-files.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-empty-generated-no-cases.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-no-cases.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-empty-generated-no-cases.test test/Tools/run-opentitan-connectivity-circt-lec-results-jsonl-file.test`
+      - result: `7/7` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-opentitan-connectivity-circt-bmc-status-*.test test/Tools/run-opentitan-connectivity-circt-lec-status-*.test test/Tools/run-opentitan-connectivity-circt-bmc-basic.test test/Tools/run-opentitan-connectivity-circt-lec-basic.test`
+      - result: `16/16` pass.
+
 - Iteration update (WS1/WS6: connectivity LEC no-case JSONL artifact parity):
   - realization:
     - `run_opentitan_connectivity_circt_lec.py` accepted
