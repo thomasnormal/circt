@@ -463,6 +463,16 @@ Current workstream status in this branch:
    - shared env-driven retry launcher landed in `runner_common`
    - OpenTitan LEC runners migrated off duplicated retry parsing
    - shared drop-reason parser landed in `runner_common` and adopted in LEC runners
+   - shared optional existing-file resolver and optional allowlist loader
+     landed in `runner_common`
+   - OpenTitan connectivity BMC/LEC status baseline+allowlist path validation
+     now consumes shared optional-file helper (local fallback retained)
+   - FPV BMC optional drift allowlist loading now consumes shared optional
+     allowlist helper (local fallback retained)
+   - connectivity baseline missing-file status lanes are now explicitly
+     regression-covered for both BMC and LEC wrappers
+   - shared optional file/allowlist helper behavior is now regression-covered
+     in `formal-runner-common-optional-files.test`
    - shared log-writer truncation controls landed in `runner_common`
      and baseline capture now consumes shared log writing path
    - runner shared-library extraction still partial

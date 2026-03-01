@@ -96,6 +96,7 @@ try:
     from runner_common import (
         is_allowlisted as _shared_is_allowlisted,
         load_allowlist as _shared_load_allowlist,
+        load_optional_allowlist as _shared_load_optional_allowlist,
     )
 except Exception:
     _HAS_SHARED_FORMAL_HELPERS = False
@@ -498,6 +499,15 @@ if _HAS_SHARED_FORMAL_HELPERS:
         regex_rules: list[re.Pattern[str]],
     ) -> bool:
         return _shared_is_allowlisted(token, (exact, prefixes, regex_rules))
+
+    def load_optional_allowlist(
+        path_arg: str, *, missing_file_prefix: str
+    ) -> tuple[Path | None, Allowlist]:
+        return _shared_load_optional_allowlist(
+            path_arg,
+            missing_file_prefix=missing_file_prefix,
+            fail_fn=fail,
+        )
 
 
 def write_fpv_summary(

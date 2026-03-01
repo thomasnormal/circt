@@ -154,6 +154,39 @@ def load_allowlist(
     return exact, prefixes, regex_rules
 
 
+def resolve_optional_existing_file(
+    path_arg: str,
+    *,
+    missing_file_prefix: str,
+    fail_fn: Callable[[str], None] | None = None,
+) -> Path | None:
+    if fail_fn is None:
+        fail_fn = fail
+    if not path_arg:
+        return None
+    path = Path(path_arg).resolve()
+    if not path.is_file():
+        fail_fn(f"{missing_file_prefix}: {path}")
+        raise AssertionError("unreachable")
+    return path
+
+
+def load_optional_allowlist(
+    path_arg: str,
+    *,
+    missing_file_prefix: str,
+    fail_fn: Callable[[str], None] | None = None,
+) -> tuple[Path | None, Allowlist]:
+    path = resolve_optional_existing_file(
+        path_arg,
+        missing_file_prefix=missing_file_prefix,
+        fail_fn=fail_fn,
+    )
+    if path is None:
+        return None, (set(), [], [])
+    return path, load_allowlist(path, fail_fn)
+
+
 def is_allowlisted(token: str, allowlist: Allowlist) -> bool:
     exact, prefixes, regex_rules = allowlist
     if token in exact:

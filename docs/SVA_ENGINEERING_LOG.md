@@ -12821,3 +12821,43 @@
 - follow-up status:
   - FPV drift allowlist parsing now has invalid-regex coverage on both
     target-level and row-level paths across assertion/grouped/summary lanes.
+
+## 2026-03-01 - WS1 optional-file helper extraction for status/allowlist lanes
+
+- realization:
+  - optional file existence checks (baseline and allowlist paths) were still
+    duplicated in OpenTitan connectivity and FPV drift runners.
+  - this duplication made missing-file guardrail behavior harder to keep in
+    sync across wrappers.
+
+- implemented:
+  - `utils/formal/lib/runner_common.py`
+    - added shared helpers:
+      - `resolve_optional_existing_file(path_arg, missing_file_prefix, fail_fn)`
+      - `load_optional_allowlist(path_arg, missing_file_prefix, fail_fn)`
+  - `utils/run_opentitan_connectivity_circt_bmc.py`
+    - migrated status baseline/allowlist optional path checks to shared helper
+      (with local fallback preserved when shared helper import is unavailable).
+  - `utils/run_opentitan_connectivity_circt_lec.py`
+    - same migration as connectivity BMC.
+  - `utils/run_opentitan_fpv_circt_bmc.py`
+    - migrated optional drift allowlist loading wrapper to shared helper when
+      available; local fallback retained.
+  - new regressions:
+    - `test/Tools/formal-runner-common-optional-files.test`
+    - `test/Tools/Inputs/formal_runner_common_optional_files.py`
+    - `test/Tools/run-opentitan-connectivity-circt-bmc-status-baseline-missing-file.test`
+    - `test/Tools/run-opentitan-connectivity-circt-lec-status-baseline-missing-file.test`
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile` on touched formal runner modules + shared helper
+  - focused lit:
+    - formal runner-common helper tests (`retry`, `drop-reasons`, new `optional-files`)
+    - connectivity status missing-file + requires-baseline + invalid-regex subsets (BMC/LEC)
+    - FPV drift missing-file + invalid-regex subsets (assertion/grouped/summary)
+    - all passed.
+
+- follow-up status:
+  - optional file/allowlist guardrail behavior is now centralized in
+    `runner_common` and covered with dedicated regressions.

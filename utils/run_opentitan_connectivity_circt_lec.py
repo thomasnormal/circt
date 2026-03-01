@@ -199,6 +199,15 @@ def is_allowlisted(
     return False
 
 
+def resolve_optional_existing_file(path_arg: str, *, missing_file_prefix: str) -> Path | None:
+    if not path_arg:
+        return None
+    path = Path(path_arg).resolve()
+    if not path.is_file():
+        fail(f"{missing_file_prefix}: {path}")
+    return path
+
+
 def normalize_connectivity_rule_id(case_id: str) -> str:
     token = case_id.strip()
     prefix = "connectivity::"
@@ -1354,6 +1363,7 @@ try:
         normalize_drop_reason as _shared_normalize_drop_reason,
         parse_nonnegative_int as _shared_parse_nonnegative_int,
         read_status_summary as _shared_read_status_summary,
+        resolve_optional_existing_file as _shared_resolve_optional_existing_file,
         run_command_logged_with_env_retry as _shared_run_command_logged_with_env_retry,
         write_log as _shared_write_log,
         write_status_drift as _shared_write_status_drift,
@@ -1446,6 +1456,15 @@ if _HAS_SHARED_FORMAL_HELPERS:
         token: str, exact: set[str], prefixes: list[str], regex_rules: list[re.Pattern[str]]
     ) -> bool:
         return _shared_is_allowlisted(token, (exact, prefixes, regex_rules))
+
+    def resolve_optional_existing_file(
+        path_arg: str, *, missing_file_prefix: str
+    ) -> Path | None:
+        return _shared_resolve_optional_existing_file(
+            path_arg,
+            missing_file_prefix=missing_file_prefix,
+            fail_fn=fail,
+        )
 
     def write_connectivity_lec_status_summary(
         path: Path,
@@ -1626,26 +1645,19 @@ def main() -> int:
     status_summary_path = (
         Path(args.status_summary_file).resolve() if args.status_summary_file else None
     )
-    status_baseline_path = (
-        Path(args.status_baseline_file).resolve() if args.status_baseline_file else None
+    status_baseline_path = resolve_optional_existing_file(
+        args.status_baseline_file,
+        missing_file_prefix="connectivity LEC status baseline file not found",
     )
     status_drift_path = (
         Path(args.status_drift_file).resolve() if args.status_drift_file else None
     )
-    status_allowlist_path = (
-        Path(args.status_drift_allowlist_file).resolve()
-        if args.status_drift_allowlist_file
-        else None
+    status_allowlist_path = resolve_optional_existing_file(
+        args.status_drift_allowlist_file,
+        missing_file_prefix="connectivity LEC status drift allowlist file not found",
     )
     if not opentitan_root.is_dir():
         fail(f"opentitan root not found: {opentitan_root}")
-    if status_baseline_path is not None and not status_baseline_path.is_file():
-        fail(f"connectivity LEC status baseline file not found: {status_baseline_path}")
-    if status_allowlist_path is not None and not status_allowlist_path.is_file():
-        fail(
-            "connectivity LEC status drift allowlist file not found: "
-            f"{status_allowlist_path}"
-        )
 
     rule_shard_count = parse_nonnegative_int(args.rule_shard_count, "rule-shard-count")
     rule_shard_index = parse_nonnegative_int(args.rule_shard_index, "rule-shard-index")
