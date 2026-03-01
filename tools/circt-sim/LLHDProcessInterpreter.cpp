@@ -1209,6 +1209,7 @@ void LLHDProcessInterpreter::enqueueUvmSequencerGetWaiter(
   }
   bucket.push_back({procId, retryOp});
   sequencerGetWaitQueueByProc[procId] = queueAddr;
+  sequencerGetWakeQueueHintByProc.erase(procId);
 }
 
 void LLHDProcessInterpreter::removeUvmSequencerGetWaiter(ProcessId procId) {
@@ -1217,6 +1218,7 @@ void LLHDProcessInterpreter::removeUvmSequencerGetWaiter(ProcessId procId) {
     return;
   uint64_t queueAddr = procIt->second;
   sequencerGetWaitQueueByProc.erase(procIt);
+  sequencerGetWakeQueueHintByProc.erase(procId);
 
   auto bucketIt = sequencerGetWaitersByQueue.find(queueAddr);
   if (bucketIt == sequencerGetWaitersByQueue.end())
@@ -1231,7 +1233,8 @@ void LLHDProcessInterpreter::removeUvmSequencerGetWaiter(ProcessId procId) {
     sequencerGetWaitersByQueue.erase(bucketIt);
 }
 
-bool LLHDProcessInterpreter::wakeOneUvmSequencerGetWaiter(uint64_t queueAddr) {
+bool LLHDProcessInterpreter::wakeOneUvmSequencerGetWaiter(
+    uint64_t queueAddr, uint64_t wakeHintQueueAddr) {
   auto bucketIt = sequencerGetWaitersByQueue.find(queueAddr);
   if (bucketIt == sequencerGetWaitersByQueue.end())
     return false;
@@ -1259,6 +1262,11 @@ bool LLHDProcessInterpreter::wakeOneUvmSequencerGetWaiter(uint64_t queueAddr) {
     state.waiting = false;
     if (waiter.retryOp)
       state.sequencerGetRetryCallOp = waiter.retryOp;
+    uint64_t wakeHint = wakeHintQueueAddr ? wakeHintQueueAddr : queueAddr;
+    if (wakeHint != 0)
+      sequencerGetWakeQueueHintByProc[waiter.procId] = wakeHint;
+    else
+      sequencerGetWakeQueueHintByProc.erase(waiter.procId);
     scheduler.scheduleProcess(waiter.procId, SchedulingRegion::Active);
     if (bucket.empty())
       sequencerGetWaitersByQueue.erase(bucketIt);
@@ -1271,9 +1279,10 @@ bool LLHDProcessInterpreter::wakeOneUvmSequencerGetWaiter(uint64_t queueAddr) {
 
 void LLHDProcessInterpreter::wakeUvmSequencerGetWaiterForPush(
     uint64_t queueAddr) {
-  if (wakeOneUvmSequencerGetWaiter(queueAddr))
+  if (wakeOneUvmSequencerGetWaiter(queueAddr, queueAddr))
     return;
-  (void)wakeOneUvmSequencerGetWaiter(/*queueAddr=*/0);
+  (void)wakeOneUvmSequencerGetWaiter(/*queueAddr=*/0,
+                                     /*wakeHintQueueAddr=*/queueAddr);
 }
 
 uint64_t LLHDProcessInterpreter::normalizeUvmObjectKey(ProcessId procId,
@@ -23094,6 +23103,14 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     uint64_t seqrQueueAddr = 0;
     bool resolvedSeqrQueueHint = resolveUvmSequencerQueueAddress(
         procId, portAddr, callOp.getOperation(), seqrQueueAddr);
+    if (seqrQueueAddr == 0) {
+      auto wakeHintIt = sequencerGetWakeQueueHintByProc.find(procId);
+      if (wakeHintIt != sequencerGetWakeQueueHintByProc.end() &&
+          wakeHintIt->second != 0) {
+        seqrQueueAddr = wakeHintIt->second;
+        resolvedSeqrQueueHint = true;
+      }
+    }
     // Use global FIFO fallback only when queue routing is completely
     // unresolved. If we already have a queue hint, keep the waiter bound
     // to that queue even before the first push creates FIFO state.
@@ -23133,6 +23150,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     if (found && itemAddr != 0) {
       removeUvmSequencerGetWaiter(procId);
+      sequencerGetWakeQueueHintByProc.erase(procId);
       recordUvmDequeuedItem(procId, portAddr, seqrQueueAddr, itemAddr);
       if (seqrQueueAddr != 0)
         cacheUvmSequencerQueueAddress(portAddr, seqrQueueAddr);
@@ -23169,6 +23187,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
 
     if (isTryNextItem) {
       removeUvmSequencerGetWaiter(procId);
+      sequencerGetWakeQueueHintByProc.erase(procId);
       uint64_t refAddr = 0;
       if (!outRefVal.isX())
         refAddr = outRefVal.getUInt64();
@@ -23200,6 +23219,7 @@ LLHDProcessInterpreter::interpretFuncCall(ProcessId procId,
     auto &pState = processStates[procId];
     pState.waiting = true;
     pState.sequencerGetRetryCallOp = callOp.getOperation();
+    sequencerGetWakeQueueHintByProc.erase(procId);
     uint64_t waitQueueAddr = allowGlobalFallbackSearch ? 0 : seqrQueueAddr;
     // Park the process on an empty sensitivity list and resume it only from
     // sequencer push wakeups. This avoids unrelated event wakeups repeatedly

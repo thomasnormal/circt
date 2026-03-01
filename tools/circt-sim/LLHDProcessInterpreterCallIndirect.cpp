@@ -4084,6 +4084,18 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       bool resolvedSeqrQueueHint = resolveUvmSequencerQueueAddress(
           procId, portAddr, callIndirectOp.getOperation(), seqrQueueAddr);
 
+      // If structural routing is unresolved, prefer the queue that most
+      // recently woke this blocked process. This preserves queue affinity
+      // across unresolved wait-bucket wakeups.
+      if (seqrQueueAddr == 0) {
+        auto wakeHintIt = sequencerGetWakeQueueHintByProc.find(procId);
+        if (wakeHintIt != sequencerGetWakeQueueHintByProc.end() &&
+            wakeHintIt->second != 0) {
+          seqrQueueAddr = wakeHintIt->second;
+          resolvedSeqrQueueHint = true;
+        }
+      }
+
       // Cache only explicit routing hints (cache hit or resolved connection
       // chain). Do not cache opportunistic fallback choices.
       if (resolvedSeqrQueueHint && seqrQueueAddr != 0)
@@ -4117,6 +4129,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         }
       }
       if (found && itemAddr != 0) {
+        sequencerGetWakeQueueHintByProc.erase(procId);
         // Track the dequeued item by both pull-port and resolved queue alias.
         recordUvmDequeuedItem(procId, portAddr, seqrQueueAddr, itemAddr);
         // Write item address to output ref (args[1]).
@@ -4158,6 +4171,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
         return success();
       }
       if (isTryNextItem) {
+        sequencerGetWakeQueueHintByProc.erase(procId);
         uint64_t refAddr = args[1].isX() ? 0 : args[1].getUInt64();
         if (traceSeq)
           llvm::errs() << "[SEQ-CI] try_next_item miss port=0x"
@@ -4205,6 +4219,7 @@ LogicalResult LLHDProcessInterpreter::interpretFuncCallIndirect(
       auto &pState = processStates[procId];
       pState.waiting = true;
       pState.sequencerGetRetryCallOp = callIndirectOp.getOperation();
+      sequencerGetWakeQueueHintByProc.erase(procId);
       uint64_t waitQueueAddr = allowGlobalFallbackSearch ? 0 : seqrQueueAddr;
       enqueueUvmSequencerGetWaiter(waitQueueAddr, procId,
                                    callIndirectOp.getOperation());

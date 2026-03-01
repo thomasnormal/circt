@@ -10820,3 +10820,72 @@
       - `11 passed`.
     - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-tlm-analysis-100.sv test/Runtime/uvm/config_db_test.sv test/Tools/crun/uvm-config-db-*.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_callback_test.sv test/Runtime/uvm/uvm_comparator_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
       - `16 passed`.
+
+## 2026-03-01 - sv-tests BMC item-1 continuation: sequence gap recheck + `$exit` closure in runner
+
+- realization:
+  - re-ran the active sv-tests BMC slice with Z3 on current workspace binaries:
+    - `TAG_REGEX='(^| )(16\\.|20\\.)' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+    - result: `total=101 pass=100 error=1` and the only non-pass was
+      `20.2--exit` frontend error (`$exit is only valid in program blocks`).
+  - targeted sequence/operator set (`16.7/16.9/16.12/16.17`) is currently green
+    in this workspace (`7/7 pass`), so the old “3 sequence XFAILs” note is stale
+    here.
+
+- implemented:
+  - runner compatibility knob for sv-tests BMC:
+    - `utils/run_sv_tests_circt_bmc.sh`
+      - added `BMC_ALLOW_EXIT_OUTSIDE_PROGRAM` (default `1`).
+      - when enabled, appends `--allow-exit-outside-program` to `circt-verilog`.
+  - regression test (tooling-level, independent of C++ relink):
+    - `test/Tools/run-sv-tests-bmc-allow-exit-outside-program.test`
+      - asserts default flag forwarding.
+      - asserts env override (`BMC_ALLOW_EXIT_OUTSIDE_PROGRAM=0`) disables forwarding.
+
+- validation:
+  - green:
+    - `build_test/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-allow-exit-outside-program.test`
+      - `1 passed`.
+    - `build_test/bin/llvm-lit -sv test/Tools/run-sv-tests-bmc-*.test`
+      - `29 passed`.
+    - `build_test/bin/llvm-lit -sv test/Conversion/ImportVerilog/exit-outside-program-error.sv test/Conversion/ImportVerilog/exit-outside-program-compat.sv`
+      - `2 passed`.
+    - `TAG_REGEX='(^| )20\\.2( |$)' TEST_FILTER='^20\\.2--exit$' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - with default runner behavior:
+        - `PASS    20.2--exit`
+      - with `BMC_ALLOW_EXIT_OUTSIDE_PROGRAM=0`:
+        - `ERROR   20.2--exit`
+    - `TAG_REGEX='(^| )(16\\.|20\\.)' ... utils/run_sv_tests_circt_bmc.sh /home/thomas-ahle/sv-tests`
+      - `total=101 pass=101 fail=0 xfail=0 xpass=0 error=0`.
+  - residual workspace blocker (unrelated to this slice):
+    - `lib/Conversion/LTLToCore/LTLToCore.cpp` still fails to build as an
+      object when invoked directly, but `circt-verilog` relink was possible and
+      sufficient for this closure.
+
+## 2026-03-01 - UVM multi-agent sequencer wake-affinity fix (semantic runtime)
+
+- realization:
+  - `test/Tools/crun/uvm-integ-multi-agent.sv` regressed to a semantic hang again (only `RNTST`, no agent output).
+  - Root cause: both drivers blocked in unresolved `get_next_item` wait bucket (`queueAddr=0`). When producers pushed items, wakeups resumed processes but queue routing remained unresolved, so retries re-blocked forever.
+  - Existing `sole-ready` fallback was insufficient when multiple queues were non-empty.
+
+- implemented:
+  - Added queue wake-affinity tracking in the simulator runtime:
+    - when a blocked sequencer waiter is resumed by a push, record the waking queue per process.
+    - on subsequent `get/get_next_item` retry, if structural queue resolution still misses, use the wake-hint queue before fallback search.
+    - clear stale hints on re-wait / try-next-item miss / successful pop.
+  - Updated both call paths for consistency:
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+    - `tools/circt-sim/LLHDProcessInterpreterCallIndirect.cpp`
+    - `tools/circt-sim/LLHDProcessInterpreter.h`
+  - Kept prior alias-resolution work, but this fix is the semantic blocker closure for multi-queue unresolved waiters.
+
+- validation:
+  - red baseline:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-multi-agent.sv`
+    - failed (no PASS markers; long-running forced completion).
+  - green after fix:
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-multi-agent.sv`
+      - `1 passed`.
+    - `build_test/bin/llvm-lit -sv test/Tools/crun/uvm-integ-multi-agent.sv test/Tools/crun/uvm-tlm-analysis-100.sv test/Runtime/uvm/config_db_test.sv test/Tools/crun/uvm-config-db-*.sv test/Runtime/uvm/uvm_simple_test.sv test/Runtime/uvm/uvm_callback_test.sv test/Runtime/uvm/uvm_comparator_test.sv test/Runtime/uvm/uvm_reporting_test.sv`
+      - `17 passed`.

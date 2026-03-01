@@ -1086,6 +1086,15 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
       return false;
     auto [resolvedQueueAddr, resolvedStrongHint] =
         promoteToSequencerQueue(resolvedOwnerAddr);
+    if (traceSeqEnabled) {
+      llvm::errs() << "[SEQ-CANON] owner-fn=" << ownerFunc.getSymName()
+                   << " this=0x" << llvm::format_hex(ownerThisAddr, 16)
+                   << " owner=0x" << llvm::format_hex(resolvedOwnerAddr, 16)
+                   << " promoted=0x" << llvm::format_hex(resolvedQueueAddr, 16)
+                   << " in_fifo="
+                   << (sequencerItemFifo.contains(resolvedOwnerAddr) ? 1 : 0)
+                   << "\n";
+    }
     // During initial get_next_item waits, the producer may not have pushed yet,
     // so the sequencer queue won't exist in `sequencerItemFifo` yet. Still
     // accept the owner-resolved queue address so waiters bind to the right
@@ -1128,27 +1137,43 @@ bool LLHDProcessInterpreter::canonicalizeUvmSequencerQueueAddress(
         auto vtableBlockIt = globalMemoryBlocks.find(globalIt->second);
         if (vtableBlockIt != globalMemoryBlocks.end()) {
           auto &vtableBlock = vtableBlockIt->second;
-          auto resolveVtableSlot = [&](unsigned slot) -> bool {
-            unsigned slotOffset = slot * 8;
-            if (slotOffset + 8 > vtableBlock.size)
+          auto resolveVtableMethodBySuffix =
+              [&](llvm::StringRef methodSuffix) -> bool {
+            if (!rootModule || methodSuffix.empty())
               return false;
-            uint64_t methodAddr = 0;
-            for (unsigned i = 0; i < 8; ++i)
-              methodAddr |=
-                  static_cast<uint64_t>(vtableBlock[slotOffset + i])
-                  << (i * 8);
-            auto fnIt = addressToFunction.find(methodAddr);
-            if (fnIt == addressToFunction.end() || !rootModule)
-              return false;
-            auto ownerFunc = rootModule.lookupSymbol<func::FuncOp>(fnIt->second);
-            if (!ownerFunc)
-              return false;
-            return resolvePortOwner(ownerFunc, queueAddr);
+            constexpr unsigned kMaxVtableScanSlots = 128;
+            unsigned numSlots = std::min<unsigned>(
+                static_cast<unsigned>(vtableBlock.size / 8),
+                kMaxVtableScanSlots);
+            for (unsigned slot = 0; slot < numSlots; ++slot) {
+              unsigned slotOffset = slot * 8;
+              if (slotOffset + 8 > vtableBlock.size)
+                break;
+              uint64_t methodAddr = 0;
+              for (unsigned i = 0; i < 8; ++i)
+                methodAddr |=
+                    static_cast<uint64_t>(vtableBlock[slotOffset + i])
+                    << (i * 8);
+              if (methodAddr == 0)
+                continue;
+              auto fnIt = addressToFunction.find(methodAddr);
+              if (fnIt == addressToFunction.end())
+                continue;
+              llvm::StringRef fnName = fnIt->second;
+              if (!fnName.ends_with(methodSuffix))
+                continue;
+              auto ownerFunc = rootModule.lookupSymbol<func::FuncOp>(fnName);
+              if (!ownerFunc)
+                continue;
+              if (resolvePortOwner(ownerFunc, queueAddr))
+                return true;
+            }
+            return false;
           };
 
-          (void)resolveVtableSlot(/*get_parent slot=*/12);
+          (void)resolveVtableMethodBySuffix("::get_parent");
           if (!sequencerItemFifo.contains(queueAddr))
-            (void)resolveVtableSlot(/*get_comp slot=*/13);
+            (void)resolveVtableMethodBySuffix("::get_comp");
         }
       }
     }

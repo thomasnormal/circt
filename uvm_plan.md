@@ -27,6 +27,7 @@ reduction must be staged and measurable.
   - `uvm_component_child_iteration_semantic_test.sv`
   - `uvm_simple_test.sv`
   - `uvm-tlm-analysis-100.sv`
+- [x] Closed multi-agent sequencer semantic hang (`uvm-integ-multi-agent.sv`) by adding queue wake-affinity recovery for unresolved `get_next_item` retries in sim runtime.
 - [ ] Continue Wave C reduction with parity gates for:
   - phase-hopper intercept family
   - factory/type-resolution intercept family

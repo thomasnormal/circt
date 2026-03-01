@@ -3618,7 +3618,8 @@ private:
   void removeUvmSequencerGetWaiter(ProcessId procId);
 
   /// Wake one pending sequencer get waiter for a queue (or unresolved queue 0).
-  bool wakeOneUvmSequencerGetWaiter(uint64_t queueAddr);
+  bool wakeOneUvmSequencerGetWaiter(uint64_t queueAddr,
+                                    uint64_t wakeHintQueueAddr = 0);
 
   /// Wake one queue-specific waiter first, then unresolved waiters.
   void wakeUvmSequencerGetWaiterForPush(uint64_t queueAddr);
@@ -3881,6 +3882,11 @@ private:
 
   /// Reverse map for fast waiter removal on process finalize/kill.
   llvm::DenseMap<ProcessId, uint64_t> sequencerGetWaitQueueByProc;
+
+  /// Queue hint recorded when a blocked get/get_next_item process is resumed
+  /// by a producer push. Used to preserve queue affinity when structural
+  /// routing remains unresolved on retry.
+  llvm::DenseMap<ProcessId, uint64_t> sequencerGetWakeQueueHintByProc;
 
   /// Maps sequence item address to the sequencer address that owns it.
   /// Set during start_item() interception so finish_item() knows which
