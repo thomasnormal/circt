@@ -10026,3 +10026,36 @@
   - regression sweep:
     - `build_test/bin/llvm-lit -sv test/Runtime/uvm`
     - result: `30 passed`.
+
+## 2026-03-01 - UVM report file-handle precedence semantics (remove set_severity_file no-op interception)
+
+- realization:
+  - New semantic test `uvm_report_file_handle_precedence_semantic_test` failed red on
+    `set_severity_file` behavior:
+    - default file-handle lookup passed,
+    - severity override failed (`set_severity_file` had no effect),
+    - downstream id/severity-id checks became unreliable.
+  - Root cause was explicit no-op interception of `uvm_report_handler::set_severity_file`
+    in circt-sim interpreter fast paths:
+    - `tools/circt-sim/UVMFastPaths.cpp` registry + fallback fast paths,
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp` direct-call and trampoline fast paths.
+
+- implemented:
+  - Added semantic regression:
+    - `test/Runtime/uvm/uvm_report_file_handle_precedence_semantic_test.sv`
+    - checks precedence chain: default -> severity -> id -> severity-id.
+  - Reduced interceptor surface by removing `set_severity_file` no-op interception from:
+    - `tools/circt-sim/UVMFastPaths.cpp`
+    - `tools/circt-sim/LLHDProcessInterpreter.cpp`
+
+- validation:
+  - red before fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_report_file_handle_precedence_semantic_test.sv`
+  - targeted semantic rerun after fix:
+    - `build_test/bin/llvm-lit -sv -j 1 test/Runtime/uvm/uvm_report_file_handle_precedence_semantic_test.sv test/Runtime/uvm/uvm_report_action_semantic_test.sv test/Runtime/uvm/uvm_report_verbosity_semantic_test.sv test/Runtime/uvm/uvm_report_verbosity_precedence_semantic_test.sv test/Runtime/uvm/uvm_phase_add_scope_validation_test.sv`
+    - result: `5 passed`.
+
+- note:
+  - In this shared workspace, broad `test/Runtime/uvm` sweeps intermittently reported
+    `Permission denied` on `build_test/bin/circt-verilog`/`circt-sim` due concurrent
+    binary mutation by overlapping build jobs. Isolated/targeted reruns were stable.

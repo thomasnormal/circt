@@ -40,7 +40,6 @@ enum class UvmFastPathAction : uint8_t {
   ReportInfoSuppress,
   ReportWarningSuppress,
   GetReportObject,
-  ReportHandlerSetSeverityFileNoOp,
 };
 
 static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
@@ -83,8 +82,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_handler::set_severity_file",
-              UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
   case UvmFastPathCallForm::FuncCall:
     return StringSwitch<UvmFastPathAction>(calleeName)
@@ -120,8 +117,6 @@ static UvmFastPathAction lookupUvmFastPath(UvmFastPathCallForm callForm,
               UvmFastPathAction::ReportWarningSuppress)
         .Case("uvm_pkg::uvm_report_object::uvm_get_report_object",
               UvmFastPathAction::GetReportObject)
-        .Case("uvm_pkg::uvm_report_handler::set_severity_file",
-              UvmFastPathAction::ReportHandlerSetSeverityFileNoOp)
         .Default(UvmFastPathAction::None);
   }
   return UvmFastPathAction::None;
@@ -1174,13 +1169,6 @@ bool LLHDProcessInterpreter::handleUvmCallIndirectFastPath(
     recordFastPathHit("registry.call_indirect.get_report_object");
     return true;
   }
-  case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
-    LLVM_DEBUG(llvm::dbgs()
-               << "  call_indirect: registry report_handler::set_severity_file "
-                  "no-op: "
-               << calleeName << "\n");
-    recordFastPathHit("registry.call_indirect.report_handler_set_severity_file");
-    return true;
   case UvmFastPathAction::None:
     break;
   }
@@ -1617,13 +1605,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     recordFastPathHit("registry.func.call.get_report_object");
     return true;
   }
-  case UvmFastPathAction::ReportHandlerSetSeverityFileNoOp:
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: registry report_handler::set_severity_file "
-                  "no-op: "
-               << calleeName << "\n");
-    recordFastPathHit("registry.func.call.report_handler_set_severity_file");
-    return true;
   case UvmFastPathAction::PrinterNoOp:
     // Suppress printer body and zero all results.
     for (Value result : callOp.getResults()) {
@@ -1748,16 +1729,6 @@ bool LLHDProcessInterpreter::handleUvmFuncCallFastPath(
     LLVM_DEBUG(llvm::dbgs()
                << "  func.call: " << calleeName
                << " intercepted (return self)\n");
-    return true;
-  }
-
-  // Intercept report_handler severity-map mutators. These methods only affect
-  // report formatting/routing policy and are safely bypassed by our default
-  // report getter fast-path behavior.
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("::set_severity_file")) {
-    LLVM_DEBUG(llvm::dbgs() << "  func.call: " << calleeName
-                            << " intercepted (no-op)\n");
     return true;
   }
 

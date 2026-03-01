@@ -24597,16 +24597,6 @@ no_uvm_objection_intercept:
     }
   }
 
-  // Intercept report file configuration mutators in interpreted mode.
-  // File routing is non-critical for simulation correctness here.
-  if (calleeName.contains("uvm_report_handler") &&
-      calleeName.contains("set_severity_file")) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "  func.call: " << calleeName
-               << " intercepted (no-op)\n");
-    return success();
-  }
-
   // Check call depth to prevent stack overflow from deep recursion (UVM patterns)
   // Intercept uvm_wait_for_nba_region: this UVM synchronization primitive
   // increments a counter and waits for it to change. In our interpreter,
@@ -43872,11 +43862,6 @@ void LLHDProcessInterpreter::dispatchTrampoline(uint32_t funcId,
          trampName.contains("uvm_report_object::uvm_report_info")) ||
         (fastPathUvmReportWarning &&
          trampName.contains("uvm_report_object::uvm_report_warning"))) {
-      appendZeroTrampolineResults();
-      return true;
-    }
-    if (trampName.contains("uvm_report_handler") &&
-        trampName.contains("::set_severity_file")) {
       appendZeroTrampolineResults();
       return true;
     }
