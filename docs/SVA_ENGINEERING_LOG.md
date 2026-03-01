@@ -2,6 +2,39 @@
 
 ## 2026-03-01
 
+- Iteration update (WS6: pairwise BMC JSONL log-path routing uses diag+reason context):
+  - realization:
+    - pairwise JSONL metadata routing used `reason_code` alone to choose
+      `log_path` (`circt-verilog.log`, `circt-opt.log`, `circt-bmc.log`).
+    - frontend failures where normalized reason omitted stage tokens (for
+      example `FRONTEND_PARSE_EXPLODED`) were misrouted to solver logs
+      (`circt-bmc.log`) despite `status=ERROR` + frontend diagnostics.
+  - TDD repro:
+    - expanded
+      `test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test` with an
+      explicit frontend-failing case (`error_case` / `top_error`) and asserted:
+      - `status == ERROR`
+      - `stage == frontend`
+      - `log_path` ends with `/circt-verilog.log`
+    - red-before-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test`
+      - result: fail (`error_case` log-path assertion).
+  - implemented:
+    - `utils/run_pairwise_circt_bmc.py`
+      - updated JSONL `log_path` inference to consult both:
+        - high-level diag column (`row[5]`, e.g. `CIRCT_VERILOG_ERROR`)
+        - extracted reason code
+      - frontend/opt logs are now selected when either diag or reason carries
+        `CIRCT_VERILOG` / `CIRCT_OPT`.
+  - validation:
+    - `python3 -m py_compile utils/run_pairwise_circt_bmc.py`
+      - result: pass.
+    - green-after-fix:
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test`
+      - result: `4/4` pass.
+      - `build_test/bin/llvm-lit -sv test/Tools/run-pairwise-circt-bmc-basic.test test/Tools/run-pairwise-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-bmc-results-jsonl-file.test test/Tools/run-opentitan-fpv-circt-bmc-results-jsonl-file.test test/Tools/run-opentitan-connectivity-circt-bmc-results-jsonl-file.test test/Tools/run-sv-tests-circt-bmc-results-jsonl-file.test`
+      - result: `6/6` pass.
+
 - Iteration update (WS6: copied-runner stage inference parity across formal wrappers):
   - realization:
     - multiple copied-runner fallback `_infer_stage(...)` implementations

@@ -441,6 +441,9 @@ Current workstream status in this branch:
    - pairwise BMC schema JSONL rows now include per-case timing/artifact
      metadata (`frontend_time_ms`, `solver_time_ms`, `log_path`,
      `artifact_dir`) with stage-aware log-path inference
+   - pairwise BMC JSONL log-path routing now uses both diag and reason context
+     so frontend failure rows with normalized non-stage reasons still point to
+     frontend logs (`circt-verilog.log`/`circt-opt.log`) instead of solver logs
    - OpenTitan AES BMC schema JSONL lane now inherits pairwise metadata parity
      via delegated pairwise runner output
    - sv-tests BMC schema JSONL projection now emits non-null timing/artifact

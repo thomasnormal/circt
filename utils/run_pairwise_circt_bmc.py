@@ -3757,14 +3757,15 @@ def main() -> int:
             str, tuple[int | None, int | None, str, str]
         ] = {}
 
-        def infer_jsonl_log_path(case_id: str, reason_code: str) -> str:
+        def infer_jsonl_log_path(case_id: str, reason_code: str, diag_code: str) -> str:
             verilog_log, opt_log, solver_log = case_log_paths_by_case_id.get(
                 case_id, ("", "", "")
             )
             reason_norm = reason_code.strip().upper()
-            if "CIRCT_VERILOG" in reason_norm:
+            diag_norm = diag_code.strip().upper()
+            if "CIRCT_VERILOG" in diag_norm or "CIRCT_VERILOG" in reason_norm:
                 return verilog_log
-            if "CIRCT_OPT" in reason_norm:
+            if "CIRCT_OPT" in diag_norm or "CIRCT_OPT" in reason_norm:
                 return opt_log
             return solver_log
 
@@ -3772,9 +3773,10 @@ def main() -> int:
             if len(row) < 5:
                 continue
             status, case_id, case_path, suite, mode = row[:5]
+            diag_code = row[5] if len(row) >= 6 else ""
             reason_code = extract_result_reason_code(row)
             artifact_dir = case_artifact_dir_by_case_id.get(case_id, "")
-            log_path = infer_jsonl_log_path(case_id, reason_code)
+            log_path = infer_jsonl_log_path(case_id, reason_code, diag_code)
             json_case_rows.append(
                 (status, case_id, case_path, suite, mode, reason_code)
             )
