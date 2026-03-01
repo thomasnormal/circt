@@ -43905,9 +43905,11 @@ void LLHDProcessInterpreter::loadCompiledFunctions(
          name.contains("::uvm_report_object::") ||
          name.contains("process_report_message")))
       return true;
-    // Keep this printer-element traversal interpreted by default. Native
-    // dispatch can still be forced with CIRCT_AOT_ALLOW_NATIVE_UVM_REPORTING.
-    if (!allowNativeUvmReporting &&
+    // Keep printer tree traversal interpreted even under reporting opt-in.
+    // These paths recurse through dynamic call_indirect chains and have
+    // produced native crashes in AVIP startup (`uvm_printer_element::
+    // get_children`).
+    if (name.contains("::uvm_printer_element::get_children") ||
         name.contains("::uvm_printer_element_proxy::get_immediate_children"))
       return true;
     // Random-seeding paths build dynamic strings and rely on interpreter-side
