@@ -66,6 +66,25 @@ def coerce_text_output(raw: str | bytes | None) -> str:
     return raw
 
 
+def write_log_text(log_path: Path, log_data: str, max_log_bytes: int) -> None:
+    if max_log_bytes <= 0:
+        log_path.write_text(log_data, encoding="utf-8")
+        return
+    encoded = log_data.encode("utf-8", errors="replace")
+    if len(encoded) <= max_log_bytes:
+        log_path.write_bytes(encoded)
+        return
+    notice = (
+        "\n[capture_formal_baseline] log truncated from "
+        f"{len(encoded)} to {max_log_bytes} bytes\n"
+    ).encode("utf-8")
+    if max_log_bytes <= len(notice):
+        log_path.write_bytes(encoded[:max_log_bytes])
+        return
+    keep = max_log_bytes - len(notice)
+    log_path.write_bytes(encoded[:keep] + notice)
+
+
 def load_manifest_commands(path: Path) -> tuple[dict[str, Any], list[ManifestCommand]]:
     if not path.is_file():
         fail(f"manifest not found: {path}")
@@ -118,6 +137,7 @@ def run_manifest_command(
     command_dir: Path,
     default_command_cwd: Path,
     default_command_timeout_secs: int,
+    max_log_bytes: int,
 ) -> tuple[int, Path, Path, Path]:
     command_dir.mkdir(parents=True, exist_ok=True)
     out_tsv = command_dir / "results.tsv"
@@ -163,7 +183,7 @@ def run_manifest_command(
             "[capture_formal_baseline] command timeout after "
             f"{timeout_secs}s\n"
         )
-        log_path.write_text(log_data, encoding="utf-8")
+        write_log_text(log_path, log_data, max_log_bytes)
         out_tsv.write_text("", encoding="utf-8")
         out_jsonl.write_text("", encoding="utf-8")
         return 124, out_tsv, out_jsonl, log_path
@@ -174,7 +194,7 @@ def run_manifest_command(
             log_data += "\n"
     if proc.stderr:
         log_data += proc.stderr
-    log_path.write_text(log_data, encoding="utf-8")
+    write_log_text(log_path, log_data, max_log_bytes)
     return proc.returncode, out_tsv, out_jsonl, log_path
 
 
@@ -231,6 +251,15 @@ def main() -> int:
             "(0 disables timeout)."
         ),
     )
+    parser.add_argument(
+        "--max-log-bytes",
+        type=int,
+        default=0,
+        help=(
+            "Maximum bytes per command log file in capture output "
+            "(0 disables truncation)."
+        ),
+    )
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--stop-on-command-failure", action="store_true")
     parser.add_argument("--fail-on-status-drift", action="store_true")
@@ -248,6 +277,8 @@ def main() -> int:
         fail(f"default command cwd not found: {default_command_cwd}")
     if args.command_timeout_secs < 0:
         fail("--command-timeout-secs must be >= 0")
+    if args.max_log_bytes < 0:
+        fail("--max-log-bytes must be >= 0")
     drift_script = (Path(__file__).resolve().parent / "compare_formal_results_drift.py")
     if not drift_script.is_file():
         fail(f"drift comparator script not found: {drift_script}")
@@ -273,6 +304,7 @@ def main() -> int:
                 command_dir=command_dir,
                 default_command_cwd=default_command_cwd,
                 default_command_timeout_secs=args.command_timeout_secs,
+                max_log_bytes=args.max_log_bytes,
             )
             execution_rows.append(
                 (

@@ -382,6 +382,8 @@ Current workstream status in this branch:
      emits timeout budgets in `execution.tsv`
    - timeout capture path is now robust to `TimeoutExpired` byte
      stdout/stderr payloads (no Python type crash)
+   - baseline capture now supports per-command log size caps via
+     `--max-log-bytes` to bound artifact growth
    - first 3-run real mini-baseline completed for AES LEC + sv-tests BMC with zero status/reason/stage drift
    - OpenTitan connectivity LEC lane remains the timeout frontier blocker for full WS0 parity capture
 2. WS1: in progress

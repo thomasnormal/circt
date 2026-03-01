@@ -1,0 +1,10 @@
+// RUN: rm -rf %t
+// RUN: mkdir -p %t/bin
+// RUN: printf '#!/usr/bin/env python3\nprint(\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\")\n' > %t/bin/noisy_runner.py
+// RUN: chmod +x %t/bin/noisy_runner.py
+// RUN: python3 %S/../../utils/formal/write_baseline_manifest.py --out %t/manifest.json --baseline-id ws0-log-cap --command suite=toy --command mode=LEC --command id=noisy_case --command cwd=%t --command command='python3 bin/noisy_runner.py'
+// RUN: python3 %S/../../utils/formal/capture_formal_baseline.py --manifest %t/manifest.json --out-dir %t/out --repeat 1 --max-log-bytes 120
+// RUN: test $(wc -c < %t/out/run-01/noisy_case/command.log) -le 120
+// RUN: FileCheck %s --check-prefix=LOG < %t/out/run-01/noisy_case/command.log
+//
+// LOG: [capture_formal_baseline] log truncated from

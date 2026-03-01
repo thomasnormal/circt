@@ -2,6 +2,27 @@
 
 ## 2026-03-01
 
+- Iteration update (WS0 baseline artifact retention: log size cap):
+  - realization:
+    - repeated real formal captures can produce very large command logs and
+      inflate WS0 baseline artifact footprints.
+    - WS0-T4 requires explicit artifact size controls, not ad-hoc cleanup.
+  - implemented:
+    - `utils/formal/capture_formal_baseline.py`
+      - added `--max-log-bytes` (default `0`, disabled).
+      - command logs are now deterministically truncated when above budget and
+        emit a truncation marker with original/final byte counts.
+      - added argument validation: reject negative values.
+    - tests:
+      - added `test/Tools/formal-capture-baseline-log-cap.test`.
+      - extended `test/Tools/formal-capture-baseline-invalid-timeout.test`
+        with `--max-log-bytes` negative-value rejection check.
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-log-cap.test test/Tools/formal-capture-baseline-invalid-timeout.test test/Tools/formal-ws0-baseline-manifest.test test/Tools/formal-ws0-baseline-manifest-invalid-timeout.test test/Tools/formal-drift-compare.test`
+      - result: `7/7` pass.
+
 - Iteration update (WS0 baseline timeout controls + crash fix):
   - realization:
     - `utils/formal/capture_formal_baseline.py` added timeout handling, but
