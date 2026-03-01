@@ -507,6 +507,8 @@ Current workstream status in this branch:
    - schema contract/versioning doc landed (`docs/FormalResultsSchema.md`)
    - schema drift comparator now supports strict fail gates for reason/stage
      drift (`--fail-on-reason-drift`, `--fail-on-stage-drift`)
+   - baseline capture now forwards strict reason/stage drift failure gates to
+     schema drift comparison (`capture_formal_baseline.py`)
 
 ## 17. Execution Backlog (Ticket-Level)
 

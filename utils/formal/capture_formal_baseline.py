@@ -105,6 +105,8 @@ def compare_drift(
     out_tsv: Path,
     summary_json: Path,
     fail_on_status_drift: bool,
+    fail_on_reason_drift: bool,
+    fail_on_stage_drift: bool,
     fail_on_missing_case: bool,
     fail_on_new_case: bool,
 ) -> int:
@@ -122,6 +124,10 @@ def compare_drift(
     ]
     if fail_on_status_drift:
         cmd.append("--fail-on-status-drift")
+    if fail_on_reason_drift:
+        cmd.append("--fail-on-reason-drift")
+    if fail_on_stage_drift:
+        cmd.append("--fail-on-stage-drift")
     if fail_on_missing_case:
         cmd.append("--fail-on-missing-case")
     if fail_on_new_case:
@@ -199,6 +205,8 @@ def main() -> int:
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--stop-on-command-failure", action="store_true")
     parser.add_argument("--fail-on-status-drift", action="store_true")
+    parser.add_argument("--fail-on-reason-drift", action="store_true")
+    parser.add_argument("--fail-on-stage-drift", action="store_true")
     parser.add_argument("--fail-on-missing-case", action="store_true")
     parser.add_argument("--fail-on-new-case", action="store_true")
     parser.add_argument(
@@ -456,6 +464,8 @@ def main() -> int:
                     out_tsv=drift_tsv,
                     summary_json=drift_summary,
                     fail_on_status_drift=args.fail_on_status_drift,
+                    fail_on_reason_drift=args.fail_on_reason_drift,
+                    fail_on_stage_drift=args.fail_on_stage_drift,
                     fail_on_missing_case=args.fail_on_missing_case,
                     fail_on_new_case=args.fail_on_new_case,
                 )

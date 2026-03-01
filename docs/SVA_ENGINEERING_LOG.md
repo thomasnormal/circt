@@ -757,6 +757,32 @@
     - `build_test/bin/llvm-lit -sv test/Tools/formal-drift-compare.test test/Tools/formal-timeout-frontier-summary.test test/Tools/formal-jsonl-to-tsv.test test/Tools/formal-validate-results-schema.test`
       - result: `4/4` pass.
 
+- Iteration update (WS6: baseline capture pass-through for reason/stage drift gates):
+  - realization:
+    - after adding drift comparator flags for reason/stage, baseline capture
+      still only forwarded `--fail-on-status-drift`, `--fail-on-missing-case`,
+      and `--fail-on-new-case`.
+    - this left a wiring gap between WS6 drift policy and baseline automation.
+  - implemented:
+    - `utils/formal/capture_formal_baseline.py`:
+      - added CLI flags:
+        - `--fail-on-reason-drift`
+        - `--fail-on-stage-drift`
+      - forwarded both flags through `compare_drift(...)` into
+        `compare_formal_results_drift.py`.
+    - tests:
+      - expanded `test/Tools/formal-capture-baseline.test` fake runner harness
+        with:
+        - `FAKE_REASON_DRIFT=1` lane + failing capture invocation under
+          `--fail-on-reason-drift`
+        - `FAKE_STAGE_DRIFT=1` lane + failing capture invocation under
+          `--fail-on-stage-drift`
+  - validation:
+    - `python3 -m py_compile utils/formal/capture_formal_baseline.py`
+      - result: pass.
+    - `build_test/bin/llvm-lit -sv test/Tools/formal-capture-baseline.test test/Tools/formal-capture-baseline-timeout.test test/Tools/formal-capture-baseline-expected-returncodes.test test/Tools/formal-drift-compare.test`
+      - result: `4/4` pass.
+
 - Iteration update (WS6-T4: schema-only dashboard input builder):
   - realization:
     - we had schema validators, drift compare, and timeout summaries, but no
