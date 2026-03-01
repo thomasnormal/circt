@@ -12882,3 +12882,32 @@
 - follow-up status:
   - FPV drift baseline artifact guardrails are now covered for missing-file
     failure modes in assertion, grouped-policy, and summary lanes.
+
+## 2026-03-01 - WS1 FPV drift allowlist matching dedup
+
+- realization:
+  - FPV drift loops still repeated token-level allowlist matching boilerplate
+    across three lanes:
+    - assertion-results drift
+    - grouped-policy drift
+    - FPV-summary drift
+
+- implemented:
+  - `utils/run_opentitan_fpv_circt_bmc.py`
+    - added shared local helper:
+      - `is_allowlisted_token(token, allowlist)`
+    - switched drift loops to carry target/row allowlists as tuple values and
+      route all matching through the helper, removing repeated
+      exact/prefix/regex argument plumbing.
+
+- validation:
+  - syntax:
+    - `python3 -m py_compile utils/run_opentitan_fpv_circt_bmc.py`
+  - focused lit:
+    - FPV drift invalid-regex/missing-file/fail subset across
+      assertion/grouped/summary lanes
+    - all discovered tests passed.
+
+- follow-up status:
+  - FPV drift allowlist matching is now centralized at the script level, which
+    narrows future behavior drift risk while preserving current semantics.

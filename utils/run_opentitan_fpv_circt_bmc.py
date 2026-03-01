@@ -487,6 +487,11 @@ def load_optional_allowlist(
     return path, load_allowlist(path)
 
 
+def is_allowlisted_token(token: str, allowlist: Allowlist) -> bool:
+    exact, prefixes, regex_rules = allowlist
+    return is_allowlisted(token, exact, prefixes, regex_rules)
+
+
 if _HAS_SHARED_FORMAL_HELPERS:
 
     def load_allowlist(path: Path) -> tuple[set[str], list[str], list[re.Pattern[str]]]:
@@ -2686,23 +2691,15 @@ def main() -> int:
                 else Path("<in-memory-current>")
             )
 
-            allow_exact: set[str] = set()
-            allow_prefix: list[str] = []
-            allow_regex: list[re.Pattern[str]] = []
-            _, (allow_exact, allow_prefix, allow_regex) = load_optional_allowlist(
+            _, target_allowlist = load_optional_allowlist(
                 args.assertion_results_drift_allowlist_file,
                 missing_file_prefix="assertion results drift allowlist file not found",
             )
-            row_allow_exact: set[str] = set()
-            row_allow_prefix: list[str] = []
-            row_allow_regex: list[re.Pattern[str]] = []
-            _, (row_allow_exact, row_allow_prefix, row_allow_regex) = (
-                load_optional_allowlist(
-                    args.assertion_results_drift_row_allowlist_file,
-                    missing_file_prefix=(
-                        "assertion results drift row allowlist file not found"
-                    ),
-                )
+            _, row_allowlist = load_optional_allowlist(
+                args.assertion_results_drift_row_allowlist_file,
+                missing_file_prefix=(
+                    "assertion results drift row allowlist file not found"
+                ),
             )
 
             drift_rows: list[tuple[str, str, str, str]] = []
@@ -2712,26 +2709,16 @@ def main() -> int:
             for key in sorted(baseline_keys - current_keys):
                 target_name = baseline[key].target_name
                 drift_token = f"{key}::missing_assertion_row"
-                if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
-                    continue
-                if is_allowlisted(
-                    drift_token,
-                    row_allow_exact,
-                    row_allow_prefix,
-                    row_allow_regex,
+                if is_allowlisted_token(target_name, target_allowlist) or is_allowlisted_token(
+                    drift_token, row_allowlist
                 ):
                     continue
                 drift_rows.append((target_name, "missing_assertion_row", key, "absent"))
             for key in sorted(current_keys - baseline_keys):
                 target_name = current[key].target_name
                 drift_token = f"{key}::new_assertion_row"
-                if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
-                    continue
-                if is_allowlisted(
-                    drift_token,
-                    row_allow_exact,
-                    row_allow_prefix,
-                    row_allow_regex,
+                if is_allowlisted_token(target_name, target_allowlist) or is_allowlisted_token(
+                    drift_token, row_allowlist
                 ):
                     continue
                 drift_rows.append((target_name, "new_assertion_row", "absent", key))
@@ -2740,38 +2727,23 @@ def main() -> int:
                 b = baseline[key]
                 c = current[key]
                 target_name = c.target_name
-                if is_allowlisted(target_name, allow_exact, allow_prefix, allow_regex):
+                if is_allowlisted_token(target_name, target_allowlist):
                     continue
                 if b.status != c.status:
                     drift_token = f"{key}::assertion_status"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
-                    ):
+                    if is_allowlisted_token(drift_token, row_allowlist):
                         continue
                     drift_rows.append((target_name, "assertion_status", b.status, c.status))
                 if b.solver_result != c.solver_result:
                     drift_token = f"{key}::solver_result"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
-                    ):
+                    if is_allowlisted_token(drift_token, row_allowlist):
                         continue
                     drift_rows.append(
                         (target_name, "solver_result", b.solver_result, c.solver_result)
                     )
                 if b.reason != c.reason:
                     drift_token = f"{key}::reason"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
-                    ):
+                    if is_allowlisted_token(drift_token, row_allowlist):
                         continue
                     drift_rows.append((target_name, "reason", b.reason, c.reason))
 
@@ -2870,27 +2842,19 @@ def main() -> int:
                     else Path("<in-memory-grouped-violations-current>")
                 )
 
-                allow_exact: set[str] = set()
-                allow_prefix: list[str] = []
-                allow_regex: list[re.Pattern[str]] = []
-                _, (allow_exact, allow_prefix, allow_regex) = load_optional_allowlist(
+                _, target_allowlist = load_optional_allowlist(
                     args.assertion_status_policy_grouped_violations_drift_allowlist_file,
                     missing_file_prefix=(
                         "assertion status policy grouped violations drift "
                         "allowlist file not found"
                     ),
                 )
-                row_allow_exact: set[str] = set()
-                row_allow_prefix: list[str] = []
-                row_allow_regex: list[re.Pattern[str]] = []
-                _, (row_allow_exact, row_allow_prefix, row_allow_regex) = (
-                    load_optional_allowlist(
-                        args.assertion_status_policy_grouped_violations_drift_row_allowlist_file,
-                        missing_file_prefix=(
-                            "assertion status policy grouped violations drift "
-                            "row allowlist file not found"
-                        ),
-                    )
+                _, row_allowlist = load_optional_allowlist(
+                    args.assertion_status_policy_grouped_violations_drift_row_allowlist_file,
+                    missing_file_prefix=(
+                        "assertion status policy grouped violations drift "
+                        "row allowlist file not found"
+                    ),
                 )
 
                 drift_rows: list[tuple[str, str, str, str, str, str]] = []
@@ -2898,17 +2862,10 @@ def main() -> int:
                 current_keys = set(current.keys())
                 for key in sorted(baseline_keys - current_keys):
                     b = baseline[key]
-                    if is_allowlisted(
-                        b.task_profile, allow_exact, allow_prefix, allow_regex
-                    ):
-                        continue
                     drift_token = f"{key}::missing_group_row"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
-                    ):
+                    if is_allowlisted_token(
+                        b.task_profile, target_allowlist
+                    ) or is_allowlisted_token(drift_token, row_allowlist):
                         continue
                     drift_rows.append(
                         (
@@ -2922,17 +2879,10 @@ def main() -> int:
                     )
                 for key in sorted(current_keys - baseline_keys):
                     c = current[key]
-                    if is_allowlisted(
-                        c.task_profile, allow_exact, allow_prefix, allow_regex
-                    ):
-                        continue
                     drift_token = f"{key}::new_group_row"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
-                    ):
+                    if is_allowlisted_token(
+                        c.task_profile, target_allowlist
+                    ) or is_allowlisted_token(drift_token, row_allowlist):
                         continue
                     drift_rows.append(
                         (
@@ -2947,9 +2897,7 @@ def main() -> int:
                 for key in sorted(baseline_keys.intersection(current_keys)):
                     b = baseline[key]
                     c = current[key]
-                    if is_allowlisted(
-                        b.task_profile, allow_exact, allow_prefix, allow_regex
-                    ):
+                    if is_allowlisted_token(b.task_profile, target_allowlist):
                         continue
                     comparisons = [
                         ("target_count", b.target_count, c.target_count),
@@ -2960,12 +2908,7 @@ def main() -> int:
                         if before == after:
                             continue
                         drift_token = f"{key}::{kind}"
-                        if is_allowlisted(
-                            drift_token,
-                            row_allow_exact,
-                            row_allow_prefix,
-                            row_allow_regex,
-                        ):
+                        if is_allowlisted_token(drift_token, row_allowlist):
                             continue
                         drift_rows.append(
                             (b.task_profile, b.violation_kind, b.status, kind, before, after)
@@ -3048,23 +2991,15 @@ def main() -> int:
                 baseline = read_fpv_summary(baseline_path)
                 current = read_fpv_summary(current_path)
 
-                allow_exact: set[str] = set()
-                allow_prefix: list[str] = []
-                allow_regex: list[re.Pattern[str]] = []
-                _, (allow_exact, allow_prefix, allow_regex) = load_optional_allowlist(
+                _, target_allowlist = load_optional_allowlist(
                     args.fpv_summary_drift_allowlist_file,
                     missing_file_prefix="fpv summary drift allowlist file not found",
                 )
-                row_allow_exact: set[str] = set()
-                row_allow_prefix: list[str] = []
-                row_allow_regex: list[re.Pattern[str]] = []
-                _, (row_allow_exact, row_allow_prefix, row_allow_regex) = (
-                    load_optional_allowlist(
-                        args.fpv_summary_drift_row_allowlist_file,
-                        missing_file_prefix=(
-                            "fpv summary drift row allowlist file not found"
-                        ),
-                    )
+                _, row_allowlist = load_optional_allowlist(
+                    args.fpv_summary_drift_row_allowlist_file,
+                    missing_file_prefix=(
+                        "fpv summary drift row allowlist file not found"
+                    ),
                 )
 
                 drift_rows: list[tuple[str, str, str, str]] = []
@@ -3072,32 +3007,22 @@ def main() -> int:
                 current_targets = set(current.keys())
 
                 for target in sorted(baseline_targets - current_targets):
-                    if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
-                        continue
                     drift_token = f"{target}::missing_in_current"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
+                    if is_allowlisted_token(target, target_allowlist) or is_allowlisted_token(
+                        drift_token, row_allowlist
                     ):
                         continue
                     drift_rows.append((target, "missing_in_current", "present", "absent"))
                 for target in sorted(current_targets - baseline_targets):
-                    if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
-                        continue
                     drift_token = f"{target}::new_in_current"
-                    if is_allowlisted(
-                        drift_token,
-                        row_allow_exact,
-                        row_allow_prefix,
-                        row_allow_regex,
+                    if is_allowlisted_token(target, target_allowlist) or is_allowlisted_token(
+                        drift_token, row_allowlist
                     ):
                         continue
                     drift_rows.append((target, "new_in_current", "absent", "present"))
 
                 for target in sorted(baseline_targets.intersection(current_targets)):
-                    if is_allowlisted(target, allow_exact, allow_prefix, allow_regex):
+                    if is_allowlisted_token(target, target_allowlist):
                         continue
                     b = baseline[target]
                     c = current[target]
@@ -3115,12 +3040,7 @@ def main() -> int:
                     ]:
                         if before != after:
                             drift_token = f"{target}::{kind}"
-                            if is_allowlisted(
-                                drift_token,
-                                row_allow_exact,
-                                row_allow_prefix,
-                                row_allow_regex,
-                            ):
+                            if is_allowlisted_token(drift_token, row_allowlist):
                                 continue
                             drift_rows.append((target, kind, before, after))
 

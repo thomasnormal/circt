@@ -469,6 +469,10 @@ Current workstream status in this branch:
      now consumes shared optional-file helper (local fallback retained)
    - FPV BMC optional drift allowlist loading now consumes shared optional
      allowlist helper (local fallback retained)
+   - FPV BMC drift allowlist matching now consumes a shared local
+     `is_allowlisted_token` helper across assertion/grouped/summary lanes,
+     reducing duplicated target/row allowlist gating logic with no behavior
+     drift
    - connectivity baseline missing-file status lanes are now explicitly
      regression-covered for both BMC and LEC wrappers
    - FPV BMC missing-baseline-file guardrails are now explicitly
