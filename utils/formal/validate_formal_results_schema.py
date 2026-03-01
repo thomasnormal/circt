@@ -34,6 +34,14 @@ def main() -> int:
     )
     parser.add_argument("--jsonl", required=True)
     parser.add_argument("--summary-json", default="")
+    parser.add_argument(
+        "--strict-contract",
+        action="store_true",
+        help=(
+            "Enable stricter invariants beyond per-row schema checks: "
+            "sorted row order and stage/solver consistency."
+        ),
+    )
     args = parser.parse_args()
 
     jsonl_path = Path(args.jsonl).resolve()
@@ -44,6 +52,7 @@ def main() -> int:
     mode_counts: Counter[str] = Counter()
     stage_counts: Counter[str] = Counter()
     total_rows = 0
+    previous_order_key: tuple[str, str, str] | None = None
     for line_no, line in enumerate(
         jsonl_path.read_text(encoding="utf-8").splitlines(), start=1
     ):
@@ -60,6 +69,23 @@ def main() -> int:
             status, mode, stage = validate_schema_v1_row(payload)
         except ValueError as exc:
             fail(jsonl_path, line_no, str(exc))
+
+        case_id = str(payload["case_id"]).strip()
+        case_path = str(payload["case_path"]).strip()
+        solver = str(payload["solver"]).strip()
+
+        if args.strict_contract:
+            if stage == "solver" and not solver:
+                fail(jsonl_path, line_no, "solver must be non-empty for solver stage")
+            order_key = (case_id, status, case_path)
+            if previous_order_key is not None and order_key < previous_order_key:
+                fail(
+                    jsonl_path,
+                    line_no,
+                    "rows must be sorted by (case_id, status, case_path)",
+                )
+            previous_order_key = order_key
+
         total_rows += 1
         status_counts[status] += 1
         mode_counts[mode] += 1

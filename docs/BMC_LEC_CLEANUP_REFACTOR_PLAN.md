@@ -432,6 +432,8 @@ Current workstream status in this branch:
 7. WS6: in progress
    - JSONL schema emission landed in major runners
    - strict schema validation tooling landed (`validate_formal_results_schema.py`)
+   - schema validator now supports `--strict-contract` for cross-row
+     invariants (sorted row order and solver-stage non-empty solver enforcement)
    - JSONL->TSV migration adapter landed (`formal_results_jsonl_to_tsv.py`)
    - WS0 capture integration now supports per-command schema validation gating
      and surfaces per-run schema validation rc in `execution.tsv`

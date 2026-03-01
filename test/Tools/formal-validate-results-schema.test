@@ -1,11 +1,20 @@
 // RUN: mkdir -p %t
 // RUN: printf '{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"case_pass","case_path":"/tmp/case_pass.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":10,"frontend_time_ms":20,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"case_timeout","case_path":"/tmp/case_timeout.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver","solver":"z3","solver_time_ms":200,"frontend_time_ms":5,"log_path":"","artifact_dir":""}\n' > %t/valid.jsonl
 // RUN: python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/valid.jsonl --summary-json %t/summary.json
+// RUN: python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/valid.jsonl --strict-contract
 // RUN: FileCheck %s --check-prefix=VALID < %t/summary.json
 // RUN: printf '{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"case_bad","case_path":"/tmp/case_bad.sv","status":"FAIL","reason_code":"","stage":"result","solver":"z3","solver_time_ms":0,"frontend_time_ms":0,"log_path":"","artifact_dir":""}\n' > %t/invalid.jsonl
 // RUN: not python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/invalid.jsonl
+// RUN: printf '{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"z_case","case_path":"/tmp/z_case.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":1,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n{"schema_version":1,"suite":"sv-tests","mode":"BMC","case_id":"a_case","case_path":"/tmp/a_case.sv","status":"PASS","reason_code":"","stage":"result","solver":"z3","solver_time_ms":1,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n' > %t/unsorted.jsonl
+// RUN: python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/unsorted.jsonl
+// RUN: not python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/unsorted.jsonl --strict-contract 2>&1 | FileCheck %s --check-prefix=UNSORTED
+// RUN: printf '{"schema_version":1,"suite":"opentitan","mode":"LEC","case_id":"solver_empty","case_path":"/tmp/solver_empty.sv","status":"TIMEOUT","reason_code":"SOLVER_COMMAND_TIMEOUT","stage":"solver","solver":"","solver_time_ms":10,"frontend_time_ms":1,"log_path":"","artifact_dir":""}\n' > %t/solver-empty.jsonl
+// RUN: python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/solver-empty.jsonl
+// RUN: not python3 %S/../../utils/formal/validate_formal_results_schema.py --jsonl %t/solver-empty.jsonl --strict-contract 2>&1 | FileCheck %s --check-prefix=SOLVEREMPTY
 //
 // VALID: "rows": 2
 // VALID: "status_counts": {
 // VALID: "PASS": 1
 // VALID: "TIMEOUT": 1
+// UNSORTED: rows must be sorted by (case_id, status, case_path)
+// SOLVEREMPTY: solver must be non-empty for solver stage
